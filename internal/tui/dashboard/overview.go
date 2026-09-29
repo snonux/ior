@@ -13,9 +13,10 @@ import (
 )
 
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
+	theme := common.Current()
 	_ = height
 	if snap == nil {
-		return common.PanelStyle.Render("Overview: waiting for stats...")
+		return theme.PanelStyle.Render("Overview: waiting for stats...")
 	}
 	if width <= 0 {
 		width = 80
@@ -46,7 +47,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	latencyHist := "Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram)
 	gapHist := "Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram)
 
-	panel := common.PanelStyle.Width(panelW)
+	panel := theme.PanelStyle.Width(panelW)
 	sparkPanel := panel.Render(strings.Join([]string{latencySpark, gapSpark, throughputSpark}, "\n"))
 	topPanel := panel.Render(strings.Join([]string{topSyscalls, topFiles, topProcesses}, "\n"))
 	histPanel := panel.Render(strings.Join([]string{latencyHist, gapHist}, "\n"))
@@ -54,7 +55,7 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	return strings.Join(
 		[]string{
 			row,
-			common.HighlightStyle.Render(trends),
+			theme.HighlightStyle.Render(trends),
 			sparkPanel,
 			topPanel,
 			histPanel,
@@ -75,7 +76,7 @@ func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
 		snap.SyscallRatePerSec,
 		generatedAt,
 	)
-	return common.PanelStyle.Width(width).Height(5).Render(content)
+	return common.Current().PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func renderBytesBox(snap *statsengine.Snapshot, width int) string {
@@ -85,7 +86,7 @@ func renderBytesBox(snap *statsengine.Snapshot, width int) string {
 		formatBytes(snap.WriteBytesPerSec),
 		formatBytes(float64(snap.TotalBytes)),
 	)
-	return common.PanelStyle.Width(width).Height(5).Render(content)
+	return common.Current().PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func renderErrorBox(snap *statsengine.Snapshot, width int) string {
@@ -101,7 +102,7 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 		snap.LatencyMeanNs,
 		snap.GapMeanNs,
 	)
-	return common.PanelStyle.Width(width).Height(5).Render(content)
+	return common.Current().PanelStyle.Width(width).Height(5).Render(content)
 }
 
 func trendWithArrow(trend statsengine.Trend) string {

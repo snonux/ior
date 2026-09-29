@@ -125,6 +125,9 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 		rows = make([]StreamEvent, 0, len(snapshot))
 		for i := range snapshot {
 			ev := snapshot[i]
+			// Plain Matches, as in Model.applyFilter: the either-name rule is
+			// inside it now, so the export must contain exactly the rows the
+			// Stream tab is showing.
 			if filter.Matches(&ev) {
 				rows = append(rows, ev)
 			}
@@ -182,7 +185,7 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 // writeStreamCSV writes the CSV header and all event rows to w, calling fail
 // on the first write error to close the underlying file before returning.
 func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string, error)) error {
-	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error"}
+	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
 	if err := w.Write(header); err != nil {
 		_, err = fail(err)
 		return err
@@ -203,6 +206,10 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string,
 			fmt.Sprintf("%d", ev.Bytes),
 			ev.FileName,
 			fmt.Sprintf("%t", ev.IsError),
+			ev.Family,
+			fmt.Sprintf("%d", ev.RequestedSleepNs),
+			fmt.Sprintf("%d", ev.Nfds),
+			fmt.Sprintf("%d", ev.TimeoutNs),
 		}
 		if err := w.Write(record); err != nil {
 			_, err = fail(err)
@@ -243,10 +250,27 @@ func ensureCSVFilename(name string) (string, error) {
 	return base + ".csv", nil
 }
 
-// ExportSnapshotToCSV exports a fresh filtered snapshot from the current source
-// without mutating the model's paused/live view state.
-func (m Model) ExportSnapshotToCSV(filename string) (string, error) {
-	return exportSnapshotToCSV(m.source, m.filter, m.exportDir, filename)
+// ExportSourceSnapshotToCSV is the export path for callers that must not
+// touch a live Model: Bubble Tea runs command closures on their own goroutine,
+// and the Model's plain fields (width, height, paused, ...) are mutated by
+// Update/View with no lock, so a command goroutine reading them races. This
+// function takes the concrete inputs instead — capture them on the Update
+// goroutine before returning the command (see Model.ExportInputs and
+// tui.runExportCmd). Source.Snapshot itself is RWMutex-guarded
+// (streamrow.RingBuffer) and safe to call from any goroutine; the Filter is a
+// plain value whose pointed-to sub-filters are replaced wholesale, never
+// mutated in place.
+func ExportSourceSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
+	return exportSnapshotToCSV(source, filter, exportDir, filename)
+}
+
+// ExportInputs captures the concrete CSV-export inputs (source, active
+// filter, target directory) on the caller's goroutine. Return these from the
+// Update path and hand them to the command closure instead of a Model
+// pointer: command closures run on their own goroutine while Update/View
+// keep mutating this Model (see ExportSourceSnapshotToCSV).
+func (m *Model) ExportInputs() (Source, Filter, string) {
+	return m.source, m.filter, m.exportDir
 }
 
 func (m *Model) exportFilteredToCSV(filename string) (string, error) {

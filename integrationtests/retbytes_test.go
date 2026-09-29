@@ -1,0 +1,73 @@
+package integrationtests
+
+import "testing"
+
+var retbytesTraceArgs = []string{"-trace-syscalls", "sendto,recvfrom,sendmsg,recvmsg,sendmmsg,recvmmsg,sendfile64,splice,tee,vmsplice,process_vm_writev,process_vm_readv,socketpair,pipe2,openat,write,read,close,lseek,fcntl,unlinkat,mkdirat,getdents64,readlinkat,symlink"}
+
+func TestRetbytesPhaseA(t *testing.T) {
+	const payloadLen = uint64(18)
+
+	result, _ := runScenarioResultWithIorArgs(t, "retbytes-phase-a", []ExpectedEvent{
+		{Tracepoint: "enter_sendto", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_recvfrom", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_sendmsg", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_recvmsg", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_sendmmsg", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_recvmmsg", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "sendfiledst.txt", Tracepoint: "enter_sendfile64", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "pipe:", Tracepoint: "enter_splice", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "teedst.fifo", Tracepoint: "enter_tee", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_getdents64", Comm: "ioworkload", MinCount: 1},
+		{Tracepoint: "enter_readlinkat", Comm: "ioworkload", MinCount: 1},
+		{PathContains: "pipe:", Tracepoint: "enter_vmsplice", Comm: "ioworkload", MinCount: 1},
+	}, retbytesTraceArgs)
+
+	for _, exp := range []ExpectedEvent{
+		{Tracepoint: "enter_sendto", Comm: "ioworkload"},
+		{Tracepoint: "enter_recvfrom", Comm: "ioworkload"},
+		{Tracepoint: "enter_sendmsg", Comm: "ioworkload"},
+		{Tracepoint: "enter_recvmsg", Comm: "ioworkload"},
+		{PathContains: "sendfiledst.txt", Tracepoint: "enter_sendfile64", Comm: "ioworkload"},
+		{PathContains: "pipe:", Tracepoint: "enter_splice", Comm: "ioworkload"},
+		{PathContains: "teedst.fifo", Tracepoint: "enter_tee", Comm: "ioworkload"},
+		{Tracepoint: "enter_process_vm_writev", Comm: "ioworkload"},
+		{Tracepoint: "enter_process_vm_readv", Comm: "ioworkload"},
+	} {
+		assertEventBytesAtLeast(t, result, exp, payloadLen)
+		assertEventDurationPositive(t, result, exp)
+	}
+
+	for _, tracepoint := range []string{"enter_sendmmsg", "enter_recvmmsg"} {
+		exp := ExpectedEvent{Tracepoint: tracepoint, Comm: "ioworkload"}
+		assertEventBytesEqual(t, result, exp, 0)
+		assertEventDurationPositive(t, result, exp)
+	}
+
+	// getdents64 is READ_CLASSIFIED: a successful call on a non-empty directory
+	// fills the dirent buffer and reports ctx->ret > 0. Dirent size varies with
+	// filename length and alignment, so assert a conservative bytes>=1 minimum
+	// rather than an exact payload length.
+	getdentsExp := ExpectedEvent{Tracepoint: "enter_getdents64", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, getdentsExp, 1)
+	assertEventDurationPositive(t, result, getdentsExp)
+
+	// readlinkat is READ_CLASSIFIED: a successful call reports ctx->ret > 0,
+	// the byte length of the resolved link target written into the caller's
+	// buffer. The retbytes driver points the symlink at a known non-empty
+	// target, so the exit byte count is strictly positive. Assert a
+	// conservative bytes>=1 minimum (the exact target length is deterministic
+	// but path-dependent across temp dirs, so >=1 is the safest invariant).
+	readlinkatExp := ExpectedEvent{Tracepoint: "enter_readlinkat", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, readlinkatExp, 1)
+	assertEventDurationPositive(t, result, readlinkatExp)
+
+	// vmsplice is TRANSFER_CLASSIFIED: a successful gather of the user iovec
+	// into the pipe reports ctx->ret = bytes moved. The retbytes driver gathers
+	// exactly payloadLen (18) bytes each iteration, so the exit byte count is at
+	// least that. This locks in the TRANSFER byte attribution like splice/tee.
+	vmspliceExp := ExpectedEvent{PathContains: "pipe:", Tracepoint: "enter_vmsplice", Comm: "ioworkload"}
+	assertEventBytesAtLeast(t, result, vmspliceExp, payloadLen)
+	assertEventDurationPositive(t, result, vmspliceExp)
+}

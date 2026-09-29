@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,8 @@ func TestExtractTracepoints(t *testing.T) {
 	requireContains(t, output, `"sys_enter_close",`)
 	requireContains(t, output, `"sys_exit_close",`)
 	requireContains(t, output, "var List = []string{")
+	requireContains(t, output, "var syscallFamilies = map[string]string{")
+	requireContains(t, output, "var syscallKinds = map[string]string{")
 
 	// Should NOT contain ignore comments or defines
 	if strings.Contains(output, "kill") {
@@ -78,6 +81,8 @@ func TestExtractTracepointsEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireContains(t, output, "var List = []string{")
+	requireContains(t, output, "var syscallFamilies = map[string]string{")
+	requireContains(t, output, "var syscallKinds = map[string]string{")
 	requireContains(t, output, "}")
 }
 
@@ -115,7 +120,63 @@ func TestExtractTracepointsNoSECLines(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	requireContains(t, output, "var List = []string{")
+	requireContains(t, output, "var syscallFamilies = map[string]string{")
+	requireContains(t, output, "var syscallKinds = map[string]string{")
 	if strings.Contains(output, `"sys_`) {
 		t.Error("input with no SEC lines should produce empty list")
+	}
+}
+
+func TestExtractTracepointsWithKinds(t *testing.T) {
+	kindData := `sys_enter_read is a struct fd_event
+sys_enter_open_by_handle_at is a struct open_by_handle_at_event
+sys_enter_mq_open is a struct mq_open_event
+sys_enter_epoll_ctl is a struct epoll_ctl_event
+sys_enter_pidfd_open is a struct eventfd_event (kind=pidfd)
+sys_enter_msgsnd is a struct null_event (kind=sysv-op)
+`
+	output, err := ExtractTracepointsWithKinds(strings.NewReader(sampleGeneratedC), strings.NewReader(kindData))
+	if err != nil {
+		t.Fatalf("ExtractTracepointsWithKinds failed: %v", err)
+	}
+	requireContains(t, output, `"read": "fd",`)
+	requireContains(t, output, `"open_by_handle_at": "open-by-handle-at",`)
+	requireContains(t, output, `"mq_open": "mq-open",`)
+	requireContains(t, output, `"epoll_ctl": "epoll-ctl",`)
+	requireContains(t, output, `"pidfd_open": "pidfd",`)
+	requireContains(t, output, `"msgsnd": "sysv-op",`)
+}
+
+// TestCommittedTracepointsGoMatchesDerivedArtifacts closes the generated-file
+// chain: generated_tracepoints.c supplies the ordered tracepoint list,
+// generated_tracepoints_result.txt supplies each enter kind, and the committed
+// Go artifact must be exactly what ExtractTracepointsWithKinds derives from
+// those two reviewed inputs. This remains runnable on older kernels because it
+// never regenerates the host-dependent syscall corpus.
+func TestCommittedTracepointsGoMatchesDerivedArtifacts(t *testing.T) {
+	cSource, err := readRepoFile("internal", "c", "generated_tracepoints.c")
+	if err != nil {
+		t.Fatalf("read generated C: %v", err)
+	}
+	kindsSource, err := readRepoFile("internal", "c", "generated_tracepoints_result.txt")
+	if err != nil {
+		t.Fatalf("read generated kind metadata: %v", err)
+	}
+	want, err := readRepoFile("internal", "tracepoints", "generated_tracepoints.go")
+	if err != nil {
+		t.Fatalf("read generated Go: %v", err)
+	}
+
+	derived, err := ExtractTracepointsWithKinds(strings.NewReader(cSource), strings.NewReader(kindsSource))
+	if err != nil {
+		t.Fatalf("derive generated Go: %v", err)
+	}
+	formatted, err := format.Source([]byte(derived))
+	if err != nil {
+		t.Fatalf("format derived Go: %v", err)
+	}
+	got := string(formatted)
+	if got != want {
+		t.Fatal("committed generated_tracepoints.go differs from generated C and kind metadata")
 	}
 }

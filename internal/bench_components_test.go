@@ -108,6 +108,8 @@ func BenchmarkRawHandlerLookup(b *testing.B) {
 		types.ENTER_PATH_EVENT,
 		types.ENTER_FCNTL_EVENT,
 		types.ENTER_DUP3_EVENT,
+		types.ENTER_SOCKET_EVENT,
+		types.ENTER_SOCKETPAIR_EVENT,
 	}
 
 	b.ResetTimer()

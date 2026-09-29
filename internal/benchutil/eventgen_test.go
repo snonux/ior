@@ -39,6 +39,9 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	t.Run("EnterFdEvent", func(t *testing.T) {
 		want, raw, err := gen.EnterFdEvent(time, pid, tid, 11, types.SYS_ENTER_READ)
 		requireNoError(t, err)
+		if len(raw) != 32 {
+			t.Fatalf("read enter payload is %d bytes, want 32", len(raw))
+		}
 		got := types.NewFdEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {
@@ -49,6 +52,9 @@ func TestEventGeneratorEventMethodsRoundTrip(t *testing.T) {
 	t.Run("ExitFdEvent", func(t *testing.T) {
 		want, raw, err := gen.ExitFdEvent(time, pid, tid, 11, types.SYS_EXIT_CLOSE)
 		requireNoError(t, err)
+		if len(raw) != 32 {
+			t.Fatalf("fd exit payload is %d bytes, want 32", len(raw))
+		}
 		got := types.NewFdEvent(raw)
 		defer got.Recycle()
 		if !want.Equals(got) {

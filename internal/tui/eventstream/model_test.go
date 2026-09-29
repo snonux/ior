@@ -5,7 +5,20 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"ior/internal/globalfilter/presenter"
+	"ior/internal/tui/messages"
+
+	tea "charm.land/bubbletea/v2"
 )
+
+func (m *Model) setFilterForTest(f Filter) {
+	m.filter = f
+}
+
+func (m *Model) setExportDirForTest(dir string) {
+	m.exportDir = dir
+}
 
 func pushEvents(rb *RingBuffer, count int) {
 	for i := 0; i < count; i++ {
@@ -26,6 +39,38 @@ func pushEvents(rb *RingBuffer, count int) {
 	}
 }
 
+// TestPausedFooterRendersIndependentOfFooterVisible verifies the footer
+// gating: the paused selection/column footer renders whenever the stream is
+// paused, even with SetFooterVisible(false) (the dashboard help-bar state),
+// while the live footer stays hidden until the help bar enables it.
+func TestPausedFooterRendersIndependentOfFooterVisible(t *testing.T) {
+	rb := NewRingBuffer()
+	m := NewModel(rb)
+	pushEvents(rb, 10)
+	m.Refresh()
+
+	// Footer hidden (help bar off) and live: no Row/Sel footer line.
+	m.SetFooterVisible(false)
+	if got := m.View(120, 24); strings.Contains(got, "Row ") {
+		t.Fatalf("live + footer-hidden should not render the Row footer:\n%s", got)
+	}
+
+	// Pause and anchor a selection; the footer must render despite footer-hidden.
+	if !pressLocal(t, &m, "space") {
+		t.Fatalf("space should pause")
+	}
+	if !m.paused {
+		t.Fatalf("expected paused state")
+	}
+	got := m.View(120, 24)
+	if !strings.Contains(got, "Sel ") || !strings.Contains(got, "Col ") {
+		t.Fatalf("paused stream must render Sel/Col footer regardless of SetFooterVisible(false):\n%s", got)
+	}
+	if !strings.Contains(got, "Enter push-filter") {
+		t.Fatalf("paused footer should include the push-filter hint:\n%s", got)
+	}
+}
+
 func TestModelPauseFreezesDisplay(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)
@@ -36,7 +81,7 @@ func TestModelPauseFreezesDisplay(t *testing.T) {
 		t.Fatalf("filtered=%d, want 3", len(m.filtered))
 	}
 
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should be handled")
 	}
 	pushEvents(rb, 2)
@@ -54,14 +99,14 @@ func TestModelScrollClamp(t *testing.T) {
 	m.Refresh()
 
 	for i := 0; i < 100; i++ {
-		m.HandleKey("j")
+		pressLocal(t, &m, "j")
 	}
 	if m.scrollOffset > m.maxScrollOffset() {
 		t.Fatalf("scrollOffset=%d exceeds max=%d", m.scrollOffset, m.maxScrollOffset())
 	}
 
 	for i := 0; i < 100; i++ {
-		m.HandleKey("k")
+		pressLocal(t, &m, "k")
 	}
 	if m.scrollOffset != 0 {
 		t.Fatalf("scrollOffset=%d, want 0", m.scrollOffset)
@@ -74,29 +119,29 @@ func TestModelPageScrollWithPgUpPgDown(t *testing.T) {
 	m.height = 12 // visibleRows=4, pageStep=3
 	pushEvents(rb, 30)
 	m.Refresh()
-	m.HandleKey("g")
+	pressLocal(t, &m, "g")
 
-	if !m.HandleKey("pgdown") {
+	if !pressLocal(t, &m, "pgdown") {
 		t.Fatalf("pgdown should be handled")
 	}
 	if m.scrollOffset != 3 {
 		t.Fatalf("expected page down to move by 3, got %d", m.scrollOffset)
 	}
 
-	if !m.HandleKey("pagedown") {
+	if !pressLocal(t, &m, "pagedown") {
 		t.Fatalf("pagedown should be handled")
 	}
 	if m.scrollOffset != 6 {
 		t.Fatalf("expected pagedown alias to move by 3, got %d", m.scrollOffset)
 	}
 
-	if !m.HandleKey("pgup") {
+	if !pressLocal(t, &m, "pgup") {
 		t.Fatalf("pgup should be handled")
 	}
 	if m.scrollOffset != 3 {
 		t.Fatalf("expected page up to move up by 3, got %d", m.scrollOffset)
 	}
-	if !m.HandleKey("pageup") {
+	if !pressLocal(t, &m, "pageup") {
 		t.Fatalf("pageup should be handled")
 	}
 	if m.scrollOffset != 0 {
@@ -110,27 +155,27 @@ func TestModelArrowAndJKScroll(t *testing.T) {
 	m.height = 12
 	pushEvents(rb, 30)
 	m.Refresh()
-	m.HandleKey("g")
+	pressLocal(t, &m, "g")
 
-	if !m.HandleKey("down") {
+	if !pressLocal(t, &m, "down") {
 		t.Fatalf("down should be handled")
 	}
 	if m.scrollOffset != 1 {
 		t.Fatalf("expected down to increment offset, got %d", m.scrollOffset)
 	}
-	if !m.HandleKey("j") {
+	if !pressLocal(t, &m, "j") {
 		t.Fatalf("j should be handled")
 	}
 	if m.scrollOffset != 2 {
 		t.Fatalf("expected j to increment offset, got %d", m.scrollOffset)
 	}
-	if !m.HandleKey("up") {
+	if !pressLocal(t, &m, "up") {
 		t.Fatalf("up should be handled")
 	}
 	if m.scrollOffset != 1 {
 		t.Fatalf("expected up to decrement offset, got %d", m.scrollOffset)
 	}
-	if !m.HandleKey("k") {
+	if !pressLocal(t, &m, "k") {
 		t.Fatalf("k should be handled")
 	}
 	if m.scrollOffset != 0 {
@@ -164,7 +209,7 @@ func TestModelAutoScrollBehavior(t *testing.T) {
 		t.Fatalf("expected auto-scroll at bottom, got offset=%d max=%d", m.scrollOffset, m.maxScrollOffset())
 	}
 
-	m.HandleKey("k")
+	pressLocal(t, &m, "k")
 	prev := m.scrollOffset
 	pushEvents(rb, 3)
 	m.Refresh()
@@ -172,7 +217,7 @@ func TestModelAutoScrollBehavior(t *testing.T) {
 		t.Fatalf("when autoScroll=false, offset should stay %d, got %d", prev, m.scrollOffset)
 	}
 
-	m.HandleKey("G")
+	pressLocal(t, &m, "G")
 	if m.scrollOffset != m.maxScrollOffset() {
 		t.Fatalf("G should jump to tail")
 	}
@@ -182,10 +227,10 @@ func TestModelHandleKeyRouting(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)
 
-	if m.HandleKey("x") {
+	if pressLocal(t, &m, "x") {
 		t.Fatalf("unknown key should not be handled")
 	}
-	if m.HandleKey("f") {
+	if pressLocal(t, &m, "f") {
 		t.Fatalf("stream-local filter shortcut should no longer be handled here")
 	}
 }
@@ -216,11 +261,11 @@ func TestUnpauseRestoresLiveTailAndRefresh(t *testing.T) {
 	m.Refresh()
 
 	// Move off tail, then pause.
-	m.HandleKey("g")
+	pressLocal(t, &m, "g")
 	if m.autoScroll {
 		t.Fatalf("expected autoScroll disabled at top")
 	}
-	m.HandleKey("space")
+	pressLocal(t, &m, "space")
 	if !m.paused {
 		t.Fatalf("expected paused")
 	}
@@ -230,7 +275,7 @@ func TestUnpauseRestoresLiveTailAndRefresh(t *testing.T) {
 	m.Refresh()
 
 	// Resume: should auto-tail and refresh immediately.
-	m.HandleKey("space")
+	pressLocal(t, &m, "space")
 	if m.paused {
 		t.Fatalf("expected unpaused")
 	}
@@ -248,25 +293,25 @@ func TestPausedScrollWithJKAndPageKeys(t *testing.T) {
 	m.height = 20
 	pushEvents(rb, 100)
 	m.Refresh()
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should toggle pause")
 	}
 	before := rowNumber(m.scrollOffset, len(m.filtered))
-	if !m.HandleKey("k") {
+	if !pressLocal(t, &m, "k") {
 		t.Fatalf("k should be handled while paused")
 	}
 	afterK := rowNumber(m.scrollOffset, len(m.filtered))
 	if afterK >= before {
 		t.Fatalf("expected k to scroll up while paused: before=%d after=%d", before, afterK)
 	}
-	if !m.HandleKey("pgup") {
+	if !pressLocal(t, &m, "pgup") {
 		t.Fatalf("pgup should be handled while paused")
 	}
 	afterPgUp := rowNumber(m.scrollOffset, len(m.filtered))
 	if afterPgUp >= afterK {
 		t.Fatalf("expected pgup to scroll up while paused: afterK=%d afterPgUp=%d", afterK, afterPgUp)
 	}
-	if !m.HandleKey("pgdown") {
+	if !pressLocal(t, &m, "pgdown") {
 		t.Fatalf("pgdown should be handled while paused")
 	}
 	afterPgDown := rowNumber(m.scrollOffset, len(m.filtered))
@@ -282,7 +327,7 @@ func TestPausedSelectionInitializesNearMiddleAndCenters(t *testing.T) {
 	pushEvents(rb, 100)
 	m.Refresh()
 
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should toggle pause")
 	}
 	if !m.paused {
@@ -306,15 +351,15 @@ func TestPausedSelectionMovesAndRecentersWithJKAndArrows(t *testing.T) {
 	pushEvents(rb, 100)
 	m.Refresh()
 
-	if !m.HandleKey("g") {
+	if !pressLocal(t, &m, "g") {
 		t.Fatalf("g should be handled")
 	}
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should toggle pause")
 	}
 	startSel := m.selectedIdx
 
-	if !m.HandleKey("j") {
+	if !pressLocal(t, &m, "j") {
 		t.Fatalf("j should be handled while paused")
 	}
 	if m.selectedIdx != startSel+1 {
@@ -325,7 +370,7 @@ func TestPausedSelectionMovesAndRecentersWithJKAndArrows(t *testing.T) {
 		t.Fatalf("expected centered viewport after j")
 	}
 
-	if !m.HandleKey("up") {
+	if !pressLocal(t, &m, "up") {
 		t.Fatalf("up should be handled while paused")
 	}
 	if m.selectedIdx != startSel {
@@ -343,13 +388,13 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 	pushEvents(rb, 100)
 	m.Refresh()
 
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should toggle pause")
 	}
 	startCol := m.selectedCol
 	startRow := m.selectedIdx
 
-	if !m.HandleKey("right") {
+	if !pressLocal(t, &m, "right") {
 		t.Fatalf("right should be handled while paused")
 	}
 	if m.selectedCol != startCol+1 {
@@ -359,17 +404,17 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 		t.Fatalf("expected selected row unchanged after right, got %d->%d", startRow, m.selectedIdx)
 	}
 
-	if !m.HandleKey("l") {
+	if !pressLocal(t, &m, "l") {
 		t.Fatalf("l should be handled while paused")
 	}
 	if m.selectedCol != startCol+2 {
 		t.Fatalf("expected selected col +2 after l, got %d", m.selectedCol)
 	}
 
-	if !m.HandleKey("left") {
+	if !pressLocal(t, &m, "left") {
 		t.Fatalf("left should be handled while paused")
 	}
-	if !m.HandleKey("h") {
+	if !pressLocal(t, &m, "h") {
 		t.Fatalf("h should be handled while paused")
 	}
 	if m.selectedCol != startCol {
@@ -377,7 +422,7 @@ func TestPausedSelectionMovesAcrossColumnsWithLeftRightAndHL(t *testing.T) {
 	}
 }
 
-func TestPausedEnterQueuesGlobalFilterRequestFromSelectedCell(t *testing.T) {
+func TestPausedEnterEmitsGlobalFilterRequestFromSelectedCell(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a", DurationNs: 100, GapNs: 5})
 	rb.Push(StreamEvent{Seq: 2, PID: 1, TID: 2, Comm: "b", DurationNs: 200, GapNs: 6})
@@ -385,57 +430,269 @@ func TestPausedEnterQueuesGlobalFilterRequestFromSelectedCell(t *testing.T) {
 	m.height = 20
 	m.Refresh()
 	m.SetFilter(Filter{PID: &NumericFilter{Op: OpEq, Value: 1}})
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should pause")
 	}
 
 	m.selectedIdx = 0
 	m.selectedCol = streamColComm
-	if !m.HandleKey("enter") {
-		t.Fatalf("expected enter to queue a global filter request in paused stream mode")
-	}
+	req := pressRequest[messages.GlobalFilterRequestedMsg](t, &m, "enter")
 	if m.filter.Comm != nil {
 		t.Fatalf("expected local stream filter state to remain unchanged until parent applies it")
 	}
-	req, action, ok := m.ConsumeGlobalFilterRequest()
-	if !ok {
-		t.Fatalf("expected pending global filter request")
+	if req.Action != "comm~a" {
+		t.Fatalf("expected action label comm~a, got %q", req.Action)
 	}
-	if action != "comm~a" {
-		t.Fatalf("expected action label comm~a, got %q", action)
+	if req.Filter.PID == nil || req.Filter.PID.Op != OpEq || req.Filter.PID.Value != 1 {
+		t.Fatalf("expected existing pid filter preserved, got %+v", req.Filter.PID)
 	}
-	if req.PID == nil || req.PID.Op != OpEq || req.PID.Value != 1 {
-		t.Fatalf("expected existing pid filter preserved, got %+v", req.PID)
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "a" {
+		t.Fatalf("expected selected comm folded into global filter, got %+v", req.Filter.Comm)
 	}
-	if req.Comm == nil || req.Comm.Pattern != "a" {
-		t.Fatalf("expected selected comm folded into global filter, got %+v", req.Comm)
-	}
-	if _, _, ok := m.ConsumeGlobalFilterRequest(); ok {
-		t.Fatalf("expected global filter request to be one-shot")
-	}
-	if m.HandleKey("esc") {
-		t.Fatalf("expected esc not to act as local filter undo anymore")
+	if pressLocal(t, &m, "esc") {
+		t.Fatalf("expected esc without a filter stack to fall through")
 	}
 }
 
-func TestPausedEscQueuesGlobalFilterUndoWhenStackPresent(t *testing.T) {
+// TestGlobalFilterRequestIsDetachedFromLocalFilter verifies the emitted
+// filter is a snapshot: changing the stream's own filter after the key press
+// but before the command runs must not leak into the request.
+func TestGlobalFilterRequestIsDetachedFromLocalFilter(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 7, TID: 1, Comm: "a"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	m.SetFilter(Filter{Comm: &StringFilter{Pattern: "a"}})
+	pressLocal(t, &m, "space")
+	m.selectedIdx = 0
+	m.selectedCol = streamColPID
+
+	handled, cmd := m.HandleKey("enter")
+	if !handled || cmd == nil {
+		t.Fatalf("expected enter to be handled with a command, got handled=%v cmd=%v", handled, cmd != nil)
+	}
+	m.filter.Comm.Pattern = "mutated"
+	m.SetFilter(Filter{})
+
+	req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+	if !ok {
+		t.Fatalf("expected GlobalFilterRequestedMsg")
+	}
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "a" {
+		t.Fatalf("expected request to keep the comm filter from key-press time, got %+v", req.Filter.Comm)
+	}
+	if req.Filter.PID == nil || req.Filter.PID.Value != 7 || req.Action != "pid=7" {
+		t.Fatalf("expected pid=7 request, got action=%q pid=%+v", req.Action, req.Filter.PID)
+	}
+}
+
+// pressEnterOnCell pauses a stream holding only ev, selects column col of
+// its row and presses enter, returning whether the key was handled and the
+// command it produced.
+func pressEnterOnCell(t *testing.T, ev StreamEvent, col int) (bool, tea.Cmd) {
+	t.Helper()
+	rb := NewRingBuffer()
+	rb.Push(ev)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	pressLocal(t, &m, "space")
+	m.selectedIdx = 0
+	m.selectedCol = col
+	return m.HandleKey("enter")
+}
+
+// TestPausedEnterActionLabelPerColumn pins every column's action label to the
+// presenter's canonical token for the dimension the column sets, so the undo
+// stack reads exactly like the filter summary (durations included: the label
+// uses time.Duration wording such as "1.5µs", not the table cell's "1.5us").
+func TestPausedEnterActionLabelPerColumn(t *testing.T) {
+	ev := StreamEvent{
+		Seq: 1, PID: 11, TID: 12, Comm: "cc", Syscall: "openat", FD: 3,
+		RetVal: -2, Bytes: 64, FileName: "/etc/x", DurationNs: 1500, GapNs: 40,
+	}
+	tests := []struct {
+		col  int
+		dim  presenter.Dimension
+		want string
+	}{
+		{streamColGap, presenter.DimGap, "gap>=40ns"},
+		{streamColLatency, presenter.DimLatency, "latency>=1.5µs"},
+		{streamColComm, presenter.DimComm, "comm~cc"},
+		{streamColPID, presenter.DimPID, "pid=11"},
+		{streamColTID, presenter.DimTID, "tid=12"},
+		{streamColSyscall, presenter.DimSyscall, "syscall~openat"},
+		{streamColFD, presenter.DimFD, "fd=3"},
+		{streamColRet, presenter.DimRet, "ret=-2"},
+		{streamColBytes, presenter.DimBytes, "bytes=64"},
+		{streamColFile, presenter.DimFile, "file~/etc/x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, ev, tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("column %d: expected enter to emit a request", tt.col)
+			}
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("column %d: expected GlobalFilterRequestedMsg", tt.col)
+			}
+			if req.Action != tt.want {
+				t.Fatalf("column %d: expected action %q, got %q", tt.col, tt.want, req.Action)
+			}
+			if canonical := presenter.DimensionSummary(req.Filter, tt.dim); req.Action != canonical {
+				t.Fatalf("column %d: action %q differs from presenter token %q", tt.col, req.Action, canonical)
+			}
+			if !req.Filter.IsActive() {
+				t.Fatalf("column %d: expected an active filter in the request", tt.col)
+			}
+		})
+	}
+}
+
+// TestPausedEnterActionLabelEdgeValues covers values whose wording used to
+// be hand-built: zero and negative numbers, sub-microsecond and multi-second
+// durations, and string cells holding spaces or filter-syntax characters.
+func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   StreamEvent
+		col  int
+		dim  presenter.Dimension
+		want string
+	}{
+		{"zero gap", StreamEvent{Seq: 1, GapNs: 0}, streamColGap, presenter.DimGap, "gap>=0s"},
+		{"seconds latency", StreamEvent{Seq: 1, DurationNs: 2_500_000_000}, streamColLatency, presenter.DimLatency, "latency>=2.5s"},
+		{"odd latency", StreamEvent{Seq: 1, DurationNs: 1234}, streamColLatency, presenter.DimLatency, "latency>=1.234µs"},
+		{"zero pid", StreamEvent{Seq: 1, PID: 0}, streamColPID, presenter.DimPID, "pid=0"},
+		{"negative fd", StreamEvent{Seq: 1, FD: -1}, streamColFD, presenter.DimFD, "fd=-1"},
+		{"zero bytes", StreamEvent{Seq: 1, Bytes: 0}, streamColBytes, presenter.DimBytes, "bytes=0"},
+		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~kworker/0:1 ~x=y"},
+		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~sh"},
+		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^/tmp/a b$"},
+		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~écrire"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("expected enter to emit a request")
+			}
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("expected GlobalFilterRequestedMsg")
+			}
+			if req.Action != tt.want {
+				t.Fatalf("expected action %q, got %q", tt.want, req.Action)
+			}
+			if canonical := presenter.DimensionSummary(req.Filter, tt.dim); req.Action != canonical {
+				t.Fatalf("action %q differs from presenter token %q", req.Action, canonical)
+			}
+		})
+	}
+}
+
+// TestPausedEnterOnBlankStringCellIsNotHandled: a blank pattern constrains
+// nothing (and has no presenter token), so enter on an empty comm, syscall or
+// file cell must not push an empty undo layer.
+func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ev   StreamEvent
+		col  int
+	}{
+		{"empty comm", StreamEvent{Seq: 1, PID: 5}, streamColComm},
+		{"blank comm", StreamEvent{Seq: 1, PID: 5, Comm: "   "}, streamColComm},
+		{"empty syscall", StreamEvent{Seq: 1, PID: 5}, streamColSyscall},
+		{"empty file", StreamEvent{Seq: 1, PID: 5}, streamColFile},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
+			if handled || cmd != nil {
+				t.Fatalf("expected blank cell enter to be ignored, got handled=%v cmd=%v", handled, cmd != nil)
+			}
+		})
+	}
+}
+
+func TestEnterEmitsNoFilterRequestWithoutPausedSelection(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	if pressLocal(t, &m, "enter") {
+		t.Fatalf("enter on the live stream must fall through")
+	}
+
+	pressLocal(t, &m, "space")
+	m.selectedCol = streamColumnCount // out of range: no column to filter on
+	m.selectedIdx = 0
+	if pressLocal(t, &m, "enter") {
+		t.Fatalf("enter on an unknown column must fall through")
+	}
+}
+
+func TestPausedEscEmitsGlobalFilterUndoWhenStackPresent(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a"})
 	m := NewModel(rb)
 	m.height = 20
 	m.Refresh()
 	m.SetFilterStack([]string{"comm~a"})
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should pause")
 	}
-	if !m.HandleKey("esc") {
-		t.Fatalf("expected esc to queue undo when a global filter stack exists")
+	pressRequest[messages.GlobalFilterUndoRequestedMsg](t, &m, "esc")
+	// Each press is its own request; nothing is buffered between them.
+	pressRequest[messages.GlobalFilterUndoRequestedMsg](t, &m, "esc")
+}
+
+func TestUndoKeysFallThroughWithoutRequest(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	// No filter stack: neither F nor esc has anything to undo.
+	if pressLocal(t, &m, "F") {
+		t.Fatalf("F without a filter stack must fall through")
 	}
-	if !m.ConsumeGlobalFilterUndoRequest() {
-		t.Fatalf("expected pending global filter undo request")
+	pressLocal(t, &m, "space")
+	if pressLocal(t, &m, "esc") {
+		t.Fatalf("paused esc without a filter stack must fall through")
 	}
-	if m.ConsumeGlobalFilterUndoRequest() {
-		t.Fatalf("expected global filter undo request to be one-shot")
+	pressLocal(t, &m, "space") // back to live
+
+	// Live stream with a stack: esc belongs to the parent, F still undoes.
+	m.SetFilterStack([]string{"comm~a"})
+	if pressLocal(t, &m, "esc") {
+		t.Fatalf("live esc must fall through even with a filter stack")
+	}
+	pressRequest[messages.GlobalFilterUndoRequestedMsg](t, &m, "F")
+}
+
+func TestHandleTeaKeyEnterEmitsGlobalFilterRequest(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, PID: 1, TID: 1, Comm: "a"})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	if handled, cmd := m.HandleTeaKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); !handled || cmd != nil {
+		t.Fatalf("space should pause without a command, got handled=%v cmd=%v", handled, cmd != nil)
+	}
+	m.selectedIdx = 0
+	m.selectedCol = streamColComm
+
+	handled, cmd := m.HandleTeaKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled || cmd == nil {
+		t.Fatalf("expected enter to be handled with a command, got handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if req, ok := cmd().(messages.GlobalFilterRequestedMsg); !ok || req.Action != "comm~a" {
+		t.Fatalf("expected comm~a GlobalFilterRequestedMsg, got %#v", cmd())
 	}
 }
 
@@ -459,7 +716,7 @@ func TestSetFilterKeepsPausedSelectionCentered(t *testing.T) {
 	m := NewModel(rb)
 	m.height = 20
 	m.Refresh()
-	_ = m.HandleKey("space")
+	_ = pressLocal(t, &m, "space")
 	m.moveSelectionTo(150)
 	before := m.selectedIdx - m.scrollOffset
 	if before < 4 || before > 8 {
@@ -483,7 +740,7 @@ func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
 	m.height = 20
 	m.setExportDirForTest(t.TempDir())
 	m.Refresh()
-	if !m.HandleKey("space") {
+	if !pressLocal(t, &m, "space") {
 		t.Fatalf("space should pause")
 	}
 
@@ -492,7 +749,7 @@ func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
 		t.Fatalf("expected 2 filtered rows before export, got %d", len(m.filtered))
 	}
 
-	if !m.HandleKey("x") {
+	if !pressLocal(t, &m, "x") {
 		t.Fatalf("x should quick-export while paused")
 	}
 	if m.lastExportPath == "" {
@@ -507,6 +764,57 @@ func TestPausedQuickExportWritesFilteredRows(t *testing.T) {
 	}
 }
 
+// TestPausedQuickExportDisabledByExportFlag regresses audit finding M10: with
+// -tuiExport=false the paused-stream x shortcut must not write an export CSV,
+// must not open the export modal, and must fall through as unhandled.
+func TestPausedQuickExportDisabledByExportFlag(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "firefox", PID: 10, TID: 100, Syscall: "read", FileName: "/a"})
+
+	exportDir := t.TempDir()
+	m := NewModel(rb)
+	m.height = 20
+	m.SetExportEnabled(false)
+	m.setExportDirForTest(exportDir)
+	m.Refresh()
+	if !pressLocal(t, &m, "space") {
+		t.Fatalf("space should pause")
+	}
+
+	if pressLocal(t, &m, "x") {
+		t.Fatalf("x must fall through as unhandled when export is disabled")
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("expected no export path when export is disabled, got %q", m.lastExportPath)
+	}
+	if strings.Contains(m.statusMessage, "Export") {
+		t.Fatalf("expected no export status when export is disabled, got %q", m.statusMessage)
+	}
+	if m.exportModal.Visible() {
+		t.Fatalf("x must not open the export modal when export is disabled")
+	}
+	if pressLocal(t, &m, "X") {
+		t.Fatalf("X must fall through as unhandled when export is disabled")
+	}
+	if m.exportModal.Visible() {
+		t.Fatalf("X must not open the export modal when export is disabled")
+	}
+	if pressLocal(t, &m, "E") {
+		t.Fatalf("E must fall through as unhandled when export is disabled")
+	}
+	if strings.Contains(m.statusMessage, "editor") || strings.Contains(m.statusMessage, "No stream export") {
+		t.Fatalf("E must not set an open-in-editor status when export is disabled, got %q", m.statusMessage)
+	}
+
+	entries, err := os.ReadDir(exportDir)
+	if err != nil {
+		t.Fatalf("read export dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no exported files in export dir, got %d entries", len(entries))
+	}
+}
+
 func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
@@ -514,9 +822,9 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	m.height = 20
 	m.setExportDirForTest(t.TempDir())
 	m.Refresh()
-	_ = m.HandleKey("space")
+	_ = pressLocal(t, &m, "space")
 
-	if !m.HandleKey("X") {
+	if !pressLocal(t, &m, "X") {
 		t.Fatalf("X should open export modal while paused")
 	}
 	if !m.exportModal.Visible() {
@@ -524,7 +832,7 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	}
 	// Replace default value fully and submit.
 	m.exportModal = m.exportModal.Open("custom-name")
-	if !m.HandleKey("enter") {
+	if !pressLocal(t, &m, "enter") {
 		t.Fatalf("enter should submit export modal")
 	}
 	if m.exportModal.Visible() {
@@ -538,28 +846,46 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	}
 }
 
-func TestPausedOpenLastExportQueuesRequest(t *testing.T) {
+func TestPausedOpenLastExportEmitsEditorRequest(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
 	m := NewModel(rb)
 	m.height = 20
 	m.setExportDirForTest(t.TempDir())
 	m.Refresh()
-	_ = m.HandleKey("space")
-	_ = m.HandleKey("x")
+	_ = pressLocal(t, &m, "space")
+	_ = pressLocal(t, &m, "x")
+	if m.lastExportPath == "" {
+		t.Fatalf("expected x to export before E")
+	}
 
-	if !m.HandleKey("E") {
-		t.Fatalf("E should queue opening last export while paused")
+	req := pressRequest[messages.OpenEditorRequestedMsg](t, &m, "E")
+	if req.Path != m.lastExportPath {
+		t.Fatalf("expected opened path %q, got %q", m.lastExportPath, req.Path)
 	}
-	path, ok := m.ConsumeOpenEditorRequest()
-	if !ok {
-		t.Fatalf("expected queued open-editor request")
+	if m.statusMessage != "Opening in editor: "+m.lastExportPath {
+		t.Fatalf("expected opening status, got %q", m.statusMessage)
 	}
-	if path != m.lastExportPath {
-		t.Fatalf("expected opened path %q, got %q", m.lastExportPath, path)
+}
+
+func TestOpenLastExportWithoutRequest(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(t.TempDir())
+	m.Refresh()
+
+	if pressLocal(t, &m, "E") {
+		t.Fatalf("E on the live stream must fall through")
 	}
-	if _, ok := m.ConsumeOpenEditorRequest(); ok {
-		t.Fatalf("expected request to be consumed once")
+
+	_ = pressLocal(t, &m, "space")
+	if !pressLocal(t, &m, "E") {
+		t.Fatalf("E while paused should be consumed even without an export")
+	}
+	if m.statusMessage != "No stream export yet" {
+		t.Fatalf("expected no-export status, got %q", m.statusMessage)
 	}
 }
 
@@ -573,19 +899,19 @@ func TestRegexSearchForwardBackwardAndRepeat(t *testing.T) {
 	m := NewModel(rb)
 	m.height = 20
 	m.Refresh()
-	_ = m.HandleKey("space")
+	_ = pressLocal(t, &m, "space")
 	m.moveSelectionTo(0)
 
-	if !m.HandleKey("/") {
+	if !pressLocal(t, &m, "/") {
 		t.Fatalf("/ should open search modal")
 	}
 	if !m.searchModal.Visible() {
 		t.Fatalf("expected search modal visible")
 	}
-	if !m.HandleKey("b") || !m.HandleKey("e") || !m.HandleKey("t") || !m.HandleKey("a") {
+	if !pressLocal(t, &m, "b") || !pressLocal(t, &m, "e") || !pressLocal(t, &m, "t") || !pressLocal(t, &m, "a") {
 		t.Fatalf("expected term typing keys handled")
 	}
-	if !m.HandleKey("enter") {
+	if !pressLocal(t, &m, "enter") {
 		t.Fatalf("enter should submit search")
 	}
 	if m.selectedIdx != 1 {
@@ -595,24 +921,24 @@ func TestRegexSearchForwardBackwardAndRepeat(t *testing.T) {
 		t.Fatalf("expected search direction forward")
 	}
 
-	if !m.HandleKey("n") {
+	if !pressLocal(t, &m, "n") {
 		t.Fatalf("n should jump to next hit")
 	}
 	if m.selectedIdx != 3 {
 		t.Fatalf("expected next forward beta hit at idx 3, got %d", m.selectedIdx)
 	}
 
-	if !m.HandleKey("N") {
+	if !pressLocal(t, &m, "N") {
 		t.Fatalf("N should jump opposite direction")
 	}
 	if m.selectedIdx != 1 {
 		t.Fatalf("expected opposite-direction beta hit at idx 1, got %d", m.selectedIdx)
 	}
 
-	if !m.HandleKey("?") {
+	if !pressLocal(t, &m, "?") {
 		t.Fatalf("? should open backward search modal")
 	}
-	if !m.HandleKey("enter") {
+	if !pressLocal(t, &m, "enter") {
 		t.Fatalf("enter should submit backward search")
 	}
 	if m.selectedIdx != 3 {
@@ -629,11 +955,87 @@ func readCSVRecords(t *testing.T, path string) [][]string {
 	if err != nil {
 		t.Fatalf("open csv: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r := csv.NewReader(f)
 	records, err := r.ReadAll()
 	if err != nil {
 		t.Fatalf("read csv: %v", err)
 	}
 	return records
+}
+
+// TestModelFilterMatchesRenameOnEitherName pins that the Stream tab applies the
+// same either-name file semantics as the event loop and the dashboard ingest
+// stage. A rename row's FileValue is its newname, so filtering it with plain
+// Matches would hide a row the aggregates on every other tab already counted —
+// and would drop it from the CSV export too.
+func TestModelFilterMatchesRenameOnEitherName(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq:      1,
+		Syscall:  "renameat2",
+		Comm:     "mv",
+		FileName: "/tmp/new.txt",
+		OldName:  "/tmp/old.txt",
+	})
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "old.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 1 {
+		t.Fatalf("a rename matched on its oldname must stay visible in the Stream tab, got %d rows", len(m.filtered))
+	}
+
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "new.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 1 {
+		t.Fatalf("a rename matched on its newname must stay visible, got %d rows", len(m.filtered))
+	}
+
+	// Widening the file dimension must not become a bypass.
+	m.setFilterForTest(Filter{File: &StringFilter{Pattern: "unrelated.txt"}})
+	m.applyFilter()
+	if len(m.filtered) != 0 {
+		t.Fatalf("a pattern matching neither name must hide the row, got %d rows", len(m.filtered))
+	}
+	m.setFilterForTest(Filter{
+		File:    &StringFilter{Pattern: "old.txt"},
+		Syscall: &StringFilter{Pattern: "openat"},
+	})
+	m.applyFilter()
+	if len(m.filtered) != 0 {
+		t.Fatalf("an oldname match must not bypass the other dimensions, got %d rows", len(m.filtered))
+	}
+}
+
+// pressLocal sends keyStr to m and reports whether it was consumed. It fails
+// the test if the key returns a command: navigation, modal and export keys
+// act on local stream state only and must not emit a request to the parent.
+func pressLocal(t *testing.T, m *Model, keyStr string) bool {
+	t.Helper()
+	handled, cmd := m.HandleKey(keyStr)
+	if cmd != nil {
+		t.Fatalf("key %q: expected no command, got one emitting %#v", keyStr, cmd())
+	}
+	return handled
+}
+
+// pressRequest sends keyStr to m, requires it to be consumed with a command,
+// and returns the message the command emits, which must be of type T.
+func pressRequest[T tea.Msg](t *testing.T, m *Model, keyStr string) T {
+	t.Helper()
+	handled, cmd := m.HandleKey(keyStr)
+	if !handled {
+		t.Fatalf("key %q: expected to be consumed", keyStr)
+	}
+	if cmd == nil {
+		t.Fatalf("key %q: expected a command emitting %T", keyStr, *new(T))
+	}
+	msg, ok := cmd().(T)
+	if !ok {
+		t.Fatalf("key %q: expected %T, got %#v", keyStr, *new(T), cmd())
+	}
+	return msg
 }

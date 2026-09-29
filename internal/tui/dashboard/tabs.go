@@ -64,6 +64,7 @@ func tabIndex(tab Tab, tabs []Tab) int {
 // plain renderer when the terminal is narrow, and further degrades to showing
 // only the active tab label when even the abbreviated labels do not fit.
 func renderTabBar(active Tab, width int) string {
+	theme := common.Current()
 	if width > 0 && width < 90 {
 		return renderTabBarPlain(active, width)
 	}
@@ -73,9 +74,9 @@ func renderTabBar(active Tab, width int) string {
 		for i, tab := range tabs {
 			label := fmt.Sprintf("%d:%s", i+1, tabLabel(tab, short))
 			if tab == active {
-				parts = append(parts, common.TabActiveStyle.Render(label))
+				parts = append(parts, theme.TabActiveStyle.Render(label))
 			} else {
-				parts = append(parts, common.TabInactiveStyle.Render(label))
+				parts = append(parts, theme.TabInactiveStyle.Render(label))
 			}
 		}
 		return lipgloss.JoinHorizontal(lipgloss.Left, parts...)
@@ -87,7 +88,7 @@ func renderTabBar(active Tab, width int) string {
 	}
 	if width > 0 && lipgloss.Width(bar) > width {
 		label := fmt.Sprintf("%d:%s", tabIndex(active, tabs)+1, tabLabel(active, false))
-		bar = common.TabActiveStyle.Render(label)
+		bar = theme.TabActiveStyle.Render(label)
 	}
 	if width <= 0 {
 		return bar
@@ -125,11 +126,7 @@ func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) strin
 	if width > 0 && width < 90 {
 		return text
 	}
-	return common.HelpBarStyle.Width(width).Render(text)
-}
-
-func renderHelpHint(width int) string {
-	return renderHelpHintWithStatus(width, "")
+	return common.Current().HelpBarStyle.Width(width).Render(text)
 }
 
 func renderHelpHintWithStatus(width int, status string) string {
@@ -140,51 +137,33 @@ func renderHelpHintWithStatus(width int, status string) string {
 	if width > 0 && width < 90 {
 		return hint
 	}
-	return common.HelpBarStyle.Width(width).Render(hint)
+	return common.Current().HelpBarStyle.Width(width).Render(hint)
 }
 
+// appendStatusText joins the chrome's static help text and its live status
+// half into one row of at most width cells.
+//
+// When both do not fit, the HELP half is the one that gives way. The status
+// half is where the dashboard reports state the user cannot get anywhere else
+// - the active filter, a filter that was refused, the recording status - while
+// the help half is reference text that the help overlay repeats in full.
+// Truncating the joined line from the right (as this did) dropped precisely
+// the half worth reading, which is how a refused filter could go unnoticed on
+// a narrow terminal.
 func appendStatusText(base, status string, width int) string {
 	if status == "" {
 		return base
 	}
-	line := base + " | " + status
-	if width > 0 {
-		return truncatePlain(line, width)
-	}
-	return line
-}
-
-func wrapHelpLines(parts []string, width int) (string, string) {
-	if len(parts) == 0 {
-		return "", ""
-	}
+	const separator = " | "
 	if width <= 0 {
-		return strings.Join(parts, " • "), ""
+		return base + separator + status
 	}
-	max := width
-	lines := []string{"", ""}
-	line := 0
-	for _, part := range parts {
-		token := part
-		if lines[line] != "" {
-			token = " • " + part
-		}
-		if utf8.RuneCountInString(lines[line]+token) <= max {
-			lines[line] += token
-			continue
-		}
-		if line == 0 {
-			line = 1
-			if utf8.RuneCountInString(part) <= max {
-				lines[line] = part
-			}
-			continue
-		}
-		break
+	statusText := truncatePlain(status, width)
+	room := width - utf8.RuneCountInString(statusText) - utf8.RuneCountInString(separator)
+	if room < 1 {
+		return statusText
 	}
-	lines[0] = truncatePlain(lines[0], max)
-	lines[1] = truncatePlain(lines[1], max)
-	return lines[0], lines[1]
+	return truncatePlain(base, room) + separator + statusText
 }
 
 // tabLabel returns the display label for tab. When short is true the

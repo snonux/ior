@@ -1,0 +1,235 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
+type mountIDReq struct {
+	Size  uint32
+	Pad   uint32
+	MntID uint64
+	Param uint64
+}
+
+func mountfsManagement() error {
+	dir, cleanup, err := makeTempDir("mountfs-management")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	mountPoint := filepath.Join(dir, "mnt")
+	if err := os.Mkdir(mountPoint, 0o755); err != nil {
+		return fmt.Errorf("mkdir mountpoint: %w", err)
+	}
+	openTreeTarget := filepath.Join(dir, "open-tree-target")
+	if err := os.Mkdir(openTreeTarget, 0o755); err != nil {
+		return fmt.Errorf("mkdir open_tree target: %w", err)
+	}
+	moveMountDestination := filepath.Join(dir, "move-mount-destination")
+	if err := os.Mkdir(moveMountDestination, 0o755); err != nil {
+		return fmt.Errorf("mkdir move_mount destination: %w", err)
+	}
+
+	swapFile := filepath.Join(dir, "swapfile")
+	if err := os.WriteFile(swapFile, []byte("swap"), 0o600); err != nil {
+		return fmt.Errorf("write swap file: %w", err)
+	}
+
+	mountPath := mustCStringPtr(mountPoint)
+	moveMountDestinationPath := mustCStringPtr(moveMountDestination)
+	emptyPath := mustCStringPtr("")
+	openTreePath := mustCStringPtr(openTreeTarget)
+	swapPath := mustCStringPtr(swapFile)
+	newRoot := mustCStringPtr(mountPoint)
+	putOld := mustCStringPtr(dir)
+	tmpfs := mustCStringPtr("tmpfs")
+	none := mustCStringPtr("none")
+	rootPath := mustCStringPtr("/")
+	atFDCWDInt := int64(unix.AT_FDCWD)
+	atFDCWD := uintptr(atFDCWDInt)
+
+	keyName := mustCStringPtr("source")
+	keyValue := mustCStringPtr("none")
+
+	// Best-effort coverage: these calls are expected to fail on most hosts
+	// without CAP_SYS_ADMIN, but still exercise syscall tracing paths. Every
+	// sys_enter_ tracepoint fires on kernel entry, before any permission or
+	// validity check, so the integration assertions only require the enter_
+	// tracepoint to fire once (MinCount>=1) regardless of the syscall's return.
+	//
+	// fsopen(fsname, flags) is the entry point of the new mount API: it takes a
+	// filesystem TYPE name (e.g. "tmpfs"), NOT a path, in args[0] and the
+	// FSOPEN_CLOEXEC flag in args[1], returning a new filesystem-context fd. We
+	// keep the returned fd to feed fsconfig below, and close it afterwards so we
+	// do not leak it.
+	fsContextFd := -1
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSOPEN, uintptr(unsafe.Pointer(tmpfs)), uintptr(unix.FSOPEN_CLOEXEC), 0); errno == 0 {
+		fsContextFd = int(fd)
+	}
+
+	// fsconfig(fd, cmd, key, value, aux) configures a filesystem context obtained
+	// from fsopen. It is a KindFd syscall: args[0] is the fscontext fd. We issue
+	// two best-effort commands on whatever fd we have (the real fscontext fd when
+	// fsopen succeeded, otherwise an invalid -1 which still fires the enter_
+	// tracepoint and returns EBADF): FSCONFIG_SET_STRING to set a parameter and
+	// FSCONFIG_CMD_CREATE to materialise the superblock. Errors (ENOSYS on old
+	// kernels, EPERM/EINVAL/EBADF otherwise) are tolerated; no mount is created.
+	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_SET_STRING), uintptr(unsafe.Pointer(keyName)), uintptr(unsafe.Pointer(keyValue)), 0, 0)
+	_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, uintptr(fsContextFd), uintptr(unix.FSCONFIG_CMD_CREATE), 0, 0, 0, 0)
+
+	// fsmount consumes the live filesystem-context fd and returns a detached
+	// mount fd. On capable hosts, immediately feed that fd to move_mount using
+	// MOVE_MOUNT_F_EMPTY_PATH and a distinct destination. If creation fails,
+	// still issue move_mount with two pathnames so its enter event always carries
+	// an independently assertable destination rather than the old same-path pair.
+	mountFd := -1
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSMOUNT, uintptr(fsContextFd), uintptr(unix.FSMOUNT_CLOEXEC), 0); errno == 0 {
+		mountFd = int(fd)
+	}
+	if mountFd >= 0 {
+		_, _, moveErrno := syscall.RawSyscall6(
+			unix.SYS_MOVE_MOUNT,
+			uintptr(mountFd),
+			uintptr(unsafe.Pointer(emptyPath)),
+			atFDCWD,
+			uintptr(unsafe.Pointer(moveMountDestinationPath)),
+			uintptr(unix.MOVE_MOUNT_F_EMPTY_PATH),
+			0,
+		)
+		if moveErrno == 0 {
+			// move_mount attached the detached tmpfs to the host mount
+			// namespace. Tear it down before RemoveAll tries to remove the
+			// workload directory.
+			_, _, unmountErrno := syscall.RawSyscall(
+				unix.SYS_UMOUNT2,
+				uintptr(unsafe.Pointer(moveMountDestinationPath)),
+				uintptr(unix.MNT_DETACH),
+				0,
+			)
+			if unmountErrno != 0 {
+				syscall.Close(mountFd)
+				if fsContextFd >= 0 {
+					syscall.Close(fsContextFd)
+				}
+				return fmt.Errorf("unmount move_mount destination: %w", unmountErrno)
+			}
+		}
+		syscall.Close(mountFd)
+	} else {
+		_, _, _ = syscall.RawSyscall6(
+			unix.SYS_MOVE_MOUNT,
+			atFDCWD,
+			uintptr(unsafe.Pointer(mountPath)),
+			atFDCWD,
+			uintptr(unsafe.Pointer(moveMountDestinationPath)),
+			0,
+			0,
+		)
+	}
+	if fsContextFd >= 0 {
+		syscall.Close(fsContextFd)
+	}
+
+	// fspick(dfd, path, flags) creates a filesystem context for an EXISTING mount
+	// so it can be reconfigured. It is a KindPathname syscall: args[1] is the path.
+	// We point it at "/" (always present) with FSPICK_NO_AUTOMOUNT and close any
+	// returned fscontext fd. This reconfigures nothing and creates no mount.
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_FSPICK, atFDCWD, uintptr(unsafe.Pointer(rootPath)), uintptr(unix.FSPICK_NO_AUTOMOUNT|unix.FSPICK_CLOEXEC)); errno == 0 {
+		// A successful fspick returns an fscontext descriptor. Feed it to
+		// fsconfig before close so integration runs on capable hosts exercise
+		// the complete fspick -> fd consumer -> close state chain.
+		_, _, _ = syscall.RawSyscall6(unix.SYS_FSCONFIG, fd, uintptr(unix.FSCONFIG_CMD_RECONFIGURE), 0, 0, 0, 0)
+		syscall.Close(int(fd))
+	}
+
+	// open_tree(dfd, path, flags) returns an O_PATH-like fd. Use a dedicated
+	// pathname and non-cloning flags so the call succeeds without CAP_SYS_ADMIN;
+	// the AT_* bits deliberately overlap unrelated O_* bits and exercise ior's
+	// translation of the mount-API word before descriptor registration.
+	openTreeFlags := unix.OPEN_TREE_CLOEXEC | unix.AT_NO_AUTOMOUNT | unix.AT_SYMLINK_NOFOLLOW
+	if fd, _, errno := syscall.RawSyscall(unix.SYS_OPEN_TREE, atFDCWD, uintptr(unsafe.Pointer(openTreePath)), uintptr(openTreeFlags)); errno == 0 {
+		syscall.Close(int(fd))
+	}
+
+	// open_tree_attr is the Linux 6.15 sibling that adds mount_attr/size. It
+	// shares open_tree's path and flags positions, so issue it best-effort even
+	// on older kernels (where it returns ENOSYS) to cover its generated handler.
+	openTreeAttr := unix.MountAttr{}
+	if fd, _, errno := syscall.RawSyscall6(unix.SYS_OPEN_TREE_ATTR, atFDCWD, uintptr(unsafe.Pointer(openTreePath)), uintptr(unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC), uintptr(unsafe.Pointer(&openTreeAttr)), unsafe.Sizeof(openTreeAttr), 0); errno == 0 {
+		syscall.Close(int(fd))
+	}
+
+	// mount_setattr(dirfd, path, flags, attr, size) changes the per-mount
+	// attributes of an existing mount. It is a KindPathname syscall: args[1] is
+	// the path. We aim it at the scenario mount point with AT_FDCWD, requesting
+	// MOUNT_ATTR_RDONLY, but it requires CAP_SYS_ADMIN (Linux 5.12+) and the
+	// path is not even a mount here, so it returns EPERM/EINVAL unprivileged.
+	// That is fine: like its mount-API siblings above, the sys_enter_
+	// mount_setattr tracepoint fires on kernel entry before any permission or
+	// validity check, so MinCount>=1 holds regardless of errno. attr/size carry
+	// the MountAttr struct and its size so the kernel parses the call before
+	// failing; the call mutates no real mount.
+	attr := unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}
+	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT_SETATTR, atFDCWD, uintptr(unsafe.Pointer(mountPath)), 0, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+
+	_, _, _ = syscall.RawSyscall6(unix.SYS_MOUNT, uintptr(unsafe.Pointer(none)), uintptr(unsafe.Pointer(mountPath)), uintptr(unsafe.Pointer(tmpfs)), 0, 0, 0)
+	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), 0, 0)
+	_, _, _ = syscall.RawSyscall(unix.SYS_UMOUNT2, uintptr(unsafe.Pointer(mountPath)), uintptr(unix.MNT_DETACH), 0)
+	_, _, _ = syscall.RawSyscall(unix.SYS_PIVOT_ROOT, uintptr(unsafe.Pointer(newRoot)), uintptr(unsafe.Pointer(putOld)), 0)
+	_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL, 0, uintptr(unsafe.Pointer(mountPath)), 0, 0, 0, 0)
+
+	// quotactl_fd(fd, cmd, id, addr) is the fd-based variant of quotactl: it is
+	// a KindFd syscall capturing fd@arg0. We point it at an fd opened on the
+	// mount point directory with best-effort args (Q_GETQUOTA-style cmd, id 0,
+	// nil addr). Quota support / privilege is irrelevant: the sys_enter_
+	// quotactl_fd tracepoint fires on kernel entry before any check, exactly
+	// like the quotactl call above, so MinCount>=1 holds regardless of errno.
+	if quotaFd, err := syscall.Open(mountPoint, syscall.O_RDONLY, 0); err == nil {
+		_, _, _ = syscall.RawSyscall6(unix.SYS_QUOTACTL_FD, uintptr(quotaFd), 0, 0, 0, 0, 0)
+		syscall.Close(quotaFd)
+	}
+
+	_, _, _ = syscall.RawSyscall(unix.SYS_SWAPON, uintptr(unsafe.Pointer(swapPath)), 0, 0)
+	_, _, _ = syscall.RawSyscall(unix.SYS_SWAPOFF, uintptr(unsafe.Pointer(swapPath)), 0, 0)
+
+	req := mountIDReq{Size: uint32(unsafe.Sizeof(mountIDReq{}))}
+	var statBuf [256]byte
+	_, _, _ = syscall.RawSyscall6(unix.SYS_STATMOUNT, uintptr(unsafe.Pointer(&req)), uintptr(unsafe.Pointer(&statBuf[0])), uintptr(len(statBuf)), 0, 0, 0)
+
+	var mountIDs [8]uint64
+	_, _, _ = syscall.RawSyscall6(unix.SYS_LISTMOUNT, uintptr(unsafe.Pointer(&req)), uintptr(unsafe.Pointer(&mountIDs[0])), uintptr(len(mountIDs)), 0, 0, 0)
+
+	if nr, err := listnsSyscallNr(); err == nil {
+		var nsIDs [8]uint64
+		_, _, _ = syscall.RawSyscall6(nr, uintptr(unsafe.Pointer(&req)), uintptr(unsafe.Pointer(&nsIDs[0])), uintptr(len(nsIDs)), 0, 0, 0)
+	}
+
+	return nil
+}
+
+func listnsSyscallNr() (uintptr, error) {
+	return listnsSyscallNrForArch(runtime.GOARCH)
+}
+
+func listnsSyscallNrForArch(arch string) (uintptr, error) {
+	// __NR_listns was introduced from asm-generic numbering where amd64/arm64 use 470.
+	switch arch {
+	case "amd64", "arm64":
+		return 470, nil
+	default:
+		return 0, fmt.Errorf("listns syscall number not defined for GOARCH=%s", arch)
+	}
+}
+
+func mustCStringPtr(s string) *byte {
+	p, _ := unix.BytePtrFromString(s)
+	return p
+}

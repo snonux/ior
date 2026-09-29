@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
+	"ior/internal/tui/messages"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -32,6 +34,10 @@ type Source interface {
 	Snapshot() []StreamEvent
 }
 
+// Model is the stream tab: the live event view over a Source, with its own
+// selection, filter, search and export modals. Receiver policy: every
+// method takes *Model - this is the all-pointer template the other TUI
+// models follow (see internal/tui/dashboard and AGENTS.md).
 type Model struct {
 	source Source
 
@@ -43,25 +49,25 @@ type Model struct {
 
 	paused bool
 
-	scrollOffset        int
-	autoScroll          bool
-	selectedIdx         int
-	selectedCol         int
-	fdTraceView         fdTraceViewState
-	exportModal         ExportModal
-	searchModal         SearchModal
-	searchPattern       string
-	searchRegex         *regexp.Regexp
-	searchDirection     SearchDirection
-	lastExportPath      string
-	pendingOpenPath     string
-	pendingFilter       Filter
-	pendingFilterAction string
-	hasPendingFilter    bool
-	pendingUndo         bool
-	statusMessage       string
-	exportDir           string
-	isDark              bool
+	// exportEnabled gates the x/X/E stream export shortcuts and their hints.
+	// It is wired from the shared key map's Export binding, which the top-level
+	// model blanks when -tuiExport=false.
+	exportEnabled bool
+
+	scrollOffset    int
+	autoScroll      bool
+	selectedIdx     int
+	selectedCol     int
+	fdTraceView     fdTraceViewState
+	exportModal     ExportModal
+	searchModal     SearchModal
+	searchPattern   string
+	searchRegex     *regexp.Regexp
+	searchDirection SearchDirection
+	lastExportPath  string
+	statusMessage   string
+	exportDir       string
+	isDark          bool
 
 	width  int
 	height int
@@ -78,21 +84,32 @@ type fdTraceViewState struct {
 	offset  int
 }
 
+// NewModel constructs a stream model over source with its modals ready.
+// The value return matches the field-embedding style of the parents that
+// hold it; all methods are on *Model.
 func NewModel(source Source) Model {
 	m := Model{
-		source:      source,
-		exportModal: NewExportModal(),
-		searchModal: NewSearchModal(),
-		autoScroll:  true,
-		selectedIdx: -1,
-		selectedCol: 0,
-		exportDir:   ".",
-		showFooter:  true,
-		isDark:      true,
-		viewport:    newStreamViewport(),
+		source:        source,
+		exportModal:   NewExportModal(),
+		searchModal:   NewSearchModal(),
+		autoScroll:    true,
+		selectedIdx:   -1,
+		selectedCol:   0,
+		exportDir:     ".",
+		showFooter:    true,
+		isDark:        true,
+		viewport:      newStreamViewport(),
+		exportEnabled: true,
 	}
 	m.SetDarkMode(true)
 	return m
+}
+
+// SetExportEnabled gates the x/X/E stream export shortcuts and their hints.
+// It is wired from the shared key map's Export binding, which the top-level
+// model blanks when -tuiExport=false.
+func (m *Model) SetExportEnabled(enabled bool) {
+	m.exportEnabled = enabled
 }
 
 func newStreamViewport() viewport.Model {
@@ -155,36 +172,41 @@ func (m *Model) SetDarkMode(isDark bool) {
 }
 
 // FilterModalVisible reports whether the filter modal is currently open.
-func (m Model) FilterModalVisible() bool {
+func (m *Model) FilterModalVisible() bool {
 	return false
 }
 
 // ExportModalVisible reports whether the stream export modal is currently open.
-func (m Model) ExportModalVisible() bool {
+func (m *Model) ExportModalVisible() bool {
 	return m.exportModal.Visible()
 }
 
 // SearchModalVisible reports whether the stream search modal is currently open.
-func (m Model) SearchModalVisible() bool {
+func (m *Model) SearchModalVisible() bool {
 	return m.searchModal.Visible()
 }
 
 // Paused reports whether stream refresh is currently paused.
-func (m Model) Paused() bool {
+func (m *Model) Paused() bool {
 	return m.paused
 }
 
 // HandleKey dispatches keyStr to the active modal or live/paused stream handlers.
-// It returns true if the key was consumed, false if the caller should handle it.
-func (m *Model) HandleKey(keyStr string) bool {
+// It reports whether the key was consumed (false means the caller should
+// handle it) and returns a command for any request the stream cannot fulfil
+// itself: it emits messages.GlobalFilterRequestedMsg,
+// messages.GlobalFilterUndoRequestedMsg or messages.OpenEditorRequestedMsg
+// for the parent to act on. The command is nil when the key only changed
+// local stream state.
+func (m *Model) HandleKey(keyStr string) (bool, tea.Cmd) {
 	if m.searchModal.Visible() {
-		return m.handleSearchModalKey(keyStr)
+		return m.handleSearchModalKey(keyStr), nil
 	}
 	if m.exportModal.Visible() {
-		return m.handleExportModalKey(keyStr)
+		return m.handleExportModalKey(keyStr), nil
 	}
 	if m.fdTraceView.visible {
-		return m.handleFDTraceKey(keyStr)
+		return m.handleFDTraceKey(keyStr), nil
 	}
 	return m.handleStreamKey(keyStr)
 }
@@ -261,93 +283,93 @@ func (m *Model) handleFDTraceKey(keyStr string) bool {
 	}
 }
 
-// handleStreamExportKey handles x/X/E export shortcuts while the stream is paused.
-func (m *Model) handleStreamExportKey(keyStr string) (bool, bool) {
+// handleStreamExportKey handles the x/X/E export shortcuts. They act only
+// while the stream is paused, and are inactive when export is disabled
+// (-tuiExport=false): the key is then not consumed, so no export file is
+// written, no modal opens and no editor is requested. E returns a command
+// emitting messages.OpenEditorRequestedMsg for the last export.
+func (m *Model) handleStreamExportKey(keyStr string) (bool, tea.Cmd) {
+	if !m.exportEnabled || !m.paused {
+		return false, nil
+	}
+	m.statusMessage = ""
 	switch keyStr {
 	case "x":
-		if !m.paused {
-			return false, true
-		}
-		m.statusMessage = ""
 		path, err := m.exportFilteredToCSV(defaultStreamExportFilename())
 		if err != nil {
 			m.statusMessage = fmt.Sprintf("Export failed: %v", err)
-			return true, true
+			return true, nil
 		}
 		m.lastExportPath = path
 		m.statusMessage = "Exported: " + path
-		return true, true
+		return true, nil
 	case "X":
-		if !m.paused {
-			return false, true
-		}
-		m.statusMessage = ""
 		m.exportModal = m.exportModal.Open(defaultStreamExportFilename())
-		return true, true
+		return true, nil
 	case "E":
-		if !m.paused {
-			return false, true
-		}
-		m.statusMessage = ""
 		if m.lastExportPath == "" {
 			m.statusMessage = "No stream export yet"
-			return true, true
+			return true, nil
 		}
-		m.pendingOpenPath = m.lastExportPath
 		m.statusMessage = "Opening in editor: " + m.lastExportPath
-		return true, true
+		return true, emit(messages.OpenEditorRequestedMsg{Path: m.lastExportPath})
 	}
-	return false, false
+	return false, nil
 }
 
-// handleStreamKey handles keys for the main live/paused stream table.
-func (m *Model) handleStreamKey(keyStr string) bool {
-	if consumed, handled := m.handleStreamExportKey(keyStr); handled {
-		return consumed
-	}
+// emit wraps msg in a command that delivers it to the parent model.
+func emit(msg tea.Msg) tea.Cmd {
+	return func() tea.Msg { return msg }
+}
 
+// handleStreamKey handles keys for the main live/paused stream table. The
+// returned command carries any request for the parent (see HandleKey).
+func (m *Model) handleStreamKey(keyStr string) (bool, tea.Cmd) {
 	switch keyStr {
+	case "x", "X", "E":
+		return m.handleStreamExportKey(keyStr)
 	case "enter":
 		if m.paused {
 			return m.requestGlobalFilterFromSelectedCell()
 		}
-		return false
+		return false, nil
 	case "F":
-		if len(m.filterStack) == 0 {
-			return false
-		}
-		m.pendingUndo = true
-		return true
+		return m.requestGlobalFilterUndo(true)
 	case "esc":
-		if m.paused && len(m.filterStack) > 0 {
-			m.pendingUndo = true
-			return true
+		return m.requestGlobalFilterUndo(m.paused)
+	case "T":
+		if !m.paused {
+			return false, nil
 		}
-		return false
+		return m.openFDTraceView(), nil
 	case "/":
 		m.openSearch(SearchForward)
-		return true
+		return true, nil
 	case "?":
 		m.openSearch(SearchBackward)
-		return true
+		return true, nil
 	case "n":
-		if m.searchRegex == nil {
-			return false
-		}
-		return m.jumpSearch(m.searchDirection)
+		return m.jumpSearch(m.searchDirection), nil
 	case "N":
-		if m.searchRegex == nil {
-			return false
-		}
-		return m.jumpSearch(-m.searchDirection)
+		return m.jumpSearch(-m.searchDirection), nil
 	case " ", "space":
-		return m.handleSpaceKey()
+		return m.handleSpaceKey(), nil
 	case "G", "g", "j", "down", "k", "up", "left", "h", "right", "l",
 		"pgdown", "pgdn", "pagedown", "pgup", "pageup":
-		return m.handleNavigationKey(keyStr)
+		return m.handleNavigationKey(keyStr), nil
 	default:
-		return false
+		return false, nil
 	}
+}
+
+// requestGlobalFilterUndo returns a command asking the parent to pop the
+// latest shared filter layer. The key is consumed only when allowed and
+// there is a layer to pop; otherwise it falls through to the caller.
+func (m *Model) requestGlobalFilterUndo(allowed bool) (bool, tea.Cmd) {
+	if !allowed || len(m.filterStack) == 0 {
+		return false, nil
+	}
+	return true, emit(messages.GlobalFilterUndoRequestedMsg{})
 }
 
 // handleSpaceKey toggles the paused/live state of the stream.
@@ -415,10 +437,11 @@ func (m *Model) handleDirectionalKey(keyStr string) bool {
 }
 
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
-// then falls back to string matching for rune-driven shortcuts.
-func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) bool {
+// then falls back to string matching for rune-driven shortcuts. Its results
+// have the same meaning as HandleKey's.
+func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.handleViewportUpdate(msg) {
-		return true
+		return true, nil
 	}
 
 	switch msg.Code {
@@ -506,7 +529,11 @@ func (m *Model) View(width, height int) string {
 	if m.searchModal.Visible() {
 		return m.searchModal.View(width, height)
 	}
-	if !m.showFooter {
+	// The paused selection/column/search footer is essential interaction
+	// feedback while the user navigates rows and columns, so render it whenever
+	// the stream is paused, independent of the dashboard help-bar toggle
+	// (m.showFooter). The live Row x/N footer remains tied to the help bar.
+	if !m.showFooter && !m.paused {
 		return base
 	}
 	return m.appendStreamFooter(base, start)
@@ -544,7 +571,7 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 func (m *Model) appendStreamFooter(base string, start int) string {
 	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
 	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | Esc/F undo",
+		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | T fd-trace | Esc/F undo",
 			rowNumber(start, len(m.filtered)), len(m.filtered),
 			rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered),
 			m.selectedCol+1, streamColumnCount)
@@ -562,6 +589,8 @@ func (m *Model) appendStreamFooter(base string, start int) string {
 	return b.String()
 }
 
+// Refresh pulls a fresh snapshot from the source and re-applies the filter,
+// unless the stream is paused. Driven by the high-frequency stream tick.
 func (m *Model) Refresh() {
 	if m.paused {
 		return
@@ -592,6 +621,9 @@ func (m *Model) applyFilter() {
 	filtered := make([]StreamEvent, 0, len(m.allEvents))
 	for i := range m.allEvents {
 		ev := m.allEvents[i]
+		// Plain Matches: the either-name rule for rename rows lives inside it
+		// now (Candidate.OldFileValue), so this stage cannot re-narrow what the
+		// event loop and the dashboard ingest already applied.
 		if m.filter.Matches(&ev) {
 			filtered = append(filtered, ev)
 		}
@@ -774,51 +806,62 @@ func (m *Model) ensureSelectedCol() {
 	}
 }
 
-func (m *Model) requestGlobalFilterFromSelectedCell() bool {
+// requestGlobalFilterFromSelectedCell folds the selected cell's value into a
+// copy of the current filter and returns a command emitting
+// messages.GlobalFilterRequestedMsg. The local filter is left unchanged: the
+// parent applies the shared filter and pushes it back via SetFilter.
+//
+// The action label is the presenter's canonical token for the dimension just
+// set, so it reads exactly like the filter summary. A blank string cell (e.g.
+// an event without a file name) is not handled: a blank pattern constrains
+// nothing, so requesting it would only push an empty undo layer.
+func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
-		return false
+		return false, nil
 	}
 	ev := m.filtered[m.selectedIdx]
 	next := m.filter.Clone()
+	var dim presenter.Dimension
 
 	switch m.selectedCol {
 	case streamColGap:
 		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
-		m.pendingFilterAction = fmt.Sprintf("gap>=%s", formatDurationNs(ev.GapNs))
+		dim = presenter.DimGap
 	case streamColLatency:
 		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
-		m.pendingFilterAction = fmt.Sprintf("latency>=%s", formatDurationNs(ev.DurationNs))
+		dim = presenter.DimLatency
 	case streamColComm:
 		next.Comm = &StringFilter{Pattern: ev.Comm}
-		m.pendingFilterAction = "comm~" + ev.Comm
+		dim = presenter.DimComm
 	case streamColPID:
 		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
-		m.pendingFilterAction = fmt.Sprintf("pid=%d", ev.PID)
+		dim = presenter.DimPID
 	case streamColTID:
 		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
-		m.pendingFilterAction = fmt.Sprintf("tid=%d", ev.TID)
+		dim = presenter.DimTID
 	case streamColSyscall:
 		next.Syscall = &StringFilter{Pattern: ev.Syscall}
-		m.pendingFilterAction = "syscall~" + ev.Syscall
+		dim = presenter.DimSyscall
 	case streamColFD:
 		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
-		m.pendingFilterAction = fmt.Sprintf("fd=%d", ev.FD)
+		dim = presenter.DimFD
 	case streamColRet:
 		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
-		m.pendingFilterAction = fmt.Sprintf("ret=%d", ev.RetVal)
+		dim = presenter.DimRet
 	case streamColBytes:
 		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
-		m.pendingFilterAction = fmt.Sprintf("bytes=%d", ev.Bytes)
+		dim = presenter.DimBytes
 	case streamColFile:
 		next.File = &StringFilter{Pattern: ev.FileName}
-		m.pendingFilterAction = "file~" + ev.FileName
+		dim = presenter.DimFile
 	default:
-		return false
+		return false, nil
 	}
-
-	m.pendingFilter = next
-	m.hasPendingFilter = true
-	return true
+	action := presenter.DimensionSummary(next, dim)
+	if action == "" {
+		return false, nil
+	}
+	return true, emit(messages.GlobalFilterRequestedMsg{Filter: next, Action: action})
 }
 
 func (m *Model) currentSelectedSeq() uint64 {
@@ -892,46 +935,6 @@ func clamp(v, min, max int) int {
 		return max
 	}
 	return v
-}
-
-func (m *Model) setFilterForTest(f Filter) {
-	m.filter = f
-}
-
-func (m *Model) setExportDirForTest(dir string) {
-	m.exportDir = dir
-}
-
-// ConsumeOpenEditorRequest returns the pending editor-open path once.
-func (m *Model) ConsumeOpenEditorRequest() (string, bool) {
-	if m.pendingOpenPath == "" {
-		return "", false
-	}
-	path := m.pendingOpenPath
-	m.pendingOpenPath = ""
-	return path, true
-}
-
-// ConsumeGlobalFilterRequest returns the pending global-filter request once.
-func (m *Model) ConsumeGlobalFilterRequest() (Filter, string, bool) {
-	if !m.hasPendingFilter {
-		return Filter{}, "", false
-	}
-	filter := m.pendingFilter.Clone()
-	action := m.pendingFilterAction
-	m.pendingFilter = Filter{}
-	m.pendingFilterAction = ""
-	m.hasPendingFilter = false
-	return filter, action, true
-}
-
-// ConsumeGlobalFilterUndoRequest returns the pending undo request once.
-func (m *Model) ConsumeGlobalFilterUndoRequest() bool {
-	if !m.pendingUndo {
-		return false
-	}
-	m.pendingUndo = false
-	return true
 }
 
 // SetStatusMessage updates the stream footer status line.
@@ -1026,12 +1029,4 @@ func streamEventMatchesRegex(ev StreamEvent, re *regexp.Regexp) bool {
 		return true
 	}
 	return false
-}
-
-func (m *Model) dumpVisibleForTest() string {
-	rows := make([]string, 0, len(m.filtered))
-	for _, ev := range m.filtered {
-		rows = append(rows, ev.Syscall)
-	}
-	return strings.Join(rows, ",")
 }

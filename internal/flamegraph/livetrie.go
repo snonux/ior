@@ -2,7 +2,6 @@ package flamegraph
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,51 +18,55 @@ const (
 	liveTrieVisibleChildrenFallbackMaxDepth = 1
 )
 
+// SnapshotNode is one node of a serialised flamegraph snapshot tree: a frame
+// with its own value, its subtree total, an optional height metric and its
+// children. The short JSON keys keep snapshot payloads small.
 type SnapshotNode struct {
-	Name     string          `json:"n"`
-	Value    uint64          `json:"v"`
-	Total    uint64          `json:"t"`
-	Children []*SnapshotNode `json:"c,omitempty"`
+	Name        string          `json:"n"`
+	Value       uint64          `json:"v"`
+	Total       uint64          `json:"t"`
+	HeightTotal uint64          `json:"ht,omitempty"`
+	Children    []*SnapshotNode `json:"c,omitempty"`
 }
 
 // LiveTrie is a thread-safe, append-only trie used for live flamegraph snapshots.
 type LiveTrie struct {
-	mu         sync.RWMutex
-	root       *trieNode
-	maxDepth   int
-	version    atomic.Uint64
-	fields     []string
-	countField string
+	mu          sync.RWMutex
+	root        *trieNode
+	maxDepth    int
+	version     atomic.Uint64
+	fields      []string
+	countField  string
+	heightField string
 
-	// Snapshot cache avoids recomputing JSON when version is unchanged.
-	cacheMu      sync.Mutex
-	cacheVersion uint64
-	cacheJSON    []byte
-
-	// Tree cache lets the TUI fetch the snapshot tree without a JSON
-	// marshal+unmarshal round-trip. Built lazily; invalidated on reset and
-	// on field/metric reconfiguration.
+	// Tree cache avoids rebuilding the snapshot tree while the version is
+	// unchanged. Built lazily; invalidated on reset and on field/metric
+	// reconfiguration.
 	treeCacheMu sync.Mutex
 	treeVersion uint64
 	treeCache   *SnapshotNode
 }
 
-// NewLiveTrie constructs an empty live trie with the configured frame/count fields.
-func NewLiveTrie(fields []string, countField string) *LiveTrie {
+// NewLiveTrie constructs an empty live trie with the configured frame/count/height fields.
+func NewLiveTrie(fields []string, countField, heightField string) *LiveTrie {
 	if !isLiveTrieCountField(countField) {
 		countField = "count"
+	}
+	if heightField != "" && !isLiveTrieCountField(heightField) {
+		heightField = ""
 	}
 	return &LiveTrie{
 		root: &trieNode{
 			childMap: make(map[string]*trieNode),
 		},
-		fields:     slices.Clone(fields),
-		countField: countField,
+		fields:      slices.Clone(fields),
+		countField:  countField,
+		heightField: heightField,
 	}
 }
 
-func (lt *LiveTrie) addLocked(frames []string, value uint64) {
-	insertTriePath(lt.root, frames, value)
+func (lt *LiveTrie) addLocked(frames []string, value, heightValue uint64) {
+	insertTriePath(lt.root, frames, value, heightValue)
 	if len(frames) > lt.maxDepth {
 		lt.maxDepth = len(frames)
 	}
@@ -78,14 +81,10 @@ func (lt *LiveTrie) resetLocked() {
 }
 
 func (lt *LiveTrie) invalidateCache() {
-	lt.cacheMu.Lock()
-	lt.cacheVersion = 0
-	lt.cacheJSON = nil
-	lt.cacheMu.Unlock()
 	lt.treeCacheMu.Lock()
+	defer lt.treeCacheMu.Unlock()
 	lt.treeVersion = 0
 	lt.treeCache = nil
-	lt.treeCacheMu.Unlock()
 }
 
 // Ingest adds one event pair into the live trie.
@@ -94,43 +93,81 @@ func (lt *LiveTrie) Ingest(ep *event.Pair) {
 	lt.AddRecord(record)
 }
 
+func (lt *LiveTrie) addRecordConfig() ([]string, string, string) {
+	lt.mu.RLock()
+	defer lt.mu.RUnlock()
+	fields := slices.Clone(lt.fields)
+	countField := lt.countField
+	heightField := lt.heightField
+	return fields, countField, heightField
+}
+
 // AddRecord adds one already-decoded flamegraph record into the live trie.
 func (lt *LiveTrie) AddRecord(record IterRecord) {
-	lt.mu.Lock()
-	// countField is read under the lock so a concurrent SetCountField cannot
-	// race with it or leak a value in the old metric into the new baseline.
-	value, err := record.Cnt.ValueByName(lt.countField)
-	if err != nil {
-		lt.mu.Unlock()
-		return
+	for {
+		fields, countField, heightField := lt.addRecordConfig()
+
+		value, err := record.Cnt.ValueByName(countField)
+		if err != nil {
+			return
+		}
+		heightValue := uint64(0)
+		if heightField != "" {
+			heightValue, err = record.Cnt.ValueByName(heightField)
+			if err != nil {
+				return
+			}
+		}
+
+		frames := buildFrames(record, fields)
+
+		committed := func() bool {
+			lt.mu.Lock()
+			defer lt.mu.Unlock()
+			if countField != lt.countField || heightField != lt.heightField || !slices.Equal(fields, lt.fields) {
+				return false
+			}
+			lt.addLocked(frames, value, heightValue)
+			lt.version.Add(1)
+			return true
+		}()
+		if committed {
+			return
+		}
 	}
-	frames := lt.buildFrames(record)
-	lt.addLocked(frames, value)
-	lt.version.Add(1)
-	lt.mu.Unlock()
 }
 
 // Reset clears the trie so live snapshots start from a new baseline.
 func (lt *LiveTrie) Reset() {
-	lt.mu.Lock()
-	lt.resetLocked()
-	lt.mu.Unlock()
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		lt.resetLocked()
+	}()
 	lt.invalidateCache()
 }
 
 // Fields returns the currently configured frame fields in stack order.
 func (lt *LiveTrie) Fields() []string {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	out := slices.Clone(lt.fields)
-	lt.mu.RUnlock()
 	return out
 }
 
 // CountField returns the active metric used to aggregate node values.
 func (lt *LiveTrie) CountField() string {
 	lt.mu.RLock()
+	defer lt.mu.RUnlock()
 	field := lt.countField
-	lt.mu.RUnlock()
+	return field
+}
+
+// HeightField returns the active metric used to aggregate node heights.
+func (lt *LiveTrie) HeightField() string {
+	lt.mu.RLock()
+	defer lt.mu.RUnlock()
+	field := lt.heightField
 	return field
 }
 
@@ -141,14 +178,45 @@ func (lt *LiveTrie) SetCountField(countField string) error {
 		return fmt.Errorf("invalid count field %q", countField)
 	}
 
-	lt.mu.Lock()
-	if lt.countField == field {
-		lt.mu.Unlock()
+	changed := false
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		if lt.countField == field {
+			return
+		}
+		lt.countField = field
+		lt.resetLocked()
+		changed = true
+	}()
+	if !changed {
 		return nil
 	}
-	lt.countField = field
-	lt.resetLocked()
-	lt.mu.Unlock()
+	lt.invalidateCache()
+	return nil
+}
+
+// SetHeightField changes the active height metric and starts a new baseline.
+func (lt *LiveTrie) SetHeightField(heightField string) error {
+	field := strings.TrimSpace(heightField)
+	if field != "" && !isLiveTrieCountField(field) {
+		return fmt.Errorf("invalid height field %q", heightField)
+	}
+
+	changed := false
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		if lt.heightField == field {
+			return
+		}
+		lt.heightField = field
+		lt.resetLocked()
+		changed = true
+	}()
+	if !changed {
+		return nil
+	}
 	lt.invalidateCache()
 	return nil
 }
@@ -160,10 +228,12 @@ func (lt *LiveTrie) Reconfigure(fields []string) error {
 		return err
 	}
 
-	lt.mu.Lock()
-	lt.fields = slices.Clone(normalized)
-	lt.resetLocked()
-	lt.mu.Unlock()
+	func() {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		lt.fields = slices.Clone(normalized)
+		lt.resetLocked()
+	}()
 	lt.invalidateCache()
 	return nil
 }
@@ -173,61 +243,41 @@ func (lt *LiveTrie) Version() uint64 {
 	return lt.version.Load()
 }
 
-// SnapshotJSON returns a compact JSON snapshot for the current trie version.
-// Layered on top of SnapshotTree so the tree-building work is shared with
-// callers that want the typed form directly.
-func (lt *LiveTrie) SnapshotJSON() ([]byte, uint64) {
-	version := lt.Version()
-	lt.cacheMu.Lock()
-	if lt.cacheVersion == version && lt.cacheJSON != nil {
-		cached := slices.Clone(lt.cacheJSON)
-		lt.cacheMu.Unlock()
-		return cached, version
-	}
-	lt.cacheMu.Unlock()
-
-	snapshot, version := lt.SnapshotTree()
-	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return []byte(`{}`), version
-	}
-
-	lt.cacheMu.Lock()
-	lt.cacheVersion = version
-	lt.cacheJSON = slices.Clone(payload)
-	lt.cacheMu.Unlock()
-
-	return payload, version
-}
-
-// SnapshotTree returns the live trie snapshot as a typed node tree, bypassing
-// the JSON round-trip. The pointer is safe to retain — buildSnapshot allocates
-// fresh nodes per snapshot, and the trie never mutates a previously returned
-// tree. The TUI uses this on a background goroutine so per-tick refreshes don't
+// SnapshotTree returns the live trie snapshot as a typed node tree. The
+// pointer is safe to retain — buildSnapshot allocates fresh nodes per
+// snapshot, and the trie never mutates a previously returned tree. The tree
+// is cached per version and shared between callers, so callers must treat it
+// as read-only. The TUI uses this on a background goroutine so per-tick refreshes don't
 // block the Bubble Tea update loop.
 func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
 	version := lt.Version()
-	lt.treeCacheMu.Lock()
-	if lt.treeVersion == version && lt.treeCache != nil {
-		tree := lt.treeCache
-		lt.treeCacheMu.Unlock()
+	tree, ok := func() (*SnapshotNode, bool) {
+		lt.treeCacheMu.Lock()
+		defer lt.treeCacheMu.Unlock()
+		if lt.treeVersion == version && lt.treeCache != nil {
+			return lt.treeCache, true
+		}
+		return nil, false
+	}()
+	if ok {
 		return tree, version
 	}
-	lt.treeCacheMu.Unlock()
 
-	lt.mu.RLock()
-	version = lt.version.Load()
-	rootTotal := subtreeTotal(lt.root)
-	tree := buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
-	lt.mu.RUnlock()
+	version, tree = func() (uint64, *SnapshotNode) {
+		lt.mu.RLock()
+		defer lt.mu.RUnlock()
+		currentVersion := lt.version.Load()
+		rootTotal := subtreeTotal(lt.root)
+		return currentVersion, buildSnapshot(lt.root, 0, liveTrieMinFraction, rootTotal)
+	}()
 
 	lt.treeCacheMu.Lock()
+	defer lt.treeCacheMu.Unlock()
 	// Only commit if no concurrent caller stored a newer version.
 	if version >= lt.treeVersion {
 		lt.treeVersion = version
 		lt.treeCache = tree
 	}
-	lt.treeCacheMu.Unlock()
 	return tree, version
 }
 
@@ -248,9 +298,9 @@ func eventPairToRecord(ep *event.Pair) IterRecord {
 	}
 }
 
-func (lt *LiveTrie) buildFrames(record IterRecord) []string {
-	frames := make([]string, 0, len(lt.fields))
-	for _, fieldName := range lt.fields {
+func buildFrames(record IterRecord, fields []string) []string {
+	frames := make([]string, 0, len(fields))
+	for _, fieldName := range fields {
 		value, err := record.StringByName(fieldName)
 		if err != nil {
 			continue
@@ -305,18 +355,20 @@ func subtreeTotal(node *trieNode) uint64 {
 }
 
 func buildSnapshot(node *trieNode, depth int, minFraction float64, rootTotal uint64) *SnapshotNode {
-	snapshot, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
+	snapshot, _, _ := buildSnapshotWithTotal(node, depth, minFraction, rootTotal, false)
 	return snapshot
 }
 
 type childSnapshotState struct {
-	node     *trieNode
-	snapshot *SnapshotNode
-	total    uint64
+	node        *trieNode
+	snapshot    *SnapshotNode
+	total       uint64
+	heightTotal uint64
 }
 
-func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*SnapshotNode, uint64) {
+func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, rootTotal uint64, forceKeep bool) (*SnapshotNode, uint64, uint64) {
 	total := node.value
+	heightTotal := node.heightValue
 	children := slices.Clone(node.children)
 	slices.SortFunc(children, func(a, b *trieNode) int {
 		return cmp.Compare(a.name, b.name)
@@ -324,17 +376,19 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 
 	childStates := make([]childSnapshotState, 0, len(children))
 	for _, child := range children {
-		childSnapshot, childTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
+		childSnapshot, childTotal, childHeightTotal := buildSnapshotWithTotal(child, depth+1, minFraction, rootTotal, false)
 		total += childTotal
+		heightTotal += childHeightTotal
 		childStates = append(childStates, childSnapshotState{
-			node:     child,
-			snapshot: childSnapshot,
-			total:    childTotal,
+			node:        child,
+			snapshot:    childSnapshot,
+			total:       childTotal,
+			heightTotal: childHeightTotal,
 		})
 	}
 
 	if !forceKeep && depth > 0 && rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction {
-		return nil, total
+		return nil, total, heightTotal
 	}
 	ensureFallbackVisibleChildren(childStates, depth, minFraction, rootTotal)
 
@@ -346,14 +400,15 @@ func buildSnapshotWithTotal(node *trieNode, depth int, minFraction float64, root
 	}
 
 	snapshot := &SnapshotNode{
-		Name:  node.name,
-		Value: node.value,
-		Total: total,
+		Name:        node.name,
+		Value:       node.value,
+		Total:       total,
+		HeightTotal: heightTotal,
 	}
 	if len(childSnapshots) > 0 {
 		snapshot.Children = childSnapshots
 	}
-	return snapshot, total
+	return snapshot, total, heightTotal
 }
 
 func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, minFraction float64, rootTotal uint64) {
@@ -391,7 +446,7 @@ func ensureFallbackVisibleChildren(children []childSnapshotState, depth int, min
 	}
 	for i := 0; i < limit; i++ {
 		idx := candidates[i]
-		forced, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
+		forced, _, _ := buildSnapshotWithTotal(children[idx].node, depth+1, minFraction, rootTotal, true)
 		children[idx].snapshot = forced
 	}
 }

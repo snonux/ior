@@ -1,8 +1,6 @@
 package flamegraph
 
 import (
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +31,7 @@ func TestRefreshFromLiveTrieCmdNilWhenNoTrie(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120
@@ -55,6 +53,9 @@ func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
 	if ready.snapshot == nil {
 		t.Fatalf("expected snapshot in ready message")
 	}
+	if ready.generation != m.refreshGeneration {
+		t.Fatalf("ready msg generation = %d, want %d", ready.generation, m.refreshGeneration)
+	}
 	if ready.layoutWidth != 120 || ready.layoutHeight != 30 {
 		t.Fatalf("ready msg layout = %dx%d, want 120x30", ready.layoutWidth, ready.layoutHeight)
 	}
@@ -67,7 +68,7 @@ func TestRefreshFromLiveTrieCmdProducesSnapshotReady(t *testing.T) {
 }
 
 func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 80
@@ -81,8 +82,105 @@ func TestRefreshFromLiveTrieCmdCoalescesInFlight(t *testing.T) {
 	}
 }
 
+func TestSetLiveTrieInvalidatesOldDispatchedCompletionWithoutReleasingNewRefresh(t *testing.T) {
+	oldTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(oldTrie, 0)
+	m := NewModel(oldTrie)
+	m.width = 120
+	m.height = 30
+
+	oldCmd := m.RefreshFromLiveTrieCmd()
+	if oldCmd == nil {
+		t.Fatal("expected old-session refresh command")
+	}
+
+	newTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(newTrie, 1)
+	m.SetLiveTrie(newTrie)
+	if m.refreshInFlight {
+		t.Fatal("SetLiveTrie left the old session's in-flight slot occupied")
+	}
+	newCmd := m.RefreshFromLiveTrieCmd()
+	if newCmd == nil {
+		t.Fatal("expected new-session refresh command")
+	}
+
+	oldReady := oldCmd()
+	handled, followup := m.HandleRefreshCompletion(oldReady, true)
+	if !handled {
+		t.Fatal("old-session completion was not recognized")
+	}
+	if followup != nil {
+		t.Fatal("old-session completion scheduled a command")
+	}
+	if !m.refreshInFlight {
+		t.Fatal("old-session completion released the new session's in-flight slot")
+	}
+	if got := m.LastVersion(); got != 0 {
+		t.Fatalf("old-session completion applied version %d to the new session", got)
+	}
+
+	newReady := newCmd()
+	handled, _ = m.HandleRefreshCompletion(newReady, true)
+	if !handled {
+		t.Fatal("new-session completion was not recognized")
+	}
+	if m.refreshInFlight {
+		t.Fatal("new-session completion did not release its in-flight slot")
+	}
+	if got, want := m.LastVersion(), newTrie.Version(); got != want {
+		t.Fatalf("new-session completion applied version %d, want %d", got, want)
+	}
+}
+
+func TestDiscardedStaleRefreshCompletionReleasesInFlightSlot(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(trie, 0)
+	m := NewModel(trie)
+	m.width = 120
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatal("expected initial refresh to populate a snapshot")
+	}
+	initialVersion := m.LastVersion()
+
+	coreflamegraph.SeedTestLiveFlameData(trie, 1)
+	cmd := m.RefreshFromLiveTrieCmd()
+	if cmd == nil {
+		t.Fatal("expected background refresh command")
+	}
+	msg := cmd()
+	ready, ok := msg.(flameSnapshotReadyMsg)
+	if !ok {
+		t.Fatalf("refresh command returned %T, want flameSnapshotReadyMsg", msg)
+	}
+	// Change only the current viewport field so the completion is stale without
+	// starting an unrelated resize animation inside the test.
+	m.width = ready.layoutWidth - 1
+	if ready.layoutWidth == m.width {
+		t.Fatal("test setup did not make the completion stale")
+	}
+
+	handled, followup := m.HandleRefreshCompletion(ready, false)
+	if !handled {
+		t.Fatal("expected stale refresh completion to be recognized")
+	}
+	if followup != nil {
+		t.Fatal("expected discarded stale completion not to schedule a command")
+	}
+	if m.refreshInFlight {
+		t.Fatal("discarded stale completion did not release the in-flight slot")
+	}
+	if got := m.LastVersion(); got != initialVersion {
+		t.Fatalf("discarded stale completion applied version %d, want %d", got, initialVersion)
+	}
+	if next := m.RefreshFromLiveTrieCmd(); next == nil {
+		t.Fatal("expected a later refresh to dispatch after stale completion")
+	}
+}
+
 func TestRefreshFromLiveTrieCmdSkippedWhileUserDrives(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 80
@@ -108,7 +206,7 @@ func TestRefreshFromLiveTrieCmdSkippedWhileUserDrives(t *testing.T) {
 }
 
 func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120
@@ -136,17 +234,17 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 
 	m.lastKeyAt = time.Now()
 	next, _ := m.handleSnapshotReady(msg)
-	post := next.(Model)
-	if post.animating {
+	post := next.(*Model)
+	if post.anim.animating {
 		t.Fatalf("expected snapshot ready to skip animation while user is driving")
 	}
-	if len(post.frames) != len(msg.targetFrames) {
-		t.Fatalf("expected frames to snap directly to target (len %d != %d)", len(post.frames), len(msg.targetFrames))
+	if len(post.anim.frames) != len(msg.targetFrames) {
+		t.Fatalf("expected frames to snap directly to target (len %d != %d)", len(post.anim.frames), len(msg.targetFrames))
 	}
 }
 
 func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
 	ingestTwoEventsForAsync(t, trie)
 	m := NewModel(trie)
 	m.width = 120
@@ -156,9 +254,9 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 	}
 
 	// Drain any pending animation so the cache path is exercised.
-	for m.animating {
-		nextModel, _ := m.Update(animTickMsg{})
-		m = nextModel.(Model)
+	for m.anim.animating {
+		nextModel, _ := m.Update(currentAnimTick(m))
+		m = nextModel.(*Model)
 	}
 
 	first := m.View().Content
@@ -192,61 +290,15 @@ func BenchmarkRecomputeFilterState(b *testing.B) {
 		decorateFramesForSearch(frames)
 		b.Run(tc.label, func(b *testing.B) {
 			model := NewModel(nil)
-			model.frames = frames
-			model.ancestry = buildFrameAncestry(frames)
-			model.selectedIdx = midDepthFrameIndex(frames)
+			model.anim.frames = frames
+			model.anim.ancestry = buildFrameAncestry(frames)
+			model.sel.selectedIdx = midDepthFrameIndex(frames)
 
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				model.applySearchQuery(queries[i%len(queries)])
-				benchIntSink = len(model.matchIndices)
+				benchIntSink = len(model.search.matchIndices)
 			}
 		})
-	}
-}
-
-func TestDiscardSnapshotReadyClearsRefreshInFlight(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
-	ingestTwoEventsForAsync(t, trie)
-	m := NewModel(trie)
-	m.width = 120
-	m.height = 30
-
-	cmd := m.RefreshFromLiveTrieCmd()
-	if cmd == nil {
-		t.Fatalf("expected a refresh command when trie has new events")
-	}
-	if m.DiscardSnapshotReady(tea.KeyPressMsg{}) {
-		t.Fatalf("expected non-snapshot message not to be discarded")
-	}
-	if !m.DiscardSnapshotReady(cmd()) || m.refreshInFlight {
-		t.Fatalf("expected discarded snapshot result to clear refreshInFlight")
-	}
-	if m.RefreshFromLiveTrieCmd() == nil {
-		t.Fatalf("expected a new refresh to dispatch after the discarded result")
-	}
-}
-
-func TestSetLiveTrieClearsRefreshInFlight(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count")
-	m := NewModel(nil)
-	m.refreshInFlight = true
-	m.SetLiveTrie(trie)
-	if m.refreshInFlight {
-		t.Fatalf("expected SetLiveTrie to reset refreshInFlight")
-	}
-}
-
-func TestSearchPromptViewUpdatesWhileTyping(t *testing.T) {
-	m := NewModel(nil)
-	m.SetViewport(120, 30)
-	next, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
-	m = next.(Model)
-	_ = m.View()
-	next, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
-	m = next.(Model)
-	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(m.View().Content, "")
-	if !strings.Contains(plain, "/q") {
-		t.Fatalf("expected cached view to show the typed search text")
 	}
 }

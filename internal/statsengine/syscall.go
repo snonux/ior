@@ -94,8 +94,33 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 	stats.updateMinMax(pair.Duration)
 	stats.addSample(pair.Duration, a.sampleCap, a.rng)
 
-	if retEv, ok := pair.ExitEv.(*types.RetEvent); ok && retEv.Ret < 0 {
+	// Any ret-carrying exit event counts here, including the kind-specific
+	// exits (accept/accept4, pipe/pipe2, socketpair, eventfd/pidfd).
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && event.IsErrnoRet(retEv.GetRet()) {
 		stats.errorCount++
+	}
+}
+
+func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
+	if a == nil || row.TraceID == 0 || row.Count == 0 {
+		return
+	}
+
+	stats := a.byID[row.TraceID]
+	if stats == nil {
+		stats = &syscallStats{traceID: row.TraceID, name: row.TraceID.Name()}
+		a.byID[row.TraceID] = stats
+	}
+
+	prevCount := stats.count
+	stats.count += row.Count
+	stats.errorCount += row.Errors
+	stats.totalLatency += row.TotalLatencyNs
+	if prevCount == 0 || row.MinLatencyNs < stats.minLatency {
+		stats.minLatency = row.MinLatencyNs
+	}
+	if row.MaxLatencyNs > stats.maxLatency {
+		stats.maxLatency = row.MaxLatencyNs
 	}
 }
 

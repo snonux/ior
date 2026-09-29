@@ -1,6 +1,9 @@
 package integrationtests
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestDirBasic(t *testing.T) {
 	runScenario(t, "dir-basic", []ExpectedEvent{
@@ -24,6 +27,22 @@ func TestDirMkdirat(t *testing.T) {
 	})
 }
 
+// TestDirMknodatFifo verifies mknodat(2) is traced end-to-end. The
+// dir-mknodat-fifo workload creates an unprivileged FIFO node under AT_FDCWD,
+// so enter_mknodat fires with pathname@args[1] (after dirfd@args[0]). Matching
+// the distinct fifo name via PathContains proves the args[1] capture, mirroring
+// the mkdirat coverage above.
+func TestDirMknodatFifo(t *testing.T) {
+	runScenario(t, "dir-mknodat-fifo", []ExpectedEvent{
+		{
+			PathContains: "mknodat-fifo",
+			Tracepoint:   "enter_mknodat",
+			Comm:         "ioworkload",
+			MinCount:     1,
+		},
+	})
+}
+
 func TestDirChdir(t *testing.T) {
 	runScenario(t, "dir-chdir", []ExpectedEvent{
 		{
@@ -36,7 +55,7 @@ func TestDirChdir(t *testing.T) {
 }
 
 func TestDirGetcwd(t *testing.T) {
-	runScenario(t, "dir-getcwd", []ExpectedEvent{
+	result, _ := runScenarioResult(t, "dir-getcwd", []ExpectedEvent{
 		{
 			PathContains: "dir-getcwd",
 			Tracepoint:   "enter_getcwd",
@@ -44,6 +63,11 @@ func TestDirGetcwd(t *testing.T) {
 			MinCount:     1,
 		},
 	})
+	assertEventBytesAtLeast(t, result, ExpectedEvent{
+		PathContains: "dir-getcwd",
+		Tracepoint:   "enter_getcwd",
+		Comm:         "ioworkload",
+	}, 1)
 }
 
 func TestDirGetdents(t *testing.T) {
@@ -69,22 +93,15 @@ func TestDirMkdirEexist(t *testing.T) {
 }
 
 func TestDirChdirEnoent(t *testing.T) {
-	runScenario(t, "dir-chdir-enoent", []ExpectedEvent{
-		{
-			PathContains: "chdir-enoent-missing",
-			Tracepoint:   "enter_chdir",
-			Comm:         "ioworkload",
-			MinCount:     1,
-		},
-	})
+	runParquetErrorScenario(t, "dir-chdir-enoent", syscall.ENOENT, ExpectedRow{
+		FileContains: "chdir-enoent-missing",
+		Syscall:      "chdir",
+	}, nil)
 }
 
 func TestDirGetdentsEbadf(t *testing.T) {
-	runScenario(t, "dir-getdents-ebadf", []ExpectedEvent{
-		{
-			Tracepoint: "enter_getdents64",
-			Comm:       "ioworkload",
-			MinCount:   1,
-		},
-	})
+	runParquetErrorScenario(t, "dir-getdents-ebadf", syscall.EBADF, ExpectedRow{
+		Syscall: "getdents64",
+		FD:      ptrTo(int32(9999)),
+	}, nil)
 }

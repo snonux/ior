@@ -1,0 +1,294 @@
+package internal
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"ior/internal/probemanager"
+)
+
+// The exec probe is attached outside the probemanager's enter/exit pair model,
+// but through the same Attacher/Program/Link seam, so its non-fatal failure
+// paths and its detach path are reachable without a live BPF module.
+
+type fakeProbeLink struct {
+	destroys int
+	err      error
+}
+
+func (l *fakeProbeLink) Destroy() error {
+	l.destroys++
+	return l.err
+}
+
+type fakeProbeProgram struct {
+	link     probemanager.Link
+	err      error
+	category string
+	name     string
+}
+
+func (p *fakeProbeProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
+	p.category, p.name = category, name
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.link, nil
+}
+
+type fakeProbeAttacher struct {
+	prog      probemanager.Program
+	err       error
+	requested string
+}
+
+func (a *fakeProbeAttacher) GetProgram(name string) (probemanager.Program, error) {
+	a.requested = name
+	if a.err != nil {
+		return nil, a.err
+	}
+	return a.prog, nil
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	_, stderr := captureConsole(t, fn)
+	return stderr
+}
+
+// captureConsole runs fn with os.Stdout and os.Stderr redirected and returns
+// what it wrote to each. Output must stay below the pipe buffer size, since
+// the pipes are drained only after fn returns.
+func captureConsole(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	outR, errR, restore := captureStdoutStderr(t)
+	fn()
+	restore()
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, outR)
+	_, _ = io.Copy(&errBuf, errR)
+	return outBuf.String(), errBuf.String()
+}
+
+// setupLogRecorders records each bpfSetupLog sink separately, so a test can
+// tell which sink a message used.
+type setupLogRecorders struct {
+	status, warn, teardown lineRecorder
+}
+
+func (r *setupLogRecorders) log() bpfSetupLog {
+	return bpfSetupLog{status: r.status.log, warn: r.warn.log, teardown: r.teardown.log}
+}
+
+// requireOnlySink fails unless every recorded line went to want.
+func (r *setupLogRecorders) requireOnlySink(t *testing.T, want *lineRecorder) {
+	t.Helper()
+	for name, sink := range map[string]*lineRecorder{"status": &r.status, "warn": &r.warn, "teardown": &r.teardown} {
+		if sink != want && len(sink.lines()) != 0 {
+			t.Fatalf("message reached the %s sink: %q", name, sink.lines())
+		}
+	}
+}
+
+// requireNoConsoleOutput fails when setup code wrote to the terminal
+// directly instead of through its injected loggers.
+func requireNoConsoleOutput(t *testing.T, stdout, stderr string) {
+	t.Helper()
+	if stdout != "" || stderr != "" {
+		t.Fatalf("wrote to the console directly: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+// TestAttachProcessExecProbeAttachesTheSchedTracepoint pins the exact program
+// and tracepoint the comm fix depends on, and the idempotence of the returned
+// release closure: setupBPFModule hands that closure out both directly and
+// wrapped inside releaseBindings, and destroying a libbpf link twice is not
+// safe.
+func TestAttachProcessExecProbeAttachesTheSchedTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &fakeProbeProgram{link: link}
+	attacher := &fakeProbeAttacher{prog: prog}
+
+	release := attachProcessExecProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+
+	if attacher.requested != processExecProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, processExecProgName)
+	}
+	if prog.category != "sched" || prog.name != "sched_process_exec" {
+		t.Fatalf("attached %s:%s, want sched:sched_process_exec", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroys != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	}
+}
+
+// TestAttachProcessExecProbeFailuresAreNonFatal covers both skip paths. A
+// missing program or a kernel without the tracepoint must degrade to
+// procfs-only comm labelling, not abort the trace, and must leave a usable
+// (no-op) release closure behind.
+func TestAttachProcessExecProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + processExecProgName,
+		},
+		{
+			name: "tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &fakeProbeProgram{err: errors.New("no such tracepoint")},
+			},
+			wantLog: "no such tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec setupLogRecorders
+			var release func()
+			stdout, stderr := captureConsole(t, func() {
+				release = attachProcessExecProbe(tc.attacher, rec.log())
+			})
+			requireNoConsoleOutput(t, stdout, stderr)
+			// A skipped sched probe is a degradation the user must see in
+			// every mode, so it goes to the replayed warn sink - not to
+			// status, which TUI mode silences.
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
+
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			// Must be safe to call, repeatedly, with nothing attached.
+			release()
+			release()
+
+			if !strings.Contains(logged, "skipping sched_process_exec probe") {
+				t.Fatalf("warn log = %q, want it to report the skipped probe", logged)
+			}
+			if !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("warn log = %q, want it to contain %q", logged, tc.wantLog)
+			}
+		})
+	}
+}
+
+// TestAttachProcessExecProbeReportsDetachErrors keeps the teardown path honest:
+// a failing Destroy is reported rather than swallowed, and still counts as done.
+func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
+	link := &fakeProbeLink{err: errors.New("detach boom")}
+	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: link}}
+
+	var rec setupLogRecorders
+	release := attachProcessExecProbe(attacher, rec.log())
+	stdout, stderr := captureConsole(t, func() {
+		release()
+		release()
+	})
+	requireNoConsoleOutput(t, stdout, stderr)
+
+	if link.destroys != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	}
+	// Teardown errors stay visible in every mode, so they must use the
+	// always-on teardown sink, never the status sink that TUI mode silences.
+	rec.requireOnlySink(t, &rec.teardown)
+	if logged := rec.teardown.joined(); !strings.Contains(logged, "detach boom") {
+		t.Fatalf("teardown log = %q, want it to report the detach error", logged)
+	}
+}
+
+// TestAttachProcessExecProbeWithoutAttacher guards the nil guard: setup code
+// must never panic on a missing module.
+func TestAttachProcessExecProbeWithoutAttacher(t *testing.T) {
+	release := attachProcessExecProbe(nil, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+	if release == nil {
+		t.Fatal("expected a non-nil release closure")
+	}
+	release()
+}
+
+// TestAttachProcessExitProbeAttachesTheSchedTracepoint pins the exit probe's
+// program and tracepoint the same way the exec probe tests above pin theirs:
+// the fdTracker eviction depends on sched:sched_process_exit records, and the
+// release closure must stay idempotent for the same double-handout reason.
+func TestAttachProcessExitProbeAttachesTheSchedTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &fakeProbeProgram{link: link}
+	attacher := &fakeProbeAttacher{prog: prog}
+
+	release := attachProcessExitProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+
+	if attacher.requested != processExitProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, processExitProgName)
+	}
+	if prog.category != "sched" || prog.name != "sched_process_exit" {
+		t.Fatalf("attached %s:%s, want sched:sched_process_exit", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroys != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	}
+}
+
+// TestAttachProcessExitProbeFailuresAreNonFatal mirrors the exec probe's
+// policy: a missing program or tracepoint degrades to LRU-only fd-table
+// eviction, never an aborted trace, and leaves a usable no-op release.
+func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + processExitProgName,
+		},
+		{
+			name: "tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &fakeProbeProgram{err: errors.New("no such tracepoint")},
+			},
+			wantLog: "no such tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec setupLogRecorders
+			var release func()
+			stdout, stderr := captureConsole(t, func() {
+				release = attachProcessExitProbe(tc.attacher, rec.log())
+			})
+			requireNoConsoleOutput(t, stdout, stderr)
+			// A skipped sched probe is a degradation the user must see in
+			// every mode, so it goes to the replayed warn sink - not to
+			// status, which TUI mode silences.
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
+
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			release()
+			release()
+
+			if !strings.Contains(logged, "skipping sched_process_exit probe") {
+				t.Fatalf("warn log = %q, want it to report the skipped probe", logged)
+			}
+			if !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("warn log = %q, want it to contain %q", logged, tc.wantLog)
+			}
+		})
+	}
+}

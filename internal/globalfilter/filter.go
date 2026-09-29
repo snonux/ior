@@ -4,17 +4,27 @@ import (
 	"strings"
 )
 
+// CompareOp is the comparison a NumericFilter applies between a candidate
+// value and the filter's reference value.
 type CompareOp int
 
 const (
+	// OpEq selects values equal to the reference.
 	OpEq CompareOp = iota
+	// OpNeq selects values different from the reference.
 	OpNeq
+	// OpGt selects values strictly greater than the reference.
 	OpGt
+	// OpGte selects values greater than or equal to the reference.
 	OpGte
+	// OpLt selects values strictly less than the reference.
 	OpLt
+	// OpLte selects values less than or equal to the reference.
 	OpLte
 )
 
+// NumericFilter constrains one numeric dimension (pid, fd, latency, ...) to
+// the comparison Op against Value.
 type NumericFilter struct {
 	// Op is the comparison operator applied when matching a candidate value.
 	Op CompareOp
@@ -45,16 +55,35 @@ func (f *NumericFilter) EqValue() (int64, bool) {
 	return f.Value, true
 }
 
+// StringFilter constrains one string dimension (comm, path, syscall, ...) by
+// substring, case-insensitively. The anchors ^ and $ switch the match to
+// prefix/suffix/exact; a blank or nil filter matches everything.
 type StringFilter struct {
 	// Pattern is the substring (or anchored prefix/suffix) matched against the
 	// candidate string value; matching is case-insensitive.
 	Pattern string
 }
 
+// Candidate is the per-dimension view of a filterable item - a syscall pair,
+// a stream row, or any other row-shaped value. Each Value method reports one
+// dimension of the candidate, and Filter.Matches applies every configured
+// filter dimension against them. The file dimension is special: OldFileValue
+// carries the rename source path, which Matches accepts as the dimension's
+// alternate value (see its comment).
 type Candidate interface {
 	SyscallValue() string
+	FamilyValue() string
 	CommValue() string
 	FileValue() string
+	// OldFileValue reports the alternate value of the file dimension: the
+	// source (oldname) path of a rename-like event, whose reported name
+	// (FileValue) is only the destination (newname) path. It is empty for
+	// every single-name candidate, and the file dimension of Matches treats it
+	// as a second legitimate value — this method is the ONE place that knows a
+	// candidate can carry two names, so no filter stage can re-narrow or
+	// re-widen the rule on its own (the raw kernel-side counterpart is
+	// MatchNameEvent, which reads oldname/newname straight from the payload).
+	OldFileValue() string
 	PIDValue() uint32
 	TIDValue() uint32
 	FDValue() int32
@@ -65,9 +94,16 @@ type Candidate interface {
 	ErrorValue() bool
 }
 
+// Filter is the active global event filter: one optional constraint per
+// dimension plus the ErrorsOnly switch. A zero Filter matches everything;
+// any single failing dimension rejects the candidate.
 type Filter struct {
 	// Syscall filters events by syscall/tracepoint name substring.
 	Syscall *StringFilter
+	// Family filters events by high-level syscall family (FS/Network/...)
+	// substring. Family is derived from the syscall classification at
+	// pair/row construction, so it is matched user-side only.
+	Family *StringFilter
 	// Comm filters events by process command name substring.
 	Comm *StringFilter
 	// File filters events by the file path involved in the syscall.
@@ -90,9 +126,12 @@ type Filter struct {
 	ErrorsOnly bool
 }
 
+// Clone returns a deep copy with every pointer field duplicated, so the
+// clone can be mutated without affecting the original's sub-filters.
 func (f Filter) Clone() Filter {
 	out := f
 	out.Syscall = cloneFilter(f.Syscall)
+	out.Family = cloneFilter(f.Family)
 	out.Comm = cloneFilter(f.Comm)
 	out.File = cloneFilter(f.File)
 	out.PID = cloneFilter(f.PID)
@@ -105,8 +144,11 @@ func (f Filter) Clone() Filter {
 	return out
 }
 
+// Equal reports whether both filters configure identical constraints,
+// pointer fields compared by value.
 func (f Filter) Equal(other Filter) bool {
 	return sameFilter(f.Syscall, other.Syscall) &&
+		sameFilter(f.Family, other.Family) &&
 		sameFilter(f.Comm, other.Comm) &&
 		sameFilter(f.File, other.File) &&
 		sameFilter(f.PID, other.PID) &&
@@ -119,6 +161,8 @@ func (f Filter) Equal(other Filter) bool {
 		f.ErrorsOnly == other.ErrorsOnly
 }
 
+// Matches reports whether the candidate satisfies every configured
+// dimension. A nil candidate matches nothing.
 func (f Filter) Matches(candidate Candidate) bool {
 	if candidate == nil {
 		return false
@@ -129,10 +173,25 @@ func (f Filter) Matches(candidate Candidate) bool {
 	if !matchString(f.Syscall, candidate.SyscallValue()) {
 		return false
 	}
+	if !matchString(f.Family, candidate.FamilyValue()) {
+		return false
+	}
 	if !matchString(f.Comm, candidate.CommValue()) {
 		return false
 	}
-	if !matchString(f.File, candidate.FileValue()) {
+	// The file dimension is the one dimension that can carry two legitimate
+	// values: a rename-like candidate reports its destination path as
+	// FileValue and its source path as OldFileValue, and `-path <oldname>` is
+	// as valid a selection as `-path <newname>` (the raw enter filter
+	// MatchNameEvent has always matched either). Evaluating both here means
+	// every stage that calls Matches — pair checkpoint, dashboard ingest,
+	// Stream tab, CSV export — applies the same rule by construction, and no
+	// stage can silently diverge from the others again. The empty-OldFileValue
+	// guard matters for one degenerate input: the anchored pattern `^$` (an
+	// empty path) matches the empty string, so without the guard every
+	// single-name candidate would satisfy it through the absent oldname.
+	if !matchString(f.File, candidate.FileValue()) &&
+		(candidate.OldFileValue() == "" || !matchString(f.File, candidate.OldFileValue())) {
 		return false
 	}
 	if !matchNumeric(f.PID, int64(candidate.PIDValue())) {
@@ -159,11 +218,23 @@ func (f Filter) Matches(candidate Candidate) bool {
 	return true
 }
 
+// MatchesSyscallRow reports whether a syscall-table row with the given syscall
+// name and family satisfies ONLY the row-level string dimensions of the filter
+// (Syscall and Family). Trace-scope dimensions (pid/tid/fd/numeric/comm/file)
+// are intentionally ignored: in --testflames the synthetic processes are seeded
+// unfiltered, so applying those here would hide rows that should stay visible.
+// A nil/empty Syscall or Family filter matches everything for that dimension.
+func (f Filter) MatchesSyscallRow(name, family string) bool {
+	return matchString(f.Syscall, name) && matchString(f.Family, family)
+}
+
+// IsActive reports whether any dimension is configured; an inactive filter
+// is a pass-through and lets hot paths skip evaluation.
 func (f Filter) IsActive() bool {
 	if f.ErrorsOnly {
 		return true
 	}
-	for _, sf := range []*StringFilter{f.Syscall, f.Comm, f.File} {
+	for _, sf := range []*StringFilter{f.Syscall, f.Family, f.Comm, f.File} {
 		if sf != nil && strings.TrimSpace(sf.Pattern) != "" {
 			return true
 		}
@@ -176,6 +247,29 @@ func (f Filter) IsActive() bool {
 	return false
 }
 
+// trimAnchors splits a string pattern into the text actually compared against
+// the value and the two anchor flags. The anchors are syntax, not content:
+// `^exact$` matches a value of exactly `exact`, so the `^` and `$` are never
+// part of what has to fit in the field being matched.
+//
+// It exists so the matcher and the length validator cannot disagree about what
+// the pattern is. They did: validateTraceStringFilter measured the raw pattern
+// against the kernel field size, so `^` plus a 15-character comm plus `$` -
+// the documented way to exact-match the longest possible comm, and the syntax
+// the filter modal advertises - was rejected as 17 characters for a 16-byte
+// field it would have matched.
+func trimAnchors(pattern string) (trimmed string, anchoredStart, anchoredEnd bool) {
+	anchoredStart = strings.HasPrefix(pattern, "^")
+	if anchoredStart {
+		pattern = pattern[1:]
+	}
+	anchoredEnd = strings.HasSuffix(pattern, "$")
+	if anchoredEnd && len(pattern) > 0 {
+		pattern = pattern[:len(pattern)-1]
+	}
+	return pattern, anchoredStart, anchoredEnd
+}
+
 func matchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
@@ -185,14 +279,7 @@ func matchString(sf *StringFilter, value string) bool {
 		return true
 	}
 	value = strings.ToLower(value)
-	anchoredStart := strings.HasPrefix(pattern, "^")
-	anchoredEnd := strings.HasSuffix(pattern, "$")
-	if anchoredStart {
-		pattern = pattern[1:]
-	}
-	if anchoredEnd && len(pattern) > 0 {
-		pattern = pattern[:len(pattern)-1]
-	}
+	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
 	switch {
 	case anchoredStart && anchoredEnd:
 		return value == pattern

@@ -33,6 +33,41 @@ func newSearchController(isDark bool) SearchController {
 	}
 }
 
+// isActive reports whether the search input is open and receiving keys.
+func (sc *SearchController) isActive() bool {
+	return sc.searchActive
+}
+
+// query returns the applied (trimmed, lower-cased) filter query, or "" when
+// no filter is applied.
+func (sc *SearchController) query() string {
+	return sc.searchQuery
+}
+
+// matches returns the set of frame indices whose name matches the query. The
+// map is owned by the controller and is refilled in place on every recompute,
+// so callers must not retain or mutate it.
+func (sc *SearchController) matches() map[int]bool {
+	return sc.matchIndices
+}
+
+// visibleSet returns the frames an active filter keeps visible: every match
+// plus its subtree and ancestors. Same ownership rules as matches.
+func (sc *SearchController) visibleSet() map[int]bool {
+	return sc.filterVisible
+}
+
+// navigable returns the selection filter implied by the current query: nil
+// (every frame navigable) when no filter is applied, otherwise membership in
+// the filter-visible set.
+func (sc *SearchController) navigable() frameFilter {
+	if !filterActive(sc.searchQuery) {
+		return nil
+	}
+	visible := sc.filterVisible
+	return func(idx int) bool { return visible[idx] }
+}
+
 // open activates search mode, restoring the current query into the text input.
 func (sc *SearchController) open() {
 	sc.searchActive = true
@@ -68,19 +103,33 @@ func (sc *SearchController) applyQuery(raw string, frames []tuiFrame, ancestry f
 	return fmt.Sprintf("Filter %q: no matches", query), 0
 }
 
-// handleInput processes a key event while search mode is active. Returns the
-// updated text input command, plus booleans for whether the search was committed
-// or cancelled. The committed value carries the final query string.
-func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (cmd tea.Cmd, committed bool, query string, cancelled bool) {
+// commit closes the search input and applies raw as the filter query. It
+// returns the same status message and jump direction as applyQuery.
+func (sc *SearchController) commit(raw string, frames []tuiFrame, ancestry frameAncestry) (statusMsg string, jumpDir int) {
+	sc.searchActive = false
+	return sc.applyQuery(raw, frames, ancestry)
+}
+
+// handleInput processes a key event while search mode is active. It reports
+// whether the search was committed or cancelled; the committed value carries
+// the final query string.
+//
+// The text input's command is discarded, as in the stream search, stream
+// export and recording modals: it only schedules the cursor blink, and no
+// parent routes the blink message back to this input (the flamegraph's Update
+// handles keys, mouse clicks, resizes and its own ticks only), so returning
+// it would leave orphan timers while the cursor still never blinks.
+func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (committed bool, query string, cancelled bool) {
 	switch msg.String() {
 	case "esc":
-		return nil, false, "", true
+		return false, "", true
 	case "enter":
-		return nil, true, sc.searchInput.Value(), false
+		return true, sc.searchInput.Value(), false
 	}
-	var c tea.Cmd
-	sc.searchInput, c = sc.searchInput.Update(msg)
-	return c, false, "", false
+	var cmd tea.Cmd
+	sc.searchInput, cmd = sc.searchInput.Update(msg)
+	_ = cmd
+	return false, "", false
 }
 
 // recomputeFilterState rebuilds matchIndices and filterVisible from the current
@@ -109,7 +158,7 @@ func (sc *SearchController) recomputeFilterState(frames []tuiFrame, ancestry fra
 
 // footerLine renders the search bar with the match count. Called by View when
 // search is active.
-func (sc *SearchController) footerLine(frames []tuiFrame, selectedIdx int) string {
+func (sc *SearchController) footerLine(selectedIdx int) string {
 	matches := orderedMatchIndices(sc.matchIndices)
 	pos := 0
 	if len(matches) > 0 {
@@ -121,12 +170,17 @@ func (sc *SearchController) footerLine(frames []tuiFrame, selectedIdx int) strin
 	return fmt.Sprintf("%s  %d/%d matches", sc.searchInput.View(), pos, len(matches))
 }
 
-// jumpMatch moves the selection to the next or previous match (direction +1/-1).
-// Returns the new selectedIdx (unchanged if there are no matches).
-func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAncestry, selectedIdx, direction int) (int, map[int]bool) {
+// jumpMatch moves the selection to the next or previous match (direction +1/-1)
+// and returns the new selectedIdx together with its subtree highlight set.
+// `subtree` is the caller's current highlight set: with no matches the
+// selection does not move, so both selectedIdx and subtree are returned
+// unchanged, keeping the highlight in sync with the selection (a nil set was
+// only papered over by the renderer's recompute fallback). Otherwise subtree
+// is refilled in place for the new selection, like subtreeSetUsingAncestry.
+func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAncestry, selectedIdx, direction int, subtree map[int]bool) (int, map[int]bool) {
 	matches := orderedMatchIndices(matchIndices)
 	if len(matches) == 0 {
-		return selectedIdx, nil
+		return selectedIdx, subtree
 	}
 	currentPos := indexOf(matches, selectedIdx)
 	var nextIdx int
@@ -146,13 +200,23 @@ func jumpMatch(frames []tuiFrame, matchIndices map[int]bool, ancestry frameAnces
 		}
 		nextIdx = matches[next]
 	}
-	subtree := subtreeSetUsingAncestry(frames, nextIdx, ancestry, nil)
-	return nextIdx, subtree
+	return nextIdx, subtreeSetUsingAncestry(frames, nextIdx, ancestry, subtree)
 }
 
 // setDarkMode updates the text input style for the given theme.
 func (sc *SearchController) setDarkMode(isDark bool) {
 	sc.searchInput.SetStyles(textinput.DefaultStyles(isDark))
+}
+
+// discardResults empties the match and filter-visible sets, and the applied
+// query when clearQuery is set, as done when the snapshot state is cleared.
+// Unlike reset it leaves the input widget and search mode alone.
+func (sc *SearchController) discardResults(clearQuery bool) {
+	sc.matchIndices = resetBoolSet(sc.matchIndices)
+	sc.filterVisible = resetBoolSet(sc.filterVisible)
+	if clearQuery {
+		sc.searchQuery = ""
+	}
 }
 
 // reset clears all search state, keeping the text input widget.

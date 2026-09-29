@@ -48,3 +48,29 @@ func TestAnimationStateHandlesAddedAndRemovedFrames(t *testing.T) {
 		t.Fatalf("expected remaining frame path root\\x1fchild, got %q", frames[0].Path)
 	}
 }
+
+// TestSetTargetsAtRestIsSettled checks that installing the layout the springs
+// already rest on reports settled, so it does not start an animation.
+func TestSetTargetsAtRestIsSettled(t *testing.T) {
+	state := NewAnimationState(30, 6.0, 1.0)
+	frames := linearFrames(4, 0, 10)
+	state.SetTargets(frames)
+	if !state.Settled() {
+		t.Fatal("fresh springs at their targets reported unsettled")
+	}
+	state.SetTargets(frames)
+	if !state.Settled() {
+		t.Fatal("re-installing the layout at rest reported unsettled")
+	}
+	state.SetTargets(linearFrames(4, 5, 20))
+	if state.Settled() {
+		t.Fatal("a moved layout reported settled")
+	}
+	state.SnapToTargets()
+	if !state.Settled() {
+		t.Fatal("SnapToTargets left the springs unsettled")
+	}
+	if got := state.CurrentFrames(); got[3].Width != 20 {
+		t.Fatalf("snapped width = %d, want 20", got[3].Width)
+	}
+}

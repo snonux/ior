@@ -1,7 +1,6 @@
 package flamegraph
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -46,7 +45,7 @@ func BenchmarkBuildTerminalLayout(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					benchFramesSink = BuildTerminalLayout(snapshot, width, height)
+					benchFramesSink = buildTerminalLayout(snapshot, width, height)
 				}
 				if len(benchFramesSink) == 0 {
 					b.Fatal("layout returned no frames")
@@ -84,20 +83,20 @@ func BenchmarkRenderFrame(b *testing.B) {
 				model.height = viewport.height
 				model.snapshot = fixture.snapshot
 				model.rebuildFrames(false)
-				if len(model.frames) == 0 {
+				if len(model.anim.frames) == 0 {
 					b.Fatal("render benchmark requires non-empty frame layout")
 				}
 
-				for idx := range model.frames {
+				for idx := range model.anim.frames {
 					switch idx % 12 {
 					case 0:
-						model.frames[idx].Name = "sys_enter_read"
+						model.anim.frames[idx].Name = "sys_enter_read"
 					case 1:
-						model.frames[idx].Name = "sys_enter_write"
+						model.anim.frames[idx].Name = "sys_enter_write"
 					}
 				}
-				model.selectedIdx = midDepthFrameIndex(model.frames)
-				model.subtreeSet = computeSubtreeSetInto(model.frames, model.selectedIdx, model.subtreeSet)
+				model.sel.selectedIdx = midDepthFrameIndex(model.anim.frames)
+				model.sel.subtreeSet = computeSubtreeSetInto(model.anim.frames, model.sel.selectedIdx, model.sel.subtreeSet)
 				model.applySearchQuery("sys_")
 
 				b.ReportAllocs()
@@ -159,15 +158,15 @@ func BenchmarkSearchHighlight(b *testing.B) {
 		decorateFramesForSearch(frames)
 
 		model := NewModel(nil)
-		model.frames = frames
-		model.selectedIdx = midDepthFrameIndex(frames)
-		model.subtreeSet = computeSubtreeSetInto(model.frames, model.selectedIdx, model.subtreeSet)
+		model.anim.frames = frames
+		model.sel.selectedIdx = midDepthFrameIndex(frames)
+		model.sel.subtreeSet = computeSubtreeSetInto(model.anim.frames, model.sel.selectedIdx, model.sel.subtreeSet)
 
 		b.Run(tc.label, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				model.applySearchQuery(queries[i%len(queries)])
-				benchIntSink = len(model.matchIndices)
+				benchIntSink = len(model.search.matchIndices)
 			}
 		})
 	}
@@ -242,36 +241,36 @@ func BenchmarkZoomTransition(b *testing.B) {
 	model.height = 40
 	model.snapshot = snapshot
 	model.rebuildFrames(false)
-	if len(model.frames) == 0 {
+	if len(model.anim.frames) == 0 {
 		b.Fatal("zoom benchmark requires non-empty initial layout")
 	}
-	zoomPath := model.frames[midDepthFrameIndex(model.frames)].Path
+	zoomPath := model.anim.frames[midDepthFrameIndex(model.anim.frames)].Path
 
 	b.Run("zoom_in", func(b *testing.B) {
 		benchModel := model
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			benchModel.zoomReset()
-			benchModel.selectedIdx = frameIndexByPath(benchModel.frames, zoomPath)
+			benchModel.sel.selectedIdx = frameIndexByPath(benchModel.anim.frames, zoomPath)
 			benchModel.zoomIn()
-			benchIntSink = len(benchModel.targetFrames)
+			benchIntSink = len(benchModel.anim.targetFrames)
 		}
 	})
 
 	b.Run("undo_zoom", func(b *testing.B) {
 		benchModel := model
-		benchModel.selectedIdx = frameIndexByPath(benchModel.frames, zoomPath)
+		benchModel.sel.selectedIdx = frameIndexByPath(benchModel.anim.frames, zoomPath)
 		benchModel.zoomIn()
-		if len(benchModel.zoomStack) == 0 {
+		if len(benchModel.zoom.zoomStack) == 0 {
 			b.Fatal("undo benchmark requires an active zoom stack")
 		}
 
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			benchModel.zoomUndo()
-			benchIntSink = len(benchModel.frames)
+			benchIntSink = len(benchModel.anim.frames)
 
-			benchModel.selectedIdx = frameIndexByPath(benchModel.frames, zoomPath)
+			benchModel.sel.selectedIdx = frameIndexByPath(benchModel.anim.frames, zoomPath)
 			benchModel.zoomIn()
 		}
 	})
@@ -284,7 +283,7 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_events", count), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count")
+				liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
 				for eventIdx := 0; eventIdx < count; eventIdx++ {
 					traceID := types.SYS_ENTER_READ
 					if eventIdx%2 == 0 {
@@ -301,25 +300,21 @@ func BenchmarkLiveTrieIngestAndSnapshot(b *testing.B) {
 					pair.Recycle()
 				}
 
-				payload, _ := liveTrie.SnapshotJSON()
-				var snapshot snapshotNode
-				if err := json.Unmarshal(payload, &snapshot); err != nil {
-					b.Fatalf("snapshot decode failed: %v", err)
-				}
-				benchFramesSink = BuildTerminalLayout(&snapshot, 120, 40)
+				snapshot, _ := liveTrie.SnapshotTree()
+				benchFramesSink = buildTerminalLayout(snapshot, 120, 40)
 			}
 		})
 	}
 }
 
 func BenchmarkResizeRelayout(b *testing.B) {
-	// Performance target: resize relayout cost should match BuildTerminalLayout (< 500us medium@120col).
+	// Performance target: resize relayout cost should match buildTerminalLayout (< 500us medium@120col).
 	snapshot := generateTestSnapshot(fixtureMediumDepth, fixtureMediumBreadth)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		frames120 := BuildTerminalLayout(snapshot, 120, 40)
-		frames80 := BuildTerminalLayout(snapshot, 80, 24)
-		benchFramesSink = BuildTerminalLayout(snapshot, 120, 40)
+		frames120 := buildTerminalLayout(snapshot, 120, 40)
+		frames80 := buildTerminalLayout(snapshot, 80, 24)
+		benchFramesSink = buildTerminalLayout(snapshot, 120, 40)
 		benchIntSink = len(frames120) + len(frames80) + len(benchFramesSink)
 	}
 }
@@ -336,7 +331,7 @@ func benchmarkFramesForCount(frameCount int) []tuiFrame {
 	default:
 		snapshot = generateTestSnapshot(10, 5)
 	}
-	return BuildTerminalLayout(snapshot, 200, 80)
+	return buildTerminalLayout(snapshot, 200, 80)
 }
 
 func decorateFramesForSearch(frames []tuiFrame) {
@@ -369,7 +364,7 @@ func midDepthFrameIndex(frames []tuiFrame) int {
 		}
 	}
 	targetDepth := maxDepth / 2
-	indices := framesAtDepth(frames, targetDepth)
+	indices := framesAtDepthFiltered(frames, targetDepth, nil)
 	if len(indices) == 0 {
 		return len(frames) / 2
 	}

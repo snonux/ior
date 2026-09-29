@@ -1,0 +1,55 @@
+# event struct sizes in bytes (internal/c/types.h, natural alignment)
+struct_size open_event 320
+struct_size open_name_fixup_event 268
+struct_size exec_event 304
+struct_size null_event 24
+struct_size fd_event 48
+struct_size ret_event 40
+struct_size name_event 560
+struct_size path_event 312
+struct_size fd_path_event 304
+struct_size fcntl_event 40
+struct_size dup3_event 32
+struct_size open_by_handle_at_event 32
+struct_size socket_event 40
+struct_size socketpair_event 56
+struct_size accept_event 48
+struct_size pipe_event 48
+struct_size eventfd_event 312
+struct_size epoll_ctl_event 40
+struct_size poll_event 48
+struct_size mem_event 56
+struct_size mmap_event 64
+struct_size sleep_event 32
+struct_size two_fd_event 568
+struct_size bpf_event 32
+struct_size keyctl_event 40
+struct_size ptrace_event 48
+struct_size perf_open_event 56
+struct_size process_exec_event 40
+struct_size process_exit_event 24
+
+# clock helper calls on the path of one traced syscall (handler body + inlined hook)
+clock_reads sys_enter_read 2
+clock_reads sys_exit_read 2
+
+# bytes reserved in the ring buffer for one syscall pair, by representative syscall
+pair_bytes read 88
+pair_bytes close 88
+pair_bytes openat 360
+pair_bytes newfstatat 352
+pair_bytes renameat2 600
+pair_bytes close_range 608
+pair_bytes eventfd2 624
+pair_bytes memfd_create 624
+pair_bytes mmap 104
+pair_bytes epoll_wait 88
+pair_bytes futex 64
+
+# full-buffer memsets emitted across all generated handlers
+memset_sites ev->filename [sizeof(ev->filename)] 34
+memset_sites ev->filename [sizeof(ev->filename) + sizeof(ev->comm)] 8
+memset_sites ev->oldname [sizeof(ev->oldname) + sizeof(ev->newname)] 10
+memset_sites ev->pathname [sizeof(ev->pathname)] 58
+memset_sites_total 110
+handlers_total 731

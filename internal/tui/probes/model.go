@@ -25,7 +25,9 @@ type ProbeToggledMsg struct {
 	Err     error
 }
 
-// Model is the probe toggle modal state.
+// Model is the probe toggle modal state. It is value-flow: every method has a
+// value receiver and every mutator returns the updated Model (see the TUI
+// Model receiver policy in AGENTS.md).
 type Model struct {
 	visible bool
 	probes  []probemanager.ProbeState
@@ -43,6 +45,7 @@ type Model struct {
 	isDark  bool
 }
 
+// NewModel constructs a probes modal listing manager's probe states.
 func NewModel(manager Manager) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -56,18 +59,21 @@ func NewModel(manager Manager) Model {
 	}
 }
 
+// Visible reports whether the probes modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
+// Open shows the probes modal and reloads the probe list.
 func (m Model) Open() Model {
 	m.visible = true
 	m.searching = false
 	m.lastErr = ""
 	m.textInput.Blur()
-	m.reload()
-	m.clampCursor()
+	m = m.reload()
+	m = m.clampCursor()
 	return m
 }
 
+// Close hides the probes modal.
 func (m Model) Close() Model {
 	m.visible = false
 	m.searching = false
@@ -87,8 +93,7 @@ func (m Model) SetDarkMode(isDark bool) Model {
 // scroll offset kept by Update matches the rows View will draw.
 func (m Model) SetHeight(height int) Model {
 	m.height = height
-	m.clampCursor()
-	return m
+	return m.clampCursor()
 }
 
 // Update dispatches Bubble Tea messages to the appropriate handler.
@@ -112,13 +117,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // handleProbeToggled refreshes probe state after an async toggle completes.
 func (m Model) handleProbeToggled(msg ProbeToggledMsg) (Model, tea.Cmd) {
-	m.reload()
+	m = m.reload()
 	if msg.Err != nil {
 		m.lastErr = msg.Err.Error()
 	} else {
 		m.lastErr = ""
 	}
-	m.clampCursor()
+	m = m.clampCursor()
 	return m, nil
 }
 
@@ -129,12 +134,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.Close(), nil
 	case "j", "down":
 		m.cursor++
-		m.clampCursor()
-		return m, nil
+		return m.clampCursor(), nil
 	case "k", "up":
 		m.cursor--
-		m.clampCursor()
-		return m, nil
+		return m.clampCursor(), nil
 	case "/", "f":
 		m.searching = true
 		m.textInput.SetValue(m.search)
@@ -165,31 +168,35 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.search = strings.TrimSpace(m.textInput.Value())
 		m.searching = false
 		m.textInput.Blur()
-		m.clampCursor()
+		m = m.clampCursor()
 		return m, nil
 	default:
 		var cmd tea.Cmd
 		m.textInput, cmd = m.textInput.Update(msg)
 		m.search = strings.TrimSpace(m.textInput.Value())
-		m.clampCursor()
+		m = m.clampCursor()
 		return m, cmd
 	}
 }
 
-func (m *Model) reload() {
+// reload returns m with probes refreshed from the manager.
+func (m Model) reload() Model {
 	if m.manager == nil {
 		m.probes = nil
-		return
+		return m
 	}
 	m.probes = m.manager.States()
+	return m
 }
 
-func (m *Model) clampCursor() {
+// clampCursor returns m with the cursor and scroll offset kept inside the
+// filtered probe list.
+func (m Model) clampCursor() Model {
 	items := m.filtered()
 	if len(items) == 0 {
 		m.cursor = 0
 		m.offset = 0
-		return
+		return m
 	}
 	if m.cursor >= len(items) {
 		m.cursor = len(items) - 1
@@ -207,6 +214,7 @@ func (m *Model) clampCursor() {
 	if m.offset < 0 {
 		m.offset = 0
 	}
+	return m
 }
 
 func (m Model) filtered() []probemanager.ProbeState {

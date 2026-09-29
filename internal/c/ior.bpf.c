@@ -1,6 +1,7 @@
 //+build ignore
 
 #include "vmlinux.h"
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include "types.h"
 #include "maps.h"
@@ -13,6 +14,9 @@
  * splitting the code up into several smaller files.
  */
 #include "filter.c"
+
+// Hand-written non-syscall tracepoints (sched:sched_process_exec, sched:sched_process_exit).
+#include "exec.c"
 
 // Auto-generated tracepoints.
 #include "generated_tracepoints.c"

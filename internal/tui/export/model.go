@@ -13,7 +13,9 @@ import (
 type Option int
 
 const (
+	// OptionCSV exports the filtered stream snapshot as CSV.
 	OptionCSV Option = iota
+	// OptionCancel dismisses the modal without exporting.
 	OptionCancel
 )
 
@@ -55,8 +57,10 @@ func NewModel() Model {
 	return Model{}
 }
 
+// Visible reports whether the export modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
+// Open shows the export modal with the CSV option preselected.
 func (m Model) Open() Model {
 	m.visible = true
 	m.selected = 0
@@ -65,6 +69,7 @@ func (m Model) Open() Model {
 	return m
 }
 
+// Close hides the export modal and clears its status.
 func (m Model) Close() Model {
 	m.visible = false
 	m.exporting = false

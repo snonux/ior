@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"ior/internal/collapse"
 	appconfig "ior/internal/config"
+	"ior/internal/csvlist"
 	"ior/internal/globalfilter"
 	"ior/internal/tracepoints"
+	"ior/internal/types"
 )
 
 // Config captures runtime configuration parsed from CLI flags.
@@ -72,9 +75,25 @@ type Config struct {
 	// ResetTimer is the interval at which aggregate dashboard state (flamegraph
 	// trie and stats engine) is automatically cleared; 0 disables auto-reset.
 	ResetTimer time.Duration
+	// SyscallFamilySamplingRates controls in-kernel syscall sampling by family.
+	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
+	SyscallFamilySamplingRates map[types.SyscallFamily]uint32
+	// SyscallSamplingRates controls in-kernel syscall sampling by syscall name.
+	// Keys use syscall names (for example "futex"), not tracepoint names.
+	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
+	SyscallSamplingRates map[string]uint32
 
 	// ShowVersion prints the banner plus version and exits without running.
 	ShowVersion bool
+}
+
+// IsRawOutputMode reports whether the config selects a headless output path
+// (-plain, -flamegraph, or headless -parquet) that lacks a TUI aggregate
+// sink. In these modes, aggregate-only sampling (rate 0) would silently
+// suppress ring-buffer events, so callers should promote default aggregate-
+// only rates to 1.
+func (f Config) IsRawOutputMode() bool {
+	return f.PlainMode || f.FlamegraphOutput || strings.TrimSpace(f.ParquetPath) != ""
 }
 
 // DefaultResetTimer is the default cadence for the dashboard's auto-reset
@@ -86,16 +105,18 @@ const DefaultResetTimer = 30 * time.Second
 // NewFlags returns a configuration instance initialized with project defaults.
 func NewFlags() Config {
 	return Config{
-		PidFilter:              -1,
-		TidFilter:              -1,
-		EventMapSize:           appconfig.DefaultEventMapSize,
-		Duration:               900,
-		LiveInterval:           200 * time.Millisecond,
-		TUIFastRefreshInterval: 250 * time.Millisecond,
-		TUIExportEnable:        true,
-		CollapsedFields:        []string{"comm", "tracepoint", "path"},
-		CountField:             "count",
-		ResetTimer:             DefaultResetTimer,
+		PidFilter:                  -1,
+		TidFilter:                  -1,
+		EventMapSize:               appconfig.DefaultEventMapSize,
+		Duration:                   900,
+		LiveInterval:               200 * time.Millisecond,
+		TUIFastRefreshInterval:     250 * time.Millisecond,
+		TUIExportEnable:            true,
+		CollapsedFields:            collapse.DefaultFields(),
+		CountField:                 collapse.DefaultCountField(),
+		ResetTimer:                 DefaultResetTimer,
+		SyscallFamilySamplingRates: make(map[types.SyscallFamily]uint32),
+		SyscallSamplingRates:       make(map[string]uint32),
 	}
 }
 
@@ -121,6 +142,8 @@ func (f Config) Clone() Config {
 	out.TracepointSelector = f.TracepointSelector.Clone()
 	out.CollapsedFields = slices.Clone(f.CollapsedFields)
 	out.GlobalFilter = f.GlobalFilter.Clone()
+	out.SyscallFamilySamplingRates = cloneFamilySamplingRates(f.SyscallFamilySamplingRates)
+	out.SyscallSamplingRates = cloneSyscallSamplingRates(f.SyscallSamplingRates)
 	return out
 }
 
@@ -136,12 +159,15 @@ func Parse() (Config, error) {
 // fresh FlagSet and custom argument slices without touching global state.
 func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	cfg := NewFlags()
-	tpsAttach, tpsExclude, fields := registerFlags(fs, &cfg)
+	tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dims := registerFlags(fs, &cfg)
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
-	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields); err != nil {
+	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields, dims); err != nil {
+		return Config{}, err
+	}
+	if err := resolveSamplingRates(&cfg, familySampling, syscallSampling); err != nil {
 		return Config{}, err
 	}
 	if err := validateConfig(cfg); err != nil {
@@ -152,9 +178,17 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 
 // registerFlags binds all CLI flags to cfg and returns the string pointers for
 // fields that require post-parse resolution (tracepoint regexes, collapse fields).
-func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields *string) {
+func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string, dims *tracepoints.DimensionSelectorConfig) {
 	validFields := collapse.ValidFields()
 	validCounts := collapse.ValidCountFields()
+	// Families and kinds enumerate their full valid sets in the help text
+	// (audit domain-06 D2); syscall names are too numerous to list.
+	validFamilies := make([]string, 0, 12)
+	for _, family := range types.AllSyscallFamilies() {
+		validFamilies = append(validFamilies, string(family))
+	}
+	validKinds := tracepoints.KnownKinds()
+	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
 
 	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
 	fs.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
@@ -165,35 +199,54 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.StringVar(&cfg.PathFilter, "path", "", "Path to filter for")
 	fs.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
 
-	tpsAttach = fs.String("tps", "", "Comma separated list regexes for tracepoints to load")
-	tpsExclude = fs.String("tpsExclude", "", "Comma separated list regexes for tracepoints to exclude")
+	tpsAttach = fs.String("tps", "", "Comma separated list of regexes for tracepoints to load (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
+	tpsExclude = fs.String("tpsExclude", "", "Comma separated list of regexes for tracepoints to exclude (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
+	fs.StringVar(&dimensionCfg.TraceFamilies, "trace-families", "",
+		"Comma separated syscall families to attach; default attaches the FS family only (valid: "+strings.Join(validFamilies, ",")+")")
+	fs.StringVar(&dimensionCfg.TraceKinds, "trace-kinds", "",
+		"Comma separated tracepoint kinds to attach (valid: "+strings.Join(validKinds, ",")+")")
+	fs.StringVar(&dimensionCfg.TraceSyscalls, "trace-syscalls", "",
+		"Comma separated syscall names to attach (for example openat,read,nanosleep)")
+	fs.StringVar(&dimensionCfg.NoTraceFamilies, "no-trace-families", "",
+		"Comma separated syscall families to exclude from attachment (valid: "+strings.Join(validFamilies, ",")+")")
+	fs.StringVar(&dimensionCfg.NoTraceKinds, "no-trace-kinds", "",
+		"Comma separated tracepoint kinds to exclude from attachment (valid: "+strings.Join(validKinds, ",")+")")
+	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
+		"Comma separated syscall names to exclude from attachment")
 
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
-	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write all traced syscall rows directly to a parquet file in headless mode (skip the TUI; incompatible with -plain, -flamegraph, --testflames, --testliveflames, and content filters)")
+	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name for .ior.zst trace output files")
 	fs.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	fs.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
-	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for --testliveflames")
+	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for -testliveflames")
 	fs.DurationVar(&cfg.TUIFastRefreshInterval, "tui-fast-refresh", cfg.TUIFastRefreshInterval,
-		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = disable high-frequency refresh)")
-	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI CSV snapshot export files (separate from Parquet recording)")
+		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = fall back to the built-in 200ms flame/stream tick, not to the slower dashboard cadence)")
+	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI stream CSV export (e and stream-tab x/X/E shortcuts plus their hints; separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
+	familySampling = fs.String("syscall-sampling-families", "",
+		"Per-family sampling rates as name=rate, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink; valid families: "+strings.Join(validFamilies, ",")+")")
+	syscallSampling = fs.String("syscall-sampling-syscalls", "",
+		"Per-syscall sampling rates as name=rate, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 	fields = fs.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	fs.StringVar(&cfg.CountField, "count", cfg.CountField,
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
-	return tpsAttach, tpsExclude, fields
+	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dimensionCfg
 }
 
 // resolvePostParseFields compiles the tracepoint selector and collapse field
 // list from the raw string flags that cannot be bound directly to cfg fields.
-func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) error {
+func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string, dims *tracepoints.DimensionSelectorConfig) error {
 	// Parse the tracepoint include/exclude regex lists into a Selector.
 	// The Selector owns all matching logic; Config is purely a data carrier.
-	sel, err := tracepoints.ParseSelector(*tpsAttach, *tpsExclude)
+	if dims == nil {
+		dims = &tracepoints.DimensionSelectorConfig{}
+	}
+	sel, err := tracepoints.ParseSelectorWithDimensions(*tpsAttach, *tpsExclude, *dims)
 	if err != nil {
 		return err
 	}
@@ -203,10 +256,10 @@ func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) 
 	// As of February 23, 2026, open_by_handle_at and name_to_handle_at were
 	// re-evaluated on newer kernels and do not require CO-RE-based exclusions.
 	// If future kernels regress, add targeted exclusions here.
-	if *fields == "" {
-		cfg.CollapsedFields = []string{"comm", "tracepoint", "path"}
-	} else {
-		cfg.CollapsedFields = strings.Split(*fields, ",")
+	// A blank or comma-only -fields value falls back to the defaults, like an
+	// unset flag; padding around entries ("path, comm") is ignored.
+	if cfg.CollapsedFields = csvlist.Split(*fields); len(cfg.CollapsedFields) == 0 {
+		cfg.CollapsedFields = collapse.DefaultFields()
 	}
 
 	for _, field := range cfg.CollapsedFields {
@@ -216,6 +269,27 @@ func resolvePostParseFields(cfg *Config, tpsAttach, tpsExclude, fields *string) 
 	}
 	if !collapse.IsValidCountField(cfg.CountField) {
 		return fmt.Errorf("invalid count field: %s", cfg.CountField)
+	}
+	return nil
+}
+
+func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) error {
+	familyRates, err := parseFamilySamplingRates(*familySampling)
+	if err != nil {
+		return err
+	}
+	syscallRates, err := parseSyscallSamplingRates(*syscallSampling)
+	if err != nil {
+		return err
+	}
+	cfg.SyscallFamilySamplingRates = familyRates
+	cfg.SyscallSamplingRates = mergeSyscallSamplingRates(syscallRates)
+	// In raw output modes (-plain, -flamegraph, headless -parquet) there is
+	// no aggregate sink, so aggregate-only defaults (rate 0) would silently
+	// suppress ring-buffer events. Promote those defaults to rate 1 unless
+	// the user explicitly requested rate 0 via -syscall-sampling-syscalls.
+	if cfg.IsRawOutputMode() {
+		promoteAggregateOnlyForRawOutput(cfg.SyscallSamplingRates, syscallRates)
 	}
 	return nil
 }
@@ -238,6 +312,54 @@ func validateConfig(cfg Config) error {
 	// error. Reject it here with a clear diagnostic instead.
 	if cfg.EventMapSize <= 0 {
 		return fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
+	}
+	// A -pid/-tid of 0 matches only the idle task, and any negative value
+	// other than the -1 "no filter" sentinel wraps to a huge uint32 BPF
+	// global that no real TGID/TID can ever equal — both produce a silently
+	// empty trace, so reject them with a clear startup error.
+	if err := validateProcessID("pid", cfg.PidFilter); err != nil {
+		return err
+	}
+	if err := validateProcessID("tid", cfg.TidFilter); err != nil {
+		return err
+	}
+	// A -comm/-path pattern longer than the fixed-size kernel event field it
+	// is matched against can never be found in anything the tracepoint gates
+	// see, so it is another silently empty trace - the same class as the
+	// checks above. setupTraceInfra rejects it too, but only after the TUI is
+	// already up, where it arrives as TracingErrorMsg and takes over the
+	// screen; refusing it here means the user gets the reason on stderr with
+	// a non-zero exit, before any terminal is taken over at all.
+	return BuildTraceFilter(cfg).ValidateTracepointFields()
+}
+
+// fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for
+// example in a container without /proc mounted); 4194304 is the maximum
+// pid_max on 64-bit Linux.
+const fallbackPidMax = 4194304
+
+// pidMaxFn is swapped in tests to pin the validation bound deterministically.
+var pidMaxFn = defaultPidMax
+
+func defaultPidMax() int {
+	data, err := os.ReadFile("/proc/sys/kernel/pid_max")
+	if err != nil {
+		return fallbackPidMax
+	}
+	if max, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && max > 0 {
+		return max
+	}
+	return fallbackPidMax
+}
+
+// validateProcessID rejects -pid/-tid values outside {-1} ∪ [1, pid_max]:
+// -1 means "no filter", and any other value must be a real process/thread ID.
+func validateProcessID(name string, value int) error {
+	if value == -1 {
+		return nil
+	}
+	if max := pidMaxFn(); value < 1 || value > max {
+		return fmt.Errorf("invalid %s: %d (must be -1 for no filter or an ID in [1, %d])", name, value, max)
 	}
 	return nil
 }

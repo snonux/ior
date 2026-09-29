@@ -2,10 +2,14 @@ package flags
 
 import (
 	"flag"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"ior/internal/collapse"
 )
 
 // parseForTest builds a fresh FlagSet and parses the given args, returning
@@ -152,6 +156,218 @@ func TestParseInvalidTracepointRegexReturnsError(t *testing.T) {
 	}
 }
 
+// TestParseTracepointRegexListsTolerateBlankAndPaddedEntries checks the -tps
+// and -tpsExclude flags end to end: a trailing comma must not turn into an
+// empty regex that matches (and so attaches or excludes) every tracepoint, and
+// a space after a comma must not produce a pattern that never matches.
+func TestParseTracepointRegexListsTolerateBlankAndPaddedEntries(t *testing.T) {
+	cfg, err := parseForTest(t,
+		"-tps", "^sys_enter_openat$, ^sys_enter_read$, ^sys_enter_close$,",
+		"-tpsExclude", "^sys_enter_close$,")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	sel := cfg.TracepointSelector
+	for _, name := range []string{"sys_enter_openat", "sys_enter_read"} {
+		if !sel.ShouldAttach(name) {
+			t.Errorf("ShouldAttach(%q) = false, want true", name)
+		}
+	}
+	// sys_enter_close is attached by -tps but must still be excluded;
+	// sys_enter_write is outside the -tps list and must not be attached.
+	for _, name := range []string{"sys_enter_close", "sys_enter_write"} {
+		if sel.ShouldAttach(name) {
+			t.Errorf("ShouldAttach(%q) = true, want false", name)
+		}
+	}
+}
+
+// TestParseBlankTpsBehavesLikeUnset drives a blank or comma-only -tps through
+// the real flag parser: it must keep the FS-only default exactly as if the
+// flag had not been given, rather than attaching every tracepoint.
+func TestParseBlankTpsBehavesLikeUnset(t *testing.T) {
+	for _, tps := range []string{" , ", ",", "   "} {
+		t.Run(fmt.Sprintf("%q", tps), func(t *testing.T) {
+			cfg, err := parseForTest(t, "-tps", tps)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			sel := cfg.TracepointSelector
+			if !sel.RestrictSyscalls {
+				t.Fatal("RestrictSyscalls = false, want FS-only default as with no -tps")
+			}
+			if !sel.ShouldAttach("sys_enter_openat") {
+				t.Error("ShouldAttach(sys_enter_openat) = false, want true")
+			}
+			if sel.ShouldAttach("sys_enter_socket") {
+				t.Error("ShouldAttach(sys_enter_socket) = true, want false as with no -tps")
+			}
+		})
+	}
+}
+
+// TestParseBlankTpsExcludeWithTraceDimensions checks that a blank -tpsExclude
+// excludes nothing when combined with -trace-* selectors (a stray empty regex
+// would otherwise exclude every tracepoint).
+func TestParseBlankTpsExcludeWithTraceDimensions(t *testing.T) {
+	for _, exclude := range []string{" , ", ",", "   "} {
+		t.Run(fmt.Sprintf("%q", exclude), func(t *testing.T) {
+			cfg, err := parseForTest(t, "-trace-syscalls", "socket, openat", "-tpsExclude", exclude)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			sel := cfg.TracepointSelector
+			if len(sel.Exclude) != 0 {
+				t.Fatalf("len(Exclude) = %d, want 0", len(sel.Exclude))
+			}
+			for _, name := range []string{"sys_enter_socket", "sys_exit_openat"} {
+				if !sel.ShouldAttach(name) {
+					t.Errorf("ShouldAttach(%q) = false, want true", name)
+				}
+			}
+			if sel.ShouldAttach("sys_enter_read") {
+				t.Error("ShouldAttach(sys_enter_read) = true, want false (not in -trace-syscalls)")
+			}
+		})
+	}
+}
+
+// TestParseFieldsTrimsAndSkipsBlankEntries pins -fields splitting: padding
+// around entries is ignored, stray commas are dropped, and a blank or
+// comma-only value falls back to the default field list.
+func TestParseFieldsTrimsAndSkipsBlankEntries(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+		want   []string
+	}{
+		{name: "padded entries", fields: " path , comm ", want: []string{"path", "comm"}},
+		{name: "stray commas", fields: ",comm,,pid,", want: []string{"comm", "pid"}},
+		{name: "comma only uses defaults", fields: " , ", want: collapse.DefaultFields()},
+		{name: "blank uses defaults", fields: "  ", want: collapse.DefaultFields()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parseForTest(t, "-fields", tt.fields)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			if !slices.Equal(cfg.CollapsedFields, tt.want) {
+				t.Fatalf("CollapsedFields = %q, want %q", cfg.CollapsedFields, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFieldsInvalidEntryAmongPaddedEntriesReturnsError(t *testing.T) {
+	_, err := parseForTest(t, "-fields", " comm , bogus ,")
+	if err == nil {
+		t.Fatal("expected parse error for invalid collapse field")
+	}
+	if !strings.Contains(err.Error(), "invalid field for collapse: bogus") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDefaultTraceDimensionsFSOnly(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat attached by default")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep excluded by default")
+	}
+}
+
+func TestParseTraceFamiliesFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-families", "Time")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep attached for Time family")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded when only Time family enabled")
+	}
+}
+
+func TestParseTraceKindsFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-kinds", "sleep")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep attached for sleep kind")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded for sleep-only selector")
+	}
+}
+
+func TestParseTraceSyscallsFlag(t *testing.T) {
+	cfg, err := parseForTest(t, "-trace-syscalls", "openat")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_openat") || !cfg.TracepointSelector.ShouldAttach("sys_exit_openat") {
+		t.Fatal("expected openat enter/exit attached")
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_write") {
+		t.Fatal("expected write excluded when only openat enabled")
+	}
+}
+
+func TestParseTraceDimensionsUnionAndExclusions(t *testing.T) {
+	cfg, err := parseForTest(t,
+		"-trace-families", "Time",
+		"-trace-syscalls", "openat",
+		"-no-trace-syscalls", "openat",
+	)
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("expected openat excluded by no-trace-syscalls")
+	}
+	if !cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("expected nanosleep still attached from trace-families")
+	}
+}
+
+func TestParseTraceFamiliesRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-families", "Nope")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall family") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTraceKindsRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-kinds", "not-a-kind")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall kind") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTraceSyscallsRejectsUnknown(t *testing.T) {
+	_, err := parseForTest(t, "-trace-syscalls", "definitely_not_syscall")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid syscall in trace selector") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseResetTimerDefault(t *testing.T) {
 	cfg, err := parseForTest(t)
 	if err != nil {
@@ -279,14 +495,15 @@ func TestParseTUIFastRefreshOverride(t *testing.T) {
 	}
 }
 
-func TestParseTUIFastRefreshZeroDisables(t *testing.T) {
-	// A zero value is valid and means "disable high-frequency refresh",
-	// falling back to the default Bubble Tea tick rate.
+func TestParseTUIFastRefreshZeroFallsBackToBuiltinTick(t *testing.T) {
+	// A zero value is valid: it clears the configured override so the
+	// dashboard falls back to its built-in 200ms flame/stream tick
+	// constants. High-frequency refresh is never fully disabled.
 	cfg, err := parseForTest(t, "-tui-fast-refresh", "0")
 	if err != nil {
 		t.Fatalf("parse returned error: %v", err)
 	}
 	if cfg.TUIFastRefreshInterval != 0 {
-		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (disabled)", cfg.TUIFastRefreshInterval)
+		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (built-in tick fallback)", cfg.TUIFastRefreshInterval)
 	}
 }

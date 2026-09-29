@@ -2,6 +2,7 @@ package probemanager
 
 import (
 	"errors"
+	"ior/internal/tracepoints"
 	"strings"
 	"sync"
 	"testing"
@@ -124,6 +125,46 @@ func TestManagerAttachAllToggleAndCounts(t *testing.T) {
 	active, total = mgr.ActiveCount()
 	if active != 2 || total != 2 {
 		t.Fatalf("unexpected counts after toggle active=%d total=%d", active, total)
+	}
+}
+
+func TestManagerAttachAllWithDimensionSelectorAttachesOnlyEnabledSyscalls(t *testing.T) {
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_openat": {},
+			"handle_sys_exit_openat":  {},
+			"handle_sys_enter_write":  {},
+			"handle_sys_exit_write":   {},
+		},
+		errs: map[string]error{},
+	}
+	mgr := NewManager(attacher)
+	selector, err := tracepoints.ParseSelectorWithDimensions("", "", tracepoints.DimensionSelectorConfig{
+		TraceSyscalls: "openat",
+	})
+	if err != nil {
+		t.Fatalf("build selector: %v", err)
+	}
+
+	err = mgr.AttachAll(selector.ShouldAttach, []string{
+		"sys_enter_openat", "sys_exit_openat",
+		"sys_enter_write", "sys_exit_write",
+	}, nil)
+	if err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+
+	if got := attacher.programs["handle_sys_enter_openat"].attachCalls(); got != 1 {
+		t.Fatalf("openat enter attach calls = %d, want 1", got)
+	}
+	if got := attacher.programs["handle_sys_exit_openat"].attachCalls(); got != 1 {
+		t.Fatalf("openat exit attach calls = %d, want 1", got)
+	}
+	if got := attacher.programs["handle_sys_enter_write"].attachCalls(); got != 0 {
+		t.Fatalf("write enter attach calls = %d, want 0", got)
+	}
+	if got := attacher.programs["handle_sys_exit_write"].attachCalls(); got != 0 {
+		t.Fatalf("write exit attach calls = %d, want 0", got)
 	}
 }
 
@@ -334,6 +375,101 @@ func TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy(t *testing.T) {
 	}
 }
 
+func TestManagerCloseWaitsForBlockedAttachCleanup(t *testing.T) {
+	attachStarted := make(chan struct{})
+	releaseAttach := make(chan struct{})
+	enter := &fakeLink{}
+	exit := &fakeLink{}
+	enterProgram := &fakeProgram{link: enter}
+	var startOnce sync.Once
+	enterProgram.onAttach = func() {
+		startOnce.Do(func() { close(attachStarted) })
+		<-releaseAttach
+	}
+	mgr := NewManager(&fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": enterProgram,
+			"handle_sys_exit_close":  {link: exit},
+		},
+		errs: map[string]error{},
+	})
+	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+
+	attachErr := make(chan error, 1)
+	go func() { attachErr <- mgr.Attach("close") }()
+	select {
+	case <-attachStarted:
+	case <-time.After(time.Second):
+		t.Fatal("attach did not reach the blocked module call")
+	}
+
+	closeStarted := make(chan struct{})
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- mgr.CloseWithProgress(func(completed, total int) {
+			if completed == 0 {
+				select {
+				case <-closeStarted:
+				default:
+					close(closeStarted)
+				}
+			}
+		})
+	}()
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("close did not begin")
+	}
+	select {
+	case err := <-closeErr:
+		t.Fatalf("CloseWithProgress returned before blocked attach cleanup: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseAttach)
+	if err := <-attachErr; err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Attach error = %v, want closed manager", err)
+	}
+	if err := <-closeErr; err != nil {
+		t.Fatalf("CloseWithProgress returned error: %v", err)
+	}
+	if got := enter.destroyCalls(); got != 1 {
+		t.Fatalf("enter link destroy calls = %d, want 1", got)
+	}
+	if got := exit.destroyCalls(); got != 1 {
+		t.Fatalf("exit link destroy calls = %d, want 1", got)
+	}
+}
+
+func TestManagerCloseAllowsReentrantCloseDuringDestroy(t *testing.T) {
+	mgr := &Manager{probes: make(map[string]*probeEntry)}
+	reentrantErr := make(chan error, 1)
+	enter := &fakeLink{onDestroy: func() { reentrantErr <- mgr.Close() }}
+	mgr.probes["close"] = &probeEntry{
+		syscall:   "close",
+		enterLink: enter,
+		active:    true,
+	}
+
+	closeErr := make(chan error, 1)
+	go func() { closeErr <- mgr.Close() }()
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatalf("outer Close returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("re-entrant Close deadlocked during link destruction")
+	}
+	if err := <-reentrantErr; err != nil {
+		t.Fatalf("re-entrant Close returned error: %v", err)
+	}
+	if got := enter.destroyCalls(); got != 1 {
+		t.Fatalf("enter link destroy calls = %d, want 1", got)
+	}
+}
+
 func TestManagerDetachDestroysLinks(t *testing.T) {
 	enter := &fakeLink{}
 	exit := &fakeLink{}
@@ -527,6 +663,8 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	exitDestroyErr := errors.New("exit cleanup failed")
 	enter := &fakeLink{err: enterDestroyErr}
 	exit := &fakeLink{err: exitDestroyErr}
+	exitAttachStarted := make(chan struct{})
+	allowAttachReturn := make(chan struct{})
 
 	attacher := &fakeAttacher{
 		programs: map[string]*fakeProgram{
@@ -537,13 +675,37 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	}
 	mgr := NewManager(attacher)
 	attacher.programs["handle_sys_exit_close"].onAttach = func() {
-		if err := mgr.Close(); err != nil {
-			t.Fatalf("Close returned error during attach hook: %v", err)
-		}
+		close(exitAttachStarted)
+		<-allowAttachReturn
 	}
 	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
 
-	err := mgr.Attach("close")
+	attachErr := make(chan error, 1)
+	go func() { attachErr <- mgr.Attach("close") }()
+	<-exitAttachStarted
+
+	closed := make(chan struct{})
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- mgr.CloseWithProgress(func(completed, _ int) {
+			if completed == 0 {
+				select {
+				case <-closed:
+				default:
+					close(closed)
+				}
+			}
+		})
+	}()
+	<-closed
+	select {
+	case err := <-closeErr:
+		t.Fatalf("CloseWithProgress returned before the in-flight attach could roll back: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(allowAttachReturn)
+
+	err := <-attachErr
 	if err == nil {
 		t.Fatalf("expected attach error when manager closes mid-attach")
 	}
@@ -558,6 +720,9 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	}
 	if enter.destroyed != 1 || exit.destroyed != 1 {
 		t.Fatalf("expected both cleanup destroys to run once, got enter=%d exit=%d", enter.destroyed, exit.destroyed)
+	}
+	if err := <-closeErr; err != nil {
+		t.Fatalf("CloseWithProgress returned error: %v", err)
 	}
 }
 
@@ -589,5 +754,63 @@ func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	}
 	if enter.destroyed != 1 {
 		t.Fatalf("expected enter link cleanup to run once, got %d", enter.destroyed)
+	}
+}
+
+func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *testing.T) {
+	firstEnterErr := errors.New("first enter detach failed")
+	links := []*fakeLink{
+		{err: firstEnterErr}, {}, {}, {},
+	}
+	mgr := &Manager{probes: map[string]*probeEntry{
+		"first": {
+			syscall:   "first",
+			enterLink: links[0],
+			exitLink:  links[1],
+			active:    true,
+		},
+		"second": {
+			syscall:   "second",
+			enterLink: links[2],
+			exitLink:  links[3],
+			active:    true,
+		},
+		"inactive": {syscall: "inactive"},
+	}}
+
+	type update struct {
+		completed int
+		total     int
+		destroyed int
+	}
+	var updates []update
+	err := mgr.CloseWithProgress(func(completed, total int) {
+		destroyed := 0
+		for _, link := range links {
+			destroyed += link.destroyCalls()
+		}
+		updates = append(updates, update{completed: completed, total: total, destroyed: destroyed})
+	})
+
+	if !errors.Is(err, firstEnterErr) {
+		t.Fatalf("CloseWithProgress() error = %v, want %v", err, firstEnterErr)
+	}
+	want := []update{
+		{completed: 0, total: 2, destroyed: 0},
+		{completed: 1, total: 2, destroyed: 2},
+		{completed: 2, total: 2, destroyed: 4},
+	}
+	if len(updates) != len(want) {
+		t.Fatalf("progress updates = %+v, want %+v", updates, want)
+	}
+	for i := range want {
+		if updates[i] != want[i] {
+			t.Fatalf("progress[%d] = %+v, want %+v", i, updates[i], want[i])
+		}
+	}
+	for i, link := range links {
+		if got := link.destroyCalls(); got != 1 {
+			t.Fatalf("link %d destroy calls = %d, want 1", i, got)
+		}
 	}
 }

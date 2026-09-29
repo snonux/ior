@@ -106,7 +106,7 @@ func TestModelEditingAllowsPrintableHotkeyRunes(t *testing.T) {
 
 	model = model.Update(tea.KeyPressMsg{Code: []rune("j")[0], Text: string([]rune("j"))})
 	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	for _, r := range []rune("codexjk") {
+	for _, r := range "codexjk" {
 		model = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

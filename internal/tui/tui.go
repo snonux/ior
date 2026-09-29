@@ -1,9 +1,10 @@
 package tui
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,15 +39,24 @@ const (
 	ScreenDashboard
 )
 
+type errorScreenKind uint8
+
+const (
+	errorScreenFatal errorScreenKind = iota
+	errorScreenRecoverable
+)
+
 // TraceStarter starts tracing and returns when startup succeeds or fails.
 // It is a type alias for runtime.TraceStarter so TUI callers need not import
 // the runtime package directly.
 // Long-lived tracing work should continue in background goroutines.
 type TraceStarter = runtime.TraceStarter
 
-// SnapshotSource provides dashboard snapshots for TUI rendering.
-// It is a type alias for runtime.SnapshotSource.
-type SnapshotSource = runtime.SnapshotSource
+// TraceRequest is what the TUI hands a TraceStarter for one trace session:
+// its runtime bindings, the active filter and the session's shutdown
+// reporter, passed explicitly rather than through context values.
+// It is a type alias for runtime.TraceRequest.
+type TraceRequest = runtime.TraceRequest
 
 // ProbeManager exposes runtime probe controls to TUI layers.
 // It is a type alias for runtime.ProbeManager.
@@ -67,6 +77,12 @@ type RuntimeState = runtime.RuntimeState
 // It is a type alias for runtime.TraceRuntimeBindings.
 type TraceRuntimeBindings = runtime.TraceRuntimeBindings
 
+// liveFilterRegistration gives each installed live-filter setter a distinct,
+// comparable identity so an older trace session can clear only its own setter.
+type liveFilterRegistration struct {
+	_ byte
+}
+
 // runtimeBindings is the TUI-owned concrete implementation of
 // runtime.TraceRuntimeBindings. It guards all fields with a read-write mutex so
 // the trace starter goroutine and the Bubble Tea update loop can safely exchange
@@ -75,7 +91,7 @@ type runtimeBindings struct {
 	mu sync.RWMutex
 
 	// snapshotSource is the stats engine injected by the trace starter.
-	snapshotSource runtime.SnapshotSource
+	snapshotSource runtime.ResettableSnapshotSource
 	// streamSource is the active read-side source (may be swapped on reset).
 	streamSource runtime.StreamSource
 	// streamBuffer is the TUI-owned ring buffer; it always satisfies both
@@ -88,12 +104,11 @@ type runtimeBindings struct {
 	// liveTrieSource is the flamegraph trie injected by the trace starter.
 	liveTrieSource runtime.LiveTrieSource
 	// probeManager is the BPF probe manager injected by the trace starter.
-	probeManager    runtime.ProbeManager
-	probeManagerGen uint64
+	probeManager runtime.ProbeManager
 	// liveFilterSetter, when non-nil, applies filter changes to the running
 	// event loop in-place so BPF probes need not be restarted.
-	liveFilterSetter    func(globalfilter.Filter) bool
-	liveFilterSetterGen uint64
+	liveFilterSetter       func(globalfilter.Filter)
+	liveFilterRegistration *liveFilterRegistration
 	// filterEpoch increments on every filter change and is stored in parquet rows.
 	filterEpoch atomic.Uint64
 }
@@ -109,7 +124,7 @@ func newRuntimeBindings() *runtimeBindings {
 }
 
 // SetDashboardSnapshotSource wires the stats engine into the dashboard.
-func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.SnapshotSource) {
+func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
 	r.mu.Lock()
 	r.snapshotSource = source
 	r.mu.Unlock()
@@ -122,24 +137,41 @@ func (r *runtimeBindings) SetEventStreamSource(source runtime.StreamSource) {
 	r.mu.Unlock()
 }
 
-// StreamBuffer returns the TUI-owned ring buffer, which satisfies runtime.StreamSource.
-func (r *runtimeBindings) StreamBuffer() runtime.StreamSource {
+// StreamBuffer returns the TUI-owned ring buffer. The full EventSink (push
+// plus read side) is returned because the tracing engine pushes events into
+// it; the TUI itself reads through the SetEventStreamSource wiring. A nil
+// buffer is returned as a nil interface, not as a typed nil: handing a
+// typed-nil pointer through would defeat the caller's nil check.
+func (r *runtimeBindings) StreamBuffer() runtime.EventSink {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.streamBuffer == nil {
+		return nil
+	}
 	return r.streamBuffer
 }
 
-// Recorder returns the parquet recorder for optional stream recording.
-func (r *runtimeBindings) Recorder() *parquet.Recorder {
+// Recorder returns the parquet recorder for optional stream recording,
+// behind the runtime contract (the concrete recorder stays an implementation
+// detail of these bindings). A nil recorder is returned as a nil interface:
+// handing a typed-nil pointer through would make the caller's nil check see
+// a non-nil interface whose every call panics.
+func (r *runtimeBindings) Recorder() runtime.RecordingController {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.recorder == nil {
+		return nil
+	}
 	return r.recorder
 }
 
 // StreamSequencer returns the shared monotonic counter for stream row sequencing.
-func (r *runtimeBindings) StreamSequencer() *eventstream.Sequencer {
+func (r *runtimeBindings) StreamSequencer() runtime.Sequencer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.streamSeq == nil {
+		return nil
+	}
 	return r.streamSeq
 }
 
@@ -156,45 +188,37 @@ func (r *runtimeBindings) SetLiveTrie(liveTrie runtime.LiveTrieSource) {
 }
 
 // SetProbeManager wires the BPF probe manager into the TUI probes modal.
-// The release func only clears the manager if it is still this registration,
-// so a stopping trace cannot unregister the manager of its successor.
-func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) func() {
+func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.probeManager = manager
-	r.probeManagerGen++
-	gen := r.probeManagerGen
-	return func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.probeManagerGen == gen {
-			r.probeManager = nil
-		}
-	}
+	r.mu.Unlock()
 }
 
-// SetLiveFilterSetter registers the live filter callback so the TUI can
-// update the running trace pipeline in-place. Like SetProbeManager, the
-// release func only clears the setter if it is still this registration.
-func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter) bool) func() {
+// SetLiveFilterSetter registers the live filter callback so the TUI can update
+// the running trace pipeline in-place. The returned function clears the setter
+// only while this registration still owns it, preventing a slow teardown from
+// an older trace session from unregistering a newer session's callback.
+func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
+	registration := &liveFilterRegistration{}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.liveFilterSetter = setter
-	r.liveFilterSetterGen++
-	gen := r.liveFilterSetterGen
+	r.liveFilterRegistration = registration
+	r.mu.Unlock()
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if r.liveFilterSetterGen == gen {
-			r.liveFilterSetter = nil
+		if r.liveFilterRegistration != registration {
+			return
 		}
+		r.liveFilterSetter = nil
+		r.liveFilterRegistration = nil
 	}
 }
 
 // applyLiveFilter swaps the active global filter in place via the setter
-// registered by the trace starter, returning true if the swap was applied.
+// registered by the trace starter, returning true if a setter was available.
 // Returning false tells the caller it must fall back to a full trace restart
-// (no trace is currently running, or the filter changes the BPF scope).
+// (typically because no trace is currently running).
 func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	r.mu.RLock()
 	setter := r.liveFilterSetter
@@ -202,11 +226,12 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	if setter == nil {
 		return false
 	}
-	return setter(filter)
+	setter(filter)
+	return true
 }
 
 // dashboardSnapshotSource returns the currently wired stats engine source.
-func (r *runtimeBindings) dashboardSnapshotSource() runtime.SnapshotSource {
+func (r *runtimeBindings) dashboardSnapshotSource() runtime.ResettableSnapshotSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.snapshotSource
@@ -224,6 +249,17 @@ func (r *runtimeBindings) liveTrie() runtime.LiveTrieSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.liveTrieSource
+}
+
+// resetLiveTrie clears the wired flamegraph trie, if any, and returns it so
+// the caller can re-bind the flamegraph view to the fresh baseline. It returns
+// nil when no trie is wired yet.
+func (r *runtimeBindings) resetLiveTrie() runtime.LiveTrieSource {
+	trie := r.liveTrie()
+	if trie != nil {
+		trie.Reset()
+	}
+	return trie
 }
 
 // currentProbeManager returns the currently wired probe manager.
@@ -247,80 +283,123 @@ func (r *runtimeBindings) advanceFilterEpoch() uint64 {
 	return r.filterEpoch.Add(1)
 }
 
-// resetDashboardSnapshotSource resets the dashboard snapshot source if it
-// implements the Resetter contract (i.e. exposes Reset()), then returns a
-// fresh snapshot. The check is intentionally narrow — only Reset() is required
-// so that test doubles and future sources can satisfy it without also
-// implementing Ingest (which belongs to statsengine.Accumulator and is not
-// needed here). Errors from Snapshot are silently dropped since callers handle
-// a nil snapshot.
-func (r *runtimeBindings) resetDashboardSnapshotSource() *statsengine.Snapshot {
-	src := r.dashboardSnapshotSource()
-	if src == nil {
-		return nil
-	}
-	// statsengine.Accumulator satisfies this interface; any other source that
-	// exposes Reset() (e.g. test fakes) also qualifies.
-	if resettable, ok := src.(interface{ Reset() }); ok {
-		resettable.Reset()
-	}
-	snap, _ := src.Snapshot()
-	return snap
-}
-
-// RuntimeBindingsFromContext returns the full TraceRuntimeBindings when the
-// context was created by the TUI. Use RuntimePublisherFromContext when only
-// write access is needed. Delegates to runtime.RuntimeBindingsFromContext.
-func RuntimeBindingsFromContext(ctx context.Context) (TraceRuntimeBindings, bool) {
-	return runtime.RuntimeBindingsFromContext(ctx)
-}
-
-// RuntimePublisherFromContext returns only the RuntimePublisher side of the TUI
-// bindings. Use this when the caller only injects data and does not need to
-// read persistent TUI state. Delegates to runtime.RuntimePublisherFromContext.
-func RuntimePublisherFromContext(ctx context.Context) (RuntimePublisher, bool) {
-	return runtime.RuntimePublisherFromContext(ctx)
-}
-
-// ContextWithRuntimeBindings stores trace runtime bindings on the context.
-// Delegates to runtime.ContextWithRuntimeBindings.
-func ContextWithRuntimeBindings(ctx context.Context, bindings TraceRuntimeBindings) context.Context {
-	return runtime.ContextWithRuntimeBindings(ctx, bindings)
-}
-
-// ContextWithTraceFilters stores the active trace filters for the trace starter.
-// Delegates to runtime.ContextWithTraceFilters.
-func ContextWithTraceFilters(ctx context.Context, filter globalfilter.Filter) context.Context {
-	return runtime.ContextWithTraceFilters(ctx, filter)
-}
-
-// TraceFiltersFromContext returns the active trace filters when provided by the TUI model.
-// Delegates to runtime.TraceFiltersFromContext.
-func TraceFiltersFromContext(ctx context.Context) (globalfilter.Filter, bool) {
-	return runtime.TraceFiltersFromContext(ctx)
-}
-
-// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
-func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	model := newModelWithRuntimeConfig(cfg.PidFilter, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, starter)
+// newRunModel builds the model RunWithTraceStarterConfig runs. It is split out
+// so the production startup wiring is unit-testable: the struct literal below
+// is the one path real users take, and a dropped or misnamed field there is
+// silently valid Go. Without this seam, removing initialPID left the whole
+// suite green while `ior -pid <n>` would open the PID picker instead of the
+// dashboard and never start a trace (Init would not request one).
+func newRunModel(cfg flags.Config, starter TraceStarter) *Model {
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    cfg.PidFilter,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    starter,
+	})
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	// Apply the configurable fast-refresh cadence from the CLI flag so the
 	// stream and flame tabs honour the -tui-fast-refresh value.
 	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
-	program := tea.NewProgram(model)
-	_, err := program.Run()
-	return err
+	return model
+}
+
+// RunWithTraceStarterConfig starts the TUI with explicit runtime flags.
+func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
+	return runProgram(newRunModel(cfg, starter))
+}
+
+// runTeaProgram runs a Bubble Tea program to completion. It is a variable so a
+// test can substitute the one thing tea.NewProgram(...).Run() makes
+// untestable: that the exported entry points report what the model was
+// showing. Without a seam here that half of the error-screen fix is pinned by
+// nothing - wiring tea.NewProgram directly into those entry points leaves
+// every test green while a quit from the error screen exits 0 with no reason,
+// which is the state the fix exists to end.
+var runTeaProgram = func(model *Model) (tea.Model, error) {
+	return tea.NewProgram(model).Run()
+}
+
+// runProgram runs one Bubble Tea program and reports the error the model was
+// still displaying when it exited. The TUI draws on the alternate screen,
+// which the terminal discards on exit, so a trace that failed to start used to
+// vanish without trace the moment the user left the error view: back in a
+// clean shell, no rows, no message, exit status 0. Returning it makes cmd/ior
+// print "Failed to run: ..." on stderr and exit non-zero, the same as the raw
+// modes do for the identical failure.
+//
+// Every exported entry point must go through here rather than calling
+// tea.NewProgram itself, which is what TestExportedEntryPointsReportTheError
+// pins - testing runProgram alone leaves the entry points free to bypass it.
+func runProgram(model *Model) error {
+	final, err := runTeaProgramQuietly(model)
+	if err != nil {
+		return err
+	}
+	return finalModelError(final)
+}
+
+// runTeaProgramQuietly runs the program with the standard logger discarded.
+// Bubble Tea owns the terminal for the whole run, so a stray log.Print from
+// any goroutine - the model's Update or a trace running underneath it - would
+// write over the rendered screen. The previous output is restored on return,
+// so the "Failed to run: ..." report after the program exits is unaffected.
+func runTeaProgramQuietly(model *Model) (tea.Model, error) {
+	previous := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(previous)
+	return runTeaProgram(model)
+}
+
+// finalModelError extracts the error a finished program's model was showing.
+// A model of another type reports nothing rather than panicking: Bubble Tea
+// returns whatever the last Update handed back, and a future refactor that
+// swaps the returned type must not turn a clean exit into a crash.
+func finalModelError(final tea.Model) error {
+	model, ok := final.(*Model)
+	if !ok {
+		return nil
+	}
+	return model.lastErr
+}
+
+// NewTestFlamesModel builds the test-flames dashboard model without running the
+// Bubble Tea program. It shares construction with
+// RunTestFlamesWithTraceStarterConfig so in-process tests (teatest) exercise the
+// exact same model wiring that `--testflames`/`--testliveflames` use.
+//
+// There is no attach target here: the data is seeded synthetically, so the
+// model only needs to skip the PID picker. It must NOT inherit a pid filter
+// from that decision — the seeded rows carry synthetic pids (2001-2004), so a
+// filter of pid=1 would hide every stream row and export nothing but a CSV
+// header. Any real -pid/-tid the user passed is still honoured.
+//
+// The pid/tid pair goes through resolveStartupPIDFilters, the same helper the
+// production path uses, so that "the exact same model wiring" above is true of
+// the filters too: an explicit -pid clears -tid here exactly as it does for a
+// real attach, rather than test-flames quietly honouring a combination the
+// real TUI drops.
+func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
+	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    -1,
+		skipPicker:    true,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     pidFilter,
+		tidFilter:     tidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    starter,
+	})
+	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
+	// Apply the configurable fast-refresh cadence from the CLI flag.
+	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
+	return model
 }
 
 // RunTestFlamesWithTraceStarterConfig starts test-flames mode with explicit runtime flags.
 func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
-	model := newModelWithRuntimeConfig(1, filterFromConfig(cfg), 1, -1, cfg.TUIExportEnable, starter)
-	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
-	// Apply the configurable fast-refresh cadence from the CLI flag.
-	model.dashboard.SetFastRefreshInterval(cfg.TUIFastRefreshInterval)
-	program := tea.NewProgram(model)
-	_, err := program.Run()
-	return err
+	return runProgram(NewTestFlamesModel(cfg, starter))
 }
 
 // keyboardState groups keyboard event tracking and press-suppression fields.
@@ -338,8 +417,9 @@ type keyboardState struct {
 	suppressUntil time.Time
 }
 
-// processState groups PID/TID filter values and the picker navigation
-// return bookmark used to restore the dashboard after re-selecting a process.
+// processState groups the active PID/TID filter values. The picker return
+// bookmark used to restore them after a cancelled re-selection lives in
+// screenRouter.
 type processState struct {
 	pid int
 	tid int
@@ -348,10 +428,18 @@ type processState struct {
 // Model is the top-level Bubble Tea model that routes between PID picker and
 // dashboard. It delegates filter management to filterStack, trace lifecycle
 // to traceLifecycle, and screen transitions to screenRouter.
+//
+// Receiver policy: every method takes *Model, so *Model (not Model) is the
+// Bubble Tea model handed to tea.NewProgram - the same policy the stream
+// tab's model already follows (internal/tui/eventstream). The mixed
+// value/pointer receivers this type used to have worked only while every
+// value happened to be addressable: the value-receiver Update called
+// pointer-receiver mutators (tracer, filter stack, dashboard sub-model) on
+// its local copy, so any non-addressable or later-copied Model silently
+// lost those mutations.
 type Model struct {
-	screen      Screen
 	pidPicker   pidpicker.Model
-	dashboard   dashboardui.Model
+	dashboard   *dashboardui.Model
 	exporter    tuiexport.Model
 	probeModal  probes.Model
 	filterModal tracefilterui.Model
@@ -365,16 +453,19 @@ type Model struct {
 	width    int
 	height   int
 	quitting bool
+	shutdown runtime.TraceShutdownProgress
 
 	attaching bool
 	spin      spinner.Model
 	lastErr   error
+	errorKind errorScreenKind
 
 	// tracer owns trace start/stop and the active context.CancelFunc.
 	tracer traceLifecycle
 	// filters owns the filter chain, undo history, and label stack.
 	filters filterStack
-	// router owns screen-transition state (pending picker return).
+	// router owns the active screen and the pending picker return; Model
+	// reads it and changes it only through its transition methods.
 	router screenRouter
 
 	proc          processState
@@ -385,38 +476,71 @@ type Model struct {
 	kb keyboardState
 }
 
-type pickerReturnState struct {
-	pidFilter int
-	tidFilter int
+// Quitting reports whether the model has begun shutting down (the user pressed
+// the quit key). Exposed for in-process tests that assert terminal state via
+// teatest's FinalModel.
+func (m *Model) Quitting() bool {
+	return m.quitting
 }
 
 // NewModel creates the top-level TUI model with default runtime flags.
 // Prefer NewModelWithConfig to pass parsed CLI config explicitly.
-func NewModel(initialPID int, startTrace TraceStarter) Model {
+func NewModel(initialPID int, startTrace TraceStarter) *Model {
 	return NewModelWithConfig(flags.NewFlags(), initialPID, startTrace)
 }
 
 // NewModelWithConfig creates the top-level TUI model with explicit runtime flags.
-func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) Model {
-	model := newModelWithRuntimeConfig(initialPID, filterFromConfig(cfg), cfg.PidFilter, cfg.TidFilter, cfg.TUIExportEnable, startTrace)
+func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarter) *Model {
+	model := newModelWithRuntimeConfig(modelStartup{
+		initialPID:    initialPID,
+		filter:        filterFromConfig(cfg),
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
+		exportEnabled: cfg.TUIExportEnable,
+		startTrace:    startTrace,
+	})
 	// Seed the dashboard's auto-reset cadence from the parsed CLI flag
-	// (default DefaultResetTimer; 0 disables). Init() will arm the
-	// underlying tea.Tick when the dashboard becomes active.
+	// (default DefaultResetTimer; 0 disables). The dashboard's Init()
+	// requests the underlying tea.Tick (through an arm message its Update
+	// handles) when the dashboard becomes active.
 	model.dashboard.SetAutoResetInterval(cfg.ResetTimer)
 	return model
 }
 
-func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter, startupPidFilter, startupTidFilter int, exportEnabled bool, startTrace TraceStarter) Model {
+// modelStartup carries the startup wiring for newModelWithRuntimeConfig.
+// It exists to keep the "skip the PID picker" decision separate from the
+// pid filter: both used to be derived from a single initialPID argument, so
+// modes that only wanted to skip the picker (test-flames) silently pinned the
+// stream to pid=1 as well.
+type modelStartup struct {
+	// initialPID is a genuine attach target. When > 0 it both seeds the
+	// pid filter (overriding pidFilter/tidFilter) and skips the picker.
+	// Use -1 for "no attach target".
+	initialPID int
+	// skipPicker starts on the dashboard and begins tracing immediately
+	// without an attach target, for modes whose data is seeded rather than
+	// attached. It has no effect on the filters.
+	skipPicker bool
+	// filter is the startup global filter (built from the CLI config).
+	filter globalfilter.Filter
+	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter).
+	pidFilter int
+	tidFilter int
+	// exportEnabled mirrors -tuiExport.
+	exportEnabled bool
+	startTrace    TraceStarter
+}
+
+func newModelWithRuntimeConfig(startup modelStartup) *Model {
 	common.ApplyPalette(true)
-	syncStylesFromCommon()
 
 	keys := Keys
-	if !exportEnabled {
+	if !startup.exportEnabled {
 		keys.Export = key.NewBinding()
 	}
 
 	rt := newRuntimeBindings()
-	pidFilter, tidFilter := resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter)
+	pidFilter, tidFilter := resolveStartupPIDFilters(startup.initialPID, startup.pidFilter, startup.tidFilter)
 	// Pass 0 for fastRefreshMs so the dashboard uses the package-level default
 	// (200 ms). Callers that hold a flags.Config can override this via
 	// SetFastRefreshInterval after construction.
@@ -425,8 +549,7 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 	spin := spinner.New()
 	spin.Spinner = spinner.MiniDot
 
-	model := Model{
-		screen:        ScreenPIDPicker,
+	model := &Model{
 		pidPicker:     pidpicker.New().SetDarkMode(true),
 		dashboard:     dashboard,
 		exporter:      tuiexport.NewModel(),
@@ -436,21 +559,29 @@ func newModelWithRuntimeConfig(initialPID int, startupFilter globalfilter.Filter
 		runtime:       rt,
 		keys:          keys,
 		spin:          spin,
-		tracer:        newTraceLifecycle(startTrace),
-		filters:       newFilterStack(startupFilter),
-		router:        newScreenRouter(),
-		exportEnabled: exportEnabled,
+		tracer:        newTraceLifecycle(startup.startTrace),
+		filters:       newFilterStack(startup.filter),
+		router:        newScreenRouter(initialScreen(startup)),
+		exportEnabled: startup.exportEnabled,
 		isDark:        true,
 		focused:       true,
 	}
 	model.setProcessFilters(pidFilter, tidFilter)
 
-	if initialPID > 0 {
-		model.screen = ScreenDashboard
-		model.attaching = true
-	}
+	// A startup that skips the picker begins tracing as soon as Update handles
+	// Init's initialTraceStartMsg, so it starts in the attaching state.
+	model.attaching = model.router.current() == ScreenDashboard
 
 	return model
+}
+
+// initialScreen picks the first screen: the dashboard when startup has an
+// attach target or explicitly skips the picker, otherwise the PID picker.
+func initialScreen(startup modelStartup) Screen {
+	if startup.initialPID > 0 || startup.skipPicker {
+		return ScreenDashboard
+	}
+	return ScreenPIDPicker
 }
 
 // resolveStartupPIDFilters computes the effective pid/tid filter values from
@@ -470,37 +601,96 @@ func resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter int
 // runtime and pre-configured with the initial PID filter. fastRefreshMs
 // controls the high-frequency tick cadence for stream and flame tabs; pass 0
 // to use the package-level default (200 ms).
-func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fastRefreshMs int) dashboardui.Model {
+func newDashboardWithRuntime(rt *runtimeBindings, pidFilter int, keys KeyMap, fastRefreshMs int) *dashboardui.Model {
 	dashboard := dashboardui.NewModelWithConfig(lateBoundDashboardSource{runtime: rt}, rt.eventStreamSource(), 1000, fastRefreshMs, keys)
 	dashboard.SetDarkMode(true)
 	dashboard.SetPidFilter(pidFilter)
 	return dashboard
 }
 
-// Init initializes the active child model and optional tracing startup command.
-func (m Model) Init() tea.Cmd {
+// Init initializes the active child model and requests the startup trace.
+//
+// Init only reads the model. Starting a trace stores its cancel func and
+// shutdown reporter on the tracer, so a startup that skips the picker asks
+// Update to do it through an initialTraceStartMsg (handleInitialTraceStart)
+// instead of calling beginTraceCmd here. Every mutation of the model thus
+// happens on Update, the one place Bubble Tea serialises them.
+func (m *Model) Init() tea.Cmd {
 	sizeCmd := initialWindowSizeCmd()
-	if m.screen == ScreenDashboard && m.attaching {
-		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, m.beginTraceCmd())
+	if m.attachingOnDashboard() {
+		return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.spin.Tick, initialTraceStartCmd)
 	}
 	return tea.Batch(sizeCmd, tea.RequestWindowSize, tea.RequestBackgroundColor, m.pidPicker.Init())
+}
+
+// attachingOnDashboard reports whether the dashboard is shown while a trace
+// is still being attached: the startup state of a picker-skipping run and the
+// state every trace restart enters until TracingStartedMsg arrives.
+func (m *Model) attachingOnDashboard() bool {
+	return m.router.current() == ScreenDashboard && m.attaching
+}
+
+// initialTraceStartMsg asks Update to start the trace a picker-skipping
+// startup (`ior -pid N`, test-flames) begins in. Init emits it rather than
+// starting the trace itself so Init stays side-effect free.
+type initialTraceStartMsg struct{}
+
+func initialTraceStartCmd() tea.Msg { return initialTraceStartMsg{} }
+
+// handleInitialTraceStart starts the startup trace Init requested, under the
+// same condition Init requested it (dashboard, attaching). A request that is
+// no longer wanted is dropped: the user quit before it arrived (the quit path
+// found no session to stop, so starting one now would outlive the program), or
+// a session is already running (a repeated Init must not restart it).
+func (m *Model) handleInitialTraceStart() (tea.Model, tea.Cmd) {
+	if !m.attachingOnDashboard() || m.quitting || m.tracer.running() {
+		return m, nil
+	}
+	return m, m.beginTraceCmd()
+}
+
+// fallbackWindowSizeMsg carries the viewport size initialWindowSizeCmd guesses
+// when the terminal cannot be queried. It is a distinct type from
+// tea.WindowSizeMsg so Update can tell a guess from a real size and refuse to
+// let the guess win.
+//
+// Init batches this cmd alongside tea.RequestWindowSize, and bubbletea also
+// sends a WindowSizeMsg of its own from checkResize. Both are asynchronous, so
+// nothing orders them: when stdout is not a TTY the guess is
+// common.EffectiveViewport's 80x24 default, and if it landed last it would
+// clobber the real terminal size for the rest of the run. Every width-dependent
+// rendering decision then flips with it - the dashboard's tab bar abbreviates
+// below 90 columns, and syscallColumns returns 9 columns below 140 and 12
+// at or above.
+type fallbackWindowSizeMsg tea.WindowSizeMsg
+
+// applyWindowSize records a viewport size and forwards it to the active model.
+func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
+	m.width = msg.Width
+	m.height = msg.Height
+	m.probeModal = m.probeModal.SetHeight(msg.Height)
+	next, cmd := m.updateActiveModel(msg)
+	return next, cmd, true
 }
 
 func initialWindowSizeCmd() tea.Cmd {
 	return func() tea.Msg {
 		width, height := common.EffectiveViewport(0, 0)
-		return tea.WindowSizeMsg{Width: width, Height: height}
+		return fallbackWindowSizeMsg{Width: width, Height: height}
 	}
 }
 
 // Update routes messages, transitions screens, and manages tracing startup state.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	normalizedMsg, ok := m.keyNormalizer(msg)
 	if !ok {
 		return m, nil
 	}
 	msg = normalizedMsg
 
+	if handled, cmd := m.dashboard.HandleFlameRefreshCompletion(msg, m.canApplyFlameRefresh()); handled {
+		return m, cmd
+	}
 	if next, cmd, handled := m.dispatchTypedMsg(msg); handled {
 		return next, cmd
 	}
@@ -515,38 +705,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateActiveModel(msg)
 }
 
+// canApplyFlameRefresh reports whether the dashboard itself is visible and
+// able to receive the animation ticks a newly applied snapshot may schedule.
+// Hidden completions are still consumed by their persistent dashboard owner,
+// but are discarded after releasing the matching in-flight slot.
+func (m *Model) canApplyFlameRefresh() bool {
+	return m.router.current() == ScreenDashboard &&
+		!m.quitting &&
+		!m.attaching &&
+		m.lastErr == nil &&
+		!m.helpOverlayVisible &&
+		!m.filterModal.Visible() &&
+		!m.recordModal.Visible() &&
+		!m.probeModal.Visible() &&
+		!m.exporter.Visible()
+}
+
 // dispatchTypedMsg handles all typed message cases that require no modal check.
 // Returns (model, cmd, true) when the message was consumed, or (_, _, false)
 // to fall through to modal dispatch and then active-model routing.
-func (m Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		_, height := common.EffectiveViewport(m.width, m.height)
-		m.probeModal = m.probeModal.SetHeight(height)
-		next, cmd := m.updateActiveModel(msg)
-		return next, cmd, true
+		return m.applyWindowSize(msg)
+	case fallbackWindowSizeMsg:
+		// Only fills in a size nothing else supplied. A real WindowSizeMsg
+		// already applied wins regardless of which arrived first.
+		if m.width > 0 && m.height > 0 {
+			return m, nil, true
+		}
+		return m.applyWindowSize(tea.WindowSizeMsg(msg))
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
 		return m, nil, true
 	case tea.KeyboardEnhancementsMsg:
 		m.kb.enhancements = msg
 		m.kb.enhancementsKnown = true
-		if msg.SupportsKeyDisambiguation() {
-			log.Printf("tui: keyboard enhancements enabled (flags=%d, eventTypes=%t)", msg.Flags, msg.SupportsEventTypes())
-		}
 		return m, nil, true
 	case tea.FocusMsg:
 		next, cmd := m.handleFocusMsg()
 		return next, cmd, true
 	case tea.BlurMsg:
 		m.focused = false
-		// SetFocused returns nil on blur but still bumps autoResetGen so
+		// SetFocused returns nil on blur but still bumps the auto-reset generation so
 		// that any in-flight tick scheduled before the blur is ignored.
 		m.dashboard.SetFocused(false)
 		return m, nil, true
 	case tea.KeyPressMsg:
+		if m.quitting {
+			return m, nil, true
+		}
 		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
 			return next, cmd, true
 		}
@@ -558,10 +766,14 @@ func (m Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 // dispatchAppMsg handles application-level message types (export, probe, trace,
 // filter) that are not tea framework messages.
 // It is called after dispatchTypedMsg returns unhandled for non-framework types.
-func (m Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tuiexport.RequestMsg:
-		return m, runExportCmd(m.exportEnabled, msg.Option, m.dashboard), true
+		// Capture the export inputs HERE, on the Update goroutine: the command
+		// closure below runs on its own goroutine, and reading the live model
+		// from it would race with Update/View mutations.
+		source, filter, exportDir := m.dashboard.ExportStreamCSVInputs()
+		return m, runExportCmd(m.exportEnabled, msg.Option, source, filter, exportDir), true
 	case tuiexport.CompletedMsg:
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
@@ -579,57 +791,66 @@ func (m Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case TidSelectedMsg:
 		next, cmd := m.handleTidSelected(msg)
 		return next, cmd, true
+	case initialTraceStartMsg:
+		next, cmd := m.handleInitialTraceStart()
+		return next, cmd, true
 	case TracingStartedMsg:
 		next, cmd := m.handleTracingStarted()
 		return next, cmd, true
 	case TracingErrorMsg:
 		m.attaching = false
-		m.lastErr = msg.Err
+		m.setError(msg.Err, errorScreenFatal)
 		return m, nil, true
+	case tracingShutdownProgressMsg:
+		m.shutdown = msg.progress
+		if msg.progress.Phase == runtime.TraceShutdownComplete {
+			m.tracer.shutdownReporter = nil
+			return m, tea.Quit, true
+		}
+		return m, m.tracer.waitForShutdownCmd(), true
 	case messages.GlobalFilterRequestedMsg:
 		next, cmd := m.applyGlobalFilter(msg.Filter, msg.Action)
 		return next, cmd, true
 	case messages.GlobalFilterUndoRequestedMsg:
 		next, cmd := m.undoGlobalFilter()
 		return next, cmd, true
+	case messages.OpenEditorRequestedMsg:
+		next, cmd := m.handleOpenEditorRequested(msg)
+		return next, cmd, true
 	}
 	return m, nil, false
 }
 
 // handleFocusMsg restores focus and re-arms the dashboard's auto-reset tick.
-func (m Model) handleFocusMsg() (tea.Model, tea.Cmd) {
+func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	m.focused = true
 	// SetFocused returns a tea.Cmd that arms a fresh auto-reset tick
 	// when focus returns (or nil if the timer is disabled). It also
-	// bumps the dashboard's tick generations so any refresh, stream,
-	// flame, bubble or auto-reset tick that was scheduled before the blur
-	// and is still in flight is dropped on arrival.
+	// bumps the dashboard's auto-reset generation so any tick that was
+	// scheduled before the blur and is still in flight is dropped on arrival.
 	focusCmd := m.dashboard.SetFocused(true)
-	if m.screen == ScreenDashboard && !m.attaching {
-		// Init() arms all its ticks at the post-bump generations, so
-		// discard focusCmd here to avoid two concurrently-live
-		// auto-reset ticks racing the cadence.
+	if m.router.current() == ScreenDashboard && !m.attaching {
+		// Init() arms its own auto-reset chain (through an arm message
+		// that supersedes any other live chain), so discard focusCmd here
+		// to avoid two concurrently-live ticks racing the cadence.
 		return m, tea.Batch(m.dashboard.Init(), m.dashboard.SnapshotCmd())
 	}
 	return m, focusCmd
 }
 
 // handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
-// so the new probe set is reflected immediately.
-func (m Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
+// so the new probe set is reflected immediately. The post-reset tick goes
+// through the dashboard's normal stats handling, so a failed snapshot keeps
+// the last good one exactly as a failed refresh or baseline reset does.
+func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
-	if snap := m.runtime.resetDashboardSnapshotSource(); snap != nil {
-		next, dashboardCmd := m.dashboard.Update(messages.StatsTickMsg{Snap: snap})
-		m.dashboard = next.(dashboardui.Model)
-		return m, tea.Batch(dashboardCmd, cmd)
-	}
-	return m, cmd
+	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
 }
 
 // handleTracingStarted wires live sources into the dashboard once the trace
 // starter confirms the trace is running.
-func (m Model) handleTracingStarted() (tea.Model, tea.Cmd) {
+func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 	m.dashboard.SetLiveTrie(m.runtime.liveTrie())
@@ -637,18 +858,16 @@ func (m Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.syncDashboardFilterState()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	m.dashboard = next.(dashboardui.Model)
-	// StartTicks supersedes any tick chains left over from a previous trace
-	// so restarting tracing never doubles the refresh cadence.
-	return m, tea.Batch(sizeCmd, m.dashboard.StartTicks(), m.dashboard.SnapshotCmd())
+	m.dashboard = next.(*dashboardui.Model)
+	return m, tea.Batch(sizeCmd, m.dashboard.Init(), m.dashboard.SnapshotCmd())
 }
 
 func (m *Model) keyNormalizer(msg tea.Msg) (tea.Msg, bool) {
 	return m.normalizeKeyEvent(msg)
 }
 
-func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
-	return m.screen == ScreenDashboard &&
+func (m *Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
+	return m.router.current() == ScreenDashboard &&
 		!m.attaching &&
 		m.lastErr == nil &&
 		!m.filterModal.Visible() &&
@@ -658,17 +877,18 @@ func (m Model) canHandleDashboardShortcut(msg tea.KeyPressMsg) bool {
 		!m.dashboard.BlocksGlobalShortcuts(msg)
 }
 
-func (m Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
-	return m.screen == ScreenPIDPicker &&
-		m.router.hasPendingReturn() &&
+func (m *Model) shouldCancelPickerToDashboard(msg tea.KeyPressMsg) bool {
+	_, returning := m.router.pendingReturn()
+	return m.router.current() == ScreenPIDPicker &&
+		returning &&
 		(isEscKey(msg) || key.Matches(msg, m.keys.Quit))
 }
 
-func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
+func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 	if m.helpOverlayVisible {
 		return false
 	}
-	return m.screen == ScreenDashboard &&
+	return m.router.current() == ScreenDashboard &&
 		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
@@ -676,7 +896,18 @@ func (m Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 // screen: help overlay toggle, quit, and dashboard-level shortcuts. Returns
 // (model, cmd, handled); when handled is false the caller falls through to
 // screen-specific routing.
-func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	// The full-screen error view owns its keys by construction: View renders
+	// m.lastErr ahead of the help overlay, every modal and both screens, so
+	// nothing else the model believes is open is on screen. Other keys still
+	// reach whatever is behind it, which is pre-existing and harmless. Its
+	// leaving keys are handled here, before any invisible overlay, modal or
+	// picker can consume them.
+	if m.lastErr != nil {
+		if next, cmd, handled := m.handleErrorScreenKeyPress(msg); handled {
+			return next, cmd, true
+		}
+	}
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
 	}
@@ -701,7 +932,7 @@ func (m Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bo
 
 // handleHelpOverlayKeyPress closes the help overlay on any quit/close/open
 // key and consumes the event so it does not reach the underlying screen.
-func (m Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if isHelpOverlayQuitKey(msg) || isHelpOverlayCloseKey(msg) || isHelpOverlayOpenKey(msg) {
 		m.helpOverlayVisible = false
 	}
@@ -709,51 +940,101 @@ func (m Model) handleHelpOverlayKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 }
 
 // handleQuitKeyPress handles the quit key. On the dashboard it stops the
-// trace and quits; when a modal is active the quit key is re-routed as Esc
-// so modals close before the user needs to press q again.
-func (m Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+// trace and quits; on the startup picker it quits with best-effort cleanup;
+// when a modal is active the quit key is re-routed as Esc so modals close
+// before the user needs to press q again.
+func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.attachingOnDashboard() {
+		return m.quitWithBestEffortCleanup()
+	}
 	if m.canHandleDashboardShortcut(msg) {
-		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-			m.lastErr = err
+		if err := m.stopRecording(); err != nil {
+			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
-		m.quitting = true
-		m.tracer.stop()
-		return m, tea.Quit, true
-	}
-	if m.textInputFocused() && msg.Mod&tea.ModCtrl == 0 {
-		// Let a plain quit key (q) reach the focused text input as a
-		// typed character instead of closing the modal.
-		return m, nil, false
+		return m.beginShutdown()
 	}
 	if m.shouldRouteQuitToEsc(msg) {
 		return m.routeQuitAsEsc()
 	}
-	if m.screen == ScreenDashboard && (m.attaching || m.lastErr != nil) {
-		// The attaching spinner and error screen offer no other way out,
-		// so quit must always stop the trace and exit from there. A
-		// recording is still closed best-effort so its file is flushed.
-		_ = recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
-		m.quitting = true
-		m.tracer.stop()
-		return m, tea.Quit, true
+	if _, returning := m.router.pendingReturn(); m.router.current() == ScreenPIDPicker && !returning {
+		return m.quitFromStartupPicker()
 	}
 	return m, nil, true
 }
 
-// textInputFocused reports whether a text input on the dashboard (trace
-// filter field edit, record path, stream/flame search) is capturing keys.
-func (m Model) textInputFocused() bool {
-	if m.screen != ScreenDashboard || m.attaching {
-		return false
+// quitFromStartupPicker leaves the initial picker when there is no dashboard
+// return bookmark. As with the error screen, cleanup is best effort: startup
+// has no useful screen to remain on if cleanup itself fails.
+func (m *Model) quitFromStartupPicker() (tea.Model, tea.Cmd, bool) {
+	return m.quitWithBestEffortCleanup()
+}
+
+// handleErrorScreenKeyPress handles only the keys advertised by the error
+// view. Quit always leaves the program. Esc dismisses an auxiliary recorder
+// failure, but remains a quit for a fatal trace failure because there is no
+// healthy dashboard to return to in that case.
+func (m *Model) handleErrorScreenKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.Quit) {
+		return m.quitFromErrorScreen()
 	}
-	return m.filterModal.Editing() || m.recordModal.Visible() || m.dashboard.TextInputFocused()
+	if !isEscKey(msg) {
+		return m, nil, false
+	}
+	if m.errorKind == errorScreenRecoverable {
+		return m.dismissRecoverableError()
+	}
+	return m.quitFromErrorScreen()
+}
+
+// dismissRecoverableError returns to the still-usable UI. A recorder failure
+// may have occurred while cancelling a re-selection picker; resume that
+// existing return route so its saved filters and trace restart are preserved.
+func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
+	m.clearError()
+	if _, returning := m.router.pendingReturn(); m.router.current() == ScreenPIDPicker && returning {
+		next, cmd := m.cancelPickerToDashboard()
+		return next, cmd, true
+	}
+	return m, nil, true
+}
+
+// quitFromErrorScreen leaves the full-screen error view. It performs the same
+// cleanup as the dashboard quit path - stop the recorder, cancel the trace
+// context - but treats the recorder result as best effort: the dashboard path
+// turns a recorderStop failure into m.lastErr and returns *without* quitting,
+// and doing that here would swallow the key for a second error the user is
+// already looking at. m.lastErr is left untouched so the displayed error is
+// the one runProgram reports to the caller on exit.
+func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
+	return m.quitWithBestEffortCleanup()
+}
+
+func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
+	_ = m.stopRecording()
+	return m.beginShutdown()
+}
+
+func (m *Model) beginShutdown() (tea.Model, tea.Cmd, bool) {
+	m.quitting = true
+	m.shutdown = runtime.TraceShutdownProgress{Phase: runtime.TraceShutdownStopping}
+	return m, tea.Batch(m.spin.Tick, m.tracer.stopAndWaitCmd()), true
+}
+
+func (m *Model) setError(err error, kind errorScreenKind) {
+	m.lastErr = err
+	m.errorKind = kind
+}
+
+func (m *Model) clearError() {
+	m.lastErr = nil
+	m.errorKind = errorScreenFatal
 }
 
 // routeQuitAsEsc synthesises an Esc key press and forwards it to whichever
 // modal is currently visible, allowing quit to act as an intuitive close
 // shortcut while a modal or sub-view is in focus.
-func (m Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
+func (m *Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 	esc := tea.KeyPressMsg{Code: tea.KeyEsc}
 	if m.probeModal.Visible() {
 		next, cmd := m.updateProbeModal(esc)
@@ -772,14 +1053,14 @@ func (m Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	}
 	next, cmd := m.dashboard.Update(esc)
-	m.dashboard = next.(dashboardui.Model)
+	m.dashboard = next.(*dashboardui.Model)
 	return m, cmd, true
 }
 
 // handleDashboardShortcutKeys handles all dashboard-level hotkeys (export,
 // record, probes, filter, undo, PID/TID reselect, auto-reset). The caller
 // must verify canHandleDashboardShortcut before calling this method.
-func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.exportEnabled && key.Matches(msg, m.keys.Export) {
 		m.exporter = m.exporter.Open()
 		return m, nil, true
@@ -800,6 +1081,14 @@ func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.
 		next, cmd := m.undoGlobalFilter()
 		return next, cmd, true
 	}
+	if key.Matches(msg, m.keys.NextFamily) {
+		next, cmd := m.cycleFamilyScope(+1)
+		return next, cmd, true
+	}
+	if key.Matches(msg, m.keys.PrevFamily) {
+		next, cmd := m.cycleFamilyScope(-1)
+		return next, cmd, true
+	}
 	if key.Matches(msg, m.keys.SelectPID) {
 		next, cmd := m.reselectPID()
 		return next, cmd, true
@@ -817,10 +1106,10 @@ func (m Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.
 
 // handleRecordKey either stops an active recording or opens the record modal
 // to start a new one.
-func (m Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 	if recorderActive(m.runtime.Recorder()) {
-		if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-			m.lastErr = err
+		if err := m.stopRecording(); err != nil {
+			m.setError(err, errorScreenRecoverable)
 		}
 		return m, nil, true
 	}
@@ -832,29 +1121,29 @@ func (m Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 // the next preset and re-arms the timer. The new cadence takes effect
 // on the next tick; any in-flight tick from the previous cadence is
 // dropped via the dashboard model's generation counter.
-func (m Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
+func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 	next := nextAutoResetInterval(m.dashboard.AutoResetInterval())
 	cmd := m.dashboard.SetAutoResetInterval(next)
 	return m, cmd
 }
 
-func (m Model) updateDashboardForModal(msg tea.Msg) (Model, tea.Cmd) {
-	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.screen != ScreenDashboard {
+func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
+	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.router.current() != ScreenDashboard {
 		return m, nil
 	}
 	next, cmd := m.dashboard.Update(msg)
-	m.dashboard = next.(dashboardui.Model)
+	m.dashboard = next.(*dashboardui.Model)
 	return m, cmd
 }
 
-func (m Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateProbeModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
-func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	wasVisible := m.filterModal.Visible()
 	m.filterModal = m.filterModal.Update(msg)
@@ -865,14 +1154,14 @@ func (m Model) updateFilterModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, dashboardCmd
 }
 
-func (m Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateExportModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var cmd tea.Cmd
 	m.exporter, cmd = m.exporter.Update(msg)
 	return m, tea.Batch(dashboardCmd, cmd)
 }
 
-func (m Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, dashboardCmd := m.updateDashboardForModal(msg)
 	var (
 		path   string
@@ -890,7 +1179,12 @@ func (m Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, dashboardCmd
 }
 
-func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+func (m *Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if m.quitting {
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd, true
+	}
 	if m.attaching {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -915,103 +1209,89 @@ func (m Model) handleModalDispatch(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-func (m Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m.screen {
+func (m *Model) updateActiveModel(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		next, cmd := m.pidPicker.Update(msg)
 		m.pidPicker = next.(pidpicker.Model)
 		return m, cmd
 	case ScreenDashboard:
 		next, cmd := m.dashboard.Update(msg)
-		m.dashboard = next.(dashboardui.Model)
+		m.dashboard = next.(*dashboardui.Model)
 		return m, cmd
 	default:
 		return m, nil
 	}
 }
 
-// handlePidSelected stops any running trace, resets buffers, and starts a new
-// trace for the newly selected PID.
-func (m Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
-	pid := selectedPIDFilter(msg.Pid)
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
-		return m, nil
-	}
-	m.tracer.stop()
-	m.runtime.resetStreamBuffer()
-	m.setProcessFilters(pid, -1)
-	m.router.pickerReturn = nil
-	m.screen = ScreenDashboard
-	m.attaching = true
-	m.lastErr = nil
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+// handlePidSelected starts tracing the PID chosen in the picker, with no TID
+// filter.
+func (m *Model) handlePidSelected(msg PidSelectedMsg) (tea.Model, tea.Cmd) {
+	return m.selectProcess(selectedPIDFilter(msg.Pid), -1)
 }
 
-// handleTidSelected stops any running trace, resets buffers, and starts a new
-// trace filtered to the selected TID within the current (or provided) PID.
-func (m Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
-	tid := selectedPIDFilter(msg.Tid)
+// handleTidSelected starts tracing the TID chosen in the picker, within the
+// PID the message carries or, when it carries none, the current one.
+func (m *Model) handleTidSelected(msg TidSelectedMsg) (tea.Model, tea.Cmd) {
 	pid := m.proc.pid
 	if msg.Pid > 0 {
 		pid = msg.Pid
 	}
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+	return m.selectProcess(pid, selectedPIDFilter(msg.Tid))
+}
+
+// selectProcess is the shared body of handlePidSelected and
+// handleTidSelected: it stops any running trace, resets the stream buffer,
+// switches to the dashboard with the new pid/tid filters and starts a new
+// trace. A recorder that fails to stop aborts the switch and surfaces a
+// recoverable error, leaving the picker (and any return bookmark) as it was.
+func (m *Model) selectProcess(pid, tid int) (tea.Model, tea.Cmd) {
+	if err := m.stopRecording(); err != nil {
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
+	// Stop before discarding the buffered rows, so the old session is told
+	// to go away before its stream is reset (beginTraceCmd's stop is then a
+	// no-op).
 	m.tracer.stop()
 	m.runtime.resetStreamBuffer()
 	m.setProcessFilters(pid, tid)
-	m.router.pickerReturn = nil
-	m.screen = ScreenDashboard
-	m.attaching = true
-	m.lastErr = nil
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	m.router.showDashboard()
+	return m, m.restartTrace()
 }
 
 // reselectPID saves a return bookmark and switches to the PID picker so the
 // user can choose a different process without losing dashboard state.
-func (m Model) reselectPID() (tea.Model, tea.Cmd) {
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
-		return m, nil
-	}
-	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
-	m.tracer.stop()
-	m.screen = ScreenPIDPicker
-	m.attaching = false
-	m.lastErr = nil
-	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
-	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
-	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
-	m.pidPicker = pidpicker.New().SetDarkMode(m.isDark)
-	var sizeCmd tea.Cmd
-	m.pidPicker, sizeCmd = applyWindowSizeToPicker(m.pidPicker, m.width, m.height)
-	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
+func (m *Model) reselectPID() (tea.Model, tea.Cmd) {
+	return m.enterPicker(pidpicker.New())
 }
 
 // reselectTID saves a return bookmark and switches to the TID picker within
 // the current PID so the user can narrow tracing to a specific thread.
-func (m Model) reselectTID() (tea.Model, tea.Cmd) {
-	pid := m.proc.pid
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
+func (m *Model) reselectTID() (tea.Model, tea.Cmd) {
+	return m.enterPicker(pidpicker.NewTIDWithKeys(m.proc.pid, pidpicker.DefaultKeyMap()))
+}
+
+// enterPicker is the shared body of reselectPID and reselectTID: it stops the
+// recorder and the trace, bookmarks the current pid/tid so Esc can return to
+// the dashboard, resets every modal and shows picker, sized to the terminal.
+// A recorder that fails to stop aborts the switch and surfaces a recoverable
+// error on the dashboard, with the trace still running and no bookmark set.
+func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
+	if err := m.stopRecording(); err != nil {
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
-	m.router.savePendingReturn(m.proc.pid, m.proc.tid)
+	m.router.showPickerWithReturn(m.proc.pid, m.proc.tid)
 	m.tracer.stop()
-	m.screen = ScreenPIDPicker
 	m.attaching = false
-	m.lastErr = nil
+	m.clearError()
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark)
+	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(m.height)
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
-	m.pidPicker = pidpicker.NewTIDWithKeys(pid, pidpicker.DefaultKeyMap()).SetDarkMode(m.isDark)
 	var sizeCmd tea.Cmd
-	m.pidPicker, sizeCmd = applyWindowSizeToPicker(m.pidPicker, m.width, m.height)
+	m.pidPicker, sizeCmd = applyWindowSizeToPicker(picker.SetDarkMode(m.isDark), m.width, m.height)
 	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
 }
 
@@ -1023,28 +1303,47 @@ func selectedPIDFilter(pid int) int {
 }
 
 // cancelPickerToDashboard restores the dashboard when the user presses Esc
-// while in the picker after a reselectPID/reselectTID navigation.
-func (m Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
-	returnState, ok := m.router.takePendingReturn()
+// while in the picker after a reselectPID/reselectTID navigation. The return
+// bookmark is only read here; showDashboard drops it once the transition
+// happens, so a recorder failure leaves it in place for the next attempt.
+func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
+	returnState, ok := m.router.pendingReturn()
 	if !ok {
 		return m, nil
 	}
-	if err := recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState); err != nil {
-		m.lastErr = err
-		// Restore the pending return state since we didn't complete the transition.
-		m.router.pickerReturn = &returnState
+	if err := m.stopRecording(); err != nil {
+		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
-	m.tracer.stop()
 	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
-	m.screen = ScreenDashboard
+	m.router.showDashboard()
+	return m, m.restartTrace()
+}
+
+// restartTrace is the shared tail of every path that (re)starts tracing from
+// a live model - process selection, picker cancel and the filter fallback: it
+// enters the attaching state, clears any error and returns the spinner tick
+// batched with the new trace's start command.
+//
+// It does not stop the previous session itself: beginTraceCmd owns that
+// (traceLifecycle.beginCmd cancels any running session before starting the
+// next), so at most one session is ever live. Callers that must quiesce the
+// old session before touching state it feeds - selectProcess before
+// resetStreamBuffer, the filter fallback before PrepareForTraceRestart - stop
+// it explicitly first, and beginCmd's stop is then a no-op. With no tracer
+// running it still starts one.
+func (m *Model) restartTrace() tea.Cmd {
 	m.attaching = true
-	m.lastErr = nil
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	m.clearError()
+	return tea.Batch(m.spin.Tick, m.beginTraceCmd())
 }
 
 // beginTraceCmd creates a tea.Cmd that starts the trace with the current
-// runtime bindings and active filter. It cancels any previously running trace.
+// runtime bindings and active filter. It cancels any previously running trace
+// (traceLifecycle.beginCmd stops the old session first). It stores the new
+// session's cancel func on the tracer, so it must only be called from Update
+// (never from Init, which stays side-effect free) on the *Model Bubble Tea
+// holds, so the cancel func survives to the next restart or quit.
 func (m *Model) beginTraceCmd() tea.Cmd {
 	return m.tracer.beginCmd(m.runtime, m.filters.current())
 }
@@ -1061,6 +1360,11 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	m.proc.pid = pid
 	m.proc.tid = tid
 	m.filters.rebindProcessFilters(pid, tid)
+	// The notice describes a filter that was refused in favour of the one
+	// showing. This changes the one showing - and restarts the trace - so the
+	// notice would be left explaining a filter the user is no longer looking
+	// at, in a session it never applied to.
+	m.dashboard.SetFilterNotice("")
 	m.syncDashboardFilterState()
 }
 
@@ -1083,69 +1387,137 @@ func (m *Model) syncDashboardFilterState() {
 	m.dashboard.SetRecordingStatus(recorderStatus(m.runtime.Recorder()))
 }
 
+// refuseUnusableFilter reports whether filter is one the trace pipeline cannot
+// honour, and when it is, says so instead of applying it.
+//
+// The check is globalfilter.ValidateTracepointFields - the same one
+// setupTraceInfra runs before any BPF setup on the restart path. The live-swap
+// path never restarts the trace, so nothing else on it would ever run that
+// check: handing the running eventloop a comm pattern that does not fit
+// MAX_PROGNAME_LENGTH - which the kernel's NUL makes one byte smaller than it
+// looks - left a live-looking dashboard matching nothing at all, because
+// matchString compares the pattern as a substring of a fixed-size kernel field
+// that can never contain it. A refusal has to be visible or it is
+// the same silence with an extra step, so this also writes the dashboard's
+// filter notice: the reason on refusal, "" on every accepted filter. It is not
+// the only writer - undoGlobalFilter and setProcessFilters clear it too,
+// because both change the filter on screen without going through here - but it
+// is the only one that ever sets a reason, and between the three the notice
+// cannot outlive the filter it describes.
+func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
+	err := filter.ValidateTracepointFields()
+	if err == nil {
+		m.dashboard.SetFilterNotice("")
+		return false
+	}
+	m.dashboard.SetFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
+	return true
+}
+
 // applyGlobalFilter pushes a new filter onto the filter stack, applies it
-// in-place when possible, or falls back to a full trace restart.
-func (m Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
-	changed := m.filters.push(filter, action)
-	m.setGlobalFilter(m.filters.current())
-	if !changed || m.screen != ScreenDashboard {
+// in-place when possible, or falls back to a full trace restart. A filter the
+// pipeline cannot honour is refused here, before it reaches the stack.
+func (m *Model) applyGlobalFilter(filter globalfilter.Filter, action string) (tea.Model, tea.Cmd) {
+	if m.refuseUnusableFilter(filter) {
 		return m, nil
 	}
+	changed := m.filters.push(filter, action)
+	m.setGlobalFilter(m.filters.current())
+	return m.reapplyActiveFilter(changed)
+}
 
+// replaceGlobalFilter swaps the active global filter for a re-scope (e.g. the
+// [/] family cycle) WITHOUT pushing onto the undo stack, then re-applies it to
+// the running pipeline using the same live-swap/restart path as
+// applyGlobalFilter. The stack label stays the same length across calls.
+func (m *Model) replaceGlobalFilter(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
+	if m.refuseUnusableFilter(filter) {
+		return m, nil
+	}
+	changed := !m.filters.current().Equal(filter)
+	m.setGlobalFilter(filter)
+	return m.reapplyActiveFilter(changed)
+}
+
+// reapplyActiveFilter pushes the current filter into the running pipeline,
+// preferring an in-place live swap and falling back to a trace restart. It is
+// the shared tail of applyGlobalFilter (push) and replaceGlobalFilter
+// (setGlobal) so both routes drive the pipeline identically (DRY).
+func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
+	if !changed || m.router.current() != ScreenDashboard {
+		return m, nil
+	}
+	return m.applyFilterLiveOrRestart(m.filters.current())
+}
+
+// applyFilterLiveOrRestart hands filter to the running trace, preferring an
+// in-place live swap (followed by resetAggregatesAfterLiveSwap) and falling
+// back to restartTrace. It is the shared
+// tail of reapplyActiveFilter and undoGlobalFilter, so every route that
+// changes the active filter drives the pipeline - and resets the aggregates -
+// identically.
+func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
 	m.runtime.advanceFilterEpoch()
 	// Try the in-place swap first: hand the new filter to the running
-	// eventloop via the registered setter and only reset the dashboard
-	// aggregates so the displayed counts reflect the new filter going
-	// forward. The BPF probes stay attached, so the user no longer sees
-	// the multi-second 'Attaching tracepoints' overlay on filter changes.
-	if m.runtime.applyLiveFilter(m.filters.current()) {
-		m.dashboard.PrepareForTraceRestart()
-		// PrepareForTraceRestart nils the dashboard's live-trie reference
-		// because the full-restart path expects TracingStartedMsg to
-		// rebind it. We skip that message on in-place swaps, so reconnect
-		// the flamegraph to the still-running trace's live trie here.
-		// Without this the Flame tab gets stuck on 'waiting for data...'.
-		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.lastErr = nil
-		return m, nil
+	// eventloop via the registered setter. The BPF probes stay attached, so
+	// the user no longer sees the multi-second 'Attaching tracepoints'
+	// overlay on filter changes.
+	if m.runtime.applyLiveFilter(filter) {
+		m.clearError()
+		return m, m.resetAggregatesAfterLiveSwap()
 	}
 
 	// Fallback: no trace currently running (e.g. first invocation), so
 	// restart the pipeline so the new filter takes effect on the next
-	// trace start.
+	// trace start. The old session is cancelled before its aggregates are
+	// cleared, as before; beginTraceCmd's stop is then a no-op.
 	m.tracer.stop()
 	m.dashboard.PrepareForTraceRestart()
-	m.attaching = true
-	m.lastErr = nil
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return m, m.restartTrace()
+}
+
+// resetAggregatesAfterLiveSwap starts a fresh baseline after an in-place
+// filter swap, as a trace restart would with a new engine and trie: without
+// it the Syscalls/Files/Processes tabs and the Flame tab keep every pre-swap
+// event and mix it with the filtered ones that follow (apply comm~foo and the
+// Processes tab still lists every other process). It must run after the
+// setter, never before: resetting first would let events matched by the old
+// filter land in the new baseline between the reset and the swap.
+//
+// The trie is reset and then re-bound so the flamegraph drops its zoom,
+// selection and cached snapshot of frames that no longer exist. The stats
+// reset goes through the dashboard's ResetStats, so a failed post-reset
+// snapshot keeps the last good one exactly as a probe toggle or the refresh
+// key do, and a refresh tick built before the swap cannot restore the
+// pre-swap numbers.
+func (m *Model) resetAggregatesAfterLiveSwap() tea.Cmd {
+	m.dashboard.SetLiveTrie(m.runtime.resetLiveTrie())
+	return m.dashboard.ResetStats()
 }
 
 // undoGlobalFilter pops the filter stack and re-applies the previous filter,
-// using the same in-place swap or restart logic as applyGlobalFilter.
-func (m Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
+// using the same in-place swap or restart logic as applyGlobalFilter. The
+// undo level is always consumed (so the label stack shrinks), but the pipeline
+// is only touched when the filter really changes: a family re-scope replaces
+// the active filter without pushing, so after Apply family=Network and '['
+// back to all, the popped level equals the active filter, and re-applying it
+// would wipe the stats, the flame trie and its zoom for nothing.
+func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
+	before := m.filters.current()
 	prev, ok := m.filters.pop()
 	if !ok {
 		return m, nil
 	}
+	// Only validated filters ever reach the stack (applyGlobalFilter refuses
+	// the rest), so there is nothing to re-check here - but the filter on
+	// screen is about to change, so a refusal notice describing the previous
+	// one must not survive it.
+	m.dashboard.SetFilterNotice("")
 	m.setGlobalFilter(prev)
-	if m.screen != ScreenDashboard {
+	if m.router.current() != ScreenDashboard || before.Equal(prev) {
 		return m, nil
 	}
-
-	m.runtime.advanceFilterEpoch()
-	// Same in-place swap path as applyGlobalFilter — see comment there.
-	if m.runtime.applyLiveFilter(prev) {
-		m.dashboard.PrepareForTraceRestart()
-		m.dashboard.SetLiveTrie(m.runtime.liveTrie())
-		m.lastErr = nil
-		return m, nil
-	}
-
-	m.tracer.stop()
-	m.dashboard.PrepareForTraceRestart()
-	m.attaching = true
-	m.lastErr = nil
-	return m, tea.Batch(m.spin.Tick, m.beginTraceCmd())
+	return m.applyFilterLiveOrRestart(prev)
 }
 
 // startRecording opens the parquet recorder at path and syncs dashboard status.
@@ -1166,7 +1538,6 @@ func (m *Model) applyTheme(isDark bool) {
 	}
 	m.isDark = isDark
 	common.ApplyPalette(isDark)
-	syncStylesFromCommon()
 	m.dashboard.SetDarkMode(isDark)
 	m.pidPicker = m.pidPicker.SetDarkMode(isDark)
 	m.probeModal = m.probeModal.SetDarkMode(isDark)
@@ -1174,8 +1545,11 @@ func (m *Model) applyTheme(isDark bool) {
 	m.recordModal = m.recordModal.SetDarkMode(isDark)
 }
 
-func (m Model) windowTitle() string {
-	switch m.screen {
+func (m *Model) windowTitle() string {
+	if m.quitting {
+		return "ior - shutting down"
+	}
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		return "ior - select process"
 	case ScreenDashboard:
@@ -1187,28 +1561,38 @@ func (m Model) windowTitle() string {
 }
 
 // View renders the currently active screen and startup overlay state.
-func (m Model) View() tea.View {
+func (m *Model) View() tea.View {
 	title := m.windowTitle()
 	if m.quitting {
-		return altScreenView("", title)
+		width, height := common.EffectiveViewport(m.width, m.height)
+		theme := common.Current()
+		line := m.shutdownView()
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.PanelStyle.Render(line))), title)
 	}
 
 	width, height := common.EffectiveViewport(m.width, m.height)
 
 	if m.attaching {
 		line := fmt.Sprintf("%s Attaching tracepoints...", m.spin.View())
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(common.PanelStyle.Render(line))), title)
+		theme := common.Current()
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(theme.PanelStyle.Render(line))), title)
 	}
 
 	if m.lastErr != nil {
-		return altScreenView(placeToViewport(width, height, ScreenStyle.Render(ErrorStyle.Render(m.lastErr.Error()))), title)
+		theme := common.Current()
+		hint := "q / esc  quit"
+		if m.errorKind == errorScreenRecoverable {
+			hint = "esc  back  •  q  quit"
+		}
+		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render(hint)
+		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
 	}
 	if m.helpOverlayVisible {
 		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())
 		return altScreenView(helpView, title)
 	}
 
-	switch m.screen {
+	switch m.router.current() {
 	case ScreenPIDPicker:
 		return m.viewPickerScreen(width, height, title)
 	case ScreenDashboard:
@@ -1218,8 +1602,22 @@ func (m Model) View() tea.View {
 	}
 }
 
+func (m *Model) shutdownView() string {
+	if m.shutdown.Phase == runtime.TraceShutdownReleasing {
+		return fmt.Sprintf("%s Releasing remaining BPF resources...", m.spin.View())
+	}
+	if m.shutdown.Phase != runtime.TraceShutdownDetaching || m.shutdown.Total <= 0 {
+		return fmt.Sprintf("%s Stopping trace and releasing BPF resources...", m.spin.View())
+	}
+	const barWidth = 28
+	completed := min(m.shutdown.Completed, m.shutdown.Total)
+	filled := completed * barWidth / m.shutdown.Total
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	return fmt.Sprintf("Detaching BPF probe pairs... %d/%d\n[%s]", completed, m.shutdown.Total, bar)
+}
+
 // viewPickerScreen renders the PID picker screen with optional export overlay.
-func (m Model) viewPickerScreen(width, height int, title string) tea.View {
+func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 	base := m.pidPicker.View().Content
 	if m.exporter.Visible() {
 		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
@@ -1229,7 +1627,7 @@ func (m Model) viewPickerScreen(width, height int, title string) tea.View {
 
 // viewDashboardScreen renders the dashboard screen with the appropriate modal
 // overlay (filter, record, probes, export) if one is active.
-func (m Model) viewDashboardScreen(width, height int, title string) tea.View {
+func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {
 		return altScreenView(placeToViewport(width, height, m.filterModal.View(width, height)), title)
@@ -1262,14 +1660,21 @@ func isHelpOverlayQuitKey(msg tea.KeyPressMsg) bool {
 	return msg.String() == "q"
 }
 
-func runExportCmd(exportEnabled bool, option tuiexport.Option, dashboard dashboardui.Model) tea.Cmd {
+// runExportCmd builds the export command for the chosen option. It takes the
+// concrete export inputs (source, filter, directory) captured on the Update
+// goroutine rather than a *dashboardui.Model: the closure runs on a Bubble
+// Tea command goroutine, and the model's plain fields are mutated by
+// Update/View with no lock. The Source itself is safe to read from any
+// goroutine (Snapshot is RWMutex-guarded), so the captured inputs are the
+// correct cross-goroutine boundary.
+func runExportCmd(exportEnabled bool, option tuiexport.Option, source eventstream.Source, filter eventstream.Filter, exportDir string) tea.Cmd {
 	return func() tea.Msg {
 		if !exportEnabled {
 			return tuiexport.FailedMsg{Err: fmt.Errorf("tui export is disabled by -tuiExport=false")}
 		}
 		switch option {
 		case tuiexport.OptionCSV:
-			path, err := dashboard.ExportStreamCSV()
+			path, err := eventstream.ExportSourceSnapshotToCSV(source, filter, exportDir, "")
 			if err != nil {
 				return tuiexport.FailedMsg{Err: err}
 			}
@@ -1298,6 +1703,8 @@ func (s lateBoundDashboardSource) Snapshot() (*statsengine.Snapshot, error) {
 	return source.Snapshot()
 }
 
+// Reset forwards to the underlying source; it is a no-op only while no source
+// has been wired yet (before the trace starter publishes its stats engine).
 func (s lateBoundDashboardSource) Reset() {
 	if s.runtime == nil {
 		return
@@ -1306,9 +1713,7 @@ func (s lateBoundDashboardSource) Reset() {
 	if source == nil {
 		return
 	}
-	if resettable, ok := source.(interface{ Reset() }); ok {
-		resettable.Reset()
-	}
+	source.Reset()
 }
 
 func placeToViewport(width, height int, content string) string {
@@ -1328,11 +1733,12 @@ var (
 	// composes RuntimePublisher (write side) and RuntimeState (read side).
 	_ runtime.TraceRuntimeBindings = (*runtimeBindings)(nil)
 
-	// lateBoundDashboardSource must satisfy the SnapshotSource contract used
-	// by the dashboard model. It wraps the injected stats engine and forwards
-	// calls through runtimeBindings so the dashboard source can be wired
-	// before the actual engine is available.
-	_ dashboardui.SnapshotSource = (*lateBoundDashboardSource)(nil)
+	// lateBoundDashboardSource must satisfy the resettable snapshot-source
+	// contract used by the dashboard model. It wraps the injected stats engine
+	// and forwards calls through runtimeBindings so the dashboard source can
+	// be wired before the actual engine is available.
+	_ dashboardui.SnapshotSource       = lateBoundDashboardSource{}
+	_ runtime.ResettableSnapshotSource = lateBoundDashboardSource{}
 )
 
 func altScreenView(content, title string) tea.View {

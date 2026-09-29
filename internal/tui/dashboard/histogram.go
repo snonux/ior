@@ -11,28 +11,30 @@ import (
 )
 
 func renderLatencyTab(snap *statsengine.Snapshot, width, height int) string {
+	theme := common.Current()
 	if snap == nil {
-		return common.PanelStyle.Render("Latency: waiting for stats...")
+		return theme.PanelStyle.Render("Latency: waiting for stats...")
 	}
 
 	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.LatencyHistogram, "Latency Histogram", width, height)
-	spark := common.PanelStyle.Width(panelW).Render(
+	spark := theme.PanelStyle.Width(panelW).Render(
 		renderOverviewSparkline("Latency sparkline:", snap.LatencySeriesNs(), panelInner),
 	)
 	return strings.Join([]string{hist, spark}, "\n")
 }
 
 func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
+	theme := common.Current()
 	if snap == nil {
-		return common.PanelStyle.Render("Gaps: waiting for stats...")
+		return theme.PanelStyle.Render("Gaps: waiting for stats...")
 	}
 
 	panelW := panelWidth(width)
 	panelInner := panelInnerWidth(width)
 	hist := renderHistogram(snap.GapHistogram, "Gap Histogram", width, height)
-	spark := common.PanelStyle.Width(panelW).Render(
+	spark := theme.PanelStyle.Width(panelW).Render(
 		renderOverviewSparkline("Gap sparkline:", snap.GapSeriesNs(), panelInner),
 	)
 	return strings.Join([]string{hist, spark}, "\n")
@@ -40,7 +42,7 @@ func renderGapsTab(snap *statsengine.Snapshot, width, height int) string {
 
 func renderLatencyGapsTab(snap *statsengine.Snapshot, width, height int) string {
 	if snap == nil {
-		return common.PanelStyle.Render("Latency+Gaps: waiting for stats...")
+		return common.Current().PanelStyle.Render("Latency+Gaps: waiting for stats...")
 	}
 	lat := renderLatencyTab(snap, width, height)
 	gap := renderGapsTab(snap, width, height)
@@ -51,7 +53,7 @@ func renderLatencyGapsTab(snap *statsengine.Snapshot, width, height int) string 
 func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, height int) string {
 	buckets := hist.Buckets()
 	if len(buckets) == 0 {
-		return common.PanelStyle.Render(title + ": no data")
+		return common.Current().PanelStyle.Render(title + ": no data")
 	}
 	if width <= 0 {
 		width = 80
@@ -73,7 +75,7 @@ func renderHistogram(hist statsengine.HistogramSnapshot, title string, width, he
 		lines = append(lines, fmt.Sprintf("%-*s | %-*s %*d", labelWidth, bucket.Label, barWidth, bar, countWidth, bucket.Count))
 	}
 	lines = append(lines, "Scale: █▓▒░")
-	return common.PanelStyle.Width(panelW).Render(strings.Join(lines, "\n"))
+	return common.Current().PanelStyle.Width(panelW).Render(strings.Join(lines, "\n"))
 }
 
 // clampHistogramBuckets trims the bucket slice to fit within the available rows.

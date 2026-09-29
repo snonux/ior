@@ -17,19 +17,19 @@ func TestApplyFilterByPIDCommAndCmdline(t *testing.T) {
 	}
 
 	m.input.SetValue("200")
-	m.applyFilter()
+	m = m.applyFilter()
 	if len(m.filtered) != 1 || m.filtered[0].Pid != 200 {
 		t.Fatalf("expected pid filter to keep only 200, got %+v", m.filtered)
 	}
 
 	m.input.SetValue("BASH")
-	m.applyFilter()
+	m = m.applyFilter()
 	if len(m.filtered) != 1 || m.filtered[0].Pid != 100 {
 		t.Fatalf("expected comm filter to keep only 100, got %+v", m.filtered)
 	}
 
 	m.input.SetValue("/usr/sbin")
-	m.applyFilter()
+	m = m.applyFilter()
 	if len(m.filtered) != 1 || m.filtered[0].Pid != 200 {
 		t.Fatalf("expected cmdline filter to keep only 200, got %+v", m.filtered)
 	}
@@ -38,7 +38,7 @@ func TestApplyFilterByPIDCommAndCmdline(t *testing.T) {
 func TestEnterEmitsAllPIDsAndSelectedPID(t *testing.T) {
 	m := NewWithKeys(DefaultKeyMap())
 	m.processes = []ProcessInfo{{Pid: 7, Comm: "vim"}, {Pid: 9, Comm: "top"}}
-	m.applyFilter()
+	m = m.applyFilter()
 
 	modelAny, cmdAny := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelAny
@@ -70,7 +70,7 @@ func TestEnterEmitsAllTIDsAndSelectedTIDInTIDMode(t *testing.T) {
 		{Pid: 7001, ParentPID: 42, Comm: "main"},
 		{Pid: 7002, ParentPID: 42, Comm: "worker"},
 	}
-	m.applyFilter()
+	m = m.applyFilter()
 
 	modelAny, cmdAny := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = modelAny
@@ -145,7 +145,7 @@ func TestRenderRowsKeepsSelectionVisible(t *testing.T) {
 		{Pid: 3, Comm: "p3"},
 		{Pid: 4, Comm: "p4"},
 	}
-	m.applyFilter()
+	m = m.applyFilter()
 	m.selectedIndex = 4
 
 	rows := m.renderRows()
