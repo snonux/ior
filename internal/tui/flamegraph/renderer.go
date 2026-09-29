@@ -894,6 +894,9 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	return base.Background(theme.Panel).Foreground(theme.Muted).Faint(true)
 }
 
+// frameLabel renders name into exactly width cells via padOrTrim, adding the
+// ">…<" selection or "*" match marker. Like padOrTrim it expects name to be
+// free of control characters (sanitised upstream, task io2).
 func frameLabel(name string, width int, isSelected, isMatch bool) string {
 	if width <= 0 {
 		return ""
@@ -1085,6 +1088,11 @@ func percentOfTotal(value, total uint64) float64 {
 // name overflow its cell and push the whole row past the viewport. When s is
 // too wide it is cut and ends in "…"; Truncate never splits a wide rune, so
 // the result can be one cell short and is then space-padded to width.
+//
+// The exact-width guarantee holds only for control-character-free input:
+// tabs, C1 bytes or an unterminated escape sequence are measured as zero
+// width but move the terminal cursor. padOrTrim does not sanitise; frame names
+// and status text are expected to be sanitised upstream (task io2).
 func padOrTrim(s string, width int) string {
 	if width <= 0 {
 		return ""
