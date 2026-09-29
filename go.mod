@@ -9,6 +9,7 @@ require (
 	github.com/DataDog/zstd v1.5.7
 	github.com/aquasecurity/libbpfgo v0.9.2-libbpf-1.5.1
 	github.com/charmbracelet/harmonica v0.2.0
+	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260608090822-c3ad58c6c9e5
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/charmbracelet/x/vt v0.0.0-20260608090822-c3ad58c6c9e5
@@ -25,7 +26,6 @@ require (
 	github.com/aymanbagabas/go-udiff v0.4.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff // indirect
-	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/exp/golden v0.0.0-20251109135125-8916d276318f // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect

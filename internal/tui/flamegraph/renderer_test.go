@@ -1021,9 +1021,11 @@ func TestAnimatedLayoutRowsStayWithinWidth(t *testing.T) {
 		frames := state.CurrentFrames()
 		sawOverlap = sawOverlap || rowHasOverlap(frames, 1)
 		out := RenderTerminalView(RenderContext{Frames: frames, Width: width, Height: height, SelectedIdx: 0, MetricLabel: "samples", IsDark: true})
+		// Toolbar, every frame-area row and the status line are all padded
+		// to exactly width cells; anything else would misalign the view.
 		for i, line := range strings.Split(out, "\n") {
-			if got := lipgloss.Width(line); got > width {
-				t.Fatalf("tick %d line %d width=%d > %d: %q", tick, i, got, width, stripSGR(line))
+			if got := lipgloss.Width(line); got != width {
+				t.Fatalf("tick %d line %d width=%d want %d: %q", tick, i, got, width, stripSGR(line))
 			}
 		}
 		assertHitsMatchDrawnRow(t, frames, 1, width)
@@ -1073,8 +1075,81 @@ func assertHitsMatchDrawnRow(t *testing.T, frames []tuiFrame, row, width int) {
 			}
 			continue
 		}
-		if want := []rune(frames[got].Name)[0]; drawn != want && drawn != '…' {
+		// Each label is its letter repeated past the cell width, so padOrTrim
+		// cuts it and the "…" lands on the frame's last drawn cell only: the
+		// next cell must then belong to another frame (or be off-screen).
+		if drawn == '…' {
+			if x+1 < width && findFrameAtRow(frames, row, x+1, width) == got {
+				t.Fatalf("x=%d: \"…\" drawn inside frame %q, not at its last cell: %q", x, frames[got].Name, string(line))
+			}
+			continue
+		}
+		if want := []rune(frames[got].Name)[0]; drawn != want {
 			t.Fatalf("x=%d: hit %q but %q is drawn: %q", x, frames[got].Name, drawn, string(line))
+		}
+	}
+}
+
+func TestPadOrTrimMeasuresDisplayWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		in    string
+		width int
+		want  string
+	}{
+		{"ascii pad", "ab", 4, "ab  "},
+		{"ascii exact", "abcd", 4, "abcd"},
+		{"ascii cut", "abcdef", 4, "abc…"},
+		{"wide fits", "日本", 4, "日本"},
+		{"wide pad", "日本", 5, "日本 "},
+		{"wide cut", "日本語", 5, "日本…"},
+		// Cutting at 4 cells cannot keep half of 本, so the result is one
+		// cell short before padding: 日 (2) + … (1) + space (1).
+		{"wide cut odd boundary", "日本語", 4, "日… "},
+		{"wide single cell", "日本", 1, "…"},
+		{"zero width", "abc", 0, ""},
+		{"negative width", "abc", -3, ""},
+		{"empty", "", 3, "   "},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := padOrTrim(tc.in, tc.width)
+			if got != tc.want {
+				t.Fatalf("padOrTrim(%q, %d)=%q want %q", tc.in, tc.width, got, tc.want)
+			}
+			if tc.width > 0 && lipgloss.Width(got) != tc.width {
+				t.Fatalf("padOrTrim(%q, %d) is %d cells wide", tc.in, tc.width, lipgloss.Width(got))
+			}
+		})
+	}
+}
+
+func TestFrameLabelWideNameFillsExactWidth(t *testing.T) {
+	name := "/data/日本語のファイル名.txt"
+	for _, tc := range []struct {
+		selected, match bool
+	}{{false, false}, {true, false}, {false, true}} {
+		for width := 1; width <= 40; width++ {
+			if got := lipgloss.Width(frameLabel(name, width, tc.selected, tc.match)); got != width {
+				t.Fatalf("selected=%v match=%v width=%d: label is %d cells", tc.selected, tc.match, width, got)
+			}
+		}
+	}
+}
+
+// TestRenderRowWideCharLabelKeepsRowWidth is the reported repro: a CJK file
+// name in a 20-cell frame used to be sized by rune count and produced an
+// 89-cell line at width 80.
+func TestRenderRowWideCharLabelKeepsRowWidth(t *testing.T) {
+	name := "/data/日本語のファイル名.txt"
+	row := []indexedFrame{
+		{idx: 0, frame: tuiFrame{Name: name, Col: 0, Width: 20, Path: "root" + pathSeparator + "a"}},
+		{idx: 1, frame: tuiFrame{Name: name, Col: 20, Width: 60, Path: "root" + pathSeparator + "b"}},
+	}
+	for _, selected := range []int{-1, 0, 1} {
+		line := renderRow(row, 80, "", nil, nil, selected, true, true)
+		if got := lipgloss.Width(line); got != 80 {
+			t.Fatalf("selected=%d: row width=%d want 80: %q", selected, got, stripSGR(line))
 		}
 	}
 }
