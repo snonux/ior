@@ -282,8 +282,11 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 //     it on the error screen).
 //
 // Keeping the "report once" state in the recorder rather than here means a
-// failure is reported regardless of which trace session first sees it, and
-// no per-session guard can be burned by a stale or idle result.
+// failure is reported by whichever trace session first sees it, and no
+// per-session guard can be burned by a stale or idle result. A failure no
+// event reaches before the user opens the record modal again is claimed and
+// shown there instead (Start would discard it); one no event and no modal
+// ever reaches is not reported in the stream at all.
 func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
 	switch {
 	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):

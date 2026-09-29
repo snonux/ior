@@ -153,16 +153,6 @@ func TestTUIRecorderFailureBetweenSessionsReportedByNextSession(t *testing.T) {
 	assertWarnings(t, second.warnings(), []string{"disk full"})
 }
 
-// TestTUIRecorderFailureTakenByStopIsSilent checks that a failure Stop
-// already returned to the TUI (shown on its error screen; TakeFailure nil)
-// is not reported again in the stream.
-func TestTUIRecorderFailureTakenByStopIsSilent(t *testing.T) {
-	stopErr := errors.New("flush on stop failed")
-	recorder := &scriptedRowRecorder{errs: []error{nil, stopErr, stopErr}}
-	msgs := warningMessages(runTUIPairs(t, nil, recorder, 3))
-	assertWarnings(t, msgs, nil)
-}
-
 // TestTUIRecorderOverflowWarnedOncePerRecording checks that only the first
 // shed row of each recording (ErrRecorderStartedDropping) warns, including a
 // second recording started right after a Stop with no events in between.

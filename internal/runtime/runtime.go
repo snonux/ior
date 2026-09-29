@@ -216,7 +216,8 @@ type RecordingController interface {
 	// Start opens a new recording at path with the given options.
 	Start(path string, options parquet.StartOptions) error
 	// Stop closes the active recording. When no recording is active it
-	// reports the last session's terminal state instead of starting one.
+	// reports the last session's failure instead, unless that failure was
+	// already reported (via TakeFailure or an earlier Stop).
 	Stop() error
 	// Status reports the recording's state, including queue-overflow drops.
 	Status() parquet.Status

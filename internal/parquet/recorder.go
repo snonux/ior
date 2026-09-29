@@ -110,7 +110,9 @@ func NewRecorder(config RecorderConfig) *Recorder {
 	return &Recorder{config: normalizeRecorderConfig(config)}
 }
 
-// Start begins a new recording session.
+// Start begins a new recording session. It discards the previous recording's
+// terminal state, including a failure nobody has taken yet; callers that must
+// not lose such a failure call TakeFailure first.
 func (r *Recorder) Start(path string, options StartOptions) error {
 	if r == nil {
 		return ErrRecorderNotActive
@@ -181,8 +183,10 @@ func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 
 // Stop gracefully flushes and finalizes the active recording session and
 // returns its terminal error. Without an active session it returns the last
-// session's error again. Either way the returned failure counts as reported:
-// TakeFailure will not hand it out a second time.
+// session's error, unless that failure was already taken (by TakeFailure or
+// an earlier Stop), in which case it returns nil so no failure is reported
+// twice. Either way a failure Stop returns counts as reported: TakeFailure
+// will not hand it out again.
 func (r *Recorder) Stop() error {
 	if r == nil {
 		return nil
@@ -190,19 +194,25 @@ func (r *Recorder) Stop() error {
 
 	r.mu.Lock()
 	session := r.active
-	lastErr := r.status.LastError
-	if session == nil && lastErr != nil {
-		r.failureTaken = true
+	if session == nil {
+		failure := r.status.LastError
+		if r.failureTaken {
+			failure = nil
+		}
+		r.failureTaken = r.failureTaken || failure != nil
+		r.mu.Unlock()
+		return failure
 	}
+	// Mark the stop request while still holding r.mu: a session aborting on
+	// its own must publish its failure through finishSession, which takes
+	// r.mu, so it either finished before this point (session == nil above)
+	// or sees stopRequested and marks the failure taken for this caller.
+	// Marking after unlocking left a window where the failure was both
+	// returned here and handed out by TakeFailure.
+	session.markStopRequested()
 	r.mu.Unlock()
 
-	if session == nil {
-		return lastErr
-	}
-
-	// finishSession marks the failure taken atomically with publishing it,
-	// so a concurrent TakeFailure cannot report what Stop is returning.
-	session.requestStop()
+	session.stop(nil)
 	if err := <-session.doneC; err != nil {
 		return err
 	}
@@ -354,8 +364,9 @@ func (r *Recorder) updateRowsWritten(session *recordingSession, rowsWritten uint
 
 // finishSession publishes the session's terminal state. A failure of a
 // session ended through Stop is marked taken here, under the same lock that
-// publishes it, because Stop hands it to its own caller. Lock order is r.mu
-// then session.mu; nothing takes them the other way round.
+// publishes it, because Stop hands it to its own caller. Stop sets
+// stopRequested under r.mu as well, so the two cannot interleave. Lock order
+// is r.mu then session.mu; nothing takes them the other way round.
 func (r *Recorder) finishSession(session *recordingSession, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -431,12 +442,13 @@ func (s *recordingSession) stop(cause error) {
 	s.stopOnce.Do(func() { close(s.stopC) })
 }
 
-// requestStop ends the session on behalf of Recorder.Stop.
-func (s *recordingSession) requestStop() {
+// markStopRequested records that Recorder.Stop, whose caller receives the
+// terminal error, is ending this session. Called with r.mu held (lock order
+// r.mu then session.mu).
+func (s *recordingSession) markStopRequested() {
 	s.mu.Lock()
 	s.stopRequested = true
 	s.mu.Unlock()
-	s.stop(nil)
 }
 
 func (s *recordingSession) wasStopRequested() bool {

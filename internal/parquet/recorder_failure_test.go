@@ -197,3 +197,134 @@ func TestRecorderFirstDropSentinelPerRecording(t *testing.T) {
 		}
 	}
 }
+
+// TestRecorderStopAfterFailureTakenReturnsNil checks that Stop does not
+// re-report a failure that was already handed out, by TakeFailure or by an
+// earlier Stop, while a not-yet-taken failure is still returned.
+func TestRecorderStopAfterFailureTakenReturnsNil(t *testing.T) {
+	writeErr := errors.New("disk full")
+
+	r := newFailingRecorder(writeErr, 1)
+	failRecording(t, r)
+	if err := r.TakeFailure(); !errors.Is(err, writeErr) {
+		t.Fatalf("TakeFailure() = %v, want %v", err, writeErr)
+	}
+	if err := r.Stop(); err != nil {
+		t.Fatalf("Stop() after TakeFailure = %v, want nil", err)
+	}
+
+	r = newFailingRecorder(writeErr, 1)
+	failRecording(t, r)
+	if err := r.Stop(); !errors.Is(err, writeErr) {
+		t.Fatalf("first Stop() = %v, want %v", err, writeErr)
+	}
+	if err := r.Stop(); err != nil {
+		t.Fatalf("second Stop() = %v, want nil", err)
+	}
+	if st := r.Status(); !errors.Is(st.LastError, writeErr) {
+		t.Fatalf("Status().LastError = %v, want it kept as %v", st.LastError, writeErr)
+	}
+}
+
+// abortBlockingWriter fails every write and blocks in Abort until released,
+// holding a self-aborting session between its failure and finishSession.
+type abortBlockingWriter struct {
+	failingWriter
+	aborting chan struct{}
+	release  chan struct{}
+}
+
+func (w abortBlockingWriter) Abort() error {
+	close(w.aborting)
+	<-w.release
+	return nil
+}
+
+// TestRecorderStopDuringSelfAbortReportsOnce pins Stop into a session that
+// is aborting on its own (write failed, finishSession not yet run): Stop must
+// return the failure and TakeFailure must not hand it out a second time.
+func TestRecorderStopDuringSelfAbortReportsOnce(t *testing.T) {
+	writeErr := errors.New("disk full")
+	w := abortBlockingWriter{
+		failingWriter: failingWriter{err: writeErr},
+		aborting:      make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+	r := NewRecorder(RecorderConfig{
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		newWriter: func(string, WriterConfig, FileMetadata) (rowWriter, error) {
+			return w, nil
+		},
+	})
+	mustStart(t, r)
+	if err := r.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	<-w.aborting // the session failed and is blocked before finishSession
+
+	r.mu.RLock()
+	session := r.active
+	r.mu.RUnlock()
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- r.Stop() }()
+	waitStopRequested(t, session)
+	if err := r.TakeFailure(); err != nil {
+		t.Fatalf("TakeFailure() while the session is finishing = %v, want nil", err)
+	}
+	close(w.release)
+
+	if err := <-stopErr; !errors.Is(err, writeErr) {
+		t.Fatalf("Stop() = %v, want %v", err, writeErr)
+	}
+	if err := r.TakeFailure(); err != nil {
+		t.Fatalf("TakeFailure() after Stop returned the failure = %v, want nil", err)
+	}
+}
+
+// TestRecorderStopRacingSelfAbortStress races Stop against a session that
+// fails its first write on its own. Whichever wins, the failure is reported
+// exactly once: through Stop, never again through TakeFailure.
+func TestRecorderStopRacingSelfAbortStress(t *testing.T) {
+	writeErr := errors.New("disk full")
+	// The race window is tiny: the pre-fix code failed about once in ~10k
+	// iterations without -race (much sooner with it), so run many; this is
+	// a probabilistic guard, TestRecorderStopDuringSelfAbortReportsOnce the
+	// deterministic one for the Stop-during-abort ordering.
+	iterations := 10000
+	if testing.Short() {
+		iterations = 1000
+	}
+	for i := 0; i < iterations; i++ {
+		r := newFailingRecorder(writeErr, 1)
+		mustStart(t, r)
+		if err := r.Record(testStreamRow(1, "read", false), 0); err != nil {
+			t.Fatalf("iteration %d: Record() error = %v", i, err)
+		}
+		taken := make(chan error, 1)
+		go func() { taken <- r.TakeFailure() }()
+		stopErr := r.Stop()
+		lateTake := r.TakeFailure()
+		reports := 0
+		for _, err := range []error{stopErr, <-taken, lateTake} {
+			if errors.Is(err, writeErr) {
+				reports++
+			}
+		}
+		if reports != 1 {
+			t.Fatalf("iteration %d: failure reported %d times (Stop=%v), want exactly once", i, reports, stopErr)
+		}
+	}
+}
+
+// waitStopRequested waits until Stop has marked session as stop-requested.
+func waitStopRequested(t *testing.T, session *recordingSession) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !session.wasStopRequested() {
+		if time.Now().After(deadline) {
+			t.Fatalf("Stop did not mark the session in time")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
