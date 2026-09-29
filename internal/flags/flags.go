@@ -3,6 +3,7 @@ package flags
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -294,13 +295,24 @@ func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) 
 	return nil
 }
 
+// maxDurationSeconds is the largest -duration (in seconds) that still fits in
+// a time.Duration (int64 nanoseconds), roughly 292 years. It is typed int64
+// so the constant also compiles where int is 32 bits wide.
+const maxDurationSeconds int64 = math.MaxInt64 / int64(time.Second)
+
 // validateConfig checks numeric/duration bounds that cannot be enforced by the
 // flag package itself and returns a descriptive error on the first violation.
 func validateConfig(cfg Config) error {
 	// A zero or negative duration would cause the trace context to cancel
-	// immediately, capturing no events. Require at least one second.
-	if cfg.Duration <= 0 {
-		return fmt.Errorf("invalid duration: %d (must be > 0)", cfg.Duration)
+	// immediately, capturing no events. Require at least one second. The
+	// upper bound matters just as much: setupTraceContext converts the
+	// seconds with time.Duration(cfg.Duration)*time.Second, and anything
+	// above maxDurationSeconds overflows int64 nanoseconds into a negative
+	// (already expired) timeout, so the trace would silently end at once
+	// with exit 0.
+	if cfg.Duration <= 0 || int64(cfg.Duration) > maxDurationSeconds {
+		return fmt.Errorf("invalid duration: %d (must be between 1 and %d seconds)",
+			cfg.Duration, maxDurationSeconds)
 	}
 	// A negative reset timer would imply auto-resets in the past, which is
 	// nonsensical. 0 disables, anything positive enables.

@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +427,38 @@ func TestParseDurationZeroReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid duration") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestParseDurationOverflowReturnsError guards against -duration values whose
+// seconds-to-time.Duration conversion overflows int64 into a negative timeout,
+// which used to end the trace immediately with exit 0.
+func TestParseDurationOverflowReturnsError(t *testing.T) {
+	for _, value := range []string{
+		"10000000000", // the reported repro
+		strconv.FormatInt(maxDurationSeconds+1, 10), // first overflowing value
+		strconv.FormatInt(math.MaxInt64, 10),        // extreme
+	} {
+		_, err := parseForTest(t, "-duration", value)
+		if err == nil {
+			t.Fatalf("-duration %s: expected parse error for overflowing duration", value)
+		}
+		if !strings.Contains(err.Error(), "invalid duration") {
+			t.Fatalf("-duration %s: unexpected error: %v", value, err)
+		}
+	}
+}
+
+// TestParseDurationMaxAccepted pins the boundary: the largest duration that
+// still fits in a time.Duration must be accepted and convert to a positive
+// timeout.
+func TestParseDurationMaxAccepted(t *testing.T) {
+	cfg, err := parseForTest(t, "-duration", strconv.FormatInt(maxDurationSeconds, 10))
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if got := time.Duration(cfg.Duration) * time.Second; got <= 0 {
+		t.Fatalf("max duration converted to non-positive timeout %v", got)
 	}
 }
 
