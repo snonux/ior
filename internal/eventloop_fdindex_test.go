@@ -120,6 +120,7 @@ func assertFdIndexConsistent(t *testing.T, fdt *fdTracker) {
 				pid, got.files, got.cache, wantKeys.files, wantKeys.cache)
 		}
 	}
+	assertIdlePidKeysReusable(t, fdt)
 	if len(fdt.fileAges) != len(fdt.files) || len(fdt.procFdAges) != len(fdt.procFdCache) {
 		t.Fatalf("ages out of step: files %d/%d cache %d/%d",
 			len(fdt.files), len(fdt.fileAges), len(fdt.procFdCache), len(fdt.procFdAges))
@@ -219,5 +220,59 @@ func TestPerPidOpsOnZeroValueTracker(t *testing.T) {
 	assertFdIndexConsistent(t, fdt)
 	if len(fdt.pidIndex) != 0 {
 		t.Fatalf("pid still indexed after all its entries were closed: %v", fdt.pidIndex)
+	}
+}
+
+// assertIdlePidKeysReusable checks the recycling list: bounded, every parked
+// entry empty, and none of them still reachable from the index (a parked
+// entry handed to a second pid would merge two processes' key sets).
+func assertIdlePidKeysReusable(t *testing.T, fdt *fdTracker) {
+	t.Helper()
+	if len(fdt.idlePidKeys) > maxIdlePidKeys {
+		t.Fatalf("idle list holds %d entries, cap is %d", len(fdt.idlePidKeys), maxIdlePidKeys)
+	}
+	live := make(map[*pidFdKeys]struct{}, len(fdt.pidIndex))
+	for _, keys := range fdt.pidIndex {
+		live[keys] = struct{}{}
+	}
+	for _, keys := range fdt.idlePidKeys {
+		if len(keys.files) != 0 || len(keys.cache) != 0 {
+			t.Fatalf("parked index entry is not empty: files %v cache %v", keys.files, keys.cache)
+		}
+		if _, ok := live[keys]; ok {
+			t.Fatal("parked index entry is still in use by a pid")
+		}
+	}
+}
+
+// BenchmarkFdSetDeleteChurn measures the most common fd-table pattern: a
+// process opening and closing its only tracked descriptor. Its pid enters
+// and leaves the index every iteration, so this is the path idlePidKeys
+// keeps allocation-free.
+func BenchmarkFdSetDeleteChurn(b *testing.B) {
+	fdt := newFDTracker(nil)
+	f := file.NewFd(3, "/churn", syscall.O_RDONLY)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fdt.set(3, benchTargetPid, f)
+		fdt.delete(3, benchTargetPid)
+	}
+}
+
+// BenchmarkFdNewPidLifecycle measures a stream of short-lived processes: each
+// iteration's pid is new to the tracker, registers a descriptor and a procfs
+// cache entry, and exits. The emptied entry of one process is recycled for
+// the next.
+func BenchmarkFdNewPidLifecycle(b *testing.B) {
+	fdt := newFDTracker(nil)
+	f := file.NewFd(3, "/lifecycle", syscall.O_RDONLY)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pid := uint32(benchFirstPid + i)
+		fdt.set(3, pid, f)
+		fdt.setProcFdCache(4, pid, f)
+		fdt.deletePid(pid)
 	}
 }

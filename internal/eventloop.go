@@ -184,7 +184,7 @@ func configuredFDTracker(injected *fdTracker) *fdTracker {
 	if injected == nil {
 		return newFDTracker(nil)
 	}
-	// The tracker owns its own invariants (map allocation, pid-presence
+	// The tracker owns its own invariants (map allocation, per-pid index
 	// seeding); the loop only decides WHICH tracker to use.
 	injected.ensureInit()
 	return injected

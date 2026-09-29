@@ -33,15 +33,30 @@ type fdTracker struct {
 	// (32768 + 8192 entries) for every one of them cost about a millisecond
 	// per exec or exit; through the index they cost O(descriptors of that
 	// pid). The index is exact, not an over-approximation: every insertion
-	// goes through addFileKey/addCacheKey and every removal (close, exit,
-	// exec, LRU eviction) through removeFileKey/deleteCacheKey, and a pid
-	// whose sets both become empty is dropped from the index.
+	// goes through set/setProcFdCache (indexFileKey/indexCacheKey) and every
+	// removal (close, exit, exec, LRU eviction) through
+	// removeFileKey/deleteCacheKey, and a pid whose sets both become empty is
+	// dropped from the index.
 	pidIndex map[uint32]*pidFdKeys
-	age      uint64 // monotonic counter for LRU ordering
+	// idlePidKeys recycles the pidFdKeys of pids that just lost their last
+	// entry. Without it a process that keeps opening and closing its only
+	// tracked descriptor - a common pattern - would allocate a fresh entry and
+	// its map on every open; with it, that churn, and a short-lived process
+	// replacing one that exited, reuse the emptied entry. Capped at
+	// maxIdlePidKeys because an emptied Go map keeps its bucket memory: the
+	// cap bounds what idle entries of once-busy processes can pin.
+	idlePidKeys []*pidFdKeys
+	age         uint64 // monotonic counter for LRU ordering
 }
 
+// maxIdlePidKeys bounds fdTracker.idlePidKeys. A handful covers the churn of
+// a few concurrently open/closing processes; beyond that, allocation is the
+// cheaper price than retained map memory.
+const maxIdlePidKeys = 16
+
 // pidFdKeys is one pid's slice of the fdTracker key space: the fdKey keys it
-// owns in the fd table and in the procfs cache.
+// owns in the fd table and in the procfs cache. Each set is allocated on
+// first use, so a pid that only ever appears in one map costs one map.
 type pidFdKeys struct {
 	files map[uint64]struct{}
 	cache map[uint64]struct{}
@@ -87,10 +102,10 @@ func (t *fdTracker) ensureInit() {
 	if t.pidIndex == nil {
 		t.pidIndex = make(map[uint32]*pidFdKeys)
 		for key := range t.files {
-			t.indexKey(key).files[key] = struct{}{}
+			t.indexFileKey(key)
 		}
 		for key := range t.procFdCache {
-			t.indexKey(key).cache[key] = struct{}{}
+			t.indexCacheKey(key)
 		}
 	}
 }
@@ -158,7 +173,7 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 	t.age++
 	t.files[key] = f
 	t.fileAges[key] = t.age
-	t.indexKey(key).files[key] = struct{}{}
+	t.indexFileKey(key)
 	t.pruneFiles()
 }
 
@@ -166,39 +181,72 @@ func (t *fdTracker) delete(fd int32, pid uint32) {
 	t.removeFileKey(fdKey(pid, fd))
 }
 
-// indexKey returns the index entry of key's pid, creating it (and the index
-// itself, for a zero-value tracker) on first use. Only the insertion paths
-// call it; removals go through unindexKey so they never allocate.
-func (t *fdTracker) indexKey(key uint64) *pidFdKeys {
+// indexFileKey records key in its pid's fd-table set.
+func (t *fdTracker) indexFileKey(key uint64) {
+	keys := t.pidEntry(key)
+	if keys.files == nil {
+		keys.files = make(map[uint64]struct{})
+	}
+	keys.files[key] = struct{}{}
+}
+
+// indexCacheKey records key in its pid's procfs-cache set.
+func (t *fdTracker) indexCacheKey(key uint64) {
+	keys := t.pidEntry(key)
+	if keys.cache == nil {
+		keys.cache = make(map[uint64]struct{})
+	}
+	keys.cache[key] = struct{}{}
+}
+
+// pidEntry returns the index entry of key's pid, taking a recycled one from
+// idlePidKeys or allocating it (and the index itself, for a zero-value
+// tracker) on first use. Only the insertion paths call it; removals go
+// through unindexKey so they never allocate.
+func (t *fdTracker) pidEntry(key uint64) *pidFdKeys {
 	if t.pidIndex == nil {
 		t.pidIndex = make(map[uint32]*pidFdKeys)
 	}
 	pid, _ := fdKeyParts(key)
-	keys, ok := t.pidIndex[pid]
-	if !ok {
-		keys = &pidFdKeys{files: make(map[uint64]struct{}), cache: make(map[uint64]struct{})}
-		t.pidIndex[pid] = keys
+	if keys, ok := t.pidIndex[pid]; ok {
+		return keys
 	}
+	var keys *pidFdKeys
+	if n := len(t.idlePidKeys); n > 0 {
+		keys = t.idlePidKeys[n-1]
+		t.idlePidKeys[n-1] = nil
+		t.idlePidKeys = t.idlePidKeys[:n-1]
+	} else {
+		keys = &pidFdKeys{}
+	}
+	t.pidIndex[pid] = keys
 	return keys
 }
 
-// unindexKey removes key from its pid's set selected by pick, and drops the
-// pid from the index once it owns nothing in either map, so the index stays
-// exactly as large as the set of pids with entries.
-func (t *fdTracker) unindexKey(key uint64, pick func(*pidFdKeys) map[uint64]struct{}) {
+// unindexKey removes key from its pid's fd-table set (cache false) or
+// procfs-cache set (cache true). Once the pid owns nothing in either map it
+// is dropped from the index, so the index stays exactly as large as the set
+// of pids with entries, and its emptied entry is parked on idlePidKeys for
+// the next pid to reuse.
+func (t *fdTracker) unindexKey(key uint64, cache bool) {
 	pid, _ := fdKeyParts(key)
 	keys, ok := t.pidIndex[pid]
 	if !ok {
 		return
 	}
-	delete(pick(keys), key)
-	if len(keys.files) == 0 && len(keys.cache) == 0 {
-		delete(t.pidIndex, pid)
+	if cache {
+		delete(keys.cache, key)
+	} else {
+		delete(keys.files, key)
+	}
+	if len(keys.files) != 0 || len(keys.cache) != 0 {
+		return
+	}
+	delete(t.pidIndex, pid)
+	if len(t.idlePidKeys) < maxIdlePidKeys {
+		t.idlePidKeys = append(t.idlePidKeys, keys)
 	}
 }
-
-func indexedFiles(keys *pidFdKeys) map[uint64]struct{} { return keys.files }
-func indexedCache(keys *pidFdKeys) map[uint64]struct{} { return keys.cache }
 
 // removeFileKey is the one removal path for fd-table entries: close, close_range,
 // process exit, exec and LRU eviction all go through it so the entry, its age
@@ -206,7 +254,7 @@ func indexedCache(keys *pidFdKeys) map[uint64]struct{} { return keys.cache }
 func (t *fdTracker) removeFileKey(key uint64) {
 	delete(t.files, key)
 	delete(t.fileAges, key)
-	t.unindexKey(key, indexedFiles)
+	t.unindexKey(key, false)
 }
 
 // pidKeySets returns pid's index entry, or nil when pid owns no entry in
@@ -255,10 +303,13 @@ func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
 // record: a process that exited owns no descriptors anymore, so its slice of
 // the (pid, fd) key space is pure garbage until this runs. The per-pid index
 // makes this O(entries of pid), and O(1) for the common case - a task exit
-// for a process that never registered a descriptor. The price is one extra
-// small-map insertion per registered descriptor on the syscall path, which is
-// far cheaper than the full scan of both capped maps it replaced (see
-// BenchmarkDeletePidFullTable).
+// for a process that never registered a descriptor. The price is paid on the
+// syscall path: every registration and removal also updates the pid's index
+// set (a small-map insert or delete), and a pid entering the index takes a
+// recycled entry or, when none is idle, allocates one plus the set it needs.
+// That is far cheaper than the full scan of both capped maps it replaced (see
+// BenchmarkDeletePidFullTable, BenchmarkFdSetDeleteChurn and
+// BenchmarkFdNewPidLifecycle).
 func (t *fdTracker) deletePid(pid uint32) {
 	keys := t.pidKeySets(pid)
 	if keys == nil {
@@ -401,7 +452,7 @@ func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) 
 	t.age++
 	t.procFdCache[key] = resolved
 	t.procFdAges[key] = t.age
-	t.indexKey(key).cache[key] = struct{}{}
+	t.indexCacheKey(key)
 	t.pruneCache()
 }
 
@@ -471,7 +522,7 @@ func (t *fdTracker) cacheLimit() int {
 func (t *fdTracker) deleteCacheKey(key uint64) {
 	delete(t.procFdCache, key)
 	delete(t.procFdAges, key)
-	t.unindexKey(key, indexedCache)
+	t.unindexKey(key, true)
 }
 
 func (t *pendingHandleTracker) set(tid uint32, pathname string) {
