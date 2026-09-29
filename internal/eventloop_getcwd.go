@@ -12,6 +12,17 @@ import (
 // directory as the caller's cwd.
 const getcwdTruncatedSuffix = "..."
 
+// capturedOutputPathEnters is the userspace half of outputPathSyscalls
+// (internal/generate/classify.go): the enter trace IDs whose exit handler
+// publishes the returned output path as an OPEN_NAME_FIXUP_EVENT.
+// TestCapturedOutputPathEntersMatchTheGenerator keeps the two sets equal, so a
+// syscall added to the generator cannot silently have its record fall through
+// to the open-name recovery (which would ignore it). Each entry also needs its
+// own finishing step in its exit handler, as getcwd has finishGetcwdPath.
+var capturedOutputPathEnters = map[types.TraceId]struct{}{
+	types.SYS_ENTER_GETCWD: {},
+}
+
 // applyCapturedOutputPath stores the path an output-path syscall returned to
 // its caller on the still-pending pair and reports whether fixup was one.
 //
@@ -30,10 +41,11 @@ const getcwdTruncatedSuffix = "..."
 // value (finishGetcwdPath). The trace ID check on both sides keeps a fixup for
 // some other syscall from grafting a path onto this pair, and vice versa.
 func applyCapturedOutputPath(pair *event.Pair, fixup *types.OpenNameFixupEvent) bool {
-	if fixup.GetTraceId() != types.SYS_ENTER_GETCWD {
+	traceID := fixup.GetTraceId()
+	if _, ok := capturedOutputPathEnters[traceID]; !ok {
 		return false
 	}
-	if nullEv, ok := pair.EnterEv.(*types.NullEvent); ok && nullEv.GetTraceId() == types.SYS_ENTER_GETCWD {
+	if nullEv, ok := pair.EnterEv.(*types.NullEvent); ok && nullEv.GetTraceId() == traceID {
 		pair.File = file.NewPathname(fixup.Filename[:])
 	}
 	return true

@@ -1,6 +1,10 @@
 package generate
 
-import "strings"
+import (
+	"maps"
+	"slices"
+	"strings"
+)
 
 // TracepointKind is the payload shape a syscall tracepoint was classified
 // into: it decides which C event struct the generated handler stores the
@@ -725,6 +729,14 @@ func ClassifyRet(name string) RetClassification {
 // what lets userspace detect a path longer than the captured field.
 var outputPathSyscalls = map[string]int{
 	"getcwd": 0,
+}
+
+// OutputPathSyscalls returns the names of the syscalls whose output path
+// buffer the generated exit handlers capture (outputPathSyscalls), sorted.
+// Userspace must handle exactly this set (capturedOutputPathEnters in
+// internal/eventloop_getcwd.go); a test there pins the two together.
+func OutputPathSyscalls() []string {
+	return slices.Sorted(maps.Keys(outputPathSyscalls))
 }
 
 // outputPathArgIndex returns the argument index of syscall's output path
