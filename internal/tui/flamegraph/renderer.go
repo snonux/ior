@@ -8,11 +8,11 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const pathSeparator = "\x1f"
@@ -479,11 +479,17 @@ func frameCoordToTargetRow(dataRow int, params renderViewParams) int {
 
 // findFrameAtRow returns the index of the frame drawn at column x of logical
 // row targetRow, or -1 when that cell is blank. It replays renderRow's column
-// walk (same Col ordering, same drawnCellSpan clipping) instead of testing the
-// raw [Col, Col+Width) ranges, because while the spring animation is running a
-// frame can start inside the previous frame's cell; renderRow then draws the
-// later frame only from the end of the earlier one, and a click on the overlap
-// must select the frame that is actually visible there.
+// walk (same Col ordering, same drawnCellSpan clipping) over all frames of
+// the row instead of testing the raw [Col, Col+Width) ranges, because while
+// the spring animation is running a frame can start inside the previous
+// frame's cell; renderRow then draws the later frame only from the end of the
+// earlier one, and a click on the overlap must select the frame that is
+// actually visible there.
+//
+// Limitation: for the height-metric leaf row this matches the bottom band
+// only. renderLeafRowBand drops shorter frames from the upper bands, but the
+// caller resolves just the logical row, not the band, so a click in an upper
+// band still hits a shorter frame that is not drawn there.
 func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
 	if x < 0 || x >= width {
 		return -1
@@ -1073,16 +1079,21 @@ func percentOfTotal(value, total uint64) float64 {
 	return 100 * float64(value) / float64(total)
 }
 
+// padOrTrim fits s into exactly width terminal cells. It measures and cuts by
+// display width (ansi.StringWidth/ansi.Truncate), not rune count: a CJK or
+// emoji rune takes two cells, so counting runes let a wide-character frame
+// name overflow its cell and push the whole row past the viewport. When s is
+// too wide it is cut and ends in "…"; Truncate never splits a wide rune, so
+// the result can be one cell short and is then space-padded to width.
 func padOrTrim(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= width {
-		return s + strings.Repeat(" ", width-utf8.RuneCountInString(s))
+	if ansi.StringWidth(s) > width {
+		s = ansi.Truncate(s, width, "…")
 	}
-	if width == 1 {
-		return "…"
+	if pad := width - ansi.StringWidth(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
 	}
-	r := []rune(s)
-	return string(r[:width-1]) + "…"
+	return s
 }
