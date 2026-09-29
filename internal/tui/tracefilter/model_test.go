@@ -429,4 +429,94 @@ func TestModelClearAllDropsNonCanonicalPatterns(t *testing.T) {
 	if got.IsActive() {
 		t.Fatalf("clear-all should leave no active constraint, got %+v", got)
 	}
+	want := globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: ""}}
+	if !got.Equal(want) {
+		t.Fatalf("already-blank syscall should stay as opened:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+// setField edits the field at key to text through the modal's own key flow
+// (Enter to start editing, Enter to confirm, which trims).
+func setField(model Model, key fieldKey, text string) Model {
+	model.activeField = int(key)
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.textInput.SetValue(text)
+	return model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+// cycleOp presses Tab n times on the numeric field at key.
+func cycleOp(model Model, key fieldKey, n int) Model {
+	model.activeField = int(key)
+	for range n {
+		model = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	}
+	return model
+}
+
+// TestModelRoundTripEdits pins which edit sequences count as "no change"
+// (the close must return a filter Equal to the opened one, so the TUI does
+// not reset stats or push an undo level) and which rebuild a dimension.
+func TestModelRoundTripEdits(t *testing.T) {
+	initial := globalfilter.Filter{
+		Comm:      &globalfilter.StringFilter{Pattern: "foo "},
+		PID:       &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 42},
+		LatencyNs: &globalfilter.NumericFilter{Op: globalfilter.OpGt, Value: 1_000},
+	}
+	with := func(mut func(*globalfilter.Filter)) globalfilter.Filter {
+		f := initial.Clone()
+		mut(&f)
+		return f
+	}
+	cases := map[string]struct {
+		edit func(Model) Model
+		want globalfilter.Filter
+	}{
+		"clear-all then retype same values": {
+			edit: func(m Model) Model {
+				m = m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+				m = setField(m, fieldComm, "foo")
+				m = setField(m, fieldPID, "42")
+				m = setField(m, fieldLatency, "1us")
+				// clear-all reset the op to "=" (index 2); cycle forward, wrapping, back to ">".
+				return cycleOp(m, fieldLatency, (opToIndex(globalfilter.OpGt)-2+len(compareOps))%len(compareOps))
+			},
+			want: initial,
+		},
+		"edit then revert text": {
+			edit: func(m Model) Model {
+				m = setField(m, fieldComm, "bar")
+				return setField(m, fieldComm, "foo ")
+			},
+			want: initial,
+		},
+		"duration retyped as other unit": {
+			edit: func(m Model) Model { return setField(m, fieldLatency, "1000ns") },
+			want: initial,
+		},
+		"op cycled back to start": {
+			edit: func(m Model) Model { return cycleOp(m, fieldPID, len(compareOps)) },
+			want: initial,
+		},
+		"op changed rebuilds": {
+			edit: func(m Model) Model { return cycleOp(m, fieldPID, 1) },
+			want: with(func(f *globalfilter.Filter) { f.PID.Op = globalfilter.OpGte }),
+		},
+		"value changed rebuilds": {
+			edit: func(m Model) Model { return setField(m, fieldLatency, "2us") },
+			want: with(func(f *globalfilter.Filter) { f.LatencyNs.Value = 2_000 }),
+		},
+		"pattern changed rebuilds trimmed": {
+			edit: func(m Model) Model { return setField(m, fieldComm, " bar ") },
+			want: with(func(f *globalfilter.Filter) { f.Comm.Pattern = "bar" }),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			model := tc.edit(NewModel().Open(initial))
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			if got := model.Filter(); !got.Equal(tc.want) {
+				t.Fatalf("got  %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
 }
