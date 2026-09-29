@@ -41,9 +41,27 @@ type Model struct {
 
 	lastErr string
 	manager Manager
-	height  int
-	isDark  bool
+	// height and width are the terminal size the modal is laid out for. The
+	// row budget (visibleRows) depends on both: height bounds the box and
+	// width decides how many lines the wrapped help and error text take.
+	// The caller only reports the height (SetHeight), so width is set just on
+	// View's local copy; zero (Update-time clamping) means defaultWidth.
+	height int
+	width  int
+	isDark bool
 }
+
+// defaultWidth and defaultHeight are the terminal size assumed when the
+// caller has not reported one; defaultRows is the row budget without a height.
+const (
+	defaultWidth  = 80
+	defaultHeight = 24
+	defaultRows   = 10
+)
+
+// probesHelp is the footer key help. It is wider than the modal content area,
+// so it wraps; the chrome measurement in chromeHeight accounts for that.
+const probesHelp = "j/k move • space|enter toggle • a all-on • n all-off • / search • esc close"
 
 // NewModel constructs a probes modal listing manager's probe states.
 func NewModel(manager Manager) Model {
@@ -143,7 +161,8 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.textInput.SetValue(m.search)
 		m.textInput.CursorEnd()
 		m.textInput.Focus()
-		return m, nil
+		// The search line adds a chrome row, shrinking the row budget.
+		return m.clampCursor(), nil
 	case " ", "space", "enter":
 		selected := m.selectedSyscall()
 		if selected == "" {
@@ -163,7 +182,8 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc":
 		m.searching = false
 		m.textInput.Blur()
-		return m, nil
+		// Leaving search may drop the search/filter line from the chrome.
+		return m.clampCursor(), nil
 	case "enter":
 		m.search = strings.TrimSpace(m.textInput.Value())
 		m.searching = false
@@ -239,41 +259,70 @@ func (m Model) selectedSyscall() string {
 	return items[m.cursor].Syscall
 }
 
+// visibleRows returns how many probe rows fit on screen: the terminal height
+// minus the chrome actually rendered around them (see chromeHeight). The
+// chrome is measured rather than assumed because it varies with state — the
+// search/filter line, the error block and the help footer, the latter two of
+// which wrap depending on the modal width. At least one row is kept so the
+// selection stays visible; View clips the degenerate tiny-terminal case.
 func (m Model) visibleRows() int {
 	if m.height <= 0 {
-		return 10
+		return defaultRows
 	}
-	rows := m.height - 9
-	if rows < 3 {
-		return 3
+	return max(m.height-m.chromeHeight(), 1)
+}
+
+// chromeHeight returns the number of terminal lines the modal occupies
+// besides the probe rows: border, padding, header and footer, measured by
+// rendering them in the real box style at the current modal width.
+func (m Model) chromeHeight() int {
+	lines := append(m.headerLines(), m.footerLines()...)
+	return lipgloss.Height(m.boxStyle().Render(strings.Join(lines, "\n")))
+}
+
+// boxStyle returns the modal frame style sized for the current terminal width.
+func (m Model) boxStyle() lipgloss.Style {
+	width := m.width
+	if width <= 0 {
+		width = defaultWidth
 	}
-	return rows
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(probeModalWidth(width))
+}
+
+// contentWidth returns the cells available to a line inside the modal frame.
+// lipgloss v2 widths include border and padding, so the frame is subtracted.
+func (m Model) contentWidth() int {
+	box := m.boxStyle()
+	return box.GetWidth() - box.GetHorizontalFrameSize()
 }
 
 // View renders the probe modal centered on the terminal. It returns an empty
-// string when the modal is not visible.
+// string when the modal is not visible. The output never exceeds height lines.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""
 	}
 	if width <= 0 {
-		width = 80
+		width = defaultWidth
 	}
 	if height <= 0 {
-		height = 24
+		height = defaultHeight
 	}
+	// Re-clamp against the real size: Update only knows the height (SetHeight)
+	// and assumes defaultWidth, which differs on terminals narrower than the
+	// modal. Clamping here keeps the selected row inside the drawn window.
 	m.height = height
+	m.width = width
+	m = m.clampCursor()
 
-	modalWidth := probeModalWidth(width)
-	lines := m.buildProbeLines()
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	box := m.boxStyle().Render(strings.Join(m.buildProbeLines(), "\n"))
+	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	// Terminals too short for even the chrome plus one row would overflow;
+	// cut the bottom rather than scroll the whole screen.
+	return lipgloss.NewStyle().MaxHeight(height).Render(placed)
 }
 
 // probeModalWidth returns the clamped modal width for the given terminal width.
@@ -288,43 +337,50 @@ func probeModalWidth(termWidth int) int {
 	return modalWidth
 }
 
-// buildProbeLines assembles the text lines that make up the modal content:
-// header, optional search bar, probe rows, and the help footer.
-func (m Model) buildProbeLines() []string {
+// headerLines returns the modal lines above the probe rows: the title, the
+// search input or active filter (when any), and a spacer.
+func (m Model) headerLines() []string {
 	active, total := 0, len(m.probes)
 	if m.manager != nil {
 		active, total = m.manager.ActiveCount()
 	}
-	rows := m.visibleRows()
-	items := m.filtered()
-
 	lines := []string{fmt.Sprintf("Probes (%d/%d active)", active, total)}
 	if m.searching {
 		lines = append(lines, m.textInput.View())
 	} else if m.search != "" {
 		lines = append(lines, "Filter: "+m.search)
 	}
-	lines = append(lines, "")
+	return append(lines, "")
+}
 
-	start := m.offset
-	if start > len(items) {
-		start = len(items)
+// footerLines returns the modal lines below the probe rows: the last toggle
+// error (when any) and the key help. Both may wrap inside the modal.
+func (m Model) footerLines() []string {
+	var lines []string
+	if m.lastErr != "" {
+		lines = append(lines, "", "Error: "+common.Sanitize(m.lastErr))
 	}
-	end := start + rows
-	if end > len(items) {
-		end = len(items)
-	}
+	return append(lines, "", probesHelp)
+}
+
+// buildProbeLines assembles the text lines that make up the modal content:
+// header, the visible window of probe rows, and the footer. Rows are cut to
+// the content width so each takes exactly one line, as visibleRows assumes.
+func (m Model) buildProbeLines() []string {
+	items := m.filtered()
+	lines := m.headerLines()
+
+	start := min(m.offset, len(items))
+	end := min(start+m.visibleRows(), len(items))
+	contentWidth := m.contentWidth()
 	for i := start; i < end; i++ {
-		lines = append(lines, m.renderProbeRow(items[i], i == m.cursor))
+		row := m.renderProbeRow(items[i], i == m.cursor)
+		lines = append(lines, common.TruncateRight(row, contentWidth, common.ASCIIEllipsis))
 	}
 	if len(items) == 0 {
 		lines = append(lines, "  (no probes)")
 	}
-	if m.lastErr != "" {
-		lines = append(lines, "", "Error: "+common.Sanitize(m.lastErr))
-	}
-	lines = append(lines, "", "j/k move • space|enter toggle • a all-on • n all-off • / search • esc close")
-	return lines
+	return append(lines, m.footerLines()...)
 }
 
 // renderProbeRow formats a single probe entry with selection prefix, checkbox,
