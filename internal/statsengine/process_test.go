@@ -87,7 +87,7 @@ func TestProcessAccumulatorCommUpdateAndZeroRate(t *testing.T) {
 // for task 0o2: pair.Comm is a per-thread name, so a comm change for a known
 // PID (differently named threads, or an exec) must not reset the counters.
 // The pairs carry tid 0, so the leader is never seen and the label falls back
-// to the most recent non-empty thread comm (see
+// to the first non-empty thread comm (see
 // TestProcessAccumulatorPrefersLeaderComm for the leader-preferred label).
 func TestProcessAccumulatorKeepsCountingAcrossCommChanges(t *testing.T) {
 	tests := []struct {
@@ -96,9 +96,9 @@ func TestProcessAccumulatorKeepsCountingAcrossCommChanges(t *testing.T) {
 		wantCount uint64
 		wantComm  string
 	}{
-		{name: "interleaved thread names", comms: repeatComms(100, "main", "worker-1"), wantCount: 200, wantComm: "worker-1"},
-		{name: "exec renames process", comms: []string{"bash", "bash", "ls"}, wantCount: 3, wantComm: "ls"},
-		{name: "empty comm keeps previous label", comms: []string{"old", "new", ""}, wantCount: 3, wantComm: "new"},
+		{name: "interleaved thread names", comms: repeatComms(100, "main", "worker-1"), wantCount: 200, wantComm: "main"},
+		{name: "rename without leader keeps counting", comms: []string{"bash", "bash", "ls"}, wantCount: 3, wantComm: "bash"},
+		{name: "leading empty comm skipped", comms: []string{"", "old", "new", ""}, wantCount: 4, wantComm: "old"},
 		{name: "only empty comms", comms: []string{"", ""}, wantCount: 2, wantComm: ""},
 	}
 	for _, tt := range tests {
@@ -143,7 +143,7 @@ func TestProcessAccumulatorSameCommDifferentPIDsStaySeparate(t *testing.T) {
 
 // TestProcessAccumulatorPrefersLeaderComm checks that the label is the
 // thread-group leader's comm (tid == pid) whatever order the threads arrive
-// in, falls back to the latest thread comm until the leader is seen, and
+// in, falls back to the first thread comm until the leader is seen, and
 // still follows an exec (which renames the leader).
 func TestProcessAccumulatorPrefersLeaderComm(t *testing.T) {
 	const pid = 2000
@@ -156,7 +156,7 @@ func TestProcessAccumulatorPrefersLeaderComm(t *testing.T) {
 	}{
 		{name: "leader first", pairs: []*event.Pair{leader("java"), gc("GC Thread#0"), leader("java"), gc("GC Thread#0")}, wantComm: "java"},
 		{name: "thread first", pairs: []*event.Pair{gc("GC Thread#0"), leader("java"), gc("GC Thread#0")}, wantComm: "java"},
-		{name: "leader never seen", pairs: []*event.Pair{gc("GC Thread#0"), gc("worker")}, wantComm: "worker"},
+		{name: "leader never seen", pairs: []*event.Pair{gc("GC Thread#0"), gc("worker")}, wantComm: "GC Thread#0"},
 		{name: "exec relabels leader", pairs: []*event.Pair{leader("bash"), gc("helper"), leader("ls"), gc("helper")}, wantComm: "ls"},
 		{name: "empty leader comm ignored", pairs: []*event.Pair{leader("java"), leader(""), gc("GC Thread#0")}, wantComm: "java"},
 	}
@@ -177,6 +177,31 @@ func TestProcessAccumulatorPrefersLeaderComm(t *testing.T) {
 				t.Fatalf("expected %d syscalls, got %d", want, snap[0].Syscalls)
 			}
 		})
+	}
+}
+
+// TestProcessAccumulatorFallbackLabelStableAcrossSnapshots covers a process
+// whose leader never completes a traced syscall (e.g. a Java launcher parked
+// in pthread_join): the label must stay identical across snapshots while the
+// worker threads alternate, and switch to the leader's comm once it appears.
+func TestProcessAccumulatorFallbackLabelStableAcrossSnapshots(t *testing.T) {
+	const pid = 2000
+	acc := newProcessAccumulator()
+	threads := []string{"GC Thread#0", "C2 CompilerThre", "VM Thread"}
+	for round := 0; round < 6; round++ {
+		for i, comm := range threads {
+			acc.Add(newThreadPair(pid, pid+1+uint32((round+i)%len(threads)), comm))
+			snap := acc.Snapshot(time.Second)
+			if len(snap) != 1 || snap[0].Comm != "GC Thread#0" {
+				t.Fatalf("round %d thread %q: expected stable label %q, got %+v", round, comm, "GC Thread#0", snap)
+			}
+		}
+	}
+
+	acc.Add(newThreadPair(pid, pid, "java"))
+	acc.Add(newThreadPair(pid, pid+1, "GC Thread#0"))
+	if got := acc.Snapshot(time.Second)[0].Comm; got != "java" {
+		t.Fatalf("expected leader comm once seen, got %q", got)
 	}
 }
 

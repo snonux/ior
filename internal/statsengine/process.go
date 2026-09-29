@@ -21,9 +21,10 @@ type processStats struct {
 	// leaderComm is the comm last seen on the thread-group leader (tid ==
 	// pid), i.e. the process name ps shows. It is the preferred label.
 	leaderComm string
-	// latestComm is the most recent non-empty comm of any thread, used as the
-	// label only until the leader itself has been seen.
-	latestComm   string
+	// firstComm is the first non-empty comm seen on any thread. It is the
+	// label only while the leader has not been seen, and it never changes
+	// once set so that fallback label stays stable too.
+	firstComm    string
 	count        uint64
 	totalBytes   uint64
 	totalLatency uint64
@@ -204,27 +205,39 @@ func (s *processStats) observeComm(tid uint32, comm string) {
 	if comm == "" {
 		return
 	}
-	s.latestComm = comm
+	if s.firstComm == "" {
+		s.firstComm = comm
+	}
 	if tid == s.pid {
 		s.leaderComm = comm
 	}
 }
 
 // label returns the process name shown for this PID: the thread-group
-// leader's comm when the leader has been seen, else the latest thread comm.
+// leader's comm when the leader has been seen, else the first thread comm
+// seen for the PID.
 //
-// Preferring the leader keeps the label stable for multithreaded processes;
-// a plain "latest thread wins" label flipped between thread names on every
-// snapshot, which reordered Sort-by-Comm (moving the index-based selection to
-// another PID), rebuilt the Comm column filter from an arbitrary thread name
-// and made treemap/bubble labels flicker. exec() still relabels the row: the
-// kernel makes the exec'ing thread the leader (tid == pid) and updates its
-// comm, so the next leader syscall carries the new name.
+// The label must not change between snapshots for a multithreaded process: a
+// plain "latest thread wins" label flipped between thread names, which
+// reordered Sort-by-Comm (moving the index-based selection to another PID),
+// rebuilt the Comm column filter from an arbitrary thread name and made
+// treemap/bubble labels flicker. Preferring the leader fixes that when the
+// leader makes syscalls; the fallback is "first seen" rather than "latest"
+// because the leader often never completes a traced syscall at all (a Java
+// launcher or worker-pool server whose main thread is parked in
+// pthread_join/futex for the whole run), and a latest-wins fallback would
+// flicker for exactly those processes. The first name may be a worker thread
+// name rather than the program name; stability matters more here, and the
+// event loop does not hand the leader's comm to non-leader pairs.
+//
+// exec() still relabels the row: the kernel makes the exec'ing thread the
+// leader (tid == pid) and updates its comm, so the post-exec syscalls come
+// from tid == pid and set leaderComm to the new name.
 func (s *processStats) label() string {
 	if s.leaderComm != "" {
 		return s.leaderComm
 	}
-	return s.latestComm
+	return s.firstComm
 }
 
 func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
