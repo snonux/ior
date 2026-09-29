@@ -46,8 +46,12 @@ type filterField struct {
 // fields slice explicitly so the shared-backing-array write is visible
 // instead of implied by an addressable receiver.
 type Model struct {
-	visible     bool
-	fields      []filterField
+	visible bool
+	fields  []filterField
+	// opened is a private copy of the field values as Open initialised
+	// them from the opened filter; buildFilterFromFields compares against
+	// it to tell user edits from untouched fields (see fieldUnchanged).
+	opened      []filterField
 	activeField int
 	editing     bool
 	textInput   textinput.Model
@@ -104,6 +108,9 @@ func (m Model) Open(initial globalfilter.Filter) Model {
 	m.textInput.Blur()
 	m.fields = defaultFilterFields()
 	applyFilterToFields(m.fields, initial)
+	// Snapshot into a fresh backing array: m.fields elements are written in
+	// place later, and the snapshot must keep the as-opened values.
+	m.opened = append([]filterField(nil), m.fields...)
 	m.filter = initial.Clone()
 	return m
 }
@@ -307,16 +314,38 @@ func (m Model) renderField(field filterField, active bool) string {
 // filter) survive an open+Esc or an edit+apply unchanged. Without that,
 // closing the modal would silently drop Family, and the caller would see an
 // unequal filter and reset the stats baseline and push an undo level even
-// though the user changed nothing. Every modal-owned dimension is then
-// overwritten unconditionally by applyFieldToFilter, so a blanked or invalid
-// field removes the constraint it replaced instead of inheriting it.
+// though the user changed nothing.
+//
+// For the same reason a field the user did not change keeps the opened
+// dimension verbatim instead of being rebuilt from its text: rebuilding is
+// not an identity for every filter the modal can be opened with. An
+// untrimmed pattern ("foo ", e.g. a row filter on a path with trailing
+// blanks) would come back trimmed, and an empty non-nil pattern would come
+// back nil; neither is Equal to the original even though both match
+// identically (every matcher trims the pattern and treats blank as "no
+// constraint"). Keeping the original, rather than trimming patterns where
+// filters are created, leaves the filter exactly as its producer made it.
+// Every changed modal-owned dimension is then overwritten unconditionally by
+// applyFieldToFilter, so a blanked or invalid field removes the constraint
+// it replaced instead of inheriting it.
 func (m Model) buildFilterFromFields() globalfilter.Filter {
 	out := m.filter.Clone()
-	for _, field := range m.fields {
-		value := strings.TrimSpace(field.value)
-		applyFieldToFilter(field, value, &out)
+	for i, field := range m.fields {
+		if i < len(m.opened) && fieldUnchanged(field, m.opened[i]) {
+			continue
+		}
+		applyFieldToFilter(field, strings.TrimSpace(field.value), &out)
 	}
 	return out
+}
+
+// fieldUnchanged reports whether field still holds the value (and, for a
+// numeric field, the compare op) it was opened with. Values are compared
+// trimmed because commitEdit trims what the user typed: opening a field
+// holding "foo " and confirming it unedited yields "foo", which is no edit.
+func fieldUnchanged(field, opened filterField) bool {
+	return field.opIndex == opened.opIndex &&
+		strings.TrimSpace(field.value) == strings.TrimSpace(opened.value)
 }
 
 // applyFieldToFilter writes a single field value into the appropriate slot of

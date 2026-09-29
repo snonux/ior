@@ -336,3 +336,97 @@ func TestModelClearAllKeepsUnownedFamily(t *testing.T) {
 		t.Fatalf("clear-all should leave only Family:\n got  %+v\n want %+v", got, familyFilter())
 	}
 }
+
+// nonCanonicalFilters are filters the modal cannot reproduce by rebuilding
+// from its field text (untrimmed or blank patterns, as a row filter on a path
+// with leading/trailing blanks produces), keyed by case name.
+func nonCanonicalFilters() map[string]globalfilter.Filter {
+	return map[string]globalfilter.Filter{
+		"untrimmed comm":    {Comm: &globalfilter.StringFilter{Pattern: "foo "}},
+		"untrimmed file":    {File: &globalfilter.StringFilter{Pattern: " /tmp/a b "}},
+		"empty syscall":     {Syscall: &globalfilter.StringFilter{Pattern: ""}},
+		"blank file":        {File: &globalfilter.StringFilter{Pattern: "   "}},
+		"mixed with family": {Family: &globalfilter.StringFilter{Pattern: "Network"}, Comm: &globalfilter.StringFilter{Pattern: "\tbash"}},
+	}
+}
+
+// TestModelOpenEscKeepsNonCanonicalPatterns is the uo2 regression: open+Esc
+// (with or without confirming a field unedited) must hand back a filter Equal
+// to the opened one even when a pattern is untrimmed or empty; a rebuilt,
+// trimmed/nil'd dimension made the TUI reset stats/trie and push an undo level.
+func TestModelOpenEscKeepsNonCanonicalPatterns(t *testing.T) {
+	for name, initial := range nonCanonicalFilters() {
+		t.Run(name+"/esc", func(t *testing.T) {
+			model := NewModel().Open(initial)
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			if got := model.Filter(); !got.Equal(initial) {
+				t.Fatalf("open+esc changed the filter:\n got  %+v\n want %+v", got, initial)
+			}
+		})
+		t.Run(name+"/enter-enter-esc", func(t *testing.T) {
+			model := NewModel().Open(initial)
+			for i := range model.fields[:fieldFile+1] {
+				model.activeField = i
+				model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // start edit
+				model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // confirm unedited (trims)
+			}
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			if got := model.Filter(); !got.Equal(initial) {
+				t.Fatalf("unedited confirm changed the filter:\n got  %+v\n want %+v", got, initial)
+			}
+		})
+	}
+}
+
+// TestModelEditOfNonCanonicalPatternApplies is the negative side of keeping
+// untouched fields verbatim: a real edit of such a field, a blanked field and
+// a changed numeric op must still be applied.
+func TestModelEditOfNonCanonicalPatternApplies(t *testing.T) {
+	initial := globalfilter.Filter{
+		Comm: &globalfilter.StringFilter{Pattern: "foo "},
+		File: &globalfilter.StringFilter{Pattern: " /tmp/x "},
+		PID:  &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 42},
+	}
+	model := NewModel().Open(initial)
+	model.activeField = int(fieldComm)
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.textInput.SetValue(" bar ")
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.activeField = int(fieldFile)
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.textInput.SetValue("  ")
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.activeField = int(fieldPID)
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // = -> >=
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	want := globalfilter.Filter{
+		Comm: &globalfilter.StringFilter{Pattern: "bar"},
+		PID:  &globalfilter.NumericFilter{Op: globalfilter.OpGte, Value: 42},
+	}
+	if got := model.Filter(); !got.Equal(want) {
+		t.Fatalf("edits not applied:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+// TestModelClearAllDropsNonCanonicalPatterns checks that "c" still removes
+// an untrimmed pattern (its field changed from "foo " to ""), while a
+// dimension that was already blank stays as opened because clearing it is
+// no change.
+func TestModelClearAllDropsNonCanonicalPatterns(t *testing.T) {
+	initial := globalfilter.Filter{
+		Comm:    &globalfilter.StringFilter{Pattern: "foo "},
+		Syscall: &globalfilter.StringFilter{Pattern: ""},
+	}
+	model := NewModel().Open(initial)
+	model = model.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	got := model.Filter()
+	if got.Comm != nil {
+		t.Fatalf("clear-all should drop the comm pattern, got %+v", got.Comm)
+	}
+	if got.IsActive() {
+		t.Fatalf("clear-all should leave no active constraint, got %+v", got)
+	}
+}
