@@ -298,3 +298,19 @@ func TestSyscallAggregateConsumerTornFirstSampleKeepsRealMinimum(t *testing.T) {
 		}
 	}
 }
+
+// The kernel clamps a completed invocation to at least 1ns, so a settled slot
+// with a 1ns minimum is timed and must not be mistaken for a first sample
+// still being written: its latency, count and histogram are kept.
+func TestNormalizeTornSlotKeepsSettledOneNanosecondSlot(t *testing.T) {
+	settled := rawSyscallAggregate{
+		Count: 2, TotalDuration: 5_001, MinDuration: 1, MaxDuration: 5_000, Histogram: [8]uint64{1, 1},
+	}
+	if got := settled.normalizeTornSlot(); got != settled {
+		t.Fatalf("normalized = %+v, want the settled slot unchanged %+v", got, settled)
+	}
+	onlyOne := rawSyscallAggregate{Count: 1, TotalDuration: 1, MinDuration: 1, MaxDuration: 1, Histogram: [8]uint64{1}}
+	if got := onlyOne.normalizeTornSlot(); got != onlyOne || got.untimedCount() != 0 {
+		t.Fatalf("normalized = %+v, want the 1ns slot unchanged and timed", got)
+	}
+}
