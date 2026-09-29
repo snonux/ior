@@ -44,6 +44,8 @@ func (f *fakeRowRecorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	return nil
 }
 
+func (f *fakeRowRecorder) TakeFailure() error { return nil }
+
 func (f *fakeRowRecorder) Start(path string, _ parquet.StartOptions) error {
 	f.active = strings.HasPrefix(path, "/")
 	return nil
@@ -143,7 +145,7 @@ func TestWireRuntimeBindingsAcceptsFakes(t *testing.T) {
 		t.Fatal("the wired sequencer must be the bindings' Sequencer")
 	}
 	// The recorder the core records rows through is the fake controller,
-	// narrowed to the one-method RowRecorder seam.
+	// narrowed to the RowRecorder seam.
 	if rt.recorder != runtime.RowRecorder(bindings.rec) {
 		t.Fatal("the wired recorder must be the bindings' RecordingController, narrowed to RowRecorder")
 	}

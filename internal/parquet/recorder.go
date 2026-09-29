@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,11 @@ var (
 	// accepting rows as capacity frees up; the caller should surface
 	// Status().RowsDropped instead of treating this as a failure.
 	ErrRecorderQueueFull = errors.New("parquet recorder queue is full")
+	// ErrRecorderStartedDropping is returned instead of ErrRecorderQueueFull
+	// for the first row a recording sheds, so a caller can announce the
+	// overflow once per recording without tracking recordings itself. It
+	// wraps ErrRecorderQueueFull: errors.Is checks for that keep matching.
+	ErrRecorderStartedDropping = fmt.Errorf("%w (first dropped row of this recording)", ErrRecorderQueueFull)
 )
 
 type rowWriter interface {
@@ -69,6 +75,10 @@ type Recorder struct {
 	config RecorderConfig
 	active *recordingSession
 	status Status
+	// failureTaken records that the dead recording's LastError has already
+	// been handed to someone - a TakeFailure caller or the Stop caller - so
+	// TakeFailure reports each failure exactly once. Reset by Start.
+	failureTaken bool
 }
 
 type recordingSession struct {
@@ -78,9 +88,12 @@ type recordingSession struct {
 
 	mu        sync.Mutex
 	accepting bool
-	stopCause error
-	doneErr   error
-	stopOnce  sync.Once
+	// stopRequested marks a session ended through Recorder.Stop, whose
+	// caller receives the terminal error; see finishSession.
+	stopRequested bool
+	stopCause     error
+	doneErr       error
+	stopOnce      sync.Once
 
 	// dropped counts rows shed on queue overflow; atomic so Status can
 	// read the live count without contending the session mutex.
@@ -125,6 +138,7 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 		return ErrRecorderActive
 	}
 	r.active = session
+	r.failureTaken = false
 	r.status = Status{
 		Active:   true,
 		Path:     writer.FinalPath(),
@@ -138,13 +152,14 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 
 // Record queues one shared stream row for persistence. When the bounded
 // queue is full the row is shed (counted in Status().RowsDropped) and
-// ErrRecorderQueueFull is returned; the session stays active so later rows
-// are recorded as capacity frees up.
+// ErrRecorderQueueFull is returned (ErrRecorderStartedDropping for the first
+// shed row of a recording); the session stays active so later rows are
+// recorded as capacity frees up.
 //
 // Without an active session Record returns ErrRecorderNotActive, or, if the
 // last session died with an error, that error (Status().LastError) until the
 // next successful Start - so callers see a failed recording's error on every
-// later call, not just once.
+// later call, not just once. Use TakeFailure to report such a failure once.
 func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	if r == nil {
 		return ErrRecorderNotActive
@@ -164,26 +179,53 @@ func (r *Recorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	return session.enqueue(recordRequest{row: row, filterEpoch: filterEpoch})
 }
 
-// Stop gracefully flushes and finalizes the active recording session.
+// Stop gracefully flushes and finalizes the active recording session and
+// returns its terminal error. Without an active session it returns the last
+// session's error again. Either way the returned failure counts as reported:
+// TakeFailure will not hand it out a second time.
 func (r *Recorder) Stop() error {
 	if r == nil {
 		return nil
 	}
 
-	r.mu.RLock()
+	r.mu.Lock()
 	session := r.active
 	lastErr := r.status.LastError
-	r.mu.RUnlock()
+	if session == nil && lastErr != nil {
+		r.failureTaken = true
+	}
+	r.mu.Unlock()
 
 	if session == nil {
 		return lastErr
 	}
 
-	session.stop(nil)
+	// finishSession marks the failure taken atomically with publishing it,
+	// so a concurrent TakeFailure cannot report what Stop is returning.
+	session.requestStop()
 	if err := <-session.doneC; err != nil {
 		return err
 	}
 	return session.doneErr
+}
+
+// TakeFailure returns the error the last recording died with, exactly once
+// per failure, and nil otherwise: while a recording is active, when the last
+// one ended cleanly, when the failure was already taken, or when Stop
+// returned it to its caller. It lets a caller that sees Record repeat a dead
+// recording's LastError report that failure once, without tracking
+// recordings itself.
+func (r *Recorder) TakeFailure() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != nil || r.status.LastError == nil || r.failureTaken {
+		return nil
+	}
+	r.failureTaken = true
+	return r.status.LastError
 }
 
 // Status returns a snapshot of the recorder state.
@@ -310,6 +352,10 @@ func (r *Recorder) updateRowsWritten(session *recordingSession, rowsWritten uint
 	r.status.RowsWritten = rowsWritten
 }
 
+// finishSession publishes the session's terminal state. A failure of a
+// session ended through Stop is marked taken here, under the same lock that
+// publishes it, because Stop hands it to its own caller. Lock order is r.mu
+// then session.mu; nothing takes them the other way round.
 func (r *Recorder) finishSession(session *recordingSession, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -318,6 +364,7 @@ func (r *Recorder) finishSession(session *recordingSession, err error) {
 	}
 	r.status.Active = false
 	r.status.LastError = err
+	r.failureTaken = err != nil && session.wasStopRequested()
 	r.status.RowsDropped = session.dropped.Load()
 	if err == nil {
 		r.status.TempPath = ""
@@ -365,8 +412,11 @@ func (s *recordingSession) enqueue(req recordRequest) error {
 	default:
 		// Shed the row instead of failing the session: aborting here would
 		// discard every already-captured event. The drop is counted so
-		// callers can surface it while the recording continues.
-		s.dropped.Add(1)
+		// callers can surface it while the recording continues. The first
+		// drop gets its own sentinel so callers can warn once per recording.
+		if s.dropped.Add(1) == 1 {
+			return ErrRecorderStartedDropping
+		}
 		return ErrRecorderQueueFull
 	}
 }
@@ -379,6 +429,20 @@ func (s *recordingSession) stop(cause error) {
 	}
 	s.mu.Unlock()
 	s.stopOnce.Do(func() { close(s.stopC) })
+}
+
+// requestStop ends the session on behalf of Recorder.Stop.
+func (s *recordingSession) requestStop() {
+	s.mu.Lock()
+	s.stopRequested = true
+	s.mu.Unlock()
+	s.stop(nil)
+}
+
+func (s *recordingSession) wasStopRequested() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopRequested
 }
 
 func (s *recordingSession) cause() error {

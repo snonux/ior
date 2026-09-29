@@ -188,9 +188,10 @@ type tuiRuntime struct {
 	streamSrc   runtime.StreamSource
 	streamSeq   runtime.Sequencer
 	liveTrie    *flamegraph.LiveTrie
-	// recorder stays behind the one-method runtime.RowRecorder seam: the
-	// core only records rows, so parquet's wider surface (start/stop/status,
-	// the TUI's concern) cannot ripple into this wiring.
+	// recorder stays behind the narrow runtime.RowRecorder seam: the core
+	// only records rows and claims failures to report, so parquet's wider
+	// surface (start/stop/status, the TUI's concern) cannot ripple into this
+	// wiring.
 	recorder runtime.RowRecorder
 	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
 	// bindings at row-stamp time, so in-place filter swaps advance the epoch
@@ -265,75 +266,37 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
-// recorderWarner turns the results of the TUI's per-event recorder.Record
-// call into stream warnings: at most one overflow warning and one failure
-// warning per recording observed in this trace session.
+// warnRecorderResult reports one recorder.Record result from the TUI print
+// callback as a stream warning when it is news.
 //
-// The TUI owns a single recorder for its whole lifetime, but a recording
-// only runs while the user has started one. Record therefore returns, for
-// every event outside a healthy recording:
-//   - ErrRecorderNotActive while idle (never started, cleanly stopped, or a
-//     Stop racing this Record), and
-//   - the dead recording's LastError after a failure, until the next Start -
-//     including in every later trace session.
+// The TUI owns a single recorder for its lifetime, but a recording only runs
+// while the user has started one, so most results are not news:
+//   - ErrRecorderNotActive: idle, cleanly stopped, or a Stop racing Record.
+//   - ErrRecorderQueueFull: a row shed during an overflow that was already
+//     announced; only the first shed row of a recording comes back as
+//     ErrRecorderStartedDropping, which is warned about.
+//   - any other error: a dead recording's LastError, which Record repeats on
+//     every call until the next Start - across trace sessions, too. The
+//     recorder itself decides whether it is news: TakeFailure returns it
+//     once, and not at all if Stop already handed it to the TUI (which shows
+//     it on the error screen).
 //
-// Neither is news for this session, so the warner starts un-armed and only
-// reports a failure after it has seen the current recording accept a row
-// (nil or ErrRecorderQueueFull). Reporting the failure disarms it again, so
-// the repeated LastError results stay silent, and the next accepted row -
-// necessarily a new recording - re-arms the failure and overflow warnings.
-// Treating either idle result as a failure would warn on the first event of
-// every such session and could hide a genuine failure (e.g. disk full) of a
-// recording started later in the session.
-//
-// Known gap: a recording that dies before accepting a row in this session is
-// not warned about here (the TUI status line still shows its LastError), and
-// a clean Stop/Start with no events in between keeps the overflow warning
-// from the previous recording suppressed.
-//
-// Plain bools suffice: the event loop invokes the print callback, and so
-// warn, from its single run goroutine.
-type recorderWarner struct {
-	// recording is true once the current recording has accepted a row in
-	// this session; it arms the failure warning.
-	recording bool
-	// overflowWarned suppresses repeated queue-full warnings within one
-	// recording; shedding comes in storms and must not flood the stream.
-	overflowWarned bool
-}
-
-// warn classifies one Record result and reports it through el's warning
-// callback (notifyWarning reads it at call time, since configure installs it
-// after the print callback).
-func (w *recorderWarner) warn(el *eventLoop, err error) {
+// Keeping the "report once" state in the recorder rather than here means a
+// failure is reported regardless of which trace session first sees it, and
+// no per-session guard can be burned by a stale or idle result.
+func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
 	switch {
-	case err == nil:
-		w.observeAcceptingRecording()
+	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):
+	case errors.Is(err, parquet.ErrRecorderStartedDropping):
+		el.notifyWarning("Parquet recorder queue full: rows are being dropped")
 	case errors.Is(err, parquet.ErrRecorderQueueFull):
-		// The row was shed but the recording is alive and accepting.
-		w.observeAcceptingRecording()
-		if !w.overflowWarned {
-			w.overflowWarned = true
-			el.notifyWarning("Parquet recorder queue full: rows are being dropped")
-		}
-	case errors.Is(err, parquet.ErrRecorderNotActive):
-		// Idle or stopped: the next accepted row belongs to a new recording.
-		w.recording = false
 	default:
-		if w.recording {
-			w.recording = false
-			el.notifyWarning(fmt.Sprintf("Parquet recorder failed: %v", err))
+		// Record may return the failure while the session is still being
+		// torn down, when TakeFailure yields nil; a later Record (in this or
+		// a later session) then reports it.
+		if failure := rec.TakeFailure(); failure != nil {
+			el.notifyWarning(fmt.Sprintf("Parquet recorder failed: %v", failure))
 		}
-	}
-}
-
-// observeAcceptingRecording arms the warner when a recording accepts a row.
-// The transition from not-recording marks a new recording, whose overflow
-// warning is re-armed.
-func (w *recorderWarner) observeAcceptingRecording() {
-	if !w.recording {
-		w.recording = true
-		w.overflowWarned = false
 	}
 }
 
@@ -344,9 +307,6 @@ func (w *recorderWarner) observeAcceptingRecording() {
 // registers the setter with publisher so the TUI can swap filters without
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
-	// One warner per configurer, i.e. per trace session, starting un-armed so
-	// a failure left over from an earlier session is not re-announced.
-	warner := &recorderWarner{}
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
 		IngestSyscallAggregates([]statsengine.SyscallAggregate)
@@ -364,7 +324,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				warner.warn(el, rt.recorder.Record(row, rt.currentFilterEpoch()))
+				warnRecorderResult(el, rt.recorder, rt.recorder.Record(row, rt.currentFilterEpoch()))
 			}
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so

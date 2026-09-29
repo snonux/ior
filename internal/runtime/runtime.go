@@ -190,14 +190,19 @@ type Sequencer interface {
 	Next() uint64
 }
 
-// RowRecorder is the one-method write side of the parquet recorder that the
-// tracing core needs: appending one stream row, stamped with the filter epoch
-// it was captured under. Keeping the core seam at exactly this method means
-// core wiring can be tested against a fake, and parquet signature changes
-// cannot ripple through this contract unnoticed.
+// RowRecorder is the write side of the parquet recorder that the tracing
+// core needs: appending one stream row, stamped with the filter epoch it was
+// captured under, and claiming a dead recording's failure so it is reported
+// exactly once. Keeping the core seam this narrow means core wiring can be
+// tested against a fake, and parquet signature changes cannot ripple through
+// this contract unnoticed.
 // *parquet.Recorder satisfies it.
 type RowRecorder interface {
 	Record(row streamrow.Row, filterEpoch uint64) error
+	// TakeFailure returns the error the last recording died with, once per
+	// failure, and nil when there is nothing (new) to report - including a
+	// failure the recorder already returned from Stop.
+	TakeFailure() error
 }
 
 // RecordingController is the full recorder surface the TUI needs on top of
