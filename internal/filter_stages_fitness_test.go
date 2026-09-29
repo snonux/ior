@@ -155,7 +155,10 @@ func TestRenameRowCarriesItsOldName(t *testing.T) {
 		ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_READ, Pid: 1, Tid: 1, Ret: 128},
 		File:    file.NewFd(3, "/tmp/read.txt", syscall.O_RDONLY),
 	}
-	if got := streamrow.New(2, nonRename).OldFileValue(); got != "" {
+	// Held in a variable: the Candidate accessors have pointer receivers, so
+	// they cannot be called on New's non-addressable return value.
+	nonRenameRow := streamrow.New(2, nonRename)
+	if got := nonRenameRow.OldFileValue(); got != "" {
 		t.Fatalf("non-rename row OldFileValue = %q, want empty", got)
 	}
 }

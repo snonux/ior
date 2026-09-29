@@ -163,6 +163,13 @@ func (f Filter) Equal(other Filter) bool {
 
 // Matches reports whether the candidate satisfies every configured
 // dimension. A nil candidate matches nothing.
+//
+// Every dimension checks its own sub-filter for nil BEFORE asking the
+// candidate for the value, so an unconfigured dimension costs one pointer
+// comparison and no interface call. Matches runs per buffered row on every
+// stream tick (and per pair on the event loop), where most dimensions are
+// unset; callers that re-filter many rows against one filter can skip the
+// loop entirely when IsActive reports false.
 func (f Filter) Matches(candidate Candidate) bool {
 	if candidate == nil {
 		return false
@@ -170,52 +177,64 @@ func (f Filter) Matches(candidate Candidate) bool {
 	if f.ErrorsOnly && !candidate.ErrorValue() {
 		return false
 	}
-	if !matchString(f.Syscall, candidate.SyscallValue()) {
+	return f.matchesStrings(candidate) && f.matchesNumerics(candidate)
+}
+
+// matchesStrings applies the string dimensions (syscall, family, comm, file).
+func (f *Filter) matchesStrings(candidate Candidate) bool {
+	if f.Syscall != nil && !matchString(f.Syscall, candidate.SyscallValue()) {
 		return false
 	}
-	if !matchString(f.Family, candidate.FamilyValue()) {
+	if f.Family != nil && !matchString(f.Family, candidate.FamilyValue()) {
 		return false
 	}
-	if !matchString(f.Comm, candidate.CommValue()) {
+	if f.Comm != nil && !matchString(f.Comm, candidate.CommValue()) {
 		return false
 	}
-	// The file dimension is the one dimension that can carry two legitimate
-	// values: a rename-like candidate reports its destination path as
-	// FileValue and its source path as OldFileValue, and `-path <oldname>` is
-	// as valid a selection as `-path <newname>` (the raw enter filter
-	// MatchNameEvent has always matched either). Evaluating both here means
-	// every stage that calls Matches — pair checkpoint, dashboard ingest,
-	// Stream tab, CSV export — applies the same rule by construction, and no
-	// stage can silently diverge from the others again. The empty-OldFileValue
-	// guard matters for one degenerate input: the anchored pattern `^$` (an
-	// empty path) matches the empty string, so without the guard every
-	// single-name candidate would satisfy it through the absent oldname.
-	if !matchString(f.File, candidate.FileValue()) &&
-		(candidate.OldFileValue() == "" || !matchString(f.File, candidate.OldFileValue())) {
+	return f.File == nil || matchFile(f.File, candidate)
+}
+
+// matchFile applies the file dimension, the one dimension that can carry two
+// legitimate values: a rename-like candidate reports its destination path as
+// FileValue and its source path as OldFileValue, and `-path <oldname>` is as
+// valid a selection as `-path <newname>` (the raw enter filter MatchNameEvent
+// has always matched either). Evaluating both here means every stage that
+// calls Matches — pair checkpoint, dashboard ingest, Stream tab, CSV export —
+// applies the same rule by construction, and no stage can silently diverge
+// from the others again. The empty-OldFileValue guard matters for one
+// degenerate input: the anchored pattern `^$` (an empty path) matches the
+// empty string, so without the guard every single-name candidate would
+// satisfy it through the absent oldname.
+func matchFile(sf *StringFilter, candidate Candidate) bool {
+	if matchString(sf, candidate.FileValue()) {
+		return true
+	}
+	oldFile := candidate.OldFileValue()
+	return oldFile != "" && matchString(sf, oldFile)
+}
+
+// matchesNumerics applies the numeric dimensions (pid, tid, fd, latency, gap,
+// bytes, return value).
+func (f *Filter) matchesNumerics(candidate Candidate) bool {
+	if f.PID != nil && !matchNumeric(f.PID, int64(candidate.PIDValue())) {
 		return false
 	}
-	if !matchNumeric(f.PID, int64(candidate.PIDValue())) {
+	if f.TID != nil && !matchNumeric(f.TID, int64(candidate.TIDValue())) {
 		return false
 	}
-	if !matchNumeric(f.TID, int64(candidate.TIDValue())) {
+	if f.FD != nil && !matchNumeric(f.FD, int64(candidate.FDValue())) {
 		return false
 	}
-	if !matchNumeric(f.FD, int64(candidate.FDValue())) {
+	if f.LatencyNs != nil && !matchNumeric(f.LatencyNs, int64(candidate.LatencyValue())) {
 		return false
 	}
-	if !matchNumeric(f.LatencyNs, int64(candidate.LatencyValue())) {
+	if f.GapNs != nil && !matchNumeric(f.GapNs, int64(candidate.GapValue())) {
 		return false
 	}
-	if !matchNumeric(f.GapNs, int64(candidate.GapValue())) {
+	if f.Bytes != nil && !matchNumeric(f.Bytes, int64(candidate.BytesValue())) {
 		return false
 	}
-	if !matchNumeric(f.Bytes, int64(candidate.BytesValue())) {
-		return false
-	}
-	if !matchNumeric(f.RetVal, candidate.ReturnValue()) {
-		return false
-	}
-	return true
+	return f.RetVal == nil || matchNumeric(f.RetVal, candidate.ReturnValue())
 }
 
 // MatchesSyscallRow reports whether a syscall-table row with the given syscall
@@ -270,16 +289,31 @@ func trimAnchors(pattern string) (trimmed string, anchoredStart, anchoredEnd boo
 	return pattern, anchoredStart, anchoredEnd
 }
 
+// matchString reports whether value satisfies the string filter: a
+// case-insensitive substring match, or prefix/suffix/exact under the ^ and $
+// anchors. A nil or blank filter matches everything.
+//
+// It runs per candidate on every matching path (event loop, stream re-filter,
+// raw kernel-event filter), so the common all-ASCII case is compared in place
+// by matchFoldASCII instead of lowering both strings: strings.ToLower
+// allocates whenever its input has an upper-case letter, which is every row
+// under a family filter ("FS", "Network", ...) and any pattern typed with
+// capitals. For ASCII, ASCII case folding is exactly what ToLower does, so
+// both paths select the same values.
 func matchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
 	}
-	pattern := strings.ToLower(strings.TrimSpace(sf.Pattern))
+	pattern := strings.TrimSpace(sf.Pattern)
 	if pattern == "" {
 		return true
 	}
-	value = strings.ToLower(value)
 	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
+	if isASCII(pattern) && isASCII(value) {
+		return matchFoldASCII(pattern, value, anchoredStart, anchoredEnd)
+	}
+	value = strings.ToLower(value)
+	pattern = strings.ToLower(pattern)
 	switch {
 	case anchoredStart && anchoredEnd:
 		return value == pattern
