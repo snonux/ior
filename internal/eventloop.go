@@ -94,6 +94,11 @@ type eventLoop struct {
 	cfg             eventLoopConfig
 	aggregateSink   syscallAggregateSink
 	aggregateSrc    syscallAggregateSource
+	// aggregateDrainer is the running aggregate drainer, published by
+	// startAggregateDrainLoop and cleared by its stop function, so SetFilter
+	// (called from the TUI goroutine) can flush the aggregate map before a
+	// live filter swap. nil while no drain loop runs.
+	aggregateDrainer atomic.Pointer[aggregateDrainer]
 	// dropSrc reads the kernel-side ring-buffer drop counter. nil disables
 	// drop monitoring (tests and any path without a BPF module).
 	dropSrc ringbufDropSource
@@ -133,10 +138,18 @@ func (e *eventLoop) Filter() globalfilter.Filter {
 
 // SetFilter atomically replaces the active global filter. The replacement is
 // cloned so the caller can keep mutating its own filter without affecting
-// what the eventloop sees.
+// what the eventloop sees. While the aggregate drain loop runs, the swap goes
+// through aggregateDrainer.SwapFilter, which first ingests the kernel
+// aggregate counts accumulated under the outgoing filter, so they cannot leak
+// into the baseline the TUI resets right after a live swap.
 func (e *eventLoop) SetFilter(filter globalfilter.Filter) {
 	cloned := filter.Clone()
-	e.filterPtr.Store(&cloned)
+	store := func() { e.filterPtr.Store(&cloned) }
+	if d := e.aggregateDrainer.Load(); d != nil {
+		d.SwapFilter(store)
+		return
+	}
+	store()
 }
 
 // SetAggregateSink wires the syscall-aggregate ingestion sink (the stats
