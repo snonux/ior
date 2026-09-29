@@ -42,16 +42,17 @@ type fdTracker struct {
 	// entry. Without it a process that keeps opening and closing its only
 	// tracked descriptor - a common pattern - would allocate a fresh entry and
 	// its map on every open; with it, that churn, and a short-lived process
-	// replacing one that exited, reuse the emptied entry. Capped at
-	// maxIdlePidKeys because an emptied Go map keeps its bucket memory: the
-	// cap bounds what idle entries of once-busy processes can pin.
+	// replacing one that exited, reuse the emptied entry. A parked entry only
+	// ever holds small sets (maxRecycledSetSize bounds each one); the
+	// maxIdlePidKeys cap only bounds how many entries are parked.
 	idlePidKeys []*pidFdKeys
 	age         uint64 // monotonic counter for LRU ordering
 }
 
-// maxIdlePidKeys bounds fdTracker.idlePidKeys. A handful covers the churn of
-// a few concurrently open/closing processes; beyond that, allocation is the
-// cheaper price than retained map memory.
+// maxIdlePidKeys bounds how many emptied entries fdTracker.idlePidKeys holds.
+// A handful covers a few processes opening and closing concurrently; further
+// emptied entries are left to the garbage collector. The size of each parked
+// set is bounded separately, by maxRecycledSetSize.
 const maxIdlePidKeys = 16
 
 // maxRecycledSetSize is the largest peak size a pidFdKeys set may have
@@ -62,14 +63,16 @@ const maxIdlePidKeys = 16
 // instead of ~0.5us), permanently, since parked entries are reused LIFO.
 // Sets that ever grew past this are discarded on parking and re-allocated
 // lazily; 64 covers the typical process (stdio, a few files and sockets).
+// The same threshold decides when a live pid's set is worth shrinking (see
+// shrinkKeySet).
 const maxRecycledSetSize = 64
 
 // pidFdKeys is one pid's slice of the fdTracker key space: the fdKey keys it
 // owns in the fd table and in the procfs cache. Each set is allocated on
 // first use, so a pid that only ever appears in one map costs one map. The
 // peak fields record the largest size each set reached since it was
-// allocated; parkPidEntry uses them to decide whether the set is small
-// enough to recycle (see maxRecycledSetSize).
+// allocated (or last rebuilt); shrinkKeySet and parkPidEntry use them to
+// tell an oversized bucket array from a small one (see maxRecycledSetSize).
 type pidFdKeys struct {
 	files     map[uint64]struct{}
 	cache     map[uint64]struct{}
@@ -253,8 +256,10 @@ func (t *fdTracker) unindexKey(key uint64, cache bool) {
 	}
 	if cache {
 		delete(keys.cache, key)
+		keys.cache, keys.peakCache = shrinkKeySet(keys.cache, keys.peakCache)
 	} else {
 		delete(keys.files, key)
+		keys.files, keys.peakFiles = shrinkKeySet(keys.files, keys.peakFiles)
 	}
 	if len(keys.files) != 0 || len(keys.cache) != 0 {
 		return
@@ -263,10 +268,40 @@ func (t *fdTracker) unindexKey(key uint64, cache bool) {
 	t.parkPidEntry(keys)
 }
 
+// shrinkKeySet returns set, or a right-sized copy of it once it has fallen
+// far below its peak, along with the peak to record. Go maps never shrink,
+// so a live process that once held ~30k descriptors and now holds two would
+// otherwise pay a ~30k-bucket scan on every closeRange/dropOnExec/deletePid.
+// The rebuild triggers only when the peak exceeded maxRecycledSetSize and
+// fewer than peak/8 keys remain, so its O(len) copy is paid for by the
+// more than 7*peak/8 deletions since the peak: amortised O(1) per removal.
+// An emptied set becomes nil, to be allocated again on first use.
+//
+// Callers of unindexKey may be ranging over the old set (deletePid,
+// dropOnExec). Swapping it is safe: a range evaluates its map operand once,
+// the old map is no longer mutated, so the loop still yields each remaining
+// key exactly once, and the copy holds exactly those keys, so the removals
+// the loop goes on to make land in the new set.
+func shrinkKeySet(set map[uint64]struct{}, peak int) (map[uint64]struct{}, int) {
+	if peak <= maxRecycledSetSize || len(set) >= peak/8 {
+		return set, peak
+	}
+	if len(set) == 0 {
+		return nil, 0
+	}
+	fresh := make(map[uint64]struct{}, len(set))
+	for key := range set {
+		fresh[key] = struct{}{}
+	}
+	return fresh, len(fresh)
+}
+
 // parkPidEntry puts an emptied index entry on idlePidKeys, unless the list is
 // full (the entry is then left to the garbage collector). A set whose peak
 // exceeded maxRecycledSetSize is dropped first, so a recycled entry never
-// carries the oversized bucket array of a once-busy process.
+// carries the oversized bucket array of a once-busy process. shrinkKeySet
+// already nils such a set when it empties; the check here keeps the parking
+// guarantee independent of that.
 //
 // Callers may still be ranging over the entry's sets (deletePid, dropOnExec):
 // that is safe because a range evaluates its map operand once, and parking

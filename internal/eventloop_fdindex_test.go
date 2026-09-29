@@ -2,6 +2,7 @@ package internal
 
 import (
 	"math/rand/v2"
+	"reflect"
 	"syscall"
 	"testing"
 
@@ -274,45 +275,55 @@ func TestIdlePidKeysAreCapped(t *testing.T) {
 // TestIdlePidKeysDropOversizedSets is the regression test for recycling a
 // once-busy process's bucket array: Go maps never shrink, so after a pid with
 // many descriptors exits, its parked entry must not hand that set to the next
-// short-lived pid, whose exec/exit would otherwise scan every bucket. Small
-// sets must still be recycled (that is what keeps churn allocation-free).
+// short-lived pid, whose exec/exit would otherwise scan every bucket. The
+// removals that drain the set rebuild it right-sized on the way down
+// (shrinkKeySet), so what gets parked is either nothing or a fresh small map
+// - never the original. Small sets must still be recycled as is (that is what
+// keeps churn allocation-free).
 func TestIdlePidKeysDropOversizedSets(t *testing.T) {
 	const bigPid, smallPid, nextPid = 1, 2, 3
 	fdt := newFDTracker(nil)
 	f := file.NewFd(0, "/big", syscall.O_RDONLY)
-	for fd := int32(0); fd <= maxRecycledSetSize; fd++ {
+	for fd := int32(0); fd < 8*maxRecycledSetSize; fd++ {
 		fdt.set(fd, bigPid, f)
 	}
 	fdt.setProcFdCache(0, bigPid, f)
+	bigSet := mapIdentity(fdt.pidIndex[bigPid].files)
 	fdt.deletePid(bigPid)
 
 	if n := len(fdt.idlePidKeys); n != 1 {
 		t.Fatalf("idle list holds %d entries, want 1", n)
 	}
 	parked := fdt.idlePidKeys[0]
-	if parked.files != nil || parked.peakFiles != 0 {
-		t.Fatalf("parked entry kept the oversized files set (peak %d)", parked.peakFiles)
+	if parked.files != nil && mapIdentity(parked.files) == bigSet {
+		t.Fatal("parked entry kept the oversized files map")
+	}
+	if parked.peakFiles > maxRecycledSetSize {
+		t.Fatalf("parked files set has peak %d, want <= %d", parked.peakFiles, maxRecycledSetSize)
 	}
 	if parked.cache == nil {
 		t.Fatal("parked entry dropped a small cache set that should be recycled")
 	}
 
 	fdt.set(3, nextPid, f)
-	reused := fdt.pidIndex[nextPid]
-	if reused != parked {
+	if reused := fdt.pidIndex[nextPid]; reused != parked {
 		t.Fatal("next pid did not reuse the parked entry")
-	}
-	if reused.peakFiles != 1 {
-		t.Fatalf("reused entry's files set has peak %d, want a fresh set of 1", reused.peakFiles)
 	}
 
 	// A set that stayed small is recycled as is, map included.
 	fdt.set(3, smallPid, f)
+	smallSet := mapIdentity(fdt.pidIndex[smallPid].files)
 	fdt.deletePid(smallPid)
-	if got := fdt.idlePidKeys[len(fdt.idlePidKeys)-1].files; got == nil || len(got) != 0 {
-		t.Fatal("a small emptied set must be recycled, not dropped")
+	if got := fdt.idlePidKeys[len(fdt.idlePidKeys)-1].files; got == nil || mapIdentity(got) != smallSet {
+		t.Fatal("a small emptied set must be recycled, not dropped or rebuilt")
 	}
 	assertFdIndexConsistent(t, fdt)
+}
+
+// mapIdentity returns the runtime identity of a map, so tests can tell a
+// rebuilt set from the original.
+func mapIdentity(m map[uint64]struct{}) uintptr {
+	return reflect.ValueOf(m).Pointer()
 }
 
 // BenchmarkFdSetDeleteChurn measures the most common fd-table pattern: a
@@ -365,5 +376,118 @@ func BenchmarkNewPidAfterBigPidExit(b *testing.B) {
 		fdt.set(3, pid, f)
 		fdt.dropOnExec(pid)
 		fdt.deletePid(pid)
+	}
+}
+
+// TestIdlePidKeysRecycleBoundary pins the exact threshold on both paths
+// that apply it. parkPidEntry keeps a set whose peak is maxRecycledSetSize
+// and drops one whose peak is one more; shrinkKeySet leaves a set at the
+// threshold untouched however empty it gets, and rebuilds (or, when empty,
+// drops) one just above it once fewer than peak/8 keys remain.
+func TestIdlePidKeysRecycleBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		peak     int
+		wantKept bool
+	}{
+		{maxRecycledSetSize, true},
+		{maxRecycledSetSize + 1, false},
+	} {
+		fdt := newFDTracker(nil)
+		set := map[uint64]struct{}{}
+		fdt.parkPidEntry(&pidFdKeys{files: set, peakFiles: tc.peak})
+		if kept := fdt.idlePidKeys[0].files != nil; kept != tc.wantKept {
+			t.Errorf("parkPidEntry peak %d: files set kept = %v, want %v", tc.peak, kept, tc.wantKept)
+		}
+
+		got, gotPeak := shrinkKeySet(set, tc.peak)
+		if kept := got != nil && gotPeak == tc.peak; kept != tc.wantKept {
+			t.Errorf("shrinkKeySet peak %d on an empty set: kept = %v, want %v", tc.peak, kept, tc.wantKept)
+		}
+	}
+
+	// Just above the threshold, peak/8 is the rebuild point: at peak/8 keys
+	// the set stays, one fewer and it is rebuilt right-sized.
+	const peak = maxRecycledSetSize + 1
+	set := make(map[uint64]struct{})
+	for fd := int32(0); fd < peak/8; fd++ {
+		set[fdKey(crossPidA, fd)] = struct{}{}
+	}
+	if got, gotPeak := shrinkKeySet(set, peak); mapIdentity(got) != mapIdentity(set) || gotPeak != peak {
+		t.Fatalf("set with peak/8 keys was rebuilt (peak %d)", gotPeak)
+	}
+	delete(set, fdKey(crossPidA, 0))
+	got, gotPeak := shrinkKeySet(set, peak)
+	if mapIdentity(got) == mapIdentity(set) || gotPeak != len(set) || len(got) != len(set) {
+		t.Fatalf("set below peak/8 not rebuilt right-sized: len %d peak %d", len(got), gotPeak)
+	}
+	for key := range set {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("rebuild lost key %#x", key)
+		}
+	}
+}
+
+// TestLiveOversizedSetIsShrunk covers a process that stays alive after
+// holding many descriptors: once fewer than peak/8 remain, its set is rebuilt
+// right-sized so its per-pid operations stop scanning the old bucket array.
+// Every remaining key must survive the rebuild, including when it happens
+// in the middle of a closeRange or dropOnExec loop.
+func TestLiveOversizedSetIsShrunk(t *testing.T) {
+	const peak = 8 * maxRecycledSetSize
+	fdt := newFDTracker(nil)
+	for fd := int32(0); fd < peak; fd++ {
+		flags := int32(syscall.O_RDONLY)
+		if fd%2 == 1 {
+			flags |= syscall.O_CLOEXEC
+		}
+		fdt.set(fd, crossPidA, file.NewFd(fd, "/many", flags))
+	}
+	// close_range down to four descriptors: 0-3 stay, the rebuild fires
+	// mid-loop once fewer than peak/8 keys remain.
+	bigSet := mapIdentity(fdt.pidIndex[crossPidA].files)
+	fdt.closeRange(4, -1, crossPidA)
+	keys := fdt.pidIndex[crossPidA]
+	if keys == nil || len(keys.files) != 4 {
+		t.Fatalf("index after close_range = %+v, want 4 keys", keys)
+	}
+	// The rebuild fires once, as soon as fewer than peak/8 keys remain; the
+	// right-sized set it makes is below the threshold and is kept from then on.
+	if mapIdentity(keys.files) == bigSet || keys.peakFiles > maxRecycledSetSize {
+		t.Fatalf("set not rebuilt after shrinking to 4 keys (peak %d)", keys.peakFiles)
+	}
+	assertFdIndexConsistent(t, fdt)
+
+	// Grow again, then let dropOnExec (which ranges over the set while it
+	// may be swapped) remove the O_CLOEXEC half and more.
+	for fd := int32(4); fd < peak; fd++ {
+		fdt.set(fd, crossPidA, file.NewFd(fd, "/many", syscall.O_RDONLY|syscall.O_CLOEXEC))
+	}
+	fdt.dropOnExec(crossPidA)
+	for fd := int32(0); fd < 4; fd++ {
+		_, tracked := fdt.files[fdKey(crossPidA, fd)]
+		if want := fd%2 == 0; tracked != want {
+			t.Errorf("fd %d tracked after exec = %v, want %v", fd, tracked, want)
+		}
+	}
+	if got := fdt.pidIndex[crossPidA]; got == nil || len(got.files) != 2 || got.peakFiles > maxRecycledSetSize {
+		t.Fatalf("index after exec = %+v, want 2 keys in a right-sized set", got)
+	}
+	assertFdIndexConsistent(t, fdt)
+}
+
+// BenchmarkCloseRangeAfterShrink measures close_range on a live process that
+// once held 30000 descriptors and now holds two: with the set rebuilt this
+// costs O(2), not a scan of the old bucket array.
+func BenchmarkCloseRangeAfterShrink(b *testing.B) {
+	fdt := newFDTracker(nil)
+	f := file.NewFd(0, "/many", syscall.O_RDONLY)
+	for fd := int32(0); fd < 30000; fd++ {
+		fdt.set(fd, benchTargetPid, f)
+	}
+	fdt.closeRange(2, -1, benchTargetPid)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fdt.closeRange(100, -1, benchTargetPid)
 	}
 }
