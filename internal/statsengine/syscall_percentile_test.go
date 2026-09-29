@@ -82,7 +82,7 @@ func TestSyscallSnapshotPercentilesMatchReference(t *testing.T) {
 // TestEngineCaptureDoesNotSortReservoirs is the regression test for the
 // engine lock being held while every syscall's 10k-sample reservoir is
 // sorted: the capture (the only part of Snapshot that holds e.mu) must leave
-// the percentile cache untouched and hand out private, unsorted copies.
+// the percentile cache untouched and hand out private, unmodified copies.
 func TestEngineCaptureDoesNotSortReservoirs(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
 	ids := fillReservoirs(engine, 8, 2_000)
@@ -453,6 +453,125 @@ func TestEngineConcurrentIngestSnapshotReset(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestEngineOverlappingSnapshots covers snapshots whose capture/store phases
+// overlap: a capture that finds a scratch buffer taken by another snapshot
+// allocates its own, and the later store must drop that second buffer rather
+// than replace the first. It first replays one overlap deterministically, then
+// races several Snapshot goroutines against Ingest and Reset, and finally
+// checks that the cached percentiles are exact and no scratch buffer aliases
+// a live reservoir or another syscall's scratch.
+func TestEngineOverlappingSnapshots(t *testing.T) {
+	engine := NewEngine(DefaultTopN)
+	ids := fillReservoirs(engine, 4, 2_000)
+
+	first := engine.captureSnapshotInputs()
+	for _, id := range ids { // make everything stale again for the second capture
+		engine.syscalls.byID[id].lastPercentileVersion = 0
+	}
+	second := engine.captureSnapshotInputs()
+	if second.syscalls.scratchMisses != len(ids) {
+		t.Fatalf("overlapping capture: %d scratch misses, want %d", second.syscalls.scratchMisses, len(ids))
+	}
+	firstSS, err1 := buildSubSnapshots(first, time.Second)
+	secondSS, err2 := buildSubSnapshots(second, time.Second)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("unexpected build errors: %v, %v", err1, err2)
+	}
+	engine.storeSyscallPercentiles(firstSS.syscallJobs)
+	engine.storeSyscallPercentiles(secondSS.syscallJobs)
+	for _, job := range firstSS.syscallJobs {
+		if &job.stats.scratch[:1][0] != &job.samples[0] {
+			t.Fatalf("%s: second store replaced the first handed-back buffer", job.stats.name)
+		}
+	}
+
+	raceSnapshotsWithIngestAndReset(t, engine, 3)
+
+	for _, stats := range engine.syscalls.byID {
+		stats.lastPercentileVersion = 0
+	}
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+	for _, s := range snap.Syscalls() {
+		stats := engine.syscalls.byID[s.TraceID]
+		wantP50, wantP95, wantP99 := referencePercentiles(stats.samples)
+		if s.LatencyP50Ns != wantP50 || s.LatencyP95Ns != wantP95 || s.LatencyP99Ns != wantP99 {
+			t.Fatalf("%s: percentiles = %d/%d/%d, want %d/%d/%d",
+				s.Name, s.LatencyP50Ns, s.LatencyP95Ns, s.LatencyP99Ns, wantP50, wantP95, wantP99)
+		}
+	}
+	assertScratchBuffersPrivate(t, engine)
+}
+
+// raceSnapshotsWithIngestAndReset runs snapshotters concurrent Snapshot loops
+// against one goroutine that ingests and periodically resets the engine.
+func raceSnapshotsWithIngestAndReset(t *testing.T, engine *Engine, snapshotters int) {
+	t.Helper()
+	var ingest, snaps sync.WaitGroup
+	stop := make(chan struct{})
+	ingest.Add(1)
+	go func() {
+		defer ingest.Done()
+		for n := 0; ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			engine.Ingest(newPair(types.TraceId(n%4+1), uint64(n%1000+1), 1, 0))
+			if n%20_000 == 19_999 {
+				engine.Reset()
+			}
+		}
+	}()
+	for range snapshotters {
+		snaps.Add(1)
+		go func() {
+			defer snaps.Done()
+			for i := 0; i < 30; i++ {
+				snap, err := engine.Snapshot()
+				if err != nil {
+					t.Errorf("unexpected snapshot error: %v", err)
+					return
+				}
+				for _, s := range snap.Syscalls() {
+					if msg := checkPercentileBounds(s); msg != "" {
+						t.Error(msg)
+						return
+					}
+				}
+			}
+		}()
+	}
+	snaps.Wait()
+	close(stop)
+	ingest.Wait()
+}
+
+// assertScratchBuffersPrivate fails if any syscall's scratch buffer shares its
+// backing array with a live reservoir or with another syscall's scratch.
+func assertScratchBuffersPrivate(t *testing.T, engine *Engine) {
+	t.Helper()
+	owners := make(map[*uint64]string)
+	for _, stats := range engine.syscalls.byID {
+		if len(stats.samples) > 0 {
+			owners[&stats.samples[:1][0]] = stats.name + " reservoir"
+		}
+	}
+	for _, stats := range engine.syscalls.byID {
+		if cap(stats.scratch) == 0 {
+			continue
+		}
+		key := &stats.scratch[:1][0]
+		if owner, dup := owners[key]; dup {
+			t.Fatalf("%s: scratch buffer aliases %s", stats.name, owner)
+		}
+		owners[key] = stats.name + " scratch"
+	}
 }
 
 // checkPercentileBounds returns a description of the first violated invariant

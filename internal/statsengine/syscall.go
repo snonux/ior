@@ -37,7 +37,7 @@ type syscallStats struct {
 	samples       []uint64
 	// scratch is a reusable buffer the snapshot capture copies samples into
 	// (under the engine lock) so that it neither allocates under the lock
-	// nor sorts the live reservoir. A capture takes it (leaving nil) and
+	// nor reorders the live reservoir. A capture takes it (leaving nil) and
 	// storePercentileJobs hands it back. At most one buffer per reservoir is
 	// retained, and it is freed together with the stats on Reset.
 	scratch []uint64
@@ -52,15 +52,15 @@ type syscallStats struct {
 // percentileJob carries a private copy of one syscall's latency reservoir from
 // snapshot capture (which runs under the engine lock) to the lock-free
 // percentile computation, and from there back to the cached values in stats.
-// Sorting a full 10k-sample reservoir costs ~0.5ms, so doing it for every
-// active syscall under the lock used to stall Engine.Ingest for tens of ms per
+// Sorting a full 10k-sample reservoir costs ~0.5ms (selection ~0.16ms), so
+// doing it for every active syscall under the lock used to stall Engine.Ingest for tens of ms per
 // refresh. Under the lock only a copy per stale reservoir (80KB when full)
 // remains, into the stats' reusable scratch buffer, so the lock is normally not
 // also held across allocation and GC assists.
 type percentileJob struct {
 	stats    *syscallStats
 	version  uint64   // stats.sampleVersion at the time samples was copied
-	samples  []uint64 // private copy, sorted in place outside the lock
+	samples  []uint64 // private copy, reordered in place by latencyPercentiles outside the lock
 	inputIdx int      // index of the matching entry in syscallCapture.inputs
 	p50      uint64
 	p95      uint64
@@ -174,7 +174,7 @@ func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
 // It panics on build error, which should never happen for a valid accumulator.
 // The accumulator is not safe for concurrent use on its own, so capture,
 // percentile computation and write-back simply run back to back here; Engine
-// splits them to keep the sort out of its lock.
+// splits them to keep the percentile selection out of its lock.
 func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 	if a == nil {
 		return nil
@@ -192,7 +192,7 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 
 // captureInputs copies the per-syscall counters and, for every reservoir whose
 // cached percentiles are stale, a private copy of its samples. It must run
-// under the lock guarding the accumulator but performs no sorting, and after
+// under the lock guarding the accumulator but computes no percentiles, and after
 // the first capture it normally does not allocate either: samples are copied
 // into the stats' own scratch buffer (see takeScratch). The returned inputs
 // carry the cached percentiles; resolvePercentiles overwrites the stale ones.
