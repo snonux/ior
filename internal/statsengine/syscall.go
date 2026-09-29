@@ -2,7 +2,6 @@ package statsengine
 
 import (
 	"cmp"
-	"math"
 	"math/rand/v2"
 	"slices"
 	"time"
@@ -46,7 +45,9 @@ type syscallStats struct {
 // percentile computation, and from there back to the cached values in stats.
 // Sorting a full 10k-sample reservoir costs ~0.5ms, so doing it for every
 // active syscall under the lock used to stall Engine.Ingest for tens of ms per
-// refresh; copying the samples instead is a cheap memmove.
+// refresh. Under the lock only an 80KB copy per stale reservoir remains, into
+// a buffer the caller acquired beforehand (see sampleBufferPool) so that the
+// lock is not also held across allocation and GC assists.
 type percentileJob struct {
 	stats    *syscallStats
 	version  uint64   // stats.sampleVersion at the time samples was copied
@@ -58,11 +59,13 @@ type percentileJob struct {
 }
 
 // syscallCapture is the syscall part of a snapshot capture: per-syscall
-// inputs (percentiles pre-filled from the cache) plus the percentile jobs for
-// reservoirs whose cached percentiles are stale.
+// inputs (percentiles pre-filled from the cache), the percentile jobs for
+// reservoirs whose cached percentiles are stale, and the scratch buffers the
+// capture was given but did not need.
 type syscallCapture struct {
 	inputs []syscallSnapshotInput
 	jobs   []percentileJob
+	spare  [][]uint64
 }
 
 type syscallSnapshotInput struct {
@@ -158,9 +161,9 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 		return nil
 	}
 
-	capture := a.captureInputs()
+	capture := a.captureInputs(nil)
 	capture.resolvePercentiles()
-	capture.storePercentiles()
+	storePercentileJobs(capture.jobs)
 	snap, err := buildSyscallSnapshots(capture.inputs, elapsed)
 	if err != nil {
 		panic("buildSyscallSnapshots: " + err.Error())
@@ -170,54 +173,59 @@ func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 
 // captureInputs copies the per-syscall counters and, for every reservoir whose
 // cached percentiles are stale, a private copy of its samples. It must run
-// under the lock guarding the accumulator but performs no sorting, so it stays
-// cheap even with many full reservoirs. The returned inputs carry the cached
-// percentiles; resolvePercentiles overwrites the stale ones.
-func (a *syscallAccumulator) captureInputs() syscallCapture {
+// under the lock guarding the accumulator but performs no sorting. Samples are
+// copied into the scratch buffers (empty, pre-allocated outside the lock);
+// only when scratch runs out, e.g. for syscalls first seen since the caller
+// sized it, does it allocate. Unused scratch buffers are returned in spare.
+// The returned inputs carry the cached percentiles; resolvePercentiles
+// overwrites the stale ones.
+func (a *syscallAccumulator) captureInputs(scratch [][]uint64) syscallCapture {
 	if a == nil {
-		return syscallCapture{}
+		return syscallCapture{spare: scratch}
 	}
 
 	capture := syscallCapture{inputs: make([]syscallSnapshotInput, 0, len(a.byID))}
 	for _, stats := range a.byID {
 		if stats.needsPercentileRecompute() {
+			var buf []uint64
+			if n := len(scratch); n > 0 {
+				buf, scratch = scratch[n-1], scratch[:n-1]
+			}
 			capture.jobs = append(capture.jobs, percentileJob{
 				stats:    stats,
 				version:  stats.sampleVersion,
-				samples:  slices.Clone(stats.samples),
+				samples:  append(buf[:0], stats.samples...),
 				inputIdx: len(capture.inputs),
 			})
 		}
 		capture.inputs = append(capture.inputs, stats.snapshotInput())
 	}
+	capture.spare = scratch
 	return capture
 }
 
-// resolvePercentiles sorts each job's private sample copy and fills in the
-// fresh percentiles, both on the job (for storePercentiles) and on the
-// matching input. It touches no accumulator state, so callers run it without
-// holding any lock.
+// resolvePercentiles computes each job's percentiles from its private sample
+// copy (reordering it in place) and fills them in both on the job (for
+// storePercentileJobs) and on the matching input. It touches no accumulator
+// state, so callers run it without holding any lock.
 func (c *syscallCapture) resolvePercentiles() {
 	for i := range c.jobs {
 		job := &c.jobs[i]
-		slices.Sort(job.samples)
-		job.p50 = samplePercentile(job.samples, 0.50)
-		job.p95 = samplePercentile(job.samples, 0.95)
-		job.p99 = samplePercentile(job.samples, 0.99)
+		job.p50, job.p95, job.p99 = latencyPercentiles(job.samples)
 
 		in := &c.inputs[job.inputIdx]
 		in.p50Latency, in.p95Latency, in.p99Latency = job.p50, job.p95, job.p99
 	}
 }
 
-// storePercentiles writes the resolved percentiles back into the per-syscall
+// storePercentileJobs writes resolved percentiles back into the per-syscall
 // cache so later snapshots can reuse them. It must run under the lock guarding
 // the accumulator. A job is dropped when the cache already holds percentiles
 // for the same or a newer sample version (a concurrent Snapshot got there
 // first), so an older result never replaces a fresher one.
-func (c *syscallCapture) storePercentiles() {
-	for i := range c.jobs {
-		job := &c.jobs[i]
+func storePercentileJobs(jobs []percentileJob) {
+	for i := range jobs {
+		job := &jobs[i]
 		stats := job.stats
 		if stats.lastPercentileVersion >= job.version {
 			continue
@@ -225,6 +233,16 @@ func (c *syscallCapture) storePercentiles() {
 		stats.cachedP50, stats.cachedP95, stats.cachedP99 = job.p50, job.p95, job.p99
 		stats.lastPercentileVersion = job.version
 	}
+}
+
+// jobSampleBuffers returns the sample buffers owned by jobs so the caller can
+// recycle them once the jobs are resolved and stored.
+func jobSampleBuffers(jobs []percentileJob) [][]uint64 {
+	bufs := make([][]uint64, 0, len(jobs))
+	for i := range jobs {
+		bufs = append(bufs, jobs[i].samples)
+	}
+	return bufs
 }
 
 // buildSyscallSnapshots converts raw syscall accumulator inputs into sorted
@@ -328,27 +346,6 @@ func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 		LatencyP95Ns:   s.p95Latency,
 		LatencyP99Ns:   s.p99Latency,
 	}
-}
-
-func samplePercentile(sorted []uint64, p float64) uint64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	if p <= 0 {
-		return sorted[0]
-	}
-	if p >= 1 {
-		return sorted[len(sorted)-1]
-	}
-
-	rank := int(math.Ceil(p*float64(len(sorted)))) - 1
-	if rank < 0 {
-		rank = 0
-	}
-	if rank >= len(sorted) {
-		rank = len(sorted) - 1
-	}
-	return sorted[rank]
 }
 
 func safeRate(count uint64, elapsedSeconds float64) float64 {

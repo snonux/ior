@@ -33,7 +33,8 @@ func BenchmarkSyscallAccumulatorSnapshot(b *testing.B) {
 // that runs under e.mu (and therefore blocks Ingest) with 60 active syscalls
 // whose full 10k-sample reservoirs all have stale percentiles. Before the
 // percentile sort moved out of the lock this took ~25ms per op; now it only
-// copies the reservoirs.
+// copies the reservoirs into scratch buffers acquired (untimed) beforehand,
+// exactly as Snapshot does, so no per-reservoir allocation shows up here.
 func BenchmarkEngineSnapshotCaptureLockHold(b *testing.B) {
 	engine := NewEngine(DefaultTopN)
 	fillReservoirs(engine, 60, syscallReservoirSampleCapDefault)
@@ -41,10 +42,16 @@ func BenchmarkEngineSnapshotCaptureLockHold(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		in := engine.captureSnapshotInputs()
+		b.StopTimer()
+		scratch := engine.samplePool.acquire(60)
+		b.StartTimer()
+		in := engine.captureSnapshotInputs(scratch)
+		b.StopTimer()
 		if len(in.syscalls.jobs) != 60 {
 			b.Fatalf("expected 60 stale reservoirs, got %d", len(in.syscalls.jobs))
 		}
+		engine.releaseSampleBuffers(jobSampleBuffers(in.syscalls.jobs))
+		b.StartTimer()
 	}
 }
 
