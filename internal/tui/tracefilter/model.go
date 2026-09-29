@@ -84,8 +84,8 @@ func (m Model) Visible() bool {
 }
 
 // Filter returns the filter built from the last applied modal edit. It
-// carries over any dimension the modal has no field for (Family) from the
-// filter passed to Open.
+// carries over any dimension the modal has no field for (Family, set outside
+// the modal) from the filter passed to Open.
 func (m Model) Filter() globalfilter.Filter {
 	return m.filter
 }
@@ -221,6 +221,21 @@ func (m Model) View(width, height int) string {
 		}
 	}
 
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(modalWidth).
+		Render(strings.Join(m.bodyLines(), "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// bodyLines renders the modal content: the editable fields, a read-only
+// Family line when a family scope is active, and the key help. Family has no
+// editable field here (it is set outside the modal: the [ / ] family cycle
+// or the Syscalls-tab Family row filter) and is kept by Esc and by "c", so
+// it is shown to make that carried-over constraint visible.
+func (m Model) bodyLines() []string {
 	lines := []string{"Filter"}
 	for i, field := range m.fields {
 		prefix := "  "
@@ -229,16 +244,11 @@ func (m Model) View(width, height int) string {
 		}
 		lines = append(lines, prefix+m.renderField(field, i == m.activeField))
 	}
-	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear • Esc apply+close")
-	lines = append(lines, "strings: substring by default, use ^prefix, suffix$, or ^exact$")
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	if family := m.filter.Family; family != nil && family.Pattern != "" {
+		lines = append(lines, fmt.Sprintf("  %-8s %s ([ / ] to change)", "Family:", family.Pattern))
+	}
+	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear (keeps family) • Esc apply+close")
+	return append(lines, "strings: substring by default, use ^prefix, suffix$, or ^exact$")
 }
 
 func (m Model) clearAll() Model {
@@ -292,16 +302,16 @@ func (m Model) renderField(field filterField, active bool) string {
 // String fields use substring matching; numeric fields use the selected compare op.
 //
 // The result starts from a clone of the filter the modal was opened with, so
-// dimensions the modal has no field for (currently Family, set by the [ / ]
-// family cycle) survive an open+Esc or an edit+apply unchanged. Without that,
+// dimensions the modal has no field for (currently Family, which is set
+// outside the modal: the [ / ] family cycle or the Syscalls-tab Family row
+// filter) survive an open+Esc or an edit+apply unchanged. Without that,
 // closing the modal would silently drop Family, and the caller would see an
 // unequal filter and reset the stats baseline and push an undo level even
-// though the user changed nothing. Every modal-owned dimension is cleared
-// first, because applyFieldToFilter only writes non-empty values and an
-// emptied field must remove the constraint it replaced.
+// though the user changed nothing. Every modal-owned dimension is then
+// overwritten unconditionally by applyFieldToFilter, so a blanked or invalid
+// field removes the constraint it replaced instead of inheriting it.
 func (m Model) buildFilterFromFields() globalfilter.Filter {
 	out := m.filter.Clone()
-	clearModalOwnedDimensions(&out)
 	for _, field := range m.fields {
 		value := strings.TrimSpace(field.value)
 		applyFieldToFilter(field, value, &out)
@@ -309,72 +319,50 @@ func (m Model) buildFilterFromFields() globalfilter.Filter {
 	return out
 }
 
-// clearModalOwnedDimensions resets every dimension that has a field in the
-// modal (see defaultFilterFields), leaving the ones the modal does not edit
-// (Family) as they were. Keep this in sync with applyFieldToFilter.
-func clearModalOwnedDimensions(out *globalfilter.Filter) {
-	out.Syscall = nil
-	out.Comm = nil
-	out.File = nil
-	out.PID = nil
-	out.TID = nil
-	out.FD = nil
-	out.LatencyNs = nil
-	out.GapNs = nil
-	out.Bytes = nil
-	out.RetVal = nil
-	out.ErrorsOnly = false
-}
-
 // applyFieldToFilter writes a single field value into the appropriate slot of
-// out. It is split out of buildFilterFromFields to keep each function concise.
+// out. It always assigns (nil / false when the value is empty or invalid):
+// out starts as a clone of the opened filter, so skipping the write would
+// leak the old constraint through a field the user just cleared. It is split
+// out of buildFilterFromFields to keep each function concise.
 func applyFieldToFilter(field filterField, value string, out *globalfilter.Filter) {
 	switch field.fieldKey {
 	case fieldSyscall:
-		if value != "" {
-			out.Syscall = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.Syscall = stringFilterOrNil(value)
 	case fieldComm:
-		if value != "" {
-			out.Comm = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.Comm = stringFilterOrNil(value)
 	case fieldFile:
-		if value != "" {
-			out.File = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.File = stringFilterOrNil(value)
 	case fieldPID:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.PID = f
-		}
+		out.PID, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldTID:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.TID = f
-		}
+		out.TID, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldFD:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.FD = f
-		}
+		out.FD, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldLatency:
-		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
-			out.LatencyNs = f
-		}
+		out.LatencyNs, _ = parseNumericFilter(value, field.opIndex, true)
 	case fieldGap:
-		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
-			out.GapNs = f
-		}
+		out.GapNs, _ = parseNumericFilter(value, field.opIndex, true)
 	case fieldBytes:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.Bytes = f
-		}
+		out.Bytes, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldReturn:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.RetVal = f
-		}
+		out.RetVal, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldErrorsOnly:
 		out.ErrorsOnly = strings.EqualFold(value, "true")
 	}
 }
 
+// stringFilterOrNil returns a substring filter for value, or nil (no
+// constraint) when value is empty.
+func stringFilterOrNil(value string) *globalfilter.StringFilter {
+	if value == "" {
+		return nil
+	}
+	return &globalfilter.StringFilter{Pattern: value}
+}
+
+// parseNumericFilter parses value into a numeric filter with the op at
+// opIndex. It returns (nil, false) for an empty or unparsable value, which
+// callers store as "no constraint".
 func parseNumericFilter(value string, opIndex int, duration bool) (*globalfilter.NumericFilter, bool) {
 	if value == "" {
 		return nil, false
