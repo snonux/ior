@@ -117,3 +117,122 @@ func TestModelEditingAllowsPrintableHotkeyRunes(t *testing.T) {
 		t.Fatalf("expected printable runes preserved while editing, got %+v", filter.Comm)
 	}
 }
+
+// familyFilter is a filter whose only active dimension is Family, which the
+// modal has no field for (it is set by the [ / ] family cycle in the TUI).
+func familyFilter() globalfilter.Filter {
+	return globalfilter.Filter{Family: &globalfilter.StringFilter{Pattern: "Network"}}
+}
+
+// fullyPopulatedFilter sets every Filter dimension, so a round trip through
+// the modal exercises each field and a newly added Filter dimension that the
+// modal neither owns nor preserves shows up as a mismatch.
+func fullyPopulatedFilter() globalfilter.Filter {
+	num := func(op globalfilter.CompareOp, v int64) *globalfilter.NumericFilter {
+		return &globalfilter.NumericFilter{Op: op, Value: v}
+	}
+	return globalfilter.Filter{
+		Syscall:    &globalfilter.StringFilter{Pattern: "read"},
+		Family:     &globalfilter.StringFilter{Pattern: "Network"},
+		Comm:       &globalfilter.StringFilter{Pattern: "nginx"},
+		File:       &globalfilter.StringFilter{Pattern: "^/etc"},
+		PID:        num(globalfilter.OpEq, 42),
+		TID:        num(globalfilter.OpGt, 43),
+		FD:         num(globalfilter.OpLt, 7),
+		LatencyNs:  num(globalfilter.OpGte, 5_000_000),
+		GapNs:      num(globalfilter.OpLte, 3_000),
+		Bytes:      num(globalfilter.OpNeq, 4096),
+		RetVal:     num(globalfilter.OpEq, -2),
+		ErrorsOnly: true,
+	}
+}
+
+// TestModelOpenEscPreservesUnownedFamily is the co2 regression: open+Esc
+// without edits must hand back a filter Equal to the one passed to Open,
+// including Family, otherwise the TUI treats the close as a filter change
+// (stats/trie reset and an extra undo level).
+func TestModelOpenEscPreservesUnownedFamily(t *testing.T) {
+	for name, initial := range map[string]globalfilter.Filter{
+		"family only":   familyFilter(),
+		"family+comm":   {Family: &globalfilter.StringFilter{Pattern: "Network"}, Comm: &globalfilter.StringFilter{Pattern: "nginx"}},
+		"all dimension": fullyPopulatedFilter(),
+		"empty":         {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := NewModel().Open(initial)
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+			if got := model.Filter(); !got.Equal(initial) {
+				t.Fatalf("open+esc changed the filter:\n got  %+v\n want %+v", got, initial)
+			}
+		})
+	}
+}
+
+// TestModelEditPreservesUnownedFamily checks that submitting real edits (both
+// from navigation Esc and from Esc while still typing) keeps Family while the
+// edited dimension changes.
+func TestModelEditPreservesUnownedFamily(t *testing.T) {
+	for name, closeWhileEditing := range map[string]bool{"esc after enter": false, "esc while editing": true} {
+		t.Run(name, func(t *testing.T) {
+			model := NewModel().Open(familyFilter())
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // edit Syscall
+			model = model.Update(tea.KeyPressMsg{Code: 'w', Text: "write"})
+			if !closeWhileEditing {
+				model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			}
+			model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+			got := model.Filter()
+			if got.Family == nil || got.Family.Pattern != "Network" {
+				t.Fatalf("family lost on submit: %+v", got.Family)
+			}
+			if got.Syscall == nil || got.Syscall.Pattern != "write" {
+				t.Fatalf("syscall edit not applied: %+v", got.Syscall)
+			}
+		})
+	}
+}
+
+// TestModelEmptiedFieldRemovesConstraint guards the other side of starting
+// from the opened filter: a modal-owned dimension the user blanks out must be
+// removed, not carried over from the initial filter.
+func TestModelEmptiedFieldRemovesConstraint(t *testing.T) {
+	initial := fullyPopulatedFilter()
+	model := NewModel().Open(initial)
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // edit Syscall
+	model.textInput.SetValue("")
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	for model.activeField < int(fieldPID) {
+		model = model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model.textInput.SetValue("not-a-number") // invalid input drops the constraint
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	got := model.Filter()
+	if got.Syscall != nil {
+		t.Fatalf("emptied syscall should be removed, got %+v", got.Syscall)
+	}
+	if got.PID != nil {
+		t.Fatalf("invalid pid should be removed, got %+v", got.PID)
+	}
+	want := initial.Clone()
+	want.Syscall, want.PID = nil, nil
+	if !got.Equal(want) {
+		t.Fatalf("untouched dimensions changed:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+// TestModelClearAllKeepsUnownedFamily pins the clear-all contract: "c" clears
+// every field the modal shows, but Family is not shown there (it is cycled
+// with [ / ]), so it stays in effect.
+func TestModelClearAllKeepsUnownedFamily(t *testing.T) {
+	model := NewModel().Open(fullyPopulatedFilter())
+	model = model.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	if got := model.Filter(); !got.Equal(familyFilter()) {
+		t.Fatalf("clear-all should leave only Family:\n got  %+v\n want %+v", got, familyFilter())
+	}
+}

@@ -83,7 +83,9 @@ func (m Model) Visible() bool {
 	return m.visible
 }
 
-// Filter returns the filter built from the last applied modal edit.
+// Filter returns the filter built from the last applied modal edit. It
+// carries over any dimension the modal has no field for (Family) from the
+// filter passed to Open.
 func (m Model) Filter() globalfilter.Filter {
 	return m.filter
 }
@@ -288,13 +290,40 @@ func (m Model) renderField(field filterField, active bool) string {
 
 // buildFilterFromFields converts the current field values into a globalfilter.Filter.
 // String fields use substring matching; numeric fields use the selected compare op.
+//
+// The result starts from a clone of the filter the modal was opened with, so
+// dimensions the modal has no field for (currently Family, set by the [ / ]
+// family cycle) survive an open+Esc or an edit+apply unchanged. Without that,
+// closing the modal would silently drop Family, and the caller would see an
+// unequal filter and reset the stats baseline and push an undo level even
+// though the user changed nothing. Every modal-owned dimension is cleared
+// first, because applyFieldToFilter only writes non-empty values and an
+// emptied field must remove the constraint it replaced.
 func (m Model) buildFilterFromFields() globalfilter.Filter {
-	var out globalfilter.Filter
+	out := m.filter.Clone()
+	clearModalOwnedDimensions(&out)
 	for _, field := range m.fields {
 		value := strings.TrimSpace(field.value)
 		applyFieldToFilter(field, value, &out)
 	}
 	return out
+}
+
+// clearModalOwnedDimensions resets every dimension that has a field in the
+// modal (see defaultFilterFields), leaving the ones the modal does not edit
+// (Family) as they were. Keep this in sync with applyFieldToFilter.
+func clearModalOwnedDimensions(out *globalfilter.Filter) {
+	out.Syscall = nil
+	out.Comm = nil
+	out.File = nil
+	out.PID = nil
+	out.TID = nil
+	out.FD = nil
+	out.LatencyNs = nil
+	out.GapNs = nil
+	out.Bytes = nil
+	out.RetVal = nil
+	out.ErrorsOnly = false
 }
 
 // applyFieldToFilter writes a single field value into the appropriate slot of
