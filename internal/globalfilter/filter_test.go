@@ -257,6 +257,9 @@ func TestDirPatternMatchesTheSubtree(t *testing.T) {
 		{"/", "^/", []string{"/a", "/etc/passwd"}, []string{"a", "socket:[1]"}},
 		{"/tmp/a ", "^/tmp/a /", []string{"/tmp/a /x"}, []string{"/tmp/a/x"}},
 		{"/a$", "^/a$/", []string{"/a$/x"}, []string{"/a/x"}},
+		// The literal dir of "a//b" is "a/": it must not also select "a/x".
+		{"a/", "^a//", []string{"a//b"}, []string{"a/x", "a/b"}},
+		{"   ", "^   /", []string{"   /z"}, []string{"/z", " /z"}},
 	} {
 		got := DirPattern(tt.dir)
 		if got != tt.want {

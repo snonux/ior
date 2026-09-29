@@ -40,7 +40,9 @@ import (
 //     ("chrome" -> "Chrome_ChildIOT", matched case-insensitively), so the substring keeps them; an exact
 //     pattern would drop them although the row counted them. It remains an
 //     approximation either way ("Web Content" threads are missed by both):
-//     the PID column is the exact per-process filter.
+//     the PID column is the exact per-process filter. A comm starting with
+//     ^ or ending with $ cannot be a literal substring pattern, so that row
+//     falls back to the PID filter (commSubstringUsable).
 //
 // Typed patterns (filter modal, -comm/-path flags) stay substring searches.
 
@@ -157,11 +159,12 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 }
 
 // usableDir reports whether a dir-grouped Files row can become a subtree
-// filter. A blank dir cannot, and neither can noDirGroup: it collects
-// separator-less names ("a.log", "socket:[123]") and "./"-relative ones, and
-// no prefix pattern selects exactly those.
+// filter. Only noDirGroup cannot: it collects separator-less names ("a.log",
+// "socket:[123]") and "./"-relative ones, and no prefix pattern selects
+// exactly those. Every other dir can, even an all-blank one ("   " from
+// "   /z"): DirPattern anchors it as "^   /", which no trim alters.
 func usableDir(dir string) bool {
-	return strings.TrimSpace(dir) != "" && dir != noDirGroup
+	return dir != noDirGroup
 }
 
 func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
@@ -175,11 +178,21 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 		// PID, and thread comms often extend the process's (see the file
 		// comment). Trimmed, since the matcher trims a pattern anyway and the
 		// action label should read the same as the applied filter.
-		if comm := strings.TrimSpace(proc.Comm); comm != "" {
+		if comm := strings.TrimSpace(proc.Comm); commSubstringUsable(comm) {
 			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
 			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
 		}
 	}
 	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
 	return filter, presenter.DimensionSummary(filter, presenter.DimPID), true
+}
+
+// commSubstringUsable reports whether a trimmed comm can serve as the Comm
+// cell's substring pattern. A blank one cannot (it constrains nothing), and
+// neither can one starting with ^ or ending with $: the matcher would read
+// that character as an anchor ("x$" = "ends with x"), and a substring pattern
+// has no way to keep it literal. Such a row falls back to the PID filter,
+// which is the exact filter for the process anyway.
+func commSubstringUsable(comm string) bool {
+	return comm != "" && !strings.HasPrefix(comm, "^") && !strings.HasSuffix(comm, "$")
 }

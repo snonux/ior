@@ -144,7 +144,7 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 	dirs := aggregateFilesByDir(snap.Files())
 	items := make([]syscallTreemapItem, 0, len(dirs))
 	for _, dir := range dirs {
-		pathLabel := rootPathLabelFromFSPath(dir.Dir)
+		pathLabel := dirRowLabel(dir.Dir)
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
 			Name:     pathLabel,
