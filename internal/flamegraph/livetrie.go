@@ -79,7 +79,7 @@ func NewLiveTrie(fields []string, countField, heightField string) *LiveTrie {
 }
 
 func (lt *LiveTrie) addLocked(frames []string, value, heightValue uint64) {
-	lt.nodeCount += insertTriePath(lt.root, frames, value, heightValue)
+	lt.nodeCount += insertLiveTriePath(lt.root, frames, value, heightValue)
 	if lt.maxNodes >= 2 && lt.nodeCount > lt.maxNodes {
 		lt.compactLocked()
 	}
