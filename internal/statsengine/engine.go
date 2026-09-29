@@ -3,7 +3,6 @@ package statsengine
 import (
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -67,11 +66,9 @@ type Engine struct {
 	throughputSeries *ringTimeSeries
 
 	// samplePool supplies the scratch buffers Snapshot copies stale latency
-	// reservoirs into, acquired before e.mu is taken. syscallCountHint is the
-	// number of tracked syscalls seen by the last capture, an upper bound on
-	// how many buffers the next capture needs (barring new syscalls).
-	samplePool       *sampleBufferPool
-	syscallCountHint atomic.Int64
+	// reservoirs into, acquired before e.mu is taken and sized by what the
+	// previous capture actually copied.
+	samplePool *sampleBufferPool
 }
 
 type snapshotInputs struct {
@@ -224,7 +221,6 @@ func (e *Engine) captureSnapshotInputs(scratch [][]uint64) snapshotInputs {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.now()
-	e.syscallCountHint.Store(int64(len(e.syscalls.byID)))
 
 	return snapshotInputs{
 		now:                    now,
@@ -334,7 +330,7 @@ func (e *Engine) storeSyscallPercentiles(jobs []percentileJob) {
 // releaseSampleBuffers hands scratch buffers back to the pool once nothing
 // references them any more.
 func (e *Engine) releaseSampleBuffers(bufs [][]uint64) {
-	e.samplePool.release(bufs, int(e.syscallCountHint.Load()))
+	e.samplePool.release(bufs)
 }
 
 // Snapshot returns an immutable point-in-time view of all stats.
@@ -348,12 +344,13 @@ func (e *Engine) Snapshot() (*Snapshot, error) {
 		return nil, nil
 	}
 
-	in := e.captureSnapshotInputs(e.samplePool.acquire(int(e.syscallCountHint.Load())))
+	in := e.captureSnapshotInputs(e.samplePool.acquire())
+	e.samplePool.recordDemand(in.syscalls.jobs)
 	e.releaseSampleBuffers(in.syscalls.spare)
 	// Job buffers go back to the pool once the builders and the write-back
-	// are done with them, also on error. The very first snapshot (hint 0)
-	// falls back to allocating under the lock; later ones find enough
-	// buffers unless new syscalls appeared in between.
+	// are done with them, also on error. The very first snapshot (no demand
+	// recorded yet) falls back to allocating under the lock; later ones find
+	// fitting buffers unless more or larger reservoirs went stale.
 	defer e.releaseSampleBuffers(jobSampleBuffers(in.syscalls.jobs))
 	elapsed := nonNegativeDuration(in.now.Sub(in.startedAt))
 
