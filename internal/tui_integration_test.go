@@ -1507,7 +1507,8 @@ func TestTUIIntegration_Syscalls_MetricToggle(t *testing.T) {
 
 // TestTUIIntegration_Syscalls_EnterPushesFilter presses Enter on the selected
 // table row and asserts the resulting global filter (shown in the dashboard
-// status line) gains a "syscall~<name>" predicate for the seeded top row.
+// status line) gains an exact "syscall~^<name>$" predicate for the seeded top
+// row (row filters select exactly the row, task yo2).
 func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
@@ -1517,15 +1518,16 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s.waitFor("Syscall", "filter: pid=1")
 
 	// Enter on the table's selected (top) row clones the active filter and adds a
-	// syscall predicate for that row's name; "write" is the seeded top row by the
-	// default count-descending order.
+	// syscall predicate for that row's name, anchored so it cannot also select
+	// e.g. writev; "write" is the seeded top row by the default
+	// count-descending order.
 	s.press(tea.KeyEnter)
-	s.waitFor("syscall~write")
+	s.waitFor("syscall~^write$")
 
 	// The Syscalls tab now render-scopes by the active syscall predicate: only
 	// the "write" row survives; the distinctive seeded "epoll_wait" row (which is
 	// present in the unfiltered table) is gone.
-	s.waitForAbsent("epoll_wait", "syscall~write", "write")
+	s.waitForAbsent("epoll_wait", "syscall~^write$", "write")
 }
 
 // TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter moves the column
