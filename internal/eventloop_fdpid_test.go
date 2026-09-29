@@ -275,19 +275,19 @@ func TestFdTableRetainsRecentlyUsedEntries(t *testing.T) {
 	}
 }
 
-// TestDeletePidPresenceSetInvariants pins the pidPresent fast path's core
-// property from both sides: the set only over-approximates (an exit for a pid
-// that never registered is a no-op that leaves other pids alone), and it never
-// *misses* (a pid that registered is always evicted, and can re-register
-// afterwards - pid numbers are reused by the kernel).
+// TestDeletePidPresenceSetInvariants pins the per-pid index fast path from
+// both sides: an exit for a pid that never registered is a no-op that leaves
+// other pids alone, and the index never *misses* (a pid that registered is
+// always evicted, and can re-register afterwards - pid numbers are reused by
+// the kernel).
 func TestDeletePidPresenceSetInvariants(t *testing.T) {
-	// A zero-value tracker has no presence set at all; exit records must not
-	// panic on it (the nil-set guard in deletePid).
+	// A zero-value tracker has no index at all; exit records must not panic
+	// on it (a lookup in the nil index map finds nothing).
 	(&fdTracker{}).deletePid(crossPidA)
 
 	fdt := newFDTracker(nil)
-	// A constructed tracker has an empty (non-nil) presence set: exit of a
-	// pid that never registered takes the absent-pid early return.
+	// A constructed tracker has an empty (non-nil) index: exit of a pid that
+	// never registered takes the absent-pid early return.
 	fdt.deletePid(crossPidA)
 
 	fdt.set(crossFd, crossPidA, file.NewFd(crossFd, "/tmp/present.txt", syscall.O_RDONLY))

@@ -1051,8 +1051,12 @@ func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 	fds.set(17, execCommPid, file.NewFd(17, "/h", syscall.O_RDONLY))
 	fds.addFlagsRange(17, 17, execCommPid, syscall.O_CLOEXEC)
 	fds.set(10, otherPid, file.NewFd(10, "/other", syscall.O_RDONLY|syscall.O_CLOEXEC))
-	fds.setProcFdCache(20, execCommPid, file.NewFd(20, "/cached", syscall.O_RDONLY))
-	fds.setProcFdCache(20, otherPid, file.NewFd(20, "/cached-other", syscall.O_RDONLY))
+	// Procfs cache entries follow the same rule as the fd table: known-set
+	// and unknown (unresolvable) state are dropped, known-clear survives.
+	fds.setProcFdCache(20, execCommPid, file.NewFd(20, "/cached-cloexec", syscall.O_RDONLY|syscall.O_CLOEXEC))
+	fds.setProcFdCache(21, execCommPid, file.NewFd(21, "", -1))
+	fds.setProcFdCache(22, execCommPid, file.NewFd(22, "/cached-kept", syscall.O_RDONLY))
+	fds.setProcFdCache(20, otherPid, file.NewFd(20, "/cached-other", syscall.O_RDONLY|syscall.O_CLOEXEC))
 
 	// An empty comm makes the record useless as a label, but the exec still
 	// happened, so the eviction must not hide behind the comm early return.
@@ -1069,17 +1073,61 @@ func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 	if _, ok := fds.fileAges[fdKey(execCommPid, 10)]; ok {
 		t.Error("evicted fd 10 left its LRU age behind")
 	}
-	if _, ok := fds.procFdCache[fdKey(execCommPid, 20)]; ok {
-		t.Error("exec'ing pid's procfs cache entry survived the exec")
+	for _, fd := range []int32{20, 21} {
+		if _, ok := fds.procFdCache[fdKey(execCommPid, fd)]; ok {
+			t.Errorf("exec'ing pid's procfs cache entry for fd %d survived the exec", fd)
+		}
+	}
+	if cached, ok := fds.procFdCache[fdKey(execCommPid, 22)]; !ok || cached.Name() != "/cached-kept" {
+		t.Error("known-clear procfs cache entry was dropped by the exec")
 	}
 	verifyFileDescriptor(t, el, otherPid, 10, "/other")
 	if _, ok := fds.procFdCache[fdKey(otherPid, 20)]; !ok {
 		t.Error("another pid's procfs cache entry was dropped by this pid's exec")
 	}
 	// A surviving descriptor must keep its pid registered so a later exit
-	// still evicts it (pidPresent must never miss).
+	// still evicts it (the per-pid index must never miss).
+	assertFdIndexConsistent(t, fds)
 	fds.deletePid(execCommPid)
 	verifyFdNotTracked(t, el, execCommPid, 11)
+	if _, ok := fds.procFdCache[fdKey(execCommPid, 22)]; ok {
+		t.Error("surviving procfs cache entry was not evicted by the later exit")
+	}
+	assertFdIndexConsistent(t, fds)
+}
+
+// TestProcessExecEventKeepsDup2dStdoutName drives the common shell pattern
+// end to end through the real handlers: open a log file O_CLOEXEC, dup2 it
+// onto fd 1 (registerDup clears FD_CLOEXEC on the duplicate, as the kernel
+// does), exec, then write(1). The duplicate survives the exec in the kernel,
+// so it must keep its name; the O_CLOEXEC original must be gone.
+func TestProcessExecEventKeepsDup2dStdoutName(t *testing.T) {
+	const logName = "/var/log/job.log"
+	const openedFd = 5
+	const stdout = 1
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	if ep := feedOpenPairWithFlags(t, el, logName, execCommPid, execCommTid, openedFd,
+		syscall.O_WRONLY|syscall.O_CLOEXEC); ep != nil {
+		ep.Recycle()
+	}
+	if ep := feedFdPair(t, el, types.SYS_ENTER_DUP2, types.SYS_EXIT_DUP2,
+		openedFd, stdout, dupPairStart, dupPairStart+openPairLatency); ep != nil {
+		ep.Recycle()
+	}
+
+	el.processRawEvent(makeProcessExecEvent(t, dupPairStart+openPairLatency+1, execCommPid, execCommTid, "job"),
+		make(chan *event.Pair, 1))
+
+	verifyFdNotTracked(t, el, execCommPid, openedFd)
+	ep := feedFdPair(t, el, types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE,
+		stdout, 64, writePairStart, writePairStart+openPairLatency)
+	if ep == nil {
+		t.Fatal("expected the post-exec write(1) to produce a row")
+	}
+	defer ep.Recycle()
+	if got := ep.File.Name(); got != logName {
+		t.Fatalf("post-exec write(1) reports %q, want the dup2'd %q", got, logName)
+	}
 }
 
 // TestDropOnExecIgnoresUnregisteredPids covers the fast paths: a zero-value
