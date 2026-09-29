@@ -790,6 +790,9 @@ func TestHeadlessParquetSinkQueueOverflowIsNotFatal(t *testing.T) {
 	if isFatalRecorderError(parquet.ErrRecorderQueueFull) {
 		t.Fatalf("isFatalRecorderError(ErrRecorderQueueFull) = true, want false")
 	}
+	if isFatalRecorderError(parquet.ErrRecorderStartedDropping) {
+		t.Fatalf("isFatalRecorderError(ErrRecorderStartedDropping) = true, want false")
+	}
 	joined := errors.Join(parquet.ErrRecorderQueueFull, errors.New("overflow detail"))
 	if isFatalRecorderError(joined) {
 		t.Fatalf("isFatalRecorderError(joined queue-full) = true, want false")
