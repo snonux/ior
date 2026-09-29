@@ -860,7 +860,7 @@ func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	data := make([]bubbleDatum, 0, len(dirs))
 	for _, dir := range dirs {
 		totalBytes := dir.BytesRead + dir.BytesWritten
-		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dir.Dir, dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", common.Sanitize(dir.Dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
 		data = append(data, bubbleDatum{
 			ID:       dir.Dir,
 			Label:    rootPathLabelFromFSPath(dir.Dir),
@@ -880,10 +880,7 @@ func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	rows := snap.Processes()
 	data := make([]bubbleDatum, 0, len(rows))
 	for _, proc := range rows {
-		label := fmt.Sprintf("%d", proc.PID)
-		if comm := strings.TrimSpace(proc.Comm); comm != "" {
-			label = fmt.Sprintf("%d:%s", proc.PID, comm)
-		}
+		label := processLabel(proc.PID, proc.Comm)
 		detail := fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
 		data = append(data, bubbleDatum{
 			ID:       fmt.Sprintf("%d/%s", proc.PID, proc.Comm),

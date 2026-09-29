@@ -109,19 +109,14 @@ func ClampTableCol(col, colCount int) int {
 	return clampIndex(col, colCount)
 }
 
-// renderTableCell fits value into exactly width display cells: newlines and
-// tabs become spaces, an overlong value is cut on a grapheme boundary and
-// ends in "...", and the rest is space-padded. Width is measured in terminal
-// cells (not runes) so CJK and emoji cells keep the columns aligned.
+// renderTableCell fits value into exactly width display cells: control
+// characters are neutralised by Sanitize (newlines and tabs become spaces,
+// escape sequences cannot reach the terminal), an overlong value is cut on a
+// grapheme boundary and ends in "...", and the rest is space-padded. Width is
+// measured in terminal cells (not runes) so CJK and emoji cells keep the
+// columns aligned.
 func renderTableCell(value string, width int) string {
-	return FitRight(sanitizeTableCell(value), width, ASCIIEllipsis)
-}
-
-func sanitizeTableCell(value string) string {
-	value = strings.ReplaceAll(value, "\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\t", " ")
-	return value
+	return FitRight(Sanitize(value), width, ASCIIEllipsis)
 }
 
 func clampIndex(value, count int) int {

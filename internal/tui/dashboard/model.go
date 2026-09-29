@@ -1141,7 +1141,10 @@ func (m *Model) filterSummary() string {
 	}
 	b.WriteString(" | ")
 	b.WriteString(m.autoResetStatus())
-	return b.String()
+	// Filter patterns are often copied from traced comm/file values (push
+	// filter from a selected row) and the notice/recording status can echo
+	// paths, so the plain-text summary is sanitised before it is rendered.
+	return common.Sanitize(b.String())
 }
 
 // renderActiveContent renders the active tab's body through its registered

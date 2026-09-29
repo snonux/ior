@@ -159,12 +159,14 @@ func processRows(processes []statsengine.ProcessSnapshot) [][]string {
 	return rows
 }
 
-// truncateText shortens value to at most limit display cells, ending in "..."
-// with any trailing space before the marker trimmed. Limits of three cells or
+// truncateText sanitises value (it renders traced comm names, see
+// common.Sanitize) and shortens it to at most limit display cells, ending in
+// "..." with any trailing space before the marker trimmed. Limits of three cells or
 // fewer hard-cut the value instead, as a lone "..." would hide all content.
 // Cuts are grapheme- and display-width-aware (common.TruncateRight), so
 // multi-byte comm names never turn into invalid UTF-8.
 func truncateText(value string, limit int) string {
+	value = common.Sanitize(value)
 	if common.DisplayWidth(value) <= limit {
 		return value
 	}

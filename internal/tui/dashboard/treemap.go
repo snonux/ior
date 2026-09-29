@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )
@@ -153,7 +154,7 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 			Duration: dir.TotalLatencyNs,
 			Detail: fmt.Sprintf(
 				"dir %s, files %d, read %s, write %s, max %s",
-				dir.Dir,
+				common.Sanitize(dir.Dir),
 				dir.FileCount,
 				formatBytes(float64(dir.BytesRead)),
 				formatBytes(float64(dir.BytesWritten)),
@@ -173,10 +174,7 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 	processes := snap.Processes()
 	items := make([]syscallTreemapItem, 0, len(processes))
 	for _, proc := range processes {
-		label := fmt.Sprintf("%d", proc.PID)
-		if comm := strings.TrimSpace(proc.Comm); comm != "" {
-			label = fmt.Sprintf("%d:%s", proc.PID, comm)
-		}
+		label := processLabel(proc.PID, proc.Comm)
 		item := syscallTreemapItem{
 			Name:     label,
 			Key:      processKey(proc.PID),

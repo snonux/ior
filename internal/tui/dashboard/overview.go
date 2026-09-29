@@ -147,7 +147,7 @@ func summarizeTopProcesses(snap *statsengine.Snapshot) string {
 	}
 	parts := make([]string, 0, len(processes))
 	for _, p := range processes {
-		parts = append(parts, fmt.Sprintf("%s/%d(%d)", p.Comm, p.PID, p.Syscalls))
+		parts = append(parts, fmt.Sprintf("%s/%d(%d)", common.Sanitize(p.Comm), p.PID, p.Syscalls))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -174,11 +174,12 @@ func summarizeHistogramBrief(hist statsengine.HistogramSnapshot) string {
 	return strings.Join(parts, ", ")
 }
 
-// trimPathTail shortens path to at most max display cells, keeping its end
-// (the file name) behind a "..." prefix. It delegates to common.TruncateLeft,
+// trimPathTail sanitises the traced path (common.Sanitize) and shortens it to
+// at most max display cells, keeping its end (the file name) behind a "..."
+// prefix. It delegates to common.TruncateLeft,
 // which cuts on grapheme boundaries so multi-byte paths stay valid UTF-8.
 func trimPathTail(path string, max int) string {
-	return common.TruncateLeft(path, max, common.ASCIIEllipsis)
+	return common.TruncateLeft(common.Sanitize(path), max, common.ASCIIEllipsis)
 }
 
 func formatElapsed(elapsed time.Duration) string {
