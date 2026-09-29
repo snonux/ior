@@ -39,6 +39,7 @@ func insertLiveTriePath(root *trieNode, frames []string, value, heightValue uint
 // liveTrieOtherFrame, is ever inserted into a bucket.
 func insertPath(root *trieNode, frames []string, value, heightValue uint64, trackTop bool) int {
 	created := 0
+	birthRootTotal := root.total
 	node := root
 	node.total += value
 	node.heightTotal += heightValue
@@ -48,7 +49,7 @@ func insertPath(root *trieNode, frames []string, value, heightValue uint64, trac
 		}
 		child, ok := node.childMap[frame]
 		if !ok {
-			child = &trieNode{name: strings.Clone(frame)}
+			child = &trieNode{name: strings.Clone(frame), birthRootTotal: birthRootTotal}
 			node.children = append(node.children, child)
 			node.childMap[frame] = child
 			created++

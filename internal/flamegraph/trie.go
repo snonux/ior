@@ -27,7 +27,10 @@ type trieNode struct {
 	topChildren []*trieNode
 	childMap    map[string]*trieNode
 	bucket      *trieNode
-	mark        compactMark
+	// birthRootTotal is the root total when the node was created; LiveTrie
+	// compaction ranks nodes by their rate since then (see rateClock).
+	birthRootTotal uint64
+	mark           compactMark
 }
 
 type trie struct {

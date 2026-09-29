@@ -11,7 +11,7 @@ import (
 // whole recorded history:
 //
 //   - Pruning is decided before recursing, from the subtree totals and
-//     topChildren lists that insertTriePath maintains on every insert. A
+//     topChildren lists that insertLiveTriePath maintains on every insert. A
 //     pruned subtree is neither walked nor materialised, and the pruned tail
 //     of a wide fan-out is usually not even scanned (selectVisibleChildren).
 //   - A node's snapshot Total/HeightTotal are its full subtree totals, pruned
@@ -121,8 +121,8 @@ func (b *snapshotBuilder) selectVisibleFrames(node *trieNode, depth int) {
 }
 
 // fallback appends the largest non-empty children of a shallow node none of
-// whose children passed the fraction rule. insertTriePath keeps exactly that
-// set in topChildren, so this costs nothing even for a huge fan-out.
+// whose children passed the fraction rule. insertLiveTriePath keeps exactly
+// that set in topChildren, so this costs nothing even for a huge fan-out.
 func (b *snapshotBuilder) fallback(node *trieNode, depth int) {
 	if depth > liveTrieVisibleChildrenFallbackMaxDepth {
 		return
@@ -136,9 +136,9 @@ func (b *snapshotBuilder) pruned(total uint64) bool {
 	return fractionBelow(total, b.rootTotal, b.minFraction)
 }
 
-// fractionBelow reports whether total/rootTotal < minFraction. It is the one
-// definition of "small" shared by snapshot pruning and compaction, so the
-// first compaction pass only ever removes nodes a snapshot would not show.
+// fractionBelow reports whether total/rootTotal < minFraction, the snapshot
+// pruning rule. (Compaction reuses it only indirectly, through
+// selectVisibleChildren, to find the nodes a snapshot shows.)
 func fractionBelow(total, rootTotal uint64, minFraction float64) bool {
 	return rootTotal > 0 && float64(total)/float64(rootTotal) < minFraction
 }
