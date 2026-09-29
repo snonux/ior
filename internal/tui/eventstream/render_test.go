@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/tui/common"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -166,14 +168,15 @@ func narrowTestEvents() []StreamEvent {
 }
 
 // assertPanelFits checks that out has exactly wantLines terminal lines (no
-// wrapping) and that no line is wider than the panel's outer width.
+// wrapping) and that no line is wider than the terminal width. Below the
+// smallest possible panel (frame + one cell) that panel's width is the limit.
 func assertPanelFits(t *testing.T, width int, out string, wantLines int) {
 	t.Helper()
 	lines := strings.Split(out, "\n")
 	if len(lines) != wantLines {
 		t.Fatalf("width %d: got %d lines, want %d (rows wrapped)\n%s", width, len(lines), wantLines, out)
 	}
-	limit := panelContentWidth(width)
+	limit := max(width, common.Current().PanelStyle.GetHorizontalFrameSize()+1)
 	for _, line := range lines {
 		if w := lipgloss.Width(line); w > limit {
 			t.Fatalf("width %d: line is %d cols wide, limit %d: %q", width, w, limit, line)
@@ -182,13 +185,14 @@ func assertPanelFits(t *testing.T, width int, out string, wantLines int) {
 }
 
 // Regression for task go2: below ~94 columns the column layout was sized for
-// the panel's outer width, so every row wrapped to two lines while
-// visibleRows() budgets one, pushing footer/status off-screen.
+// the panel's outer width, and the panel had a 20-column floor, so rows
+// wrapped to two lines while visibleRows() budgets one, pushing
+// footer/status off-screen.
 func TestRenderStreamTableDoesNotWrapAtAnyWidth(t *testing.T) {
 	filter := Filter{Comm: &StringFilter{Pattern: strings.Repeat("c", 150)}, PID: &NumericFilter{Op: OpEq, Value: 1}}
 	stack := []string{strings.Repeat("comm~x", 30), "fd=20"}
 	events := narrowTestEvents()
-	for width := 20; width <= 160; width++ {
+	for width := 1; width <= 160; width++ {
 		for _, paused := range []bool{false, true} {
 			sel := -1
 			if paused {
@@ -203,7 +207,7 @@ func TestRenderStreamTableDoesNotWrapAtAnyWidth(t *testing.T) {
 
 func TestRenderFDTraceTableDoesNotWrapAtAnyWidth(t *testing.T) {
 	events := narrowTestEvents()
-	for width := 20; width <= 160; width++ {
+	for width := 1; width <= 160; width++ {
 		out := RenderFDTraceTable(width, 4294967295, 2147483647, 123456789, events)
 		// border top + title + scope + header + rows + border bottom
 		assertPanelFits(t, width, out, 4+len(events)+1)

@@ -267,14 +267,12 @@ func sanitizeOneLine(s string) string {
 }
 
 // panelContentWidth is the value passed to PanelStyle.Width for a given
-// terminal width. It keeps a 4-column margin to the terminal edge and never
-// drops below 20.
+// terminal width. lipgloss v2 counts border and padding as part of Width, so
+// the panel spans the full terminal width like the dashboard's other panels.
+// It only grows past width when the terminal is narrower than the panel frame
+// plus one text cell, the smallest panel that can hold any content.
 func panelContentWidth(width int) int {
-	inner := width - 4
-	if inner < 20 {
-		return 20
-	}
-	return inner
+	return max(width, common.Current().PanelStyle.GetHorizontalFrameSize()+1)
 }
 
 // panelTextWidth is the width available to text inside a panel rendered with
