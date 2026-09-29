@@ -13,8 +13,16 @@ import (
 
 // runLandlockCreateRuleset feeds one landlock_create_ruleset enter/exit pair
 // through handleEventfdExit, after pre-registering fd 6 as a real log file so
-// a clobbered fd table entry is observable.
+// a clobbered fd table entry is observable. Enter and exit carry the same
+// flags, as when the BPF eventfd_flags_map lookup hits.
 func runLandlockCreateRuleset(t *testing.T, flags int32, ret int64) (*eventLoop, *event.Pair) {
+	t.Helper()
+	return runLandlockCreateRulesetFlags(t, flags, flags, ret)
+}
+
+// runLandlockCreateRulesetFlags is runLandlockCreateRuleset with separate
+// enter and exit flags, to model an exit whose flags lookup missed (0).
+func runLandlockCreateRulesetFlags(t *testing.T, enterFlags, exitFlags int32, ret int64) (*eventLoop, *event.Pair) {
 	t.Helper()
 	const pid = uint32(90)
 	el := mustNewEventLoop(t, eventLoopConfig{})
@@ -26,7 +34,7 @@ func runLandlockCreateRuleset(t *testing.T, flags int32, ret int64) (*eventLoop,
 		Time:      100,
 		Pid:       pid,
 		Tid:       pid,
-		Flags:     flags,
+		Flags:     enterFlags,
 		Fd:        -1,
 		Ret:       -1,
 	}
@@ -36,7 +44,7 @@ func runLandlockCreateRuleset(t *testing.T, flags int32, ret int64) (*eventLoop,
 		Time:      200,
 		Pid:       pid,
 		Tid:       pid,
-		Flags:     flags,
+		Flags:     exitFlags,
 		Fd:        -1,
 		Ret:       ret,
 	}
@@ -59,6 +67,9 @@ func TestLandlockCreateRulesetProbeDoesNotRegisterFd(t *testing.T) {
 		{name: "errata", flags: unix.LANDLOCK_CREATE_RULESET_ERRATA, ret: 6},
 		{name: "version zero return", flags: unix.LANDLOCK_CREATE_RULESET_VERSION, ret: 0},
 		{name: "unknown extra bit with version", flags: unix.LANDLOCK_CREATE_RULESET_VERSION | 0x8, ret: 6},
+		// Unknown flags make the kernel fail with -EINVAL; should a future
+		// kernel accept them as a new query, the result is still not an fd.
+		{name: "unknown bit only", flags: 0x4, ret: 6},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,10 +96,27 @@ func TestLandlockCreateRulesetRegistersRulesetFd(t *testing.T) {
 	}
 }
 
-// A failed probe (e.g. -EOPNOTSUPP when Landlock is disabled) records nothing.
+// A failed probe (e.g. -EOPNOTSUPP when Landlock is disabled) records nothing
+// but is still labelled as a probe.
 func TestLandlockCreateRulesetFailedProbeLeavesFdTable(t *testing.T) {
-	el, _ := runLandlockCreateRuleset(t, unix.LANDLOCK_CREATE_RULESET_VERSION, -int64(unix.EOPNOTSUPP))
+	el, ep := runLandlockCreateRuleset(t, unix.LANDLOCK_CREATE_RULESET_VERSION, -int64(unix.EOPNOTSUPP))
 	verifyFileDescriptor(t, el, 90, 6, "/var/log/app.log")
+	want := landlockProbeName(unix.LANDLOCK_CREATE_RULESET_VERSION)
+	if ep.File == nil || ep.File.Name() != want {
+		t.Fatalf("pair file = %v, want %q", ep.File, want)
+	}
+}
+
+// The BPF exit path reports flags 0 when its eventfd_flags_map lookup misses;
+// the enter flags must then decide, so the probe still stays out of the fd
+// table.
+func TestLandlockCreateRulesetProbeFallsBackToEnterFlags(t *testing.T) {
+	el, ep := runLandlockCreateRulesetFlags(t, unix.LANDLOCK_CREATE_RULESET_VERSION, 0, 6)
+	verifyFileDescriptor(t, el, 90, 6, "/var/log/app.log")
+	want := landlockProbeName(unix.LANDLOCK_CREATE_RULESET_VERSION)
+	if ep.File == nil || ep.File.Name() != want {
+		t.Fatalf("pair file = %v, want %q", ep.File, want)
+	}
 }
 
 func TestIsLandlockRulesetProbe(t *testing.T) {
@@ -101,7 +129,8 @@ func TestIsLandlockRulesetProbe(t *testing.T) {
 		{name: "version", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 1, want: true},
 		{name: "errata", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 2, want: true},
 		{name: "no flags", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 0, want: false},
-		{name: "unrelated bit", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 4, want: false},
+		{name: "unknown bit", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: 4, want: true},
+		{name: "sign bit", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, flags: -1 << 31, want: true},
 		{name: "other syscall with bit 0", traceID: types.SYS_ENTER_EVENTFD2, flags: 1, want: false},
 	}
 	for _, tt := range tests {

@@ -683,8 +683,9 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 
 // handleEventfdExit records the descriptor returned by the fd-creating
 // syscalls grouped under the eventfd payload (eventfd, epoll_create, memfd,
-// landlock_create_ruleset, ...). A landlock_create_ruleset ABI probe returns a
-// version/errata number rather than an fd, so it is labelled without touching
+// landlock_create_ruleset, ...). A landlock_create_ruleset call with non-zero
+// flags (an ABI probe) returns a version/errata number or an error rather
+// than an fd, so it is labelled without touching
 // the fd table: registering its return value would clobber the name of a real
 // descriptor that happens to share that number.
 func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEvent) bool {
@@ -736,14 +737,15 @@ func (e *eventLoop) registerEventfdResult(eventfdEv *types.EventfdEvent, fd, fla
 	return fdFile
 }
 
-// isLandlockRulesetProbe reports whether a landlock_create_ruleset call is an
-// ABI query. With LANDLOCK_CREATE_RULESET_VERSION or _ERRATA the kernel
-// returns the ABI version or the errata bitmask instead of a ruleset fd
-// (libraries such as go-landlock and the Rust landlock crate probe this at
-// startup), so the return value must never enter the fd table.
+// isLandlockRulesetProbe reports whether a landlock_create_ruleset call cannot
+// have returned a ruleset fd. The kernel only creates a ruleset when flags is
+// 0; LANDLOCK_CREATE_RULESET_VERSION or _ERRATA return the ABI version or the
+// errata bitmask instead (libraries such as go-landlock and the Rust landlock
+// crate probe this at startup), and any other non-zero flags fail with
+// -EINVAL. Checking flags != 0 rather than the known query bits keeps future
+// query flags out of the fd table too.
 func isLandlockRulesetProbe(traceID types.TraceId, flags int32) bool {
-	const probeFlags = unix.LANDLOCK_CREATE_RULESET_VERSION | unix.LANDLOCK_CREATE_RULESET_ERRATA
-	return traceID == types.SYS_ENTER_LANDLOCK_CREATE_RULESET && flags&probeFlags != 0
+	return traceID == types.SYS_ENTER_LANDLOCK_CREATE_RULESET && flags != 0
 }
 
 // landlockProbeName labels an ABI probe row; it is a pathname-style label
