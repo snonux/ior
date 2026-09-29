@@ -125,7 +125,7 @@ func TestInsertTriePathMaintainsSubtreeTotalsIncrementally(t *testing.T) {
 	paths := [][]string{{"a", "b"}, {"a", "c"}, {"a"}, {}, {"d", "e", "f"}, {"a", "b"}}
 	created := 0
 	for i, frames := range paths {
-		created += insertTriePath(root, frames, uint64(i+1), uint64(10*(i+1)))
+		created += insertLiveTriePath(root, frames, uint64(i+1), uint64(10*(i+1)))
 	}
 	if got, want := created, 6; got != want {
 		t.Fatalf("created nodes = %d, want %d", got, want)
@@ -144,13 +144,26 @@ func TestInsertTriePathMaintainsSubtreeTotalsIncrementally(t *testing.T) {
 	check(root)
 }
 
+func TestInsertTriePathSkipsTopChildrenUpkeep(t *testing.T) {
+	// The batch trie never reads topChildren, so its insert must not pay
+	// for them.
+	tr := newTrie()
+	tr.add([]string{"a", "b"}, 3)
+	if len(tr.root.topChildren) != 0 || len(findChild(tr.root, "a").topChildren) != 0 {
+		t.Fatal("batch trie insert maintained topChildren")
+	}
+	if got, want := tr.root.total, uint64(3); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+}
+
 func TestPromoteTopChildTracksLargestChildrenUnderRandomInserts(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	root := &trieNode{}
 	for i := 0; i < 5000; i++ {
 		// Zero values exercise the "empty children never enter" rule.
 		frame := fmt.Sprintf("c%02d", rng.Intn(40))
-		insertTriePath(root, []string{frame}, uint64(rng.Intn(4)), 0)
+		insertLiveTriePath(root, []string{frame}, uint64(rng.Intn(4)), 0)
 		assertTopChildren(t, root)
 	}
 	if got := len(root.topChildren); got != trieTopChildren {
@@ -161,7 +174,7 @@ func TestPromoteTopChildTracksLargestChildrenUnderRandomInserts(t *testing.T) {
 // assertTopChildren checks node.topChildren against a from-scratch selection.
 func assertTopChildren(t *testing.T, node *trieNode) {
 	t.Helper()
-	want := appendLargestChildren(nil, node.children, trieTopChildren)
+	want := appendLargestChildren(nil, node.children, node.bucket, trieTopChildren)
 	if !slices.Equal(node.topChildren, want) {
 		t.Fatalf("node %q topChildren = %v, want %v", node.name, trieNodeNames(node.topChildren), trieNodeNames(want))
 	}
@@ -189,8 +202,11 @@ func TestAppendLargestChildren(t *testing.T) {
 	tests := []struct {
 		name     string
 		children []*trieNode
-		limit    int
-		want     string
+		// skip is the 0-based index of the child passed as skip, or 0 for
+		// none (the tables never skip their first child).
+		skip  int
+		limit int
+		want  string
 	}{
 		{name: "none", children: nil, limit: 3, want: ""},
 		{name: "zero totals are skipped", children: nodes("a0", "b0"), limit: 3, want: ""},
@@ -198,11 +214,16 @@ func TestAppendLargestChildren(t *testing.T) {
 		{name: "largest first then by name", children: nodes("d1", "c5", "a2", "b2", "e9", "f1"), limit: 3, want: "e,c,a"},
 		{name: "ties at the cut keep the smaller names", children: nodes("z1", "y1", "x1", "w1"), limit: 2, want: "w,x"},
 		{name: "zero limit", children: nodes("a1"), limit: 0, want: ""},
+		{name: "skip is never selected", children: nodes("a1", "b9", "c2"), skip: 1, limit: 3, want: "c,a"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			prefix := []*trieNode{{name: "keep"}}
-			got := appendLargestChildren(prefix, tc.children, tc.limit)
+			var skip *trieNode
+			if tc.skip > 0 {
+				skip = tc.children[tc.skip]
+			}
+			got := appendLargestChildren(prefix, tc.children, skip, tc.limit)
 			if got[0].name != "keep" {
 				t.Fatal("existing dst entries were overwritten")
 			}

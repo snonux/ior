@@ -76,3 +76,30 @@ func BenchmarkLiveTrieSnapshotTreeWideFallback(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkLiveTrieCompaction measures the pause of one compaction at the
+// default node cap: the AddRecord that pushes the trie past liveTrieMaxNodes
+// runs compactLocked under the write lock. Refilling the trie to the cap
+// between iterations is excluded from the timing.
+func BenchmarkLiveTrieCompaction(b *testing.B) {
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "")
+	next := 0
+	fillToCap := func() {
+		for lt.nodeCount < lt.maxNodes {
+			lt.AddRecord(IterRecord{
+				Comm: "svc",
+				Path: fmt.Sprintf("/data/d%03d/f%08d", next%500, next),
+				Cnt:  Counter{Count: uint64(1 + next%5)},
+			})
+			next++
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		fillToCap()
+		b.StartTimer()
+		lt.AddRecord(IterRecord{Comm: "svc", Path: fmt.Sprintf("/trigger/%d", i), Cnt: Counter{Count: 1}})
+	}
+}

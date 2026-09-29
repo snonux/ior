@@ -72,16 +72,31 @@ func (b *snapshotBuilder) build(node *trieNode, depth int) *SnapshotNode {
 }
 
 // selectVisibleChildren appends to b.scratch the children of node that pass
-// the fraction rule, or the fallback set when none does at a shallow depth.
+// the fraction rule, or the fallback set when no frame child does at a
+// shallow depth, plus node's compaction bucket when it passes the rule.
+//
+// The bucket takes no part in the fallback decision. Compaction only folds
+// nodes that no snapshot shows, so a view with the buckets left out is the
+// view the trie had before compacting (the compaction tests pin that).
+func (b *snapshotBuilder) selectVisibleChildren(node *trieNode, depth int) {
+	b.selectVisibleFrames(node, depth)
+	if node.bucket != nil && !b.pruned(node.bucket.total) {
+		b.scratch = append(b.scratch, node.bucket)
+	}
+}
+
+// selectVisibleFrames appends the frame (non-bucket) children that pass the
+// fraction rule, or the fallback set.
 //
 // node.topChildren (largest first) usually spares the scan of all children:
 //   - if even the largest child is pruned, none is visible;
 //   - if the list is full and its last entry is pruned, or it is not full
-//     (then every other child is empty), only list members can be visible.
+//     (then every other frame child is empty), only list members can be
+//     visible.
 //
 // Only a node with at least trieTopChildren visible children scans them all.
 // That scan is allocation-free and the node cap bounds its length.
-func (b *snapshotBuilder) selectVisibleChildren(node *trieNode, depth int) {
+func (b *snapshotBuilder) selectVisibleFrames(node *trieNode, depth int) {
 	top := node.topChildren
 	var largest uint64
 	if len(top) > 0 {
@@ -99,7 +114,7 @@ func (b *snapshotBuilder) selectVisibleChildren(node *trieNode, depth int) {
 		candidates = top
 	}
 	for _, child := range candidates {
-		if !b.pruned(child.total) {
+		if child != node.bucket && !b.pruned(child.total) {
 			b.scratch = append(b.scratch, child)
 		}
 	}

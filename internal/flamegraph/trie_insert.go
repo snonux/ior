@@ -11,21 +11,33 @@ import (
 const trieTopChildren = liveTrieMinVisibleChildrenWhenPruned
 
 // insertTriePath follows or creates nodes for frames, adds the values at the
-// leaf and returns how many nodes it created.
+// leaf and to the subtree totals of every node on the path (root included),
+// and returns how many nodes it created. It is the batch trie's insert; the
+// batch trie never reads topChildren, so it does not pay for their upkeep.
+func insertTriePath(root *trieNode, frames []string, value, heightValue uint64) int {
+	return insertPath(root, frames, value, heightValue, false)
+}
+
+// insertLiveTriePath is insertTriePath plus the per-node topChildren upkeep
+// (see promoteTopChild) that LiveTrie snapshots and compaction rely on.
+func insertLiveTriePath(root *trieNode, frames []string, value, heightValue uint64) int {
+	return insertPath(root, frames, value, heightValue, true)
+}
+
+// insertPath implements both inserts.
 //
-// It also adds both values to the subtree totals of every node on the path,
-// root included, so a trie's totals are always current. LiveTrie relies on
-// that: snapshots decide what to prune from the cached totals (and the
-// per-node topChildren list, see promoteTopChild) instead of
-// re-summing the whole history under the read lock, and compaction uses them
-// to find the small subtrees. The batch trie's computeTotals recomputes the
-// same totals, which keeps it correct for nodes built by hand in tests.
+// Keeping subtree totals current on every insert is what lets LiveTrie
+// snapshots decide pruning from cached totals instead of re-summing the whole
+// history under the read lock; compaction ranks nodes by them. The batch
+// trie's computeTotals recomputes the same totals.
 //
 // A new node's name is cloned: frames can be substrings of a much longer
 // record string (see appendPathFrames), and a long-lived trie node must not
 // pin that whole string in memory. Child maps are created lazily, on the
 // first child, because most nodes of a high-cardinality trie are leaves.
-func insertTriePath(root *trieNode, frames []string, value, heightValue uint64) int {
+// A compaction bucket is never in childMap, so no frame, not even one named
+// liveTrieOtherFrame, is ever inserted into a bucket.
+func insertPath(root *trieNode, frames []string, value, heightValue uint64, trackTop bool) int {
 	created := 0
 	node := root
 	node.total += value
@@ -43,7 +55,9 @@ func insertTriePath(root *trieNode, frames []string, value, heightValue uint64) 
 		}
 		child.total += value
 		child.heightTotal += heightValue
-		node.topChildren = promoteTopChild(node.topChildren, child)
+		if trackTop {
+			node.topChildren = promoteTopChild(node.topChildren, child)
+		}
 		node = child
 	}
 	node.value += value
@@ -55,11 +69,12 @@ func insertTriePath(root *trieNode, frames []string, value, heightValue uint64) 
 // by compareLargestFirst, after child's total grew, and returns it.
 //
 // The list stays exact because totals only grow between compactions (which
-// rebuild it): every child outside the list orders after every child in it.
+// rebuild it, see appendLargestChildren): every child outside the list orders after every child in it.
 // A member that grows can only move forward; a non-member that grows past
 // the last member replaces it, and the evicted member still orders before
 // all remaining non-members. Empty children never enter, matching the
-// snapshot fallback, which ignores them. Cost: at most trieTopChildren
+// snapshot fallback, which ignores them; neither does a compaction bucket,
+// which inserts never reach. Cost: at most trieTopChildren
 // comparisons per path level.
 func promoteTopChild(top []*trieNode, child *trieNode) []*trieNode {
 	if child.total == 0 {
@@ -86,12 +101,13 @@ func promoteTopChild(top []*trieNode, child *trieNode) []*trieNode {
 // appendLargestChildren appends up to limit non-empty children, largest
 // subtree total first and ties broken by name, to dst. It selects in one pass
 // over children with an insertion-sorted window of at most limit entries, so
-// a node with a huge fan-out is neither copied nor fully sorted. Compaction
-// uses it to rebuild topChildren from scratch.
-func appendLargestChildren(dst, children []*trieNode, limit int) []*trieNode {
+// a node with a huge fan-out is neither copied nor fully sorted. skip (the
+// parent's compaction bucket, or nil) is never selected. Compaction uses it
+// to rebuild topChildren from scratch.
+func appendLargestChildren(dst, children []*trieNode, skip *trieNode, limit int) []*trieNode {
 	base := len(dst)
 	for _, child := range children {
-		if child.total == 0 {
+		if child.total == 0 || child == skip {
 			continue
 		}
 		window := dst[base:]
