@@ -17,18 +17,14 @@ type SyscallAggregate struct {
 	// internal/c/filter.c). They add to Count but not to TotalLatencyNs, the
 	// histogram or Min/MaxLatencyNs, and a row made only of them carries no
 	// latency extrema at all. Zero means every counted invocation is timed.
-	// Means that divide total latency by the full count (per-syscall and
-	// overall mean) are diluted by them; that is accepted, because they only
-	// appear once the kernel's enter-state map is full.
+	// Latency means (per syscall and overall) therefore divide by the timed
+	// count only, so they stay right when the kernel falls back to them.
 	UntimedCount uint64
 }
 
 // timedCount returns the invocations of row that carry a latency.
 func (row SyscallAggregate) timedCount() uint64 {
-	if row.UntimedCount >= row.Count {
-		return 0
-	}
-	return row.Count - row.UntimedCount
+	return timedCount(row.Count, row.UntimedCount)
 }
 
 // IngestSyscallAggregates folds kernel aggregate rows into the engine.
@@ -49,6 +45,7 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 		}
 
 		e.totalSyscalls += row.Count
+		e.totalUntimed += row.Count - row.timedCount()
 		e.totalErrors += row.Errors
 		e.totalLatency += row.TotalLatencyNs
 		e.syscalls.AddAggregate(row)

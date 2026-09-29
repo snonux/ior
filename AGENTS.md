@@ -425,8 +425,12 @@ not sufficient.
     is `1`, and a stateless or mismatched sys_exit is emitted only at rate `1`
     and never counted (see "Enter state and its two fallbacks" in
     `internal/c/filter.c`). Untimed counts bump `count` only; userspace reports
-    them as `SyscallAggregate.UntimedCount` and keeps them out of min/max and
-    the latency sparkline.
+    them as `SyscallAggregate.UntimedCount` and keeps them out of min/max,
+    the latency means and the latency sparkline. The kernel stores `count`
+    last, and the consumer tolerates torn per-CPU reads (histogram ahead of
+    count counts as timed; a baseline only advances with a new count). The
+    accounting functions of `filter.c` are compiled and exercised on the host
+    by `internal/generate/enterstate_fallback_test.go`.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,

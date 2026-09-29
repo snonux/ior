@@ -93,7 +93,7 @@ func TestAddAggregateClampsOversizedUntimedCount(t *testing.T) {
 	acc.AddAggregate(timedRow(types.SYS_ENTER_FUTEX, 30_000, 60_000))
 
 	stats := futexStats(t, acc)
-	if got := stats.timedCount(); got != 2 {
+	if got := timedCount(stats.count, stats.untimedCount); got != 2 {
 		t.Fatalf("timed count = %d, want 2", got)
 	}
 	if stats.minLatency != 30_000 || stats.maxLatency != 60_000 {
@@ -140,5 +140,84 @@ func TestIngestSyscallAggregatesUntimedOnlyBatchAddsNoLatencyPoint(t *testing.T)
 	series := snap.LatencySeriesNs()
 	if len(series) == 0 || series[len(series)-1] != 50 {
 		t.Fatalf("latency series = %v, want last point 50", series)
+	}
+}
+
+// The means divide total latency by the timed invocations only: 2 timed calls
+// of 40/60ns plus 8 untimed ones have a mean latency of 50ns, not 10ns.
+func TestSnapshotLatencyMeansIgnoreUntimedCounts(t *testing.T) {
+	engine := NewEngine(DefaultTopN)
+	engine.IngestSyscallAggregates([]SyscallAggregate{timedRow(types.SYS_ENTER_FUTEX, 40, 60)})
+	engine.IngestSyscallAggregates([]SyscallAggregate{untimedRow(types.SYS_ENTER_FUTEX, 8)})
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if snap.TotalSyscalls != 10 || snap.LatencyMeanNs != 50 {
+		t.Fatalf("total/mean = %d/%v, want 10/50", snap.TotalSyscalls, snap.LatencyMeanNs)
+	}
+	for _, row := range snap.Syscalls() {
+		if row.TraceID != types.SYS_ENTER_FUTEX {
+			continue
+		}
+		if row.Count != 10 || row.LatencyMeanNs != 50 {
+			t.Fatalf("futex count/mean = %d/%v, want 10/50", row.Count, row.LatencyMeanNs)
+		}
+		return
+	}
+	t.Fatal("no futex row in snapshot")
+}
+
+// An all-untimed syscall has no mean latency (0), not a division by zero.
+func TestSnapshotLatencyMeanOfUntimedOnlySyscallIsZero(t *testing.T) {
+	engine := NewEngine(DefaultTopN)
+	engine.IngestSyscallAggregates([]SyscallAggregate{untimedRow(types.SYS_ENTER_FUTEX, 3)})
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if snap.LatencyMeanNs != 0 {
+		t.Fatalf("overall mean = %v, want 0", snap.LatencyMeanNs)
+	}
+	for _, row := range snap.Syscalls() {
+		if row.TraceID == types.SYS_ENTER_FUTEX && row.LatencyMeanNs != 0 {
+			t.Fatalf("futex mean = %v, want 0", row.LatencyMeanNs)
+		}
+	}
+}
+
+// Reset must forget untimed counts, or the next session's mean divides by a
+// timed count that is too small (here clamped to zero).
+func TestResetClearsUntimedTotal(t *testing.T) {
+	engine := NewEngine(DefaultTopN)
+	engine.IngestSyscallAggregates([]SyscallAggregate{untimedRow(types.SYS_ENTER_FUTEX, 5)})
+	engine.Reset()
+	engine.IngestSyscallAggregates([]SyscallAggregate{timedRow(types.SYS_ENTER_FUTEX, 40, 60)})
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if snap.LatencyMeanNs != 50 {
+		t.Fatalf("mean after reset = %v, want 50", snap.LatencyMeanNs)
+	}
+}
+
+// An over-reported untimed count (a torn per-CPU read can book one timed
+// invocation as untimed) must not make the second timed sample look like the
+// first and overwrite a smaller minimum.
+func TestOverReportedUntimedCountKeepsMinimum(t *testing.T) {
+	acc := newSyscallAccumulator()
+	acc.Add(newPair(types.SYS_ENTER_FUTEX, 5_000, 0, 0))
+	acc.AddAggregate(SyscallAggregate{TraceID: types.SYS_ENTER_FUTEX, Count: 1, UntimedCount: 1})
+	// Pretend one more untimed than real: count 2, untimed 2 -> "timed 0".
+	futexStats(t, acc).untimedCount++
+	acc.Add(newPair(types.SYS_ENTER_FUTEX, 9_000, 0, 0))
+
+	stats := futexStats(t, acc)
+	if stats.minLatency != 5_000 || stats.maxLatency != 9_000 {
+		t.Fatalf("min/max = %d/%d, want 5000/9000", stats.minLatency, stats.maxLatency)
 	}
 }

@@ -108,16 +108,29 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
         bucket_idx = IOR_HISTOGRAM_BUCKETS - 1;
 
     if (existing) {
-        // Decide before the histogram below is bumped by this very sample.
+        // Store order matters. Userspace reads this CPU's slot while it may
+        // be half-updated, and derives the untimed part of count as count
+        // minus the histogram total (internal/syscall_aggregate_consumer.go).
+        // count is therefore written last: a torn read then shows the
+        // histogram ahead of count (userspace treats that as an in-flight
+        // timed sample) instead of count ahead of the histogram, which would
+        // be indistinguishable from an untimed invocation. The min seeding
+        // decision must come first, before this very sample bumps the
+        // histogram that ior_aggregate_has_timed_samples inspects. The empty
+        // asm is a compiler barrier that keeps clang from sinking the other
+        // stores below the count store; the CPU keeps store order on x86, and
+        // on weaker architectures the consumer's clamping (see there) still
+        // keeps a torn read from being booked permanently.
         if (!ior_aggregate_has_timed_samples(existing) || duration_ns < existing->min_duration_ns)
             existing->min_duration_ns = duration_ns;
-        existing->count += 1;
         existing->total_duration_ns += duration_ns;
-        if (ior_is_errno_ret(ret))
-            existing->errors += 1;
+        existing->duration_histogram[bucket_idx] += 1;
         if (duration_ns > existing->max_duration_ns)
             existing->max_duration_ns = duration_ns;
-        existing->duration_histogram[bucket_idx] += 1;
+        if (ior_is_errno_ret(ret))
+            existing->errors += 1;
+        asm volatile("" ::: "memory");
+        existing->count += 1;
         return;
     }
 
@@ -190,7 +203,9 @@ static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
 //      traced syscalls (futex, epoll_wait, ...) fills it. A full map only
 //      rejects tids without an entry yet (replacing an entry in place uses
 //      the map's spare per-CPU element); rarer failures such as -EBUSY
-//      bucket-lock contention take the same path. Whatever the cause,
+//      bucket-lock contention or -ENOMEM take the same path, and those can
+//      hit a tid that still holds an older entry, so ior_on_syscall_enter
+//      deletes this tid's entry before falling back. Whatever the cause,
 //      ior_on_enter_state_lost then decides by rate alone, without the
 //      per-invocation sample: at rate 1 the enter is emitted and the
 //      stateless exit below emits too, so userspace pairs them as usual; at
@@ -239,8 +254,13 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id,
     state.start_ns = now;
     state.enter_trace_id = enter_trace_id;
     state.emit_event = ior_sample_rate_emits(rate) ? 1 : 0;
-    if (bpf_map_update_elem(&syscall_enter_state_map, &tid, &state, BPF_ANY))
+    if (bpf_map_update_elem(&syscall_enter_state_map, &tid, &state, BPF_ANY)) {
+        // A failed replacement (-EBUSY, -ENOMEM) can leave this tid's previous
+        // entry behind; its exit would then pair with the wrong start time
+        // and sampling decision. Drop it so this syscall's exit is stateless.
+        bpf_map_delete_elem(&syscall_enter_state_map, &tid);
         return ior_on_enter_state_lost(enter_trace_id, rate);
+    }
     return state.emit_event != 0;
 }
 

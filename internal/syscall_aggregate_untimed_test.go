@@ -125,3 +125,108 @@ func TestSyscallAggregateConsumerDrainReportsUntimedCount(t *testing.T) {
 	}
 	t.Fatal("no futex row in snapshot")
 }
+
+// drainOne sets the fake map's single value and drains it.
+func drainOne(t *testing.T, consumer *syscallAggregateConsumer, fakeMap *fakeSyscallAggregateMap, traceID uint32, value rawSyscallAggregate) []statsengine.SyscallAggregate {
+	t.Helper()
+	fakeMap.values[traceID] = encodeRawAggregates(t, value)
+	rows, err := consumer.Drain()
+	if err != nil {
+		t.Fatalf("Drain error: %v", err)
+	}
+	return rows
+}
+
+func newTestAggregateConsumer(traceID uint32) (*syscallAggregateConsumer, *fakeSyscallAggregateMap) {
+	fakeMap := newFakeSyscallAggregateMap(traceID, nil)
+	return &syscallAggregateConsumer{
+		aggregateMap: fakeMap,
+		last:         make(map[types.TraceId]rawSyscallAggregate),
+	}, fakeMap
+}
+
+// A slot read while the kernel had bumped the histogram but not yet count
+// (count is stored last) holds a completed timed invocation.
+func TestDecodeRawSyscallAggregateSlotRaisesCountToHistogramTotal(t *testing.T) {
+	got, err := decodeRawSyscallAggregateSlot(encodeRawAggregates(t, rawSyscallAggregate{
+		Count: 2, TotalDuration: 3_000, MinDuration: 500, MaxDuration: 1_500, Histogram: [8]uint64{3},
+	}))
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if got.Count != 3 || got.untimedCount() != 0 {
+		t.Fatalf("count/untimed = %d/%d, want 3/0", got.Count, got.untimedCount())
+	}
+}
+
+// Torn read with count ahead of the histogram (possible on weakly ordered
+// CPUs): the invocation is booked untimed once, but its latency, seen on a
+// later read that shows no new count, must not be lost when the baseline
+// moves on - it is reported with the next row instead.
+func TestSyscallAggregateConsumerKeepsLatencyOfTornRead(t *testing.T) {
+	const traceID = uint32(types.SYS_ENTER_FUTEX)
+	consumer, fakeMap := newTestAggregateConsumer(traceID)
+	drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 2, TotalDuration: 2_000, MinDuration: 1_000, MaxDuration: 1_000, Histogram: [8]uint64{0, 2},
+	})
+
+	rows := drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 3, TotalDuration: 2_000, MinDuration: 1_000, MaxDuration: 1_000, Histogram: [8]uint64{0, 2},
+	})
+	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
+		TraceID: types.TraceId(traceID), Count: 1, UntimedCount: 1, MinLatencyNs: 1_000, MaxLatencyNs: 1_000,
+	})
+
+	// The histogram and latency of that invocation land, but no new count.
+	rows = drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 3, TotalDuration: 5_000, MinDuration: 1_000, MaxDuration: 3_000, Histogram: [8]uint64{0, 3},
+	})
+	if len(rows) != 0 {
+		t.Fatalf("rows without a new count = %+v, want none", rows)
+	}
+
+	rows = drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 4, TotalDuration: 9_000, MinDuration: 1_000, MaxDuration: 4_000, Histogram: [8]uint64{0, 4},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want one", rows)
+	}
+	row := rows[0]
+	if row.Count != 1 || row.UntimedCount != 0 || row.TotalLatencyNs != 7_000 || row.LatencyHistogramNs[1] != 2 {
+		t.Fatalf("row = %+v, want count 1, untimed 0, latency 7000 (3000 held back + 4000), 2 histogram samples", row)
+	}
+}
+
+// Torn read with the histogram ahead of count: the invocation counts as
+// timed right away and the consistent read that follows adds nothing.
+func TestSyscallAggregateConsumerHistogramAheadIsTimed(t *testing.T) {
+	const traceID = uint32(types.SYS_ENTER_FUTEX)
+	consumer, fakeMap := newTestAggregateConsumer(traceID)
+	drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 1, TotalDuration: 1_000, MinDuration: 1_000, MaxDuration: 1_000, Histogram: [8]uint64{0, 1},
+	})
+	rows := drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 1, TotalDuration: 3_000, MinDuration: 1_000, MaxDuration: 2_000, Histogram: [8]uint64{0, 2},
+	})
+	if len(rows) != 1 || rows[0].Count != 1 || rows[0].UntimedCount != 0 || rows[0].TotalLatencyNs != 2_000 {
+		t.Fatalf("rows = %+v, want one timed invocation of 2000ns", rows)
+	}
+	rows = drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 2, TotalDuration: 3_000, MinDuration: 1_000, MaxDuration: 2_000, Histogram: [8]uint64{0, 2},
+	})
+	if len(rows) != 0 {
+		t.Fatalf("rows after the count caught up = %+v, want none", rows)
+	}
+}
+
+// A kernel row that went backwards was recreated; its untimed invocations
+// are new and must be reported again.
+func TestSyscallAggregateConsumerRestartsUntimedTallyOnReset(t *testing.T) {
+	const traceID = uint32(types.SYS_ENTER_FUTEX)
+	consumer, fakeMap := newTestAggregateConsumer(traceID)
+	drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{Count: 5})
+	rows := drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{Count: 2})
+	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
+		TraceID: types.TraceId(traceID), Count: 2, UntimedCount: 2,
+	})
+}

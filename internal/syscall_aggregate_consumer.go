@@ -52,7 +52,12 @@ type rawSyscallAggregate struct {
 
 type syscallAggregateConsumer struct {
 	aggregateMap syscallAggregateMap
-	last         map[types.TraceId]rawSyscallAggregate
+	// last is the cumulative value each trace ID's reported deltas add up
+	// to; it only advances when a row is emitted (see drainRow).
+	last map[types.TraceId]rawSyscallAggregate
+	// untimed is the cumulative untimed count already reported per trace ID
+	// (see untimedDelta). Initialized lazily.
+	untimed map[types.TraceId]uint64
 }
 
 type syscallAggregateMap interface {
@@ -109,22 +114,9 @@ func (c *syscallAggregateConsumer) Drain() ([]statsengine.SyscallAggregate, erro
 		if err != nil {
 			return nil, fmt.Errorf("decode aggregate for trace id %d: %w", key, err)
 		}
-		traceID := types.TraceId(key)
-		delta := raw.diff(c.last[traceID])
-		c.last[traceID] = raw
-		if delta.Count == 0 {
-			continue
+		if row, ok := c.drainRow(types.TraceId(key), raw); ok {
+			rows = append(rows, row)
 		}
-		rows = append(rows, statsengine.SyscallAggregate{
-			TraceID:            traceID,
-			Count:              delta.Count,
-			Errors:             delta.Errors,
-			TotalLatencyNs:     delta.TotalDuration,
-			MinLatencyNs:       delta.MinDuration,
-			MaxLatencyNs:       delta.MaxDuration,
-			LatencyHistogramNs: delta.Histogram,
-			UntimedCount:       delta.untimedCount(),
-		})
 	}
 	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("iterate %s: %w", syscallAggregateMapName, err)
@@ -132,6 +124,68 @@ func (c *syscallAggregateConsumer) Drain() ([]statsengine.SyscallAggregate, erro
 	return rows, nil
 }
 
+// drainRow turns one trace ID's cumulative value into the row of what is new
+// since the last emitted row. Without a new invocation there is no row, and
+// the baseline deliberately stays put: the kernel writes the other fields
+// before count (ior_update_syscall_aggregate), so a read that caught a slot
+// mid-update may already show latency or errors of an invocation whose count
+// is not visible yet. Advancing the baseline past them would drop them for
+// good; keeping it re-diffs them once their count lands.
+func (c *syscallAggregateConsumer) drainRow(traceID types.TraceId, raw rawSyscallAggregate) (statsengine.SyscallAggregate, bool) {
+	prev := c.last[traceID]
+	delta := raw.diff(prev)
+	if delta.Count == 0 {
+		return statsengine.SyscallAggregate{}, false
+	}
+	c.last[traceID] = raw
+	return statsengine.SyscallAggregate{
+		TraceID:            traceID,
+		Count:              delta.Count,
+		Errors:             delta.Errors,
+		TotalLatencyNs:     delta.TotalDuration,
+		MinLatencyNs:       delta.MinDuration,
+		MaxLatencyNs:       delta.MaxDuration,
+		LatencyHistogramNs: delta.Histogram,
+		UntimedCount:       c.untimedDelta(traceID, raw, prev, delta.Count),
+	}, true
+}
+
+// untimedDelta returns how many of this row's deltaCount invocations are
+// untimed. It works on the cumulative untimed count (Count minus histogram
+// total) rather than on the delta: a delta whose histogram lags its count by
+// a torn read would otherwise book a timed invocation as untimed, and the
+// following delta could not take that back. The reported cumulative value
+// only grows, so each untimed invocation is reported once, and never more
+// than the row's own count. A cumulative count that went backwards means the
+// kernel row was recreated, which restarts the tally (diff restarts too).
+func (c *syscallAggregateConsumer) untimedDelta(traceID types.TraceId, raw, prev rawSyscallAggregate, deltaCount uint64) uint64 {
+	if c.untimed == nil {
+		c.untimed = make(map[types.TraceId]uint64)
+	}
+	reported := c.untimed[traceID]
+	if raw.Count < prev.Count {
+		reported = 0
+	}
+	fresh := min(subtractU64(raw.untimedCount(), reported), deltaCount)
+	c.untimed[traceID] = reported + fresh
+	return fresh
+}
+
+// decodeRawSyscallAggregateSlot decodes one CPU's slot as read from the live
+// map. A slot whose histogram total exceeds its count was read mid-update
+// (the kernel stores count last), so count is raised to the histogram total:
+// that invocation has completed and is timed, and counting it now keeps it
+// from ever looking untimed.
+func decodeRawSyscallAggregateSlot(raw []byte) (rawSyscallAggregate, error) {
+	out, err := decodeRawSyscallAggregate(raw)
+	if err != nil {
+		return rawSyscallAggregate{}, err
+	}
+	out.Count = max(out.Count, out.timedCount())
+	return out, nil
+}
+
+// decodeRawSyscallAggregate decodes the C struct syscall_aggregate verbatim.
 func decodeRawSyscallAggregate(raw []byte) (rawSyscallAggregate, error) {
 	var out rawSyscallAggregate
 	expectedSize := binary.Size(out)
@@ -148,7 +202,7 @@ func decodeRawSyscallAggregateValue(raw []byte) (rawSyscallAggregate, error) {
 	var sample rawSyscallAggregate
 	valueSize := binary.Size(sample)
 	if len(raw) == valueSize {
-		return decodeRawSyscallAggregate(raw)
+		return decodeRawSyscallAggregateSlot(raw)
 	}
 	return decodeRawSyscallAggregatePerCPU(raw)
 }
@@ -163,7 +217,7 @@ func decodeRawSyscallAggregatePerCPU(raw []byte) (rawSyscallAggregate, error) {
 
 	var out rawSyscallAggregate
 	for offset := 0; offset < len(raw); offset += stride {
-		next, err := decodeRawSyscallAggregate(raw[offset : offset+valueSize])
+		next, err := decodeRawSyscallAggregateSlot(raw[offset : offset+valueSize])
 		if err != nil {
 			return rawSyscallAggregate{}, err
 		}

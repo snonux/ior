@@ -48,6 +48,7 @@ type Engine struct {
 	topN      int
 
 	totalSyscalls          uint64
+	totalUntimed           uint64 // part of totalSyscalls without a latency
 	totalErrors            uint64
 	totalBytes             uint64
 	totalAddressSpaceBytes uint64
@@ -71,6 +72,7 @@ type snapshotInputs struct {
 	startedAt time.Time
 
 	totalSyscalls          uint64
+	totalUntimed           uint64 // part of totalSyscalls without a latency
 	totalErrors            uint64
 	totalBytes             uint64
 	totalAddressSpaceBytes uint64
@@ -127,6 +129,7 @@ func (e *Engine) Reset() {
 
 	e.startedAt = e.now()
 	e.totalSyscalls = 0
+	e.totalUntimed = 0
 	e.totalErrors = 0
 	e.totalBytes = 0
 	e.totalAddressSpaceBytes = 0
@@ -220,6 +223,7 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		now:                    now,
 		startedAt:              e.startedAt,
 		totalSyscalls:          e.totalSyscalls,
+		totalUntimed:           e.totalUntimed,
 		totalErrors:            e.totalErrors,
 		totalBytes:             e.totalBytes,
 		totalAddressSpaceBytes: e.totalAddressSpaceBytes,
@@ -301,7 +305,7 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.AddressSpaceBytesPerSec = safeRate(in.totalAddressSpaceBytes, rateDiv)
 	snap.ReadBytesPerSec = safeRate(in.totalReadBytes, rateDiv)
 	snap.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
-	snap.LatencyMeanNs = safeMean(in.totalLatency, in.totalSyscalls)
+	snap.LatencyMeanNs = safeMean(in.totalLatency, timedCount(in.totalSyscalls, in.totalUntimed))
 	snap.GapMeanNs = safeMean(in.totalGap, in.totalSyscalls)
 	snap.LatencyTrend = detectTrend(in.latencySeries)
 	snap.GapTrend = detectTrend(in.gapSeries)
