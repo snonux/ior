@@ -54,12 +54,27 @@ type fdTracker struct {
 // cheaper price than retained map memory.
 const maxIdlePidKeys = 16
 
+// maxRecycledSetSize is the largest peak size a pidFdKeys set may have
+// reached and still be kept when its entry is parked on idlePidKeys. Go maps
+// never shrink and ranging over one costs O(allocated buckets), not O(len):
+// reusing the emptied set of a process that once held 30k descriptors would
+// make every later short-lived pid's exec/exit scan those buckets (~100us
+// instead of ~0.5us), permanently, since parked entries are reused LIFO.
+// Sets that ever grew past this are discarded on parking and re-allocated
+// lazily; 64 covers the typical process (stdio, a few files and sockets).
+const maxRecycledSetSize = 64
+
 // pidFdKeys is one pid's slice of the fdTracker key space: the fdKey keys it
 // owns in the fd table and in the procfs cache. Each set is allocated on
-// first use, so a pid that only ever appears in one map costs one map.
+// first use, so a pid that only ever appears in one map costs one map. The
+// peak fields record the largest size each set reached since it was
+// allocated; parkPidEntry uses them to decide whether the set is small
+// enough to recycle (see maxRecycledSetSize).
 type pidFdKeys struct {
-	files map[uint64]struct{}
-	cache map[uint64]struct{}
+	files     map[uint64]struct{}
+	cache     map[uint64]struct{}
+	peakFiles int
+	peakCache int
 }
 
 // pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
@@ -188,6 +203,7 @@ func (t *fdTracker) indexFileKey(key uint64) {
 		keys.files = make(map[uint64]struct{})
 	}
 	keys.files[key] = struct{}{}
+	keys.peakFiles = max(keys.peakFiles, len(keys.files))
 }
 
 // indexCacheKey records key in its pid's procfs-cache set.
@@ -197,6 +213,7 @@ func (t *fdTracker) indexCacheKey(key uint64) {
 		keys.cache = make(map[uint64]struct{})
 	}
 	keys.cache[key] = struct{}{}
+	keys.peakCache = max(keys.peakCache, len(keys.cache))
 }
 
 // pidEntry returns the index entry of key's pid, taking a recycled one from
@@ -226,7 +243,7 @@ func (t *fdTracker) pidEntry(key uint64) *pidFdKeys {
 // unindexKey removes key from its pid's fd-table set (cache false) or
 // procfs-cache set (cache true). Once the pid owns nothing in either map it
 // is dropped from the index, so the index stays exactly as large as the set
-// of pids with entries, and its emptied entry is parked on idlePidKeys for
+// of pids with entries, and its emptied entry is offered to parkPidEntry for
 // the next pid to reuse.
 func (t *fdTracker) unindexKey(key uint64, cache bool) {
 	pid, _ := fdKeyParts(key)
@@ -243,9 +260,29 @@ func (t *fdTracker) unindexKey(key uint64, cache bool) {
 		return
 	}
 	delete(t.pidIndex, pid)
-	if len(t.idlePidKeys) < maxIdlePidKeys {
-		t.idlePidKeys = append(t.idlePidKeys, keys)
+	t.parkPidEntry(keys)
+}
+
+// parkPidEntry puts an emptied index entry on idlePidKeys, unless the list is
+// full (the entry is then left to the garbage collector). A set whose peak
+// exceeded maxRecycledSetSize is dropped first, so a recycled entry never
+// carries the oversized bucket array of a once-busy process.
+//
+// Callers may still be ranging over the entry's sets (deletePid, dropOnExec):
+// that is safe because a range evaluates its map operand once, and parking
+// only happens on the removal that emptied both sets, after which no
+// insertion can hand the entry out before the loops finish.
+func (t *fdTracker) parkPidEntry(keys *pidFdKeys) {
+	if len(t.idlePidKeys) >= maxIdlePidKeys {
+		return
 	}
+	if keys.peakFiles > maxRecycledSetSize {
+		keys.files, keys.peakFiles = nil, 0
+	}
+	if keys.peakCache > maxRecycledSetSize {
+		keys.cache, keys.peakCache = nil, 0
+	}
+	t.idlePidKeys = append(t.idlePidKeys, keys)
 }
 
 // removeFileKey is the one removal path for fd-table entries: close, close_range,

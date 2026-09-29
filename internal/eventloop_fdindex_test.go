@@ -157,7 +157,8 @@ func randomFdFile(rng *rand.Rand, fd int32) *file.FdFile {
 // close_range (bounded and open-ended), exit, exec, cache deletes and LRU
 // evictions under the tiny caps - are all exercised.
 func applyRandomFdOp(rng *rand.Rand, fdt *fdTracker) {
-	pid := uint32(1 + rng.IntN(4))
+	// More pids than maxIdlePidKeys, so the idle-list cap is exercised too.
+	pid := uint32(1 + rng.IntN(maxIdlePidKeys+8))
 	fd := int32(rng.IntN(8))
 	switch rng.IntN(10) {
 	case 0, 1:
@@ -231,18 +232,87 @@ func assertIdlePidKeysReusable(t *testing.T, fdt *fdTracker) {
 	if len(fdt.idlePidKeys) > maxIdlePidKeys {
 		t.Fatalf("idle list holds %d entries, cap is %d", len(fdt.idlePidKeys), maxIdlePidKeys)
 	}
-	live := make(map[*pidFdKeys]struct{}, len(fdt.pidIndex))
+	seen := make(map[*pidFdKeys]struct{}, len(fdt.pidIndex)+len(fdt.idlePidKeys))
 	for _, keys := range fdt.pidIndex {
-		live[keys] = struct{}{}
+		if _, dup := seen[keys]; dup {
+			t.Fatal("two pids share one index entry")
+		}
+		seen[keys] = struct{}{}
 	}
 	for _, keys := range fdt.idlePidKeys {
 		if len(keys.files) != 0 || len(keys.cache) != 0 {
 			t.Fatalf("parked index entry is not empty: files %v cache %v", keys.files, keys.cache)
 		}
-		if _, ok := live[keys]; ok {
-			t.Fatal("parked index entry is still in use by a pid")
+		if keys.peakFiles > maxRecycledSetSize || keys.peakCache > maxRecycledSetSize {
+			t.Fatalf("parked entry kept an oversized set (peaks %d/%d)", keys.peakFiles, keys.peakCache)
 		}
+		if _, dup := seen[keys]; dup {
+			t.Fatal("parked index entry is still in use by a pid or parked twice")
+		}
+		seen[keys] = struct{}{}
 	}
+}
+
+// TestIdlePidKeysAreCapped parks more emptied entries than the idle list may
+// hold and checks the cap: the extra entries are left to the collector.
+func TestIdlePidKeysAreCapped(t *testing.T) {
+	fdt := newFDTracker(nil)
+	f := file.NewFd(3, "/cap", syscall.O_RDONLY)
+	const pids = maxIdlePidKeys + 8
+	for pid := uint32(1); pid <= pids; pid++ {
+		fdt.set(3, pid, f)
+	}
+	for pid := uint32(1); pid <= pids; pid++ {
+		fdt.deletePid(pid)
+	}
+	if got := len(fdt.idlePidKeys); got != maxIdlePidKeys {
+		t.Fatalf("idle list holds %d entries after %d exits, want the cap %d", got, pids, maxIdlePidKeys)
+	}
+	assertFdIndexConsistent(t, fdt)
+}
+
+// TestIdlePidKeysDropOversizedSets is the regression test for recycling a
+// once-busy process's bucket array: Go maps never shrink, so after a pid with
+// many descriptors exits, its parked entry must not hand that set to the next
+// short-lived pid, whose exec/exit would otherwise scan every bucket. Small
+// sets must still be recycled (that is what keeps churn allocation-free).
+func TestIdlePidKeysDropOversizedSets(t *testing.T) {
+	const bigPid, smallPid, nextPid = 1, 2, 3
+	fdt := newFDTracker(nil)
+	f := file.NewFd(0, "/big", syscall.O_RDONLY)
+	for fd := int32(0); fd <= maxRecycledSetSize; fd++ {
+		fdt.set(fd, bigPid, f)
+	}
+	fdt.setProcFdCache(0, bigPid, f)
+	fdt.deletePid(bigPid)
+
+	if n := len(fdt.idlePidKeys); n != 1 {
+		t.Fatalf("idle list holds %d entries, want 1", n)
+	}
+	parked := fdt.idlePidKeys[0]
+	if parked.files != nil || parked.peakFiles != 0 {
+		t.Fatalf("parked entry kept the oversized files set (peak %d)", parked.peakFiles)
+	}
+	if parked.cache == nil {
+		t.Fatal("parked entry dropped a small cache set that should be recycled")
+	}
+
+	fdt.set(3, nextPid, f)
+	reused := fdt.pidIndex[nextPid]
+	if reused != parked {
+		t.Fatal("next pid did not reuse the parked entry")
+	}
+	if reused.peakFiles != 1 {
+		t.Fatalf("reused entry's files set has peak %d, want a fresh set of 1", reused.peakFiles)
+	}
+
+	// A set that stayed small is recycled as is, map included.
+	fdt.set(3, smallPid, f)
+	fdt.deletePid(smallPid)
+	if got := fdt.idlePidKeys[len(fdt.idlePidKeys)-1].files; got == nil || len(got) != 0 {
+		t.Fatal("a small emptied set must be recycled, not dropped")
+	}
+	assertFdIndexConsistent(t, fdt)
 }
 
 // BenchmarkFdSetDeleteChurn measures the most common fd-table pattern: a
@@ -273,6 +343,27 @@ func BenchmarkFdNewPidLifecycle(b *testing.B) {
 		pid := uint32(benchFirstPid + i)
 		fdt.set(3, pid, f)
 		fdt.setProcFdCache(4, pid, f)
+		fdt.deletePid(pid)
+	}
+}
+
+// BenchmarkNewPidAfterBigPidExit measures short-lived processes after one
+// process holding 30000 descriptors exited. Its emptied entry is parked
+// first and reused by the next pid; with the oversized set recycled, every
+// exec/exit here ranged over ~30000 buckets.
+func BenchmarkNewPidAfterBigPidExit(b *testing.B) {
+	fdt := newFDTracker(nil)
+	f := file.NewFd(3, "/big", syscall.O_RDONLY)
+	for fd := int32(0); fd < 30000; fd++ {
+		fdt.set(fd, benchTargetPid, f)
+	}
+	fdt.deletePid(benchTargetPid)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pid := uint32(benchFirstPid + i)
+		fdt.set(3, pid, f)
+		fdt.dropOnExec(pid)
 		fdt.deletePid(pid)
 	}
 }
