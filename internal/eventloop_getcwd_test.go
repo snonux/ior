@@ -8,6 +8,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/generate"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -191,5 +192,34 @@ func TestFinishGetcwdPath(t *testing.T) {
 				t.Fatalf("finishGetcwdPath = %q, want %q", got.Name(), tc.want)
 			}
 		})
+	}
+}
+
+// TestCapturedOutputPathEntersMatchTheGenerator pins the userspace set of
+// output-path captures to the generator's outputPathSyscalls: a syscall whose
+// exit handler publishes its output buffer must be handled here, and nothing
+// here may wait for a record the kernel never sends.
+func TestCapturedOutputPathEntersMatchTheGenerator(t *testing.T) {
+	generated := generate.OutputPathSyscalls()
+	if len(generated) == 0 {
+		t.Fatal("the generator reports no output-path syscalls")
+	}
+	want := make(map[types.TraceId]string, len(generated))
+	for _, name := range generated {
+		traceID, ok := types.EnterTraceIDByName(name)
+		if !ok {
+			t.Fatalf("output-path syscall %q has no generated enter trace ID", name)
+		}
+		want[traceID] = name
+	}
+	for traceID, name := range want {
+		if _, ok := capturedOutputPathEnters[traceID]; !ok {
+			t.Errorf("generator captures the output path of %s but userspace does not handle it", name)
+		}
+	}
+	for traceID := range capturedOutputPathEnters {
+		if _, ok := want[traceID]; !ok {
+			t.Errorf("userspace handles an output-path capture for trace ID %d the generator does not emit", traceID)
+		}
 	}
 }
