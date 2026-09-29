@@ -212,8 +212,9 @@ func (m *Model) selectionStatusLine() string {
 	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
 		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
 	if query != "" {
+		// Sanitised like the toolbar copy of the query (task io2).
 		b.WriteString(" | filter:")
-		b.WriteString(query)
+		b.WriteString(common.Sanitize(query))
 	}
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
 }
