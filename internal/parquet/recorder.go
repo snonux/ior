@@ -205,9 +205,6 @@ func (r *Recorder) Stop() error {
 		r.mu.Unlock()
 		return failure
 	}
-	if stopSnapshotHook != nil {
-		stopSnapshotHook()
-	}
 	// Mark the stop request while still holding r.mu: a session aborting on
 	// its own must publish its failure through finishSession, which takes
 	// r.mu, so it either finished before this point (session == nil above)
@@ -216,6 +213,9 @@ func (r *Recorder) Stop() error {
 	// returned here and handed out by TakeFailure.
 	first := session.markStopRequested()
 	r.mu.Unlock()
+	if stopUnlockedHook != nil {
+		stopUnlockedHook()
+	}
 
 	session.stop(nil)
 	err := <-session.doneC
@@ -230,11 +230,11 @@ func (r *Recorder) Stop() error {
 	return err
 }
 
-// stopSnapshotHook, when non-nil, runs inside Stop after it has seen an
-// active session and before it marks the stop request, with r.mu held. It is
-// a test seam for forcing interleavings with a finishing session; always nil
-// in production.
-var stopSnapshotHook func()
+// stopUnlockedHook, when non-nil, runs inside Stop after it has seen an
+// active session and released r.mu, before it stops the session. A test can
+// let a self-aborting session finish there, which is where a stop mark taken
+// after unlocking would come too late. Always nil in production.
+var stopUnlockedHook func()
 
 // TakeFailure returns the error the last recording died with, exactly once
 // per failure, and nil otherwise: while a recording is active, when the last

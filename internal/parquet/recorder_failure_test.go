@@ -245,7 +245,7 @@ func (w abortBlockingWriter) Abort() error {
 // writer held in Abort): Stop must return the failure and TakeFailure must
 // not hand it out a second time. The narrower interleaving - finishSession
 // running inside Stop, between its snapshot and its stop mark - is forced by
-// TestRecorderFinishInsideStopSnapshotReportsOnce.
+// TestRecorderFinishDuringStopReportsOnce.
 func TestRecorderStopDuringSelfAbortReportsOnce(t *testing.T) {
 	writeErr := errors.New("disk full")
 	w := abortBlockingWriter{
@@ -293,7 +293,7 @@ func TestRecorderStopRacingSelfAbortStress(t *testing.T) {
 	// The race window is tiny: the pre-fix code failed about once in ~10k
 	// iterations without -race (much sooner with it), so run many; this is
 	// a probabilistic guard next to the hook-driven
-	// TestRecorderFinishInsideStopSnapshotReportsOnce.
+	// TestRecorderFinishDuringStopReportsOnce.
 	iterations := 10000
 	if testing.Short() {
 		iterations = 1000
@@ -320,11 +320,11 @@ func TestRecorderStopRacingSelfAbortStress(t *testing.T) {
 	}
 }
 
-// setStopSnapshotHook installs hook as Stop's test seam for this test.
-func setStopSnapshotHook(t *testing.T, hook func()) {
+// setStopUnlockedHook installs hook as Stop's test seam for this test.
+func setStopUnlockedHook(t *testing.T, hook func()) {
 	t.Helper()
-	stopSnapshotHook = hook
-	t.Cleanup(func() { stopSnapshotHook = nil })
+	stopUnlockedHook = hook
+	t.Cleanup(func() { stopUnlockedHook = nil })
 }
 
 // startAbortBlockedRecorder returns a recorder whose writer fails every
@@ -353,20 +353,19 @@ func startAbortBlockedRecorder(t *testing.T, batchSize int) (*Recorder, abortBlo
 	return r, w, writeErr
 }
 
-// TestRecorderFinishInsideStopSnapshotReportsOnce forces the interleaving
-// that used to report a failure twice: the self-aborting session is released
-// to run finishSession after Stop has seen it active but before Stop marks
-// the stop request. Holding r.mu across both keeps finishSession out until
-// the mark is set, so the failure goes to Stop only. (With the mark taken
-// after unlocking, finishSession completes during the hook's pause, publishes
-// the failure as untaken, and TakeFailure hands it out again.)
-func TestRecorderFinishInsideStopSnapshotReportsOnce(t *testing.T) {
+// TestRecorderFinishDuringStopReportsOnce forces the interleaving that
+// used to report a failure twice: the self-aborting session runs
+// finishSession to completion after Stop has seen it active and released
+// r.mu. Stop marks the request before unlocking, so finishSession sees it and
+// the failure goes to Stop only. (With the mark taken after unlocking, the
+// session finishes unmarked here, publishes the failure as untaken, and
+// TakeFailure hands it out again - every time.)
+func TestRecorderFinishDuringStopReportsOnce(t *testing.T) {
 	r, w, writeErr := startAbortBlockedRecorder(t, 1)
 	<-w.aborting // the session failed and is blocked before finishSession
-	setStopSnapshotHook(t, func() {
+	setStopUnlockedHook(t, func() {
 		close(w.release)
-		// Give finishSession ample time to run if nothing holds it off.
-		time.Sleep(50 * time.Millisecond)
+		waitInactive(t, r) // finishSession has run
 	})
 
 	if err := r.Stop(); !errors.Is(err, writeErr) {
@@ -383,14 +382,14 @@ func TestRecorderFinishInsideStopSnapshotReportsOnce(t *testing.T) {
 func TestRecorderConcurrentStopsReportFailureOnce(t *testing.T) {
 	r, w, writeErr := startAbortBlockedRecorder(t, 1024)
 	entered := make(chan struct{}, 2)
-	setStopSnapshotHook(t, func() { entered <- struct{}{} })
+	setStopUnlockedHook(t, func() { entered <- struct{}{} })
 
 	results := make(chan error, 2)
 	for range 2 {
 		go func() { results <- r.Stop() }()
 	}
-	// Both Stops have seen the session active; the session is held in Abort
-	// after its final flush failed, so neither can have finished yet.
+	// Both Stops have seen the session active. It cannot finish before
+	// w.release is closed: its final flush fails and it then blocks in Abort.
 	<-entered
 	<-entered
 	close(w.release)
@@ -408,6 +407,18 @@ func TestRecorderConcurrentStopsReportFailureOnce(t *testing.T) {
 	}
 	if err := r.TakeFailure(); err != nil {
 		t.Fatalf("TakeFailure() = %v, want nil", err)
+	}
+}
+
+// waitInactive waits until the recorder's session has finished.
+func waitInactive(t *testing.T, r *Recorder) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.Status().Active {
+		if time.Now().After(deadline) {
+			t.Fatalf("session did not finish in time")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
