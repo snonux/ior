@@ -863,7 +863,7 @@ func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", common.Sanitize(dir.Dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
 		data = append(data, bubbleDatum{
 			ID:       dir.Dir,
-			Label:    rootPathLabelFromFSPath(dir.Dir),
+			Label:    dirRowLabel(dir.Dir),
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,

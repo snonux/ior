@@ -326,11 +326,14 @@ func ExactPattern(value string) string {
 // DirPattern returns the StringFilter pattern that matches every path below
 // dir - the whole subtree, case-insensitively - as the prefix "^dir/". The
 // separator is part of the prefix so "/tmp" does not also select "/tmpfoo",
-// and the root is "^/" rather than "^//". The value must end with the
-// separator, so the pattern can never end in a $ anchor, whatever dir holds.
+// and the root is "^/" rather than "^//". Only the root is special: any
+// other dir gets the separator appended even when it already ends in one,
+// because a literal dir "a/" (from "a//b") must select "a//..." and not every
+// "a/..." as well. The pattern always ends with "/", so it never ends in a $
+// anchor, whatever dir holds.
 func DirPattern(dir string) string {
-	if strings.HasSuffix(dir, "/") {
-		return "^" + dir
+	if dir == "/" {
+		return "^/"
 	}
 	return "^" + dir + "/"
 }

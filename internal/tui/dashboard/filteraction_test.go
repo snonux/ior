@@ -215,11 +215,15 @@ func TestEnterFamilyFilterStaysBare(t *testing.T) {
 // grouping by filepath.Dir, which Cleans: "./src/main.go" was counted under
 // "src", whose filter ^src/ does not match it (likewise "//usr/lib/x" under
 // "/usr/lib", "a/../b/c" under "b"). Every dir row's filter must select
-// every file the row aggregates, and no file of another row.
+// every file the row aggregates. Rows are subtrees, so a row's filter may
+// also select files of a row nested below it ("/tmp" covers "/tmp/sub"),
+// but never a file of a row outside its subtree: "a/" (from "a//b") must
+// not also select "a/x".
 func TestEnterDirRowFilterSelectsEveryFileItCounts(t *testing.T) {
 	paths := []string{
 		"./src/main.go", "./src/util.go", "//usr/lib/x", "a/../b/c",
-		"/tmp/a ", "/tmp/b", "/tmp/sub/c", "/etc", "rel/x", "a//b",
+		"/tmp/a ", "/tmp/b", "/tmp/sub/c", "/etc", "rel/x", "a//b", "a/x",
+		"   /z",
 	}
 	files := make([]statsengine.FileSnapshot, len(paths))
 	for i, p := range paths {
@@ -235,11 +239,15 @@ func TestEnterDirRowFilterSelectsEveryFileItCounts(t *testing.T) {
 		}
 		counted := 0
 		for _, p := range paths {
+			selected := req.Filter.Matches(&streamrow.Row{FileName: p})
 			if literalDir(p) != dir.Dir {
+				if selected && !isBelow(literalDir(p), dir.Dir) {
+					t.Errorf("dir row %q filter %s selects %q of row %q", dir.Dir, req.Action, p, literalDir(p))
+				}
 				continue
 			}
 			counted++
-			if !req.Filter.Matches(&streamrow.Row{FileName: p}) {
+			if !selected {
 				t.Errorf("dir row %q filter %s does not select its file %q", dir.Dir, req.Action, p)
 			}
 		}
@@ -255,13 +263,22 @@ func TestEnterDirRowFilterSelectsEveryFileItCounts(t *testing.T) {
 	}
 }
 
+// isBelow reports whether directory text sub lies inside dir's subtree,
+// literally: "/" contains every absolute dir, any other dir d contains d/...
+func isBelow(sub, dir string) bool {
+	if dir == "/" {
+		return strings.HasPrefix(sub, "/")
+	}
+	return strings.HasPrefix(sub, dir+"/")
+}
+
 // TestLiteralDir pins the grouping key: the literal text before the last
 // separator, "/" for a top-level entry, noDirGroup without a separator.
 func TestLiteralDir(t *testing.T) {
 	for path, want := range map[string]string{
 		"/tmp/a": "/tmp", "/a": "/", "/": "/", "//x": "/", "//usr/lib/x": "//usr/lib",
 		"./src/main.go": "./src", "./a": ".", "a/../b/c": "a/../b", "a//b": "a/",
-		"a.log": noDirGroup, "socket:[1]": noDirGroup, "": noDirGroup,
+		"   /z": "   ", "a.log": noDirGroup, "socket:[1]": noDirGroup, "": noDirGroup,
 	} {
 		if got := literalDir(path); got != want {
 			t.Errorf("literalDir(%q) = %q, want %q", path, got, want)
@@ -290,5 +307,65 @@ func TestEnterOnNoDirGroupShowsNotice(t *testing.T) {
 	m = filesModel(true, statsengine.FileSnapshot{Path: "/tmp/a", Accesses: 1})
 	if _, ok := enterFilterRequest(t, m); !ok || m.filterNotice != "" {
 		t.Fatalf("expected a request and no notice for /tmp, got ok=%v notice=%q", ok, m.filterNotice)
+	}
+}
+
+// TestDirRowLabelsStayDistinct: the treemap and bubble labels of literal dir
+// rows must not collapse the way a Cleaned label does ("./src" and "src"
+// were both "root/src"), or two tiles read the same.
+func TestDirRowLabelsStayDistinct(t *testing.T) {
+	want := map[string]string{
+		"/": "root", "/var/log": "root/var/log", "//usr": "root//usr",
+		"./src": "./src", "src": "src", ".": ".",
+	}
+	seen := map[string]string{}
+	for dir, label := range want {
+		got := dirRowLabel(dir)
+		if got != label {
+			t.Errorf("dirRowLabel(%q) = %q, want %q", dir, got, label)
+		}
+		if other, dup := seen[got]; dup {
+			t.Errorf("dirs %q and %q share the label %q", dir, other, got)
+		}
+		seen[got] = dir
+	}
+
+	files := []statsengine.FileSnapshot{{Path: "./src/a", Accesses: 2}, {Path: "src/b", Accesses: 1}}
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, files, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	items := buildFilesTreemapItems(&snap, bubbleMetricCount)
+	bubbles := filesDirBubbleData(&snap)
+	if len(items) != 2 || items[0].Name == items[1].Name || len(bubbles) != 2 || bubbles[0].Label == bubbles[1].Label {
+		t.Fatalf("expected two distinctly labelled dirs, got treemap %#v bubbles %#v", items, bubbles)
+	}
+}
+
+// TestEnterCommWithEdgeAnchorFallsBackToPID: a comm like "x$" as a substring
+// pattern would mean "ends with x", so the Comm cell falls back to the exact
+// PID filter for such comms instead.
+func TestEnterCommWithEdgeAnchorFallsBackToPID(t *testing.T) {
+	for _, comm := range []string{"x$", "^x", " ^x$ "} {
+		req, ok := enterFilterRequest(t, processesModel(processCommColumn, statsengine.ProcessSnapshot{PID: 5, Comm: comm}))
+		if !ok || req.Filter.Comm != nil || req.Action != "pid=5" {
+			t.Fatalf("comm %q: expected pid=5 fallback, got action %q comm %+v (ok=%v)", comm, req.Action, req.Filter.Comm, ok)
+		}
+	}
+	// A ^ or $ inside the comm is harmless and keeps the comm filter.
+	req, ok := enterFilterRequest(t, processesModel(processCommColumn, statsengine.ProcessSnapshot{PID: 5, Comm: "a$b^c"}))
+	if !ok || req.Action != "comm~a$b^c" {
+		t.Fatalf("expected comm~a$b^c, got %q (ok=%v)", req.Action, ok)
+	}
+}
+
+// TestEnterOnBlankDirRowFilters: an all-blank literal dir ("   " from
+// "   /z") is a real directory and gets an exact subtree filter, not a
+// silent no-op.
+func TestEnterOnBlankDirRowFilters(t *testing.T) {
+	m := filesModel(true, statsengine.FileSnapshot{Path: "   /z", Accesses: 1})
+	req, ok := enterFilterRequest(t, m)
+	if !ok || req.Filter.File == nil || req.Filter.File.Pattern != "^   /" {
+		t.Fatalf("expected ^   / filter, got %+v (ok=%v)", req.Filter.File, ok)
+	}
+	if !req.Filter.Matches(&streamrow.Row{FileName: "   /z"}) || req.Filter.Matches(&streamrow.Row{FileName: "/z"}) {
+		t.Fatalf("blank dir filter %q selects the wrong files", req.Filter.File.Pattern)
 	}
 }

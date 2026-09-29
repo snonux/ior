@@ -23,6 +23,24 @@ func rootPathLabelFromFSPath(path string) string {
 	return common.Sanitize("root/" + cleaned)
 }
 
+// dirRowLabel is the display label of one dir-grouped Files row in the
+// treemap and bubbles views. Unlike rootPathLabelFromFSPath it does not Clean:
+// the rows are keyed by the literal directory text (literalDir), so "./src",
+// "src" and "//usr" are distinct rows and must not share a label. An
+// absolute dir reads "root/..." ("root" for "/"); a relative one, which is
+// not under "/", is shown as it is ("./src", "src", "."). Sanitised like
+// every traced path; display-only (the item key stays the raw Dir).
+func dirRowLabel(dir string) string {
+	switch {
+	case dir == "/":
+		return "root"
+	case strings.HasPrefix(dir, "/"):
+		return common.Sanitize("root" + dir)
+	default:
+		return common.Sanitize(dir)
+	}
+}
+
 // processLabel is the "pid:comm" display label of a process tile or bubble
 // ("pid" alone without a comm). The traced comm is attacker-controlled and
 // is sanitised; the label is display-only (selection uses processKey/ID).
