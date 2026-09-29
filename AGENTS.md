@@ -276,22 +276,33 @@ fallback (`...WideFallback`) went from 10.7ms to about 1µs.
 from 584 to about 300000 events/s.
 
 The trie is capped at `liveTrieMaxNodes` (2^18 nodes, ~210-290 B each, so
-~55-75MB). Past it, `compactLocked` folds the lowest-ranked subtrees — by
-(subtree total, deeper first, walk order), a strict order in which a child
-never outranks its parent — into a per-parent `[other]` bucket leaf, only as
-many as needed to get back to about half the cap. Nodes the current snapshot
-shows (fallback children included) are spared unless that cannot suffice, so
-the view only gains buckets; buckets are identified by `trieNode.bucket`, not
-by name, and never take part in the fallback decision. Totals are conserved;
-only attribution of folded frames is lost. Pitfalls the tests pin: a single
-threshold fold per cycle (the first version) kept restarting late, steady
-frames from zero so they never became visible
+~55-75MB). Past it, `compactLocked` folds the lowest-ranked subtrees into a
+per-parent `[other]` bucket leaf, only as many as needed to get back to about
+half the cap. The rank is a node's *rate*, not its all-time total: its total
+over the root events since its birth (`trieNode.birthRootTotal`) plus one
+compaction window, maxed with its children's ranks so a child never outranks
+its parent (ties go to the deeper node, then walk order). Nodes the current
+snapshot shows (fallback children included) are spared unless that cannot
+suffice, so the view only gains buckets; buckets are identified by
+`trieNode.bucket`, not by name, and never take part in the fallback decision.
+Totals stay exact; only attribution of folded frames is lost. Pitfalls the
+tests pin: a single threshold fold per cycle (the first version) kept
+restarting late, steady frames from zero so they never became visible
 (`TestLiveTrieCompactionKeepsAFrameThatAppearsLate`), overshot the target by
-orders of magnitude and wiped zero-total tries into one root bucket.
+orders of magnitude and wiped zero-total tries into one root bucket; ranking
+by all-time totals let more than cap/2 old idle frames starve a steady late
+frame forever (`TestLiveTrieCompactionKeepsALateFrameOverOldIdleFrames`).
+
 Compaction runs inside the `AddRecord` that crossed the cap, under the write
-lock: roughly 40-80ms at the default cap on a loaded dev box
-(`BenchmarkLiveTrieCompaction`), at most once per cap/4 new nodes. Tests lower
-`LiveTrie.maxNodes` to exercise it.
+lock, and that is the event-loop goroutine (`internal/ior.go` print callback
+-> `rt.liveTrie.Ingest`): for about 40ms at the default cap
+(`BenchmarkLiveTrieCompaction`; over 100ms on a heavily oversubscribed dev
+box), plus GC of the folded nodes, no
+events are consumed, so under a high rate of unique paths the BPF ring buffer
+can back up and drop events. It happens at most once per cap/4 new nodes. A
+lower cap shortens the pause proportionally; moving ingestion off the event
+loop (a buffered hand-off) would hide it entirely. Tests lower
+`LiveTrie.maxNodes` to exercise compaction.
 
 ## Demo Pipeline
 

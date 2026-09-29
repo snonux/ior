@@ -44,12 +44,15 @@ type LiveTrie struct {
 	// nodeCount is the number of nodes below the root; maxNodes is the cap
 	// that triggers compaction (liveTrieMaxNodes; tests lower it, and a
 	// value below 2 disables compaction).
-	nodeCount   int
-	maxNodes    int
-	version     atomic.Uint64
-	fields      []string
-	countField  string
-	heightField string
+	nodeCount int
+	maxNodes  int
+	// lastCompactRootTotal is the root total at the previous compaction,
+	// which sizes the rate window (see rateClock).
+	lastCompactRootTotal uint64
+	version              atomic.Uint64
+	fields               []string
+	countField           string
+	heightField          string
 
 	// Tree cache avoids rebuilding the snapshot tree while the version is
 	// unchanged. Built lazily; invalidated on reset and on field/metric
@@ -90,6 +93,7 @@ func (lt *LiveTrie) resetLocked() {
 		childMap: make(map[string]*trieNode),
 	}
 	lt.nodeCount = 0
+	lt.lastCompactRootTotal = 0
 	lt.version.Add(1)
 }
 

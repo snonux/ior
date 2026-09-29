@@ -7,8 +7,9 @@ package flamegraph
 //
 // This runs once per ingested event, so it avoids the per-field string
 // building of IterRecord.StringByName where it can: frames are substrings of
-// the record's own strings (insertTriePath clones a name only when it creates
-// a node) and the "path" field is split in place by appendPathFrames.
+// the record's own strings (insertPath, behind insertLiveTriePath, clones a
+// name only when it creates a node) and the "path" field is split in place
+// by appendPathFrames.
 func buildFrames(record IterRecord, fields []string) []string {
 	frames := make([]string, 0, len(fields)+4)
 	for _, fieldName := range fields {

@@ -99,6 +99,46 @@ func TestLiveTrieCompactionKeepsAFrameThatAppearsLate(t *testing.T) {
 	assertTotalsConsistent(t, lt.root)
 }
 
+// TestLiveTrieCompactionKeepsALateFrameOverOldIdleFrames: more than half the
+// cap is taken by frames that were busy early and then went idle. Ranking by
+// all-time totals kept them forever and starved a steady frame that appeared
+// later: folded each cycle with a handful of events, it never grew past them.
+// Ranking by rate lets the idle frames decay below it.
+func TestLiveTrieCompactionKeepsALateFrameOverOldIdleFrames(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "")
+	lt.maxNodes = 2000
+	const oldFrames = 1100 // > maxNodes/2
+	for i := 0; i < oldFrames; i++ {
+		lt.AddRecord(IterRecord{Comm: "old", Path: fmt.Sprintf("/o/%04d", i), Cnt: Counter{Count: 100}})
+	}
+	const events = 300_000
+	late := uint64(0)
+	for i := 0; i < events; i++ {
+		if i%500 == 0 { // 0.2% of the new events
+			lt.AddRecord(IterRecord{Comm: "late", Path: "/steady", Cnt: Counter{Count: 1}})
+			late++
+			continue
+		}
+		lt.AddRecord(IterRecord{Comm: "noise", Path: fmt.Sprintf("/n/%07d", i), Cnt: Counter{Count: 1}})
+		if lt.nodeCount > lt.maxNodes {
+			t.Fatalf("nodeCount = %d, above cap %d", lt.nodeCount, lt.maxNodes)
+		}
+	}
+
+	// The first compaction may fold the frame while it has a single event or
+	// two: at that point the old frames legitimately outrank it. After that
+	// it must keep everything.
+	snapshot, _ := lt.SnapshotTree()
+	steady := findSnapshotPath(t, snapshot, "late", "/steady")
+	if steady.Total+5 < late {
+		t.Fatalf("late frame total = %d of its %d events: it kept being folded", steady.Total, late)
+	}
+	if got, want := snapshot.Total, uint64(oldFrames*100+events); got != want {
+		t.Fatalf("root total = %d, want %d", got, want)
+	}
+	assertTotalsConsistent(t, lt.root)
+}
+
 func TestLiveTrieCompactionDoesNotOvershoot(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm", "path"}, "count", "")
 	lt.maxNodes = 1000
@@ -239,8 +279,8 @@ func TestSelectLowestRankedMatchesASort(t *testing.T) {
 	for _, size := range []int{0, 1, 2, 3, 10, 257, 5000} {
 		candidates := make([]foldCandidate, size)
 		for i := range candidates {
-			// Few distinct totals and depths, so the later keys decide.
-			candidates[i] = foldCandidate{total: uint64(rng.Intn(4)), depth: int32(rng.Intn(3)), order: int32(i)}
+			// Few distinct ranks and depths, so the later keys decide.
+			candidates[i] = foldCandidate{rate: float64(rng.Intn(4)), depth: int32(rng.Intn(3)), order: int32(i)}
 		}
 		sorted := slices.Clone(candidates)
 		slices.SortFunc(sorted, func(left, right foldCandidate) int {
