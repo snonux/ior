@@ -440,7 +440,11 @@ not sufficient.
     them as `SyscallAggregate.UntimedCount` and keeps them out of min/max,
     the latency means and the latency sparkline. The kernel stores `count`
     last, and the consumer tolerates torn per-CPU reads (histogram ahead of
-    count counts as timed; a baseline only advances with a new count). The
+    count counts as timed; a slot's first timed sample read before its
+    min/max landed is deferred to the next drain instead of seeding a 0
+    minimum; a baseline only advances with a new count). This relies on the
+    copy reading `count` first, so `count` must stay the first field of
+    `struct syscall_aggregate` in `maps.h`. The
     accounting functions of `filter.c` are compiled and exercised on the host
     by `internal/generate/enterstate_fallback_test.go`.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
