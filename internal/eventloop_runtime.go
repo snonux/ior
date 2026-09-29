@@ -57,8 +57,11 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 	scope := kernelProcessScope{pid: e.cfg.pidFilter, tid: e.cfg.tidFilter}
 	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, scope, e.Filter)
 	stop := drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
-	// Publish the drainer so SetFilter flushes it before a live swap, and
-	// unpublish it before the final drain so no swap drains a stopped loop.
+	// Publish the drainer so SetFilter flushes it before a live swap. stop
+	// unpublishes it first, but a SetFilter that loaded the pointer earlier
+	// can still reach SwapFilter afterwards: that is safe only because the
+	// drainer's final drain retires it under its lock (pollCycle), turning
+	// such a late swap into a plain swap that never touches the closed map.
 	e.aggregateDrainer.Store(drainer)
 	return func() {
 		e.aggregateDrainer.Store(nil)
