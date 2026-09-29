@@ -55,6 +55,7 @@ type ringbufDropSource interface {
 
 type eventLoopConfig struct {
 	pidFilter               int
+	tidFilter               int
 	filter                  globalfilter.Filter
 	pprofEnable             bool
 	plainMode               bool

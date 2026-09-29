@@ -431,10 +431,19 @@ not sufficient.
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,
     gaps, files or processes). Counts/errors/latency-sums/histograms are full.
-  - While a runtime filter with an unsupported dimension is active, aggregate
-    ingestion is gated off entirely (`aggregateIngestAllowedForFilter`), so
-    aggregate-only syscalls disappear and sampled syscalls fall back to their
-    1-in-N counts until the filter is cleared.
+  - The runtime filter applies to aggregate rows per row where a
+    syscall-keyed row can answer it (`aggregateDrainer.filterRowsForIngest`):
+    `Syscall` and `Family` via `Filter.MatchesSyscallRow`, so `-syscall futex`
+    still counts an aggregate-only futex and `-family FS` keeps other
+    families' aggregate rows out of the dashboard totals. A `PID`/`TID`
+    equality is honoured only when it equals the kernel-enforced
+    `PID_FILTER`/`TID_FILTER` scope the program was loaded with
+    (`kernelProcessScope`). Any other dimension (comm, file, fd,
+    latency, gap, bytes, retval, errors-only, or a PID/TID the kernel does not
+    enforce) gates aggregate ingestion off entirely
+    (`aggregateIngestAllowedForFilter`), so aggregate-only syscalls disappear
+    and sampled syscalls fall back to their 1-in-N counts until the filter is
+    cleared.
 - **Additional metric dimensions**:
   - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests whose nanoseconds are unrepresentable in `__s64` saturate to `S64_MAX` (`generateExtraSleep`). The kernel similarly clamps to `KTIME_MAX`, but from `tv_sec >= KTIME_SEC_MAX` regardless of `tv_nsec`, so values within ~1s of the boundary may differ.

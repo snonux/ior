@@ -56,6 +56,7 @@ func TestAggregateDrainerTickFiltersAggregateIngestTraceIDs(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 
@@ -81,6 +82,7 @@ func TestAggregateDrainerTickGatesWhenUnsupportedFilterActive(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter {
 			return globalfilter.Filter{
 				Comm: &globalfilter.StringFilter{Pattern: "ioworkload"},
@@ -105,6 +107,7 @@ func TestAggregateDrainerTickRejectsRowsWithoutAggregateIngestTraceIDs(t *testin
 			}},
 		},
 		nil,
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 
@@ -137,6 +140,7 @@ func TestAggregateDrainerTickRejectsPIDAndTIDFilters(t *testing.T) {
 				map[types.TraceId]struct{}{
 					types.SYS_ENTER_FUTEX: {},
 				},
+				kernelProcessScope{},
 				func() globalfilter.Filter { return tt.filter },
 			)
 
@@ -157,6 +161,7 @@ func TestAggregateDrainerTickReturnsDrainWarning(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 
