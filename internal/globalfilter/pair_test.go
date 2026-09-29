@@ -213,13 +213,13 @@ func TestMatchesSeesTheCandidateOldName(t *testing.T) {
 	row := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", oldFile: "/tmp/old.txt", latency: 1_000_000}
 	singleName := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", latency: 1_000_000}
 
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).Matches(row) {
+	if !(&Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).Matches(row) {
 		t.Fatal("expected a newname match to be accepted")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(row) {
+	if !(&Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(row) {
 		t.Fatal("expected an oldname match to be accepted")
 	}
-	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).Matches(row) {
+	if (&Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).Matches(row) {
 		t.Fatal("expected a pattern matching neither name to be rejected")
 	}
 
@@ -228,16 +228,16 @@ func TestMatchesSeesTheCandidateOldName(t *testing.T) {
 	// anchored pattern "^$" is the sharp case - it matches the empty string,
 	// so an absent oldname satisfying it would let `-path '^$'` keep every
 	// single-name row instead of only the genuinely empty-path ones.
-	if (Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(singleName) {
+	if (&Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(singleName) {
 		t.Fatal("an absent oldname must not satisfy the file dimension")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "^$"}}).Matches(stubCandidate{syscall: "read", file: ""}) {
+	if !(&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(stubCandidate{syscall: "read", file: ""}) {
 		t.Fatal("an empty-path row must satisfy -path '^$'")
 	}
-	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(singleName) {
+	if (&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(singleName) {
 		t.Fatal("an absent oldname must not satisfy -path '^$'")
 	}
-	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(row) {
+	if (&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(row) {
 		t.Fatal("a non-empty oldname must not satisfy -path '^$'")
 	}
 

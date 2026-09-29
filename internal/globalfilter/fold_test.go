@@ -32,12 +32,17 @@ func referenceMatchString(sf *StringFilter, value string) bool {
 // TestMatchStringASCIIFoldAgreesWithLowering cross-checks matchString against
 // the lowering reference over every anchor mode, mixed case, boundary lengths
 // (empty, pattern longer than value) and non-ASCII input, which must take the
-// strings.ToLower fallback (the Kelvin sign lowers to an ASCII 'k').
+// strings.ToLower fallback. The non-ASCII cases include characters that
+// lower to ASCII or to ASCII plus a combining mark: the Kelvin sign U+212A
+// lowers to 'k', U+0130 (İ) to "i̇". Patterns built from them against
+// ASCII values ("KELVIN", "kelvin") would diverge if the fast path were
+// entered on an ASCII value alone, so both sides must be checked.
 func TestMatchStringASCIIFoldAgreesWithLowering(t *testing.T) {
 	values := []string{"", "FS", "fs", "Network", "/Var/Log/Access.LOG", "read", "x",
-		"Ärger", "ärger", "Kelvin", "kelvin", "@[`{"}
+		"Ärger", "ärger", "Kelvin", "kelvin", "KELVIN", "i̇", "I", "i", "s", "@[`{"}
 	cores := []string{"", "f", "FS", "s", "net", "WORK", "network2", "/var", "LOG", "access.log",
-		"ä", "Ä", "kel", "K", "@", "`", "[", "{"}
+		"ä", "Ä", "kel", "K", "@", "`", "[", "{",
+		"K", "Kel", "İ", "ſ"}
 	for _, core := range cores {
 		for _, pattern := range []string{core, "^" + core, core + "$", "^" + core + "$", " " + core + " "} {
 			sf := &StringFilter{Pattern: pattern}
