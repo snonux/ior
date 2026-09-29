@@ -266,6 +266,43 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
+// recorderWarner turns errors returned by the TUI's per-event recorder.Record
+// call into stream warnings, at most one per category per trace session.
+//
+// The TUI bindings always hold a recorder, but a recording only runs while
+// the user has started one, so Record returns ErrRecorderNotActive for every
+// event of an unrecorded session. That is the idle state, not a failure: it
+// is dropped silently. Otherwise the very first event of each session would
+// push a bogus "recorder failed: not active" warning and burn the failure
+// once-guard, hiding a genuine failure (e.g. disk full) later in the session.
+// A session that died with an error is still reported, because Record then
+// returns the session's LastError rather than ErrRecorderNotActive.
+//
+// Overflow and genuine failures have independent once-guards: a shed storm
+// must not consume the guard that would later surface a real recorder error.
+type recorderWarner struct {
+	overflowOnce sync.Once
+	failureOnce  sync.Once
+}
+
+// warn reports err through el's warning callback (notifyWarning reads it at
+// call time, since configure installs it after the print callback). Nil
+// errors and the idle ErrRecorderNotActive state are ignored.
+func (w *recorderWarner) warn(el *eventLoop, err error) {
+	switch {
+	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):
+		return
+	case errors.Is(err, parquet.ErrRecorderQueueFull):
+		w.overflowOnce.Do(func() {
+			el.notifyWarning("Parquet recorder queue full: rows are being dropped")
+		})
+	default:
+		w.failureOnce.Do(func() {
+			el.notifyWarning(fmt.Sprintf("Parquet recorder failed: %v", err))
+		})
+	}
+}
+
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
 // the event loop into the TUI runtime and an ownership-aware function that
 // unregisters its live-filter setter. The callback sets the initial filter,
@@ -273,11 +310,9 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // registers the setter with publisher so the TUI can swap filters without
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
-	// Overflow and genuine failures are warned about independently: a shed
-	// storm must not consume the once-guard that would later surface a
-	// real recorder error in the stream.
-	var recorderOverflowWarningOnce sync.Once
-	var recorderFailureWarningOnce sync.Once
+	// One warner per configurer, i.e. per trace session: each session may
+	// surface its own overflow and failure warning once.
+	warner := &recorderWarner{}
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
 		IngestSyscallAggregates([]statsengine.SyscallAggregate)
@@ -286,24 +321,6 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
-		warnRecorderIssue := func(err error) {
-			if err == nil {
-				return
-			}
-			if errors.Is(err, parquet.ErrRecorderQueueFull) {
-				recorderOverflowWarningOnce.Do(func() {
-					if el.warningCb != nil {
-						el.warningCb("Parquet recorder queue full: rows are being dropped")
-					}
-				})
-				return
-			}
-			recorderFailureWarningOnce.Do(func() {
-				if el.warningCb != nil {
-					el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
-				}
-			})
-		}
 		el.SetPrintCallback(func(ep *event.Pair) {
 			if !shouldIngestTracePair(el.Filter(), ep) {
 				ep.Recycle()
@@ -313,7 +330,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				warnRecorderIssue(rt.recorder.Record(row, rt.currentFilterEpoch()))
+				warner.warn(el, rt.recorder.Record(row, rt.currentFilterEpoch()))
 			}
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so
