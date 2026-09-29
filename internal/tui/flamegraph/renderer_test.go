@@ -983,7 +983,7 @@ func TestRenderRowNeverExceedsWidth(t *testing.T) {
 	}
 }
 
-func TestFindFrameAtRowMatchesDrawnOverlap(t *testing.T) {
+func TestFindFrameAtLineMatchesDrawnOverlap(t *testing.T) {
 	frames := overlapTestFrames()
 	for _, tc := range []struct{ x, want int }{
 		{0, 1}, {45, 1}, {59, 1}, // the overlap [40,60) is drawn as A
@@ -991,11 +991,11 @@ func TestFindFrameAtRowMatchesDrawnOverlap(t *testing.T) {
 		{90, -1}, {99, -1}, // blank tail
 		{-1, -1}, {100, -1}, // outside the viewport
 	} {
-		if got := findFrameAtRow(frames, 1, tc.x, 100); got != tc.want {
+		if got := findFrameAtLine(frames, frameLine{row: 1, band: -1}, tc.x, 100); got != tc.want {
 			t.Errorf("x=%d: got frame %d want %d", tc.x, got, tc.want)
 		}
 	}
-	if got := findFrameAtRow(frames, 7, 10, 100); got != -1 {
+	if got := findFrameAtLine(frames, frameLine{row: 7, band: -1}, 10, 100); got != -1 {
 		t.Errorf("empty row: got frame %d want -1", got)
 	}
 }
@@ -1052,7 +1052,7 @@ func rowHasOverlap(frames []tuiFrame, row int) bool {
 	return false
 }
 
-// assertHitsMatchDrawnRow checks, cell by cell, that findFrameAtRow returns a
+// assertHitsMatchDrawnRow checks, cell by cell, that findFrameAtLine returns a
 // frame whose label is the one rendered at that cell.
 func assertHitsMatchDrawnRow(t *testing.T, frames []tuiFrame, row, width int) {
 	t.Helper()
@@ -1067,7 +1067,7 @@ func assertHitsMatchDrawnRow(t *testing.T, frames []tuiFrame, row, width int) {
 	sortFramesByCol(items)
 	line := []rune(stripSGR(renderRow(items, width, "", nil, nil, -1, true, true)))
 	for x := 0; x < width; x++ {
-		got := findFrameAtRow(frames, row, x, width)
+		got := findFrameAtLine(frames, frameLine{row: row, band: -1}, x, width)
 		drawn := line[x]
 		if got < 0 {
 			if drawn != ' ' {
@@ -1079,7 +1079,7 @@ func assertHitsMatchDrawnRow(t *testing.T, frames []tuiFrame, row, width int) {
 		// cuts it and the "…" lands on the frame's last drawn cell only: the
 		// next cell must then belong to another frame (or be off-screen).
 		if drawn == '…' {
-			if x+1 < width && findFrameAtRow(frames, row, x+1, width) == got {
+			if x+1 < width && findFrameAtLine(frames, frameLine{row: row, band: -1}, x+1, width) == got {
 				t.Fatalf("x=%d: \"…\" drawn inside frame %q, not at its last cell: %q", x, frames[got].Name, string(line))
 			}
 			continue
