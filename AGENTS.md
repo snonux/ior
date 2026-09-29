@@ -247,13 +247,39 @@ pooled buffers made the byte total depend on GC frequency. The test now measures
 each real refresh between its own `runtime.ReadMemStats` pair, with the event
 that advances the trie version outside the interval. No GC setting is changed.
 
-With gap-free child-span allocation, the completed fixture costs 26366
-allocations / 1479201 bytes per refresh in an idle non-race run. With
-`GOGC=1`, `GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, it held to 26376 / 1480425;
-a full `-race` run also stayed below the ceilings. The ceilings are 30000
-allocations and 1650000 bytes. Both dimensions still matter: removing the
-`childStates` preallocation in `livetrie.go` reaches 30009 / 1829280 outside
-`-race` and trips both.
+Since `LiveTrie` snapshots prune before they build (task 1o2), the completed
+fixture costs 3686 allocations / 439512 bytes per refresh in an idle non-race
+run, 3686 / 439601 with `GOGC=1`, `GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, and
+3686 / 446248 under `-race`. The ceilings are 4200 allocations and 500000
+bytes (about 12-14% headroom). Both dimensions still matter: the former
+full-walk snapshot, which cloned and sorted every trie node's children before
+pruning, cost 26366 / 1479201 and trips both.
+
+### LiveTrie snapshot cost and growth bound
+
+`SnapshotTree` holds the trie's read lock, and every event's `AddRecord`
+needs the write lock, so snapshot cost is ingest stall time. It is therefore
+proportional to the *visible* nodes, not the recorded history:
+`insertTriePath` maintains each node's subtree totals and its
+`topChildren` (the 8 largest non-empty children) on every insert, and the
+`snapshotBuilder` decides pruning from those before recursing — a pruned
+subtree is never walked or allocated, and a wide fan-out's pruned tail is
+usually not even scanned. The fallback set is exactly `topChildren`.
+`TestLiveTrieSnapshotMatchesFullWalkReference` keeps the old full-walk
+algorithm as an oracle and must stay exactly equal (its cases assert whether
+the fallback fired, so they cannot silently stop exercising it).
+On a shared, noisy dev box `BenchmarkLiveTrieSnapshotTree` measured 10k/100k
+distinct paths at 0.4-1.1ms / 9-15ms per snapshot before and 0.09-0.12ms /
+0.05-0.07ms after (549KB/4.9MB -> 16KB allocated), and a 100k-wide depth-one
+fallback (`...WideFallback`) went from 10.7ms to about 1µs.
+`IOR_STRESS_TEST=1` `TestLiveTrieStressHighRateConcurrentSnapshot` ingest went
+from 584 to about 300000 events/s.
+
+The trie is capped at `liveTrieMaxNodes` (2^19) nodes: past it,
+`compactLocked` folds small sibling subtrees into a per-parent `[other]` leaf
+(first at the 0.1% pruning fraction, growing 4x per pass) until at most half
+the cap remains. Totals are conserved; only attribution of folded frames is
+lost. Tests lower `LiveTrie.maxNodes` to exercise it.
 
 ## Demo Pipeline
 
