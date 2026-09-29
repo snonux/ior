@@ -374,6 +374,32 @@ func TestViewCacheKeyTracksFieldOrder(t *testing.T) {
 	}
 }
 
+// TestViewTracksFieldOrderAfterSetLiveTrie is the regression test for keying
+// the cache on fieldIndex: switching to a trie with an unknown field order
+// prepends that order to fieldPresets and keeps fieldIndex at 0, and with
+// lastVersion 0 and no snapshot on both sides nothing else in the key moves.
+func TestViewTracksFieldOrderAfterSetLiveTrie(t *testing.T) {
+	m := NewModel(coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count"))
+	m.width = 240
+	m.height = 30
+	if m.fieldIndex != 0 {
+		t.Fatalf("precondition: expected fieldIndex 0, got %d", m.fieldIndex)
+	}
+	if got := visibleText(m.View().Content); !strings.Contains(got, "o:order(comm/tracepoint/path)") {
+		t.Fatalf("precondition: toolbar lacks initial order:\n%s", got)
+	}
+
+	m.SetLiveTrie(coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count"))
+	if m.fieldIndex != 0 || m.snapshot != nil || m.lastVersion != 0 {
+		t.Fatalf("precondition: expected index 0, no snapshot, version 0; got %d, %v, %d",
+			m.fieldIndex, m.snapshot != nil, m.lastVersion)
+	}
+	got := visibleText(m.View().Content)
+	if !strings.Contains(got, "o:order(comm/path)") {
+		t.Fatalf("toolbar kept the previous trie's field order:\n%s", got)
+	}
+}
+
 // TestViewDropsEmptySnapshotPanelAfterReset is the regression test for the
 // stale "no visible frames" panel: reset drops the snapshot without changing
 // lastVersion, and with an unchanged status message the key used to match.
