@@ -34,6 +34,15 @@ type Source interface {
 	Snapshot() []StreamEvent
 }
 
+// snapshotAppender is optionally implemented by a Source that can copy its
+// rows into a caller-owned buffer (streamrow.RingBuffer does). Refresh runs
+// on the Bubble Tea UI goroutine several times a second, so it prefers this
+// path to re-snapshot a full 10k-row ring into the reused allEvents buffer
+// instead of allocating a fresh multi-megabyte slice on every tick.
+type snapshotAppender interface {
+	AppendSnapshot(dst []StreamEvent) []StreamEvent
+}
+
 // Model is the stream tab: the live event view over a Source, with its own
 // selection, filter, search and export modals. Receiver policy: every
 // method takes *Model - this is the all-pointer template the other TUI
@@ -41,8 +50,13 @@ type Source interface {
 type Model struct {
 	source Source
 
-	allEvents []StreamEvent
-	filtered  []StreamEvent
+	// allEvents, filtered and blankLines are owned by the model and their
+	// backing arrays are reused across Refresh calls (see takeSnapshot,
+	// applyFilter and blankContentLines), so no caller may retain them
+	// beyond a synchronous use.
+	allEvents  []StreamEvent
+	filtered   []StreamEvent
+	blankLines []string
 
 	filter      Filter
 	filterStack []string
@@ -604,13 +618,28 @@ func (m *Model) Refresh() {
 		return
 	}
 
-	m.allEvents = m.source.Snapshot()
+	m.takeSnapshot()
 	m.applyFilter()
 }
 
+// takeSnapshot replaces allEvents with the source's current rows, reusing
+// allEvents' backing array when the source supports AppendSnapshot. Nothing
+// outside the model holds allEvents, so overwriting it in place is safe.
+func (m *Model) takeSnapshot() {
+	if appender, ok := m.source.(snapshotAppender); ok {
+		m.allEvents = appender.AppendSnapshot(m.allEvents[:0])
+		return
+	}
+	m.allEvents = m.source.Snapshot()
+}
+
+// applyFilter rebuilds filtered from allEvents and re-syncs the viewport.
+// It reuses filtered's backing array: rows past the new length stay pinned
+// until overwritten, which is bounded by the ring capacity and cheaper than
+// reallocating the slice on every stream tick.
 func (m *Model) applyFilter() {
 	if len(m.allEvents) == 0 {
-		m.filtered = []StreamEvent{}
+		m.filtered = m.filtered[:0]
 		m.scrollOffset = 0
 		m.selectedIdx = -1
 		m.viewport.SetContentLines(nil)
@@ -618,21 +647,23 @@ func (m *Model) applyFilter() {
 		return
 	}
 
-	filtered := make([]StreamEvent, 0, len(m.allEvents))
+	filtered := m.filtered[:0]
 	for i := range m.allEvents {
-		ev := m.allEvents[i]
+		// Match through a pointer into allEvents: taking the address of a
+		// loop-local copy would make every copy escape to the heap via the
+		// Candidate interface (one allocation per buffered row per tick).
+		ev := &m.allEvents[i]
 		// Plain Matches: the either-name rule for rename rows lives inside it
 		// now (Candidate.OldFileValue), so this stage cannot re-narrow what the
 		// event loop and the dashboard ingest already applied.
-		if m.filter.Matches(&ev) {
-			filtered = append(filtered, ev)
+		if m.filter.Matches(ev) {
+			filtered = append(filtered, *ev)
 		}
 	}
 	m.filtered = filtered
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(m.visibleRows())
-	lines := make([]string, len(m.filtered))
-	m.viewport.SetContentLines(lines)
+	m.viewport.SetContentLines(m.blankContentLines(len(m.filtered)))
 
 	max := m.maxScrollOffset()
 	if m.autoScroll {
@@ -648,6 +679,18 @@ func (m *Model) applyFilter() {
 		m.ensureSelectedCol()
 		m.centerSelection()
 	}
+}
+
+// blankContentLines returns n empty lines for the viewport, which only
+// tracks the row count for scrolling (rows are rendered by
+// RenderStreamTable). The slice is reused across calls; sharing it with the
+// viewport is safe because the viewport only rewrites lines that contain
+// newlines, and these are always empty.
+func (m *Model) blankContentLines(n int) []string {
+	if cap(m.blankLines) < n {
+		m.blankLines = make([]string, n)
+	}
+	return m.blankLines[:n]
 }
 
 func (m *Model) maxScrollOffset() int {

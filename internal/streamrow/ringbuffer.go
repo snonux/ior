@@ -38,20 +38,29 @@ func (r *RingBuffer) Push(ev Row) {
 	r.totalPushed++
 }
 
-// Snapshot returns a copy of all rows in insertion order.
+// Snapshot returns a copy of all rows in insertion order in a freshly
+// allocated slice the caller owns outright (safe to hand to another
+// goroutine). Callers that snapshot repeatedly on one goroutine should use
+// AppendSnapshot with a reused buffer instead.
 func (r *RingBuffer) Snapshot() []Row {
+	return r.AppendSnapshot(make([]Row, 0, r.Len()))
+}
+
+// AppendSnapshot appends a copy of all rows in insertion order to dst and
+// returns the extended slice, like append. Passing a reused buffer truncated
+// to length zero (buf[:0]) lets a periodic reader such as the Stream tab
+// refresh snapshot a full buffer without allocating once buf has grown to
+// capacity. The rows are copied under the read lock, so the result never
+// aliases the ring's internal storage.
+func (r *RingBuffer) AppendSnapshot(dst []Row) []Row {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if r.size == 0 {
-		return make([]Row, 0)
-	}
-
-	out := make([]Row, r.size)
-	for i := 0; i < r.size; i++ {
-		out[i] = r.buf[(r.start+i)%RingBufferCapacity]
-	}
-	return out
+	// Copy the ring as its (at most) two contiguous segments: the run from
+	// start to the end of buf, then the wrapped-around run from index 0.
+	first := min(r.size, RingBufferCapacity-r.start)
+	dst = append(dst, r.buf[r.start:r.start+first]...)
+	return append(dst, r.buf[:r.size-first]...)
 }
 
 // Len returns the current number of rows in the buffer.

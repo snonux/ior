@@ -102,3 +102,68 @@ func TestRingBufferReset(t *testing.T) {
 		t.Fatalf("expected empty snapshot after reset, got len=%d", len(snap))
 	}
 }
+
+// TestRingBufferAppendSnapshotWrapped verifies AppendSnapshot on a wrapped
+// ring: every row arrives in insertion order across the wrap point, after
+// the caller's existing prefix, and the result does not alias the ring.
+func TestRingBufferAppendSnapshotWrapped(t *testing.T) {
+	rb := NewRingBuffer()
+	const extra = 7
+	for i := range RingBufferCapacity + extra {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+
+	dst := []Row{{Seq: 999999}}
+	got := rb.AppendSnapshot(dst)
+	if len(got) != RingBufferCapacity+1 {
+		t.Fatalf("len = %d, want %d", len(got), RingBufferCapacity+1)
+	}
+	if got[0].Seq != 999999 {
+		t.Fatalf("prefix clobbered: got seq %d", got[0].Seq)
+	}
+	for i, row := range got[1:] {
+		if want := uint64(extra + 1 + i); row.Seq != want {
+			t.Fatalf("row %d seq = %d, want %d", i, row.Seq, want)
+		}
+	}
+
+	// Mutating the result must not reach back into the ring.
+	got[1].Seq = 0
+	if snap := rb.Snapshot(); snap[0].Seq != extra+1 {
+		t.Fatalf("AppendSnapshot result aliases the ring: first seq now %d", snap[0].Seq)
+	}
+}
+
+// TestRingBufferAppendSnapshotPartialAndEmpty covers the unwrapped partial
+// ring (a single contiguous segment) and the empty ring, which must leave
+// dst unchanged.
+func TestRingBufferAppendSnapshotPartialAndEmpty(t *testing.T) {
+	rb := NewRingBuffer()
+	if got := rb.AppendSnapshot(nil); len(got) != 0 {
+		t.Fatalf("empty ring appended %d rows", len(got))
+	}
+	for i := range 3 {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+	got := rb.AppendSnapshot(make([]Row, 0, 1))
+	if len(got) != 3 || got[0].Seq != 1 || got[2].Seq != 3 {
+		t.Fatalf("partial snapshot = %+v", got)
+	}
+}
+
+// TestRingBufferAppendSnapshotReusesBuffer pins the zero-allocation contract
+// periodic readers rely on: re-snapshotting a full ring into a buffer that
+// already has the capacity allocates nothing.
+func TestRingBufferAppendSnapshotReusesBuffer(t *testing.T) {
+	rb := NewRingBuffer()
+	for i := range RingBufferCapacity {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+	buf := rb.AppendSnapshot(nil)
+	allocs := testing.AllocsPerRun(10, func() {
+		buf = rb.AppendSnapshot(buf[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("AppendSnapshot into a reused buffer allocated %.0f times, want 0", allocs)
+	}
+}

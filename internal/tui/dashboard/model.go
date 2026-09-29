@@ -241,7 +241,12 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 		reanchor()
 	}
 	m.clampTableColumns()
-	m.streamModel.Refresh()
+	// The stream re-snapshots and re-filters the whole ring buffer, so only
+	// do it while the Stream tab is visible; a hidden stream is brought up
+	// to date when it is entered again (see onTabEntered).
+	if m.activeTab == TabStream {
+		m.streamModel.Refresh()
+	}
 	if m.refreshBubbleData() {
 		return m, m.ticks.startBubble()
 	}
@@ -304,8 +309,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !handled {
 		return m.handleUnhandledKey(msg)
 	}
-	if prevActiveTab != m.activeTab && m.activeTab == TabFlame {
-		cmd = batchCmds(cmd, m.enterFlameTab())
+	if prevActiveTab != m.activeTab {
+		cmd = batchCmds(cmd, m.onTabEntered(m.activeTab))
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
@@ -1165,6 +1170,21 @@ func (m *Model) activeTableHeight() int {
 func (m *Model) syncFlameViewport() tea.Cmd {
 	width, height := m.contentViewport(TabFlame, m.width, m.height)
 	return m.flamegraphModel.SetViewport(width, height, m.activeTab == TabFlame)
+}
+
+// onTabEntered brings a tab whose content is only refreshed while it is
+// visible up to date the moment it becomes active, so it never shows a
+// stale frame while waiting for its first tick: the flame tab resumes its
+// animation and resizes, and the stream (skipped by hidden stats ticks and
+// stream ticks) takes a fresh snapshot of the ring buffer right away.
+func (m *Model) onTabEntered(tab Tab) tea.Cmd {
+	switch tab {
+	case TabFlame:
+		return m.enterFlameTab()
+	case TabStream:
+		m.streamModel.Refresh()
+	}
+	return nil
 }
 
 // enterFlameTab brings the flamegraph up to date when the Flame tab becomes
