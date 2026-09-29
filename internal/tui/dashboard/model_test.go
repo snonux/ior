@@ -294,11 +294,11 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "beta" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^beta$" {
 		t.Fatalf("expected comm beta filter, got %+v", req.Filter.Comm)
 	}
-	if req.Action != "comm~beta" {
-		t.Fatalf("expected action comm~beta, got %q", req.Action)
+	if req.Action != "comm~^beta$" {
+		t.Fatalf("expected action comm~^beta$, got %q", req.Action)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "agent" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^agent$" {
 		t.Fatalf("expected visible sorted row to filter agent comm, got %+v", req.Filter.Comm)
 	}
 }
@@ -459,11 +459,11 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "write" {
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "^write$" {
 		t.Fatalf("expected syscall write filter, got %+v", req.Filter.Syscall)
 	}
-	if req.Action != "syscall~write" {
-		t.Fatalf("expected action syscall~write, got %q", req.Action)
+	if req.Action != "syscall~^write$" {
+		t.Fatalf("expected action syscall~^write$, got %q", req.Action)
 	}
 }
 
@@ -553,7 +553,7 @@ func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "read" {
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "^read$" {
 		t.Fatalf("expected visible sorted row to filter read, got %+v", req.Filter.Syscall)
 	}
 }
@@ -666,11 +666,11 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/b" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/b$" {
 		t.Fatalf("expected file /tmp/b filter, got %+v", req.Filter.File)
 	}
-	if req.Action != "file~/tmp/b" {
-		t.Fatalf("expected action file~/tmp/b, got %q", req.Action)
+	if req.Action != "file~^/tmp/b$" {
+		t.Fatalf("expected action file~^/tmp/b$, got %q", req.Action)
 	}
 }
 
@@ -767,7 +767,7 @@ func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/a.log" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/a.log$" {
 		t.Fatalf("expected visible sorted row to filter /tmp/a.log, got %+v", req.Filter.File)
 	}
 }
@@ -796,7 +796,7 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/" {
 		t.Fatalf("expected visible sorted grouped row to filter /tmp, got %+v", req.Filter.File)
 	}
 }

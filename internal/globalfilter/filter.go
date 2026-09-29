@@ -57,7 +57,10 @@ func (f *NumericFilter) EqValue() (int64, bool) {
 
 // StringFilter constrains one string dimension (comm, path, syscall, ...) by
 // substring, case-insensitively. The anchors ^ and $ switch the match to
-// prefix/suffix/exact; a blank or nil filter matches everything.
+// prefix/suffix/exact; a blank or nil filter matches everything. Blanks are
+// trimmed only outside the anchors, and only one anchor is taken from each
+// end, so "^x $" is exactly "x " and "^^x" is the prefix "^x". Filters built
+// from a concrete value rather than typed use ExactPattern/DirPattern.
 type StringFilter struct {
 	// Pattern is the substring (or anchored prefix/suffix) matched against the
 	// candidate string value; matching is case-insensitive.
@@ -301,6 +304,35 @@ func trimAnchors(pattern string) (trimmed string, anchoredStart, anchoredEnd boo
 		pattern = pattern[:len(pattern)-1]
 	}
 	return pattern, anchoredStart, anchoredEnd
+}
+
+// ExactPattern returns the StringFilter pattern that matches value exactly
+// (still case-insensitively, like every string filter) and nothing else. It
+// is how filters built from a concrete value - a selected table row - say
+// "this one", as opposed to a typed pattern, which is a substring search.
+//
+// Wrapping in ^...$ is enough for any value, because trimAnchors removes
+// exactly one anchor from each end and matchString trims blanks only outside
+// them:
+//   - leading/trailing blanks survive ("^/tmp/a $" stays exact, where the
+//     bare "/tmp/a " would be trimmed to the substring "/tmp/a" and match
+//     "/tmp/ab" too);
+//   - a literal edge ^ or $ in the value stays literal ("^x$$" is exactly
+//     "x$", where the bare "x$" would mean "ends with x").
+func ExactPattern(value string) string {
+	return "^" + value + "$"
+}
+
+// DirPattern returns the StringFilter pattern that matches every path below
+// dir - the whole subtree, case-insensitively - as the prefix "^dir/". The
+// separator is part of the prefix so "/tmp" does not also select "/tmpfoo",
+// and the root is "^/" rather than "^//". The value must end with the
+// separator, so the pattern can never end in a $ anchor, whatever dir holds.
+func DirPattern(dir string) string {
+	if strings.HasSuffix(dir, "/") {
+		return "^" + dir
+	}
+	return "^" + dir + "/"
 }
 
 // matchString reports whether value satisfies the string filter: a

@@ -16,6 +16,23 @@ import (
 // active global filter by one dimension of the selected row and returns the
 // filter, a one-line summary of the dimension it set, and whether the row
 // yields a usable filter at all.
+//
+// A row filter selects exactly what the row shows, never a substring of it:
+// Enter on the syscall "read" must not also admit readv/pread64, on comm
+// "bash" not also "bashbug", on file "/tmp/a" not also "/tmp/ab" or
+// "/var/tmp/a". So the syscall, comm and file builders emit
+// globalfilter.ExactPattern (^value$), which also keeps a value's
+// leading/trailing blanks and edge ^/$ characters literal instead of letting
+// the matcher trim them or read them as anchors. Two dimensions differ on
+// purpose:
+//   - a directory row stands for its whole subtree, so it becomes the prefix
+//     globalfilter.DirPattern (^dir/), not an exact match;
+//   - a family row keeps the bare family name: families are a closed set in
+//     which no name contains another, so bare is already exact, and the
+//     [/] family cycle (familycycle.go) identifies the current family by its
+//     bare name.
+//
+// Typed patterns (filter modal, -comm/-path flags) stay substring searches.
 
 // syscallFamilyColumn is the index of the Family column in the Syscalls table
 // (right after the Syscall name column, in both the compact and full layouts).
@@ -82,7 +99,7 @@ func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 		return globalfilter.Filter{}, "", false
 	}
 	filter := m.globalFilter.Clone()
-	filter.Syscall = &globalfilter.StringFilter{Pattern: selected.Name}
+	filter.Syscall = &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(selected.Name)}
 	return filter, presenter.DimensionSummary(filter, presenter.DimSyscall), true
 }
 
@@ -96,10 +113,10 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 		if !ok {
 			return globalfilter.Filter{}, "", false
 		}
-		if strings.TrimSpace(selected.Dir) == "" {
+		if !usableDir(selected.Dir) {
 			return globalfilter.Filter{}, "", false
 		}
-		filter.File = &globalfilter.StringFilter{Pattern: selected.Dir}
+		filter.File = &globalfilter.StringFilter{Pattern: globalfilter.DirPattern(selected.Dir)}
 		return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
 	}
 	selected, ok := m.selectedFileSnapshot()
@@ -109,8 +126,18 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 	if strings.TrimSpace(selected.Path) == "" {
 		return globalfilter.Filter{}, "", false
 	}
-	filter.File = &globalfilter.StringFilter{Pattern: selected.Path}
+	filter.File = &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(selected.Path)}
 	return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
+}
+
+// usableDir reports whether a dir-grouped Files row can become a subtree
+// filter. A blank dir cannot. Neither can ".": aggregateFilesByDir takes
+// filepath.Dir of every path, which yields "." for everything without a
+// separator - relative names, and non-path file names such as
+// "socket:[123]" or "pipe:[456]" - and no prefix pattern selects exactly
+// "the names with no directory part".
+func usableDir(dir string) bool {
+	return strings.TrimSpace(dir) != "" && dir != "."
 }
 
 func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
@@ -120,9 +147,10 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 	}
 	filter := m.globalFilter.Clone()
 	if m.processesTab.col == processCommColumn {
-		comm := strings.TrimSpace(proc.Comm)
-		if comm != "" {
-			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
+		// The comm is matched untrimmed: it is the kernel's value verbatim, and
+		// ExactPattern keeps any blanks it has significant.
+		if strings.TrimSpace(proc.Comm) != "" {
+			filter.Comm = &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(proc.Comm)}
 			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
 		}
 	}
