@@ -46,6 +46,7 @@ var (
 	pendingFieldRE    = regexp.MustCompile(`(?m)^\s*pending\.([a-z0-9_]+)\s*=`)
 	pendingRefRE      = regexp.MustCompile(`\bpending->([a-z0-9_]+)\b`)
 	pendingUpdateRE   = regexp.MustCompile(`(?m)^\s*bpf_map_update_elem\(&([a-z0-9_]+),\s*&tid,\s*&pending,\s*BPF_ANY\);`)
+	ringbufReserveRE  = regexp.MustCompile(`\bbpf_ringbuf_reserve\(`)
 	pendingLookupRE   = regexp.MustCompile(`(?m)^\s*struct [a-z0-9_]+ \*pending\s*=\s*bpf_map_lookup_elem\(&([a-z0-9_]+),\s*&tid\);`)
 	stringReadArgRE   = regexp.MustCompile(`(?m)^\s*(?:if\s*\(\s*)?bpf_probe_read_user_str\(ev->([a-z0-9_]+),[^\n]*ctx->args\[([0-9]+)\]`)
 	localArgRE        = regexp.MustCompile(`(?m)^\s*(?:[a-z_][a-z0-9_ ]+\s+)?([a-z_][a-z0-9_]*)\s*=.*ctx->args\[([0-9]+)\]`)
@@ -1172,8 +1173,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "exit", "socketpair", "        family = pending->family;\n", "")
 				return replaceInHandler(t, source, "exit", "socketpair",
-					"    }\n    ev->family = family;",
-					"    }\n    family = pending->family;\n    ev->family = family;")
+					"    }\n\n    struct socketpair_event *ev",
+					"    }\n    family = pending->family;\n\n    struct socketpair_event *ev")
 			},
 		},
 		{
@@ -1216,8 +1217,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "exit", "socketpair", "        bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n", "")
 				return replaceInHandler(t, source, "exit", "socketpair",
-					"    }\n    ev->family = family;",
-					"    }\n    bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n    ev->family = family;")
+					"    }\n\n    struct socketpair_event *ev",
+					"    }\n    bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n\n    struct socketpair_event *ev")
 			},
 		},
 		{
@@ -1298,8 +1299,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "exit", "pidfd_open", "        flags = *pending;\n", "")
 				return replaceInHandler(t, source, "exit", "pidfd_open",
-					"    }\n    ev->flags = flags;",
-					"    }\n    flags = *pending;\n    ev->flags = flags;")
+					"    }\n\n    struct eventfd_event *ev",
+					"    }\n    flags = *pending;\n\n    struct eventfd_event *ev")
 			},
 		},
 		{
@@ -1341,8 +1342,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "exit", "pidfd_open", "        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n", "")
 				return replaceInHandler(t, source, "exit", "pidfd_open",
-					"    }\n    ev->flags = flags;",
-					"    }\n    bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    ev->flags = flags;")
+					"    }\n\n    struct eventfd_event *ev",
+					"    }\n    bpf_map_delete_elem(&eventfd_flags_map, &tid);\n\n    struct eventfd_event *ev")
 			},
 		},
 		{
@@ -1351,6 +1352,46 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 				return replaceInHandler(t, source, "exit", "landlock_create_ruleset",
 					"    ev->flags = flags;",
 					"    ev->flags = -1;")
+			},
+		},
+		{
+			// Regression for task lo2: the pre-fix layout, whose take ran only
+			// after a successful reserve.
+			name: "socketpair side-map take after reserve",
+			mutate: func(t *testing.T, source string) string {
+				return moveSideMapTakeAfterReserve(t, source, "socketpair", "    __s32 family = -1;\n")
+			},
+		},
+		{
+			// Regression for task lo2: the pre-fix layout, whose take ran only
+			// after a successful reserve.
+			name: "pipe2 side-map take after reserve",
+			mutate: func(t *testing.T, source string) string {
+				return moveSideMapTakeAfterReserve(t, source, "pipe2", "    __s32 flags = 0;\n    __s32 fd0 = -1;\n")
+			},
+		},
+		{
+			// Regression for task lo2: the pre-fix layout, whose take ran only
+			// after a successful reserve.
+			name: "pipe side-map take after reserve",
+			mutate: func(t *testing.T, source string) string {
+				return moveSideMapTakeAfterReserve(t, source, "pipe", "    __s32 flags = 0;\n    __s32 fd0 = -1;\n")
+			},
+		},
+		{
+			// Regression for task lo2: the pre-fix layout, whose take ran only
+			// after a successful reserve.
+			name: "eventfd2 side-map take after reserve",
+			mutate: func(t *testing.T, source string) string {
+				return moveSideMapTakeAfterReserve(t, source, "eventfd2", "    __s32 flags = 0;\n    __s32 *pending")
+			},
+		},
+		{
+			// Regression for task lo2: the pre-fix layout, whose take ran only
+			// after a successful reserve.
+			name: "pidfd_open side-map take after reserve",
+			mutate: func(t *testing.T, source string) string {
+				return moveSideMapTakeAfterReserve(t, source, "pidfd_open", "    __s32 flags = 0;\n    __s32 *pending")
 			},
 		},
 		{
@@ -1666,6 +1707,34 @@ func disableHandler(t *testing.T, source, phase, name string) string {
 		t.Fatalf("%s handler for %s not found", phase, name)
 	}
 	return source[:location[0]] + "#if 0\n" + source[location[0]:location[1]] + "#endif\n" + source[location[1]:]
+}
+
+// moveSideMapTakeAfterReserve rewrites one exit handler back to the layout
+// before task lo2: its side-map take (from takeStart through the closing brace
+// of the pending null-check guard) is moved from ahead of bpf_ringbuf_reserve
+// to after the ev header fields, so it runs only when the reserve succeeds.
+func moveSideMapTakeAfterReserve(t *testing.T, source, name, takeStart string) string {
+	t.Helper()
+	re := regexp.MustCompile(`(?ms)^int handle_sys_exit_` + regexp.QuoteMeta(name) + `\([^)]*\) \{\n.*?^\}\n`)
+	location := re.FindStringIndex(source)
+	if location == nil {
+		t.Fatalf("exit handler for %s not found", name)
+	}
+	handler := source[location[0]:location[1]]
+	start := strings.Index(handler, takeStart)
+	if start < 0 {
+		t.Fatalf("exit handler for %s has no side-map take starting %q", name, takeStart)
+	}
+	const takeEnd = "\n    }\n\n"
+	end := strings.Index(handler[start:], takeEnd)
+	if end < 0 {
+		t.Fatalf("exit handler for %s has no end to its side-map take", name)
+	}
+	end += start + len(takeEnd)
+	take := handler[start : end-1]
+	handler = handler[:start] + handler[end:]
+	handler = replaceExactlyOnce(t, handler, "    ev->time = now;\n", "    ev->time = now;\n"+take)
+	return source[:location[0]] + handler + source[location[1]:]
 }
 
 func replaceInHandler(t *testing.T, source, phase, name, old, replacement string) string {
@@ -2073,6 +2142,9 @@ func validatePendingCaptureTransport(name, enterBody, exitBody string) error {
 	if len(deletes) != 1 || deletes[0][0] < pendingGuards[0][1] || deletes[0][0] < lastPendingReferenceEnd || deletes[0][0] >= pendingGuardEnd {
 		return fmt.Errorf("sys_exit_%s deletes structured pending state %d times after its final guarded read, want 1", name, len(deletes))
 	}
+	if err := requirePendingTakeBeforeReserve(name, exitBody, pendingGuardEnd); err != nil {
+		return err
+	}
 	for field := range enterFields {
 		assignments := cLValueWriteLocations(enterBody, "pending."+field)
 		if len(assignments) != 1 {
@@ -2242,10 +2314,30 @@ func validateScalarPendingTransport(name, field, enterBody, exitBody string) err
 	if len(deletes) != 1 || deletes[0][0] < pendingGuards[0][1] || deletes[0][0] < restores[0][1] || deletes[0][0] >= pendingGuardEnd {
 		return fmt.Errorf("sys_exit_%s deletes scalar pending field %s %d times after its guarded restore, want 1", name, field, len(deletes))
 	}
+	if err := requirePendingTakeBeforeReserve(name, exitBody, pendingGuardEnd); err != nil {
+		return err
+	}
 	if err := validateLocalNotWrittenAfter(name, field, exitBody, restores[0][1]); err != nil {
 		return err
 	}
 	return requireLocalEventEmission(name, field, field, field, exitBody, restores[0][1])
+}
+
+// requirePendingTakeBeforeReserve pins that an exit consumes its per-tid side
+// map entry (lookup, guarded reads and delete, all inside the null-check guard
+// ending at takeEnd) before it reserves ring-buffer space. A take placed after
+// the reserve is skipped whenever the reserve fails under backpressure, which
+// strands the entry: a later same-tid call then reads a stale pointer, and
+// entries of exited threads fill the bounded map (task lo2).
+func requirePendingTakeBeforeReserve(name, exitBody string, takeEnd int) error {
+	reserves := ringbufReserveRE.FindAllStringIndex(exitBody, -1)
+	if len(reserves) != 1 {
+		return fmt.Errorf("sys_exit_%s has %d ring-buffer reserves, want 1", name, len(reserves))
+	}
+	if reserves[0][0] < takeEnd {
+		return fmt.Errorf("sys_exit_%s takes its pending side-map entry after bpf_ringbuf_reserve; a failed reserve would strand it", name)
+	}
+	return nil
 }
 
 func requireLocalEventEmission(name, pendingField, local, eventField, exitBody string, sourceEnd int) error {

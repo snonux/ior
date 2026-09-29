@@ -31,6 +31,7 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		comment:        handlerComment(tp, eventStruct),
 		eventTypeConst: eventTypeConstant(tp.Classification.Kind, isEnter),
 		extra:          generateExtra(tp, isEnter),
+		sideMapTake:    generateSideMapTake(tp, isEnter),
 		isEnter:        isEnter,
 		// Noreturn syscalls (exit, exit_group, rt_sigreturn) get a special
 		// enter hook that skips the syscall_enter_state_map write. Their exit
@@ -72,6 +73,7 @@ type handlerSpec struct {
 	comment         string
 	eventTypeConst  string
 	extra           string
+	sideMapTake     string
 	isEnter         bool
 	noreturn        bool
 	enterName       string
@@ -147,6 +149,14 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 func renderHandler(h handlerSpec) string {
 	var b strings.Builder
 	renderHandlerPrologue(&b, h)
+	// The side-map take (exit handlers of the pipe/socketpair/eventfd kinds)
+	// runs before the reserve on purpose: the per-tid side entry must be
+	// consumed and deleted whether or not the ring buffer has room, otherwise a
+	// failed reserve strands it (see generateSideMapTake).
+	if h.sideMapTake != "" {
+		b.WriteString(h.sideMapTake)
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", h.eventStruct, h.eventStruct)
 	// A NULL reserve means event_map is full: the event is lost right here.
 	// Count it (ior_count_ringbuf_drop, internal/c/filter.c) so kernel-side
@@ -223,6 +233,38 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 func generateExtra(tp GeneratedTracepoint, isEnter bool) string {
 	if emit, ok := extraEmitters[tp.Classification.Kind]; ok {
 		return emit(tp, isEnter)
+	}
+	return ""
+}
+
+// exitSideMapTakers maps the kinds whose enter handler stashes per-tid state
+// in a side map (socketpair_ctx_map, pipe_ctx_map, eventfd_flags_map) to the
+// exit-side code that consumes and deletes that entry. Each taker declares the
+// C locals the kind's exit emitter in extraEmitters then copies into the event,
+// so the two halves are a pair and must stay in sync.
+var exitSideMapTakers = map[TracepointKind]func() string{
+	KindSocketpair:   socketpairExitTake,
+	KindPipe:         pipeExitTake,
+	KindEventfd:      eventfdExitTake,
+	KindNamedEventfd: eventfdExitTake,
+	KindPidfd:        eventfdExitTake,
+}
+
+// generateSideMapTake returns the exit handler's side-map take, rendered after
+// ior_on_syscall_exit and before bpf_ringbuf_reserve (see renderHandler). It
+// used to live after the reserve, so a full ring buffer returned early and left
+// the entry behind: a later syscall of the same tid whose enter reserve also
+// failed read the stale pointer and reported an old call's descriptors, and
+// entries of threads that then exited were never reclaimed until the bounded
+// (8192) maps filled and new calls lost their descriptors. Taking it first
+// deletes the entry on every emitted exit, whatever the ring buffer's state.
+// Enter handlers and all other kinds return "".
+func generateSideMapTake(tp GeneratedTracepoint, isEnter bool) string {
+	if isEnter {
+		return ""
+	}
+	if take, ok := exitSideMapTakers[tp.Classification.Kind]; ok {
+		return take()
 	}
 	return ""
 }
@@ -602,11 +644,23 @@ func generateExtraSocket() string {
 	return "    ev->family = (__s32)ctx->args[0];\n    ev->type = (__s32)ctx->args[1];\n    ev->protocol = (__s32)ctx->args[2];\n"
 }
 
+// generateExtraSocketpair emits the socketpair body. Enter stashes the
+// user-space sv pointer and the family/type/protocol in socketpair_ctx_map,
+// because the descriptors only exist once the syscall has returned. Exit only
+// copies the locals socketpairExitTake computed ahead of the reserve.
 func generateExtraSocketpair(isEnter bool) string {
 	if isEnter {
 		return "    struct socketpair_ctx pending;\n    pending.usockvec = ctx->args[3];\n    pending.family = (__s32)ctx->args[0];\n    pending.type = (__s32)ctx->args[1];\n    pending.protocol = (__s32)ctx->args[2];\n    bpf_map_update_elem(&socketpair_ctx_map, &tid, &pending, BPF_ANY);\n    ev->family = pending.family;\n    ev->type = pending.type;\n    ev->protocol = pending.protocol;\n    ev->sv0 = -1;\n    ev->sv1 = -1;\n    ev->ret = 0;\n"
 	}
-	return "    __s32 family = -1;\n    __s32 type = -1;\n    __s32 protocol = -1;\n    __s32 sv0 = -1;\n    __s32 sv1 = -1;\n    struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);\n    if (pending) {\n        family = pending->family;\n        type = pending->type;\n        protocol = pending->protocol;\n        if (ctx->ret == 0 && pending->usockvec != 0) {\n            int sv[2];\n            if (bpf_probe_read_user(&sv, sizeof(sv), (void *)pending->usockvec) == 0) {\n                sv0 = (__s32)sv[0];\n                sv1 = (__s32)sv[1];\n            }\n        }\n        bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n    }\n    ev->family = family;\n    ev->type = type;\n    ev->protocol = protocol;\n    ev->sv0 = sv0;\n    ev->sv1 = sv1;\n    ev->ret = ctx->ret;\n"
+	return "    ev->family = family;\n    ev->type = type;\n    ev->protocol = protocol;\n    ev->sv0 = sv0;\n    ev->sv1 = sv1;\n    ev->ret = ctx->ret;\n"
+}
+
+// socketpairExitTake is the pre-reserve half of the socketpair exit: it reads
+// the stashed socketpair_ctx, fetches the created descriptors from user memory
+// on success, and deletes the entry, leaving the results in locals for
+// generateExtraSocketpair.
+func socketpairExitTake() string {
+	return "    __s32 family = -1;\n    __s32 type = -1;\n    __s32 protocol = -1;\n    __s32 sv0 = -1;\n    __s32 sv1 = -1;\n    struct socketpair_ctx *pending = bpf_map_lookup_elem(&socketpair_ctx_map, &tid);\n    if (pending) {\n        family = pending->family;\n        type = pending->type;\n        protocol = pending->protocol;\n        if (ctx->ret == 0 && pending->usockvec != 0) {\n            int sv[2];\n            if (bpf_probe_read_user(&sv, sizeof(sv), (void *)pending->usockvec) == 0) {\n                sv0 = (__s32)sv[0];\n                sv1 = (__s32)sv[1];\n            }\n        }\n        bpf_map_delete_elem(&socketpair_ctx_map, &tid);\n    }\n"
 }
 
 func generateExtraAccept(f *Format, isEnter bool) string {
@@ -626,6 +680,10 @@ func generateExtraAccept(f *Format, isEnter bool) string {
 		"    ev->schema_version = ACCEPT_EVENT_SCHEMA_VERSION;\n"
 }
 
+// generateExtraPipe emits the pipe/pipe2 body. Enter stashes the user-space
+// pipefd pointer and the flags in pipe_ctx_map, because the descriptors only
+// exist once the syscall has returned. Exit only copies the locals
+// pipeExitTake computed ahead of the reserve.
 func generateExtraPipe(f *Format, isEnter bool) string {
 	if isEnter {
 		flagsExpr := "0"
@@ -634,7 +692,14 @@ func generateExtraPipe(f *Format, isEnter bool) string {
 		}
 		return "    struct pipe_ctx pending;\n    pending.upipefd = ctx->args[0];\n    pending.flags = " + flagsExpr + ";\n    bpf_map_update_elem(&pipe_ctx_map, &tid, &pending, BPF_ANY);\n    ev->flags = pending.flags;\n    ev->fd0 = -1;\n    ev->fd1 = -1;\n    ev->ret = 0;\n"
 	}
-	return "    __s32 flags = 0;\n    __s32 fd0 = -1;\n    __s32 fd1 = -1;\n    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);\n    if (pending) {\n        flags = pending->flags;\n        if (ctx->ret == 0 && pending->upipefd != 0) {\n            int pipefd[2];\n            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {\n                fd0 = (__s32)pipefd[0];\n                fd1 = (__s32)pipefd[1];\n            }\n        }\n        bpf_map_delete_elem(&pipe_ctx_map, &tid);\n    }\n    ev->flags = flags;\n    ev->fd0 = fd0;\n    ev->fd1 = fd1;\n    ev->ret = ctx->ret;\n"
+	return "    ev->flags = flags;\n    ev->fd0 = fd0;\n    ev->fd1 = fd1;\n    ev->ret = ctx->ret;\n"
+}
+
+// pipeExitTake is the pre-reserve half of the pipe exit: it reads the stashed
+// pipe_ctx, fetches the created descriptors from user memory on success, and
+// deletes the entry, leaving the results in locals for generateExtraPipe.
+func pipeExitTake() string {
+	return "    __s32 flags = 0;\n    __s32 fd0 = -1;\n    __s32 fd1 = -1;\n    struct pipe_ctx *pending = bpf_map_lookup_elem(&pipe_ctx_map, &tid);\n    if (pending) {\n        flags = pending->flags;\n        if (ctx->ret == 0 && pending->upipefd != 0) {\n            int pipefd[2];\n            if (bpf_probe_read_user(&pipefd, sizeof(pipefd), (void *)pending->upipefd) == 0) {\n                fd0 = (__s32)pipefd[0];\n                fd1 = (__s32)pipefd[1];\n            }\n        }\n        bpf_map_delete_elem(&pipe_ctx_map, &tid);\n    }\n"
 }
 
 // eventfdFlagsExpr maps eventfd-family enter syscall names to the C expression
@@ -675,13 +740,21 @@ var eventfdFilenameField = map[string]string{
 // Enter: reads the flags expression from eventfdFlagsExpr (defaults to "0"),
 // stashes it in eventfd_flags_map, captures an existing descriptor when the
 // syscall accepts one, and sets ev->ret = -1. Exit retrieves the stashed flags
-// from the map and captures ctx->ret. Every exit of the family, the named
-// kinds' included, uses this lean eventfd_event body.
+// taken from the map by eventfdExitTake ahead of the reserve and captures
+// ctx->ret. Every exit of the family, the named kinds' included, uses this lean
+// eventfd_event body.
 func generateExtraEventfd(f *Format, isEnter bool) string {
 	if isEnter {
 		return eventfdEnterCapture(f)
 	}
-	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+	return "    ev->flags = flags;\n    ev->ret = ctx->ret;\n    ev->fd = -1;\n"
+}
+
+// eventfdExitTake is the pre-reserve half of the eventfd-family exit: it reads
+// and deletes the flags stashed by eventfdEnterCapture, leaving them in the
+// flags local for generateExtraEventfd.
+func eventfdExitTake() string {
+	return "    __s32 flags = 0;\n    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);\n    if (pending) {\n        flags = *pending;\n        bpf_map_delete_elem(&eventfd_flags_map, &tid);\n    }\n"
 }
 
 // generateExtraNamedEventfd emits the eventfd_name_event enter body of

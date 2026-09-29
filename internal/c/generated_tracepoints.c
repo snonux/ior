@@ -842,17 +842,6 @@ int handle_sys_exit_socketpair(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SOCKETPAIR, ctx->ret, now))
         return 0;
 
-    struct socketpair_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socketpair_event), 0);
-    if (!ev) {
-        ior_count_ringbuf_drop();
-        return 0;
-    }
-
-    ev->event_type = EXIT_SOCKETPAIR_EVENT;
-    ev->trace_id = SYS_EXIT_SOCKETPAIR;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = now;
     __s32 family = -1;
     __s32 type = -1;
     __s32 protocol = -1;
@@ -872,6 +861,18 @@ int handle_sys_exit_socketpair(struct syscall_trace_exit *ctx) {
         }
         bpf_map_delete_elem(&socketpair_ctx_map, &tid);
     }
+
+    struct socketpair_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct socketpair_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    ev->event_type = EXIT_SOCKETPAIR_EVENT;
+    ev->trace_id = SYS_EXIT_SOCKETPAIR;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = now;
     ev->family = family;
     ev->type = type;
     ev->protocol = protocol;
@@ -2186,6 +2187,13 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LANDLOCK_CREATE_RULESET, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -2197,12 +2205,6 @@ int handle_sys_exit_landlock_create_ruleset(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4412,6 +4414,13 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_EVENTFD2, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4423,12 +4432,6 @@ int handle_sys_exit_eventfd2(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4480,6 +4483,13 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_EVENTFD, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4491,12 +4501,6 @@ int handle_sys_exit_eventfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4548,6 +4552,13 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_TIMERFD_CREATE, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4559,12 +4570,6 @@ int handle_sys_exit_timerfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4730,6 +4735,13 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SIGNALFD4, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4741,12 +4753,6 @@ int handle_sys_exit_signalfd4(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4798,6 +4804,13 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SIGNALFD, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4809,12 +4822,6 @@ int handle_sys_exit_signalfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4866,6 +4873,13 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_CREATE1, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4877,12 +4891,6 @@ int handle_sys_exit_epoll_create1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -4934,6 +4942,13 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_EPOLL_CREATE, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -4945,12 +4960,6 @@ int handle_sys_exit_epoll_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -5275,6 +5284,13 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FANOTIFY_INIT, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -5286,12 +5302,6 @@ int handle_sys_exit_fanotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -5413,6 +5423,13 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_INIT1, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -5424,12 +5441,6 @@ int handle_sys_exit_inotify_init1(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -5481,6 +5492,13 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_INIT, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -5492,12 +5510,6 @@ int handle_sys_exit_inotify_init(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -5836,6 +5848,13 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
 
     ior_emit_open_name_fixup(tid, SYS_ENTER_FSOPEN, pending_filename);
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -5847,12 +5866,6 @@ int handle_sys_exit_fsopen(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -8365,6 +8378,13 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FSMOUNT, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -8376,12 +8396,6 @@ int handle_sys_exit_fsmount(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -10721,17 +10735,6 @@ int handle_sys_exit_pipe2(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_PIPE2, ctx->ret, now))
         return 0;
 
-    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
-    if (!ev) {
-        ior_count_ringbuf_drop();
-        return 0;
-    }
-
-    ev->event_type = EXIT_PIPE_EVENT;
-    ev->trace_id = SYS_EXIT_PIPE2;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = now;
     __s32 flags = 0;
     __s32 fd0 = -1;
     __s32 fd1 = -1;
@@ -10747,6 +10750,18 @@ int handle_sys_exit_pipe2(struct syscall_trace_exit *ctx) {
         }
         bpf_map_delete_elem(&pipe_ctx_map, &tid);
     }
+
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    ev->event_type = EXIT_PIPE_EVENT;
+    ev->trace_id = SYS_EXIT_PIPE2;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = now;
     ev->flags = flags;
     ev->fd0 = fd0;
     ev->fd1 = fd1;
@@ -10802,17 +10817,6 @@ int handle_sys_exit_pipe(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_PIPE, ctx->ret, now))
         return 0;
 
-    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
-    if (!ev) {
-        ior_count_ringbuf_drop();
-        return 0;
-    }
-
-    ev->event_type = EXIT_PIPE_EVENT;
-    ev->trace_id = SYS_EXIT_PIPE;
-    ev->pid = pid;
-    ev->tid = tid;
-    ev->time = now;
     __s32 flags = 0;
     __s32 fd0 = -1;
     __s32 fd1 = -1;
@@ -10828,6 +10832,18 @@ int handle_sys_exit_pipe(struct syscall_trace_exit *ctx) {
         }
         bpf_map_delete_elem(&pipe_ctx_map, &tid);
     }
+
+    struct pipe_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct pipe_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    ev->event_type = EXIT_PIPE_EVENT;
+    ev->trace_id = SYS_EXIT_PIPE;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = now;
     ev->flags = flags;
     ev->fd0 = fd0;
     ev->fd1 = fd1;
@@ -13816,6 +13832,13 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
 
     ior_emit_open_name_fixup(tid, SYS_ENTER_MEMFD_CREATE, pending_filename);
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -13827,12 +13850,6 @@ int handle_sys_exit_memfd_create(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -13884,6 +13901,13 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_USERFAULTFD, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -13895,12 +13919,6 @@ int handle_sys_exit_userfaultfd(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -13952,6 +13970,13 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MEMFD_SECRET, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -13963,12 +13988,6 @@ int handle_sys_exit_memfd_secret(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
@@ -19046,6 +19065,13 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     if (!ior_on_syscall_exit(tid, SYS_ENTER_PIDFD_OPEN, ctx->ret, now))
         return 0;
 
+    __s32 flags = 0;
+    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
+    if (pending) {
+        flags = *pending;
+        bpf_map_delete_elem(&eventfd_flags_map, &tid);
+    }
+
     struct eventfd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -19057,12 +19083,6 @@ int handle_sys_exit_pidfd_open(struct syscall_trace_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    __s32 flags = 0;
-    __s32 *pending = bpf_map_lookup_elem(&eventfd_flags_map, &tid);
-    if (pending) {
-        flags = *pending;
-        bpf_map_delete_elem(&eventfd_flags_map, &tid);
-    }
     ev->flags = flags;
     ev->ret = ctx->ret;
     ev->fd = -1;
