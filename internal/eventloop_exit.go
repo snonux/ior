@@ -681,6 +681,12 @@ func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool
 	return e.finishPair(ep)
 }
 
+// handleEventfdExit records the descriptor returned by the fd-creating
+// syscalls grouped under the eventfd payload (eventfd, epoll_create, memfd,
+// landlock_create_ruleset, ...). A landlock_create_ruleset ABI probe returns a
+// version/errata number rather than an fd, so it is labelled without touching
+// the fd table: registering its return value would clobber the name of a real
+// descriptor that happens to share that number.
 func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEvent) bool {
 	exitEv, ok := ep.ExitEv.(*types.EventfdEvent)
 	if !ok {
@@ -698,32 +704,52 @@ func (e *eventLoop) handleEventfdExit(ep *event.Pair, eventfdEv *types.EventfdEv
 		identity = types.StringValue(eventfdEv.Filename[:])
 	}
 	descriptorName := eventfdDescriptorName(eventfdEv.GetTraceId(), flags, identity, identityKnown)
-	if fd, ok := fdFromRet(exitEv.Ret); ok {
-		if eventfdReusesExistingFD(eventfdEv.GetTraceId(), eventfdEv.Fd) {
-			ep.File = e.fdState().resolve(fd, eventfdEv.Pid)
-		} else if eventfdEv.GetTraceId() == types.SYS_ENTER_FSMOUNT && eventfdEv.Fd >= 0 {
-			source := e.fdState().resolve(eventfdEv.Fd, eventfdEv.Pid)
-			identity := source.Name()
-			if identity == "" {
-				identity = eventfdDescriptorName(eventfdEv.GetTraceId(), flags, "", false)
-			}
-			fdFile := file.NewFd(fd, identity, eventfdOpenFlags(eventfdEv.GetTraceId(), flags))
-			e.fdState().set(fd, eventfdEv.Pid, fdFile)
-			ep.File = fdFile
-		} else {
-			fdFile := file.NewFd(
-				fd,
-				descriptorName,
-				eventfdOpenFlags(eventfdEv.GetTraceId(), flags),
-			)
-			e.fdState().set(fd, eventfdEv.Pid, fdFile)
-			ep.File = fdFile
-		}
-	} else if identityKnown && eventfdCarriesIdentity(eventfdEv.GetTraceId()) {
+	fd, retIsFd := fdFromRet(exitEv.Ret)
+	switch {
+	case isLandlockRulesetProbe(eventfdEv.GetTraceId(), flags):
+		ep.File = file.NewPathname([]byte(landlockProbeName(flags)))
+	case retIsFd:
+		ep.File = e.registerEventfdResult(eventfdEv, fd, flags, descriptorName)
+	case identityKnown && eventfdCarriesIdentity(eventfdEv.GetTraceId()):
 		ep.File = file.NewPathname([]byte(descriptorName))
 	}
 	ep.Comm = e.comm(eventfdEv.GetTid())
 	return e.finishPair(ep)
+}
+
+// registerEventfdResult attributes the returned fd and records it in the fd
+// table. signalfd updating an existing fd keeps that fd's metadata, and
+// fsmount inherits the name of the fs-context fd it was created from.
+func (e *eventLoop) registerEventfdResult(eventfdEv *types.EventfdEvent, fd, flags int32, descriptorName string) file.File {
+	traceID := eventfdEv.GetTraceId()
+	if eventfdReusesExistingFD(traceID, eventfdEv.Fd) {
+		return e.fdState().resolve(fd, eventfdEv.Pid)
+	}
+	if traceID == types.SYS_ENTER_FSMOUNT && eventfdEv.Fd >= 0 {
+		descriptorName = e.fdState().resolve(eventfdEv.Fd, eventfdEv.Pid).Name()
+		if descriptorName == "" {
+			descriptorName = eventfdDescriptorName(traceID, flags, "", false)
+		}
+	}
+	fdFile := file.NewFd(fd, descriptorName, eventfdOpenFlags(traceID, flags))
+	e.fdState().set(fd, eventfdEv.Pid, fdFile)
+	return fdFile
+}
+
+// isLandlockRulesetProbe reports whether a landlock_create_ruleset call is an
+// ABI query. With LANDLOCK_CREATE_RULESET_VERSION or _ERRATA the kernel
+// returns the ABI version or the errata bitmask instead of a ruleset fd
+// (libraries such as go-landlock and the Rust landlock crate probe this at
+// startup), so the return value must never enter the fd table.
+func isLandlockRulesetProbe(traceID types.TraceId, flags int32) bool {
+	const probeFlags = unix.LANDLOCK_CREATE_RULESET_VERSION | unix.LANDLOCK_CREATE_RULESET_ERRATA
+	return traceID == types.SYS_ENTER_LANDLOCK_CREATE_RULESET && flags&probeFlags != 0
+}
+
+// landlockProbeName labels an ABI probe row; it is a pathname-style label
+// rather than an fd because no descriptor was created.
+func landlockProbeName(flags int32) string {
+	return fmt.Sprintf("landlock-probe:%d", flags)
 }
 
 func eventfdOpenFlags(traceID types.TraceId, rawFlags int32) int32 {

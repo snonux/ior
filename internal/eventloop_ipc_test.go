@@ -175,7 +175,7 @@ func TestHandleEventfdExitTranslatesSyscallFlags(t *testing.T) {
 		{name: "inotify_init", traceID: types.SYS_ENTER_INOTIFY_INIT, raw: 2, want: syscall.O_RDONLY},
 		{name: "inotify_init1", traceID: types.SYS_ENTER_INOTIFY_INIT1, raw: syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NONBLOCK},
 		{name: "fanotify_init", traceID: types.SYS_ENTER_FANOTIFY_INIT, raw: 1 | 2, want: -1},
-		{name: "landlock_create_ruleset", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, raw: 1, want: -1},
+		{name: "landlock_create_ruleset", traceID: types.SYS_ENTER_LANDLOCK_CREATE_RULESET, raw: 0, want: -1},
 		{name: "eventfd", traceID: types.SYS_ENTER_EVENTFD, raw: 1, want: syscall.O_RDWR},
 		{name: "eventfd2", traceID: types.SYS_ENTER_EVENTFD2, raw: 1 | syscall.O_CLOEXEC | syscall.O_NONBLOCK, want: syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NONBLOCK},
 		{name: "memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, raw: 1 | 2 | 4, want: syscall.O_RDWR | syscall.O_CLOEXEC},
