@@ -99,8 +99,10 @@ type runtimeBindings struct {
 	streamBuffer *eventstream.RingBuffer
 	// streamSeq is the shared monotonic counter for stream row sequencing.
 	streamSeq *eventstream.Sequencer
-	// recorder handles optional parquet stream recording.
-	recorder *parquet.Recorder
+	// recorder handles optional parquet stream recording. It is held as the
+	// runtime contract (a *parquet.Recorder in production) so tests can
+	// substitute a recorder whose recordings fail.
+	recorder runtime.RecordingController
 	// liveTrieSource is the flamegraph trie injected by the trace starter.
 	liveTrieSource runtime.LiveTrieSource
 	// probeManager is the BPF probe manager injected by the trace starter.
@@ -1114,7 +1116,24 @@ func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	m.recordModal = m.recordModal.Open(defaultParquetRecordingFilename())
+	m.recordModal = m.recordModal.SetError(takePreviousRecordingFailure(m.runtime.Recorder()))
 	return m, nil, true
+}
+
+// takePreviousRecordingFailure claims a failure of the previous recording
+// that nobody has reported yet, wrapped for display, or returns nil. The
+// event loop normally reports such a failure in the stream on the next
+// event, but Start discards an untaken failure, so a recording started
+// before any further event would otherwise lose it silently. TakeFailure is
+// exclusive, so the failure is shown here or in the stream, never both.
+func takePreviousRecordingFailure(recorder runtime.RecordingController) error {
+	if recorder == nil {
+		return nil
+	}
+	if err := recorder.TakeFailure(); err != nil {
+		return fmt.Errorf("previous recording failed: %w", err)
+	}
+	return nil
 }
 
 // cycleAutoResetInterval advances the dashboard's auto-reset cadence to
