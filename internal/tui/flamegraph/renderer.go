@@ -477,26 +477,36 @@ func frameCoordToTargetRow(dataRow int, params renderViewParams) int {
 	return -1
 }
 
-// findFrameAtRow scans frames for the narrowest one that occupies logical row
-// targetRow and contains pixel column x within [0, width). Returning the
-// narrowest frame resolves overlap between wide parent and narrow child bars.
+// findFrameAtRow returns the index of the frame drawn at column x of logical
+// row targetRow, or -1 when that cell is blank. It replays renderRow's column
+// walk (same Col ordering, same drawnCellSpan clipping) instead of testing the
+// raw [Col, Col+Width) ranges, because while the spring animation is running a
+// frame can start inside the previous frame's cell; renderRow then draws the
+// later frame only from the end of the earlier one, and a click on the overlap
+// must select the frame that is actually visible there.
 func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
-	best := -1
-	bestWidth := int(^uint(0) >> 1)
+	if x < 0 || x >= width {
+		return -1
+	}
+	var framesAtRow []indexedFrame
 	for idx, frame := range frames {
-		if frame.Row != targetRow || frame.Col >= width {
-			continue
-		}
-		right := min(width, frame.Col+frame.Width)
-		if x < frame.Col || x >= right {
-			continue
-		}
-		if frame.Width < bestWidth {
-			best = idx
-			bestWidth = frame.Width
+		if frame.Row == targetRow {
+			framesAtRow = append(framesAtRow, indexedFrame{idx: idx, frame: frame})
 		}
 	}
-	return best
+	sortFramesByCol(framesAtRow)
+	cursor := 0
+	for _, item := range framesAtRow {
+		start, end, ok := drawnCellSpan(item.frame, cursor, width)
+		if !ok {
+			continue
+		}
+		if x >= start && x < end {
+			return item.idx
+		}
+		cursor = end
+	}
+	return -1
 }
 
 // buildToolbar assembles the top-of-view toolbar string and pads/trims it to
@@ -674,9 +684,7 @@ func buildRenderRows(ctx renderRowsContext) []string {
 	rows := make([]string, 0, (maxRow-rowOffset+1)*barHeight)
 	for row := maxRow; row >= rowOffset; row-- {
 		framesAtRow := rowsByDepth[row]
-		slices.SortFunc(framesAtRow, func(a, b indexedFrame) int {
-			return cmp.Compare(a.frame.Col, b.frame.Col)
-		})
+		sortFramesByCol(framesAtRow)
 		if heightMetricActive && row == maxRow {
 			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
 			for h := leafBarHeight - 1; h >= 0; h-- {
@@ -742,6 +750,37 @@ func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, wi
 	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
 }
 
+// sortFramesByCol orders one row's frames left to right. The sort is stable
+// so frames sharing a Col (possible mid-animation) keep their layout order;
+// renderRow and findFrameAtRow both rely on this exact order to agree on
+// which frame owns an overlapping cell.
+func sortFramesByCol(frames []indexedFrame) {
+	slices.SortStableFunc(frames, func(a, b indexedFrame) int {
+		return cmp.Compare(a.frame.Col, b.frame.Col)
+	})
+}
+
+// drawnCellSpan returns the half-open column range [start, end) that frame
+// occupies when drawn after earlier frames of the same row have filled the
+// columns up to cursor. Settled layouts never overlap, but the spring
+// animation moves every frame independently, so a frame can start left of
+// cursor (inside its still-sliding neighbour). Drawing it at full width from
+// cursor would push the row past width and shift everything after it, so the
+// frame is clipped to the columns the earlier frame did not claim and to the
+// viewport. ok is false when nothing of the frame remains visible.
+func drawnCellSpan(frame tuiFrame, cursor, width int) (start, end int, ok bool) {
+	start = max(frame.Col, cursor)
+	end = min(frame.Col+frame.Width, width)
+	if start >= end {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// renderRow draws one terminal line of frames, which must already be sorted
+// by sortFramesByCol. Every frame is clipped by drawnCellSpan, which keeps the
+// line exactly width cells wide even mid-animation; findFrameAtRow uses the
+// same spans so mouse hits match what is on screen.
 func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
@@ -750,31 +789,21 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 	b.Grow(width + 8)
 	cursor := 0
 	for _, item := range frames {
-		frame := item.frame
-		if frame.Col >= width {
+		start, end, ok := drawnCellSpan(item.frame, cursor, width)
+		if !ok {
 			continue
 		}
-		if frame.Col > cursor {
-			gap := frame.Col - cursor
-			b.WriteString(strings.Repeat(" ", gap))
-			cursor += gap
+		if start > cursor {
+			b.WriteString(strings.Repeat(" ", start-cursor))
 		}
-
-		cellWidth := frame.Width
-		if frame.Col+cellWidth > width {
-			cellWidth = width - frame.Col
-		}
-		if cellWidth <= 0 {
-			continue
-		}
+		cellWidth := end - start
 		label := strings.Repeat(" ", cellWidth)
 		if showLabels {
-			label = frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
+			label = frameLabel(item.frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
 		}
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
-		cell := style.Render(label)
-		b.WriteString(cell)
-		cursor = frame.Col + cellWidth
+		style := styleForFrame(item.idx, item.frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
+		b.WriteString(style.Render(label))
+		cursor = end
 	}
 	if cursor < width {
 		b.WriteString(strings.Repeat(" ", width-cursor))
