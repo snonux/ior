@@ -34,6 +34,11 @@ type animTickMsg struct {
 // the live text input that the search footer renders while the prompt is open.
 // Without them every keystroke after '/' hit the cache and the typed text stayed
 // invisible until Enter.
+//
+// fieldIndex drives the toolbar's o:order(...) label, and hasSnapshot decides
+// whether an empty frame list renders the "snapshot has no visible frames"
+// panel; clearSnapshotState drops the snapshot without touching lastVersion,
+// so neither is implied by the other key fields.
 type flameViewCacheKey struct {
 	version       uint64
 	selectedIdx   int
@@ -49,6 +54,8 @@ type flameViewCacheKey struct {
 	zoomPath      string
 	countField    string
 	heightField   string
+	fieldIndex    int
+	hasSnapshot   bool
 	searchActive  bool
 	showHelp      bool
 	paused        bool
@@ -577,6 +584,8 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 		zoomPath:      m.zoom.path(),
 		countField:    m.countField,
 		heightField:   m.heightField,
+		fieldIndex:    m.fieldIndex,
+		hasSnapshot:   m.snapshot != nil,
 		searchActive:  m.search.isActive(),
 		showHelp:      m.showHelp,
 		paused:        m.paused,

@@ -1,6 +1,8 @@
 package flamegraph
 
 import (
+	"errors"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -332,6 +334,7 @@ func TestViewCacheKeyTracksSearchCursor(t *testing.T) {
 		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	before := m.currentViewCacheKey()
+	beforeView := m.View().Content
 	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
 	after := m.currentViewCacheKey()
 	if before == after {
@@ -339,6 +342,102 @@ func TestViewCacheKeyTracksSearchCursor(t *testing.T) {
 	}
 	if after.searchInput != "ab" || after.searchCursor != 1 {
 		t.Fatalf("expected key input %q cursor 1, got %q cursor %d", "ab", after.searchInput, after.searchCursor)
+	}
+	// The key changing is not enough on its own: the rendered view must
+	// actually move the cursor instead of serving the cached frame.
+	if afterView := m.View().Content; afterView == beforeView {
+		t.Fatalf("cursor move did not change the rendered view")
+	}
+}
+
+// TestViewCacheKeyTracksFieldOrder checks that the field-order preset, shown
+// as o:order(...) in the toolbar, invalidates the cache on its own.
+func TestViewCacheKeyTracksFieldOrder(t *testing.T) {
+	m := newSettledCachedModel(t)
+	m.width = 240
+	if len(m.fieldPresets) < 2 {
+		t.Fatalf("precondition: need at least two field presets, got %d", len(m.fieldPresets))
+	}
+	beforeLabel := m.currentFieldPresetLabel()
+	beforeView := visibleText(m.View().Content)
+	m.fieldIndex = (m.fieldIndex + 1) % len(m.fieldPresets)
+	afterLabel := m.currentFieldPresetLabel()
+	if beforeLabel == afterLabel {
+		t.Fatalf("precondition: presets share label %q", afterLabel)
+	}
+	afterView := visibleText(m.View().Content)
+	if !strings.Contains(beforeView, "o:order("+beforeLabel+")") {
+		t.Fatalf("precondition: toolbar lacks order %q:\n%s", beforeLabel, beforeView)
+	}
+	if !strings.Contains(afterView, "o:order("+afterLabel+")") {
+		t.Fatalf("field order change served a stale toolbar, want order %q:\n%s", afterLabel, afterView)
+	}
+}
+
+// TestViewDropsEmptySnapshotPanelAfterReset is the regression test for the
+// stale "no visible frames" panel: reset drops the snapshot without changing
+// lastVersion, and with an unchanged status message the key used to match.
+func TestViewDropsEmptySnapshotPanelAfterReset(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 30
+	m.snapshot = &snapshotNode{}
+	m.statusMessage = "Baseline reset" // as after an earlier 'r' press
+	const panel = "has no visible frames"
+	if got := m.View().Content; !strings.Contains(got, panel) {
+		t.Fatalf("precondition: expected empty-snapshot panel, got:\n%s", got)
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.snapshot != nil {
+		t.Fatalf("precondition: reset should drop the snapshot")
+	}
+	if got := m.View().Content; strings.Contains(got, panel) {
+		t.Fatalf("stale empty-snapshot panel served after reset:\n%s", got)
+	}
+}
+
+// rejectingTrie is a real LiveTrie whose Reconfigure always fails, to drive
+// the field-order error path.
+type rejectingTrie struct {
+	*coreflamegraph.LiveTrie
+}
+
+var _ coreflamegraph.LiveTrieSource = (*rejectingTrie)(nil)
+
+func (rejectingTrie) Reconfigure([]string) error {
+	return errors.New("reconfigure rejected")
+}
+
+// TestCycleFieldOrderKeepsPresetWhenReconfigureFails pins that a rejected
+// Reconfigure leaves fieldIndex (and so the toolbar label) on the preset the
+// trie is still using, and does not discard the current snapshot.
+func TestCycleFieldOrderKeepsPresetWhenReconfigureFails(t *testing.T) {
+	trie := &rejectingTrie{coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")}
+	ingestTwoEventsForAsync(t, trie.LiveTrie)
+	m := NewModel(trie)
+	m.width = 240
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatalf("expected initial refresh to populate snapshot")
+	}
+	beforeIndex := m.fieldIndex
+	beforeLabel := m.currentFieldPresetLabel()
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if m.fieldIndex != beforeIndex {
+		t.Fatalf("fieldIndex advanced to %d despite Reconfigure failing, want %d", m.fieldIndex, beforeIndex)
+	}
+	if !strings.HasPrefix(m.statusMessage, "Field order error:") {
+		t.Fatalf("expected field order error status, got %q", m.statusMessage)
+	}
+	if m.snapshot == nil {
+		t.Fatalf("failed reconfigure must not discard the current snapshot")
+	}
+	if got := visibleText(m.View().Content); !strings.Contains(got, "o:order("+beforeLabel+")") {
+		t.Fatalf("toolbar should keep order %q after failure:\n%s", beforeLabel, got)
+	}
+	if got := trie.Fields(); !reflect.DeepEqual(got, []string{"comm", "path"}) {
+		t.Fatalf("trie fields changed despite rejection: %v", got)
 	}
 }
 
