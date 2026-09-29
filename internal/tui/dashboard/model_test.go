@@ -294,11 +294,11 @@ func TestProcessesTabEnterCommColumnEmitsCommFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^beta$" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "beta" {
 		t.Fatalf("expected comm beta filter, got %+v", req.Filter.Comm)
 	}
-	if req.Action != "comm~^beta$" {
-		t.Fatalf("expected action comm~^beta$, got %q", req.Action)
+	if req.Action != "comm~beta" {
+		t.Fatalf("expected action comm~beta, got %q", req.Action)
 	}
 }
 
@@ -371,7 +371,7 @@ func TestProcessesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^agent$" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "agent" {
 		t.Fatalf("expected visible sorted row to filter agent comm, got %+v", req.Filter.Comm)
 	}
 }

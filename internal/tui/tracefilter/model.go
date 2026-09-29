@@ -323,12 +323,15 @@ func (m Model) renderField(field filterField, active bool) string {
 // For the same reason a field the user did not change keeps the opened
 // dimension verbatim instead of being rebuilt from its text: rebuilding is
 // not an identity for every filter the modal can be opened with. An
-// untrimmed pattern ("foo ", e.g. a row filter on a path with trailing
-// blanks) would come back trimmed, and an empty non-nil pattern would come
-// back nil; neither is Equal to the original even though both match
-// identically (every matcher trims the pattern and treats blank as "no
-// constraint"). Keeping the original, rather than trimming patterns where
-// filters are created, leaves the filter exactly as its producer made it.
+// untrimmed pattern ("foo ", e.g. the Stream tab's Enter-on-cell filter on a
+// comm or path with trailing blanks) would come back trimmed, and an empty
+// non-nil pattern would come back nil; neither is Equal to the original even
+// though both match identically (every matcher trims the pattern and treats
+// blank as "no constraint"). Keeping the original, rather than trimming
+// patterns where filters are created, leaves the filter exactly as its
+// producer made it. (Dashboard row filters are anchored - ^value$, ^dir/,
+// which no trim alters - or, for a process's Comm, already trimmed, so they
+// would survive a rebuild anyway.)
 // Every changed modal-owned dimension is then overwritten unconditionally by
 // applyFieldToFilter, so a blanked or invalid field removes the constraint
 // it replaced instead of inheriting it.
