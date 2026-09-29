@@ -24,6 +24,19 @@ type columnLayout struct {
 	file    int
 }
 
+// columnShrinkSteps lists, in order, which column gives up width (and down to
+// which floor) when a narrow row still exceeds the available width. Less
+// telling columns (TID, Gap, Bytes) go first; the final pass takes every
+// column down to a single cell so the row fits whenever width allows it.
+var columnShrinkSteps = []struct{ col, floor int }{
+	{streamColTID, 3}, {streamColGap, 5}, {streamColBytes, 5}, {streamColLatency, 6},
+	{streamColComm, 5}, {streamColPID, 5}, {streamColSyscall, 5}, {streamColRet, 3},
+	{streamColFile, 6},
+	{streamColTID, 1}, {streamColGap, 1}, {streamColBytes, 1}, {streamColLatency, 1},
+	{streamColComm, 1}, {streamColPID, 1}, {streamColSyscall, 1}, {streamColRet, 1},
+	{streamColFD, 1}, {streamColFile, 1},
+}
+
 // RenderStreamTable renders the stream tab's main panel: status line, filter
 // line and the (selected) event rows, fitted to width.
 func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
@@ -31,9 +44,9 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 		width = 100
 	}
 	contentWidth := panelContentWidth(width)
-	columns := streamColumns(contentWidth)
+	columns := streamColumns(panelTextWidth(contentWidth))
 
-	lines := make([]string, 0, len(events)+3)
+	lines := make([]string, 0, len(events)+4)
 	lines = append(lines, renderStatusLine(paused, totalCount, filteredCount, bufferLen, bufferCap))
 	lines = append(lines, renderFilterLine(filter))
 	if len(filterStack) > 0 {
@@ -44,7 +57,7 @@ func RenderStreamTable(width int, paused bool, totalCount, filteredCount, buffer
 		lines = append(lines, renderEventRow(ev, columns, i == selectedVisibleIdx, selectedCol))
 	}
 
-	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
+	return renderPanel(contentWidth, lines)
 }
 
 // RenderFDTraceTable renders the fd-trace view: all events of one pid/fd
@@ -58,12 +71,29 @@ func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events 
 	lines := make([]string, 0, len(events)+3)
 	lines = append(lines, common.Current().HeaderStyle.Render("FD Trace (ring snapshot)"))
 	lines = append(lines, fmt.Sprintf("PID:%d FD:%d matched:%d", pid, fd, totalCount))
-	columns := streamColumns(contentWidth)
+	columns := streamColumns(panelTextWidth(contentWidth))
 	lines = append(lines, common.RenderTableHeader(columns))
 	for _, ev := range events {
 		lines = append(lines, renderEventRow(ev, columns, false, -1))
 	}
 
+	return renderPanel(contentWidth, lines)
+}
+
+// renderPanel boxes lines in the shared panel style at contentWidth. Every
+// line is first cut to the panel's text width (display-width and ANSI aware
+// via MaxWidth) so nothing wraps: model.visibleRows budgets exactly one
+// terminal line per event row, and a wrapped row would push the footer and
+// status lines off-screen on narrow terminals.
+func renderPanel(contentWidth int, lines []string) string {
+	textWidth := panelTextWidth(contentWidth)
+	fit := lipgloss.NewStyle().MaxWidth(textWidth)
+	for i, line := range lines {
+		// Rows are already laid out to textWidth; only restyle overflowing lines.
+		if lipgloss.Width(line) > textWidth {
+			lines[i] = fit.Render(line)
+		}
+	}
 	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))
 }
 
@@ -138,44 +168,56 @@ func computeColumnLayout(width int) columnLayout {
 	}
 
 	// Keep non-file columns compact so file paths can use most of the row.
-	gap := 7
-	latency := 8
-	comm := 10
-	pid := 7
-	tid := 7
-	syscall := 9
-	fd := 4
-	ret := 5
-	bytes := 8
-	fixed := gap + latency + comm + pid + tid + syscall + fd + ret + bytes + 9
-	file := width - fixed
-	if file >= 28 {
+	cols := columnLayout{gap: 7, latency: 8, comm: 10, pid: 7, tid: 7, syscall: 9, fd: 4, ret: 5, bytes: 8}
+	cols.file = width - nonFileWidth(cols)
+	if cols.file >= 28 {
 		// On wider terminals, give a little more room back to descriptive columns.
 		if width >= 140 {
-			comm = 12
-			syscall = 11
-			pid = 8
-			tid = 8
-			fixed = gap + latency + comm + pid + tid + syscall + fd + ret + bytes + 9
-			file = width - fixed
+			cols.comm, cols.syscall, cols.pid, cols.tid = 12, 11, 8, 8
+			cols.file = width - nonFileWidth(cols)
 		}
-		return columnLayout{gap: gap, latency: latency, comm: comm, pid: pid, tid: tid, syscall: syscall, fd: fd, ret: ret, bytes: bytes, file: file}
+		return cols
 	}
 
-	// Very narrow widths: compress further but keep file column readable.
-	comm = 8
-	pid = 6
-	tid = 6
-	syscall = 8
-	fd = 3
-	ret = 4
-	bytes = 7
-	fixed = gap + latency + comm + pid + tid + syscall + fd + ret + bytes + 9
-	file = width - fixed
-	if file < 12 {
-		file = 12
+	// Narrow widths: compress the fixed columns, keep the file column readable
+	// where possible, then shrink further until the row fits width exactly so
+	// the panel never wraps a row onto a second line.
+	cols = columnLayout{gap: 7, latency: 8, comm: 8, pid: 6, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7}
+	cols.file = max(width-nonFileWidth(cols), 12)
+	shrinkToFit(&cols, width)
+	return cols
+}
+
+// shrinkToFit reduces column widths following columnShrinkSteps until the row
+// (cells plus single-space separators) is no wider than width. When even the
+// all-ones layout is too wide, the caller's line truncation is the backstop.
+func shrinkToFit(cols *columnLayout, width int) {
+	fields := columnFields(cols)
+	for _, step := range columnShrinkSteps {
+		excess := rowWidth(cols) - width
+		if excess <= 0 {
+			return
+		}
+		field := fields[step.col]
+		*field -= max(min(excess, *field-step.floor), 0)
 	}
-	return columnLayout{gap: gap, latency: latency, comm: comm, pid: pid, tid: tid, syscall: syscall, fd: fd, ret: ret, bytes: bytes, file: file}
+}
+
+// columnFields maps stream column indices (streamCol*) to the layout fields.
+func columnFields(cols *columnLayout) []*int {
+	return []*int{&cols.gap, &cols.latency, &cols.comm, &cols.pid, &cols.tid, &cols.syscall, &cols.fd, &cols.ret, &cols.bytes, &cols.file}
+}
+
+// rowWidth is the display width of a row: every cell plus one space between
+// adjacent cells (common.RenderTableRow joins cells with " ").
+func rowWidth(cols *columnLayout) int {
+	return nonFileWidth(*cols) + cols.file
+}
+
+// nonFileWidth is the width taken by all columns except File, including all
+// streamColumnCount-1 separators.
+func nonFileWidth(cols columnLayout) int {
+	return cols.gap + cols.latency + cols.comm + cols.pid + cols.tid + cols.syscall + cols.fd + cols.ret + cols.bytes + streamColumnCount - 1
 }
 
 func formatDurationNs(v uint64) string {
@@ -224,12 +266,22 @@ func sanitizeOneLine(s string) string {
 	return s
 }
 
+// panelContentWidth is the value passed to PanelStyle.Width for a given
+// terminal width. It keeps a 4-column margin to the terminal edge and never
+// drops below 20.
 func panelContentWidth(width int) int {
-	// common.PanelStyle uses 1-char border on each side and 1-char horizontal
-	// padding on each side: subtract 4 from total width for content.
 	inner := width - 4
 	if inner < 20 {
 		return 20
 	}
 	return inner
+}
+
+// panelTextWidth is the width available to text inside a panel rendered with
+// PanelStyle.Width(contentWidth). lipgloss v2 counts border and padding as
+// part of Width, so the text area is contentWidth minus the panel's
+// horizontal frame (border + padding); table rows must be laid out for this
+// width, not contentWidth, or every row wraps.
+func panelTextWidth(contentWidth int) int {
+	return max(contentWidth-common.Current().PanelStyle.GetHorizontalFrameSize(), 1)
 }
