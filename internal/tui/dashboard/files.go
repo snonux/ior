@@ -2,9 +2,9 @@ package dashboard
 
 import (
 	"cmp"
-	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -352,6 +352,35 @@ func truncatePathMiddle(path string, limit int) string {
 	return common.TruncateMiddle(common.Sanitize(path), limit, common.ASCIIEllipsis)
 }
 
+// noDirGroup is the Dir of the dir-grouped row collecting every name without
+// a separator: relative names such as "a.log", and non-path file names such
+// as "socket:[123]" or "pipe:[456]". It matches filepath.Dir's answer for
+// those names, so the row reads as before. literalDir also puts "./a" here
+// (its literal directory text is "."), so the group mixes names that share no
+// path prefix and cannot become a filter (see handleFilesEnter).
+const noDirGroup = "."
+
+// literalDir returns the directory part of path as the literal text before
+// its last separator ("/" for a top-level entry, noDirGroup when there is no
+// separator). Unlike filepath.Dir it does not Clean: a directory row turns
+// into the prefix filter ^dir/ (globalfilter.DirPattern), which only selects
+// the row's own files if dir is a literal prefix of every one of them. With
+// filepath.Dir, "./src/main.go" grouped under "src", "//usr/lib/x" under
+// "/usr/lib" and "a/../b/c" under "b" - and Enter on those rows selected
+// none of the files they counted.
+func literalDir(path string) string {
+	switch idx := strings.LastIndexByte(path, '/'); idx {
+	case -1:
+		return noDirGroup
+	case 0:
+		return "/"
+	default:
+		return path[:idx]
+	}
+}
+
+// aggregateFilesByDir groups the files by literalDir and sums each group's
+// counters into one DirSnapshot, ordered by accesses (desc), then dir.
 func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 	if len(files) == 0 {
 		return nil
@@ -359,7 +388,7 @@ func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
 
 	dirs := make(map[string]DirSnapshot, len(files))
 	for _, f := range files {
-		dir := filepath.Dir(f.Path)
+		dir := literalDir(f.Path)
 		s := dirs[dir]
 		s.Dir = dir
 		s.Accesses += f.Accesses

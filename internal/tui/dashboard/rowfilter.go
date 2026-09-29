@@ -17,20 +17,30 @@ import (
 // filter, a one-line summary of the dimension it set, and whether the row
 // yields a usable filter at all.
 //
-// A row filter selects exactly what the row shows, never a substring of it:
-// Enter on the syscall "read" must not also admit readv/pread64, on comm
-// "bash" not also "bashbug", on file "/tmp/a" not also "/tmp/ab" or
-// "/var/tmp/a". So the syscall, comm and file builders emit
-// globalfilter.ExactPattern (^value$), which also keeps a value's
-// leading/trailing blanks and edge ^/$ characters literal instead of letting
-// the matcher trim them or read them as anchors. Two dimensions differ on
-// purpose:
+// A row filter selects what the row counts. For a syscall or file row that is
+// exactly the row's value, never a substring of it: Enter on the syscall
+// "read" must not also admit readv/pread64, on file "/tmp/a" not also
+// "/tmp/ab" or "/var/tmp/a". So those builders emit globalfilter.ExactPattern
+// (^value$), which also keeps a value's leading/trailing blanks and edge ^/$
+// characters literal instead of letting the matcher trim them or read them
+// as anchors. Three dimensions differ on purpose:
 //   - a directory row stands for its whole subtree, so it becomes the prefix
-//     globalfilter.DirPattern (^dir/), not an exact match;
+//     globalfilter.DirPattern (^dir/); aggregateFilesByDir keys rows by the
+//     literal directory text (literalDir) so that prefix covers every file
+//     the row counts. The noDirGroup row has no such prefix and yields a
+//     filter notice instead;
 //   - a family row keeps the bare family name: families are a closed set in
 //     which no name contains another, so bare is already exact, and the
 //     [/] family cycle (familycycle.go) identifies the current family by its
-//     bare name.
+//     bare name;
+//   - a process's Comm cell stays a (trimmed) substring pattern. The row
+//     aggregates every thread of the PID but shows only the leader's (or
+//     first-seen) comm, while the comm filter is matched per event against
+//     the thread's own comm. Threads are commonly named after their process
+//     ("chrome" -> "Chrome_ChildIOT", matched case-insensitively), so the substring keeps them; an exact
+//     pattern would drop them although the row counted them. It remains an
+//     approximation either way ("Web Content" threads are missed by both):
+//     the PID column is the exact per-process filter.
 //
 // Typed patterns (filter modal, -comm/-path flags) stay substring searches.
 
@@ -57,12 +67,28 @@ func handleSyscallsEnter(m *Model) (bool, tea.Cmd) {
 
 // handleFilesEnter is the Files tab's HandleEnter hook, covering both the
 // dir-grouped and the plain sub-table.
+//
+// Enter on the noDirGroup row is handled without a request: no filter
+// selects exactly its members, and staying silent read as a broken key, so
+// it explains that in the filter notice instead. The notice is cleared like
+// any refusal notice, by the next filter change on screen.
 func handleFilesEnter(m *Model) (bool, tea.Cmd) {
 	if m.filesTab.mode != tabVizModeTable {
 		return false, nil
 	}
+	if m.filesDirGrouped {
+		if selected, ok := m.selectedDirSnapshot(); ok && selected.Dir == noDirGroup {
+			m.SetFilterNotice(noDirGroupNotice)
+			return true, nil
+		}
+	}
 	return requestSelectedFilter(m.selectedFileFilter())
 }
+
+// noDirGroupNotice is the filter notice for Enter on the noDirGroup row,
+// worded like the TUI's refusal notice ("FILTER REFUSED (...) - keeping the
+// previous filter").
+const noDirGroupNotice = `NO FILTER (the "." group mixes names with no common path prefix) - keeping the current filter`
 
 // handleProcessesEnter is the Processes tab's HandleEnter hook. Enter also
 // works from the treemap and bubbles views there: both select whole rows,
@@ -131,13 +157,11 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 }
 
 // usableDir reports whether a dir-grouped Files row can become a subtree
-// filter. A blank dir cannot. Neither can ".": aggregateFilesByDir takes
-// filepath.Dir of every path, which yields "." for everything without a
-// separator - relative names, and non-path file names such as
-// "socket:[123]" or "pipe:[456]" - and no prefix pattern selects exactly
-// "the names with no directory part".
+// filter. A blank dir cannot, and neither can noDirGroup: it collects
+// separator-less names ("a.log", "socket:[123]") and "./"-relative ones, and
+// no prefix pattern selects exactly those.
 func usableDir(dir string) bool {
-	return strings.TrimSpace(dir) != "" && dir != "."
+	return strings.TrimSpace(dir) != "" && dir != noDirGroup
 }
 
 func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
@@ -147,10 +171,12 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 	}
 	filter := m.globalFilter.Clone()
 	if m.processesTab.col == processCommColumn {
-		// The comm is matched untrimmed: it is the kernel's value verbatim, and
-		// ExactPattern keeps any blanks it has significant.
-		if strings.TrimSpace(proc.Comm) != "" {
-			filter.Comm = &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(proc.Comm)}
+		// A substring, not ExactPattern: the row counts every thread of the
+		// PID, and thread comms often extend the process's (see the file
+		// comment). Trimmed, since the matcher trims a pattern anyway and the
+		// action label should read the same as the applied filter.
+		if comm := strings.TrimSpace(proc.Comm); comm != "" {
+			filter.Comm = &globalfilter.StringFilter{Pattern: comm}
 			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
 		}
 	}

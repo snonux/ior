@@ -539,7 +539,7 @@ func TestProcessesTreemapColumnKeysPickEnterFilter(t *testing.T) {
 		t.Fatalf("expected l to select the Comm column, got column %d", m.processesTab.col)
 	}
 	assertProcessesTreemapSelection(t, m, 1, 200)
-	if req := enterFilter(t, m); req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^beta$" || req.Filter.PID != nil {
+	if req := enterFilter(t, m); req.Filter.Comm == nil || req.Filter.Comm.Pattern != "beta" || req.Filter.PID != nil {
 		t.Fatalf("expected a Comm=beta filter, got comm %+v pid %+v", req.Filter.Comm, req.Filter.PID)
 	}
 

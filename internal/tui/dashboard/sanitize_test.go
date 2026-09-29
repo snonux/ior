@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -75,7 +74,7 @@ func TestProcessLabelKeepsSelectionKeysRaw(t *testing.T) {
 		t.Fatalf("bubble ID should keep the raw comm, got %#v", procs)
 	}
 	files := buildFilesTreemapItems(&snap, bubbleMetricCount)
-	if len(files) != 1 || files[0].Key != filepath.Dir(hostilePath) {
+	if len(files) != 1 || files[0].Key != hostileDir {
 		t.Fatalf("treemap key should keep the raw dir, got %#v", files)
 	}
 	if got := processLabel(9, "  "); got != "9" {
