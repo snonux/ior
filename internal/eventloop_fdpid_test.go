@@ -30,6 +30,13 @@ const (
 // the fd table exactly as it would during a real run.
 func feedOpenPairForPid(t *testing.T, el *eventLoop, filename string, pid, tid uint32, ret int64) *event.Pair {
 	t.Helper()
+	return feedOpenPairWithFlags(t, el, filename, pid, tid, ret, syscall.O_RDONLY)
+}
+
+// feedOpenPairWithFlags is feedOpenPairForPid with explicit openat flags, for
+// tests that depend on the registered descriptor's flags (e.g. O_CLOEXEC).
+func feedOpenPairWithFlags(t *testing.T, el *eventLoop, filename string, pid, tid uint32, ret int64, flags int32) *event.Pair {
+	t.Helper()
 
 	enterEv := types.OpenEvent{
 		EventType:     types.ENTER_OPEN_EVENT,
@@ -37,7 +44,7 @@ func feedOpenPairForPid(t *testing.T, el *eventLoop, filename string, pid, tid u
 		Time:          defaulTime,
 		Pid:           pid,
 		Tid:           tid,
-		Flags:         syscall.O_RDONLY,
+		Flags:         flags,
 		SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION,
 	}
 	copy(enterEv.Filename[:], filename)

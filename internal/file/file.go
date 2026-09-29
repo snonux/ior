@@ -150,6 +150,17 @@ func (f *FdFile) Flags() Flags {
 	return f.flags
 }
 
+// CloseOnExec reports the descriptor's FD_CLOEXEC state: set is the flag's
+// value and known says whether that value was ever observed. The state is
+// tracked apart from the status-flag word because it belongs to the
+// descriptor, not the open file description, and can be learned (F_GETFD,
+// F_SETFD, dup3, F_DUPFD_CLOEXEC, close_range CLOSE_RANGE_CLOEXEC) while the
+// status word is still unknown. Callers deciding whether the descriptor
+// survives execve(2) must treat !known as "may have been closed".
+func (f *FdFile) CloseOnExec() (set, known bool) {
+	return f.closeOnExec, f.closeOnExecKnown
+}
+
 // FD returns the descriptor number the metadata was recorded for.
 func (f *FdFile) FD() int32 {
 	return f.fd

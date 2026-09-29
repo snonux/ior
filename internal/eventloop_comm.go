@@ -678,8 +678,17 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // this correction. The one case this cannot cover is the record never being
 // emitted at all (ring-buffer backpressure); markAllStale is the recovery path
 // for that.
+//
+// The same record is also the only notice userspace gets that the process's
+// FD_CLOEXEC descriptors were closed, so it evicts those from the fd table
+// (fdTracker.dropOnExec) before the new program's first syscall can resolve a
+// reused descriptor number against the old program's file. That happens
+// before the comm check below: an empty comm makes the record useless as a
+// label, but the exec it reports still happened. ev.Pid is the tgid, the key
+// of the fd table; after de_thread the exec'ing thread holds that id too.
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
 	defer ev.Recycle()
+	e.fdState().dropOnExec(ev.Pid)
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
 		// A control record with an empty comm carries no information; keeping

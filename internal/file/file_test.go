@@ -272,3 +272,27 @@ func TestParseFlagsFromFdInfo(t *testing.T) {
 		}
 	})
 }
+
+// TestFdFileCloseOnExec pins the accessor exec handling relies on: the state
+// is unknown until observed, follows open flags, and follows descriptor-level
+// updates even while the status word stays unknown.
+func TestFdFileCloseOnExec(t *testing.T) {
+	check := func(name string, f *FdFile, wantSet, wantKnown bool) {
+		t.Helper()
+		if set, known := f.CloseOnExec(); set != wantSet || known != wantKnown {
+			t.Errorf("%s: CloseOnExec() = (%v, %v), want (%v, %v)", name, set, known, wantSet, wantKnown)
+		}
+	}
+	check("unknown flags", NewFd(1, "a", -1), false, false)
+	check("open O_CLOEXEC", NewFd(1, "a", syscall.O_RDONLY|syscall.O_CLOEXEC), true, true)
+	check("open without O_CLOEXEC", NewFd(1, "a", syscall.O_RDONLY), false, true)
+
+	f := NewFd(1, "a", -1)
+	f.AddFlags(syscall.O_CLOEXEC)
+	check("close_range CLOEXEC on unknown", f, true, true)
+	f.MergeFlags(syscall.O_CLOEXEC, 0)
+	check("F_SETFD cleared", f, false, true)
+	f.SetFlags(-1)
+	check("reset to unknown", f, false, false)
+	check("dup keeps state", NewFd(1, "a", syscall.O_CLOEXEC).Dup(2), true, true)
+}
