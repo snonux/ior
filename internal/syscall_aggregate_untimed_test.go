@@ -230,3 +230,71 @@ func TestSyscallAggregateConsumerRestartsUntimedTallyOnReset(t *testing.T) {
 		TraceID: types.TraceId(traceID), Count: 2, UntimedCount: 2,
 	})
 }
+
+// tornFirstSampleSlot is a CPU slot read while the kernel was writing its
+// very first timed invocation: count, min and max were copied before the
+// kernel stored them, total and the histogram after.
+var tornFirstSampleSlot = rawSyscallAggregate{TotalDuration: 7_000, Histogram: [8]uint64{0, 1}}
+
+// A torn first sample next to a settled slot must not drag the merged
+// minimum to 0 (it used to be clamped to count 1 with min = max = 0).
+func TestDecodeRawSyscallAggregatePerCPUSkipsTornFirstSample(t *testing.T) {
+	settled := rawSyscallAggregate{
+		Count: 2, TotalDuration: 13_000, MinDuration: 5_000, MaxDuration: 8_000, Histogram: [8]uint64{0, 2},
+	}
+	for name, slots := range map[string][]rawSyscallAggregate{
+		"torn slot first": {tornFirstSampleSlot, settled},
+		"torn slot last":  {settled, tornFirstSampleSlot},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := decodeRawSyscallAggregatePerCPU(encodeRawAggregates(t, slots...))
+			if err != nil {
+				t.Fatalf("decode error: %v", err)
+			}
+			if got != settled {
+				t.Fatalf("merged = %+v, want only the settled slot %+v", got, settled)
+			}
+		})
+	}
+}
+
+// A torn first sample on an otherwise untimed slot keeps the untimed count
+// and leaves the timed part for the next read.
+func TestNormalizeTornSlotKeepsUntimedCount(t *testing.T) {
+	slot := tornFirstSampleSlot
+	slot.Count = 3
+	got := slot.normalizeTornSlot()
+	if got != (rawSyscallAggregate{Count: 3}) {
+		t.Fatalf("normalized = %+v, want only the 3 untimed counts", got)
+	}
+}
+
+// End to end: the torn read yields no row, the settled read that follows
+// reports the invocation with its real latency, and the stats engine's
+// minimum is that latency rather than 0.
+func TestSyscallAggregateConsumerTornFirstSampleKeepsRealMinimum(t *testing.T) {
+	const traceID = uint32(types.SYS_ENTER_FUTEX)
+	consumer, fakeMap := newTestAggregateConsumer(traceID)
+	if rows := drainOne(t, consumer, fakeMap, traceID, tornFirstSampleSlot); len(rows) != 0 {
+		t.Fatalf("rows for the torn read = %+v, want none", rows)
+	}
+	rows := drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
+		Count: 1, TotalDuration: 7_000, MinDuration: 7_000, MaxDuration: 7_000, Histogram: [8]uint64{0, 1},
+	})
+	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
+		TraceID: types.TraceId(traceID), Count: 1, TotalLatencyNs: 7_000,
+		MinLatencyNs: 7_000, MaxLatencyNs: 7_000, LatencyHistogramNs: [8]uint64{0, 1},
+	})
+
+	engine := statsengine.NewEngine(statsengine.DefaultTopN)
+	engine.IngestSyscallAggregates(rows)
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	for _, row := range snap.Syscalls() {
+		if row.TraceID == types.TraceId(traceID) && row.LatencyMinNs != 7_000 {
+			t.Fatalf("futex min = %d, want 7000", row.LatencyMinNs)
+		}
+	}
+}
