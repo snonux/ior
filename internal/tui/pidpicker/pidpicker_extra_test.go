@@ -1,6 +1,7 @@
 package pidpicker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,5 +218,21 @@ func TestFormatProcessSanitizesForeignArgv(t *testing.T) {
 	want := "42  ev?[8mil  sh -c echo fake row ?]8;;http://evil?click?]8;;? ?31m"
 	if out != want {
 		t.Fatalf("formatProcess = %q, want %q", out, want)
+	}
+}
+
+// TestViewSanitizesScanError verifies the "scan error:" line (which echoes
+// /proc paths) carries no OSC 8 link, SGR hidden text or raw C1 CSI byte.
+func TestViewSanitizesScanError(t *testing.T) {
+	m := New()
+	m.lastErr = errors.New("read /proc/\x1b]8;;http://evil\aclick\x1b]8;;\a/\x1b[8mhidden\x9b31m")
+	out := m.View().Content
+	for _, bad := range []string{"\x1b]8", "\x1b[8m", "\a", "\x9b"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("view contains injected %q: %q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "scan error: read /proc/?]8;;http://evil?click") {
+		t.Fatalf("view lost the sanitised scan error: %q", out)
 	}
 }
