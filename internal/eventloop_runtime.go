@@ -51,7 +51,11 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 		return func() {}
 	}
 
-	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, e.Filter)
+	// The PID/TID scope the BPF program was loaded with (PID_FILTER /
+	// TID_FILTER) lets the drainer honour a matching runtime PID/TID filter
+	// for aggregate rows instead of gating them off.
+	scope := kernelProcessScope{pid: e.cfg.pidFilter, tid: e.cfg.tidFilter}
+	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, scope, e.Filter)
 	return drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
 }
 

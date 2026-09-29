@@ -16,21 +16,34 @@ type aggregateDrainResult struct {
 	warning string
 }
 
+// kernelProcessScope is the PID/TID scope the BPF program enforces itself
+// (the PID_FILTER/TID_FILTER globals, fixed at load time). A value <= 0 means
+// the kernel does not restrict that dimension. The aggregate drainer needs it
+// because kernel aggregate rows are keyed by syscall only: a runtime PID/TID
+// filter can be honoured for them only when the kernel already applied it.
+type kernelProcessScope struct {
+	pid int
+	tid int
+}
+
 type aggregateDrainer struct {
 	source                  syscallAggregateSource
 	filter                  func() globalfilter.Filter
 	aggregateIngestTraceIDs map[types.TraceId]struct{}
+	kernelScope             kernelProcessScope
 }
 
 func newAggregateDrainer(
 	source syscallAggregateSource,
 	aggregateIngestTraceIDs map[types.TraceId]struct{},
+	kernelScope kernelProcessScope,
 	filter func() globalfilter.Filter,
 ) *aggregateDrainer {
 	return &aggregateDrainer{
 		source:                  source,
 		filter:                  filter,
 		aggregateIngestTraceIDs: aggregateIngestTraceIDs,
+		kernelScope:             kernelScope,
 	}
 }
 
@@ -67,20 +80,28 @@ func (d *aggregateDrainer) Start(ctx context.Context, every time.Duration, handl
 // for fully traced (rate 1) syscalls are dropped: the kernel writes none, and
 // dropping any that appear keeps a version-skewed BPF object under-reporting
 // rather than double-counting.
+//
+// The active runtime filter is then applied per row on the dimensions a
+// syscall-keyed aggregate row can answer (syscall name and family), so
+// `-syscall futex` still counts an aggregate-only futex and `-family FS` keeps
+// other families' aggregate rows out of the dashboard totals. A filter on any
+// dimension a row cannot answer gates ingestion off entirely (see
+// aggregateIngestAllowedForFilter).
 func (d *aggregateDrainer) filterRowsForIngest(rows []statsengine.SyscallAggregate) []statsengine.SyscallAggregate {
-	if len(rows) == 0 {
+	if len(rows) == 0 || len(d.aggregateIngestTraceIDs) == 0 {
 		return nil
 	}
-	if !aggregateIngestAllowedForFilter(d.currentFilter()) {
-		return nil
-	}
-	if len(d.aggregateIngestTraceIDs) == 0 {
+	filter := d.currentFilter()
+	if !aggregateIngestAllowedForFilter(&filter, d.kernelScope) {
 		return nil
 	}
 
 	filtered := make([]statsengine.SyscallAggregate, 0, len(rows))
 	for _, row := range rows {
-		if _, ok := d.aggregateIngestTraceIDs[row.TraceID]; ok {
+		if _, ok := d.aggregateIngestTraceIDs[row.TraceID]; !ok {
+			continue
+		}
+		if filter.MatchesSyscallRow(row.TraceID.Name(), string(row.TraceID.Family())) {
 			filtered = append(filtered, row)
 		}
 	}
@@ -94,23 +115,39 @@ func (d *aggregateDrainer) currentFilter() globalfilter.Filter {
 	return d.filter()
 }
 
-func aggregateIngestAllowedForFilter(filter globalfilter.Filter) bool {
+// aggregateIngestAllowedForFilter reports whether kernel aggregate rows can be
+// ingested at all under filter. A row carries only a syscall trace ID plus
+// counts/errors/latency sums, so it can be matched per row on Syscall and
+// Family (done by the caller) but not on comm, file, fd, latency, gap, bytes,
+// return value or errors-only: with any of those set, ingesting the row would
+// count invocations the filter excludes, so ingestion is gated off (the
+// all-or-nothing fallback: aggregate-only syscalls disappear and sampled ones
+// show their 1-in-N emitted counts until the filter is cleared).
+func aggregateIngestAllowedForFilter(filter *globalfilter.Filter, scope kernelProcessScope) bool {
 	if filter.ErrorsOnly {
 		return false
 	}
-	if hasPattern(filter.Syscall) || hasPattern(filter.Comm) || hasPattern(filter.File) {
+	if hasPattern(filter.Comm) || hasPattern(filter.File) {
 		return false
 	}
 	if filter.FD != nil || filter.LatencyNs != nil || filter.GapNs != nil || filter.Bytes != nil || filter.RetVal != nil {
 		return false
 	}
-	if filter.PID != nil {
-		return false
+	return kernelEnforces(filter.PID, scope.pid) && kernelEnforces(filter.TID, scope.tid)
+}
+
+// kernelEnforces reports whether a PID/TID filter dimension is already
+// satisfied by every aggregate row: either the dimension is unset, or it is
+// exactly the equality the BPF program enforces via PID_FILTER/TID_FILTER, so
+// the kernel never aggregated an out-of-scope invocation. Any other constraint
+// (a different ID, a range, a runtime-only filter) cannot be answered by a
+// syscall-keyed row.
+func kernelEnforces(nf *globalfilter.NumericFilter, kernelID int) bool {
+	if nf == nil {
+		return true
 	}
-	if filter.TID != nil {
-		return false
-	}
-	return true
+	id, ok := nf.EqValue()
+	return ok && kernelID > 0 && id == int64(kernelID)
 }
 
 func hasPattern(filter *globalfilter.StringFilter) bool {

@@ -527,6 +527,7 @@ func runTrace(cfg flags.Config) error {
 func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	return eventLoopConfig{
 		pidFilter:               cfg.PidFilter,
+		tidFilter:               cfg.TidFilter,
 		filter:                  traceFilterFromConfig(cfg),
 		pprofEnable:             cfg.PprofEnable,
 		plainMode:               cfg.PlainMode,
