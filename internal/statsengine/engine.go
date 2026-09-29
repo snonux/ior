@@ -83,7 +83,7 @@ type snapshotInputs struct {
 	gapSeries        []float64
 	throughputSeries []float64
 
-	syscalls  []syscallSnapshotInput
+	syscalls  syscallCapture
 	files     []fileSnapshotInput
 	processes []processSnapshotInput
 
@@ -205,7 +205,10 @@ type subSnapshots struct {
 }
 
 // captureSnapshotInputs copies all engine state under the lock so that the
-// subsequent (lock-free) computation does not block ingestion.
+// subsequent (lock-free) computation does not block ingestion. Syscall latency
+// reservoirs are only copied here; sorting them for percentiles is deferred to
+// buildSubSnapshots because it dominated the lock hold time (~25ms per refresh
+// with 60 full reservoirs), stalling Ingest on the event-loop goroutine.
 func (e *Engine) captureSnapshotInputs() snapshotInputs {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -225,7 +228,7 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		latencySeries:          e.latencySeries.ValuesAt(now),
 		gapSeries:              e.gapSeries.ValuesAt(now),
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
-		syscalls:               e.syscalls.snapshotInputs(),
+		syscalls:               e.syscalls.captureInputs(),
 		files:                  e.files.snapshotInputs(),
 		processes:              e.processes.snapshotInputs(),
 		latencyHist:            e.latencyHist.snapshotInputs(),
@@ -235,7 +238,10 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 
 // buildSubSnapshots runs all per-category snapshot builders concurrently
 // using errgroup so that any error from a sub-builder is captured and returned
-// to the caller instead of being silently dropped.
+// to the caller instead of being silently dropped. It runs without the engine
+// lock and also resolves the stale syscall percentiles; in is passed by value
+// but its syscall capture slices share backing arrays with the caller, so the
+// resolved jobs are visible to storeSyscallPercentiles afterwards.
 func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, error) {
 	var (
 		ss subSnapshots
@@ -244,7 +250,8 @@ func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, 
 
 	eg.Go(func() error {
 		var err error
-		ss.syscalls, err = buildSyscallSnapshots(in.syscalls, elapsed)
+		in.syscalls.resolvePercentiles()
+		ss.syscalls, err = buildSyscallSnapshots(in.syscalls.inputs, elapsed)
 		return err
 	})
 	eg.Go(func() error {
@@ -298,10 +305,25 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.ThroughputTrend = detectTrend(in.throughputSeries)
 }
 
+// storeSyscallPercentiles briefly re-takes the lock to cache the percentiles
+// resolved outside it, so the next snapshot does not sort the same reservoirs
+// again. After a concurrent Reset the jobs point at the discarded accumulator's
+// stats; writing to those is harmless.
+func (e *Engine) storeSyscallPercentiles(capture *syscallCapture) {
+	if len(capture.jobs) == 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	capture.storePercentiles()
+}
+
 // Snapshot returns an immutable point-in-time view of all stats.
 // It captures engine state under the lock, then builds sub-snapshots
-// concurrently via errgroup, and finally assembles the result without holding
-// the lock. An error is returned if any sub-builder fails.
+// (including the syscall percentile sorts) concurrently via errgroup without
+// holding the lock, caches the fresh percentiles under a short second lock,
+// and finally assembles the result. An error is returned if any sub-builder
+// fails.
 func (e *Engine) Snapshot() (*Snapshot, error) {
 	if e == nil {
 		return nil, nil
@@ -314,6 +336,7 @@ func (e *Engine) Snapshot() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	e.storeSyscallPercentiles(&in.syscalls)
 
 	snap := NewSnapshot(
 		in.latencySeries, in.gapSeries, in.throughputSeries,
