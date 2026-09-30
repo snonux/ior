@@ -16,7 +16,9 @@ const (
 // The helpers in this file are the single place where TUI code shortens or
 // pads text to a column budget. They all measure in terminal display cells
 // (ansi.StringWidth) and cut on grapheme-cluster boundaries (ansi.Truncate /
-// ansi.TruncateLeft), never on bytes or runes:
+// ansi.TruncateLeft, each result re-measured with StringWidth because the cut
+// functions and StringWidth disagree about ASCII+U+FE0F and keycap clusters,
+// see graphemePrefix and keepRight), never on bytes or runes:
 //
 //   - byte slicing (s[:n]) splits multi-byte UTF-8 sequences and emits invalid
 //     glyphs for any non-ASCII path or comm;
@@ -169,14 +171,49 @@ func prefix(s string, ascii bool, width int) string {
 	if ascii {
 		return s[:min(width, len(s))]
 	}
-	return ansi.Truncate(s, width, "")
+	return graphemePrefix(s, width)
+}
+
+// graphemePrefix is the non-ASCII path of prefix. ansi.Truncate does not
+// agree with ansi.StringWidth about every cluster: it counts an ASCII
+// base followed by U+FE0F or U+20E3 ("1\ufe0f\u20e3", "#\ufe0f\u20e3", "a\ufe0f")
+// as one cell plus two zero-width pieces, while StringWidth (and so measure,
+// lipgloss.Width and the terminal) counts the whole cluster as two cells.
+// Trusting Truncate's budget therefore returned a prefix up to one cell per
+// such cluster too wide, which overflowed padded columns and shifted every
+// hit span computed from DisplayWidth. Instead the result is re-measured with
+// StringWidth, the same measure every caller uses, and the Truncate budget is
+// lowered until the prefix really fits. Truncate's prefix grows
+// monotonically with its budget and so does the real width, so the first fit
+// found going down is the longest one. Truncate is kept (rather than a
+// hand-rolled grapheme walk) because it also passes ANSI sequences through
+// without counting them. The loop runs only for text with miscounted clusters
+// (one extra iteration per overshooting cluster); other text fits at once.
+func graphemePrefix(s string, width int) string {
+	for budget := width; budget > 0; budget-- {
+		if cut := ansi.Truncate(s, budget, ""); ansi.StringWidth(cut) <= width {
+			return cut
+		}
+	}
+	return ""
 }
 
 // keepRight returns the longest suffix of s (total cells wide) that is at
-// most width cells wide. ansi.TruncateLeft removes n cells but keeps a wide
-// rune that straddles the cut, which would leave the result one cell too
-// wide, so the cut is widened by a cell until the suffix fits (at most one
-// retry for two-cell runes).
+// most width cells wide. ansi.TruncateLeft removes n cells but has two
+// quirks, so its result is re-measured with StringWidth and the cut adjusted
+// in both directions (the suffix width only ever shrinks as the cut grows,
+// so the smallest fitting cut is the longest suffix):
+//
+//   - it keeps a wide rune that straddles the cut, which leaves the result
+//     one cell too wide, so the cut is widened until the suffix fits (at most
+//     one retry per straddled two-cell rune);
+//   - like ansi.Truncate (see graphemePrefix) it counts an ASCII base plus
+//     U+FE0F / U+20E3 as one cell, so it removes the whole cluster for a cut
+//     of one cell and the suffix can be shorter than it could be; the cut is
+//     narrowed while the longer suffix still fits.
+//
+// Neither direction splits a cluster, so no orphaned U+FE0F or U+20E3 is left
+// at the start of the result.
 func keepRight(s string, total int, ascii bool, width int) string {
 	if width <= 0 {
 		return ""
@@ -184,12 +221,31 @@ func keepRight(s string, total int, ascii bool, width int) string {
 	if ascii {
 		return s[max(len(s)-width, 0):]
 	}
-	for cut := total - width; cut <= total; cut++ {
-		if kept := ansi.TruncateLeft(s, cut, ""); ansi.StringWidth(kept) <= width {
+	cut := max(total-width, 0)
+	kept := ansi.TruncateLeft(s, cut, "")
+	if ansi.StringWidth(kept) <= width {
+		return widenSuffix(s, kept, cut, width)
+	}
+	for cut++; cut <= total; cut++ {
+		if kept = ansi.TruncateLeft(s, cut, ""); ansi.StringWidth(kept) <= width {
 			return kept
 		}
 	}
 	return ""
+}
+
+// widenSuffix lowers the cut of an already fitting suffix (kept = s cut by
+// cut cells) while the longer suffix still fits width. It runs one probe for
+// text without miscounted clusters and stops there.
+func widenSuffix(s, kept string, cut, width int) string {
+	for ; cut > 0; cut-- {
+		longer := ansi.TruncateLeft(s, cut-1, "")
+		if ansi.StringWidth(longer) > width {
+			break
+		}
+		kept = longer
+	}
+	return kept
 }
 
 // padTo right-pads s, which is w cells wide, with spaces to width cells.

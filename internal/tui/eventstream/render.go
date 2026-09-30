@@ -81,17 +81,20 @@ func RenderFDTraceTable(width int, pid uint32, fd int32, totalCount int, events 
 }
 
 // renderPanel boxes lines in the shared panel style at contentWidth. Every
-// line is first cut to the panel's text width (display-width and ANSI aware
-// via MaxWidth) so nothing wraps: model.visibleRows budgets exactly one
-// terminal line per event row, and a wrapped row would push the footer and
-// status lines off-screen on narrow terminals.
+// line is first cut to the panel's text width (display-width and ANSI aware)
+// so nothing wraps: model.visibleRows budgets exactly one terminal line per
+// event row, and a wrapped row would push the footer and status lines
+// off-screen on narrow terminals. The cut is common.TruncateRight without a
+// marker, not lipgloss MaxWidth: MaxWidth counts an ASCII base followed by
+// U+FE0F / U+20E3 (a keycap such as "1\ufe0f\u20e3") as one cell although the
+// cluster is two, so a label with keycaps stayed one cell per cluster too
+// wide and widened the panel (task vp2).
 func renderPanel(contentWidth int, lines []string) string {
 	textWidth := panelTextWidth(contentWidth)
-	fit := lipgloss.NewStyle().MaxWidth(textWidth)
 	for i, line := range lines {
-		// Rows are already laid out to textWidth; only restyle overflowing lines.
+		// Rows are already laid out to textWidth; only cut overflowing lines.
 		if lipgloss.Width(line) > textWidth {
-			lines[i] = fit.Render(line)
+			lines[i] = common.TruncateRight(line, textWidth, "")
 		}
 	}
 	return common.Current().PanelStyle.Width(contentWidth).Render(strings.Join(lines, "\n"))

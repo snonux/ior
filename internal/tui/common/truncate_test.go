@@ -219,9 +219,11 @@ func checkASCIIEarlyReturns(t *testing.T, s string) {
 }
 
 // propertyAlphabet mixes one-cell ASCII, two-cell CJK and emoji (including a
-// skin-tone modifier sequence) and zero-width combining marks, which attach
-// to the preceding grapheme.
-var propertyAlphabet = []string{"a", "Z", "/", ".", " ", "日", "本", "語", "ル", "👍", "👍🏽", "́", "̈", "é"}
+// skin-tone modifier sequence), zero-width combining marks, which attach to
+// the preceding grapheme, and the clusters ansi.Truncate counts differently
+// from ansi.StringWidth (task vp2): keycaps and an ASCII base with U+FE0F.
+var propertyAlphabet = []string{"a", "Z", "/", ".", " ", "日", "本", "語", "ル", "👍", "👍🏽", "́", "̈", "é",
+	"1\ufe0f\u20e3", "#\ufe0f\u20e3", "*\u20e3", "a\ufe0f"}
 
 // randomMixed builds a random string of up to 12 alphabet entries.
 func randomMixed(rng *rand.Rand) string {

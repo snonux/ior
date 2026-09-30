@@ -1,6 +1,7 @@
 package common
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -101,9 +102,10 @@ var invisibleFormatCases = []struct{ name, in, want string }{
 	{"boundary neighbours kept", boundaryNeighbours, boundaryNeighbours},
 }
 
-// keycapCases are kept out of invisibleFormatCases: the keycap clusters are
-// valid and stay untouched, but the width helpers still undercount them
-// (task vp2), which TestSanitizeFormatWidthIsExact would trip over.
+// keycapCases are kept apart from invisibleFormatCases because the keycap
+// clusters stay untouched (only the stray selectors are replaced). They used
+// to be unusable in TestSanitizeFormatWidthIsExact because the width helpers
+// undercounted them; task vp2 fixed that and the test now runs them too.
 var keycapCases = []struct{ name, in, want string }{
 	{"keycap kept", "1\ufe0f\u20e3 #\ufe0f\u20e3 *\ufe0e\u20e3", "1\ufe0f\u20e3 #\ufe0f\u20e3 *\ufe0e\u20e3"},
 	{"ZWJ after keycap", "1\ufe0f\u20e3\u200d\U0001F525", "1\ufe0f\u20e3?\U0001F525"},
@@ -203,7 +205,7 @@ func TestSanitizeLinesReplacesInvisibleFormat(t *testing.T) {
 // before) is measured as the one cell it now renders as, so FitRight keeps
 // columns exact, and that emoji sequences stay one grapheme wide.
 func TestSanitizeFormatWidthIsExact(t *testing.T) {
-	for _, tt := range invisibleFormatCases {
+	for _, tt := range append(slices.Clone(invisibleFormatCases), keycapCases...) {
 		s := Sanitize(tt.in)
 		for _, width := range []int{1, 2, 4, 7, 12, 40} {
 			if got := DisplayWidth(FitRight(s, width, ASCIIEllipsis)); got != width {
