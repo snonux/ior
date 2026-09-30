@@ -6,6 +6,11 @@
 
 // The largest whole-second count whose nanoseconds still fit an __s64, and the
 // nanoseconds left over at that second: 9223372036 s + 854775807 ns == S64_MAX.
+// A timeval only carries whole microseconds, so nsec is always a multiple of
+// 1000 and the largest remainder that can actually occur at that second is
+// 854775000 ns (usec 854775); usec 854776 is the first overflowing value. The
+// exact S64_MAX remainder is kept because it states the real limit; any bound
+// from 854775000 up to 854775999 behaves identically.
 #define IOR_TIMEVAL_MAX_SEC 9223372036LL
 #define IOR_TIMEVAL_MAX_SEC_REM_NS 854775807LL
 
@@ -30,9 +35,16 @@ struct ior_timeval {
 //
 // |tv_usec| is split into whole seconds and a remainder with unsigned
 // arithmetic: BPF has no signed division without -mcpu=v4, and C's modulo of a
-// negative value is negative. The sign is applied afterwards. tv_sec is
-// clamped to +-2^62 first so that adding the carry (at most about 1.8e13 s)
-// cannot wrap.
+// negative value is negative. The sign is applied afterwards.
+//
+// tv_sec is clamped to +-2^62 first so that adding the carry (at most about
+// 1.8e13 s) cannot overflow. The clamp does not change any result: without it
+// a wrapped sum would land outside [0, IOR_TIMEVAL_MAX_SEC] and be rejected
+// anyway. What it prevents is signed-integer-overflow undefined behaviour in
+// the C sense (the BPF target wraps, but a host build or a compiler that
+// exploits the UB may not). Because -fwrapv hides the difference,
+// TestSelectTimevalNoSignedOverflow builds the helper under UBSan without
+// -fwrapv, and fails if the clamp is removed.
 //
 // Returns POLL_TIMEOUT_UNKNOWN_NS for an invalid timeout, and for one that
 // would overflow __s64 nanoseconds (the kernel sleeps "forever" then; ior does
