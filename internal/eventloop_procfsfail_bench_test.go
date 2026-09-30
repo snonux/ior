@@ -18,7 +18,7 @@ import (
 //
 // Reference numbers (amd64, -benchtime 2s; see the commit message of the
 // change that introduced resolveOnExit for the before/after comparison):
-// resolve of a closed fd ~4.5 us / 7 allocs against ~50 ns for a cached hit.
+// resolve of a closed fd ~3.8 us / 7 allocs against ~50 ns for a cached hit.
 
 // BenchmarkResolveFailingProcfs is the raw cost of one fdTracker.resolve on a
 // number procfs cannot answer: Sprintf path, failing readlink, PathError and an

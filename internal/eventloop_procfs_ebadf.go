@@ -15,7 +15,7 @@ import (
 //   - whatever the procfs cache holds for (pid, fd) is stale and is evicted;
 //   - reading /proc/<pid>/fd/<fd> cannot succeed, so it is not attempted. A
 //     failing readlink is not free (path formatting, a PathError and a file
-//     object, ~4.5 us against ~50 ns for a cache hit), and an EBADF stream is
+//     object, ~3.8 us against ~50 ns for a cache hit), and an EBADF stream is
 //     exactly the hot shape: a close loop over a closed range, the closefrom
 //     idiom fcntl(F_GETFD) sweeping ~1000 numbers per process, a library
 //     probing for free descriptors. Before this shortcut such a loop cost
@@ -30,10 +30,19 @@ import (
 // Known gaps, all bounded and deliberate:
 //   - an fd-table entry whose close event was lost (ring overflow) stays
 //     stale after an EBADF, because the table is left alone as above;
-//   - a syscall with a second descriptor argument (epoll_ctl, dup2/dup3's new
-//     fd, close_range) can answer EBADF because of the OTHER number, so its
-//     row may lack the name of a perfectly valid fd that has no table entry;
-//     the next non-EBADF event on it resolves it from procfs as usual;
+//   - a syscall whose EBADF can concern a descriptor other than the one the
+//     row is labelled by has its row unnamed when the labelled fd is valid but
+//     has no fd-table entry (the next non-EBADF event on it resolves it from
+//     procfs as usual). Those are epoll_ctl (labelled by epfd, EBADF for the
+//     target fd), dup2/dup3 (labelled by oldfd, EBADF for an out-of-range
+//     newfd), the transfer cohort sendfile, splice, tee and copy_file_range
+//     (labelled by the destination fd, EBADF for the source), pidfd_getfd
+//     (labelled by the pidfd, EBADF for a bad targetfd in the other process)
+//     and fanotify_mark (labelled by the group fd, EBADF for a bad dirfd;
+//     handleFdPathExit resolves the group through resolveOnExit, so the group
+//     row loses its name). The same shape arises for read/write and friends on
+//     an open fd with the wrong access mode, which the kernel also answers with
+//     EBADF. close_range is not on the list: it never returns EBADF;
 //   - dirfd-relative path syscalls resolve their directory through
 //     resolveDirfdPath, which has no exit record and is not shortened;
 //   - successful events for a number that procfs cannot answer (a process

@@ -1243,7 +1243,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   procfs lookup (non-empty name). A failed readlink is returned for that row but
   never stored, so a number that later names a descriptor created by an untraced
   syscall (pipe/socketpair) is re-read instead of staying nameless with O_NONE.
-  The price is one failing readlink (~3-4.5 us, 7 allocs) per event on a number
+  The price is one failing readlink (~3-4 us, 7 allocs) per event on a number
   procfs cannot answer, so EBADF, the hot shape of that (close loops, the
   `fcntl(F_GETFD)` closefrom sweep over ~1000 numbers), never reaches procfs:
   every fd-resolving exit handler (read/write family, fcntl/ioctl, dup3, mmap,
@@ -1251,12 +1251,17 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `eventLoop.resolveOnExit`, which on an EBADF exit evicts the procfs-cache
   entry and uses the fd-table entry if present, else an unnamed file with
   unknown flags, with no procfs read (`TestEveryFdResolveGoesThroughTheEBADFHelper`
-  fails on a new direct `fdState().resolve(` call). The fd table itself is left
+  parses the package's non-test sources and fails on any function outside its
+  explicit allowlist that mentions a `resolve` selector, so aliasing the tracker
+  does not bypass it and comments do not trip it). The fd table itself is left
   alone on EBADF: traced syscalls own it and a reordered exit must not erase a
   correct name. Known gaps: an fd-table entry whose close event was lost stays
-  stale after EBADF; a two-descriptor syscall (epoll_ctl, dup3's new fd) can
-  answer EBADF for the *other* number, so its row may lack the name of a valid
-  fd that has no table entry (the next non-EBADF event resolves it);
+  stale after EBADF; a syscall whose EBADF can concern a descriptor other than the labelled one (epoll_ctl's target fd, dup2/dup3's
+  out-of-range new fd, the source of sendfile/splice/tee/copy_file_range which
+  are labelled by the destination, pidfd_getfd's targetfd, fanotify_mark's
+  dirfd, and read/write on an open fd of the wrong access mode) leaves its row
+  unnamed when the labelled fd is valid but has no table entry (the next
+  non-EBADF event resolves it; close_range never returns EBADF);
   dirfd-relative path resolution (`resolveDirfdPath`) has no exit record and is
   not shortened; and successful events of an already-exited pid or an fd closed
   before the event was processed still cost one failing readlink each (no

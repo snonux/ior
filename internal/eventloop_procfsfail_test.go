@@ -1,8 +1,12 @@
 package internal
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -293,30 +297,105 @@ func TestResolveOnExitEBADFCoversRetCarriers(t *testing.T) {
 	}
 }
 
-// TestEveryFdResolveGoesThroughTheEBADFHelper guards "all fd-resolving
-// handlers": a new handler calling fdTracker.resolve directly would put
-// the failing-readlink cost back on its EBADF stream. The allowed direct
-// callers are the success-only eventfd lookups, the dirfd path resolver (no
-// exit record) and resolveOnExit itself; anything else must use resolveOnExit.
-func TestEveryFdResolveGoesThroughTheEBADFHelper(t *testing.T) {
-	allowed := map[string]int{
-		"eventloop_exit.go":         3, // resolveDirfdPath, two success-only eventfd lookups
-		"eventloop_procfs_ebadf.go": 1, // resolveOnExit's non-EBADF branch
+// resolveSelectorSites parses one Go source file and returns the name of every
+// function (or "<package level>") that mentions a selector named "resolve",
+// whether it is called directly, through an alias (t := e.fdState();
+// t.resolve(...)) or taken as a method value (f := t.resolve). Working on the
+// AST makes comments and string literals irrelevant, and matching on the
+// selector name rather than on the receiver text is what defeats aliasing. The
+// name is deliberately broader than fdTracker.resolve: a full type check would
+// need the cgo dependency graph, and the cost of a false positive is one
+// explicit allowlist line below.
+func resolveSelectorSites(t testing.TB, filename string, src any) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filename, src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var sites []string
+	for _, decl := range f.Decls {
+		name := "<package level>"
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			name = fn.Name.Name
+		}
+		found := false
+		ast.Inspect(decl, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "resolve" {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			sites = append(sites, name)
+		}
+	}
+	return sites
+}
+
+// directResolveAllowlist names, as "file function", every place allowed to
+// mention a selector called "resolve". Everything else in the package's
+// non-test sources must get descriptors through eventLoop.resolveOnExit.
+var directResolveAllowlist = map[string]string{
+	"eventloop_procfs_ebadf.go resolveOnExit": "the helper itself: its non-EBADF branch is the plain resolve",
+	"eventloop_exit.go resolveDirfdPath":      "a dirfd has no exit record to inspect; documented gap",
+	"eventloop_exit.go registerEventfdResult": "runs only for a successful exit (fd is the return value), EBADF cannot occur",
+	"ior_mode_registry.go dispatch":           "unrelated: modeRegistry.resolve picks a CLI mode",
+	"ior_mode_registry.go validate":           "unrelated: modeRegistry.resolve picks a CLI mode",
+}
+
+// TestEveryFdResolveGoesThroughTheEBADFHelper guards "all fd-resolving
+// handlers": a new handler calling fdTracker.resolve directly would put the
+// failing-readlink cost back on its EBADF stream. It scans every non-test
+// source file of the package (see resolveSelectorSites) and requires the set of
+// functions mentioning a "resolve" selector to equal directResolveAllowlist, so
+// neither a new caller nor a stale allowlist entry goes unnoticed.
+func TestEveryFdResolveGoesThroughTheEBADFHelper(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := map[string]bool{}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
+		for _, fn := range resolveSelectorSites(t, f, nil) {
+			key := f + " " + fn
+			seen[key] = true
+			if _, ok := directResolveAllowlist[key]; !ok {
+				t.Errorf("%s mentions a resolve selector: use e.resolveOnExit(ep, ...) in exit handlers, or allowlist it with a reason", key)
+			}
 		}
-		if got := strings.Count(string(src), "fdState().resolve("); got != allowed[f] {
-			t.Errorf("%s has %d direct fdState().resolve( calls, want %d: use e.resolveOnExit(ep, ...) in exit handlers", f, got, allowed[f])
+	}
+	for key := range directResolveAllowlist {
+		if !seen[key] {
+			t.Errorf("stale allowlist entry %q: no resolve selector there any more", key)
+		}
+	}
+}
+
+// The detector itself is tested on synthetic sources: it must flag the alias
+// and method-value bypasses the old text count missed, and must ignore text in
+// comments and strings that made the old count fail spuriously.
+func TestResolveSelectorSitesDetector(t *testing.T) {
+	const pkg = "package p\n"
+	for name, tc := range map[string]struct {
+		src  string
+		want []string
+	}{
+		"direct call":                  {"func h(e *E) { e.fdState().resolve(1, 2) }", []string{"h"}},
+		"alias bypass":                 {"func h(e *E) { tr := e.fdState(); tr.resolve(1, 2) }", []string{"h"}},
+		"method value":                 {"func h(e *E) { f := e.fdState().resolve; f(1, 2) }", []string{"h"}},
+		"closure":                      {"func h(e *E) { go func() { e.fdState().resolve(1, 2) }() }", []string{"h"}},
+		"comment only":                 {"// e.fdState().resolve(1, 2) is forbidden\nfunc h(e *E) { /* fdState().resolve( */ }", nil},
+		"string only":                  {"func h() string { return \"fdState().resolve(\" }", nil},
+		"resolveOnExit is not resolve": {"func h(e *E) { e.resolveOnExit(nil, 1, 2) }", nil},
+		"two functions":                {"func a(e *E) { e.x.resolve() }\nfunc b(e *E) { e.x.resolve() }", []string{"a", "b"}},
+	} {
+		got := resolveSelectorSites(t, "p.go", pkg+tc.src)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: sites = %v, want %v", name, got, tc.want)
 		}
 	}
 }
