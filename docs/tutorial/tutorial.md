@@ -145,8 +145,8 @@ the selected cell **pushes a new filter onto a stack** and immediately re-filter
 buffer. A `Comm`, `Syscall` or `File` cell filters on exactly that value (`^value$`), so
 `read` does not also select `readv` and `/tmp/a` not `/tmp/ab`; numeric cells filter on
 equality, and `Gap`/`Latency` on "at least this long". Filters are stackable, so you can
-drill down: first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most recent filter (LIFO); keep hitting `Esc` to undo all
-the way back.
+drill down: first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most
+recent filter (LIFO); keep hitting `Esc` to undo all the way back.
 
 ![Pause, push two filters, undo with Esc](./assets/08-stream-pause-filter.gif)
 
