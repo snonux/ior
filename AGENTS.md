@@ -415,6 +415,15 @@ the row-only fields. Dedicated deterministic ENOENT/EBADF scenarios assert both
 the exact negative errno in `RetVal` and `IsError=true`; presence/count alone is
 not sufficient.
 
+Scenarios whose ior arguments depend on workload state use two harness hooks.
+`TestHarness.IorArgsForPID` returns extra ior args from the workload PID
+(appended after the harness's own, so `-pid -1` overrides its `-pid`), honoured
+by both `RunWithIorArgs` and `RunParquetWithIorArgs`. On the workload side,
+`scenarioPrestarts` (`cmd/ioworkload/scenario_threadexit.go`) runs a hook
+*before* the PID is printed, i.e. before ior starts: `thread-exit-tid-worker`
+uses it to park a worker thread and write its TID to `$IOR_WORKLOAD_TID_FILE`,
+which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
+
 ## TUI Behavior
 
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
@@ -672,7 +681,10 @@ not sufficient.
   once per second (`ringbufDropMonitor`): a growing count raises a live warning
   (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
   total is always printed in the end-of-run `Statistics:` block as
-  `ring buffer drops: N (N/s, N% of events)`.
+  `ring buffer drops: N (N/s, N% of events)`. The same block also reports
+  `group-dead exits: N` (whole-process `sched_process_exit` records, see the
+  fd-table notes below); the thread-exit integration tests assert both lines
+  through the harness's `OutputCapture`, the drop line being `0`.
 
   That line is a statement of fact, which is why *both* of its inputs are
   guarded. **Every mode must hear about a failed reading**: only
@@ -972,6 +984,12 @@ not sufficient.
   bypasses `-tid` in BPF, because the thread that ends the group is usually
   not the traced one; the bypass is scoped to the traced thread's process via
   the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
+  Every group-dead record that reaches userspace is counted
+  (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
+  `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`
+  parses that exact line to prove the bypass forwards the group-dead exit of an
+  untraced thread under `-tid <worker>` (it reads 0 with the bypass disabled),
+  so keep its format stable.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
