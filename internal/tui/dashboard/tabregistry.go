@@ -600,7 +600,7 @@ func (m *Model) handleOpenEditorRequested(msg messages.OpenEditorRequestedMsg) (
 		m.streamModel.SetStatusMessage("Open failed: " + err.Error())
 		return m, nil
 	}
-	return m, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+	return m, common.ExecProcess(editorCmd, func(err error) tea.Msg {
 		return streamEditorDoneMsg{err: err}
 	})
 }

@@ -162,7 +162,11 @@ func startWatchedProgram(t *testing.T, model tea.Model) <-chan error {
 	program := newProgram(model, tea.WithInput(input), tea.WithOutput(io.Discard), tea.WithWindowSize(100, 30))
 	// Registered before Run starts, so a signal sent right after this returns
 	// is already handled by the watcher.
-	watcher := watchTerminationSignals(program)
+	var hooks watcherHooks
+	if m, ok := model.(*Model); ok {
+		hooks.publishRecording = modelRecordingPublisher(m)
+	}
+	watcher := watchTerminationSignals(program, hooks)
 	t.Cleanup(watcher.stop) // idempotent; covers a test that never gets to run
 	done := make(chan error, 1)
 	go func() {
@@ -429,7 +433,7 @@ func TestRelayTerminationSignalsQuitsThenForcesOnceAfterTheWindow(t *testing.T) 
 	ch := make(chan os.Signal, 8)
 	var quits, forces atomic.Int32
 	unregistered := false
-	stop := relayTerminationSignals(ch, func() { quits.Add(1) }, func() { forces.Add(1) }, func() { unregistered = true })
+	stop := relayTerminationSignals(ch, nil, func() { quits.Add(1) }, func() { forces.Add(1) }, func() { unregistered = true })
 
 	ch <- syscall.SIGTERM
 	ch <- syscall.SIGHUP // inside the window: same request

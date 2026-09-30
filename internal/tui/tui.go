@@ -313,7 +313,7 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // hung shutdown (Run then returns errShutdownForced). Bubble Tea's own handler
 // is disabled because it is one-shot and skips Update, see signalQuitFilter.
 var runTeaProgram = func(model *Model) (tea.Model, error) {
-	return runWatchedProgram(newProgram(model))
+	return runWatchedProgram(newProgram(model), model)
 }
 
 // newProgram builds the Bubble Tea program for model with the signal filter
