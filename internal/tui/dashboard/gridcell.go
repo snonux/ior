@@ -57,7 +57,8 @@ func newGridRows(width, height int) [][]gridCell {
 // abbreviateLabel fits a chart label into at most maxCells terminal cells,
 // cutting on grapheme boundaries with a trailing "…" (common.TruncateRight,
 // so a wide rune is never split and CJK/emoji labels cannot overflow the
-// tile or bubble). A blank label becomes "?" so the tile is still marked.
+// tile or bubble). A single-cell budget shows just "…" for any wider label.
+// A blank label becomes "?" so the tile is still marked.
 //
 // Leading and trailing blanks are deliberately kept, not trimmed: dir rows
 // are keyed by their literal text (dirRowLabel), so "/tmp/a" and "/tmp/a "
@@ -72,6 +73,12 @@ func abbreviateLabel(label string, maxCells int) string {
 	}
 	if strings.TrimSpace(label) == "" {
 		label = "?"
+	}
+	if maxCells == 1 && common.DisplayWidth(label) > 1 {
+		// The shared marker rule would hard-cut to the first letter here,
+		// making a cut label look like a real one-letter label; the charts
+		// prefer the unambiguous "…".
+		return common.Ellipsis
 	}
 	return common.TruncateRight(label, maxCells, common.Ellipsis)
 }
@@ -134,6 +141,12 @@ func renderGridRow(cells []gridCell, palette []color.Color) string {
 	styleCache := make(map[string]lipgloss.Style, 8)
 	selectedColor := lipgloss.Color("129")
 	for _, cell := range cells {
+		// Fast path for the dominant plain cell (blank background, one-rune
+		// glyph): WriteRune avoids the per-cell string allocation of glyph().
+		if cell.colorSlot < 0 && !cell.bold && !cell.cont && cell.cluster == "" {
+			b.WriteRune(cell.char)
+			continue
+		}
 		glyph := cell.glyph()
 		if glyph == "" {
 			continue

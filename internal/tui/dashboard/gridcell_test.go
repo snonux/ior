@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,6 +60,9 @@ func TestAbbreviateLabelEdgeCases(t *testing.T) {
 		{" a", 5, " a"},
 		{"a ", 5, "a "},
 		{"日本", 1, "…"},
+		{"close", 1, "…"},
+		{"x", 1, "x"},
+		{"close", 2, "c…"},
 	}
 	for _, tt := range tests {
 		if got := abbreviateLabel(tt.label, tt.maxCells); got != tt.want {
@@ -227,5 +231,37 @@ func TestOverviewLabelWidthsUseDisplayCells(t *testing.T) {
 	}
 	if got := padLabelRight("toolong", 3); got != "toolong" {
 		t.Fatalf("padLabelRight truncated: %q", got)
+	}
+}
+
+// BenchmarkRenderGridRow measures a mostly blank row, the common case, to
+// keep plain cells allocation-free.
+func BenchmarkRenderGridRow(b *testing.B) {
+	row := newGridRows(200, 1)[0]
+	for col := 40; col < 80; col++ {
+		row[col] = gridCell{char: '█', colorSlot: col % 3}
+	}
+	writeGridLabel(row, 50, "日本語 label", 1, true)
+	palette := treemapPalette(true)
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = renderGridRow(row, palette)
+	}
+}
+
+// BenchmarkBubbleRender measures a full bubbles view of 200x50 cells.
+func BenchmarkBubbleRender(b *testing.B) {
+	chart := newBubbleChart()
+	for i := range 12 {
+		chart.nodes = append(chart.nodes, bubbleNode{
+			Label:  fmt.Sprintf("label-%d", i),
+			x:      float64(10 + i*15),
+			y:      float64(5 + (i%4)*10),
+			radius: float64(3 + i%4),
+		})
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = chart.Render("Files", 200, 50)
 	}
 }
