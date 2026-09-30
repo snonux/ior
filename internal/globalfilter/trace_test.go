@@ -26,6 +26,33 @@ func TestValidateTracepointFieldsIgnoresAnchors(t *testing.T) {
 	}
 }
 
+// TestValidateTracepointFieldsDirChildrenPattern pins the kernel-side length
+// check of ^dir/*: its shortest witness is "dir/" (the empty name directly in
+// dir), not the pattern text "dir/*", and the root's is "/". A dir whose
+// witness needs the whole NUL-terminated buffer is rejected.
+func TestValidateTracepointFieldsDirChildrenPattern(t *testing.T) {
+	usable := types.MAX_FILENAME_LENGTH - 1
+	fits := DirPattern(strings.Repeat("d", usable-1))
+	if err := (Filter{File: &StringFilter{Pattern: fits}}).ValidateTracepointFields(); err != nil {
+		t.Fatalf("expected dir-children pattern with a %d-byte witness to pass: %v", usable, err)
+	}
+	tooLong := DirPattern(strings.Repeat("d", usable))
+	if err := (Filter{File: &StringFilter{Pattern: tooLong}}).ValidateTracepointFields(); err == nil {
+		t.Fatalf("expected dir-children pattern with a %d-byte witness to fail", usable+1)
+	}
+	for pattern, want := range map[string]int{"^/*": 1, "^//*": 1, "^/tmp/*": 5, "^a//*": 3} {
+		if got := shortestWitnessLen(pattern); got != want {
+			t.Errorf("shortestWitnessLen(%q) = %d, want %d", pattern, got, want)
+		}
+	}
+
+	ev := &types.PathEvent{}
+	copy(ev.Pathname[:], "/tmp/sub/x")
+	if (Filter{File: &StringFilter{Pattern: DirPattern("/tmp")}}).MatchPathEvent(ev) {
+		t.Fatalf("expected ^/tmp/* not to match a raw event in a subdirectory")
+	}
+}
+
 func TestTracepointHelpersMatchRawEvents(t *testing.T) {
 	filter := Filter{
 		Comm: &StringFilter{Pattern: "^nginx"},

@@ -62,17 +62,21 @@ func (f *NumericFilter) EqValue() (int64, bool) {
 // end, so "^x $" is exactly "x " and "^^x" is the prefix "^x". Filters built
 // from a concrete value rather than typed use ExactPattern/DirPattern.
 //
+// One start-anchored form is special: "^dir/*" selects the files directly in
+// dir and nothing below it (see dirchildren.go and DirPattern).
+//
 // Case: substring, prefix (^x) and suffix (x$) matching ignore case; the
-// fully anchored exact form (^x$) does not. Anchoring both ends says "exactly
-// this value", and a value differing in case is a different file or comm
-// (Linux paths and comms are case-sensitive), so /tmp/A must not satisfy
-// ^/tmp/a$. The rule lives in the pattern text itself, not in a separate
-// flag, so a pattern round-trips unchanged through the filter modal and a
-// user typing ^foo$ gets the same semantics as a row filter.
+// fully anchored exact form (^x$) and the directory-children form (^dir/*) do
+// not. Both say "exactly this value" (or "exactly this directory"), and a
+// value differing in case is a different file or comm (Linux paths and comms
+// are case-sensitive), so /tmp/A must not satisfy ^/tmp/a$. The rule lives in
+// the pattern text itself, not in a separate flag, so a pattern round-trips
+// unchanged through the filter modal and a user typing ^foo$ gets the same
+// semantics as a row filter.
 type StringFilter struct {
-	// Pattern is the substring (or anchored prefix/suffix/exact) matched
-	// against the candidate string value; only the exact form ^...$ is
-	// case-sensitive.
+	// Pattern is the substring (or anchored prefix/suffix/exact, or ^dir/*
+	// directory-children) pattern matched against the candidate string
+	// value; only the exact and directory-children forms are case-sensitive.
 	Pattern string
 }
 
@@ -332,32 +336,15 @@ func ExactPattern(value string) string {
 	return "^" + value + "$"
 }
 
-// DirPattern returns the StringFilter pattern that matches every path below
-// dir - the whole subtree - as the prefix "^dir/". Like every one-sided
-// anchor it matches case-insensitively (only ^exact$ is case-sensitive), so a
-// "/tmp/A" row also admits "/tmp/a/x"; the dashboard dir-row matcher is due
-// to be reworked separately (task ip2), and this function keeps the generic
-// prefix semantics until then. The separator is part of the prefix so "/tmp"
-// does not also select "/tmpfoo", and the root is "^/" rather than "^//".
-// Only the root is special: any other dir gets the separator appended even
-// when it already ends in one, because a literal dir "a/" (from "a//b") must
-// select "a//..." and not every "a/..." as well. The pattern always ends with "/", so it never ends in a $
-// anchor, whatever dir holds.
-func DirPattern(dir string) string {
-	if dir == "/" {
-		return "^/"
-	}
-	return "^" + dir + "/"
-}
-
 // matchString reports whether value satisfies the string filter: a
 // case-insensitive substring match, a case-insensitive prefix/suffix under
-// one of the ^ and $ anchors, or a case-sensitive exact match under both (see
-// StringFilter). A nil or blank filter matches everything.
+// one of the ^ and $ anchors, a case-sensitive exact match under both, or a
+// case-sensitive directory-children match for ^dir/* (see StringFilter). A
+// nil or blank filter matches everything.
 //
 // It runs per candidate on every matching path (event loop, stream re-filter,
-// raw kernel-event filter), so it never allocates for the exact form (a plain
-// string comparison) nor for the common all-ASCII case, which matchFoldASCII
+// raw kernel-event filter), so it never allocates for the exact and
+// directory-children forms (plain string comparisons) nor for the common all-ASCII case, which matchFoldASCII
 // compares in place instead of lowering both strings: strings.ToLower
 // allocates whenever its input has an upper-case letter, which is every row
 // under a family filter ("FS", "Network", ...) and any pattern typed with
@@ -374,6 +361,11 @@ func matchString(sf *StringFilter, value string) bool {
 	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
 	if anchoredStart && anchoredEnd {
 		return value == pattern
+	}
+	if anchoredStart {
+		if dir, ok := dirChildrenDir(pattern); ok {
+			return matchDirChildren(dir, value)
+		}
 	}
 	if isASCII(pattern) && isASCII(value) {
 		return matchFoldASCII(pattern, value, anchoredStart, anchoredEnd)

@@ -4,8 +4,8 @@ import (
 	"cmp"
 	"slices"
 	"strconv"
-	"strings"
 
+	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 )
@@ -360,23 +360,21 @@ func truncatePathMiddle(path string, limit int) string {
 // path prefix and cannot become a filter (see handleFilesEnter).
 const noDirGroup = "."
 
-// literalDir returns the directory part of path as the literal text before
-// its last separator ("/" for a top-level entry, noDirGroup when there is no
-// separator). Unlike filepath.Dir it does not Clean: a directory row turns
-// into the prefix filter ^dir/ (globalfilter.DirPattern), which only selects
-// the row's own files if dir is a literal prefix of every one of them. With
-// filepath.Dir, "./src/main.go" grouped under "src", "//usr/lib/x" under
-// "/usr/lib" and "a/../b/c" under "b" - and Enter on those rows selected
-// none of the files they counted.
+// literalDir returns the dir-grouped row key of path: its literal directory
+// text (globalfilter.LiteralDir - the text before the last separator, "/" for
+// a top-level entry), or noDirGroup when there is no separator. Unlike
+// filepath.Dir it does not Clean. A directory row turns into the
+// directory-children filter ^dir/* (globalfilter.DirPattern), which the
+// matcher defines by the same LiteralDir, so the filter selects exactly the
+// files the row counts: none of a subdirectory's (those have their own rows)
+// and none outside. With filepath.Dir, "./src/main.go" grouped under "src",
+// "//usr/lib/x" under "/usr/lib" and "a/../b/c" under "b" - and Enter on
+// those rows selected none of the files they counted.
 func literalDir(path string) string {
-	switch idx := strings.LastIndexByte(path, '/'); idx {
-	case -1:
-		return noDirGroup
-	case 0:
-		return "/"
-	default:
-		return path[:idx]
+	if dir, ok := globalfilter.LiteralDir(path); ok {
+		return dir
 	}
+	return noDirGroup
 }
 
 // aggregateFilesByDir groups the files by literalDir and sums each group's

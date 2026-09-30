@@ -257,9 +257,13 @@ func (m Model) bodyLines() []string {
 	}
 	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear (keeps family) • Esc apply+close")
 	// The case rule is spelled out because it differs by anchor mode (see
-	// globalfilter.StringFilter): only the fully anchored ^exact$ - the form
-	// dashboard row filters round-trip through this modal - is case-sensitive.
-	return append(lines, "strings: substring by default, use ^prefix, suffix$ (any case), or ^exact$ (case-sensitive)")
+	// globalfilter.StringFilter): only the fully anchored ^exact$ and the
+	// directory-children ^dir/* - the forms dashboard row filters round-trip
+	// through this modal - are case-sensitive. ^dir/* is listed because it is
+	// the one form whose meaning is not the obvious anchored substring.
+	return append(lines,
+		"strings: substring by default, use ^prefix, suffix$ (any case), or ^exact$ (case-sensitive)",
+		"         ^dir/* = files directly in dir (case-sensitive, no subdirs)")
 }
 
 func (m Model) clearAll() Model {
@@ -332,7 +336,7 @@ func (m Model) renderField(field filterField, active bool) string {
 // though both match identically (every matcher trims the pattern and treats
 // blank as "no constraint"). Keeping the original, rather than trimming
 // patterns where filters are created, leaves the filter exactly as its
-// producer made it. (Dashboard row filters are anchored - ^value$, ^dir/,
+// producer made it. (Dashboard row filters are anchored - ^value$, ^dir/*,
 // which no trim alters - or, for a process's Comm, already trimmed, so they
 // would survive a rebuild anyway.)
 // Every changed modal-owned dimension is then overwritten unconditionally by

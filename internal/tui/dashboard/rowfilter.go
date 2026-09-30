@@ -24,11 +24,14 @@ import (
 // (^value$), which also keeps a value's leading/trailing blanks and edge ^/$
 // characters literal instead of letting the matcher trim them or read them
 // as anchors. Three dimensions differ on purpose:
-//   - a directory row stands for its whole subtree, so it becomes the prefix
-//     globalfilter.DirPattern (^dir/); aggregateFilesByDir keys rows by the
-//     literal directory text (literalDir) so that prefix covers every file
-//     the row counts. The noDirGroup row has no such prefix and yields a
-//     filter notice instead;
+//   - a directory row counts only the files directly in its directory
+//     (aggregateFilesByDir keys rows by the literal directory text,
+//     literalDir), so it becomes the directory-children pattern
+//     globalfilter.DirPattern (^dir/*), which the matcher defines by that
+//     same literal directory text: files of subdirectories (their own rows)
+//     are not selected, and the "/" row selects only top-level entries. Like
+//     ^exact$ it is case-sensitive. The noDirGroup row has no such pattern
+//     and yields a filter notice instead;
 //   - a family row keeps the bare family name: families are a closed set in
 //     which no name contains another, so bare is already exact, and the
 //     [/] family cycle (familycycle.go) identifies the current family by its
@@ -160,11 +163,12 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 	return filter, presenter.DimensionSummary(filter, presenter.DimFile), true
 }
 
-// usableDir reports whether a dir-grouped Files row can become a subtree
-// filter. Only noDirGroup cannot: it collects separator-less names ("a.log",
-// "socket:[123]") and "./"-relative ones, and no prefix pattern selects
-// exactly those. Every other dir can, even an all-blank one ("   " from
-// "   /z"): DirPattern anchors it as "^   /", which no trim alters.
+// usableDir reports whether a dir-grouped Files row can become a
+// directory-children filter. Only noDirGroup cannot: it collects
+// separator-less names ("a.log", "socket:[123]") together with "./"-relative
+// ones, and no pattern selects exactly that mix ("^./*" would miss the
+// separator-less names). Every other dir can, even an all-blank one ("   "
+// from "   /z"): DirPattern writes it as "^   /*", which no trim alters.
 func usableDir(dir string) bool {
 	return dir != noDirGroup
 }
