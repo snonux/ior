@@ -2,6 +2,8 @@ package internal
 
 import (
 	"context"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -177,6 +179,71 @@ func (s *gatedAggregateSource) Drain() ([]statsengine.SyscallAggregate, error) {
 	return s.pendingAggregateSource.Drain()
 }
 
+// blockedInSwapFilter counts goroutines currently parked on a mutex inside
+// aggregateDrainer.SwapFilter, read from the runtime's own goroutine dump. It
+// is the only way to observe "this goroutine reached the lock and is waiting
+// for it" without a test seam in production code: a goroutine that merely
+// started, or that is still spinning before it parks, does not count. A parked
+// mutex waiter shows a header like "goroutine 7 [sync.Mutex.Lock]:" (older
+// toolchains print "[semacquire]") above its frames.
+func blockedInSwapFilter() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		parkedOnMutex := strings.Contains(header, "sync.Mutex.Lock") || strings.Contains(header, "semacquire")
+		if parkedOnMutex && strings.Contains(g, "(*aggregateDrainer).SwapFilter") {
+			count++
+		}
+	}
+	return count
+}
+
+// awaitSwapFilterBlocked returns once a goroutine beyond the baseline count is
+// parked on the drainer lock inside SwapFilter, which proves the swap is
+// contending with the drain that holds it. It replaces a fixed sleep that only
+// hoped the swapping goroutine had been scheduled by then: on a loaded host the
+// goroutine could reach the lock after the drain finished, so the test would
+// take the uncontended "already retired" path and pass vacuously. The polling
+// below waits on that condition, not on elapsed time; the deadline only bounds
+// a failing run. If the swap instead returns early (done closed), it never
+// waited for the lock - the regression these tests pin - and the test fails.
+func awaitSwapFilterBlocked(t *testing.T, baseline int, done <-chan struct{}) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for blockedInSwapFilter() <= baseline {
+		select {
+		case <-done:
+			t.Fatal("swap returned while the final drain held the drainer lock; it must wait for the lock")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("swap never blocked on the drainer lock inside SwapFilter")
+		}
+		runtime.Gosched()
+		time.Sleep(200 * time.Microsecond) // poll interval, not a synchronisation guess
+	}
+}
+
+// releaseOnce returns an idempotent closer for release that is also
+// registered as cleanup, so a test failing while the final drain is parked
+// inside Drain does not leave that goroutine (and the drainer lock) stuck.
+func releaseOnce(t *testing.T, release chan struct{}) func() {
+	t.Helper()
+	var once sync.Once
+	closeRelease := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease)
+	return closeRelease
+}
+
 func newFutexDrainer(src syscallAggregateSource) *aggregateDrainer {
 	return newAggregateDrainer(src,
 		map[types.TraceId]struct{}{types.SYS_ENTER_FUTEX: {}},
@@ -222,15 +289,17 @@ func TestSwapFilterBlockedDuringFinalDrainDrainsNothing(t *testing.T) {
 	d := newFutexDrainer(src)
 	stop := d.Start(context.Background(), time.Hour, func(aggregateDrainResult) {})
 
+	closeRelease := releaseOnce(t, src.release)
 	src.armed.Store(true)
 	stopped := make(chan struct{})
 	go func() { stop(); close(stopped) }()
 	<-src.entered // the final drain now holds the drainer lock
 
+	baseline := blockedInSwapFilter()
 	swapped := make(chan struct{})
 	go func() { d.SwapFilter(func() {}); close(swapped) }()
-	time.Sleep(20 * time.Millisecond) // let SwapFilter block on the lock
-	close(src.release)
+	awaitSwapFilterBlocked(t, baseline, swapped) // SwapFilter is queued on the lock
+	closeRelease()
 	<-stopped
 	<-swapped
 
@@ -257,18 +326,23 @@ func TestSetFilterDuringStopJudgesPendingCountsByOutgoingFilter(t *testing.T) {
 	el, engine, stop := startSwapTestLoopWith(t, excludeFutex, src)
 
 	src.add(types.SYS_ENTER_FUTEX, 4)
+	closeRelease := releaseOnce(t, src.release)
 	src.armed.Store(true)
 	stopped := make(chan struct{})
 	go func() { stop(); close(stopped) }()
 	<-src.entered // the final drain now holds the drainer lock
 
+	baseline := blockedInSwapFilter()
 	swapped := make(chan struct{})
 	go func() {
 		el.SetFilter(globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: "futex"}})
 		close(swapped)
 	}()
-	time.Sleep(20 * time.Millisecond) // let SetFilter reach the drainer lock
-	close(src.release)
+	// SetFilter must have gone through the still-published drainer and be
+	// queued on its lock; with the drainer unpublished before the final drain
+	// it would instead return at once (plain swap) and fail here.
+	awaitSwapFilterBlocked(t, baseline, swapped)
+	closeRelease()
 	<-stopped
 	<-swapped
 
