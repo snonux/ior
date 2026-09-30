@@ -185,10 +185,7 @@ func (c *bubbleChart) SetDarkMode(isDark bool) {
 func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 	targets := buildBubbleTargets(data, c.Metric(), c.width, c.height)
 
-	selectedID := ""
-	if c.selected >= 0 && c.selected < len(c.nodes) {
-		selectedID = c.nodes[c.selected].ID
-	}
+	selectedID := c.selectedID()
 
 	existing := make(map[string]bubbleNode, len(c.nodes))
 	for _, node := range c.nodes {
@@ -289,6 +286,17 @@ func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, ta
 		c.updateNodeDriftAmplitude(node)
 	}
 	return retargeted
+}
+
+// selectedID returns the ID (selection key) of the highlighted bubble, or ""
+// when the chart has no such bubble. Consumers that act on the selection
+// (Enter's filter) resolve it by this key against their own rows instead of
+// re-deriving the chart's order, which only the chart itself can reproduce.
+func (c *bubbleChart) selectedID() string {
+	if c.selected >= 0 && c.selected < len(c.nodes) {
+		return c.nodes[c.selected].ID
+	}
+	return ""
 }
 
 func (c *bubbleChart) selectIndexByID(id string) int {

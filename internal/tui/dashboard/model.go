@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"fmt"
-	"slices"
 	"strings"
 
 	coreflamegraph "ior/internal/flamegraph"
@@ -624,7 +622,12 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 		// The same item the treemap highlights (processesTreemapSelection).
 		return processByKey(rows, m.processesTreemapSelection().selectedKey())
 	case m.processesTab.mode == tabVizModeBubbles:
-		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesTab.bubble.Metric(), bubbleMaxItems), m.processesTab.bubble.selected)
+		// The highlighted bubble's ID is its processKey (processBubbleData),
+		// so resolve it by key like the treemap. Re-sorting the rows here to
+		// find the same index broke on metric ties: the chart breaks them by
+		// the display label ("20#1:x") and a second sort by any other string
+		// disagrees whenever a recycled PID is present.
+		return processByKey(rows, m.processesTab.bubble.selectedID())
 	default:
 		return indexedProcessSnapshot(m.sortedProcessTableRows(), m.processesTab.offset)
 	}
@@ -654,56 +657,6 @@ func indexedProcessSnapshot(rows []statsengine.ProcessSnapshot, index int) (stat
 		return statsengine.ProcessSnapshot{}, false
 	}
 	return rows[index], true
-}
-
-func sortedProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMetric, limit int) []statsengine.ProcessSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
-		lv := processMetricValue(left, metric)
-		rv := processMetricValue(right, metric)
-		switch {
-		case lv > rv:
-			return -1
-		case lv < rv:
-			return 1
-		}
-		llabel := processSelectionLabel(left)
-		rlabel := processSelectionLabel(right)
-		switch {
-		case llabel < rlabel:
-			return -1
-		case llabel > rlabel:
-			return 1
-		default:
-			return 0
-		}
-	})
-	if limit > 0 && len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-	return sorted
-}
-
-func processMetricValue(proc statsengine.ProcessSnapshot, metric bubbleMetric) uint64 {
-	switch metric {
-	case bubbleMetricBytes:
-		return proc.Bytes
-	case bubbleMetricDuration:
-		return proc.TotalLatencyNs
-	default:
-		return proc.Syscalls
-	}
-}
-
-func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
-	label := fmt.Sprintf("%d", proc.PID)
-	if comm := strings.TrimSpace(proc.Comm); comm != "" {
-		label = fmt.Sprintf("%d:%s", proc.PID, comm)
-	}
-	return label
 }
 
 // postKeyTransitionCmd assembles the commands needed when the active tab
