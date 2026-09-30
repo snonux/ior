@@ -579,9 +579,21 @@ func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.C
 	return true, m, flameCmd
 }
 
+// handleFlameConsumedKey routes the keys the flamegraph claims (ConsumesKey)
+// to it while the Flame tab is active. The baseline-reset key is the
+// exception: the baseline is shared by every tab, so it goes through
+// resetBaselineCmd (live trie, stats engine and stats generation) and the
+// flame only drops its own view state afterwards (ClearBaseline). Sending it
+// to the flame model alone reset just the flamegraph and left the stats tabs
+// on their pre-reset totals.
 func (m *Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame || !m.flamegraphModel.ConsumesKey(msg) {
 		return false, m, nil
+	}
+	if m.flamegraphModel.WantsBaselineReset(msg) {
+		cmd := m.resetBaselineCmd()
+		m.flamegraphModel.ClearBaseline()
+		return true, m, cmd
 	}
 	next, cmd := m.flamegraphModel.Update(msg)
 	m.flamegraphModel = next.(*flamegraphtui.Model)

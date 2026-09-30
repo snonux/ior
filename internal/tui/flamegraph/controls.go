@@ -6,6 +6,7 @@ import (
 
 	common "ior/internal/tui/common"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -55,17 +56,39 @@ func resetBoolSet(values map[int]bool) map[int]bool {
 	return values
 }
 
-// resetBaseline is the flame tab's `r` key. It deliberately drops the flame
-// selection: clearSnapshotState resets the selection manager together with
+// resetBaseline is the flame model's own handling of the `r` key, used when
+// the model runs without a parent that owns the baseline (the dashboard does
+// not: see WantsBaselineReset). It resets the live trie and then drops the
+// flame view state through ClearBaseline.
+func (m *Model) resetBaseline() {
+	if m.liveTrie != nil {
+		m.liveTrie.Reset()
+	}
+	m.ClearBaseline()
+}
+
+// WantsBaselineReset reports whether msg is the flame tab's baseline-reset
+// key (`r`) and should reset the baseline rather than be typed text: while the
+// search input is open `r` is a search character, so it reports false. The
+// dashboard asks this before routing the key, because the baseline is shared:
+// the live trie, the stats engine behind the other tabs and the stats
+// generation all restart together (Model.resetBaselineCmd), and only the
+// dashboard can reach all of them. Letting the flame model consume the key
+// itself reset just the flamegraph and left the stats tabs on pre-reset totals.
+func (m *Model) WantsBaselineReset(msg tea.KeyPressMsg) bool {
+	return !m.search.isActive() && isResetBaselineKey(msg)
+}
+
+// ClearBaseline drops the flame view state after the live trie was reset by
+// the `r` key (resetBaseline here, or the dashboard's resetBaselineCmd). It
+// deliberately drops the flame selection: clearSnapshotState resets the selection manager together with
 // the zoom, as it does for a field-order or metric change, because the user
 // asked for a fresh baseline. The automatic 30s reset and the `r` key on the
 // dashboard tables are different on purpose: they keep the selected item (the
 // tables via stickyKey, the flame via SelectionManager's wantedPath) so the
 // cursor does not jump to row 0 / root every time the data refills.
-func (m *Model) resetBaseline() {
-	if m.liveTrie != nil {
-		m.liveTrie.Reset()
-	}
+// It does not touch the live trie.
+func (m *Model) ClearBaseline() {
 	m.clearSnapshotState(true)
 	m.statusMessage = "Baseline reset"
 }

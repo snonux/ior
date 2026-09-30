@@ -1645,8 +1645,8 @@ func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
 	model = next.(*Model)
-	if cmd != nil {
-		t.Fatalf("expected flame reset key to be handled by flame tab without global refresh command")
+	if cmd == nil {
+		t.Fatalf("expected flame reset key to return the shared baseline reset command")
 	}
 	if model.activeTab != TabFlame {
 		t.Fatalf("expected flame tab to stay active after reset key")
@@ -2093,5 +2093,93 @@ func TestFormatAutoResetRemainingFormats(t *testing.T) {
 				t.Fatalf("formatAutoResetRemaining(%v, %v) = %q, want %q", tc.armedAt, tc.every, got, tc.want)
 			}
 		})
+	}
+}
+
+// newFlameResetDashboard returns a dashboard on the Flame tab with a seeded
+// live trie (and so a flame snapshot), backed by a stats source that counts
+// its resets.
+func newFlameResetDashboard(t *testing.T) (*Model, *fakeSnapshotSource, *coreflamegraph.LiveTrie) {
+	t.Helper()
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
+	engine := &fakeSnapshotSource{
+		snap:      &statsengine.Snapshot{TotalSyscalls: 42},
+		resetSnap: &statsengine.Snapshot{TotalSyscalls: 0},
+	}
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	m.SetLiveTrie(liveTrie)
+	if m.activeTab != TabFlame || !m.flamegraphModel.HasSnapshot() {
+		t.Fatal("expected a laid-out flamegraph on the Flame tab")
+	}
+	return m, engine, liveTrie
+}
+
+// TestFlameResetKeyResetsStatsBaselineToo: `r` on the Flame tab restarts the
+// whole baseline, not just the flamegraph. Before the fix the flame model
+// consumed the key itself, so the stats engine was never reset, the stats
+// generation stayed put and the other tabs kept their pre-reset totals.
+func TestFlameResetKeyResetsStatsBaselineToo(t *testing.T) {
+	m, engine, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+	versionBefore := liveTrie.Version()
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+
+	if engine.resetCount != 1 {
+		t.Fatalf("stats engine resets = %d, want 1", engine.resetCount)
+	}
+	if m.statsGen != genBefore+1 {
+		t.Fatalf("statsGen = %d, want %d", m.statsGen, genBefore+1)
+	}
+	if liveTrie.Version() == versionBefore {
+		t.Fatalf("expected the live trie to be reset")
+	}
+	if m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("expected the flame snapshot state to be cleared")
+	}
+	if m.activeTab != TabFlame {
+		t.Fatalf("expected the Flame tab to stay active")
+	}
+	if cmd == nil {
+		t.Fatalf("expected the post-reset stats command")
+	}
+	tick, ok := cmd().(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected a StatsTickMsg from the reset command")
+	}
+	if tick.Generation != m.statsGen || tick.Snap == nil || tick.Snap.TotalSyscalls != 0 {
+		t.Fatalf("expected a post-reset tick of the new generation, got %+v", tick)
+	}
+	next, _ = m.Update(tick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got == nil || got.TotalSyscalls != 0 {
+		t.Fatalf("stats tabs still show pre-reset totals: %+v", got)
+	}
+}
+
+// TestFlameSearchTypedRDoesNotResetBaseline is the negative half: while the
+// flame search input is open `r` is search text and must reset nothing.
+func TestFlameSearchTypedRDoesNotResetBaseline(t *testing.T) {
+	m, engine, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+	versionBefore := liveTrie.Version()
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+
+	if !m.flamegraphModel.SearchActive() {
+		t.Fatalf("expected the search input to stay open")
+	}
+	if engine.resetCount != 0 || m.statsGen != genBefore || liveTrie.Version() != versionBefore {
+		t.Fatalf("typing r in the search reset the baseline: resets %d gen %d->%d", engine.resetCount, genBefore, m.statsGen)
+	}
+	if !m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("typing r in the search cleared the flame snapshot")
 	}
 }
