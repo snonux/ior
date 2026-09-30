@@ -52,6 +52,13 @@ func (s *pendingAggregateSource) pendingCount(id types.TraceId) uint64 {
 func startSwapTestLoop(t *testing.T, initial globalfilter.Filter) (*eventLoop, *pendingAggregateSource, *statsengine.Engine, func()) {
 	t.Helper()
 	src := &pendingAggregateSource{}
+	el, engine, stop := startSwapTestLoopWith(t, initial, src)
+	return el, src, engine, stop
+}
+
+// startSwapTestLoopWith is startSwapTestLoop over a caller-provided source.
+func startSwapTestLoopWith(t *testing.T, initial globalfilter.Filter, src syscallAggregateSource) (*eventLoop, *statsengine.Engine, func()) {
+	t.Helper()
 	engine := statsengine.NewEngine(statsengine.DefaultTopN)
 	el := &eventLoop{
 		cfg: eventLoopConfig{
@@ -64,7 +71,7 @@ func startSwapTestLoop(t *testing.T, initial globalfilter.Filter) (*eventLoop, *
 	el.SetFilter(initial)
 	ctx, cancel := context.WithCancel(context.Background())
 	stop := el.startAggregateDrainLoop(ctx)
-	return el, src, engine, func() { cancel(); stop() }
+	return el, engine, func() { cancel(); stop() }
 }
 
 func totalSyscalls(t *testing.T, engine *statsengine.Engine) uint64 {
@@ -234,5 +241,41 @@ func TestSwapFilterBlockedDuringFinalDrainDrainsNothing(t *testing.T) {
 	d.SwapFilter(func() {})
 	if got := src.pendingCount(types.SYS_ENTER_FUTEX); got != 7 {
 		t.Fatalf("pending futex = %d, want 7 (retired drainer never drains)", got)
+	}
+}
+
+// TestSetFilterDuringStopJudgesPendingCountsByOutgoingFilter covers a live
+// swap landing while the drain loop stops: the final drain is parked inside
+// Drain (holding the drainer lock) when SetFilter arrives. The pre-stop futex
+// counts accumulated under a filter that excludes futex, so they must not be
+// ingested. When stop unpublished the drainer before its final drain, that
+// SetFilter took the plain-swap path, installed the futex filter at once, and
+// the final drain ingested the 4 pre-stop futex calls under it.
+func TestSetFilterDuringStopJudgesPendingCountsByOutgoingFilter(t *testing.T) {
+	src := &gatedAggregateSource{entered: make(chan struct{}), release: make(chan struct{})}
+	excludeFutex := globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: "^read$"}}
+	el, engine, stop := startSwapTestLoopWith(t, excludeFutex, src)
+
+	src.add(types.SYS_ENTER_FUTEX, 4)
+	src.armed.Store(true)
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	<-src.entered // the final drain now holds the drainer lock
+
+	swapped := make(chan struct{})
+	go func() {
+		el.SetFilter(globalfilter.Filter{Syscall: &globalfilter.StringFilter{Pattern: "futex"}})
+		close(swapped)
+	}()
+	time.Sleep(20 * time.Millisecond) // let SetFilter reach the drainer lock
+	close(src.release)
+	<-stopped
+	<-swapped
+
+	if got := totalSyscalls(t, engine); got != 0 {
+		t.Fatalf("TotalSyscalls = %d, want 0 (pre-stop futex judged by the outgoing ^read$ filter)", got)
+	}
+	if got := el.Filter(); got.Syscall == nil || got.Syscall.Pattern != "futex" {
+		t.Fatalf("filter after swap = %+v, want syscall futex", got)
 	}
 }
