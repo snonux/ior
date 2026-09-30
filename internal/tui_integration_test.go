@@ -894,9 +894,10 @@ func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 
 // TestTUIIntegration_Stream_EnterPushFilterThenUndo pauses, anchors the
 // selection on row 0 (comm "api"), advances two columns to the Comm column,
-// and presses Enter to push a "comm~api" filter. The paused footer's "Col"
-// counter makes the column advance observable (Col 1/10 -> Col 3/10), so the
-// push targets Comm; the resulting predicate is observable on the stream's
+// and presses Enter to push the exact "comm~^api$" filter (a Stream cell
+// filter selects exactly the cell's value). The paused footer's "Col" counter
+// makes the column advance observable (Col 1/10 -> Col 3/10), so the push
+// targets Comm; the resulting predicate is observable on the stream's
 // "Filter:" summary line. F then pops the filter stack, reverting to
 // "Filter: all".
 func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
@@ -917,10 +918,10 @@ func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 	s.waitFor("Col 3/10")
 
 	// Enter clones the stream filter and adds the selected cell's predicate; the
-	// Comm cell of row 0 is "api", so the filter becomes "comm~api" (synced into
-	// the stream's own Filter line via the dashboard global filter).
+	// Comm cell of row 0 is "api", so the filter becomes the exact "comm~^api$"
+	// (synced into the stream's own Filter line via the dashboard global filter).
 	s.press(tea.KeyEnter)
-	s.waitFor("Filter:", "comm~api")
+	s.waitFor("Filter:", "comm~^api$")
 
 	// F pops the filter stack, reverting to the cleared "all" filter.
 	s.press('F')

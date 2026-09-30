@@ -1917,7 +1917,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected applying selected-cell global filter to restart tracing")
 	}
-	if m.filters.global.Comm == nil || m.filters.global.Comm.Pattern != "systemd" {
+	if m.filters.global.Comm == nil || m.filters.global.Comm.Pattern != "^systemd$" {
 		t.Fatalf("expected selected comm applied globally, got %+v", m.filters.global.Comm)
 	}
 	if !stopped {
@@ -1926,7 +1926,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if !m.attaching {
 		t.Fatalf("expected selected-cell global filter to restart tracing")
 	}
-	if len(m.filters.stack) != 1 || m.filters.stack[0] != "comm~systemd" {
+	if len(m.filters.stack) != 1 || m.filters.stack[0] != "comm~^systemd$" {
 		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filters.stack)
 	}
 }

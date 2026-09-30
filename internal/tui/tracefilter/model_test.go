@@ -379,11 +379,12 @@ func TestModelOpenEscKeepsNonCanonicalPatterns(t *testing.T) {
 }
 
 // TestModelRoundTripsExactRowPatterns covers the patterns dashboard row
-// filters now emit (task yo2): ^value$ / ^dir/ with the value's blanks and
-// literal edge ^/$ inside the anchors. Opening one and leaving must hand it
-// back unchanged, and typing the displayed text into a fresh modal must
-// rebuild the very same filter - the anchors put the blanks out of reach of
-// the modal's TrimSpace, so the text shown is the text that applies.
+// filters (task yo2) and the Stream tab's Enter-on-cell filter (task 2p2)
+// emit: ^value$ / ^dir/ with the value's blanks and literal edge ^/$ inside
+// the anchors. Opening one and leaving must hand it back unchanged, and
+// typing the displayed text into a fresh modal must rebuild the very same
+// filter - the anchors put the blanks out of reach of the modal's TrimSpace,
+// so the text shown is the text that applies.
 func TestModelRoundTripsExactRowPatterns(t *testing.T) {
 	for _, initial := range []globalfilter.Filter{
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("/tmp/a ")}},
@@ -391,6 +392,13 @@ func TestModelRoundTripsExactRowPatterns(t *testing.T) {
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("/var/log")}},
 		{Comm: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("  sh  ")}},
 		{Syscall: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("read")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("^/tmp/a b$")}},
+		{Comm: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("x$")}},
+		{
+			Comm:    &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(" kworker/0:1 ")},
+			Syscall: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("openat")},
+			File:    &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("/etc/x ")},
+		},
 	} {
 		model := NewModel().Open(initial)
 		model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
