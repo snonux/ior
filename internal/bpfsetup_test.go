@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -266,6 +267,12 @@ func TestResizeBPFMapsAgainstRealObject(t *testing.T) {
 // strings both changed) whose object no longer defines that global - exactly
 // what an IOR_BPF_OBJECT override built before the global existed looks like
 // to libbpfgo, without needing a second checked-in object or a clang run.
+//
+// It needs no privileges: NewModuleFromBuffer would raise RLIMIT_MEMLOCK
+// unconditionally (and fail for a non-root user), but NewModuleFromFileArgs
+// with SkipMemlockBump only opens the object, and opening plus
+// InitGlobalVariable never touch the kernel. The renamed object is therefore
+// written to a temp file, so these tests run under a plain `mage test`.
 func openObjectWithRenamedGlobal(t *testing.T, name string) *bpf.Module {
 	t.Helper()
 	renamed := name[:len(name)-1] + "X"
@@ -273,12 +280,76 @@ func openObjectWithRenamedGlobal(t *testing.T, name string) *bpf.Module {
 	if bytes.Equal(object, embeddedBPFObject) {
 		t.Fatalf("embedded BPF object does not mention %s", name)
 	}
-	mod, err := bpf.NewModuleFromBuffer(object, embeddedBPFObjectName)
+	path := filepath.Join(t.TempDir(), embeddedBPFObjectName)
+	if err := os.WriteFile(path, object, 0o600); err != nil {
+		t.Fatalf("write renamed object: %v", err)
+	}
+	mod, err := bpf.NewModuleFromFileArgs(bpf.NewModuleArgs{BPFObjPath: path, SkipMemlockBump: true})
 	if err != nil {
-		skipIfUnprivilegedOpen(t, err)
+		t.Fatalf("open renamed BPF object without a memlock bump (euid %d): %v", os.Geteuid(), err)
 	}
 	t.Cleanup(mod.Close)
 	return mod
+}
+
+// TestLibbpfgoReportsAMissingGlobalAsSymbolNotFound is the unprivileged guard
+// for errSymbolNotFound: it asks the real libbpfgo for a global the real
+// object lacks and requires exactly the text setTidFilterTgid matches. A
+// libbpfgo reword fails here in every `mage test`, not only in a root run.
+func TestLibbpfgoReportsAMissingGlobalAsSymbolNotFound(t *testing.T) {
+	mod := openObjectWithRenamedGlobal(t, "TID_FILTER_TGID")
+	err := mod.InitGlobalVariable("TID_FILTER_TGID", noTgid)
+	if !isMissingSymbol(err) {
+		t.Fatalf("InitGlobalVariable on a missing global = %v, want the %q error", err, errSymbolNotFound)
+	}
+	// A present global must still succeed, or the check above proves nothing.
+	if err := mod.InitGlobalVariable("TID_FILTER", noTgid); err != nil {
+		t.Fatalf("InitGlobalVariable on a present global = %v, want nil", err)
+	}
+}
+
+// TestSetTidFilterTgidClassifiesSetterErrors pins the error policy with an
+// injected setter, which a real object cannot do for arbitrary errors: only
+// libbpfgo's "symbol not found" is tolerated (warning only under -tid); every
+// other error, including one that merely mentions the text, stays fatal and
+// keeps the cause wrapped.
+func TestSetTidFilterTgidClassifiesSetterErrors(t *testing.T) {
+	other := errors.New("invalid value")
+	for _, tc := range []struct {
+		name      string
+		setErr    error
+		tid       int
+		wantErr   error // matched with errors.Is; nil means no error
+		wantFatal bool
+		wantWarns int
+	}{
+		{name: "success is silent", setErr: nil, tid: os.Getpid()},
+		{name: "missing symbol without -tid is silent", setErr: errors.New(errSymbolNotFound), tid: -1},
+		{name: "missing symbol with -tid warns once", setErr: errors.New(errSymbolNotFound), tid: os.Getpid(), wantWarns: 1},
+		{name: "other error is fatal", setErr: other, tid: -1, wantErr: other, wantFatal: true},
+		{name: "other error is fatal under -tid too", setErr: other, tid: os.Getpid(), wantErr: other, wantFatal: true},
+		{name: "wrapped symbol-not-found text is not a match", setErr: fmt.Errorf("x: %w", errors.New(errSymbolNotFound)), tid: -1, wantFatal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var warnings []string
+			warn := func(args ...any) { warnings = append(warnings, fmt.Sprint(args...)) }
+			var gotName string
+			setter := func(name string, _ any) error { gotName = name; return tc.setErr }
+			err := setTidFilterTgid(flags.Config{PidFilter: -1, TidFilter: tc.tid}, setter, warn)
+			if (err != nil) != tc.wantFatal {
+				t.Fatalf("setTidFilterTgid = %v, want fatal=%v", err, tc.wantFatal)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error %v does not wrap the setter's cause %v", err, tc.wantErr)
+			}
+			if gotName != "TID_FILTER_TGID" {
+				t.Fatalf("setter called for %q, want TID_FILTER_TGID", gotName)
+			}
+			if len(warnings) != tc.wantWarns {
+				t.Fatalf("warnings = %q, want %d", warnings, tc.wantWarns)
+			}
+		})
+	}
 }
 
 // TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid pins the compatibility
@@ -287,8 +358,8 @@ func openObjectWithRenamedGlobal(t *testing.T, name string) *bpf.Module {
 // 24-byte exit record lacks it, and a missing symbol used to abort setup at
 // the "set globals" stage. It now passes without -tid, warns (once) under -tid,
 // and real failures of other globals still surface. It runs the real libbpfgo
-// against a real object, which also guards the error text setTidFilterTgid
-// matches.
+// against a real object (unprivileged, see openObjectWithRenamedGlobal), the
+// end-to-end twin of the injected-setter tests.
 func TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -296,7 +367,7 @@ func TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid(t *testing.T) {
 		wantWarns int
 	}{
 		{name: "no -tid stays silent", tid: -1, wantWarns: 0},
-		{name: "-tid warns that the bypass is unavailable", tid: os.Getpid(), wantWarns: 1},
+		{name: "-tid warns that the scoping is unavailable", tid: os.Getpid(), wantWarns: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mod := openObjectWithRenamedGlobal(t, "TID_FILTER_TGID")
@@ -309,8 +380,8 @@ func TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid(t *testing.T) {
 			if len(warnings) != tc.wantWarns {
 				t.Fatalf("warnings = %q, want %d", warnings, tc.wantWarns)
 			}
-			if tc.wantWarns > 0 && !strings.Contains(warnings[0], "TID_FILTER_TGID") {
-				t.Fatalf("warning %q does not name the missing global", warnings[0])
+			if tc.wantWarns > 0 && (!strings.Contains(warnings[0], "TID_FILTER_TGID") || !strings.Contains(warnings[0], "-tid")) {
+				t.Fatalf("warning %q must name the missing global and the -tid scoping it affects", warnings[0])
 			}
 		})
 	}

@@ -1188,10 +1188,16 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
   An object that predates the global (every one that emits the legacy exit
   record) does not define it: `setTidFilterTgid` treats libbpfgo's "symbol not
-  found" as non-fatal - silent without `-tid`, one setup warning with it - so
-  such an `IOR_BPF_OBJECT` still loads
-  (`TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid`; a missing
-  `TID_FILTER` and any other error stay fatal).
+  found" (`isMissingSymbol`) as non-fatal - silent without `-tid`, one setup
+  warning with it saying the object cannot scope the process-exit forwarding
+  to the `-tid` target (depending on its age it forwards every group-dead exit
+  or none; the warning claims no mechanism) - so such an `IOR_BPF_OBJECT`
+  still loads. Any other setter error stays fatal
+  (`TestSetTidFilterTgidClassifiesSetterErrors`, injected setter), a missing
+  `TID_FILTER` stays fatal, and `TestLibbpfgoReportsAMissingGlobalAsSymbolNotFound`
+  guards libbpfgo's error text unprivileged: the tests open the real object
+  through `NewModuleFromFileArgs{SkipMemlockBump: true}` (the buffer variant
+  always bumps RLIMIT_MEMLOCK and needs root).
   Every group-dead record that reaches userspace and is not a per-pid
   duplicate is counted (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
   `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`
