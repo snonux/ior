@@ -759,9 +759,9 @@ not sufficient.
   short-lived processes. The `sched:sched_process_exit` control record already
   attached for the fd table (below) therefore also evicts the comm entry for
   its `ev.Tid` (`commResolver.evictTid`, called from `handleProcessExitEvent`).
-  The record fires per *task* and this cache is keyed per task, so unlike the
-  fd-table eviction this is precise rather than degraded: a thread exit drops
-  only that thread's name. Eviction, not `markAllStale`, is right here because
+  The record fires per *task* and this cache is keyed per task, so this runs
+  on every exit record and is precise: a thread exit drops only that thread's
+  name (the fd-table eviction, keyed by tgid, waits for the group-dead record). Eviction, not `markAllStale`, is right here because
   there is nothing left to serve - the value is not merely at risk of being
   outdated, its owner is gone; the recycled tid then behaves exactly like a
   never-before-seen one (async lookup, and under `-comm` its first
@@ -951,16 +951,23 @@ not sufficient.
   safe because `resolve` falls back to the procfs cache and then
   `/proc/<pid>/fd`), and a `sched:sched_process_exit` control record — the
   sibling of `sched_process_exec` in `internal/c/exec.c`, attached the same
-  way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
-  (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
-  both maps, and — keyed by tid rather than tgid — the exited task's cached
-  comm, its pair state (parked enter plus gap baseline) and its unconsumed
-  `name_to_handle_at` pathname (see "Comm resolution across `execve`"). It
-  fires per *task*, so a thread exit in a still-living multithreaded process
-  evicts that process early: degraded, not wrong — the procfs fallback still
-  answers and re-populates the table. For the three tid-keyed structures the
-  same record is precise rather than degraded, which is why one record serves
-  all four.
+  way in `internal/ior_bpfsetup.go` — handled by `handleProcessExitEvent`
+  (`internal/eventloop_processexit.go`). The record fires per *task* and
+  carries a `group_dead` flag (`ProcessExitEvent.IsGroupDead`), set by
+  `ior_exit_group_dead` in `exec.c` from the tracepoint's own `group_dead`
+  field when the kernel has it (CO-RE `bpf_core_field_exists`), else from
+  `task->signal->live == 0` (runtime-verified only on kernels with the
+  field). The cleanup is split by key: every record drops the exited task's
+  tid-keyed state — cached comm, pair state (parked enter plus gap baseline)
+  and unconsumed `name_to_handle_at` pathname (see "Comm resolution across
+  `execve`") — while the tgid's entries in both fd maps are dropped only on
+  the group-dead record. Evicting them on a mere thread exit pushed the
+  surviving threads' descriptors through the `/proc/<pid>/fd` fallback,
+  which renames them (`pipe:0:3:4` → `pipe:[N]`), loses already-closed ones,
+  and under lag can resolve a reused fd number to the wrong file
+  (`TestThreadExitKeepsFdName` covers it end to end). A group-dead exit
+  bypasses `-tid` in BPF (still honouring `-pid`), because the thread that
+  ends the group is usually not the traced one.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
