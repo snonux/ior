@@ -423,9 +423,14 @@ the exact negative errno in `RetVal` and `IsError=true`; presence/count alone is
 not sufficient.
 
 Scenarios whose ior arguments depend on workload state use two harness hooks.
-`TestHarness.IorArgsForPID` returns extra ior args from the workload PID
-(appended after the harness's own, so `-pid -1` overrides its `-pid`), honoured
-by both `RunWithIorArgs` and `RunParquetWithIorArgs`. On the workload side,
+`TestHarness.IorArgsForPID` (`func(pid int) ([]string, error)`) returns extra
+ior args from the workload PID (appended after the harness's own, so `-pid -1`
+overrides its `-pid`), honoured by both `RunWithIorArgs` and
+`RunParquetWithIorArgs`. The callback runs after the workload has started, so it
+must report failure through its error result and never call `t.Fatal`/`Goexit`:
+when it returns an error, the harness kills and reaps the workload before
+failing the run, whereas an unwound goroutine would skip that cleanup and leave
+the workload waiting 30s for its startup file as a zombie. On the workload side,
 `scenarioPrestarts` (`cmd/ioworkload/scenario_threadexit.go`) runs a hook
 *before* the PID is printed, i.e. before ior starts: `thread-exit-tid-worker`
 and `exec-non-leader-thread-tid` use it (`startParkedWorker`) to park a worker
