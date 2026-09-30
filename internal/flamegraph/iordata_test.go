@@ -614,7 +614,7 @@ func TestLoadFromFileRejectsTracepointUnknownToThisBuild(t *testing.T) {
 
 func TestLoadFromFileRejectsUnknownFormatVersion(t *testing.T) {
 	path := writeZstdGob(t, recordingMagic[:],
-		recordingHeader{Version: recordingFormatVersion + 1}, map[recordKey]Counter{})
+		recordingHeader{Version: recordingFormatVersionSampled + 1}, map[recordKey]Counter{})
 	_, err := newIorDataFromFile(path)
 	if err == nil || !strings.Contains(err.Error(), "unsupported recording format version") {
 		t.Fatalf("error = %v, want an unsupported-version error", err)
@@ -640,7 +640,7 @@ func TestGarbageIsNotReportedAsLegacy(t *testing.T) {
 		"garbage":   []byte("this is not valid gob data"),
 		"magic-eof": recordingMagic[:],
 	} {
-		_, err := decodeRecords(bytes.NewReader(data))
+		_, _, err := decodeRecords(bytes.NewReader(data))
 		if err == nil || errors.Is(err, errLegacyRecording) {
 			t.Errorf("%s: err = %v, want a non-legacy decode error", name, err)
 		}

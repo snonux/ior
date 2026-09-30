@@ -14,6 +14,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/probemanager"
+	"ior/internal/sampling"
 )
 
 // The tests in this file drive runHeadlessParquetWith - the Parquet-specific
@@ -41,11 +42,19 @@ type headlessParquetRunProbe struct {
 // because the shutdown watcher only returns on cancellation.
 func fakeHeadlessParquetSetup(t *testing.T, n int, probe *headlessParquetRunProbe, finalPath string) headlessParquetInfraSetup {
 	t.Helper()
+	return fakeHeadlessParquetSetupWithLoop(t, n, probe, finalPath, func() *eventLoop { return newEmitOrderEventLoop(t) })
+}
+
+// fakeHeadlessParquetSetupWithLoop is fakeHeadlessParquetSetup around the event
+// loop newLoop builds, for tests that need a loop wired differently (a sampling
+// tally, an aggregate source).
+func fakeHeadlessParquetSetupWithLoop(t *testing.T, n int, probe *headlessParquetRunProbe, finalPath string, newLoop func() *eventLoop) headlessParquetInfraSetup {
+	t.Helper()
 	return func(cfg flags.Config, logln func(...any)) (*traceInfra, error) {
 		probe.setupCfg = cfg
 		probe.setupCalls++
 
-		el := newEmitOrderEventLoop(t)
+		el := newLoop()
 		rawCh := filledRawChannel(syncPairStream(t, 0, n))
 		close(rawCh)
 
@@ -250,7 +259,7 @@ func TestFinishHeadlessParquetRecordingReportsTheRunOutcome(t *testing.T) {
 			var logs []string
 			logln := func(args ...any) { logs = append(logs, fmt.Sprint(args...)) }
 
-			err := finishHeadlessParquetRecording(recorder, sink, logln)
+			err := finishHeadlessParquetRecording(recorder, sink, sampling.Summary{}, logln)
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
 				t.Fatalf("finishHeadlessParquetRecording() error = %v, want %v", err, tc.wantErr)
 			}

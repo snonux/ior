@@ -510,6 +510,35 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     relies on that to tell a settled slot from one still being written. The
     accounting functions of `filter.c` are compiled and exercised on the host
     by `internal/generate/enterstate_fallback_test.go`.
+  - **Raw-mode outputs of a sampling run say so and keep the exact totals**
+    (task qq2; `internal/sampling`, `internal/sampling_tally.go`). A raw mode
+    (`-plain`, `-flamegraph`, headless `-parquet`) has no stats engine, so a run
+    with an explicit rate other than 1 (`rawModeSamplingRates`; the promoted
+    defaults sample nothing) used to write its 1-in-N rows with no marker and
+    never read the kernel counts of the other invocations. Now `newEventLoop`
+    gives such a run a `samplingTally` as its aggregate sink, so the drain loop
+    runs (headless Parquet wires the aggregate source only in this case; an
+    unsampled run pays nothing): `traced` is counted where the loop emits a pair
+    (`drainPairs`), `counted` is the drained aggregate rows, and their sum is
+    the exact per-syscall population (the two sources are disjoint, see above).
+    The totals are withheld, not guessed, when they cannot be trusted: a filter
+    the syscall-keyed kernel rows cannot answer (`aggregateIngestAllowedForFilter`,
+    e.g. `-comm`) or a last drain that failed gives `Unavailable` with the
+    reason, rates still reported. Surfaces: startup line on stderr
+    (`announceSampling`), a block in the end-of-run statistics
+    (`samplingStatLines`, incl. "syscalls including kernel-counted only"),
+    Parquet footer keys `ior.sampling` (rates, written at start) and
+    `ior.sampling.totals` (JSON or `unavailable`, added by
+    `Recorder.SetSamplingTotals` just before the footer is written; neither key
+    exists in an unsampled file, so the key is the marker), and the `.ior.zst`
+    header's `Sampling` field, which writes format version 2 (version 1 stays
+    for unsampled runs; a pre-qq2 reader refuses version 2 rather than show
+    sampled counts as complete). `ior collapsed` prints the sampling to stderr
+    (`CollapsedOptions.Notice`) and `flamegraph.LoadRecording` returns it.
+    `-plain` stdout stays the fixed CSV: its marker is the stderr lines only.
+    Not covered: TUI `R` recordings (the stats engine has the kernel counts but
+    the file is not marked). Verified with stubs only, not against a live kernel
+    (no root in the authoring sandbox).
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ior/internal/sampling"
 	"ior/internal/streamrow"
 )
 
@@ -39,6 +40,13 @@ type rowWriter interface {
 	Abort() error
 	FinalPath() string
 	TempPath() string
+}
+
+// footerWriter is implemented by writers that can still add a key/value pair
+// to the file footer just before it is finalised (the real Writer does). It is
+// optional so that test doubles of rowWriter stay small.
+type footerWriter interface {
+	SetKeyValueMetadata(key, value string) error
 }
 
 type writerFactory func(path string, cfg WriterConfig, meta FileMetadata) (rowWriter, error)
@@ -105,6 +113,9 @@ type recordingSession struct {
 	stopCause     error
 	doneErr       error
 	stopOnce      sync.Once
+	// footer holds key/value pairs to add to the file footer when the session
+	// stops (SetSamplingTotals); guarded by mu.
+	footer map[string]string
 
 	// dropped counts rows shed on queue overflow; atomic so Status can
 	// read the live count without contending the session mutex.
@@ -251,6 +262,34 @@ func (r *Recorder) Stop() error {
 // after unlocking would come too late. Always nil in production.
 var stopUnlockedHook func()
 
+// SetSamplingTotals records the exact per-syscall population of a sampled run
+// in the footer of the active recording (KeySamplingTotals); it is written when
+// the recording stops, so call it before Stop, once the counts are final. A
+// Summary that sampled nothing adds no key, so the file stays unmarked.
+// Without an active session it returns ErrRecorderNotActive.
+func (r *Recorder) SetSamplingTotals(summary sampling.Summary) error {
+	if r == nil {
+		return ErrRecorderNotActive
+	}
+	totals := summary.Totals()
+	r.mu.RLock()
+	session := r.active
+	r.mu.RUnlock()
+	if session == nil {
+		return ErrRecorderNotActive
+	}
+	if totals == "" {
+		return nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.footer == nil {
+		session.footer = make(map[string]string)
+	}
+	session.footer[KeySamplingTotals] = totals
+	return nil
+}
+
 // TakeFailure returns the error the last recording died with, exactly once
 // per failure, and nil otherwise: while a recording is active, when the last
 // one ended cleanly, when the failure was already taken, or when Stop
@@ -372,6 +411,10 @@ func (r *Recorder) stopSession(
 		return err
 	}
 	if err := r.flushBatch(session, writer, batch, written); err != nil {
+		_ = writer.Abort()
+		return err
+	}
+	if err := session.applyFooter(writer); err != nil {
 		_ = writer.Abort()
 		return err
 	}
@@ -507,6 +550,24 @@ func (s *recordingSession) wasStopRequested() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stopRequested
+}
+
+// applyFooter adds the pairs set through SetSamplingTotals to writer's footer,
+// just before the writer is closed. A writer that cannot take footer pairs is
+// left alone.
+func (s *recordingSession) applyFooter(writer rowWriter) error {
+	fw, ok := writer.(footerWriter)
+	if !ok {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, value := range s.footer {
+		if err := fw.SetKeyValueMetadata(key, value); err != nil {
+			return fmt.Errorf("set parquet footer %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func (s *recordingSession) cause() error {

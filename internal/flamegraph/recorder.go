@@ -1,6 +1,9 @@
 package flamegraph
 
-import "ior/internal/event"
+import (
+	"ior/internal/event"
+	"ior/internal/sampling"
+)
 
 // Recorder aggregates event pairs and writes them to the legacy .ior.zst format.
 // Integration tests still use this artifact to assert trace output end-to-end.
@@ -27,6 +30,18 @@ func (r *Recorder) AddPair(pair *event.Pair) {
 		return
 	}
 	r.data.addEventPair(pair)
+}
+
+// SetSampling records the run's sampling outcome, which Write stores in the
+// recording's header: a run that sampled wrote only some of the invocations of
+// the sampled syscalls as records, and the header is what says so and keeps the
+// exact totals. Call it once the trace has finished, before Write. The zero
+// Summary (nothing sampled) leaves the recording a plain version 1 file.
+func (r *Recorder) SetSampling(summary sampling.Summary) {
+	if r == nil {
+		return
+	}
+	r.data.sampling = summary
 }
 
 // Write persists the aggregated trace output to a .ior.zst file.

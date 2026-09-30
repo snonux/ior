@@ -120,6 +120,14 @@ The TUI treats a name as generated only when it matches the generated pattern ex
 `ior-stream-20260930-90500.csv` or a missing `.csv`/`.parquet` counts as your own name and is
 replaced. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
 
+With an explicit sampling rate, a raw-mode run (`-plain`, `-flamegraph`, `-parquet`) writes only a
+sample of the sampled syscalls. It says so on stderr at startup, reports their exact totals
+(rows written plus the invocations the kernel only counted) in the end-of-run statistics, and
+marks the files: Parquet footer keys `ior.sampling` and `ior.sampling.totals` (see
+`docs/parquet-querying.md`), and the `.ior.zst` header (format version 2, which `ior collapsed`
+reports on stderr; unsampled recordings keep version 1). Totals are reported as unavailable
+under a filter the kernel counters cannot apply (`-comm`, `-path`, ...).
+
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
 Records whose selected `-fields` are all empty (for example an empty file name with

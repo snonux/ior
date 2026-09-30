@@ -56,6 +56,7 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		}
 	}
 	e.flushPendingWarnings()
+	e.announceSampling()
 
 	e.startTime = time.Now()
 	// emit() already handles a nil printCb safely, but guard here so that
@@ -161,12 +162,16 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 
 // handleAggregateDrainResult ingests one drained batch of kernel-side syscall
 // aggregates, or reports why the drain failed. The drain loop only runs with an
-// aggregate sink wired, which today means TUI mode only (makeTUIEventLoopConfigurer
-// is the sole caller of both SetAggregateSink and SetWarningCallback), so the
-// stderr fallback is unreachable in production right now. It is used anyway
-// rather than plain notifyWarning: a future headless aggregate consumer would
-// otherwise silently reintroduce exactly the swallow this file just fixed.
+// aggregate sink wired: the stats engine in TUI mode
+// (makeTUIEventLoopConfigurer), or the samplingTally of a raw output mode that
+// samples (newEventLoop). Both report a failed drain through
+// notifyWarningOrLog, so it reaches stderr where no warning sink is wired.
+// A raw-mode run also records whether its latest drain failed: the tally's
+// exact totals are only claimed when the final drain succeeded.
 func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
+	if e.samplingTally != nil {
+		e.samplingTally.drainFailed.Store(result.warning != "")
+	}
 	if result.warning != "" {
 		e.notifyWarningOrLog(result.warning)
 		return
@@ -244,6 +249,10 @@ func (e *eventLoop) drainPairs(pairs <-chan *event.Pair) {
 	for {
 		select {
 		case ep := <-pairs:
+			// Counted before emit, which hands the pair on and may recycle it.
+			if e.samplingTally != nil {
+				e.samplingTally.countTraced(ep.EnterEv.GetTraceId())
+			}
 			e.emit(ep)
 			e.numSyscallsAfterFilter++
 		default:

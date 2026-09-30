@@ -11,6 +11,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
+	"ior/internal/sampling"
 	"ior/internal/streamrow"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -136,8 +137,12 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 	}
 	defer infra.Close()
 
+	// A run that samples says so in the file footer from the start; the exact
+	// totals follow when the recording stops (finishHeadlessParquetRecording).
+	meta := parquet.NewFileMetadata("headless")
+	meta.Sampling = infra.el.samplingPlan()
 	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
-	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: parquet.NewFileMetadata("headless")}); err != nil {
+	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: meta}); err != nil {
 		return fmt.Errorf("start parquet recording: %w", err)
 	}
 
@@ -145,7 +150,7 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 	// sink.configure wires the event loop's print callback to record each pair
 	// to Parquet; runTraceLoop wraps it to skip inactive probes.
 	totalDuration := runTraceLoop(infra, true, sink.configure, logln)
-	if err := finishHeadlessParquetRecording(recorder, sink, logln); err != nil {
+	if err := finishHeadlessParquetRecording(recorder, sink, infra.el.samplingResult(), logln); err != nil {
 		return err
 	}
 	logTraceStopped(totalDuration, logln)
@@ -158,7 +163,13 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 // a distinct Stop error joined to it; otherwise Stop's own error is returned.
 // Rows shed by queue overflow are not an error, but the recording is then
 // partial, so that is logged.
-func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessParquetSink, logln func(...any)) error {
+//
+// samples is the run's sampling outcome. Its exact totals go into the file
+// footer before the recorder stops (a recording that sampled nothing gets no
+// sampling key); failing to record them fails the run, because a sampled file
+// without its totals would pass for a complete one.
+func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessParquetSink, samples sampling.Summary, logln func(...any)) error {
+	totalsErr := recorder.SetSamplingTotals(samples)
 	stopErr := recorder.Stop()
 	if err := sink.err(); err != nil {
 		if stopErr != nil && !errors.Is(stopErr, err) {
@@ -168,6 +179,9 @@ func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessPa
 	}
 	if stopErr != nil {
 		return stopErr
+	}
+	if totalsErr != nil {
+		return fmt.Errorf("record the sampling totals in the parquet footer: %w", totalsErr)
 	}
 	status := recorder.Status()
 	logln(parquetPublishedNotice(status))
@@ -198,8 +212,12 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (*traceInfr
 	)
 }
 
-// newHeadlessParquetEventLoop leaves the syscall aggregate source unwired:
-// headless Parquet records event rows and has no aggregate sink to consume it.
+// newHeadlessParquetEventLoop builds the headless Parquet event loop. Headless
+// Parquet records event rows and has no TUI aggregate sink, so the kernel
+// aggregate source stays unwired - except when the run samples (an explicit
+// -syscall-sampling-* rate): then the loop carries a samplingTally as its
+// aggregate sink, and the source is wired so the invocations that produced no
+// row are still counted and end up in the file footer.
 func newHeadlessParquetEventLoop(
 	cfg flags.Config,
 	bpfModule *bpf.Module,
@@ -208,6 +226,13 @@ func newHeadlessParquetEventLoop(
 	el, err := newEventLoop(newEventLoopConfig(cfg))
 	if err != nil {
 		return nil, err
+	}
+	if el.samplingTally != nil {
+		aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+		if err != nil {
+			return nil, fmt.Errorf("count the unsampled invocations of a sampled recording: %w", err)
+		}
+		el.aggregateSrc = aggregateConsumer
 	}
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	return el, nil

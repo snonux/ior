@@ -13,6 +13,7 @@ import (
 	"ior/internal/atomicfile"
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/sampling"
 	"ior/internal/types"
 
 	"github.com/DataDog/zstd" // Go stdlib does not include zstd; third-party dep required
@@ -63,6 +64,10 @@ type recordKey struct {
 
 type iorData struct {
 	records map[recordKey]Counter
+	// sampling is the run's sampling outcome. A recording of a run that
+	// sampled has fewer records than invocations; this says which syscalls
+	// and how many there really were. Persisted in the header (iorformat.go).
+	sampling sampling.Summary
 }
 
 func newIorData() iorData {
@@ -78,12 +83,23 @@ func newIorDataFromFile(filename string) (iorData, error) {
 }
 
 // LoadFromFile loads an .ior.zst file and returns an iterator over all records.
+// Use LoadRecording when the recording's sampling marker matters.
 func LoadFromFile(filename string) (iter.Seq[IterRecord], error) {
+	records, _, err := LoadRecording(filename)
+	return records, err
+}
+
+// LoadRecording loads an .ior.zst file and returns an iterator over all
+// records together with the sampling outcome of the run that wrote it. The
+// Summary is the zero value (not Active) for a recording that traced every
+// syscall in full; otherwise the counts of the sampled syscalls in the records
+// are a sample, and the Summary holds their exact totals.
+func LoadRecording(filename string) (iter.Seq[IterRecord], sampling.Summary, error) {
 	iod, err := newIorDataFromFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("load ior data from %s: %w", filename, err)
+		return nil, sampling.Summary{}, fmt.Errorf("load ior data from %s: %w", filename, err)
 	}
-	return iod.iter(), nil
+	return iod.iter(), iod.sampling, nil
 }
 
 // addEventPair aggregates ev into the record. The path is ev.FileValue(), not
@@ -183,7 +199,7 @@ func serializedFilename(flamegraphName string, now time.Time, layout string) (st
 // native zstd context. name only labels errors.
 func (iod *iorData) encodeCompressed(w io.Writer, name string) error {
 	encoder := zstd.NewWriter(w)
-	if err := encodeRecords(encoder, iod.records); err != nil {
+	if err := encodeRecords(encoder, iod.records, iod.sampling); err != nil {
 		_ = encoder.Close() // release the native zstd context
 		return fmt.Errorf("encode ior records: %w", err)
 	}
@@ -214,11 +230,12 @@ func (iod *iorData) loadFromFile(filename string) (retErr error) {
 	// decodeRecords translates the stored tracepoint names to this build's IDs
 	// and rejects headerless (pre-format-version) recordings, whose numeric IDs
 	// would otherwise render as the wrong syscalls without any error.
-	records, err := decodeRecords(decoder)
+	records, samples, err := decodeRecords(decoder)
 	if err != nil {
 		return fmt.Errorf("decode ior records from %s: %w", filename, err)
 	}
 	iod.records = records
+	iod.sampling = samples
 	return nil
 }
 
@@ -226,16 +243,17 @@ func (iod *iorData) loadFromFile(filename string) (retErr error) {
 // the .ior.zst, see iorformat.go).
 func (iod *iorData) serialize() ([]byte, error) {
 	var buf bytes.Buffer
-	err := encodeRecords(&buf, iod.records)
+	err := encodeRecords(&buf, iod.records, iod.sampling)
 	return buf.Bytes(), err
 }
 
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
-	records, err := decodeRecords(bytes.NewReader(buf.Bytes()))
+	records, samples, err := decodeRecords(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return err
 	}
 	iod.records = records
+	iod.sampling = samples
 	return nil
 }
 

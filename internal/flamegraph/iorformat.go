@@ -11,13 +11,14 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/sampling"
 	"ior/internal/types"
 )
 
 // Recording stream layout (the payload inside the zstd frame of an .ior.zst):
 //
 //	recordingMagic                      8 raw bytes
-//	gob(recordingHeader)                format version + tracepoint table
+//	gob(recordingHeader)                format version + tracepoint table (+ sampling)
 //	gob(map[recordKey]Counter)          the records
 //
 // recordKey.TraceID is a numeric tracepoint ID, and those IDs are the
@@ -34,9 +35,23 @@ import (
 // matching gob's error strings.
 var recordingMagic = [8]byte{'I', 'O', 'R', 'R', 'E', 'C', 0, 0}
 
-// recordingFormatVersion is bumped on any incompatible change to the layout
-// above; the reader refuses versions it does not know instead of guessing.
-const recordingFormatVersion = 1
+// Sampling (task qq2): a run that samples writes only a fraction of the
+// invocations of the sampled syscalls as records, so the counts of such a
+// recording are not the population. The header's Sampling field names those
+// syscalls with their rates and the exact totals (sampling.Summary). Because a
+// reader that ignores the field would present sampled counts as complete, a
+// sampled recording is written as version recordingFormatVersionSampled, which
+// a build that predates the field refuses; a recording that sampled nothing
+// stays at version 1 and stays readable by every build.
+
+// recordingFormatVersion is the version of a recording that sampled nothing.
+// recordingFormatVersionSampled is bumped on any incompatible change to the
+// layout above; the reader refuses versions it does not know instead of
+// guessing.
+const (
+	recordingFormatVersion        = 1
+	recordingFormatVersionSampled = 2
+)
 
 // unknownTracePrefix is what types.TraceId.String yields for an ID missing
 // from the writer's table. Such a name cannot be resolved by string, so the
@@ -54,27 +69,38 @@ var errLegacyRecording = errors.New("recording has no format header: it was writ
 type recordingHeader struct {
 	Version     uint32
 	Tracepoints map[traceIdType]string // writer's ID -> tracepoint string, for IDs used in the records
+	// Sampling is the run's sampling outcome; the zero value (no entries) for
+	// a recording that sampled nothing, which is also what a version 1 header
+	// decodes to.
+	Sampling sampling.Summary
 }
 
 // newRecordingHeader records the writer's name for every trace ID that occurs
-// in records, so the table stays small however large the recording is.
-func newRecordingHeader(records map[recordKey]Counter) recordingHeader {
+// in records, so the table stays small however large the recording is, and the
+// run's sampling outcome. The version is the lowest one that still tells a
+// reader the truth (see the Sampling note above).
+func newRecordingHeader(records map[recordKey]Counter, samples sampling.Summary) recordingHeader {
 	names := make(map[traceIdType]string)
 	for key := range records {
 		if _, ok := names[key.TraceID]; !ok {
 			names[key.TraceID] = key.TraceID.String()
 		}
 	}
-	return recordingHeader{Version: recordingFormatVersion, Tracepoints: names}
+	header := recordingHeader{Version: recordingFormatVersion, Tracepoints: names}
+	if samples.Active() {
+		header.Version = recordingFormatVersionSampled
+		header.Sampling = samples
+	}
+	return header
 }
 
 // encodeRecords writes the full recording stream (magic, header, records) to w.
-func encodeRecords(w io.Writer, records map[recordKey]Counter) error {
+func encodeRecords(w io.Writer, records map[recordKey]Counter, samples sampling.Summary) error {
 	if _, err := w.Write(recordingMagic[:]); err != nil {
 		return fmt.Errorf("write recording magic: %w", err)
 	}
 	enc := gob.NewEncoder(w)
-	if err := enc.Encode(newRecordingHeader(records)); err != nil {
+	if err := enc.Encode(newRecordingHeader(records, samples)); err != nil {
 		return fmt.Errorf("encode recording header: %w", err)
 	}
 	if err := enc.Encode(records); err != nil {
@@ -84,31 +110,37 @@ func encodeRecords(w io.Writer, records map[recordKey]Counter) error {
 }
 
 // decodeRecords reads a recording stream and returns its records with every
-// trace ID translated to this build's table. A headerless legacy stream yields
-// errLegacyRecording; anything that is neither format yields a decode error.
-func decodeRecords(r io.Reader) (map[recordKey]Counter, error) {
+// trace ID translated to this build's table, and the sampling outcome of the
+// run that wrote it (the zero Summary for an unsampled recording). A headerless
+// legacy stream yields errLegacyRecording; anything that is neither format
+// yields a decode error.
+func decodeRecords(r io.Reader) (map[recordKey]Counter, sampling.Summary, error) {
 	br := bufio.NewReader(r)
 	prefix, err := br.Peek(len(recordingMagic))
 	if err != nil || !bytes.Equal(prefix, recordingMagic[:]) {
-		return nil, classifyHeaderless(br)
+		return nil, sampling.Summary{}, classifyHeaderless(br)
 	}
 	if _, err := br.Discard(len(recordingMagic)); err != nil {
-		return nil, fmt.Errorf("read recording magic: %w", err)
+		return nil, sampling.Summary{}, fmt.Errorf("read recording magic: %w", err)
 	}
 	dec := gob.NewDecoder(br)
 	var header recordingHeader
 	if err := dec.Decode(&header); err != nil {
-		return nil, fmt.Errorf("decode recording header: %w", err)
+		return nil, sampling.Summary{}, fmt.Errorf("decode recording header: %w", err)
 	}
-	if header.Version != recordingFormatVersion {
-		return nil, fmt.Errorf("unsupported recording format version %d (this build reads version %d)",
-			header.Version, recordingFormatVersion)
+	if header.Version != recordingFormatVersion && header.Version != recordingFormatVersionSampled {
+		return nil, sampling.Summary{}, fmt.Errorf("unsupported recording format version %d (this build reads versions %d and %d)",
+			header.Version, recordingFormatVersion, recordingFormatVersionSampled)
 	}
 	var stored map[recordKey]Counter
 	if err := dec.Decode(&stored); err != nil {
-		return nil, fmt.Errorf("decode records: %w", err)
+		return nil, sampling.Summary{}, fmt.Errorf("decode records: %w", err)
 	}
-	return translateRecords(stored, header.Tracepoints)
+	records, err := translateRecords(stored, header.Tracepoints)
+	if err != nil {
+		return nil, sampling.Summary{}, err
+	}
+	return records, header.Sampling, nil
 }
 
 // classifyHeaderless decides between "old recording" and "not a recording".

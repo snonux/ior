@@ -218,6 +218,20 @@ func publishParquet(tempPath, finalPath string, noClobber bool) (string, error) 
 	return finalPath, atomicfile.PublishReplace(tempPath, finalPath)
 }
 
+// SetKeyValueMetadata adds one key/value pair to the file footer. The footer is
+// written by Close, so a pair may be set any time until then: it is how a
+// recording records what is only known when it ends (the exact totals of a
+// sampled run). It fails once the writer is closed or aborted.
+func (w *Writer) SetKeyValueMetadata(key, value string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state != writerStateOpen {
+		return errWriterClosed
+	}
+	w.writer.SetKeyValueMetadata(key, value)
+	return nil
+}
+
 // Abort discards the temporary parquet file.
 func (w *Writer) Abort() error {
 	if w == nil {

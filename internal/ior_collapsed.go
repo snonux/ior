@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"ior/internal/collapse"
@@ -72,5 +73,8 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		// file (line breaks excepted, which the collapsed writer always
 		// encodes); -escape=always|never overrides the terminal check.
 		Escape: escapeMode.Escaper(w),
+		// Remarks about the recording (a sampled run) go to stderr, which
+		// keeps stdout pure collapsed text for flamegraph.pl.
+		Notice: func(line string) { _, _ = fmt.Fprintln(os.Stderr, line) },
 	})
 }

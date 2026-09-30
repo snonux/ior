@@ -27,6 +27,12 @@ type CollapsedOptions struct {
 	// because they are structural in the collapsed format. Aggregation and
 	// sorting use the format-encoded (never the Escape-rewritten) paths.
 	Escape func(string) string
+	// Notice, when non-nil, receives one human-readable line per remark about
+	// the recording that the collapsed stacks cannot carry themselves - today
+	// that a recording of a sampling run holds only a sample of the sampled
+	// syscalls. `ior collapsed` writes them to stderr, keeping stdout pure
+	// collapsed text for flamegraph.pl. nil drops them.
+	Notice func(line string)
 }
 
 func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
@@ -46,7 +52,7 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 	if !collapse.IsValidCountField(countField) {
 		return CollapsedOptions{}, fmt.Errorf("invalid count field %q", countField)
 	}
-	return CollapsedOptions{Fields: fields, CountField: countField, Escape: o.Escape}, nil
+	return CollapsedOptions{Fields: fields, CountField: countField, Escape: o.Escape, Notice: o.Notice}, nil
 }
 
 // WriteCollapsedStacks reads an .ior.zst recording and writes collapsed-stack
@@ -81,9 +87,16 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 		return err
 	}
 
-	records, err := LoadFromFile(filename)
+	records, samples, err := LoadRecording(filename)
 	if err != nil {
 		return err
+	}
+	// A sampled recording's weights are those of the traced sample, not of the
+	// population: say so, or the flamegraph reads as the whole workload.
+	if opts.Notice != nil {
+		for _, line := range samples.Lines() {
+			opts.Notice("ior collapsed: " + line)
+		}
 	}
 
 	totals := make(map[string]uint64)

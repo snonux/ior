@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"ior/internal/flags"
+	"ior/internal/sampling"
 	"ior/internal/streamrow"
 	"ior/internal/textsafe"
 	"ior/internal/types"
@@ -68,12 +69,30 @@ type Record struct {
 	EpollEvents   uint32 `parquet:"epoll_events"`
 }
 
+// Footer key/value keys that mark a recording as sampled (see
+// sampling.Summary). Both are absent from a recording that traced every syscall
+// in full, so `ior.sampling` being present is the marker.
+const (
+	// KeySampling holds the effective rates, "read=10,write=0" (0 is
+	// aggregate-only: no rows at all). Written when the file is created.
+	KeySampling = "ior.sampling"
+	// KeySamplingTotals holds the exact per-syscall population as a JSON array
+	// (rows written plus invocations only the kernel counted), or the word
+	// "unavailable". Written when the recording stops, since the counts are
+	// only known then (Recorder.SetSamplingTotals).
+	KeySamplingTotals = "ior.sampling.totals"
+)
+
 // FileMetadata captures constant metadata written once into the parquet file.
 type FileMetadata struct {
 	Hostname          string
 	StartedAtUnixNano uint64
 	Mode              string
 	IORVersion        string
+	// Sampling carries the run's effective sampling rates; only its entries'
+	// Syscall and Rate are written here (KeySampling). The zero value, a run
+	// that sampled nothing, writes no sampling key.
+	Sampling sampling.Summary
 }
 
 // NewFileMetadata constructs file-level metadata for a parquet trace file,
@@ -212,6 +231,9 @@ func writerMetadataOptions(meta FileMetadata) []parquetgo.WriterOption {
 	}
 	if meta.IORVersion != "" {
 		options = append(options, parquetgo.KeyValueMetadata("ior.version", meta.IORVersion))
+	}
+	if rates := meta.Sampling.Rates(); rates != "" {
+		options = append(options, parquetgo.KeyValueMetadata(KeySampling, rates))
 	}
 	return options
 }

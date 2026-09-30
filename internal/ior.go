@@ -15,6 +15,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
 	"ior/internal/tracepoints"
@@ -594,6 +595,7 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 		plainMode:               cfg.PlainMode,
 		escapeMode:              cfg.EscapeMode,
 		aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
+		samplingRates:           rawModeSamplingRates(cfg),
 	}
 }
 
@@ -794,9 +796,13 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 }
 
 // finaliseTrace flushes the flamegraph recorder if one was created and logs
-// the total run duration. It runs after runTraceLoop has returned.
-func finaliseTrace(recorder *flamegraph.Recorder, totalDuration time.Duration, logln func(...any)) error {
+// the total run duration. It runs after runTraceLoop has returned, which is
+// what makes samples final: the recording's header carries them, so a run that
+// sampled says so and keeps the exact totals (a run that sampled nothing passes
+// the zero Summary and writes the plain format).
+func finaliseTrace(recorder *flamegraph.Recorder, samples sampling.Summary, totalDuration time.Duration, logln func(...any)) error {
 	if recorder != nil {
+		recorder.SetSampling(samples)
 		if err := recorder.Write(); err != nil {
 			return err
 		}
@@ -866,7 +872,8 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	defer infra.Close()
 
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
-	return traceResult(infra.el, finaliseTrace(recorder, totalDuration, logln))
+	// The event loop has returned, so the sampling totals are final.
+	return traceResult(infra.el, finaliseTrace(recorder, infra.el.samplingResult(), totalDuration, logln))
 }
 
 // traceResult is the error of a finished trace run: the -plain sink's write
@@ -980,7 +987,8 @@ func setupTraceInfra(
 // setupTraceInfraWithEventLoop owns the setup sequence shared by interactive,
 // raw, and headless Parquet traces. The factory preserves the one intentional
 // mode difference: regular traces wire the syscall aggregate source, while
-// headless Parquet has no aggregate sink and leaves that source unwired.
+// headless Parquet wires it only when the run samples (it has no TUI aggregate
+// sink, so nothing else would consume it).
 // The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
 // event-loop build and the start signal stay in this body because the
 // ior_setup_test.go structural tests pin their relative order here.

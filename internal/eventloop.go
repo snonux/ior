@@ -72,6 +72,11 @@ type eventLoopConfig struct {
 	commResolver            *commResolver
 	aggregateDrainEvery     time.Duration
 	aggregateIngestTraceIDs map[types.TraceId]struct{}
+	// samplingRates are the syscalls a raw output mode samples and their
+	// effective rates (rawModeSamplingRates); nil when nothing is sampled and
+	// in the TUI, whose stats engine merges the kernel counts itself. When
+	// set, newEventLoop keeps an exact tally of them (samplingTally).
+	samplingRates map[types.TraceId]uint32
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
@@ -103,6 +108,10 @@ type eventLoop struct {
 	cfg             eventLoopConfig
 	aggregateSink   syscallAggregateSink
 	aggregateSrc    syscallAggregateSource
+	// samplingTally is the exact population of the sampled syscalls of a raw
+	// output mode, or nil (see eventLoopConfig.samplingRates). It is the
+	// aggregate sink of such a run.
+	samplingTally *samplingTally
 	// aggregateDrainer is the running aggregate drainer, published by
 	// startAggregateDrainLoop and cleared by its stop function, so SetFilter
 	// (called from the TUI goroutine) can flush the aggregate map before a
@@ -229,6 +238,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	// Failed stdout writes of the default sink reach the loop, which stops the
 	// trace and makes the run exit non-zero (outputFailed).
 	plainSink.onErr = el.outputFailed
+	el.initSamplingTally(cfg.samplingRates)
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.initRuntimeEventKinds()
@@ -326,13 +336,13 @@ func (e *eventLoop) stats() string {
 			"\tsyscalls: %d (%.2f/s) with %d mismatched enter/exit pairs (%.2f%%)\n"+
 			"\tsyscalls after filter: %d (%.2f/s)\n"+
 			"\tgroup-dead exits: %d\n"+
-			"%s",
+			"%s%s",
 		duration,
 		e.numTracepoints, rate(uint64(e.numTracepoints)),
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.outputLossStatLine()+e.ringbufDropStatLine(rate),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate), e.samplingStatLines(),
 	)
 }
 

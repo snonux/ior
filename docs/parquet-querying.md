@@ -163,6 +163,27 @@ GROUP BY bucket_10ms
 ORDER BY bucket_10ms;
 ```
 
+### Sampled recordings
+
+A recording of a run with an explicit sampling rate (`-syscall-sampling-syscalls read=10`,
+`-syscall-sampling-families`) holds only a sample of the sampled syscalls: about 1 in N
+invocations of a rate-N syscall is written as a row, and none of a rate-0 (aggregate-only)
+one. The file footer says so, in two key/value pairs that are absent from a recording that
+traced everything:
+
+- `ior.sampling`: the effective rates, for example `read=10,write=0`.
+- `ior.sampling.totals`: the exact population of each sampled syscall, written when the
+  recording ends, as JSON, for example
+  `[{"syscall":"read","rate":10,"traced":110,"counted_only":890,"total":1000}]`:
+  `traced` is the number of rows in the file, `counted_only` the invocations only the
+  kernel counted, `total` their sum. The value is the word `unavailable` when the totals
+  cannot be trusted (a filter the kernel counters cannot apply, or a failed read of them).
+
+Row counts of sampled syscalls in such a file are therefore not the population; use
+`ior.sampling.totals` for that. The kernel counts carry no bytes, files or latency
+percentiles: those stay sampled. Read the footer with, for example,
+`SELECT decode(key), decode(value) FROM parquet_kv_metadata('trace.parquet')` in DuckDB. `R` recordings made from the TUI are not marked.
+
 `time_ns` is a boot-relative clock, so join it to wall time only if you have an independent
 boot-time reference.
 
