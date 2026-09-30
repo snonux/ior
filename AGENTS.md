@@ -847,10 +847,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   from the same asynchronous procfs read and lost the race against short-lived
   tasks: a thread that exited before the lookup ran has no `/proc/<tid>` and
   every row it produced carried an empty comm, the first rows of a thread that
-  lives on did too, and under `-comm` a tid with no cached comm has an
-  empty comm at the exit-side filter, which matches no ordinary pattern (only
-  `^$`, `^` and `$` match an empty comm), so those rows were dropped silently (0 of 200 in the report). The hand-written `task:task_newtask`
-  handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
+  lives on did too, and under `-comm` a tid with no cached comm has an empty
+  comm at the exit-side filter, which matches no ordinary pattern (only `^$`,
+  `^` and `$` match an empty comm), so those rows were dropped silently (0 of
+  200 in the report). The hand-written `task:task_newtask` handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
   `attachTaskNewtaskProbe` next to the exec and exit probes, before the syscall
   tracepoints, regardless of `-trace-*`) emits a 48-byte `TASK_NEWTASK_EVENT`
   control record from the creator's context, before the child is first woken:
@@ -917,11 +917,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   The record fires per *task* and this cache is keyed per task, so this runs
   on every exit record and is precise: a thread exit drops only that thread's
   name (the fd-table eviction, keyed by tgid, waits for the group-dead
-  record). Eviction, not `markAllStale`, is right here because
-  there is nothing left to serve - the value is not merely at risk of being
-  outdated, its owner is gone; the recycled tid then behaves exactly like a
-  never-before-seen one (async lookup, and under `-comm` its rows dropped
-  at the exit-side comm check until the name is known).
+  record). Eviction, not `markAllStale`, is right here because there is nothing
+  left to serve - the value is not merely at risk of being outdated, its owner
+  is gone; the recycled tid then behaves exactly like a never-before-seen one
+  (async lookup, and under `-comm` its rows dropped at the exit-side comm check
+  until the name is known).
 
   Retiring an in-flight lookup needs its own counter here: the entry's exec
   epoch cannot do it, because eviction *deletes* the entry, so a result landing
@@ -953,9 +953,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   IDs. (Reaching it needs the new owner's own enter to be missing, which is
   routine: ring-buffer loss. Before task dr2 the `-comm` enter-side gate
   also dropped a brand-new tid's first non-open/exec syscall, which the comm
-  eviction above guaranteed was the recycled tid's state; that gate is gone.) `prevTimes` is the milder half: it
-  gave the new owner's first pair a `DurationToPrev` measured from the dead
-  task's last syscall, which `-gap` filters on. The parked enter is *dropped*
+  eviction above guaranteed was the recycled tid's state; that gate is gone.)
+  `prevTimes` is the milder half: it gave the new owner's first pair a
+  `DurationToPrev` measured from the dead task's last syscall, which `-gap`
+  filters on. The parked enter is *dropped*
   rather than emitted as a synthetic row - the syscall never returned, so it
   has no return value, bytes or latency, and the only timestamp available is
   the task's death, which would fabricate the very latency the eviction
