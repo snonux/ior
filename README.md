@@ -142,8 +142,9 @@ written before recordings carried names (no format header): its numbers cannot b
 reliably, so re-record it instead of trusting a silently wrong syscall name.
 
 Traced comm names and paths come from other users and may contain terminal escape
-The recording is bounded in memory: it keeps at most 2^19 (524288) distinct
-(path, comm, pid, tid, flags) records, which an ordinary trace never reaches but a
+The recording is bounded in memory: it keeps about 2^19 (524288) distinct
+(path, comm, pid, tid, flags) records, plus a cap/8 headroom for pid/tid-folded records
+and a handful of `[other]` records, which an ordinary trace never reaches but a
 fork-heavy system-wide run can. Past that, events of new pid/tid combinations are folded
 into a pid 0/tid 0 record of the same path and comm, and, if the path/comm population
 churns as well, into `[other]` records. Counts, durations and bytes stay exact; only the
