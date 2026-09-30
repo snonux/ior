@@ -137,7 +137,7 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 		t.Error("comm left cached under the pre-exec tid")
 	}
 	for _, tid := range []uint32{nleExecCaller, nleExecPid} {
-		if _, ok := el.pendingHandleState().consume(tid); ok {
+		if _, ok := el.pendingHandleState().peek(tid); ok {
 			t.Errorf("pending handle path left under tid %d", tid)
 		}
 	}

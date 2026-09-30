@@ -267,7 +267,7 @@ func assertRecycledTidIsClean(t *testing.T, el *eventLoop, out chan *event.Pair)
 	if ep.DurationToPrev != 0 {
 		t.Errorf("first row gap = %dns, want 0 (no baseline from the dead owner)", ep.DurationToPrev)
 	}
-	if path, ok := el.pendingHandleState().consume(execCommTid); ok {
+	if path, ok := el.pendingHandleState().peek(execCommTid); ok {
 		t.Errorf("pending handle pathname %q survived the record", path)
 	}
 	if ep.Comm != "fresh" {

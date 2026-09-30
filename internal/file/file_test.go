@@ -2,6 +2,7 @@ package file
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -362,5 +363,28 @@ func TestFdFileAppendStringIsAllocationFree(t *testing.T) {
 	buf := make([]byte, 0, 128)
 	if allocs := testing.AllocsPerRun(100, func() { buf = f.AppendString(buf[:0], nil) }); allocs != 0 {
 		t.Fatalf("AppendString allocates %.1f times, want 0", allocs)
+	}
+}
+
+// TestNewFdWithProcNameKeepsTheGivenName: the caller's link text is used as is
+// (no second readlink), while the flags still come from the live fdinfo.
+func TestNewFdWithProcNameKeepsTheGivenName(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	got := NewFdWithProcName(int32(f.Fd()), uint32(os.Getpid()), "/given/name")
+	if got.Name() != "/given/name" {
+		t.Errorf("name = %q, want the given link text", got.Name())
+	}
+	if got.Flags() == Flags(-1) {
+		t.Error("flags must come from the live fdinfo of the open descriptor")
+	}
+
+	unreadable := NewFdWithPid(1<<20, uint32(os.Getpid()))
+	if unreadable.Name() != "" || unreadable.Flags() != Flags(-1) {
+		t.Errorf("unreadable fd = (%q, %v), want an unnamed file with unknown flags", unreadable.Name(), unreadable.Flags())
 	}
 }

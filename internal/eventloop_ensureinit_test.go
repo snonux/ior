@@ -58,16 +58,21 @@ func TestFDTrackerEnsureInitCompletesHandBuiltState(t *testing.T) {
 
 // TestPendingHandleTrackerZeroValueIsUsable pins the usable-zero-value
 // contract: a tracker that never went through ensureInit must still be safe
-// to consume from, and its first set() must complete the initialization.
+// to read from, and its first set() must complete the initialization.
 func TestPendingHandleTrackerZeroValueIsUsable(t *testing.T) {
 	var tracker pendingHandleTracker
 
-	if _, ok := tracker.consume(1); ok {
-		t.Fatal("consuming from a zero-value tracker must not report a hit")
+	if _, ok := tracker.peek(1); ok {
+		t.Fatal("peeking a zero-value tracker must not report a hit")
 	}
+	tracker.delete(1) // deleting from nil maps must be a no-op, not a panic
 	tracker.set(1, "/tmp/handle.txt")
-	if pathname, ok := tracker.consume(1); !ok || pathname != "/tmp/handle.txt" {
-		t.Fatalf("consume after set = (%q, %v), want the stored pathname", pathname, ok)
+	if pathname, ok := tracker.peek(1); !ok || pathname != "/tmp/handle.txt" {
+		t.Fatalf("peek after set = (%q, %v), want the stored pathname", pathname, ok)
+	}
+	tracker.delete(1)
+	if _, ok := tracker.peek(1); ok {
+		t.Fatal("a deleted entry must not be peekable")
 	}
 }
 

@@ -79,20 +79,23 @@ func NewFd(fd int32, name string, flags int32) *FdFile {
 
 // NewFdWithPid resolves descriptor metadata from /proc/<pid>/fd.
 func NewFdWithPid(fd int32, pid uint32) *FdFile {
-	f := &FdFile{
-		fd: fd,
-	}
-	var err error
-
-	procPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
-	f.name, err = os.Readlink(procPath)
+	name, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
-		f.name = ""
-		f.SetFlags(-1)
-		f.flagsFromProcFS = true
-		return f
+		return unresolvedFd(fd)
 	}
+	return NewFdWithProcName(fd, pid, name)
+}
 
+// NewFdWithProcName is NewFdWithPid for a caller that has already read the
+// /proc/<pid>/fd/<fd> link itself: name is that link text and is used as is,
+// so the name the caller inspected is the name the row carries (a second
+// readlink could see a different file if the descriptor was closed and reused
+// in between). Only the flags still come from /proc/<pid>/fdinfo/<fd>.
+func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
+	f := &FdFile{
+		fd:   fd,
+		name: name,
+	}
 	flags, err := readFlagsFromFdInfo(fd, pid)
 	if err != nil {
 		f.SetFlags(-1)
@@ -101,6 +104,15 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	}
 	f.flagsFromProcFS = true
 
+	return f
+}
+
+// unresolvedFd is the descriptor procfs could not answer for: no name and
+// unknown flags.
+func unresolvedFd(fd int32) *FdFile {
+	f := &FdFile{fd: fd}
+	f.SetFlags(-1)
+	f.flagsFromProcFS = true
 	return f
 }
 

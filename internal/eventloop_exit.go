@@ -654,19 +654,10 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 
 	// The stash is only the thread's LAST name_to_handle_at path; it is used
 	// only if the returned descriptor is not contradicting it (see
-	// claimPendingHandlePath), otherwise the row is named from procfs.
-	if pathname, ok := e.claimPendingHandlePath(tid, openByHandleEv.Pid, fd); ok {
-		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
-		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
-		ep.File = fdFile
-	} else {
-		fdFile := file.NewFdWithPid(fd, openByHandleEv.Pid)
-		if fdFile.Flags() == file.Flags(-1) {
-			fdFile.SetFlags(openByHandleEv.Flags)
-		}
-		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
-		ep.File = fdFile
-	}
+	// openedHandleFile), otherwise the row is named from procfs.
+	fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
+	e.fdState().set(fd, openByHandleEv.Pid, fdFile)
+	ep.File = fdFile
 	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
 	// without a checkpoint here NO filter dimension - comm included - was ever
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
