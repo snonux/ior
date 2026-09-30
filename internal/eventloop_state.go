@@ -200,6 +200,25 @@ func (t *fdTracker) delete(fd int32, pid uint32) {
 	t.removeFileKey(fdKey(pid, fd))
 }
 
+// tracksExactly reports whether the fd table (not the procfs cache) holds f
+// itself - the same pointer - for (pid, fd). Fd-table entries come from
+// syscalls ior traced, so their name was captured at the time of the syscall.
+// Procfs-resolved answers (resolve's fallback and its cache) are read when
+// the event is processed, which lags the syscall, so by then the number may
+// name a different file than it did. It does not refresh the LRU age: a
+// provenance check must not make an entry look recently used.
+func (t *fdTracker) tracksExactly(fd int32, pid uint32, f file.File) bool {
+	tracked, ok := t.files[fdKey(pid, fd)]
+	return ok && tracked == f
+}
+
+// forget drops everything known about (pid, fd) from both the fd table and
+// the procfs cache, so the next use of that number resolves from scratch.
+func (t *fdTracker) forget(fd int32, pid uint32) {
+	t.delete(fd, pid)
+	t.deleteProcFdCache(fd, pid)
+}
+
 // indexFileKey records key in its pid's fd-table set.
 func (t *fdTracker) indexFileKey(key uint64) {
 	keys := t.pidEntry(key)

@@ -296,10 +296,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 		if ep.File == nil || ep.File.Name() != path {
 			t.Fatalf("pidfd_getfd row reported file %v, want %q", ep.File, path)
 		}
-		resolved, ok := el.fdState().get(transferredFd, selfPid)
-		if !ok || resolved == nil || resolved.Name() != path {
-			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
-		}
+		assertPidfdGetfdResolvesLazily(t, el, transferredFd, selfPid, path)
 	})
 
 	t.Run("dropped by -path on the source pidfd", func(t *testing.T) {
@@ -312,13 +309,24 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 				"the filtered value and the printed value must be the same",
 				pidfdName, ep.File)
 		}
-		// Dropped or not, the transferred descriptor is global state and must
-		// still be registered for the rows the run does want.
-		resolved, ok := el.fdState().get(transferredFd, selfPid)
-		if !ok || resolved == nil || resolved.Name() != path {
-			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
-		}
+		// Dropped or not, the transferred descriptor must resolve for the
+		// rows the run does want.
+		assertPidfdGetfdResolvesLazily(t, el, transferredFd, selfPid, path)
 	})
+}
+
+// assertPidfdGetfdResolvesLazily pins the storage rule for pidfd_getfd: the
+// transferred descriptor is not entered into the fd table (its name is a
+// procfs read taken after the syscall, so it may already be stale - task er2),
+// yet a later row on that number still resolves to the file it names.
+func assertPidfdGetfdResolvesLazily(t *testing.T, el *eventLoop, fd int32, pid uint32, want string) {
+	t.Helper()
+	if _, ok := el.fdState().get(fd, pid); ok {
+		t.Fatalf("transferred fd %d was stored in the fd table from a lagging procfs read", fd)
+	}
+	if resolved := el.fdState().resolve(fd, pid); resolved == nil || resolved.Name() != want {
+		t.Fatalf("transferred fd %d resolves to %v, want %q", fd, resolved, want)
+	}
 }
 
 // TestDroppedCloseStillEvictsTheFd is the eviction half of the rule the dup

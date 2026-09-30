@@ -1191,8 +1191,10 @@ func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
 		if got, want := ep.File.Name(), path; got != want {
 			t.Errorf("Expected transferred file '%v' but got '%v'", want, got)
 		}
-		if _, ok := el.fdState().files[fdKey(pid, int32(fd))]; !ok {
-			t.Errorf("Expected transferred fd %d to be tracked", fd)
+		// The name came from a procfs read taken after the syscall, so it is
+		// not stored in the fd table (task er2); the number resolves lazily.
+		if _, ok := el.fdState().files[fdKey(pid, int32(fd))]; ok {
+			t.Errorf("Expected transferred fd %d to stay out of the fd table", fd)
 		}
 	})
 

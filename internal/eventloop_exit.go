@@ -596,9 +596,17 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 			return false
 		}
 		if newFd, ok := fdFromRet(retEv.Ret); ok {
-			transferredFile := file.NewFdWithPid(newFd, fdEv.Pid)
-			e.fdState().set(newFd, fdEv.Pid, transferredFile)
-			ep.File = transferredFile
+			// The transferred descriptor lives in this process's table but
+			// ior saw no open for it, so its name can only come from procfs,
+			// read now - after the syscall. That answer is right for this
+			// row's filter and printout, but it must not be stored: the
+			// program may close and reuse the number before this event is
+			// processed, and a stored answer would label every later row on
+			// it (across exec too, close-on-exec being known clear) with the
+			// wrong file. Forget whatever the number held before and let its
+			// first later use resolve it afresh.
+			e.fdState().forget(newFd, fdEv.Pid)
+			ep.File = file.NewFdWithPid(newFd, fdEv.Pid)
 		}
 	}
 	return true
@@ -1375,6 +1383,20 @@ func (e *eventLoop) storeFcntlFdFile(ep *event.Pair, fdFile *file.FdFile, fd int
 	e.fdState().set(fd, pid, fdFile)
 }
 
+// registerDup models a successful descriptor-duplicating syscall (dup, dup2,
+// dup3, F_DUPFD*). fdFile is what the source descriptor resolved to.
+//
+// The copy is only as trustworthy as the source. A source held in the fd table
+// was named by a traced syscall, so its name is right. A source that resolve
+// answered from procfs (a descriptor opened before ior attached, or by a
+// syscall outside the traced set such as pipe/socket) was read when this exit
+// event was processed, which lags the syscall: the program may already have
+// closed that number and reused it. Copying such an answer onto newFd would
+// bind the wrong file to it for its whole life, and, with close-on-exec known
+// clear, past execve. So for a procfs-resolved source no copy is registered;
+// newFd's stale entries are dropped instead and it is resolved lazily on its
+// own first use, which is the same lagging read but for the number the program
+// is actually using.
 func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFlags int32) {
 	if newFd < 0 {
 		return
@@ -1383,6 +1405,10 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFla
 	// its close-on-exec flag. Every other successful caller creates a distinct
 	// descriptor.
 	if newFd == fdFile.FD() {
+		return
+	}
+	if !e.fdState().tracksExactly(fdFile.FD(), pid, fdFile) {
+		e.fdState().forget(newFd, pid)
 		return
 	}
 	duppedFdFile := fdFile.Dup(newFd)
