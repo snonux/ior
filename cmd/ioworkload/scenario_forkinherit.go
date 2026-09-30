@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -20,6 +22,14 @@ import (
 // runtime, where any allocation, lock or scheduler call may deadlock on a mutex
 // another (now nonexistent) thread held. The buffer lives on the stack, and the
 // parent reaps the child with wait4 so the scenario does not leave a zombie.
+//
+// When $IOR_WORKLOAD_CHILD_PID_FILE is set the parent writes the child's pid
+// there (after the fork, in the parent, where the runtime is intact). The
+// system-wide ior of the integration test sees every process of the machine, so
+// the test needs a way to tell this child's rows from those of any other
+// ioworkload running at the same time; the pid is unique among live processes.
+const childPidFileEnv = "IOR_WORKLOAD_CHILD_PID_FILE"
+
 func forkInheritFds() error {
 	var pipefd [2]int
 	if err := syscall.Pipe2(pipefd[:], 0); err != nil {
@@ -37,6 +47,10 @@ func forkInheritFds() error {
 	}
 	if child == 0 {
 		forkChildReadAndExit(pipefd[0])
+	}
+
+	if err := publishChildPid(int(child)); err != nil {
+		return err
 	}
 
 	var status syscall.WaitStatus
@@ -66,4 +80,18 @@ func forkChildReadAndExit(fd int) {
 	for {
 		_, _, _ = syscall.RawSyscall(syscall.SYS_EXIT_GROUP, code, 0, 0)
 	}
+}
+
+// publishChildPid writes the forked child's pid to $IOR_WORKLOAD_CHILD_PID_FILE
+// (a no-op when unset). The child is already running; whether the file appears
+// before or after its read does not matter, the test reads it after the run.
+func publishChildPid(pid int) error {
+	path := os.Getenv(childPidFileEnv)
+	if path == "" {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		return fmt.Errorf("write child pid file: %w", err)
+	}
+	return nil
 }

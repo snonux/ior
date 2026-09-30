@@ -48,6 +48,10 @@ type fdTracker struct {
 	// maxIdlePidKeys cap only bounds how many entries are parked.
 	idlePidKeys []*pidFdKeys
 	age         uint64 // monotonic counter for LRU ordering
+	// inheritSkipped counts forks whose parent held more than
+	// maxInheritedEntries entries and so passed none on (see inherit). Kept for
+	// tests and debugging; not part of the end-of-run statistics.
+	inheritSkipped uint64
 }
 
 // maxIdlePidKeys bounds how many emptied entries fdTracker.idlePidKeys holds.
@@ -420,12 +424,25 @@ func (t *fdTracker) deletePid(pid uint32) {
 	}
 }
 
-// inheritedFd is one descriptor of a parent process captured by inherit: its
-// number and the file (fd-table entry) or cached procfs resolution behind it.
-type inheritedFd struct {
-	fd   int32
-	file file.File
-}
+// maxInheritedEntries bounds what one fork may copy: a parent tracking more
+// fd-table plus procfs-cache entries than this passes none of them on, and its
+// child resolves through procfs as before task gr2. The copy costs O(entries)
+// per fork on the single event-loop goroutine, and the child's copy is freed
+// again on its exit, so an unbounded copy made a parent with 1000 tracked
+// descriptors forking 1000 times per second (fork+exec, where the child drops
+// most of it at once) cost about half a core and overrun the ring buffer.
+// BenchmarkForkStorm (inherit plus the exit-time deletePid, per fork): 1.2 us
+// for 8 entries, 11 us for 64, 28 us for 128 (the cap), and, before the cap
+// existed, 0.27 ms for 1024 and 3.7-7.8 ms for 8192. 128 covers the descriptors
+// of the usual forker (a shell, a build tool, a supervisor, a modest server:
+// stdio, pipes, files, sockets) at under ~35 us per fork. The cost of skipping
+// is only the degraded name of an inherited descriptor, never a wrong one, so
+// a large table is where the compromise is cheapest. A lazy per-fd copy
+// (resolve on the child's first lookup against the parent's table) would be O(1)
+// per fork but cannot keep the snapshot semantic when the parent closes or
+// reopens a descriptor after the fork, short of copying on the parent's write,
+// which is unbounded again; hence the cap.
+const maxInheritedEntries = 128
 
 // inherit makes child's slice of the fd table and of the procfs cache a copy
 // of parent's, the way fork(2) gives a new process a copy of its creator's
@@ -450,13 +467,27 @@ type inheritedFd struct {
 // ior can only learn per process from that process's own fcntl records, so after
 // the fork each table tracks its own changes. Entries whose close-on-exec
 // state is known to be set are dropped by the child's exec record as for any
-// process (dropOnExec).
+// process (dropOnExec). The copy is a snapshot: what the parent closes or
+// reopens after the fork does not reach the child's entries.
 //
-// The parent's entries are snapshotted before anything is written: set and
-// setProcFdCache prune the LRU, which may evict parent entries mid-copy, and the
-// copy must not depend on the order of a map range. The cost is O(descriptors
-// of the parent), like the kernel's own copy, and only paid per created
-// process; a parent that tracks nothing costs a map lookup.
+// Nothing is copied when the parent holds more than maxInheritedEntries entries
+// (see there for why and what it costs), nor when the copy would not fit under
+// the table's cap: a fork must never trigger the LRU pruning, which trims the
+// table well below its cap and would evict the parent's and other processes'
+// entries to make room for copies nobody has used yet (a 1024-descriptor
+// parent with 32 live children filled the 32768-entry table and lost its own).
+// inheritSkipped counts the forks that copied nothing for either reason; their
+// children resolve through procfs, the pre-gr2 behaviour.
+//
+// LRU: the copies are stamped with age 0, the oldest, instead of the newest age
+// set stamps on an entry. A fork is not a use of the descriptor, and an entry
+// never touched is by definition the least recently used: when a later set has to
+// prune, the unused copies of every child go first, before anything a process
+// really used. The child's own lookups (get, cachedProcFdFile) stamp what it
+// does use.
+//
+// The copy writes straight into the maps, so nothing is evicted while the
+// parent's sets are being ranged over and no snapshot of the parent is needed.
 func (t *fdTracker) inherit(parent, child uint32) {
 	if parent == child {
 		// Not a fork: the "child" is the creator itself (a record that says so
@@ -468,24 +499,52 @@ func (t *fdTracker) inherit(parent, child uint32) {
 	if keys == nil {
 		return
 	}
-	files := make([]inheritedFd, 0, len(keys.files))
+	if !t.inheritFits(keys) {
+		t.inheritSkipped++
+		return
+	}
+	dst := t.pidEntry(fdKey(child, 0))
+	if dst.files == nil && len(keys.files) > 0 {
+		dst.files = make(map[uint64]struct{}, len(keys.files))
+	}
+	if dst.cache == nil && len(keys.cache) > 0 {
+		dst.cache = make(map[uint64]struct{}, len(keys.cache))
+	}
 	for key := range keys.files {
 		_, fd := fdKeyParts(key)
-		files = append(files, inheritedFd{fd, t.files[key]})
+		childKey := fdKey(child, fd)
+		t.files[childKey] = copyForChild(t.files[key], fd)
+		t.fileAges[childKey] = 0
+		t.indexFileKey(childKey)
 	}
-	cache := make([]inheritedFd, 0, len(keys.cache))
 	for key := range keys.cache {
-		_, fd := fdKeyParts(key)
-		cache = append(cache, inheritedFd{fd, t.procFdCache[key]})
-	}
-	for _, in := range files {
-		t.set(in.fd, child, copyForChild(in.file, in.fd))
-	}
-	for _, in := range cache {
-		if fdFile, ok := in.file.(*file.FdFile); ok && fdFile != nil {
-			t.setProcFdCache(in.fd, child, fdFile.Dup(in.fd))
+		fdFile := t.procFdCache[key]
+		if fdFile == nil {
+			continue
 		}
+		_, fd := fdKeyParts(key)
+		childKey := fdKey(child, fd)
+		t.procFdCache[childKey] = fdFile.Dup(fd)
+		t.procFdAges[childKey] = 0
+		t.indexCacheKey(childKey)
 	}
+	if len(dst.files) == 0 && len(dst.cache) == 0 {
+		// Nothing copyable (only nil cache entries): keep the index exact, a
+		// pid with no entries must not stay in it.
+		delete(t.pidIndex, child)
+		t.parkPidEntry(dst)
+	}
+}
+
+// inheritFits reports whether a parent's entries may be copied: at most
+// maxInheritedEntries of them, and room for all of them in both maps without
+// reaching their caps (see inherit).
+func (t *fdTracker) inheritFits(parent *pidFdKeys) bool {
+	if len(parent.files)+len(parent.cache) > maxInheritedEntries {
+		return false
+	}
+	return len(t.files)+len(parent.files) <= t.filesLimit() &&
+		len(t.procFdCache)+len(parent.cache) <= t.cacheLimit()
 }
 
 // copyForChild returns the entry a forked child starts with for descriptor fd:

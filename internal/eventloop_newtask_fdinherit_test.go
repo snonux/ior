@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -257,12 +258,12 @@ func TestForkThenExecDropsInheritedCloseOnExecFds(t *testing.T) {
 	}
 }
 
-// TestInheritSnapshotsBeforeWriting pins the LRU-safety of the copy: with the
-// fd table at its cap, writing the child's entries evicts the oldest entries,
-// which include the parent's own; the copy must still complete from the
-// snapshot (a missing value would panic or copy nil) and leave the table at its
-// cap.
-func TestInheritSnapshotsBeforeWriting(t *testing.T) {
+// TestInheritNeverPrunesTheTable pins the cap rule of the copy: with the fd
+// table too full for the copies, the fork copies nothing and evicts nothing. A
+// copy that overran the cap triggered the LRU pruning, which trims the table to
+// 75% of its cap and so threw out the parent's own entries (a copy stamped one
+// age below its source lost parent entries to ties in exactly this setup).
+func TestInheritNeverPrunesTheTable(t *testing.T) {
 	tr := newFDTracker(nil)
 	tr.maxFiles = 8
 	for fd := int32(3); fd < 3+6; fd++ {
@@ -271,16 +272,156 @@ func TestInheritSnapshotsBeforeWriting(t *testing.T) {
 
 	tr.inherit(forkParentPid, forkChildPid)
 
+	if got := len(tr.pidKeySets(forkParentPid).files); got != 6 {
+		t.Errorf("the fork left the parent %d of 6 entries", got)
+	}
+	if tr.pidKeySets(forkChildPid) != nil {
+		t.Error("a copy that does not fit under the cap was made anyway")
+	}
+	if tr.inheritSkipped != 1 {
+		t.Errorf("inheritSkipped = %d, want 1", tr.inheritSkipped)
+	}
+	// With room for the copy it is made (same parent, larger cap).
+	tr.maxFiles = 12
+	tr.inherit(forkParentPid, forkChildPid)
+	if got := len(tr.pidKeySets(forkChildPid).files); got != 6 {
+		t.Errorf("child got %d of 6 entries although they fit", got)
+	}
+	assertFdIndexConsistent(t, tr)
+}
+
+// TestInheritedCopiesAreTheFirstToBePruned: the copies are stamped with the
+// oldest age, so when a later insertion does prune, every child's unused copy
+// goes before any entry a process really used.
+func TestInheritedCopiesAreTheFirstToBePruned(t *testing.T) {
+	tr := newFDTracker(nil)
+	tr.maxFiles = 40
+	for fd := int32(0); fd < 30; fd++ { // older than everything the parent holds
+		tr.set(fd, 9000, file.NewFd(fd, "/other", syscall.O_RDONLY))
+	}
+	for fd := int32(3); fd < 3+4; fd++ {
+		tr.set(fd, forkParentPid, file.NewFd(fd, "/f", syscall.O_RDONLY))
+	}
+	tr.inherit(forkParentPid, forkChildPid)
+	for fd := int32(100); fd < 103; fd++ { // 30 + 4 + 4 + 3 = 41 > 40: prunes
+		tr.set(fd, 9001, file.NewFd(fd, "/newer", syscall.O_RDONLY))
+	}
+
+	if keys := tr.pidKeySets(forkChildPid); keys != nil && len(keys.files) > 0 {
+		t.Errorf("unused copies survived the pruning: %d left", len(keys.files))
+	}
+	if got := len(tr.pidKeySets(forkParentPid).files); got != 4 {
+		t.Errorf("parent keeps %d of 4 entries", got)
+	}
+	assertFdIndexConsistent(t, tr)
+}
+
+// TestLargeParentDoesNotEvictItsOwnEntriesAcrossForks is the regression of the
+// review finding: a parent with 4096 tracked descriptors forked 200 times used
+// to copy all of them into each child (0.4 s of event-loop time, and with live
+// children the 32768-entry cap was hit after 8 forks, evicting the parent's own
+// entries). Above maxInheritedEntries nothing is copied, so the table does not
+// grow and the parent keeps every entry.
+func TestLargeParentDoesNotEvictItsOwnEntriesAcrossForks(t *testing.T) {
+	const parentEntries, forks = 4096, 200
+	tr := newFDTracker(nil)
+	tr.maxFiles = parentEntries + 904 // room for under a thousand copies: the old eager copy overran it on the 1st fork
+	for fd := int32(0); fd < parentEntries; fd++ {
+		tr.set(fd, forkParentPid, file.NewFd(fd, "pipe:0:3:4", syscall.O_RDONLY))
+	}
+
+	for i := 0; i < forks; i++ {
+		tr.inherit(forkParentPid, uint32(forkChildPid+i)) // children stay alive
+	}
+
+	if len(tr.files) != parentEntries {
+		t.Errorf("table holds %d entries after %d forks, want the parent's %d only", len(tr.files), forks, parentEntries)
+	}
+	if got := len(tr.pidKeySets(forkParentPid).files); got != parentEntries {
+		t.Errorf("parent keeps %d of %d entries", got, parentEntries)
+	}
+	if tr.inheritSkipped != forks {
+		t.Errorf("inheritSkipped = %d, want %d", tr.inheritSkipped, forks)
+	}
+	assertFdIndexConsistent(t, tr)
+}
+
+// TestInheritCapBoundary pins the exact threshold: a parent holding
+// maxInheritedEntries entries (files and procfs cache together) is copied, one
+// more and it is not.
+func TestInheritCapBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		entries  int
+		wantCopy bool
+	}{{maxInheritedEntries, true}, {maxInheritedEntries + 1, false}} {
+		tr := newFDTracker(nil)
+		for i := 0; i < tc.entries; i++ {
+			if i%2 == 0 {
+				tr.set(int32(i), forkParentPid, file.NewFd(int32(i), "/f", syscall.O_RDONLY))
+			} else {
+				tr.setProcFdCache(int32(i), forkParentPid, file.NewFd(int32(i), "/c", syscall.O_RDONLY))
+			}
+		}
+		tr.inherit(forkParentPid, forkChildPid)
+		keys := tr.pidKeySets(forkChildPid)
+		copied := keys != nil && len(keys.files)+len(keys.cache) == tc.entries
+		if copied != tc.wantCopy {
+			t.Errorf("parent with %d entries: copied = %v, want %v", tc.entries, copied, tc.wantCopy)
+		}
+		assertFdIndexConsistent(t, tr)
+	}
+}
+
+// TestForkStormKeepsTheParentsAndOthersEntries: a parent at the copy cap forking
+// 200 children that all stay alive, in a table that cannot hold all their
+// copies. Copies are made while they fit and skipped after that; nothing is
+// evicted, so the parent's entries and an unrelated process's survive.
+func TestForkStormKeepsTheParentsAndOthersEntries(t *testing.T) {
+	const forks, otherPid = 200, 9000
+	tr := newFDTracker(nil)
+	tr.maxFiles = 1000
+	for fd := int32(0); fd < maxInheritedEntries; fd++ {
+		tr.set(fd, forkParentPid, file.NewFd(fd, "pipe:0:3:4", syscall.O_RDONLY))
+	}
+	for fd := int32(0); fd < 100; fd++ {
+		tr.set(fd, otherPid, file.NewFd(fd, "/other", syscall.O_RDONLY))
+	}
+
+	for i := 0; i < forks; i++ {
+		tr.inherit(forkParentPid, uint32(forkChildPid+i))
+	}
+
+	if got := len(tr.pidKeySets(forkParentPid).files); got != maxInheritedEntries {
+		t.Errorf("parent keeps %d of %d entries", got, maxInheritedEntries)
+	}
+	if got := len(tr.pidKeySets(otherPid).files); got != 100 {
+		t.Errorf("the unrelated process keeps %d of 100 entries", got)
+	}
 	if len(tr.files) > tr.maxFiles {
-		t.Fatalf("table holds %d entries, cap %d", len(tr.files), tr.maxFiles)
+		t.Errorf("table holds %d entries, cap %d", len(tr.files), tr.maxFiles)
 	}
-	if _, ok := tr.get(8, forkChildPid); !ok {
-		t.Fatal("the child's newest inherited entry is missing")
+	if tr.inheritSkipped == 0 || tr.inheritSkipped == forks {
+		t.Errorf("inheritSkipped = %d, want some forks copied and the rest skipped", tr.inheritSkipped)
 	}
-	for key, f := range tr.files {
-		if f == nil {
-			pid, fd := fdKeyParts(key)
-			t.Fatalf("nil entry for pid %d fd %d", pid, fd)
+	assertFdIndexConsistent(t, tr)
+}
+
+// TestChildKeepsItsInheritedNameWhenTheParentChangesAfterTheFork pins the
+// snapshot semantic: a fork copies the table as of the fork, so a parent that
+// then closes a descriptor, or reuses its number for another file (the usual
+// pipe plumbing after a fork), must not change what the child's rows say.
+func TestChildKeepsItsInheritedNameWhenTheParentChangesAfterTheFork(t *testing.T) {
+	el := newTaskEventLoop(t, "")
+	registerParentFds(el, forkParentPid)
+	feedForkRecord(t, el, forkParentPid, forkChildPid, forkChildPid, forkSigchld)
+
+	el.fdState().delete(3, forkParentPid) // the parent closes its copy of the pipe end
+	el.fdState().set(5, forkParentPid, file.NewFd(5, "/tmp/reopened", syscall.O_WRONLY))
+	el.fdState().forget(6, forkParentPid)
+
+	for fd, want := range map[int32]string{3: "pipe:0:3:4", 5: "memfd:huntbuf", 6: "eventfd:0"} {
+		if got := feedReadOn(t, el, forkChildPid, forkChildPid, fd).Name(); got != want {
+			t.Errorf("child fd %d = %q after the parent changed it, want the snapshot name %q", fd, got, want)
 		}
 	}
 }
@@ -347,5 +488,28 @@ func TestInheritFromItselfKeepsTheTable(t *testing.T) {
 
 	if _, ok := tr.get(3, forkParentPid); !ok {
 		t.Fatal("inherit(p, p) erased p's table")
+	}
+}
+
+// BenchmarkForkStorm is the cost of one fork of a parent holding n fd-table
+// entries, together with the exit-time cleanup that frees the child's copy
+// (inherit + deletePid): what the single event-loop goroutine pays per fork in
+// a fork storm. Above maxInheritedEntries the fork is skipped and costs a map
+// lookup; at and below it the cost is bounded by the cap.
+func BenchmarkForkStorm(b *testing.B) {
+	for _, n := range []int{8, 64, 128, 1024, 8192} {
+		b.Run(fmt.Sprintf("entries=%d", n), func(b *testing.B) {
+			tr := newFDTracker(nil)
+			for fd := 0; fd < n; fd++ {
+				tr.set(int32(fd), forkParentPid, file.NewFd(int32(fd), "pipe:0:3:4", syscall.O_RDONLY))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				child := uint32(forkChildPid + i)
+				tr.inherit(forkParentPid, child)
+				tr.deletePid(child)
+			}
+		})
 	}
 }

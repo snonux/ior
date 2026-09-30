@@ -99,7 +99,9 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 //   - a new process without CLONE_FILES (fork, vfork, plain clone): the child
 //     gets a *copy* of the creator's table, made by the kernel inside clone, so
 //     the creator's entries as of this record (ring-buffer order) are the
-//     child's entries (fdTracker.inherit). This is the case the fix is for:
+//     child's entries (fdTracker.inherit; only for a parent tracking at most
+//     maxInheritedEntries entries, a larger table costs too much per fork and
+//     its children fall back to procfs). This is the case the fix is for:
 //     without it the child's inherited descriptors degrade to procfs names
 //     (pipe:0:3:4 -> pipe:[N], memfd:x -> /memfd:x (deleted)) and, once the
 //     child has exited before the lazy read, to E:name.

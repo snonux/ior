@@ -983,10 +983,26 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   does nothing (the thread already uses the creator's tgid entries);
   a new process without `CLONE_FILES` (fork, vfork, posix_spawn, plain clone)
   gets a copy of the creator's fd-table entries *and* procfs-cache entries
-  (`fdTracker.inherit`: snapshot first, because writing the child's entries
-  prunes the LRU, then independent `FdFile.Dup` copies so FD_CLOEXEC and later
+  (`fdTracker.inherit`: independent `FdFile.Dup` copies so FD_CLOEXEC and later
   flag changes stay per table; the kernel-shared status word is not mirrored
-  across the two tables, each learns changes from its own process's fcntl);
+  across the two tables, each learns changes from its own process's fcntl; the
+  copy is a snapshot, what the parent closes or reopens after the fork does not
+  reach the child). **The copy is bounded**: a parent tracking more than
+  `maxInheritedEntries` (128) fd-table plus cache entries passes none on, and a
+  copy that would not fit under the table cap is skipped too (the child then
+  resolves through procfs, as before gr2; `fdTracker.inheritSkipped` counts
+  them, it is not in the statistics). Reason: the copy is O(entries) per fork on
+  the one event-loop goroutine plus the same again at the child's exit
+  (`BenchmarkForkStorm`: 1.2 us for 8 entries, 11 us for 64, 28 us for 128, and
+  0.27 ms for 1024, 3.7-7.8 ms for 8192 before the cap, i.e. half a core for a
+  1000-fd parent forking 1000/s), and unbounded copies of live children filled
+  the 32768-entry table and evicted the parent's own entries. A fork never
+  prunes the LRU (it skips instead of overflowing the cap) and the copies are
+  stamped with age 0, the oldest: they are the first to go when any later
+  insertion prunes, and the child's own lookups stamp what it really uses. A lazy
+  per-fd copy was rejected: O(1) per fork, but keeping the snapshot semantic
+  when the parent closes or reopens a descriptor after the fork needs
+  copy-on-write on the parent's side, which is unbounded again.
   a `CLONE_FILES` process gets *no* snapshot (a shared table cannot be modelled
   with per-tgid keys and a copy would go stale on the first open/close of
   either side, worse than the procfs fallback that reads the one live table).
@@ -1005,7 +1021,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   row says `pipe:<flags>:<r>:<w>`, the pre-fix procfs spelling was `pipe:[N]`).
   The fork child is out of scope under `-pid`, so that test uses
   `TestHarness.RunSystemWideWithIorArgs` (no `-pid`, narrowed by `-comm`; ior
-  then lasts the full `-duration`, so pass a short one).
+  then lasts the full `-duration`, so pass a short one). A system-wide run also
+  sees other `ioworkload` processes (a parallel test), so the assertion only
+  counts rows of this test's own child: the scenario writes the child's pid to
+  `$IOR_WORKLOAD_CHILD_PID_FILE`.
 
   Old-kernel portability (RHEL/Rocky 8 and 9, 4.18/5.14): the handler takes
   `void *` and reads `pid`/`clone_flags` through the local CO-RE flavor

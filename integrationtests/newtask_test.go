@@ -1,7 +1,10 @@
 package integrationtests
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -235,6 +238,8 @@ func TestFdTableChangeOfAnUncachedThreadReachesRowsUnderCommFilter(t *testing.T)
 
 const (
 	forkInheritScenario = "fork-inherit-fds"
+	// forkChildPidFileEnv mirrors ioworkload's env var for the child pid file.
+	forkChildPidFileEnv = "IOR_WORKLOAD_CHILD_PID_FILE"
 	// forkInheritDuration is how long the system-wide ior of the fork test runs.
 	forkInheritDuration = 4
 )
@@ -251,29 +256,53 @@ const (
 // under -pid, and it inherits the name "ioworkload", which the newtask record
 // seeds (the parent's own rows are not matched: a pre-existing pid has no record
 // and, without -pid, no startup seed, so they are not what is asserted).
-// The child's read is the only reader, so its record must exist and carry the
-// traced spelling, never the procfs one. No timing is involved.
+//
+// A system-wide run also sees every other ioworkload on the machine (a parallel
+// integration test, a leftover process), whose reads of a pipe that pre-dates
+// its ior resolve through procfs as "pipe:[N]" by design. The assertion is
+// therefore restricted to the rows of this test's own child: the scenario
+// publishes the child's pid ($IOR_WORKLOAD_CHILD_PID_FILE) and only records
+// with that pid count, so a foreign read can neither fail nor satisfy the test.
+// The child's read is the only reader of the pipe, so its record must exist and
+// carry the traced spelling, never the procfs one. No timing is involved.
 func TestForkedChildReadsInheritedPipeUnderItsTracedName(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
+	pidFile := filepath.Join(h.OutputDir, "fork-inherit.childpid")
+	h.WorkloadEnv = []string{forkChildPidFileEnv + "=" + pidFile}
 	result, _, err := h.RunSystemWideWithIorArgs(forkInheritScenario, forkInheritDuration,
 		[]string{"-trace-syscalls", "pipe2,read,write", "-comm", "ioworkload"})
 	if err != nil {
 		t.Fatalf("run scenario %s: %v", forkInheritScenario, err)
 	}
+	child := readForkChildPid(t, pidFile)
 
 	tracedPipe := regexp.MustCompile(`^pipe:\d+:\d+:\d+$`)
 	pipeReads := 0
 	for _, rec := range result.Records {
-		if !strings.HasSuffix(rec.TraceID.String(), "_read") || !strings.HasPrefix(rec.Path, "pipe:") {
+		if rec.Pid != child || !strings.HasSuffix(rec.TraceID.String(), "_read") || !strings.HasPrefix(rec.Path, "pipe:") {
 			continue
 		}
 		pipeReads += int(rec.Cnt.Count)
 		if !tracedPipe.MatchString(rec.Path) {
-			t.Errorf("forked child's read is named %q, want the inherited traced pipe name (pipe:<flags>:<r>:<w>), not a procfs form", rec.Path)
+			t.Errorf("forked child %d's read is named %q, want the inherited traced pipe name (pipe:<flags>:<r>:<w>), not a procfs form", child, rec.Path)
 		}
 	}
 	if pipeReads == 0 {
-		t.Fatal("the forked child's read on the inherited pipe produced no record")
+		t.Fatalf("the forked child %d's read on the inherited pipe produced no record", child)
 	}
+}
+
+// readForkChildPid returns the pid the fork-inherit-fds scenario published.
+func readForkChildPid(t *testing.T, path string) uint32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the forked child's pid: %v", err)
+	}
+	pid, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+	if err != nil || pid == 0 {
+		t.Fatalf("forked child pid file holds %q: %v", raw, err)
+	}
+	return uint32(pid)
 }
