@@ -132,6 +132,11 @@ type eventLoop struct {
 	// usable, expires entries incrementally so it is bounded by the deaths of
 	// one dedup window, event-loop goroutine only.
 	recentGroupDead groupDeadDedup
+	// brkState remembers each traced process's last program break so a brk
+	// call's address-space extent can be computed as the movement since the
+	// previous one (applyBrkGrowth). Zero value usable; evicted per process on
+	// exec and on group-dead exit; event-loop goroutine only.
+	brkState brkTracker
 	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
@@ -308,14 +313,14 @@ func (e *eventLoop) stats() string {
 	return fmt.Sprintf(
 		"Statistics:\n"+
 			"\tduration: %v\n"+
-			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
-			"\tsyscalls: %d (%.2f/s)\n"+
+			"\ttracepoints: %v (%.2f/s)\n"+
+			"\tsyscalls: %d (%.2f/s) with %d mismatched enter/exit pairs (%.2f%%)\n"+
 			"\tsyscalls after filter: %d (%.2f/s)\n"+
 			"\tgroup-dead exits: %d\n"+
 			"%s",
 		duration,
-		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, e.mismatchPercent(),
-		e.numSyscalls, rate(uint64(e.numSyscalls)),
+		e.numTracepoints, rate(uint64(e.numTracepoints)),
+		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
 		e.ringbufDropStatLine(rate),
@@ -334,29 +339,27 @@ func perSecondRate(secs float64) func(uint64) float64 {
 	}
 }
 
-// mismatchPercent returns tracepoint mismatches as a share of numTracepoints.
+// mismatchPercent returns mismatched enter/exit pairs as a share of the pairs
+// the tracker formed (numSyscalls).
 //
-// numTracepoints counts every non-empty ring-buffer record the loop pulled
-// off the ring. It is incremented before dispatch, so it counts records
-// *seen*, not records successfully turned into something: records that fail
-// to decode (dropMalformedRawEvent) and records of an unhandled event type
-// are included, and so are - since the sched_process_exec probe - control
-// records (one per successful execve, one per task exit and one per created
-// task, since the sched and newtask probes) alongside the syscall enter/exit
-// records. Both denominators (this one and the drop share in
-// ringbufDropStatLine) are deliberately left on that total: the
-// kernel-side drop counter also counts control records it failed to reserve
-// (internal/c/exec.c), so "drops as a share of events" only stays
-// arithmetically honest if the events side counts them too. The mismatch
-// share is diluted by the same records, which is acceptable - execve is
-// rare next to syscall traffic, task exits less so on thread-churning
-// workloads, and both figures describe the ring-buffer
-// stream as a whole rather than the syscall pairs alone.
+// Numerator and denominator are deliberately the same unit. A mismatch is
+// counted once per *pair* (tracepointExited: the exit found its parked enter
+// but their trace IDs do not belong together), and numSyscalls is incremented
+// on that very path just before the ID check, so every mismatch is also a
+// member of the denominator and the result is a true 0..100% share. It used
+// to divide by numTracepoints, which counts ring-buffer *records* - at least
+// two per pair, plus control records - so even a run where every pair
+// mismatched printed at most ~50%.
+//
+// numTracepoints stays the denominator of the ring-buffer drop share in
+// ringbufDropStatLine instead: there the numerator (kernel drop counter)
+// counts records, control records included (internal/c/exec.c), so the
+// records-seen total is the matching unit.
 func (e *eventLoop) mismatchPercent() float64 {
-	if e.numTracepoints == 0 {
+	if e.numSyscalls == 0 {
 		return 0
 	}
-	return (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
+	return (float64(e.numTracepointMismatches) / float64(e.numSyscalls)) * 100
 }
 
 // ringbufDropStatLine renders the end-of-run "ring buffer drops" line.
