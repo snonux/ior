@@ -10,6 +10,7 @@ import (
 	"ior/internal/collapse"
 	"ior/internal/csvlist"
 	"ior/internal/flamegraph"
+	"ior/internal/textsafe"
 )
 
 // RunCollapsedConverter implements the `ior collapsed` subcommand: it reads
@@ -19,6 +20,10 @@ import (
 // bridge for offline FlameGraph rendering:
 //
 //	ior collapsed trace.ior.zst | flamegraph.pl > trace.svg
+//
+// When w is a terminal the frames are escaped with textsafe.Escape (control
+// and invisible runes shown as \x1b, \u202e, ...); piped or redirected
+// output keeps the raw bytes.
 func RunCollapsedConverter(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("collapsed", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -46,5 +51,9 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		// treats as collapse.DefaultFields.
 		Fields:     csvlist.Split(*fields),
 		CountField: *count,
+		// Frames are traced comm names and paths: escape them when w is a
+		// terminal so they cannot inject escape sequences; keep them raw
+		// when piped into flamegraph.pl or redirected to a file.
+		Escape: textsafe.ForWriter(w),
 	})
 }

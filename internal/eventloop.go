@@ -183,10 +183,11 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		pendingHandles: newPendingHandleTracker(),
 		fdTracker:      fdState,
 		commResolver:   commState,
-		// Default printCb prints each pair to stdout then recycles it; callers
-		// (e.g. TUI, headless-parquet) replace this via configureEventLoopOutput.
+		// Default printCb prints each pair to stdout as a CSV row (escaped
+		// when stdout is a terminal) then recycles it; callers (e.g. TUI,
+		// headless-parquet) replace this via configureEventLoopOutput.
 		outputFormatter: outputFormatter{
-			printCb: func(ep *event.Pair) { fmt.Println(ep); ep.Recycle() },
+			printCb: plainStdoutCallback(),
 		},
 		rawHandlers:  make(map[types.EventType]rawEventHandler),
 		exitHandlers: make(map[types.EventType]runtimeExitHandler),
