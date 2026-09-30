@@ -44,8 +44,15 @@ struct ior_user_iovec {
 // not reject an oversized total, it clamps it to MAX_RW_COUNT, so the sum
 // here can only overestimate what was copied - harmless, as userspace counts
 // min(ret, capacity) and ret is the real length. Each length is clamped to
-// MAX_RW_COUNT before adding so that eight absurd user-supplied lengths
-// cannot wrap the u64 sum and turn an overestimate into a small capacity.
+// MAX_RW_COUNT before adding as belt-and-braces: it keeps the sum provably
+// below 2^35 (8 * 2^31) for the verifier and the reader. It cannot change
+// any observable result: probing the kernel shows an oversized iovec total
+// either succeeds with the kernel clamping it (one iovec of 2^31..2^46) or
+// fails with EFAULT (e.g. two of 2^47, four of 2^62, eight of 2^61), so a
+// call whose return value is used has iovec lengths below 2^47 and eight of
+// them sum below 2^50; the u64 wrap is unreachable there. The constant is
+// INT_MAX & PAGE_MASK for 4 KiB pages; on 16 KiB/64 KiB pages the kernel's
+// real limit is smaller, so this overestimates, which is tolerated.
 static __always_inline void ior_recvmsg_capacity(void *msg_ptr, __u64 *size, __u32 *valid) {
     struct ior_user_msghdr msg = {};
     __u64 total = 0;
