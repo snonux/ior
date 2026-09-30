@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -42,8 +44,51 @@ func TestCreateTempIsUniqueAndBesideTarget(t *testing.T) {
 	if a.Name() == b.Name() {
 		t.Fatalf("two CreateTemp calls returned the same file %q", a.Name())
 	}
-	if !strings.HasPrefix(a.Name(), final+".") || !strings.HasSuffix(a.Name(), ".tmp") {
-		t.Errorf("temp name %q should be <final>.<random>.tmp", a.Name())
+	if filepath.Dir(a.Name()) != filepath.Dir(final) {
+		t.Errorf("temp %q must sit beside the target %q (same filesystem)", a.Name(), final)
+	}
+	base := filepath.Base(a.Name())
+	if !strings.HasPrefix(base, "ior-") || !strings.HasSuffix(base, ".tmp") {
+		t.Errorf("temp name %q should be ior-<random>.tmp", base)
+	}
+}
+
+// TestTempNameLengthIndependentOfFinal pins the NAME_MAX fix: a final name of
+// 250 bytes must still be writable, which a temp name derived from the final
+// name (final + suffix) could not be.
+func TestTempNameLengthIndependentOfFinal(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, strings.Repeat("a", 250-len(".csv"))+".csv")
+	if len(filepath.Base(final)) != 250 {
+		t.Fatalf("test setup: base name is %d bytes", len(filepath.Base(final)))
+	}
+
+	published, err := WriteFile(final, ".csv", func(w io.Writer) error {
+		_, err := io.WriteString(w, "long")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("WriteFile with a 250-byte name: %v", err)
+	}
+	if published != final || readFile(t, final) != "long" {
+		t.Errorf("published %q, content %q; want %q with long", published, readFile(t, published), final)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only the final file", entries)
+	}
+}
+
+// TestCreateTempBareFilenameUsesCurrentDir covers a relative final without a
+// directory part: the temp file must land in ".", not at some root path.
+func TestCreateTempBareFilenameUsesCurrentDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f, err := CreateTemp("out.csv")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if filepath.Dir(f.Name()) != "." {
+		t.Errorf("temp %q not in the current directory", f.Name())
 	}
 }
 
@@ -274,5 +319,184 @@ func TestSuffixedKeepsExtensionLast(t *testing.T) {
 		if got := suffixed(tc.final, tc.ext, tc.n); got != tc.want {
 			t.Errorf("suffixed(%q, %q, %d) = %q, want %q", tc.final, tc.ext, tc.n, got, tc.want)
 		}
+	}
+}
+
+// errRename returns a renameFunc that always fails with err, counting calls.
+func errRename(err error, calls *int) renameFunc {
+	return func(string, string) error {
+		*calls++
+		return err
+	}
+}
+
+// TestRenameNoReplaceFallbackDispatch pins which errors from the rename
+// syscall select the O_EXCL placeholder fallback: exactly the "unsupported"
+// family. The fallback must then really deliver the data.
+func TestRenameNoReplaceFallbackDispatch(t *testing.T) {
+	for _, errno := range []error{unix.EINVAL, unix.ENOSYS, unix.ENOTSUP} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			dir := t.TempDir()
+			tmp := filepath.Join(dir, "t.tmp")
+			final := filepath.Join(dir, "out.csv")
+			writeFile(t, tmp, "data")
+
+			var calls int
+			if err := renameNoReplace(errRename(errno, &calls), tmp, final); err != nil {
+				t.Fatalf("renameNoReplace: %v", err)
+			}
+			if calls != 1 {
+				t.Errorf("rename called %d times, want 1", calls)
+			}
+			if readFile(t, final) != "data" {
+				t.Error("fallback did not deliver the data")
+			}
+			if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+				t.Errorf("temp should be gone after the fallback rename: %v", err)
+			}
+		})
+	}
+}
+
+// TestRenameNoReplaceFallbackRefusesExisting checks the fallback keeps the
+// no-replace promise on a filesystem without RENAME_NOREPLACE.
+func TestRenameNoReplaceFallbackRefusesExisting(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "t.tmp")
+	final := filepath.Join(dir, "out.csv")
+	writeFile(t, tmp, "new")
+	writeFile(t, final, "old")
+
+	var calls int
+	err := renameNoReplace(errRename(unix.ENOTSUP, &calls), tmp, final)
+	if !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("renameNoReplace = %v, want ErrExist", err)
+	}
+	if readFile(t, final) != "old" {
+		t.Error("existing file was replaced")
+	}
+}
+
+// TestRenameNoReplaceNoFallbackOnOtherErrors is the negative case: EPERM (and
+// friends) are real failures. They must be returned as-is, must not trigger
+// the placeholder fallback (no file appears at the destination), and EEXIST
+// must map to ErrExist without a fallback either.
+func TestRenameNoReplaceNoFallbackOnOtherErrors(t *testing.T) {
+	for _, errno := range []error{unix.EPERM, unix.EACCES, unix.EXDEV} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			dir := t.TempDir()
+			tmp := filepath.Join(dir, "t.tmp")
+			final := filepath.Join(dir, "out.csv")
+			writeFile(t, tmp, "data")
+
+			var calls int
+			err := renameNoReplace(errRename(errno, &calls), tmp, final)
+			if !errors.Is(err, errno) || errors.Is(err, fs.ErrExist) {
+				t.Fatalf("renameNoReplace = %v, want %v unchanged", err, errno)
+			}
+			if _, statErr := os.Lstat(final); !os.IsNotExist(statErr) {
+				t.Errorf("fallback ran: destination exists (%v)", statErr)
+			}
+			if readFile(t, tmp) != "data" {
+				t.Error("temp must be left for the caller")
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "t.tmp")
+	final := filepath.Join(dir, "out.csv")
+	writeFile(t, tmp, "data")
+	var calls int
+	if err := renameNoReplace(errRename(unix.EEXIST, &calls), tmp, final); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("EEXIST = %v, want ErrExist", err)
+	}
+	if _, statErr := os.Lstat(final); !os.IsNotExist(statErr) {
+		t.Errorf("EEXIST must not create the destination: %v", statErr)
+	}
+}
+
+// TestWriteFileRemovesTempOnRenameError drives the whole exporter pattern
+// with an EPERM rename: the error surfaces, nothing is published and the temp
+// file is cleaned up (no orphan for a failure we can see).
+func TestWriteFileRemovesTempOnRenameError(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, "out.csv")
+	var calls int
+	_, err := writeThenPublish(final,
+		func(w io.Writer) error { _, err := io.WriteString(w, "x"); return err },
+		func(tmp string) (string, error) {
+			return publish(tmp, final, ".csv", errRename(unix.EPERM, &calls))
+		})
+	if !errors.Is(err, unix.EPERM) {
+		t.Fatalf("error = %v, want EPERM", err)
+	}
+	if calls != 1 {
+		t.Errorf("rename called %d times, want 1 (no retry with other names)", calls)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("failed publish left %v behind", entries)
+	}
+}
+
+// TestReplaceFileOverwritesExisting pins the explicit-name
+// policy: the existing file is atomically replaced and the path is unchanged.
+func TestReplaceFileOverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, "chosen.parquet")
+	writeFile(t, final, "old")
+
+	got, err := ReplaceFile(final, func(w io.Writer) error {
+		_, err := io.WriteString(w, "new")
+		return err
+	})
+	if err != nil || got != final {
+		t.Fatalf("ReplaceFile = %q, %v; want %q", got, err, final)
+	}
+	if readFile(t, final) != "new" {
+		t.Error("existing file was not replaced")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only the final file", entries)
+	}
+}
+
+func TestReplaceFileWriteErrorKeepsExisting(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, "chosen.csv")
+	writeFile(t, final, "old")
+	boom := errors.New("boom")
+	if _, err := ReplaceFile(final, func(io.Writer) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("error = %v, want boom", err)
+	}
+	if readFile(t, final) != "old" {
+		t.Error("failed replace damaged the existing file")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only the old file", entries)
+	}
+}
+
+// TestReplaceFileReplacesSymlinkNotTarget: a symlink at the final name is
+// itself replaced by the rename; the file it pointed at is never written.
+func TestReplaceFileReplacesSymlinkNotTarget(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	writeFile(t, victim, "precious")
+	final := filepath.Join(dir, "out.csv")
+	if err := os.Symlink(victim, final); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplaceFile(final, func(w io.Writer) error {
+		_, err := io.WriteString(w, "new")
+		return err
+	}); err != nil {
+		t.Fatalf("ReplaceFile: %v", err)
+	}
+	if readFile(t, victim) != "precious" {
+		t.Error("symlink target was written through")
+	}
+	if readFile(t, final) != "new" {
+		t.Error("final does not hold the new content")
 	}
 }

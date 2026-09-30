@@ -253,6 +253,25 @@ func TestFinishHeadlessParquetRecordingReportsTheRunOutcome(t *testing.T) {
 			if slices.ContainsFunc(logs, func(line string) bool { return strings.Contains(line, "dropped") }) {
 				t.Errorf("logged a drop warning without dropped rows: %q", logs)
 			}
+			wantLog := "Parquet recording written to " + path
+			if got := slices.Contains(logs, wantLog); got != (tc.sinkErr == nil) {
+				t.Errorf("logged %q = %v, want %v (logs %q)", wantLog, got, tc.sinkErr == nil, logs)
+			}
 		})
+	}
+}
+
+// TestParquetPublishedNotice pins the log line naming the file a headless
+// recording ended up in: the plain confirmation normally, and an explicit
+// "already taken" note when the published name differs from the requested one.
+func TestParquetPublishedNotice(t *testing.T) {
+	same := parquet.Status{Path: "out.parquet", RequestedPath: "out.parquet"}
+	if got, want := parquetPublishedNotice(same), "Parquet recording written to out.parquet"; got != want {
+		t.Errorf("notice = %q, want %q", got, want)
+	}
+	moved := parquet.Status{Path: "out-1.parquet", RequestedPath: "out.parquet"}
+	got := parquetPublishedNotice(moved)
+	if !strings.Contains(got, "out-1.parquet") || !strings.Contains(got, "out.parquet was already taken") {
+		t.Errorf("notice = %q, want the published and the requested path", got)
 	}
 }

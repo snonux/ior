@@ -112,8 +112,21 @@ func consumeBackslash(s string, i int, out *strings.Builder) int {
 	return i + 1
 }
 
+// defaultStreamExportLayout is the time.Format layout of the generated export
+// name; isDefaultStreamExportName parses with the same layout so the two
+// cannot drift apart.
+const defaultStreamExportLayout = "ior-stream-20060102-150405.csv"
+
 func defaultStreamExportFilename() string {
-	return fmt.Sprintf("ior-stream-%s.csv", time.Now().Format("20060102-150405"))
+	return time.Now().Format(defaultStreamExportLayout)
+}
+
+// isDefaultStreamExportName reports whether name is a generated default export
+// name rather than one the user typed. Generated names are only accurate to
+// the second and are never replaced; a typed name is the user's to overwrite.
+func isDefaultStreamExportName(name string) bool {
+	_, err := time.Parse(defaultStreamExportLayout, filepath.Base(name))
+	return err == nil
 }
 
 func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
@@ -137,11 +150,12 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 // filename (which is validated and sanitised by ensureCSVFilename) and returns
 // its absolute path.
 //
-// The rows go to a uniquely named temp file that is published without
-// replacing anything: if the name is already taken (an earlier export in the
-// same second, or a file the user keeps under that name) the new file gets a
-// "-N" suffix, so an export can never overwrite another file or write through
-// a symlink planted at the predictable default name.
+// The rows go to a uniquely named temp file first, so a reader never sees a
+// partial CSV and a symlink planted at a predictable name is never written
+// through. What happens when the target exists depends on who chose the name:
+// a generated default name (only accurate to the second) is never replaced -
+// a taken name yields a "-N" suffix, and the returned path says so - while a
+// name the user typed is atomically replaced, as it always was.
 func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
 	name, err := ensureCSVFilename(filename)
 	if err != nil {
@@ -152,9 +166,13 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 		path = filepath.Join(exportDir, name)
 	}
 
-	published, err := atomicfile.WriteFile(path, ".csv", func(w io.Writer) error {
-		return writeStreamCSV(csv.NewWriter(w), rows)
-	})
+	write := func(w io.Writer) error { return writeStreamCSV(csv.NewWriter(w), rows) }
+	var published string
+	if isDefaultStreamExportName(name) {
+		published, err = atomicfile.WriteFile(path, ".csv", write)
+	} else {
+		published, err = atomicfile.ReplaceFile(path, write)
+	}
 	if err != nil {
 		return "", err
 	}

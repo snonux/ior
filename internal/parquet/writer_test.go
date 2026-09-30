@@ -117,18 +117,19 @@ func readAllRecords(t *testing.T, path string) []Record {
 // recordings that resolve to the same name (default names are only accurate to
 // the second): they used to share one ".tmp" and the later rename replaced the
 // earlier file. Now each has its own temp file and the later publish lands
-// under a "-1" name, reported by FinalPath.
-func TestWritersAimedAtOnePathKeepEveryRecording(t *testing.T) {
+// under a "-1" name, reported by FinalPath. This is the policy for ior's
+// generated default names (NewAutoNamedWriter).
+func TestAutoNamedWritersAimedAtOnePathKeepEveryRecording(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trace.parquet")
 	rowsA := []Record{{Seq: 1, Comm: "a", Syscall: "read"}}
 	rowsB := []Record{{Seq: 2, Comm: "b", Syscall: "write"}}
 
-	a, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	a, err := NewAutoNamedWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
 	if err != nil {
-		t.Fatalf("NewWriter a: %v", err)
+		t.Fatalf("NewAutoNamedWriter a: %v", err)
 	}
-	b, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	b, err := NewAutoNamedWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
 	if err != nil {
 		t.Fatalf("NewWriter b: %v", err)
 	}
@@ -163,6 +164,39 @@ func TestWritersAimedAtOnePathKeepEveryRecording(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
 		t.Errorf("dir holds %v, want exactly the two recordings", entries)
+	}
+}
+
+// TestExplicitPathWriterReplacesExistingFile pins the least-surprise policy
+// for a user-chosen path (-parquet out.parquet): a second recording replaces
+// the first at exactly that path, as it did before no-clobber publishing was
+// introduced for generated names, and FinalPath stays the requested path.
+func TestExplicitPathWriterReplacesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chosen.parquet")
+	first := []Record{{Seq: 1, Comm: "a", Syscall: "read"}}
+	second := []Record{{Seq: 2, Comm: "b", Syscall: "write"}}
+
+	for _, rows := range [][]Record{first, second} {
+		w, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "headless"})
+		if err != nil {
+			t.Fatalf("NewWriter: %v", err)
+		}
+		if err := w.WriteRows(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if w.FinalPath() != path {
+			t.Errorf("FinalPath() = %q, want the requested %q", w.FinalPath(), path)
+		}
+	}
+	if got := readAllRecords(t, path); !reflect.DeepEqual(got, second) {
+		t.Errorf("file = %+v, want the second recording %+v", got, second)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only chosen.parquet", entries)
 	}
 }
 

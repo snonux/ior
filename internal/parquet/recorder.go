@@ -56,14 +56,25 @@ type RecorderConfig struct {
 // StartOptions supplies per-session metadata.
 type StartOptions struct {
 	Metadata FileMetadata
+	// AutoNamed marks a path ior generated itself (the timestamped default).
+	// It is then never replaced: on a collision the recording is published
+	// under a "-N" suffixed name and Status().Path reports it. A path the
+	// user chose (AutoNamed false) is replaced, as it always was.
+	AutoNamed bool
 }
 
 // Status reports the last known recorder state.
 type Status struct {
-	Active      bool
-	Path        string
-	TempPath    string
-	RowsWritten uint64
+	Active bool
+	// Path is the file the recording is written to. While recording it is the
+	// requested path; after a graceful Stop it is where the file was really
+	// published, which differs from RequestedPath only for an auto-named
+	// recording whose name was already taken ("-N" suffix).
+	Path string
+	// RequestedPath is the (".parquet"-normalized) path Start asked for.
+	RequestedPath string
+	TempPath      string
+	RowsWritten   uint64
 	// RowsDropped counts rows shed because the bounded queue was full.
 	RowsDropped uint64
 	LastError   error
@@ -122,6 +133,9 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 	buildWriter := cfg.newWriter
 	if buildWriter == nil {
 		buildWriter = func(path string, cfg WriterConfig, meta FileMetadata) (rowWriter, error) {
+			if options.AutoNamed {
+				return NewAutoNamedWriter(path, cfg, meta)
+			}
 			return NewWriter(path, cfg, meta)
 		}
 	}
@@ -142,9 +156,10 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 	r.active = session
 	r.failureTaken = false
 	r.status = Status{
-		Active:   true,
-		Path:     writer.FinalPath(),
-		TempPath: writer.TempPath(),
+		Active:        true,
+		Path:          writer.FinalPath(),
+		RequestedPath: writer.FinalPath(),
+		TempPath:      writer.TempPath(),
 	}
 	r.mu.Unlock()
 
@@ -296,8 +311,8 @@ func (r *Recorder) runSession(session *recordingSession, writer rowWriter, cfg R
 		case <-session.stopC:
 			err := r.stopSession(session, writer, &batch, &written, cfg.BatchSize)
 			if err == nil {
-				// Close never replaces an existing file, so the recording may
-				// have been published under a "-N" name; report where it is.
+				// An auto-named recording never replaces an existing file, so
+				// it may have been published under a "-N" name; report where it is.
 				r.updatePublishedPath(session, writer.FinalPath())
 			}
 			r.completeSession(session, err)

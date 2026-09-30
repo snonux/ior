@@ -323,7 +323,7 @@ func (w *blockingWriter) releaseWrites() {
 	w.releaseOnce.Do(func() { close(w.release) })
 }
 
-// TestRecorderStatusPathFollowsSuffixedPublish pins that when the requested
+// TestRecorderStatusPathFollowsSuffixedPublish pins that when an auto-named
 // path is already taken, the recording is published under a "-N" name and
 // Status().Path names the file that actually holds it.
 func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
@@ -335,7 +335,7 @@ func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
 	}
 
 	recorder := NewRecorder(RecorderConfig{QueueCapacity: 4, BatchSize: 2, FlushInterval: time.Hour})
-	if err := recorder.Start(path, StartOptions{}); err != nil {
+	if err := recorder.Start(path, StartOptions{AutoNamed: true}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if got := recorder.Status().Path; got != path {
@@ -357,5 +357,36 @@ func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
 	}
 	if rows := readAllRecords(t, want); len(rows) != 1 || rows[0].Seq != 1 {
 		t.Errorf("published file rows = %+v, want the one recorded row", rows)
+	}
+}
+
+// TestRecorderExplicitPathReplacesExisting is the counterpart for a
+// user-chosen path (StartOptions.AutoNamed false): it is replaced in place and
+// Status().Path stays the requested path.
+func TestRecorderExplicitPathReplacesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chosen.parquet")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 4, BatchSize: 2, FlushInterval: time.Hour})
+	if err := recorder.Start(path, StartOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := recorder.Status().Path; got != path {
+		t.Fatalf("Status().Path = %q, want %q", got, path)
+	}
+	if rows := readAllRecords(t, path); len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("file rows = %+v, want the one recorded row", rows)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only chosen.parquet", entries)
 	}
 }

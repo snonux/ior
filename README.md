@@ -100,6 +100,15 @@ plain CSV schema is deliberately small:
 `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file`. Use TUI CSV export or Parquet for
 timestamps, byte counts and other per-event fields.
 
+Files are written to a temporary `ior-<random>.tmp` file and renamed into place when
+complete. Names ior generates itself (`ior-stream-<timestamp>.csv`,
+`ior-recording-<timestamp>.parquet`, `ior-snapshot-<timestamp>.csv`, and the
+`<host>-<name>-<timestamp>.ior.zst` flamegraph record) are only accurate to the second and are
+never overwritten: if the name is taken, ior writes `<name>-1.<ext>` (then `-2`, ...) and
+prints or shows the path it really used. A file name you choose yourself (`-parquet
+trace.parquet`, or a name typed into a TUI export/recording prompt) is replaced if it
+exists. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
+
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
 

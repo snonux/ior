@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"ior/internal/globalfilter"
@@ -270,7 +271,12 @@ func recorderStart(recorder runtime.RecordingController, path string, syncFn fun
 	if recorder == nil {
 		return errors.New("recording runtime is unavailable")
 	}
-	err := recorder.Start(path, parquet.StartOptions{Metadata: tuiParquetMetadata()})
+	err := recorder.Start(path, parquet.StartOptions{
+		Metadata: tuiParquetMetadata(),
+		// The R modal offers a generated default; only that name is ior's to
+		// protect. Anything the user typed is theirs and is replaced.
+		AutoNamed: isDefaultParquetRecordingName(path),
+	})
 	syncFn()
 	return err
 }
@@ -322,11 +328,30 @@ func formatRecorderStatus(status parquet.Status) string {
 	if status.LastError != nil {
 		return "rec err: " + status.LastError.Error()
 	}
+	if status.Path != "" && status.RequestedPath != "" && status.Path != status.RequestedPath {
+		// An auto-named recording found its name taken and was published
+		// under a "-N" name; say so, since the modal showed the other one.
+		return "rec: saved as " + shortenRecordingPath(status.Path) + dropped
+	}
 	return "rec: off" + dropped
 }
 
+// defaultParquetRecordingLayout is the time.Format layout of the generated
+// recording name; isDefaultParquetRecordingName parses with the same layout,
+// so the two cannot drift apart.
+const defaultParquetRecordingLayout = "ior-recording-20060102-150405.parquet"
+
 func defaultParquetRecordingFilename() string {
-	return fmt.Sprintf("ior-recording-%s.parquet", time.Now().Format("20060102-150405"))
+	return time.Now().Format(defaultParquetRecordingLayout)
+}
+
+// isDefaultParquetRecordingName reports whether path's file name is a
+// generated default recording name (as opposed to one the user typed). Such a
+// name is only accurate to the second, so it is published without replacing an
+// existing file.
+func isDefaultParquetRecordingName(path string) bool {
+	_, err := time.Parse(defaultParquetRecordingLayout, filepath.Base(path))
+	return err == nil
 }
 
 // tuiParquetMetadata delegates to the canonical parquet.NewFileMetadata.

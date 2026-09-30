@@ -161,10 +161,25 @@ func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessPa
 	if stopErr != nil {
 		return stopErr
 	}
-	if dropped := recorder.Status().RowsDropped; dropped > 0 {
+	status := recorder.Status()
+	logln(parquetPublishedNotice(status))
+	if dropped := status.RowsDropped; dropped > 0 {
 		logln("Warning:", dropped, "events were dropped (parquet recorder queue overflow) - the recording is partial")
 	}
 	return nil
+}
+
+// parquetPublishedNotice names the file a finished recording was really
+// written to. The path given with -parquet is replaced in place, so normally
+// the notice just confirms it; if the recorder ever had to publish under
+// another name (a "-N" suffix because the requested name was protected) the
+// notice says so explicitly, since the user would otherwise look for the
+// recording at the requested path and find something else.
+func parquetPublishedNotice(status parquet.Status) string {
+	if status.RequestedPath != "" && status.Path != status.RequestedPath {
+		return fmt.Sprintf("Parquet recording written to %s (%s was already taken)", status.Path, status.RequestedPath)
+	}
+	return "Parquet recording written to " + status.Path
 }
 
 // setupHeadlessParquetInfra selects the headless event-loop variant while

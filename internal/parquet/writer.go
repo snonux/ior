@@ -51,18 +51,36 @@ type Writer struct {
 	mu sync.Mutex
 
 	finalPath string
+	// noClobber selects the publish policy: true for a name ior generated
+	// itself (never replace, add "-N"), false for a path the user chose
+	// (replace, as before).
+	noClobber bool
 	tempPath  string
 	file      *os.File
 	writer    *parquetgo.GenericWriter[Record]
 	state     writerState
 }
 
-// NewWriter creates a new parquet writer that writes to a uniquely named
-// temporary file first and only publishes the final path once Close succeeds.
-// The temp name is unique per writer, so two recordings aimed at the same path
-// (default names are only accurate to the second) never share or truncate one
+// NewWriter creates a parquet writer for a path the user chose explicitly. It
+// writes to a uniquely named temporary file first and, once Close succeeds,
+// atomically publishes it at exactly that path, replacing an existing file
+// there (what "-parquet out.parquet" always meant). The temp name is unique per
+// writer, so two recordings aimed at the same path never share or truncate one
 // another's temp file.
 func NewWriter(path string, cfg WriterConfig, meta FileMetadata) (*Writer, error) {
+	return newWriter(path, cfg, meta, false)
+}
+
+// NewAutoNamedWriter is NewWriter for a path ior generated itself (the
+// timestamped default, accurate only to the second). Close never replaces an
+// existing file there: a collision publishes under a "-N" suffixed name and
+// FinalPath then reports the name actually used, so two recordings started in
+// the same second both survive.
+func NewAutoNamedWriter(path string, cfg WriterConfig, meta FileMetadata) (*Writer, error) {
+	return newWriter(path, cfg, meta, true)
+}
+
+func newWriter(path string, cfg WriterConfig, meta FileMetadata, noClobber bool) (*Writer, error) {
 	finalPath, err := normalizeOutputPath(path)
 	if err != nil {
 		return nil, err
@@ -85,6 +103,7 @@ func NewWriter(path string, cfg WriterConfig, meta FileMetadata) (*Writer, error
 
 	return &Writer{
 		finalPath: finalPath,
+		noClobber: noClobber,
 		tempPath:  tempPath,
 		file:      file,
 		writer:    parquetgo.NewGenericWriter[Record](file, options...),
@@ -93,9 +112,10 @@ func NewWriter(path string, cfg WriterConfig, meta FileMetadata) (*Writer, error
 }
 
 // FinalPath returns the parquet path the file is (or will be) published at.
-// It is the requested path until Close publishes the file; if that path was
-// already taken by another file, Close never replaces it and publishes under a
-// "-N" suffixed name instead, after which FinalPath reports that name.
+// It is the requested path until Close publishes the file; for an auto-named
+// writer whose path was already taken by another file, Close never replaces it
+// and publishes under a "-N" suffixed name instead, after which FinalPath
+// reports that name.
 func (w *Writer) FinalPath() string {
 	if w == nil {
 		return ""
@@ -136,8 +156,9 @@ func (w *Writer) WriteRows(rows []Record) error {
 	return nil
 }
 
-// Close finalizes the parquet footer and publishes the file atomically,
-// without replacing an existing file (see FinalPath). If publishing fails the
+// Close finalizes the parquet footer and publishes the file atomically: an
+// auto-named writer never replaces an existing file (see FinalPath), an
+// explicitly named one replaces it. If publishing fails the
 // complete temp file is kept at TempPath so the recording can be rescued.
 func (w *Writer) Close() error {
 	if w == nil {
@@ -153,6 +174,7 @@ func (w *Writer) Close() error {
 	writer := w.writer
 	tempPath := w.tempPath
 	finalPath := w.finalPath
+	noClobber := w.noClobber
 	w.state = writerStateClosed
 	w.mu.Unlock()
 
@@ -165,7 +187,7 @@ func (w *Writer) Close() error {
 		removeErr := os.Remove(tempPath)
 		return errors.Join(fmt.Errorf("close parquet file: %w", err), removeErr)
 	}
-	published, err := atomicfile.Publish(tempPath, finalPath, parquetExt)
+	published, err := publishParquet(tempPath, finalPath, noClobber)
 	if err != nil {
 		return fmt.Errorf("publish parquet file: %w", err)
 	}
@@ -173,6 +195,15 @@ func (w *Writer) Close() error {
 	w.finalPath = published
 	w.mu.Unlock()
 	return nil
+}
+
+// publishParquet moves the finished temp file to finalPath under the writer's
+// policy and returns the path it ended up at.
+func publishParquet(tempPath, finalPath string, noClobber bool) (string, error) {
+	if noClobber {
+		return atomicfile.Publish(tempPath, finalPath, parquetExt)
+	}
+	return finalPath, atomicfile.PublishReplace(tempPath, finalPath)
 }
 
 // Abort discards the temporary parquet file.

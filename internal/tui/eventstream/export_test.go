@@ -322,24 +322,27 @@ func TestExportSnapshotMatchesRenameOnEitherName(t *testing.T) {
 	}
 }
 
-// TestExportRowsToCSVNeverOverwrites pins the no-clobber contract: exporting
-// twice under one name (the default name is only accurate to the second) keeps
-// both files, the second under a "-1" suffix before the extension.
-func TestExportRowsToCSVNeverOverwrites(t *testing.T) {
+// TestExportRowsToCSVNeverOverwritesDefaultName pins the no-clobber contract
+// for generated names: exporting twice under one default name (only accurate
+// to the second) keeps both files, the second under a "-1" suffix before the
+// extension, and the returned path names it.
+func TestExportRowsToCSVNeverOverwritesDefaultName(t *testing.T) {
 	dir := t.TempDir()
 	first := []StreamEvent{{Seq: 1, Comm: "first", Syscall: "read"}}
 	second := []StreamEvent{{Seq: 2, Comm: "second", Syscall: "write"}}
+	name := defaultStreamExportFilename()
 
-	p1, err := exportRowsToCSV(first, dir, "same.csv")
+	p1, err := exportRowsToCSV(first, dir, name)
 	if err != nil {
 		t.Fatalf("first export: %v", err)
 	}
-	p2, err := exportRowsToCSV(second, dir, "same.csv")
+	p2, err := exportRowsToCSV(second, dir, name)
 	if err != nil {
 		t.Fatalf("second export: %v", err)
 	}
-	if p1 != filepath.Join(dir, "same.csv") || p2 != filepath.Join(dir, "same-1.csv") {
-		t.Fatalf("paths = %q, %q; want same.csv then same-1.csv", p1, p2)
+	want2 := filepath.Join(dir, strings.TrimSuffix(name, ".csv")+"-1.csv")
+	if p1 != filepath.Join(dir, name) || p2 != want2 {
+		t.Fatalf("paths = %q, %q; want %s then %s", p1, p2, name, want2)
 	}
 	for path, want := range map[string]string{p1: "first", p2: "second"} {
 		data, err := os.ReadFile(path)
@@ -352,26 +355,76 @@ func TestExportRowsToCSVNeverOverwrites(t *testing.T) {
 	}
 }
 
+// TestExportRowsToCSVReplacesUserChosenName pins the least-surprise policy: a
+// filename the user typed is theirs, so exporting to it again replaces the
+// earlier file in place and reports exactly that path.
+func TestExportRowsToCSVReplacesUserChosenName(t *testing.T) {
+	dir := t.TempDir()
+	first := []StreamEvent{{Seq: 1, Comm: "first", Syscall: "read"}}
+	second := []StreamEvent{{Seq: 2, Comm: "second", Syscall: "write"}}
+
+	if _, err := exportRowsToCSV(first, dir, "mine.csv"); err != nil {
+		t.Fatalf("first export: %v", err)
+	}
+	path, err := exportRowsToCSV(second, dir, "mine.csv")
+	if err != nil {
+		t.Fatalf("second export: %v", err)
+	}
+	if path != filepath.Join(dir, "mine.csv") {
+		t.Fatalf("path = %q, want mine.csv", path)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "second") || strings.Contains(string(data), "first") {
+		t.Errorf("mine.csv = %q, want only the second export", data)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only mine.csv", entries)
+	}
+}
+
+func TestIsDefaultStreamExportName(t *testing.T) {
+	if !isDefaultStreamExportName(defaultStreamExportFilename()) {
+		t.Error("generated default name not recognised")
+	}
+	for _, name := range []string{"", "mine.csv", "ior-stream-x.csv", "ior-stream-20260930-135324-1.csv"} {
+		if isDefaultStreamExportName(name) {
+			t.Errorf("%q treated as generated; user-typed names must be replaced", name)
+		}
+	}
+}
+
 // TestExportRowsToCSVDoesNotFollowPlantedSymlink pins that a symlink sitting
-// at the export name is neither written through nor replaced.
+// at a generated export name is neither written through nor replaced, and that
+// for a user-typed name the symlink itself is replaced (never written through).
 func TestExportRowsToCSVDoesNotFollowPlantedSymlink(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(t.TempDir(), "victim")
 	if err := os.WriteFile(victim, []byte("precious"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(victim, filepath.Join(dir, "out.csv")); err != nil {
+	name := defaultStreamExportFilename()
+	if err := os.Symlink(victim, filepath.Join(dir, name)); err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := exportRowsToCSV(nil, dir, "out.csv")
+	path, err := exportRowsToCSV(nil, dir, name)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	if path == filepath.Join(dir, "out.csv") {
+	if path == filepath.Join(dir, name) {
 		t.Fatal("export replaced the symlink")
 	}
 	if data, _ := os.ReadFile(victim); string(data) != "precious" {
 		t.Errorf("symlink target was overwritten: %q", data)
+	}
+
+	if err := os.Symlink(victim, filepath.Join(dir, "typed.csv")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exportRowsToCSV(nil, dir, "typed.csv"); err != nil {
+		t.Fatalf("export to typed name: %v", err)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "precious" {
+		t.Errorf("typed-name export wrote through the symlink: %q", data)
 	}
 }

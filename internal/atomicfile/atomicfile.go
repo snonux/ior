@@ -10,6 +10,24 @@
 // writer's temp file and then replaced its published file, silently losing a
 // recording. Here the temp name is unique per call and the final name is
 // claimed atomically, so a collision costs a "-N" name suffix, never data.
+//
+// Two publish policies exist because two kinds of names exist. Names ior
+// generates itself (the timestamped defaults) use Publish/WriteFile, which
+// never replace anything. A name the user typed or passed on the command line
+// (-parquet <path>, a filename in a TUI modal) keeps its historical meaning
+// "write exactly here, replacing what is there" through PublishReplace/
+// ReplaceFile: still atomic (readers see the old or the new file, never a
+// partial one), still written through an O_EXCL|O_NOFOLLOW temp file, but
+// deliberately overwriting. Callers that fall back to a "-N" name must tell
+// the user which path was really written.
+//
+// Orphans: a temp file only disappears when its writer finishes or fails
+// gracefully. A process that is killed or crashes mid-write leaves its
+// "ior-<random>.tmp" behind, and because every call picks a fresh random name
+// no later run ever reuses or cleans it. Such orphans are harmless but
+// accumulate; "mage mrproper" removes *.tmp files from the working directory.
+// No automatic sweep runs, since deleting *.tmp files another live ior
+// process is still writing would be worse than leaving them.
 package atomicfile
 
 import (
@@ -19,6 +37,7 @@ import (
 	"io/fs"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -35,9 +54,19 @@ const (
 	publishAttempts = 10000
 )
 
+// tempPrefix and tempSuffix frame the random part of a temp file name.
+const (
+	tempPrefix = "ior-"
+	tempSuffix = ".tmp"
+)
+
 // CreateTemp creates a new, uniquely named temp file in the directory of
 // final (so a later rename stays on one filesystem and is atomic) and returns
-// it open for writing. The name is "<final>.<random>.tmp".
+// it open for writing. The name is "ior-<16 hex digits>.tmp" - deliberately
+// independent of final's name: a name derived from final ("<final>.<rand>.tmp")
+// would be longer than final, so a final name near the 255-byte NAME_MAX limit
+// could be created by the old code but not by its temp file. With a fixed-size
+// temp name any final name the filesystem accepts can also be written.
 //
 // The file is created with O_EXCL|O_NOFOLLOW: it must not exist, and a
 // symlink planted at the guessed name is refused rather than followed, so a
@@ -45,9 +74,10 @@ const (
 // The mode is 0666 filtered by the umask, exactly what os.Create gave the
 // exporters before, so published files keep their previous permissions.
 func CreateTemp(final string) (*os.File, error) {
+	dir := filepath.Dir(final)
 	var lastErr error
 	for range createAttempts {
-		name := fmt.Sprintf("%s.%016x.tmp", final, rand.Uint64())
+		name := filepath.Join(dir, fmt.Sprintf("%s%016x%s", tempPrefix, rand.Uint64(), tempSuffix))
 		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 		if err == nil {
 			return f, nil
@@ -70,9 +100,16 @@ func CreateTemp(final string) (*os.File, error) {
 // without it an O_EXCL placeholder that is then renamed over - so two
 // concurrent publishers can never pick the same name.
 func Publish(tmp, final, ext string) (string, error) {
+	return publish(tmp, final, ext, renameat2NoReplace)
+}
+
+// publish is Publish with the rename syscall injected so tests can drive the
+// unsupported-filesystem fallback and the error paths without a special
+// filesystem.
+func publish(tmp, final, ext string, rename renameFunc) (string, error) {
 	for n := 0; n < publishAttempts; n++ {
 		candidate := suffixed(final, ext, n)
-		err := renameNoReplace(tmp, candidate)
+		err := renameNoReplace(rename, tmp, candidate)
 		if err == nil {
 			return candidate, nil
 		}
@@ -97,11 +134,35 @@ func suffixed(final, ext string, n int) string {
 	return fmt.Sprintf("%s-%d", final, n)
 }
 
-// renameNoReplace renames oldPath to newPath, failing with an error matching
-// fs.ErrExist when newPath already exists (a dangling symlink counts; it is
-// never followed).
-func renameNoReplace(oldPath, newPath string) error {
-	err := unix.Renameat2(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, unix.RENAME_NOREPLACE)
+// PublishReplace moves the finished temp file tmp to final, atomically
+// replacing whatever is there, for names the user chose explicitly (see the
+// package comment). It is a plain rename with error context; on error tmp is
+// left in place for the caller to remove.
+func PublishReplace(tmp, final string) error {
+	if err := os.Rename(tmp, final); err != nil {
+		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
+	}
+	return nil
+}
+
+// renameFunc is the signature of a renameat2(RENAME_NOREPLACE) call; it is a
+// type so tests can substitute a filesystem that lacks the flag.
+type renameFunc func(oldPath, newPath string) error
+
+// renameat2NoReplace is the real syscall behind renameFunc.
+func renameat2NoReplace(oldPath, newPath string) error {
+	return unix.Renameat2(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, unix.RENAME_NOREPLACE)
+}
+
+// renameNoReplace renames oldPath to newPath through rename, failing with an
+// error matching fs.ErrExist when newPath already exists (a dangling symlink
+// counts; it is never followed). Only the errors that mean "this kernel or
+// filesystem does not implement RENAME_NOREPLACE" select the O_EXCL fallback;
+// any other error (EPERM, EACCES, EXDEV, ...) is a real failure and is
+// returned unchanged, because retrying it with a different mechanism would
+// just fail again or, worse, mask a permission problem.
+func renameNoReplace(rename renameFunc, oldPath, newPath string) error {
+	err := rename(oldPath, newPath)
 	switch {
 	case err == nil:
 		return nil
@@ -140,12 +201,30 @@ func claimThenRename(oldPath, newPath string) error {
 	return nil
 }
 
-// WriteFile is the whole exporter pattern in one call: it creates a temp file
-// beside final, lets write fill it, closes it (so a delayed write error such as
-// a full disk surfaces here, before anything is published) and publishes it
-// with Publish. It returns the path the data ended up at. On any failure the
-// temp file is removed and nothing is published.
+// WriteFile is the whole exporter pattern in one call for names ior generates
+// itself: it creates a temp file beside final, lets write fill it, closes it
+// (so a delayed write error such as a full disk surfaces here, before anything
+// is published) and publishes it with Publish, never replacing an existing
+// file. It returns the path the data ended up at. On any failure the temp file
+// is removed and nothing is published.
 func WriteFile(final, ext string, write func(io.Writer) error) (published string, err error) {
+	return writeThenPublish(final, write, func(tmp string) (string, error) {
+		return publish(tmp, final, ext, renameat2NoReplace)
+	})
+}
+
+// ReplaceFile is WriteFile for a name the user chose explicitly: same temp
+// file and atomicity, but the result atomically replaces an existing final
+// (see PublishReplace). It returns final on success.
+func ReplaceFile(final string, write func(io.Writer) error) (string, error) {
+	return writeThenPublish(final, write, func(tmp string) (string, error) {
+		return final, PublishReplace(tmp, final)
+	})
+}
+
+// writeThenPublish runs the create/write/close/publish sequence shared by WriteFile
+// and ReplaceFile, removing the temp file on every failure.
+func writeThenPublish(final string, write func(io.Writer) error, publishTmp func(tmp string) (string, error)) (string, error) {
 	f, err := CreateTemp(final)
 	if err != nil {
 		return "", fmt.Errorf("create temp file for %s: %w", final, err)
@@ -157,7 +236,7 @@ func WriteFile(final, ext string, write func(io.Writer) error) (published string
 	if err := f.Close(); err != nil {
 		return "", errors.Join(fmt.Errorf("close temp file %s: %w", tmp, err), os.Remove(tmp))
 	}
-	published, err = Publish(tmp, final, ext)
+	published, err := publishTmp(tmp)
 	if err != nil {
 		return "", errors.Join(err, os.Remove(tmp))
 	}
