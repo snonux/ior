@@ -129,7 +129,8 @@ marks the files: Parquet footer keys `ior.sampling` and `ior.sampling.totals` (s
 `docs/parquet-querying.md`), and the `.ior.zst` header (format version 2, which `ior collapsed`
 reports on stderr; unsampled recordings keep version 1). Totals are reported as unavailable
 under a filter the kernel counters cannot apply (`-comm`, `-path`, ...). If the kernel's ring
-buffer dropped events (`ring buffer drops: N` in the statistics), the lost rows are in neither
+buffer dropped events (`ring buffer drops: N` in the statistics) or records still buffered at
+stop could not be decoded (`records discarded at stop: N`), the lost rows are in neither
 count, so the totals are labelled `at least` (Parquet: `"lower_bound":true`) instead of exact.
 A family rate (`-syscall-sampling-families FS=10`) is reported once as `FS=10`, with lines and
 totals only for the syscalls that were invoked; syscalls whose probes are not attached are not

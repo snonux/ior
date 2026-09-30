@@ -199,8 +199,8 @@ traced everything:
   number of rows in the file: a row the recorder queue shed (`events were dropped
   (parquet recorder queue overflow)` on stderr) or a pair of a probe that is not active is
   counted as traced but has no row, so compare `total`, not the row count, with the
-  population. When the kernel's ring buffer dropped events (the run statistics say
-  `ring buffer drops: N`), the lost rows are in neither `traced` nor `counted_only`: every
+  population. When events were lost (the run statistics say
+  `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither `traced` nor `counted_only`: every
   element then carries `"lower_bound":true` and its numbers are a lower bound (the true
   total is at least that). The value is the word `unavailable` when the totals cannot be
   trusted at all (a filter the kernel counters cannot apply, or a failed read of them).

@@ -169,6 +169,20 @@ func TestHeadlessParquetLoopWiresTheKernelCountsIntoTheFooter(t *testing.T) {
 // The same production loop, with ring-buffer drops: the footer keeps the
 // numbers but marks them as a lower bound instead of passing them for exact.
 func TestHeadlessParquetFooterMarksLowerBoundsUnderRingbufDrops(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		loss func(*eventLoop)
+	}{
+		{"ring-buffer drops", func(el *eventLoop) { el.numRingbufDrops.Store(17) }},
+		{"records discarded at stop", func(el *eventLoop) { el.numDiscardedAtStop = 5 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testHeadlessParquetFooterLowerBound(t, tc.loss) })
+	}
+}
+
+// testHeadlessParquetFooterLowerBound runs the headless recording with the
+// given loss injected into the loop and checks the footer marks its totals.
+func testHeadlessParquetFooterLowerBound(t *testing.T, loss func(*eventLoop)) {
 	path := filepath.Join(t.TempDir(), "dropped.parquet")
 	cfg := mustParseArgs(t, "-parquet", path, "-syscall-sampling-syscalls", "sync=4")
 	useAggregateSource(t, &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{
@@ -180,7 +194,7 @@ func TestHeadlessParquetFooterMarksLowerBoundsUnderRingbufDrops(t *testing.T) {
 			t.Fatalf("newHeadlessParquetEventLoop() error = %v", err)
 		}
 		el.setCachedComm(emitOrderTestTid, "emitorder")
-		el.numRingbufDrops.Store(17)
+		loss(el)
 		return el
 	}
 	probe := &headlessParquetRunProbe{}

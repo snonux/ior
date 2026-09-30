@@ -188,12 +188,15 @@ func (e *eventLoop) samplingPlan() sampling.Summary {
 // as unavailable rather than as a count that ignores the filter. A drain that
 // failed at the end leaves the counts short for the same reason.
 //
-// Ring-buffer drops do not make the counts unavailable, but inexact: a dropped
-// event is an emitted row that never reached the loop (so it is in neither the
-// traced count nor the kernel aggregate, which only sees invocations that were
-// not emitted). The counts are then a lower bound and are marked as one. The
-// drop counter cannot say which syscalls lost events, so any drop, or a counter
-// that could not be read, marks all of them.
+// Lost rows do not make the counts unavailable, but inexact: a row that was
+// emitted and never decoded is in neither the traced count nor the kernel
+// aggregate (which only sees invocations that were not emitted). The counts are
+// then a lower bound and are marked as one. Two kinds of loss qualify: a
+// ring-buffer drop (the row never reached the loop), and a record discarded at
+// stop (it reached rawCh but the stop-time drain could not decode it, see
+// drainBacklogAtStop). Neither the drop counter nor the discard count can say
+// which syscalls lost rows, so any loss, or a drop counter that could not be
+// read, marks all of them.
 func (e *eventLoop) samplingResult() sampling.Summary {
 	t := e.samplingTally
 	if t == nil {
@@ -208,7 +211,9 @@ func (e *eventLoop) samplingResult() sampling.Summary {
 		return t.summary("reading the kernel counters failed")
 	}
 	summary := t.summary("")
-	if e.numRingbufDrops.Load() > 0 || e.ringbufDropReadFailed.Load() {
+	// numDiscardedAtStop is written by the event-loop goroutine only and is
+	// final here: the caller runs after run returned.
+	if e.numRingbufDrops.Load() > 0 || e.ringbufDropReadFailed.Load() || e.numDiscardedAtStop > 0 {
 		return summary.AtLeast()
 	}
 	return summary

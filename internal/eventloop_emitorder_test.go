@@ -251,6 +251,13 @@ func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 		if el.numDiscardedAtStop != 0 {
 			t.Fatalf("trial %d: numDiscardedAtStop = %d, want 0", trial, el.numDiscardedAtStop)
 		}
+		// Nothing may be emitted once run() returned: give a stray goroutine
+		// (a late flush, a leaked handoff) a moment to misbehave, then check
+		// that the count did not move (and, under -race, that nobody wrote).
+		time.Sleep(time.Millisecond)
+		if len(times) != emittedAtReturn {
+			t.Fatalf("trial %d: %d pairs emitted after run() returned", trial, len(times)-emittedAtReturn)
+		}
 	}
 }
 

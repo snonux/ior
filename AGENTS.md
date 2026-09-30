@@ -526,11 +526,16 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     The totals are withheld, not guessed, when they cannot be trusted: a filter
     the syscall-keyed kernel rows cannot answer (`aggregateIngestAllowedForFilter`,
     e.g. `-comm`) or a last drain that failed gives `Unavailable` with the
-    reason, rates still reported. Ring-buffer drops make them inexact, not
+    reason, rates still reported. Lost rows make them inexact, not
     unavailable: a dropped event is an emitted row that is in neither `traced`
     nor the kernel aggregate, so `samplingResult` marks the `Summary` with
-    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0` or the drop
-    counter could not be read; the stats block says "at least", the footer JSON
+    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0`, the drop
+    counter could not be read, or `numDiscardedAtStop > 0` (records discarded
+    by the stop-time drain are emitted rows that never reached decoding, so
+    they are in neither `traced` nor the kernel aggregate either; pinned by the
+    "records were discarded at stop" case of
+    `TestSamplingTotalsAreALowerBoundUnderRingbufDrops` and the parquet footer
+    twin); the stats block says "at least", the footer JSON
     carries `"lower_bound":true` per element. The report is compact:
     `sampling.New` folds syscalls that run at a `-syscall-sampling-families`
     rate into `Summary.Families` (`FS=10`, once) and keeps an `Entry` only for
@@ -1508,6 +1513,30 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   Evidence, identical 4s fork/exec workload: `E:name` rows 6153/41063 (14.98%)
   → 0/39617 (0.00%), and `-path locale-archive` — the path those opens were
   actually taking — went from 0 matched rows to 6211.
+
+- **Stop-time drain** (task tq2; `internal/eventloop_stopdrain.go`): the BPF
+  ring buffer's poller (libbpfgo) fills `rawCh` (4096 records) ahead of the
+  decoder, and `RingBuffer.Stop` discards what is left in it, so returning at
+  `ctx.Done()` alone lost the tail of the trace window whenever the consumer
+  lagged - in neither `tracepoints` nor `ring buffer drops`, so `drops: 0`
+  overstated completeness. `drainBacklogAtStop` therefore decodes, on the
+  event-loop goroutine, the snapshot of `len(rawCh)` taken at the stop (not
+  what the still-attached probes add meanwhile: the window ends at the stop and
+  chasing a saturated producer would never finish). It is capped at 1 s
+  (`defaultStopDrainBudget`, `stopDrainBudget` in tests) so a stalled stdout
+  pipe or saturated TUI cannot hang the stop, and it is skipped when a `-plain`
+  output write already failed (`outputErr`; the rows have nowhere to go).
+  Whatever it could not decode is added to `numDiscardedAtStop`, raised as a
+  warning through `notifyWarningOrLog` (every mode), and printed as the
+  conditional stats line `records discarded at stop: N (delivered but not
+  decoded; ...)` (`discardedAtStopStatLine`, absent when the backlog was
+  drained, like `outputLossStatLine`). A nonzero count also marks sampling
+  totals as lower bounds (see the sampling notes). This is the userspace half
+  of loss observability: records the kernel could not reserve stay in `ring
+  buffer drops`, and the loss that remains in the kernel ring buffer itself at
+  stop is tracked separately (task us2). Pinned by
+  `internal/eventloop_stopdrain_test.go` and `TestRunStopsPromptlyAfterCancel`
+  (nothing is emitted after `run` returned).
 
 - **Control records in the statistics**: `numTracepoints` counts every non-empty
   ring-buffer record the event loop pulled off the ring. It is incremented

@@ -306,6 +306,9 @@ func TestSamplingTotalsAreALowerBoundUnderRingbufDrops(t *testing.T) {
 	}{
 		{"events were dropped", func(el *eventLoop) { el.numRingbufDrops.Store(211176) }},
 		{"the drop counter could not be read", func(el *eventLoop) { el.ringbufDropReadFailed.Store(true) }},
+		// Rows that reached rawCh but were discarded at stop are lost to the
+		// counts just like dropped ones (task tq2).
+		{"records were discarded at stop", func(el *eventLoop) { el.numDiscardedAtStop = 7 }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

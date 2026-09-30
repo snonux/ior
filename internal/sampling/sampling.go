@@ -63,10 +63,11 @@ type Summary struct {
 	// of their own, and those of a sampled family that have a nonzero total.
 	Entries []Entry
 	// LowerBound is true when Traced and Counted are not exact but only a
-	// lower bound: the kernel dropped events because the ring buffer was full,
-	// and a dropped event is a row that was emitted (so the kernel did not
-	// count it in the aggregate either) and never reached the output. The
-	// true totals are at least the ones stored. Meaningful only when
+	// lower bound: rows were lost after they were emitted, either because the
+	// kernel dropped events (the ring buffer was full) or because records
+	// still buffered at stop were discarded undecoded. Such a row is one the
+	// kernel did not count in the aggregate either and that never reached the
+	// output. The true totals are at least the ones stored. Meaningful only when
 	// Unavailable is empty.
 	LowerBound bool
 	// Unavailable is empty when Traced and Counted are the run's exact
@@ -198,7 +199,7 @@ func (s Summary) Lines() []string {
 	headline := fmt.Sprintf("sampled syscalls (%s): rows are a sample; the counts below are exact kernel totals", rates)
 	calls := "%d calls"
 	if s.LowerBound {
-		headline = fmt.Sprintf("sampled syscalls (%s): rows are a sample and the ring buffer dropped events; "+
+		headline = fmt.Sprintf("sampled syscalls (%s): rows are a sample and some events were lost (ring buffer drops or records discarded at stop); "+
 			"the counts below are lower bounds, the true totals are higher", rates)
 		calls = "at least %d calls"
 	}
