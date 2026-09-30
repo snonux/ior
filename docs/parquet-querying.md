@@ -52,16 +52,25 @@ ior keeps them visible in `ret` but sets `is_error` to `false` and does not coun
 errors (error counters, the errors-only filter, `is_error`). The filter `ret == -512` still
 matches, so the rows can be found on purpose.
 
-What the program experiences depends on the signal:
+What the program experiences depends on the restart code and on whether a signal handler ran
+(Linux x86, `arch/x86/kernel/signal.c`; see also signal(7), "Interruption of system calls and
+library functions by signal handlers"):
 
-- No handler ran (`SIGSTOP`/`SIGCONT`, a ptrace attach, cgroup freezer) or the handler was
-  installed with `SA_RESTART`: the kernel re-executes the call. The row with the restart code
-  is followed by a second row for the restarted call (for `-516` that is `restart_syscall`, which
-  carries no requested sleep). The program never saw a failure.
-- A handler ran without `SA_RESTART`, or the call is never restarted after a handler (a relative
-  `clock_nanosleep`/`nanosleep` interrupted by a handled signal, `-516`): the program gets a real
-  `EINTR`, but ior still shows -512/-514/-516 with `is_error=false`, because the rewrite to
-  -4 happens after `sys_exit`. ior cannot tell that case from a transparent restart.
+- The call is transparently restarted, and the program never saw a failure, when either no
+  handler ran (`SIGSTOP`/`SIGCONT`, a ptrace attach, cgroup freezer, a signal whose action is
+  ignore or default-continue), or a handler ran and the code allows a restart after it:
+  - -513 (`ERESTARTNOINTR`) is always restarted, with or without a handler.
+  - -512 (`ERESTARTSYS`) is restarted when no handler ran, or when the handler was installed with
+    `SA_RESTART`.
+  - -514 (`ERESTARTNOHAND`) is restarted only when no handler ran.
+  - -516 (`ERESTART_RESTARTBLOCK`) is re-executed via `restart_syscall` only when no handler ran.
+  The row with the restart code is followed by a second row for the restarted call (for -516 that
+  is `restart_syscall`, which carries no requested sleep).
+- The program gets a real `EINTR` when a handler ran and the code does not allow a restart:
+  -512 without `SA_RESTART`, -514 (`ERESTARTNOHAND`, for example `pause` or `sigsuspend`) and -516 (a relative `clock_nanosleep`/`nanosleep` interrupted by a handled
+  signal) always. ior still shows the restart code with `is_error=false` in that case, because
+  the rewrite to -4 happens after `sys_exit`. ior cannot tell that case from a transparent
+  restart.
 - A call that itself returns `-EINTR` (-4), for example `epoll_wait` when a signal is
   pending, is a genuine result: `ret=-4`, `is_error=true`. Only the four restart codes are
   excluded. `-515` (`ENOIOCTLCMD`) is not a restart code and stays an error.
