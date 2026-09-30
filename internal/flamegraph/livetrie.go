@@ -36,8 +36,9 @@ type SnapshotNode struct {
 
 // LiveTrie is a thread-safe trie used for live flamegraph snapshots. It only
 // grows until it holds maxNodes nodes; then compactLocked folds the
-// lowest-ranked (low-rate) subtrees into "[other;]" buckets (liveTrieOtherFrame), so memory stays
-// bounded on long sessions while all totals are conserved.
+// lowest-ranked (low-rate) subtrees into "[other;]" buckets
+// (liveTrieOtherFrame), so memory stays bounded on long sessions while all
+// totals are conserved.
 type LiveTrie struct {
 	mu   sync.RWMutex
 	root *trieNode

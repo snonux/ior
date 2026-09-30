@@ -19,9 +19,10 @@ const (
 	// can have, or a real comm/path component spelled "[other]" would share
 	// the bucket's name and path, swap places with it between refreshes and
 	// let zoom land on the wrong node. Every frame source splits on ';'
-	// (appendSplitFrames, appendPathFrames), so no frame ever contains one and the
-	// trailing ';' makes this name unique per parent. It is deliberately not
-	// a control character: those render as placeholders in the TUI.
+	// (appendSplitFrames, appendPathFrames), so no frame ever contains one
+	// and the trailing ';' makes this name unique per parent. It is
+	// deliberately not a control character: those render as placeholders in
+	// the TUI.
 	liveTrieOtherFrame = "[other;]"
 )
 

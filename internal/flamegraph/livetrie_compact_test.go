@@ -387,9 +387,8 @@ func TestLiveTrieBucketNameCannotBeARealFrame(t *testing.T) {
 // TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket reproduces the
 // reviewer's probe: a real "[other]" comm and a compaction bucket under the
 // root while ever more children become visible. Their relative order used to
-// flip with the visible count; now the names differ, so every snapshot lists
-// the same order and unique sibling names, and the real frame keeps its own
-// total.
+// flip with the visible count; now the names differ, so every snapshot has
+// unique sibling names and the real frame keeps its own total.
 func TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "")
 	lt.maxNodes = 40
@@ -401,9 +400,14 @@ func TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket(t *testing.T) {
 		t.Fatal("setup: expected a root compaction bucket")
 	}
 
-	var wantOrder []string
 	// Growing the visible set with steady frames changes how many children
-	// the sort sees, which is what flipped the old order.
+	// the sort sees, which is what flipped the old order. Nothing here
+	// compares the relative order of the two nodes: with distinct names it is
+	// fixed by the name sort and would hold trivially. What guards the fix is
+	// that sibling names stay unique (assertUniqueSiblingNames; the old
+	// "[other]" bucket name fails it as soon as both nodes are visible) and
+	// that the real frame keeps its own total instead of being merged with,
+	// or shadowed by, the bucket.
 	for visible := 0; visible < 30; visible++ {
 		lt.AddRecord(IterRecord{Comm: fmt.Sprintf("steady%02d", visible), Cnt: Counter{Count: 400}})
 		snapshot, _ := lt.SnapshotTree()
@@ -414,27 +418,7 @@ func TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket(t *testing.T) {
 		if real == nil || bucket == nil || real.Total != 1000 {
 			t.Fatalf("visible=%d: real=%+v bucket=%+v, want both present and the real total 1000", visible, real, bucket)
 		}
-		order := realBeforeBucket(snapshot)
-		if wantOrder == nil {
-			wantOrder = []string{order}
-		} else if order != wantOrder[0] {
-			t.Fatalf("visible=%d: real/bucket order changed between refreshes (%s, was %s)", visible, order, wantOrder[0])
-		}
 	}
-}
-
-// realBeforeBucket names the relative order of the real "[other]" frame and
-// the bucket among node's children.
-func realBeforeBucket(node *SnapshotNode) string {
-	for _, child := range node.Children {
-		switch child.Name {
-		case "[other]":
-			return "real-first"
-		case liveTrieOtherFrame:
-			return "bucket-first"
-		}
-	}
-	return "neither"
 }
 
 // assertUniqueSiblingNames fails when any node has two children with the same
