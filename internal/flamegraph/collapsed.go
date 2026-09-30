@@ -63,8 +63,9 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 // render zero-width in any flamegraph. A record whose selected fields all
 // render empty (for example -fields path on a file whose name is empty, or
 // -fields comm with an empty comm) is NOT skipped, because its weight is
-// positive and dropping it would make the collapsed total differ from the
-// recording's event count and the other outputs (CSV, Parquet). It is
+// positive and dropping it would make the collapsed total weight differ from the
+// recording's (the event count for -count count, the sum of the chosen
+// counter otherwise) and from the other outputs (CSV, Parquet). It is
 // counted under the single placeholder frame collapsedEmptyFrame instead,
 // since a collapsed line cannot have an empty stack.
 //
