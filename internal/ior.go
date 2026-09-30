@@ -395,7 +395,10 @@ func startTUITrace(
 	if shutdownReporter != nil && !shutdownReporter.Claim() {
 		return context.Canceled
 	}
-	bpf.SetLoggerCbs(bpf.Callbacks{Log: func(int, string) {}})
+	// libbpf's output must never reach stderr while the dashboard owns the
+	// screen; its WARN lines are collected as setup warnings instead (see
+	// libbpfLogger and setupTraceInfraBPF), the rest is dropped.
+	setLibbpfLogging(true)
 	backgroundOwnsCompletion := false
 	defer func() {
 		if !backgroundOwnsCompletion {
@@ -1014,6 +1017,12 @@ func setupTraceInfraBPF(
 	// logln is a no-op in TUI mode, which previously silently discarded
 	// probe-detach failures (audit domain-10 F2).
 	logTeardown := newLogger(true)
+	// libbpf's WARN lines explain a failed load or attach. In TUI mode they
+	// join the setup warnings for the duration of the load/attach only (the
+	// collector is drained once, when the event loop starts); headless they
+	// already went to stderr and this is a no-op.
+	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
+	defer endLibbpfRouting()
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
 	if err != nil {
 		return nil, nil, err

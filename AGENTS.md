@@ -398,6 +398,7 @@ committed set contains syscalls that only exist on recent mainline kernels
   `TestInitDoesNotArmAutoReset` in `dashboard`; task fc).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
+- **libbpf log policy**: `internal/libbpflog.go` owns libbpf's process-global print callback in every mode (installed at package init, switched by `startTUITrace`). WARN lines are kept, INFO/DEBUG are dropped: libbpfgo's default logger printed ~23.5k DEBUG lines (2.6 MB) to stderr on every headless start. Headless keeps WARN on stderr; TUI never writes stderr and collects WARN lines during BPF load/attach as setup warnings. `IOR_LIBBPF_DEBUG=1` restores the full output for headless modes (ignored in TUI mode).
 
 ## Integration-test output ownership
 
