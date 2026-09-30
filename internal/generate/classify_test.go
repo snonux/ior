@@ -523,17 +523,19 @@ func mustParseAll(t *testing.T, data string) []Format {
 }
 
 // TestMetadataNameCoversEveryKind guards the kindMetadataNames table: every
-// kind after KindNone must have a real name, and unknown kinds report "none".
+// kind between KindNone and the kindCount sentinel must have a real name (so a
+// newly added kind without a table entry fails here), and the sentinel itself,
+// like any unknown kind, reports "none".
 func TestMetadataNameCoversEveryKind(t *testing.T) {
 	if got := KindNone.MetadataName(); got != "none" {
 		t.Fatalf("KindNone.MetadataName() = %q, want none", got)
 	}
-	for k := KindNone + 1; k <= KindTwoFdNames; k++ {
+	for k := KindNone + 1; k < kindCount; k++ {
 		if got := k.MetadataName(); got == "none" || got == "" {
 			t.Errorf("kind %d has no metadata name (got %q)", k, got)
 		}
 	}
-	if got := (KindTwoFdNames + 1).MetadataName(); got != "none" {
+	if got := kindCount.MetadataName(); got != "none" {
 		t.Errorf("out-of-range kind MetadataName() = %q, want none", got)
 	}
 	aliases := map[TracepointKind]string{KindFdSize: "fd", KindTwoFdNames: "two-fd", KindNamedEventfd: "eventfd"}
