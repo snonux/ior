@@ -13,8 +13,9 @@ import (
 
 // NoFileName is the placeholder a pair renders in its file column (CSV
 // output, FileName, the stream tab's File cell) when it carries no file. It
-// is display text only: the global filter's file dimension sees such a pair
-// as the empty value (globalfilter pairCandidate.FileValue), so consumers that
+// is display text only: the global filter's file dimension sees such a pair,
+// and the stream row built from it, as the empty value (globalfilter
+// pairCandidate.FileValue, streamrow Row.FileValue), so consumers that
 // turn a displayed file name back into a filter or a ranking key must treat
 // NoFileName like a blank value. A real file literally named "N:file" is
 // indistinguishable from the placeholder once rendered and is treated the

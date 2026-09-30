@@ -888,9 +888,10 @@ func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 // selected string cell's value and reports the dimension it set; ok is false
 // for a non-string column or a blank cell (a blank value constrains nothing).
 // A File cell showing event.NoFileName counts as blank: the placeholder is
-// display text for "no file", while the global filter sees such a live pair's
-// file as "" (globalfilter pairCandidate.FileValue), so ^N:file$ would keep
-// the buffered placeholder rows yet reject every new event.
+// display text for "no file", while the global filter sees such a row's or
+// live pair's file as "" (streamrow Row.FileValue, globalfilter
+// pairCandidate.FileValue), so ^N:file$ would match nothing at all and blank
+// the stream instead of selecting the fileless rows.
 //
 // The pattern is globalfilter.ExactPattern (^value$), matching the dashboard
 // row filters: Enter on "read" must not also admit readv/pread64, on

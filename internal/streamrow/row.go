@@ -71,7 +71,18 @@ func (r *Row) CommValue() string {
 }
 
 // FileValue reports the file path, the rename destination for rename-like rows.
+// A fileless row reports "" rather than its FileName: New stores the
+// event.NoFileName display placeholder there (so the stream cell, CSV and
+// parquet exports keep rendering "N:file"), but the live pair checkpoint sees
+// the same pair's file as "" (globalfilter pairCandidate.FileValue). Returning
+// the placeholder here let a file filter such as "file" or ^N:file$ keep the
+// buffered rows while rejecting every new live pair (task op2). As documented
+// on event.NoFileName, a real file literally named "N:file" is treated like
+// the placeholder.
 func (r *Row) FileValue() string {
+	if r.FileName == event.NoFileName {
+		return ""
+	}
 	return r.FileName
 }
 
