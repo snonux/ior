@@ -32,6 +32,33 @@ func TestEngineResetClearsAccumulatedStats(t *testing.T) {
 	}
 }
 
+// TestEngineResetClearsRetiredProcesses checks that Reset drops the rows of
+// exited processes and their lifetime numbering too: after a reset, a process
+// with a previously recycled PID starts again as lifetime 0, alone.
+func TestEngineResetClearsRetiredProcesses(t *testing.T) {
+	e := NewEngine(8)
+	var nilEngine *Engine
+	nilEngine.RetireProcess(7) // must not panic
+
+	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 7, types.READ_CLASSIFIED, "old", 7, "/tmp/a", 7, 0, 1000, 50))
+	e.RetireProcess(7)
+	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 7, types.READ_CLASSIFIED, "new", 7, "/tmp/a", 7, 0, 1000, 50))
+	if snap, err := e.Snapshot(); err != nil || len(snap.Processes()) != 2 {
+		t.Fatalf("expected two lifetimes of PID 7 before reset, got %+v (err %v)", snap, err)
+	}
+
+	e.Reset()
+	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 7, types.READ_CLASSIFIED, "after", 7, "/tmp/a", 7, 0, 1000, 50))
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatalf("unexpected snapshot error after reset: %v", err)
+	}
+	procs := snap.Processes()
+	if len(procs) != 1 || procs[0].Comm != "after" || procs[0].Lifetime != 0 || procs[0].Syscalls != 1 {
+		t.Fatalf("expected only a fresh lifetime-0 row after reset, got %+v", procs)
+	}
+}
+
 // TestEngineResetConcurrentWithIngestAndSnapshot is the regression guard for
 // audit finding M5 (AUDIT-REPORT.md section 3, evidence
 // audit/domain-03-statsengine.md F2): Reset, Ingest and Snapshot all serialize

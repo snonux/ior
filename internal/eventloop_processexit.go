@@ -1,12 +1,13 @@
 package internal
 
 import (
+	"ior/internal/statsengine"
 	"ior/internal/types"
 )
 
 // handleProcessExitEvent applies a sched:sched_process_exit control record to
 // the four pieces of state that would otherwise outlive the task the kernel
-// just reported dead.
+// just reported dead, and reports whole-process exits to the stats engine.
 //
 // The fd table: when the record says the whole thread group is dead
 // (ev.IsGroupDead), every (pid, fd) entry of tgid ev.Pid is dropped from the
@@ -88,6 +89,11 @@ import (
 //     parked enter, gap baseline and unconsumed name_to_handle_at pathname of
 //     the thread that actually died are dropped, and its siblings keep theirs.
 //
+// The stats engine: a group-dead exit also ends the process's row in the
+// Processes table (retireStatsProcess), so a later process handed the same
+// PID gets a row and label of its own. A thread exit does not, for the same
+// reason it does not evict fds.
+//
 // A record lost to ring-buffer backpressure simply never evicts (counted in
 // ringbuf_drop_map like every other record); the stale entries linger until
 // the LRU cap trims them, which is the same trade the procfs cache already
@@ -101,6 +107,7 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 		// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
 		e.numGroupDeadExits++
 		e.fdState().deletePid(ev.Pid)
+		e.retireStatsProcess(ev.Pid)
 	}
 	e.evictCachedComm(ev.Tid)
 	// Neither of these guards tid == 0 the way commResolver.evictTid does:
@@ -117,4 +124,20 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// write and close on the descriptor reports it too: a wrong row rather
 	// than a missing one, and a persistent one.
 	e.pendingHandleState().delete(ev.Tid)
+}
+
+// retireStatsProcess tells the stats engine that process pid has exited, when
+// the aggregate sink is the engine (TUI runtimes wire the same Engine as both;
+// headless modes have no engine and no sink). It rides on the sink the way
+// aggregateDrainPeriodSetter does rather than on a dedicated field: the sink
+// is already this loop's handle on the engine.
+//
+// Calling it from the event loop goroutine is what keeps it correct: the print
+// callback ingests every pair synchronously on this goroutine too, so the
+// retirement lands after the dying process's last pair and before the first
+// pair of any successor with the same PID.
+func (e *eventLoop) retireStatsProcess(pid uint32) {
+	if retirer, ok := e.aggregateSink.(statsengine.ProcessRetirer); ok {
+		retirer.RetireProcess(pid)
+	}
 }

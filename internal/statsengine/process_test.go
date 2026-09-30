@@ -274,3 +274,105 @@ func newThreadPair(pid, tid uint32, comm string) *event.Pair {
 	pair.EnterEv = &types.RetEvent{Pid: pid, Tid: tid}
 	return pair
 }
+
+// TestProcessAccumulatorRetireSplitsRecycledPID is the regression test for
+// task ro2: once a PID's process has exited (RetireProcess), a new process
+// handed the same PID must get its own row, count and label, and the dead
+// one's row must stay listed so the table remains cumulative.
+func TestProcessAccumulatorRetireSplitsRecycledPID(t *testing.T) {
+	acc := newProcessAccumulator()
+	for i := 0; i < 3; i++ {
+		acc.Add(newThreadPair(2000, 2000, "a"))
+	}
+	acc.RetireProcess(2000)
+	for i := 0; i < 5; i++ {
+		acc.Add(newThreadPair(2000, 2000, "b"))
+	}
+	acc.RetireProcess(2000)
+	acc.Add(newThreadPair(2000, 2000, "c"))
+
+	want := []ProcessSnapshot{
+		{PID: 2000, Lifetime: 1, Comm: "b", Syscalls: 5},
+		{PID: 2000, Lifetime: 0, Comm: "a", Syscalls: 3},
+		{PID: 2000, Lifetime: 2, Comm: "c", Syscalls: 1},
+	}
+	assertProcessLifetimes(t, acc.Snapshot(time.Second), want)
+}
+
+// TestProcessAccumulatorRetireNoOps covers the retirements that must not
+// change anything: an unknown PID, a PID retired twice, and a nil accumulator.
+func TestProcessAccumulatorRetireNoOps(t *testing.T) {
+	var nilAcc *processAccumulator
+	nilAcc.RetireProcess(1) // must not panic
+
+	acc := newProcessAccumulator()
+	acc.Add(newThreadPair(10, 10, "a"))
+	acc.RetireProcess(99) // never seen
+	acc.RetireProcess(10)
+	acc.RetireProcess(10) // already retired, no live row
+	acc.Add(newThreadPair(10, 10, "b"))
+
+	assertProcessLifetimes(t, acc.Snapshot(time.Second), []ProcessSnapshot{
+		{PID: 10, Lifetime: 0, Comm: "a", Syscalls: 1},
+		{PID: 10, Lifetime: 1, Comm: "b", Syscalls: 1},
+	})
+	if len(acc.nextLifetime) != 0 {
+		t.Fatalf("nextLifetime should be empty while every PID has a live row, got %v", acc.nextLifetime)
+	}
+}
+
+// TestProcessAccumulatorCompactsRetiredRows checks that retired rows count
+// against the memory bound: compaction keeps the topN best rows of either
+// kind, and drops the lifetime bookkeeping of PIDs whose rows all went.
+func TestProcessAccumulatorCompactsRetiredRows(t *testing.T) {
+	acc := newProcessAccumulatorWithLimits(2, 4)
+	for i := 0; i < 5; i++ {
+		acc.Add(newProcessPair(10, "hot-dead", 10, 1))
+	}
+	acc.RetireProcess(10)
+	for i := 0; i < 3; i++ {
+		acc.Add(newProcessPair(20, "warm-live", 10, 1))
+	}
+	// The fifth row (PID 3) triggers compaction down to PIDs 10 and 20, so
+	// retiring PID 3 afterwards finds no live row and is a no-op.
+	for pid := uint32(1); pid <= 3; pid++ {
+		acc.Add(newProcessPair(pid, "cold-dead", 10, 1))
+		acc.RetireProcess(pid)
+	}
+
+	if got := len(acc.byPID) + len(acc.retired); got != 2 {
+		t.Fatalf("expected compaction to keep topN rows, got %d live + %d retired", len(acc.byPID), len(acc.retired))
+	}
+	if _, ok := acc.nextLifetime[1]; ok {
+		t.Fatalf("nextLifetime kept a PID whose rows were all compacted away: %v", acc.nextLifetime)
+	}
+	if acc.nextLifetime[10] != 1 {
+		t.Fatalf("nextLifetime[10] = %d, want 1 while its retired row survives", acc.nextLifetime[10])
+	}
+	assertProcessLifetimes(t, acc.Snapshot(time.Second), []ProcessSnapshot{
+		{PID: 10, Lifetime: 0, Comm: "hot-dead", Syscalls: 5},
+		{PID: 20, Lifetime: 0, Comm: "warm-live", Syscalls: 3},
+	})
+
+	// The retired row stays retired after compaction: PID 10's next process
+	// gets a new row rather than reviving the old one.
+	acc.Add(newProcessPair(10, "reborn", 10, 1))
+	if got := acc.byPID[10]; got == nil || got.lifetime != 1 || got.count != 1 {
+		t.Fatalf("expected a fresh lifetime-1 row for PID 10, got %+v", got)
+	}
+}
+
+// assertProcessLifetimes compares the identity and count of each row.
+func assertProcessLifetimes(t *testing.T, got, want []ProcessSnapshot) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		g, w := got[i], want[i]
+		if g.PID != w.PID || g.Lifetime != w.Lifetime || g.Comm != w.Comm || g.Syscalls != w.Syscalls {
+			t.Fatalf("row %d = %+v, want PID %d lifetime %d comm %q syscalls %d",
+				i, g, w.PID, w.Lifetime, w.Comm, w.Syscalls)
+		}
+	}
+}

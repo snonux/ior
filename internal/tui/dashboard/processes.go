@@ -87,7 +87,11 @@ func compareProcessDefault(left, right statsengine.ProcessSnapshot) int {
 	if cmp := compareUint64Desc(left.Bytes, right.Bytes); cmp != 0 {
 		return cmp
 	}
-	return compareUint64Asc(uint64(left.PID), uint64(right.PID))
+	if cmp := compareUint64Asc(uint64(left.PID), uint64(right.PID)); cmp != 0 {
+		return cmp
+	}
+	// A recycled PID has one row per lifetime; order them oldest first.
+	return compareUint64Asc(uint64(left.Lifetime), uint64(right.Lifetime))
 }
 
 func processSortKeyForColumn(column int) (processSortKey, bool) {
@@ -135,9 +139,11 @@ func processSortLabel(sortState tableSortState[processSortKey]) string {
 	}
 }
 
-func findProcessOffset(rows []statsengine.ProcessSnapshot, pid uint32) (int, bool) {
+// findProcessOffset returns the index of the row with selection key key
+// (processKey).
+func findProcessOffset(rows []statsengine.ProcessSnapshot, key string) (int, bool) {
 	for idx, row := range rows {
-		if row.PID == pid {
+		if processRowKey(row) == key {
 			return idx, true
 		}
 	}

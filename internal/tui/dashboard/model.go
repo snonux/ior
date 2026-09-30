@@ -449,18 +449,20 @@ func (m *Model) handleFilesSortKey(reverse bool) (bool, tea.Cmd) {
 }
 
 // handleProcessesSortKey is the Processes tab's HandleSort hook; the anchor
-// row is the selected PID, so the selection survives the re-order.
+// row is the selected process row (processKey: PID and lifetime, since a
+// recycled PID has one row per lifetime), so the selection survives the
+// re-order.
 func (m *Model) handleProcessesSortKey(reverse bool) (bool, tea.Cmd) {
 	rows := m.sortedProcessTableRows()
 	idx := m.processesTab.selectedIndex(len(rows))
-	var selectedPID uint32
+	var selectedKey string
 	if idx < len(rows) {
-		selectedPID = rows[idx].PID
+		selectedKey = processRowKey(rows[idx])
 	}
 	handled := m.processesTab.applySort(reverse, m.processesTab.col,
 		processSortKeyForColumn,
 		func(current int) int {
-			return reanchorOffset(current, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+			return reanchorOffset(current, m.sortedProcessTableRows(), selectedKey, findProcessOffset)
 		})
 	return handled, nil
 }
@@ -621,7 +623,7 @@ func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
 // empty key matches no row.
 func processByKey(rows []statsengine.ProcessSnapshot, key string) (statsengine.ProcessSnapshot, bool) {
 	for _, row := range rows {
-		if processKey(row.PID) == key {
+		if processRowKey(row) == key {
 			return row, true
 		}
 	}
@@ -886,7 +888,7 @@ func (m *Model) keepSyscallsSelection(change func()) {
 // chart keeps its own selection, the offset still indexes the table rows.
 func (m *Model) processesTableSelection() keyedSelection {
 	return keyedSelection{offset: &m.processesTab.offset, keys: func() []string {
-		return keysOf(m.sortedProcessTableRows(), func(row statsengine.ProcessSnapshot) string { return processKey(row.PID) })
+		return keysOf(m.sortedProcessTableRows(), processRowKey)
 	}}
 }
 

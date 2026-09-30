@@ -98,10 +98,16 @@ type FileSnapshot struct {
 	TotalLatencyNs uint64
 }
 
-// ProcessSnapshot is an aggregated per-process entry.
+// ProcessSnapshot is an aggregated per-process entry: one process lifetime.
+// A PID the kernel recycled during the session appears once per lifetime,
+// each row with its own counts and comm.
 type ProcessSnapshot struct {
-	PID  uint32
-	Comm string
+	PID uint32
+	// Lifetime tells apart the rows of one PID: 0 for the first process seen
+	// with it in the session, counting up with each one that exited before
+	// (see Engine.RetireProcess). It is stable for the life of a row.
+	Lifetime uint32
+	Comm     string
 
 	Syscalls   uint64
 	RatePerSec float64
