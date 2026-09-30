@@ -273,6 +273,20 @@ func TestStatsReportsZeroRingbufDrops(t *testing.T) {
 	}
 }
 
+// TestStatsReportsGroupDeadExits pins the "group-dead exits: N" statistics
+// line: TestTidFilterForwardsGroupDeadExitOfUntracedThread (integrationtests)
+// parses it to prove the -tid group-dead bypass forwarded a record.
+func TestStatsReportsGroupDeadExits(t *testing.T) {
+	el := &eventLoop{done: make(chan struct{}), dropSrc: &ringbufDropSourceStub{}}
+	el.startTime = time.Now().Add(-time.Second)
+	el.numGroupDeadExits = 3
+	close(el.done)
+
+	if stats := el.stats(); !strings.Contains(stats, "\tgroup-dead exits: 3\n") {
+		t.Fatalf("stats missing the group-dead exits line:\n%s", stats)
+	}
+}
+
 // TestRingbufDropCounterConcurrentWithStatsRead exercises the actual data race
 // the atomic counter exists for: the monitor goroutine stores new totals while
 // the shutdown path reads them for the statistics summary. Meaningful under
