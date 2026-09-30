@@ -414,6 +414,46 @@ func TestParseResetTimerNegativeReturnsError(t *testing.T) {
 	}
 }
 
+// The synthetic test modes cannot refill what an auto-reset clears, so they
+// default the timer off; every other mode keeps the 30s default.
+func TestParseResetTimerDefaultsOffInTestModes(t *testing.T) {
+	for _, flagName := range []string{"-testflames", "-testliveflames"} {
+		t.Run(flagName, func(t *testing.T) {
+			cfg, err := parseForTest(t, flagName)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			if cfg.ResetTimer != 0 {
+				t.Fatalf("reset timer with %s = %v, want 0 (disabled)", flagName, cfg.ResetTimer)
+			}
+		})
+	}
+}
+
+func TestParseResetTimerExplicitWinsInTestModes(t *testing.T) {
+	for _, explicit := range []string{"30s", "45s"} {
+		cfg, err := parseForTest(t, "-testflames", "-resetTimer", explicit)
+		if err != nil {
+			t.Fatalf("parse returned error: %v", err)
+		}
+		want, _ := time.ParseDuration(explicit)
+		if cfg.ResetTimer != want {
+			t.Fatalf("reset timer = %v, want explicit %v", cfg.ResetTimer, want)
+		}
+	}
+}
+
+// Negative: the test-mode default must not leak into real tracing modes.
+func TestParseResetTimerTestModeDefaultDoesNotLeak(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.ResetTimer != DefaultResetTimer {
+		t.Fatalf("reset timer = %v, want %v outside test modes", cfg.ResetTimer, DefaultResetTimer)
+	}
+}
+
 func TestParseDurationNegativeReturnsError(t *testing.T) {
 	_, err := parseForTest(t, "-duration", "-1")
 	if err == nil {

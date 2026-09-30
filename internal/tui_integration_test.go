@@ -2127,6 +2127,42 @@ func TestTUIIntegration_Global_AutoResetCycleShowsInterval(t *testing.T) {
 	s.waitFor("auto-reset: ", "/1m0s")
 }
 
+// tuiNewFlamesModelFromArgs starts a static test-flames session from a real
+// command line (flags.ParseArgs), so the auto-reset default that the CLI
+// resolves for -testflames reaches the model, unlike tuiTestConfig, which
+// starts from the bare flags.NewFlags defaults.
+func tuiNewFlamesModelFromArgs(t *testing.T, args ...string) *tuiSession {
+	t.Helper()
+	cfg, err := flags.ParseArgs(args)
+	if err != nil {
+		t.Fatalf("ParseArgs(%q): %v", args, err)
+	}
+	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarter(cfg)))
+}
+
+// TestTUIIntegration_TestFlamesCLI_AutoResetOffByDefault guards the regression
+// where `ior -testflames` ran the 30s auto-reset: the reset clears the stats
+// engine, the static seed is never re-injected, and the dashboard went empty
+// for good. Through the real CLI resolution the status line must say "off".
+func TestTUIIntegration_TestFlamesCLI_AutoResetOffByDefault(t *testing.T) {
+	s := tuiNewFlamesModelFromArgs(t, "-testflames")
+	s.waitFor("view:root")
+	s.typeStr("3")
+	s.waitFor("Syscall", "auto-reset: off")
+	if scr := s.screen(); strings.Contains(scr, "auto-reset: ") && strings.Contains(scr, "/30s") {
+		t.Fatalf("-testflames armed the 30s auto-reset:\n%s", scr)
+	}
+}
+
+// TestTUIIntegration_TestFlamesCLI_ExplicitResetTimerIsHonoured is the negative
+// counterpart: a user who passes -resetTimer to -testflames still gets it.
+func TestTUIIntegration_TestFlamesCLI_ExplicitResetTimerIsHonoured(t *testing.T) {
+	s := tuiNewFlamesModelFromArgs(t, "-testflames", "-resetTimer", "5m")
+	s.waitFor("view:root")
+	s.typeStr("3")
+	s.waitFor("Syscall", "auto-reset: ", "/5m0s")
+}
+
 // --- Terminal resize (tea.WindowSizeMsg) ------------------------------------
 //
 // The model forwards tea.WindowSizeMsg to the dashboard, which re-renders its

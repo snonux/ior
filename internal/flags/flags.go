@@ -116,7 +116,9 @@ func (f Config) IsRawOutputMode() bool {
 // DefaultResetTimer is the default cadence for the dashboard's auto-reset
 // timer. It periodically clears aggregate state (live flamegraph trie and
 // stats engine) — the same effect as pressing `r` — to prevent unbounded
-// growth during long traces. A value of 0 disables auto-reset entirely.
+// growth during long traces. A value of 0 disables auto-reset entirely. The
+// synthetic -testflames/-testliveflames modes default to 0 instead (see
+// applyTestModeResetDefault).
 const DefaultResetTimer = 30 * time.Second
 
 // NewFlags returns a configuration instance initialized with project defaults.
@@ -218,10 +220,34 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	if err := resolveSamplingRates(&cfg, familySampling, syscallSampling); err != nil {
 		return Config{}, err
 	}
+	applyTestModeResetDefault(fs, &cfg)
 	if err := validateConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// applyTestModeResetDefault turns the dashboard auto-reset off for the
+// synthetic -testflames/-testliveflames modes unless the user passed
+// -resetTimer explicitly. The reset clears the stats engine (and the trie),
+// but the synthetic sources only seed once at start (-testflames) or reseed
+// just the flamegraph trie (-testliveflames), so with the 30s default the
+// dashboard would go permanently empty ("Syscalls: 0") after the first reset.
+// A real trace refills those aggregates; these modes cannot. An explicit
+// -resetTimer, including -resetTimer=30s, is still honoured.
+func applyTestModeResetDefault(fs *flag.FlagSet, cfg *Config) {
+	if !cfg.TestFlames && !cfg.TestLiveFlames {
+		return
+	}
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "resetTimer" {
+			explicit = true
+		}
+	})
+	if !explicit {
+		cfg.ResetTimer = 0
+	}
 }
 
 // registerFlags binds all CLI flags to cfg and returns the string pointers for
@@ -304,7 +330,7 @@ func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
 		"High-frequency refresh interval for TUI flamegraph and stream tabs (0 = fall back to the built-in 200ms flame/stream tick, not to the slower dashboard cadence)")
 	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI stream CSV export (e and stream-tab x/X/E shortcuts plus their hints; separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
-		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
+		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable (default 0 with -testflames/-testliveflames, whose synthetic data is not re-seeded after a reset)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
 }
 
