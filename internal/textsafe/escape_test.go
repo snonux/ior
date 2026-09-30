@@ -13,7 +13,8 @@ import (
 const osc8Payload = "\x1b]8;;http://evil\aclick\x1b]8;;\a"
 
 // TestEscape checks the notation for every unsafe class and that safe text
-// (ASCII, CJK, emoji ZWJ sequences, contextual ZWNJ and variation selectors, backslashes) is kept verbatim.
+// (ASCII, CJK, emoji ZWJ sequences, contextual ZWNJ and variation selectors,
+// backslashes) is kept verbatim.
 func TestEscape(t *testing.T) {
 	tests := []struct{ name, in, want string }{
 		{"OSC 8 link", osc8Payload, `\x1b]8;;http://evil\x07click\x1b]8;;\x07`},

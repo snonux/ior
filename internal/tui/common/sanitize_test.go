@@ -294,6 +294,73 @@ func TestRenderTableRowSanitizesCells(t *testing.T) {
 	}
 }
 
+// contextRunes are the runes whose classification depends on, or can change,
+// the context of a neighbour (see textsafe's trickyRunes): joiners and
+// selectors, format marks that are replaced although they belong to a
+// script (Mongolian FVS, Khmer U+17B4/17B5, an IVS), keycap and emoji bases,
+// and a letter or virama of each script that keeps a ZWNJ.
+var contextRunes = []rune{
+	'\u200d', '\u200c', '\ufe0e', '\ufe0f',
+	0x180B, 0x180F, 0x17B4, 0x17B5, 0xE0100, 0xFE00, 0x20E3,
+	'a', '1', '\x1b', 0x2764, 0x1F600, 0x1F3FD, 0x1F1E9,
+	0x0645, 0x0710, 0x1820, 0x0915, 0x094D, 0x0995, 0x0B95, 0x1000, 0x1780,
+}
+
+// TestSanitizeIsIdempotentForContextRunes is the Sanitize twin of the
+// textsafe Escape idempotence test: a replaced rune must never have been the
+// neighbour that kept a context-dependent rune, otherwise the second pass
+// (over the '?' placeholders) rejects what the first pass kept. The named
+// inputs are the Mongolian and Khmer counterexamples; the generated corpus
+// covers every combination of up to four context runes.
+func TestSanitizeIsIdempotentForContextRunes(t *testing.T) {
+	check := func(s string) {
+		t.Helper()
+		once := Sanitize(s)
+		if twice := Sanitize(once); twice != once {
+			t.Fatalf("Sanitize(%q) = %q, but sanitising again gives %q", s, once, twice)
+		}
+		if textsafe.FirstUnsafe(once, false) >= 0 {
+			t.Fatalf("Sanitize(%q) = %q still has an unsafe rune", s, once)
+		}
+	}
+	for _, s := range []string{
+		"\u1820\u180b\u200c\u1820", "\u1780\u17b4\u200c\u1781", "\u1780\u200c\u17b5\u1781",
+		"\u0645\u200c\u06cc", "\U0001F1E9\u200d\U0001F1EA",
+	} {
+		check(s)
+	}
+	var build func(prefix []rune)
+	build = func(prefix []rune) {
+		if len(prefix) > 0 {
+			check(string(prefix))
+		}
+		if len(prefix) == 4 {
+			return
+		}
+		for _, r := range contextRunes {
+			build(append(prefix, r))
+		}
+	}
+	build(make([]rune, 0, 4))
+}
+
+// TestSanitizeZWNJIgnoresReplacedMarks checks the concrete outputs for the
+// counterexamples: the ZWNJ next to a replaced Mongolian or Khmer mark is
+// replaced in the first pass already, and a real Persian ZWNJ stays.
+func TestSanitizeZWNJIgnoresReplacedMarks(t *testing.T) {
+	for _, tt := range []struct{ name, in, want string }{
+		{"Mongolian FVS before ZWNJ", "\u1820\u180b\u200c\u1820", "\u1820??\u1820"},
+		{"Khmer U+17B4 before ZWNJ", "\u1780\u17b4\u200c\u1781", "\u1780??\u1781"},
+		{"Khmer U+17B5 after ZWNJ", "\u1780\u200c\u17b5\u1781", "\u1780??\u1781"},
+		{"Persian ZWNJ kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+		{"regional indicators joined by ZWJ", "\U0001F1E9\u200d\U0001F1EA", "\U0001F1E9?\U0001F1EA"},
+	} {
+		if got := Sanitize(tt.in); got != tt.want {
+			t.Errorf("%s: Sanitize(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}
+
 func BenchmarkSanitizeCleanASCII(b *testing.B) {
 	s := "/usr/lib/x86_64-linux-gnu/libc.so.6"
 	b.ReportAllocs()

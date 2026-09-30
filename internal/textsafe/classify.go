@@ -67,10 +67,27 @@ const (
 // ClassAt decodes the rune at byte offset i of s and returns its class and
 // its encoded size (1 for an invalid byte). The runes around i are looked up
 // only for a ZWJ, ZWNJ or variation selector, so the common path pays
-// nothing for that context. The context of a replaced rune never changes:
-// the runes a rule looks at (emoji bases, letters, keycap bases) are Safe
-// themselves, so classifying an already sanitised or escaped string again
-// yields the same result.
+// nothing for that context. The decision is stable: every rune a rule accepts
+// as context (emoji base, keycap base, letter or mark) is itself Safe, and
+// letters or marks that ClassAt would replace (the Mongolian free variation
+// selectors, Khmer U+17B4/17B5, ...) are never accepted as context, so
+// classifying an already escaped string, or the output of Sanitize, again
+// yields the same result; the idempotence tests cover the tricky neighbours.
+//
+// Trade-offs the context rules accept, because a name that an operator
+// cannot tell apart from another name is worse than a lost joiner:
+//
+//   - ZWNJ is replaced in scripts that are not in zwnjScripts (Tibetan, Lao,
+//     Thai, Balinese, Javanese, N'Ko, Adlam, Mandaic), between an Arabic
+//     letter and a digit or Latin letter, and next to any other script;
+//   - ZWJ is replaced outside emoji sequences, which costs the conjunct
+//     shaping it does in some Indic and Arabic text;
+//   - the standardized variation selectors VS1..VS14, the ideographic
+//     variation selectors U+E0100..E01EF (IVS) and the Mongolian free
+//     variation selectors U+180B..180D/180F are replaced, so some Japanese
+//     and Mongolian names lose the glyph variant they select. They are a
+//     known channel for invisible data smuggling and change no visible text
+//     unless a font supports the variant.
 func ClassAt(s string, i int) (Class, int) {
 	c := s[i]
 	if c >= 0x20 && c < 0x7f {
@@ -224,6 +241,9 @@ func isKeycapBase(r rune) bool {
 // zwnjScripts lists the scripts whose orthography uses U+200C to break a
 // cursive join (Arabic-script Persian, Urdu, Pashto, ...) or an Indic conjunct
 // (after a virama), so that a ZWNJ between their letters is meaningful text.
+// Scripts outside the list (Tibetan, Lao, Thai, ...) lose their ZWNJ, see
+// the trade-offs in ClassAt. TestZWNJKeptBetweenScriptLetters pins every
+// entry, so dropping one is noticed.
 var zwnjScripts = []*unicode.RangeTable{
 	unicode.Arabic, unicode.Syriac, unicode.Mongolian,
 	unicode.Devanagari, unicode.Bengali, unicode.Gurmukhi, unicode.Gujarati,
@@ -241,7 +261,7 @@ var zwnjScripts = []*unicode.RangeTable{
 func separatesJoiningLetters(s string, i, size int) bool {
 	prev, _ := utf8.DecodeLastRuneInString(s[:i])
 	next, _ := utf8.DecodeRuneInString(s[i+size:])
-	if !isLetterOrMark(prev) || !isLetterOrMark(next) {
+	if !isJoiningContext(prev) || !isJoiningContext(next) {
 		return false
 	}
 	for _, script := range zwnjScripts {
@@ -252,27 +272,25 @@ func separatesJoiningLetters(s string, i, size int) bool {
 	return false
 }
 
-// isLetterOrMark reports whether r is a letter or a combining mark (an Indic
-// virama is a mark).
-func isLetterOrMark(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsMark(r)
+// isJoiningContext reports whether r may stand next to a ZWNJ as the letter
+// or combining mark it separates (an Indic virama is a mark). A mark that
+// ClassAt itself replaces, such as the Mongolian free variation selectors or
+// Khmer U+17B4/17B5, is excluded: it disappears from the text on the first
+// pass, so accepting it would keep a ZWNJ that the second pass (over the
+// escaped or sanitised text) rejects.
+func isJoiningContext(r rune) bool {
+	return (unicode.IsLetter(r) || unicode.IsMark(r)) && !IsInvisibleFormat(r)
 }
 
 // isEmojiBase reports whether r may stand next to a ZWJ or take a variation
-// selector: an Extended_Pictographic rune or a skin-tone modifier
-// (U+1F3FB..1F3FF). U+FE0F is deliberately not one, so a selector after a
-// letter cannot pose as an emoji. Go's unicode package has no
-// Extended_Pictographic table, so the emoji blocks are approximated by range.
+// selector: a rune that is Extended_Pictographic, Emoji_Modifier_Base or an
+// Emoji_Modifier (skin tone), see emojiBases. U+FE0F is deliberately not
+// one, so a selector after a letter cannot pose as an emoji. Regional
+// indicators are not either: flags never contain a ZWJ. Two Extended_Pictographic
+// runes around a ZWJ are kept even where no emoji ZWJ sequence is defined for
+// them, because Unicode text segmentation (UAX #29, rule GB11) also treats
+// that as one grapheme cluster; the set is what keeps ordinary symbols such as
+// arrows and geometric shapes out.
 func isEmojiBase(r rune) bool {
-	switch {
-	case r == 0xA9, r == 0xAE, r == 0x203C, r == 0x2049,
-		r == 0x2122, r == 0x2139, r == 0x24C2, r == 0x3030, r == 0x303D,
-		r == 0x3297, r == 0x3299:
-		return true
-	case r >= 0x2194 && r <= 0x21FF, r >= 0x2300 && r <= 0x23FF,
-		r >= 0x25A0 && r <= 0x27BF, r >= 0x2934 && r <= 0x2935,
-		r >= 0x2B00 && r <= 0x2BFF, r >= 0x1F000 && r <= 0x1FFFF:
-		return true
-	}
-	return false
+	return unicode.Is(emojiBases, r)
 }
