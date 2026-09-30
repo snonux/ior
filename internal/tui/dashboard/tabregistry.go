@@ -149,8 +149,14 @@ type tabDescriptor struct {
 //
 // It is populated in init rather than by its declaration because the hooks
 // legitimately reach back into the registry (a Files key toggles grouping,
-// which refreshes every tab's bubble chart through the registry); as a
+// which refreshes the bubble charts through the registry; see
+// Model.refreshBubbleData, which feeds only the tabs in bubbles mode); as a
 // package-level initializer that is a compile-time initialization cycle.
+// A chart whose tab is in table or treemap mode is therefore not fed: it keeps
+// its stale nodes and selected ID until bubbles mode is next entered
+// (cycleVisualizationMode refreshes on entry), then animates from the old
+// positions to the new ones. That is benign: nothing renders or reads it
+// meanwhile.
 // Package-level var initializers run before init, so none of them may read
 // the registry (directly or through orderedTabs, lookupTab,
 // forEachBubbleChart and friends): they would see it empty.
