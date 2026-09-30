@@ -214,12 +214,14 @@ func TestViewInvisibleReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestVisibleRowsDefault verifies the fallback when height is zero.
+// TestVisibleRowsDefault verifies an unreported height budgets rows for the
+// same defaultHeight View renders into, so Update and View agree.
 func TestVisibleRowsDefault(t *testing.T) {
 	m := NewModel(nil)
 	m.height = 0
-	if got := m.visibleRows(); got != 10 {
-		t.Fatalf("visibleRows with height=0 = %d, want 10", got)
+	want := NewModel(nil).SetSize(0, defaultHeight).visibleRows()
+	if got := m.visibleRows(); got != want {
+		t.Fatalf("visibleRows with height=0 = %d, want %d (defaultHeight)", got, want)
 	}
 }
 

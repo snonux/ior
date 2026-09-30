@@ -238,3 +238,44 @@ func TestProbeModalWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestGrowingHeightPullsOffsetBack is the jo2 review 2 regression: with the
+// list scrolled to its end, a taller terminal must show more probes rather
+// than keep the old offset and pad the window with blank rows.
+func TestGrowingHeightPullsOffsetBack(t *testing.T) {
+	const total = 300
+	m := NewModel(&fakeManager{states: manyProbes(total)}).SetSize(80, 24).Open()
+	for i := 0; i < total-1; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	m = m.SetSize(80, 50)
+	rows := m.visibleRows()
+	if m.offset != total-rows {
+		t.Fatalf("offset = %d, want %d (len - rows)", m.offset, total-rows)
+	}
+	l := m.layout()
+	box := l.box.Render(strings.Join(m.buildProbeLines(l, m.filtered()), "\n"))
+	if got := lipgloss.Height(box); got != 50 {
+		t.Fatalf("box height = %d, want 50 (window filled)", got)
+	}
+	assertCursorInWindow(t, m, "after growing")
+}
+
+// TestLeavingSearchAtEndPullsOffsetBack checks the same pull-back when the
+// budget grows because the search line disappears (esc out of search).
+func TestLeavingSearchAtEndPullsOffsetBack(t *testing.T) {
+	const total = 100
+	m := NewModel(&fakeManager{states: manyProbes(total)}).SetSize(80, 24).Open()
+	for i := 0; i < total-1; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	// Entering search shrinks the budget, scrolling the end one row further.
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if want := total - m.visibleRows(); m.offset != want {
+		t.Fatalf("offset = %d, want %d while searching", m.offset, want)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if want := total - m.visibleRows(); m.offset != want {
+		t.Fatalf("offset = %d, want %d after leaving search", m.offset, want)
+	}
+}
