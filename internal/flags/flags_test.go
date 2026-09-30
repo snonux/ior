@@ -703,21 +703,66 @@ func TestParseRejectsSelectionThatMatchesNoTracepoint(t *testing.T) {
 
 // TestParseHintsAtBareSyscallNamePattern pins the message for the likely typo:
 // -tps matches tracepoint names (sys_enter_openat), so "^openat$" selects
-// nothing although the syscall exists. The error must point at -tps openat,
-// and a pattern that matches neither form must not get the hint.
+// nothing although the syscall exists. The error must point at the pattern
+// with the anchors stripped, and only when following that advice would
+// really work: the hint is judged by the real selector, so an allowlist or an
+// exclude that would still empty the retry must not get it.
 func TestParseHintsAtBareSyscallNamePattern(t *testing.T) {
-	_, err := parseForTest(t, "-tps", "^openat$")
-	if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
-		!strings.Contains(err.Error(), "sys_enter_openat") || !strings.Contains(err.Error(), "-tps openat") {
-		t.Fatalf("error = %v, want the empty-selection diagnostic with the bare-name hint", err)
+	const hint = "so try -tps "
+	hinted := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-tps", "^openat$"}, hint + "openat (without"},
+		// The hint names the user's own pattern, not always openat.
+		{[]string{"-tps", "^getpid$"}, hint + "getpid (without"},
+		{[]string{"-tps", "^read$,^getpid$"}, hint + "read,getpid (without"},
+		// An allowlist that admits the syscall does not block the retry.
+		{[]string{"-tps", "^openat$", "-trace-syscalls", "openat"}, hint + "openat (without"},
 	}
-	_, err = parseForTest(t, "-tps", "nonexistent_zzz")
-	if err == nil || strings.Contains(err.Error(), "bare syscall") {
-		t.Fatalf("error = %v, want no bare-name hint for a pattern matching nothing", err)
+	for _, tc := range hinted {
+		_, err := parseForTest(t, tc.args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
+			!strings.Contains(err.Error(), "sys_enter_openat") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("args %v: error = %v, want the empty-selection diagnostic containing %q", tc.args, err, tc.want)
+		}
 	}
-	// An exclude that removes the only bare-name match must not hint either.
-	_, err = parseForTest(t, "-tps", "^openat$", "-tpsExclude", "openat")
-	if err == nil || strings.Contains(err.Error(), "bare syscall") {
-		t.Fatalf("error = %v, want no hint when the exclude list removes the bare match", err)
+	noHint := [][]string{
+		// Matches neither the full nor the bare name.
+		{"-tps", "nonexistent_zzz"},
+		// The retry "-tps openat" is excluded again by "openat".
+		{"-tps", "^openat$", "-tpsExclude", "openat"},
+		// The allowlist still rejects read, so "-tps read" would fail again.
+		{"-tps", "read", "-trace-syscalls", "openat"},
+		{"-tps", "^read$", "-trace-syscalls", "openat"},
+		// Nothing to strip: the user already typed -tps openat, and the
+		// exclude of the full names is what empties the selection.
+		{"-tps", "openat", "-tpsExclude", "sys_enter_openat,sys_exit_openat"},
+		// Stripping gives "openat", which "_openat" excludes again.
+		{"-tps", "^openat$", "-tpsExclude", "_openat"},
+	}
+	for _, args := range noHint {
+		_, err := parseForTest(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
+			strings.Contains(err.Error(), "bare syscall") {
+			t.Errorf("args %v: error = %v, want the diagnostic without the anchor hint", args, err)
+		}
+	}
+}
+
+// TestStripAnchors pins the anchor removal: one leading ^ and one trailing
+// unescaped $, nothing else, so a literal "\$" survives.
+func TestStripAnchors(t *testing.T) {
+	for in, want := range map[string]string{
+		"^openat$": "openat",
+		"openat":   "openat",
+		"^a|b$":    "a|b",
+		`a\$`:      `a\$`,
+		`a\\$`:     `a\\`,
+		"^":        "",
+	} {
+		if got := stripAnchors(in); got != want {
+			t.Errorf("stripAnchors(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

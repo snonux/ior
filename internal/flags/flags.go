@@ -456,8 +456,8 @@ func validateConfig(cfg Config) error {
 // The message names the flags because the selector itself is a compiled form
 // the user never typed. -tps/-tpsExclude regexes match tracepoint names
 // (sys_enter_openat), so an anchored syscall name such as "^openat$" matches
-// nothing; when it would match the name without its sys_enter_/sys_exit_
-// prefix the message says so, because that is the likely typo.
+// nothing; when retrying with the anchors stripped would really work the
+// message says so, because that is the likely typo.
 func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) error {
 	for _, name := range tpNames {
 		if sel.ShouldAttach(name) {
@@ -465,36 +465,60 @@ func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) err
 		}
 	}
 	msg := fmt.Sprintf("the -tps/-tpsExclude/-trace-* selection matches none of the %d traceable syscall tracepoints, so the trace would stay empty", len(tpNames))
-	if matchesBareSyscallName(sel, tpNames) {
-		msg += "; -tps patterns match tracepoint names such as sys_enter_openat, not bare syscall names, so try -tps openat (without ^ and $ anchors)"
+	if retry, ok := anchorlessRetry(sel, tpNames); ok {
+		msg += fmt.Sprintf("; -tps patterns match tracepoint names such as sys_enter_openat, not bare syscall names, so try -tps %s (without ^ and $ anchors)", retry)
 	}
 	return errors.New(msg)
 }
 
-// matchesBareSyscallName reports whether the -tps/-tpsExclude regexes of sel
-// would select at least one tracepoint if they were matched against the
-// syscall name without its sys_enter_/sys_exit_ prefix. Only the regex lists
-// are consulted: the -trace-* family/dimension allowlist is keyed by bare
-// names already, so it cannot cause this particular mistake.
-func matchesBareSyscallName(sel tracepoints.Selector, tpNames []string) bool {
+// anchorlessRetry builds the selection a user gets by following the anchor
+// hint - the -tps patterns of sel with their leading ^ and trailing $ removed,
+// everything else (-tpsExclude, the -trace-* allowlist) unchanged - and
+// returns the comma-joined -tps value for it, but only when that retry would
+// really attach at least one of tpNames. The retry is judged by the real
+// Selector.ShouldAttach, so an exclude that matches the full sys_enter_*/
+// sys_exit_* name or an allowlist that rejects the syscall correctly suppresses
+// the hint instead of sending the user into a second identical failure. A
+// retry identical to sel (no anchors to strip) attaches nothing either, since
+// sel itself already failed, so it needs no separate check.
+func anchorlessRetry(sel tracepoints.Selector, tpNames []string) (string, bool) {
 	if len(sel.Attach) == 0 {
-		return false
+		return "", false
 	}
-	bareMatches := func(res []*regexp.Regexp, bare string) bool {
-		for _, re := range res {
-			if re.MatchString(bare) {
-				return true
-			}
+	retry := sel.Clone()
+	retry.Attach = retry.Attach[:0]
+	patterns := make([]string, 0, len(sel.Attach))
+	for _, re := range sel.Attach {
+		stripped := stripAnchors(re.String())
+		compiled, err := regexp.Compile(stripped)
+		if err != nil {
+			return "", false
 		}
-		return false
+		retry.Attach = append(retry.Attach, compiled)
+		patterns = append(patterns, stripped)
 	}
 	for _, name := range tpNames {
-		bare, ok := tracepoints.SyscallNameFromTracepoint(name)
-		if ok && bareMatches(sel.Attach, bare) && !bareMatches(sel.Exclude, bare) {
-			return true
+		if retry.ShouldAttach(name) {
+			return strings.Join(patterns, ","), true
 		}
 	}
-	return false
+	return "", false
+}
+
+// stripAnchors removes one leading ^ and one trailing unescaped $ from a
+// regex source, the anchors that make "^openat$" miss sys_enter_openat.
+func stripAnchors(pattern string) string {
+	pattern = strings.TrimPrefix(pattern, "^")
+	if strings.HasSuffix(pattern, "$") {
+		backslashes := 0
+		for i := len(pattern) - 2; i >= 0 && pattern[i] == '\\'; i-- {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
+			pattern = strings.TrimSuffix(pattern, "$")
+		}
+	}
+	return pattern
 }
 
 // fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for
