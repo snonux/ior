@@ -18,6 +18,9 @@
 // Receive-side capture helpers used by the generated recvmsg handler.
 #include "recv.c"
 
+// select timeout normalisation used by the generated select handler.
+#include "poll.c"
+
 // Hand-written non-syscall tracepoints (sched:sched_process_exec, sched:sched_process_exit).
 #include "exec.c"
 

@@ -9152,16 +9152,9 @@ int handle_sys_enter_select(struct syscall_trace_enter *ctx) {
     if (ctx->args[4] == 0) {
         ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;
     } else {
-        struct __ior_timeval {
-            __s64 tv_sec;
-            __s64 tv_usec;
-        } tv = {};
+        struct ior_timeval tv = {};
         if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {
-            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&
-                (tv.tv_sec < 9223372036LL ||
-                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {
-                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;
-            }
+            ev->timeout_ns = ior_timeval_timeout_ns(&tv);
         }
     }
     ev->fd = -1;

@@ -57,6 +57,13 @@ func TestPollingEpollSemanticsInParquet(t *testing.T) {
 	for _, syscallName := range []string{"select", "pselect6"} {
 		expected = append(expected, ExpectedRow{Syscall: syscallName, Comm: "ioworkload", RetValAtLeast: &positive, IsError: &notError, Bytes: &zeroBytes, EpollOp: &empty, TimeoutNs: &shortTimeout})
 	}
+	// select normalises tv_usec >= 1e6 like the kernel ({0, 1500000} is a valid
+	// 1.5 s timeout) and reports a negative tv_usec (EINVAL) as unknown.
+	normalisedTimeout := int64(1_500_000_000)
+	expected = append(expected,
+		ExpectedRow{Syscall: "select", Comm: "ioworkload", RetValAtLeast: &positive, IsError: &notError, TimeoutNs: &normalisedTimeout},
+		ExpectedRow{Syscall: "select", Comm: "ioworkload", RetVal: &einval, IsError: &isError, TimeoutNs: &unknownTimeout},
+	)
 	AssertRowsPresent(t, rows, expected)
 
 	var sawPwait2 bool

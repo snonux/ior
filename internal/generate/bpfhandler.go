@@ -1061,25 +1061,30 @@ func pollTimeoutBody(argIdx int, style pollTimeoutStyle) string {
 				"        }\n"+
 				"    }\n", argIdx, argIdx)
 	case pollTimeoutTimeval:
-		return fmt.Sprintf(
-			"    if (ctx->args[%d] == 0) {\n"+
-				"        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;\n"+
-				"    } else {\n"+
-				"        struct __ior_timeval {\n"+
-				"            __s64 tv_sec;\n"+
-				"            __s64 tv_usec;\n"+
-				"        } tv = {};\n"+
-				"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[%d]) == 0) {\n"+
-				"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
-				"                (tv.tv_sec < 9223372036LL ||\n"+
-				"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
-				"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
-				"            }\n"+
-				"        }\n"+
-				"    }\n", argIdx, argIdx)
+		return pollTimeoutTimevalBody(argIdx)
 	default:
 		return ""
 	}
+}
+
+// pollTimeoutTimevalBody returns the C snippet that captures the struct
+// timeval timeout of select(2). The conversion (kern_select() normalises an
+// out-of-range tv_usec into seconds and only rejects a negative result) lives
+// in ior_timeval_timeout_ns in internal/c/poll.c, where it is ordinary C
+// rather than a string template; the snippet only reads the struct and stores
+// the result. An unreadable struct leaves the caller's
+// POLL_TIMEOUT_UNKNOWN_NS default in place, and the helper returns the same
+// sentinel for an invalid or unrepresentable timeout.
+func pollTimeoutTimevalBody(argIdx int) string {
+	return fmt.Sprintf(
+		"    if (ctx->args[%d] == 0) {\n"+
+			"        ev->timeout_ns = POLL_TIMEOUT_INFINITE_NS;\n"+
+			"    } else {\n"+
+			"        struct ior_timeval tv = {};\n"+
+			"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[%d]) == 0) {\n"+
+			"            ev->timeout_ns = ior_timeval_timeout_ns(&tv);\n"+
+			"        }\n"+
+			"    }\n", argIdx, argIdx)
 }
 
 // memFieldSpec describes the four fields captured for a memory syscall.

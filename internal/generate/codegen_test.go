@@ -2122,7 +2122,7 @@ func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
 // fd number plus one, i.e. a COUNT, NOT a file descriptor — and args[1..3] are
 // userspace fd_set bitmask pointers (also NOT single fds). The timeout is a
 // timeval pointer at args[4]. The handler must therefore capture nfds from
-// args[0] and the timeout from the args[4] timeval (sec*1e9 + usec*1e3), and
+// args[0] and the timeout from the args[4] timeval (normalised by ior_timeval_timeout_ns), and
 // must NEVER read any argument as an fd: capturing args[0] as an fd would
 // record a garbage fd (it is a count), and capturing the bitmask pointers
 // would record garbage pointers. The exit is an UNCLASSIFIED ret_event because
@@ -2137,7 +2137,7 @@ func TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout(t *testing.T) {
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
 	requireContains(t, output, "if (ctx->args[4] == 0) {")
 	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
-	requireContains(t, output, "ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;")
+	requireContains(t, output, "ev->timeout_ns = ior_timeval_timeout_ns(&tv);")
 
 	// Negative: nfds is a count and the fd_set args are bitmask pointers, so no
 	// argument may ever be captured as an fd, and the exit carries no bytes/fd
@@ -2197,13 +2197,16 @@ func TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues(t *test
 			"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
 			"            }")
 
+	// The timeval conversion is a C helper, exercised by
+	// TestGeneratedSelectTimevalNormalisation; here the handler must route
+	// the value through it and must not fall back to the old inline check that
+	// rejected tv_usec >= 1000000 although the kernel normalises it.
 	timevalOutput := generateFromPair(t, FormatSelect, FormatExitSelect)
 	requireContains(t, timevalOutput,
-		"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
-			"                (tv.tv_sec < 9223372036LL ||\n"+
-			"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
-			"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
-			"            }")
+		"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {\n"+
+			"            ev->timeout_ns = ior_timeval_timeout_ns(&tv);\n"+
+			"        }")
+	requireNotContains(t, timevalOutput, "tv.tv_usec < 1000000LL")
 }
 
 // TestCommittedPollingHandlersMatchGenerator keeps the targeted artifact
