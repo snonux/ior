@@ -47,8 +47,8 @@ const zeroWidthJoiner = '\u200d'
 // blank-rendering runes can hide text, smuggle data or make two different
 // paths look identical. Replacing them with a visible one-cell placeholder
 // both exposes the trick and keeps the measured width equal to the rendered
-// width. U+200D ZWJ is kept only where it glues an emoji sequence (see
-// isEmojiGlueBase). Printable non-ASCII text (CJK, emoji incl. ZWJ
+// width. U+200D ZWJ is kept only where it glues two emoji together (see
+// joinsEmoji). Printable non-ASCII text (CJK, emoji incl. ZWJ
 // sequences, U+FE0E/U+FE0F and skin-tone modifiers, combining marks) is
 // kept unchanged.
 //
@@ -108,8 +108,8 @@ func firstUnsafe(s string, keepLF bool) int {
 // placeholderAt decodes the rune at byte offset i of s and returns the
 // placeholder byte Sanitize writes for it (0 when the rune is kept) and the
 // rune's encoded size. It is shared by Sanitize and firstUnsafe so the fast
-// check and the rewrite can never disagree. The rune before i is looked up
-// (from the original s) only for a ZWJ, so the common path pays nothing for
+// check and the rewrite can never disagree. The runes around i are looked
+// up (in the original s) only for a ZWJ, so the common path pays nothing for
 // that context.
 func placeholderAt(s string, i int) (byte, int) {
 	r, size := utf8.DecodeRuneInString(s[i:])
@@ -120,11 +120,8 @@ func placeholderAt(s string, i int) (byte, int) {
 		return WhitespacePlaceholder, size
 	case unicode.IsControl(r) || isInvisibleFormat(r):
 		return ControlPlaceholder, size
-	case r == zeroWidthJoiner:
-		prev, _ := utf8.DecodeLastRuneInString(s[:i])
-		if !isEmojiGlueBase(prev) {
-			return ControlPlaceholder, size
-		}
+	case r == zeroWidthJoiner && !joinsEmoji(s, i, size):
+		return ControlPlaceholder, size
 	}
 	return 0, size
 }
@@ -180,14 +177,25 @@ func isInvisibleFormat(r rune) bool {
 	return unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
 }
 
-// isEmojiGlueBase reports whether r may precede a ZWJ inside an emoji
+// joinsEmoji reports whether the ZWJ at s[i:i+size] sits inside an emoji
+// ZWJ sequence: the rune before it is an emoji glue base and the rune after
+// it is an emoji (a glue base other than U+FE0F, which cannot start the next
+// element). Any other ZWJ ("pass\u200Dwd", a trailing "\U0001F600\u200D",
+// a ZWJ before a letter) joins nothing visible and could hide text or make
+// two strings look identical, so placeholderAt replaces it. ZWJ also shapes
+// some Indic and Arabic conjuncts; those render with a '?' instead, which is
+// acceptable for traced paths and comm names.
+func joinsEmoji(s string, i, size int) bool {
+	prev, _ := utf8.DecodeLastRuneInString(s[:i])
+	next, _ := utf8.DecodeRuneInString(s[i+size:])
+	return isEmojiGlueBase(prev) && next != 0xFE0F && isEmojiGlueBase(next)
+}
+
+// isEmojiGlueBase reports whether r may stand next to a ZWJ inside an emoji
 // sequence (family, profession, rainbow flag, ...): an Extended_Pictographic
 // rune, a skin-tone modifier (U+1F3FB..1F3FF) or U+FE0F. Go's unicode
 // package has no Extended_Pictographic table, so the emoji blocks are
-// approximated by range; a ZWJ after any other rune (e.g. "pass\u200Dwd")
-// joins nothing visible and could hide text, so placeholderAt replaces it.
-// ZWJ also shapes some Indic and Arabic conjuncts; those render with a '?'
-// instead, which is acceptable for traced paths and comm names.
+// approximated by range.
 func isEmojiGlueBase(r rune) bool {
 	switch {
 	case r == 0xFE0F, r == 0xA9, r == 0xAE, r == 0x203C, r == 0x2049,

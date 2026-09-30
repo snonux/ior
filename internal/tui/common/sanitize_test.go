@@ -69,6 +69,11 @@ var invisibleFormatCases = []struct{ name, in, want string }{
 	{"ZWJ at start", "\u200d\U0001F525", "?\U0001F525"},
 	{"ZWJ after replaced rune", "\U0001F525\ufe00\u200d\U0001F525", "\U0001F525??\U0001F525"},
 	{"ZWJ after invalid byte", "\xff\u200dx", "??x"},
+	{"trailing ZWJ after emoji", "\U0001F600\u200d", "\U0001F600?"},
+	{"ZWJ between emoji and letter", "\U0001F600\u200dx", "\U0001F600?x"},
+	{"ZWJ before VS16", "\U0001F600\u200d\ufe0f", "\U0001F600?\ufe0f"},
+	{"ZWJ before invalid byte", "\U0001F600\u200d\xff", "\U0001F600??"},
+	{"fire heart kept", "\u2764\ufe0f\u200d\U0001F525", "\u2764\ufe0f\u200d\U0001F525"},
 	{"England flag degrades", englandFlag, "\U0001F3F4??????"},
 	{"mixed with controls", "\x1b\u202e\n", "?? "},
 	{"clean emoji kept", cleanEmoji, cleanEmoji},
@@ -125,7 +130,7 @@ func TestSanitizeReplacesControls(t *testing.T) {
 
 // TestSanitizeReplacesInvisibleFormat checks bidi controls, separators,
 // format, default-ignorable and variation-selector runes and a ZWJ outside an
-// emoji sequence become the visible '?', while emoji glue (ZWJ after an
+// emoji sequence become the visible '?', while emoji glue (ZWJ between two
 // emoji, VS15/VS16, skin tones), regional-indicator flags and ZWNJ, as well
 // as the visible code points next to each replaced range, are kept.
 func TestSanitizeReplacesInvisibleFormat(t *testing.T) {
