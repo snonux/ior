@@ -78,11 +78,14 @@ func (m *Model) handleKeyWhileShuttingDown(msg tea.KeyPressMsg) (tea.Model, tea.
 
 // finaliseRecording is the safety net behind the quit path: once the program
 // has returned, a recording still active is stopped so its .tmp file is
-// published instead of left as an orphan. Normally the model already did this
-// and the call is a no-op. It matters for the exits that bypass the model -
-// a panic recovered by Bubble Tea, a forced exit that cut a shutdown short. A
-// Stop failure is returned joined to the run error, since it means the
-// recording the user asked for was lost.
+// published instead of left as an orphan, and an inactive recorder's failure
+// that nobody has reported yet (a recording that aborted on its own) is
+// claimed, both via recorderFinalise. Normally the model already did this and
+// the call is a no-op, because TakeFailure is exclusive and a failure already
+// reported is never returned again. It matters for the exits that bypass the
+// model - a panic recovered by Bubble Tea, a forced exit that cut a shutdown
+// short. A failure (from Stop or the claim) is returned joined to the run
+// error, since it means the recording the user asked for was lost.
 func finaliseRecording(model *Model, runErr error) error {
 	if model == nil || model.runtime == nil {
 		return runErr

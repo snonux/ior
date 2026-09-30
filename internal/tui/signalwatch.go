@@ -57,9 +57,12 @@ type programControl interface {
 // watcherHooks are the process-facing dependencies of the watcher, injectable
 // for tests. The zero value plus withDefaults is what production uses.
 type watcherHooks struct {
-	// publishRecording stops the active Parquet recording, publishing its file.
-	// It must be safe to call from any goroutine and idempotent (the recorder's
-	// Stop is); nil means there is no recorder.
+	// publishRecording finalises the Parquet recording at signal time: an
+	// active recording is stopped, publishing its file, and an inactive
+	// recorder's not yet reported failure (a recording that aborted on its
+	// own) is claimed so the signal quit cannot hide it (see recorderFinalise).
+	// It must be safe to call from any goroutine and idempotent (Stop and the
+	// exclusive TakeFailure are); nil means there is no recorder.
 	publishRecording func() error
 	// execActive reports whether an editor (or other child) owns the terminal.
 	execActive func() bool
@@ -79,10 +82,11 @@ func (h watcherHooks) withDefaults() watcherHooks {
 }
 
 // modelRecordingPublisher returns the publishRecording hook for model: it
-// stops the model's recorder straight through the runtime bindings, WITHOUT
-// the model's own stopRecordingAtQuit, which also syncs dashboard state and so may
-// only run on the event-loop goroutine. The recorder is safe for concurrent
-// use (Stop waits for a stop already in flight and returns nil then).
+// finalises the model's recorder straight through the runtime bindings
+// (recorderFinalise), WITHOUT the model's own stopRecordingAtQuit, which also
+// syncs dashboard state and so may only run on the event-loop goroutine. The
+// recorder is safe for concurrent use (Stop waits for a stop already in flight
+// and returns nil then).
 func modelRecordingPublisher(model *Model) func() error {
 	return func() error {
 		if model == nil || model.runtime == nil {

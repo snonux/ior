@@ -67,6 +67,25 @@ func TestQuitKeepsFailureAlreadyReported(t *testing.T) {
 	}
 }
 
+// TestQuitKeepsFailureAlreadyShownInRecordModal is the record-modal twin of
+// the warning-row case: opening the modal claims the failure (TakeFailure is
+// exclusive), so no quit path may report it a second time.
+func TestQuitKeepsFailureAlreadyShownInRecordModal(t *testing.T) {
+	m, _ := newModelWithSelfAbortedRecording(t, errors.New("disk full"))
+	m.handleRecordKey()
+	if view := m.recordModal.View(120, 30); !strings.Contains(view, "previous recording failed: disk full") {
+		t.Fatalf("record modal should show the failure, got:\n%s", view)
+	}
+
+	if err := finaliseRecording(m, nil); err != nil {
+		t.Fatalf("finaliseRecording() = %v, want nil for a failure the modal showed", err)
+	}
+	next, _, _ := m.quitWithBestEffortCleanup()
+	if err := finalModelError(next); err != nil {
+		t.Fatalf("quit reported %v again", err)
+	}
+}
+
 // TestQuitWithHealthyIdleRecorderReportsNothing: no recording ever failed.
 func TestQuitWithHealthyIdleRecorderReportsNothing(t *testing.T) {
 	m, _ := newModelWithSelfAbortedRecording(t, nil)

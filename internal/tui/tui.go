@@ -1163,11 +1163,12 @@ func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
 // quitFromErrorScreen leaves the full-screen error view. It performs the same
 // cleanup as the dashboard quit path - stop the recorder, cancel the trace
 // context - but treats the recorder result as best effort: the dashboard path
-// turns a recorderStop failure into an error screen and returns *without*
-// quitting, and doing that here would swallow the key for a second error the
-// user is already looking at. The displayed error stays in m.lastErr, which
-// runProgram reports to the caller on exit; a Stop failure is joined to it
-// rather than dropped (see quitWithBestEffortCleanup).
+// turns a recorderFinalise failure (a Stop error, or the unreported failure of
+// a recording that aborted on its own) into an error screen and returns
+// *without* quitting, and doing that here would swallow the key for a second
+// error the user is already looking at. The displayed error stays in
+// m.lastErr, which runProgram reports to the caller on exit; a recorder
+// failure is joined to it rather than dropped (see quitWithBestEffortCleanup).
 func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 	return m.quitWithBestEffortCleanup()
 }
