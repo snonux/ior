@@ -120,7 +120,8 @@ type tabDescriptor struct {
 	// results. Nil means the tab has no text input that accepts a paste.
 	HandlePaste func(m *Model, msg tea.PasteMsg) tea.Cmd
 	// RefreshBubble feeds the tab's bubble chart from the latest snapshot and
-	// reports whether the chart is still animating. Nil means the tab has no
+	// reports whether the chart is still animating. It is called only for a
+	// tab in bubbles mode (see refreshBubbleData). Nil means the tab has no
 	// bubble chart.
 	RefreshBubble func(m *Model) bool
 	// CaptureSelection is called on every stats tick BEFORE the new snapshot
@@ -197,7 +198,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			HandleEnter:     handleSyscallsEnter,
 			HandleSort:      func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleSyscallsSortKey(reverse) },
 			RefreshBubble: func(m *Model) bool {
-				return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
+				return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest), m.syscallsTab.bubble.Metric()))
 			},
 			KeepSelection:    (*Model).keepSyscallsSelection,
 			CaptureSelection: captureSyscallsSelection,
@@ -230,17 +231,19 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.Four },
 		},
 		TabProcesses: {
-			Name:             "Processes",
-			ShortName:        "Pro",
-			Position:         50,
-			AllowedVizModes:  []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
-			TableState:       func(m *Model) tableTab { return &m.processesTab },
-			KeepSelection:    (*Model).keepProcessesSelection,
-			Render:           tabRenderProcesses,
-			HandleScroll:     tabScrollProcesses,
-			HandleEnter:      handleProcessesEnter,
-			HandleSort:       func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleProcessesSortKey(reverse) },
-			RefreshBubble:    func(m *Model) bool { return m.processesTab.bubble.SetData(processBubbleData(m.latest)) },
+			Name:            "Processes",
+			ShortName:       "Pro",
+			Position:        50,
+			AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
+			TableState:      func(m *Model) tableTab { return &m.processesTab },
+			KeepSelection:   (*Model).keepProcessesSelection,
+			Render:          tabRenderProcesses,
+			HandleScroll:    tabScrollProcesses,
+			HandleEnter:     handleProcessesEnter,
+			HandleSort:      func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleProcessesSortKey(reverse) },
+			RefreshBubble: func(m *Model) bool {
+				return m.processesTab.bubble.SetData(processBubbleData(m.latest, m.processesTab.bubble.Metric()))
+			},
 			CaptureSelection: captureProcessesSelection,
 			ClampColumns: func(m *Model) {
 				m.processesTab.col = common.ClampTableCol(m.processesTab.col, len(processColumns()))

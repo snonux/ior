@@ -64,17 +64,17 @@ func TestBubbleRootPathTextDirectoryOnly(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	sys := syscallBubbleData(snap.Syscalls())
+	sys := syscallBubbleData(snap.Syscalls(), bubbleMetricCount)
 	if len(sys) == 0 || sys[0].Label != "write" {
 		t.Fatalf("expected syscall bubble label to stay native, got %#v", sys)
 	}
 
-	files := filesDirBubbleData(&snap)
+	files := filesDirBubbleData(&snap, bubbleMetricCount)
 	if len(files) == 0 || files[0].Label != "/home/paul/.config" {
 		t.Fatalf("expected files bubble label to be the literal dir, got %#v", files)
 	}
 
-	procs := processBubbleData(&snap)
+	procs := processBubbleData(&snap, bubbleMetricCount)
 	if len(procs) == 0 || procs[0].Label != "7:worker" {
 		t.Fatalf("expected process bubble label to stay native, got %#v", procs)
 	}

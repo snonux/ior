@@ -658,7 +658,7 @@ func TestRecycledPIDLifetimesAreDistinctOnScreen(t *testing.T) {
 	if len(items) != 2 || items[0].Key == items[1].Key || items[0].Name == items[1].Name {
 		t.Fatalf("treemap items must differ in key and label: %+v", items)
 	}
-	bubbles := processBubbleData(&snap)
+	bubbles := processBubbleData(&snap, bubbleMetricCount)
 	if len(bubbles) != 2 || bubbles[0].ID != "2000#1" || bubbles[1].ID != "2000" {
 		t.Fatalf("bubble IDs = %+v, want 2000#1 and 2000", bubbles)
 	}
@@ -686,7 +686,7 @@ func TestBubbleSelectionStaysOnRecycledPIDLifetime(t *testing.T) {
 	chart := newBubbleChart()
 	chart.SetViewport(80, 24)
 	first := snapWith(9, 5)
-	chart.SetData(processBubbleData(&first))
+	chart.SetData(processBubbleData(&first, bubbleMetricCount))
 	idx := chart.selectIndexByID("2000#1")
 	if chart.nodes[idx].ID != "2000#1" {
 		t.Fatalf("lifetime 1 bubble missing: %+v", chart.nodes)
@@ -694,7 +694,7 @@ func TestBubbleSelectionStaysOnRecycledPIDLifetime(t *testing.T) {
 	chart.selected = idx
 
 	second := snapWith(5, 9) // lifetime 1 now outranks lifetime 0
-	chart.SetData(processBubbleData(&second))
+	chart.SetData(processBubbleData(&second, bubbleMetricCount))
 	if got := chart.nodes[chart.selected].ID; got != "2000#1" {
 		t.Fatalf("selection moved to %q after refresh, want 2000#1", got)
 	}

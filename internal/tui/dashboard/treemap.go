@@ -29,6 +29,11 @@ type syscallTreemapItem struct {
 	P95Ns    uint64
 	Detail   string
 	Value    uint64
+	// row is the index of the source row (syscall, directory or process)
+	// the item was built from. The builders rank every row but only format
+	// Detail for the items that survive the cut (see rankTreemapItems), so
+	// the survivors need a way back to their row.
+	row int
 }
 
 type syscallTreemapTile struct {
@@ -97,9 +102,12 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	return strings.Join(lines, "\n")
 }
 
+// buildSyscallTreemapItems ranks the syscall rows into treemap items. The
+// Detail text is formatted only for the items that survive the cut
+// (rankTreemapItems), not for every row.
 func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bubbleMetric) []syscallTreemapItem {
 	items := make([]syscallTreemapItem, 0, len(syscalls))
-	for _, syscall := range syscalls {
+	for i, syscall := range syscalls {
 		item := syscallTreemapItem{
 			Name:     syscall.Name,
 			Key:      syscall.Name,
@@ -108,26 +116,31 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 			Duration: syscall.TotalLatencyNs,
 			Errors:   syscall.Errors,
 			P95Ns:    syscall.LatencyP95Ns,
-			Detail: fmt.Sprintf(
-				"rate %.1f/s, errors %d, p95 %s",
-				syscall.RatePerSec,
-				syscall.Errors,
-				formatDurationUintNs(syscall.LatencyP95Ns),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		syscall := syscalls[row]
+		return fmt.Sprintf(
+			"rate %.1f/s, errors %d, p95 %s",
+			syscall.RatePerSec,
+			syscall.Errors,
+			formatDurationUintNs(syscall.LatencyP95Ns),
+		)
+	})
 }
 
+// buildFilesTreemapItems ranks the directory rows into treemap items; see
+// buildSyscallTreemapItems for when Detail is formatted.
 func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
 	if snap == nil {
 		return nil
 	}
 	dirs := snapshotDirRows(snap)
 	items := make([]syscallTreemapItem, 0, len(dirs))
-	for _, dir := range dirs {
+	for i, dir := range dirs {
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
 			Name:     dirDisplayLabel(dir),
@@ -135,53 +148,66 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,
-			Detail: fmt.Sprintf(
-				"dir %s, files %d, read %s, write %s, max %s",
-				dirDisplayLabel(dir),
-				dir.FileCount,
-				formatBytes(float64(dir.BytesRead)),
-				formatBytes(float64(dir.BytesWritten)),
-				formatDurationUintNs(dir.MaxLatencyNs),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		dir := dirs[row]
+		return fmt.Sprintf(
+			"dir %s, files %d, read %s, write %s, max %s",
+			dirDisplayLabel(dir),
+			dir.FileCount,
+			formatBytes(float64(dir.BytesRead)),
+			formatBytes(float64(dir.BytesWritten)),
+			formatDurationUintNs(dir.MaxLatencyNs),
+		)
+	})
 }
 
+// buildProcessesTreemapItems ranks the process rows into treemap items. It
+// is also how the selection learns the tile order (processesTreemapSelection),
+// on every stats tick for a snapshot that may hold thousands of rows, so the
+// per-row work stays free of fmt: Detail is formatted for the surviving
+// items only.
 func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
 	if snap == nil {
 		return nil
 	}
 	processes := snap.Processes()
 	items := make([]syscallTreemapItem, 0, len(processes))
-	for _, proc := range processes {
-		label := processLabel(proc)
+	for i, proc := range processes {
 		item := syscallTreemapItem{
-			Name:     label,
+			Name:     processLabel(proc),
 			Key:      processRowKey(proc),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
-			Detail: fmt.Sprintf(
-				"pid %d, rate %.1f/s, avg %s",
-				proc.PID,
-				proc.RatePerSec,
-				formatDurationNs(proc.AvgLatencyNs),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		proc := processes[row]
+		return fmt.Sprintf(
+			"pid %d, rate %.1f/s, avg %s",
+			proc.PID,
+			proc.RatePerSec,
+			formatDurationNs(proc.AvgLatencyNs),
+		)
+	})
 }
 
 // rankTreemapItems is the shared tail of the treemap item builders: it drops
 // the items without a value for the metric, orders the rest by value
 // (largest first, ties by label) and keeps the maxSyscallTreemapItems
 // largest. The order is the layout order, so it is also the selection order.
-func rankTreemapItems(items []syscallTreemapItem) []syscallTreemapItem {
+// describe formats the Detail text of one source row; it runs only for the
+// kept items (at most maxSyscallTreemapItems), never for the rows that are
+// dropped, which is what keeps a tick over thousands of rows cheap.
+func rankTreemapItems(items []syscallTreemapItem, describe func(row int) string) []syscallTreemapItem {
 	items = slices.DeleteFunc(items, func(item syscallTreemapItem) bool { return item.Value == 0 })
 	if len(items) == 0 {
 		return nil
@@ -194,6 +220,9 @@ func rankTreemapItems(items []syscallTreemapItem) []syscallTreemapItem {
 	})
 	if len(items) > maxSyscallTreemapItems {
 		items = items[:maxSyscallTreemapItems]
+	}
+	for i := range items {
+		items[i].Detail = describe(items[i].row)
 	}
 	return items
 }

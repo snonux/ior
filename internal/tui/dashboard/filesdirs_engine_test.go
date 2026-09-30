@@ -51,7 +51,7 @@ func TestDirViewsShowTheDominantDirectoryOutsideTheTopFiles(t *testing.T) {
 	}
 
 	var bubbleIDs []string
-	for _, d := range filesDirBubbleData(snap) {
+	for _, d := range filesDirBubbleData(snap, bubbleMetricCount) {
 		bubbleIDs = append(bubbleIDs, d.ID)
 	}
 	if !contains(bubbleIDs, "/data") {
@@ -129,7 +129,7 @@ func TestRemainderRowHasAStableNonPathIdentity(t *testing.T) {
 	if len(items) != 3 || items[2].Key != remainderDirKey || items[2].Name != "(other: 3 dirs)" {
 		t.Fatalf("treemap items = %+v", items)
 	}
-	data := filesDirBubbleData(snap)
+	data := filesDirBubbleData(snap, bubbleMetricCount)
 	if len(data) != 3 || data[2].ID != remainderDirKey || data[2].Label != "(other: 3 dirs)" {
 		t.Fatalf("bubble data = %+v", data)
 	}

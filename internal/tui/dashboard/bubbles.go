@@ -58,6 +58,10 @@ type bubbleDatum struct {
 	Bytes    uint64
 	Duration uint64
 	Detail   string
+	// row is the index of the source row the datum was built from, so the
+	// builders can format Detail for the datums that survive the cut only
+	// (rankBubbleData).
+	row int
 }
 
 type bubbleNode struct {
@@ -855,65 +859,86 @@ func bubbleValue(d bubbleDatum, metric bubbleMetric) uint64 {
 	}
 }
 
+// rankBubbleData is the shared tail of the bubble data builders: it ranks
+// data by metric and keeps the bubbleMaxItems largest (the same cut SetData
+// would make, so nothing visible changes), then formats Detail for those
+// survivors only via describe, the Detail text of one source row. Formatting
+// every row up front cost milliseconds per stats tick on a snapshot with
+// thousands of processes, to show at most bubbleMaxItems of them.
+func rankBubbleData(data []bubbleDatum, metric bubbleMetric, describe func(row int) string) []bubbleDatum {
+	data = filterAndSortBubbleData(data, metric)
+	for i := range data {
+		data[i].Detail = describe(data[i].row)
+	}
+	return data
+}
+
 // syscallBubbleData builds bubble-chart data from the already filter-scoped
 // syscall rows (see Model.visibleSyscallRows) so the bubble view matches the
 // table view under an active family/syscall filter.
-func syscallBubbleData(rows []statsengine.SyscallSnapshot) []bubbleDatum {
+func syscallBubbleData(rows []statsengine.SyscallSnapshot, metric bubbleMetric) []bubbleDatum {
 	data := make([]bubbleDatum, 0, len(rows))
-	for _, syscall := range rows {
-		detail := fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, formatDurationUintNs(syscall.LatencyP95Ns))
+	for i, syscall := range rows {
 		data = append(data, bubbleDatum{
 			ID:       syscall.Name,
 			Label:    syscall.Name,
 			Count:    syscall.Count,
 			Bytes:    syscall.Bytes,
 			Duration: syscall.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		syscall := rows[row]
+		return fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, formatDurationUintNs(syscall.LatencyP95Ns))
+	})
 }
 
-func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
+func filesDirBubbleData(snap *statsengine.Snapshot, metric bubbleMetric) []bubbleDatum {
 	if snap == nil {
 		return nil
 	}
 	dirs := snapshotDirRows(snap)
 	data := make([]bubbleDatum, 0, len(dirs))
-	for _, dir := range dirs {
-		totalBytes := dir.BytesRead + dir.BytesWritten
-		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dirDisplayLabel(dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+	for i, dir := range dirs {
 		data = append(data, bubbleDatum{
 			ID:       dirKey(dir),
 			Label:    dirDisplayLabel(dir),
 			Count:    dir.Accesses,
-			Bytes:    totalBytes,
+			Bytes:    dir.BytesRead + dir.BytesWritten,
 			Duration: dir.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		dir := dirs[row]
+		return fmt.Sprintf("dir %s, files %d, read %s, write %s", dirDisplayLabel(dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+	})
 }
 
-func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
+// processBubbleData builds the Processes bubble data. It runs for every
+// stats tick over every process row (thousands on a busy host), so the
+// per-row work excludes fmt: see rankBubbleData.
+func processBubbleData(snap *statsengine.Snapshot, metric bubbleMetric) []bubbleDatum {
 	if snap == nil {
 		return nil
 	}
 	rows := snap.Processes()
 	data := make([]bubbleDatum, 0, len(rows))
-	for _, proc := range rows {
-		label := processLabel(proc)
-		detail := fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
+	for i, proc := range rows {
 		data = append(data, bubbleDatum{
 			ID:       processRowKey(proc),
-			Label:    label,
+			Label:    processLabel(proc),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		proc := rows[row]
+		return fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
+	})
 }
 
 // padOrTrim fits value into exactly width display cells for the bubble,

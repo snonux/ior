@@ -317,7 +317,7 @@ func TestDirRowLabelsStayDistinct(t *testing.T) {
 	files := []statsengine.FileSnapshot{{Path: "./src/a", Accesses: 2}, {Path: "src/b", Accesses: 1}}
 	snap := statsengine.NewSnapshot(nil, nil, nil, nil, files, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
 	items := buildFilesTreemapItems(&snap, bubbleMetricCount)
-	bubbles := filesDirBubbleData(&snap)
+	bubbles := filesDirBubbleData(&snap, bubbleMetricCount)
 	if len(items) != 2 || items[0].Name == items[1].Name || len(bubbles) != 2 || bubbles[0].Label == bubbles[1].Label {
 		t.Fatalf("expected two distinctly labelled dirs, got treemap %#v bubbles %#v", items, bubbles)
 	}

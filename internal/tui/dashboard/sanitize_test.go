@@ -45,11 +45,11 @@ func TestDashboardViewsSanitizeTracedLabels(t *testing.T) {
 			t.Fatalf("process treemap name = %q, want %q", item.Name, "7:ev?[8mil?")
 		}
 	}
-	for _, d := range filesDirBubbleData(&snap) {
+	for _, d := range filesDirBubbleData(&snap, bubbleMetricCount) {
 		assertNoControl(t, "files bubble label", d.Label)
 		assertNoControl(t, "files bubble detail", d.Detail)
 	}
-	for _, d := range processBubbleData(&snap) {
+	for _, d := range processBubbleData(&snap, bubbleMetricCount) {
 		assertNoControl(t, "process bubble label", d.Label)
 	}
 	assertNoControl(t, "top files", summarizeTopFiles(&snap))
@@ -69,7 +69,7 @@ func TestDashboardViewsSanitizeTracedLabels(t *testing.T) {
 // sanitised: the bubble ID and treemap key must still identify the process.
 func TestProcessLabelKeepsSelectionKeysRaw(t *testing.T) {
 	snap := hostileSnapshot()
-	procs := processBubbleData(&snap)
+	procs := processBubbleData(&snap, bubbleMetricCount)
 	if len(procs) != 1 || procs[0].ID != processKey(7, 0) {
 		t.Fatalf("bubble ID should be the process key, not the sanitised label, got %#v", procs)
 	}

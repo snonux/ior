@@ -1243,19 +1243,29 @@ func (m *Model) setBubbleViewports() {
 	}
 }
 
-// refreshBubbleData pushes the latest snapshot data into EVERY registered
-// bubble chart (through the registry RefreshBubble hooks) and returns
-// whether the ACTIVE tab's chart is still animating, which drives the
-// bubble tick loop. Feeding is deliberately not limited to the active tab:
-// a tab left in bubbles mode renders the moment the user switches back to
-// it, and the nil-snapshot feed is what clears the charts of non-active
-// tabs after a trace restart (PrepareForTraceRestart resets only the
-// active one) - lazily feeding only the active tab left both of those
-// windows showing stale or previous-session data (review finding).
+// refreshBubbleData pushes the latest snapshot data into every registered
+// bubble chart whose tab is in bubbles mode (through the registry
+// RefreshBubble hooks) and returns whether the ACTIVE tab's chart is still
+// animating, which drives the bubble tick loop. Feeding is deliberately not
+// limited to the active tab: a tab left in bubbles mode renders the moment
+// the user switches back to it, and the nil-snapshot feed is what clears
+// the charts of non-active tabs after a trace restart
+// (PrepareForTraceRestart resets only the active one) - lazily feeding only
+// the active tab left both of those windows showing stale or previous-session
+// data (review finding).
+//
+// A tab in table or treemap mode is not fed at all: ranking and laying out
+// its bubbles every tick is wasted work, since nothing renders or reads
+// them (selectedProcessSnapshot reads the chart only in bubbles mode). The
+// only way into bubbles mode, cycleVisualizationMode, refreshes the charts
+// right after the switch, so the first bubbles frame is never stale.
 func (m *Model) refreshBubbleData() bool {
 	m.setBubbleViewports()
 	animating := false
 	for _, tab := range orderedTabs() {
+		if m.tabVizModeFor(tab) != tabVizModeBubbles {
+			continue
+		}
 		if d := tabDescriptors[tab]; d.RefreshBubble != nil && d.RefreshBubble(m) && tab == m.activeTab {
 			animating = true
 		}
@@ -1271,7 +1281,7 @@ func (m *Model) refreshBubbleData() bool {
 func (m *Model) refreshFilesBubbleData() bool {
 	if m.filesDirGrouped {
 		m.filesTab.bubble.SetStatusHint("")
-		return m.filesTab.bubble.SetData(filesDirBubbleData(m.latest))
+		return m.filesTab.bubble.SetData(filesDirBubbleData(m.latest, m.filesTab.bubble.Metric()))
 	}
 	m.filesTab.bubble.SetStatusHint("Files bubble view requires directory mode (press d).")
 	m.filesTab.bubble.SetData(nil)
