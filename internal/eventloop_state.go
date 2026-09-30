@@ -632,7 +632,20 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 	t.unindexKey(key, true)
 }
 
+// set records pathname as the thread's latest name_to_handle_at path. An empty
+// pathname (resolvePathEvent produced no name) is not a stash: storing it would
+// make openedHandleFile consume it as an "unverified" name and emit an unnamed
+// row even when procfs could name the descriptor. It still supersedes the
+// thread's previous stash - the slot means "the last handle taken", and that
+// handle is unnamed - so the old entry is dropped rather than left to be
+// mistaken for it (when procfs cannot verify, a stale name would be wrong, an
+// absent one is merely unknown; when procfs can, the row is named from it
+// either way).
 func (t *pendingHandleTracker) set(tid uint32, pathname string) {
+	if pathname == "" {
+		t.delete(tid)
+		return
+	}
 	if t.paths == nil {
 		t.paths = make(map[uint32]string)
 		t.pathAges = make(map[uint32]uint64)

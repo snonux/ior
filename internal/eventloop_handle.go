@@ -149,6 +149,7 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 // only a hypothesis about which handle was opened. The descriptor is the
 // ground truth and is checked first:
 //
+//   - no stash (or an empty one): the row is named from procfs.
 //   - match or unverifiable: the stashed name is used and consumed (the
 //     unverifiable case is the legacy behaviour, for a descriptor procfs
 //     cannot answer for).
@@ -164,7 +165,10 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32) *file.FdFile {
 	handles := e.pendingHandleState()
 	pathname, stashed := handles.peek(tid)
-	if !stashed {
+	if !stashed || pathname == "" {
+		// An empty name is no stash (set never stores one; this also covers a
+		// hand-built tracker): consuming it would yield an unnamed row even
+		// when procfs can name the descriptor.
 		return procFdFile(nil, pid, fd, eventFlags)
 	}
 	probe := probeHandleFd(pid, fd)

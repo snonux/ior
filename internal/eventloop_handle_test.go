@@ -303,6 +303,86 @@ func TestOpenByHandleAtRelativeStash(t *testing.T) {
 	}
 }
 
+// TestOpenByHandleAtRelativeStashResolvingInCwdToSameInode pins the
+// filepath.IsAbs guard in classifyHandlePath. The relative stash resolves, in
+// ior's own working directory, to the SAME inode as the opened descriptor (a
+// hard link), so without the guard a stat of the relative name would say
+// "match" and the row would carry the task-relative spelling "rel.txt"
+// instead of procfs's absolute path. The stash is the string the task passed,
+// resolved against the TASK's cwd, which ior cannot know, so it is never
+// trusted.
+func TestOpenByHandleAtRelativeStashResolvingInCwdToSameInode(t *testing.T) {
+	dir := tempDir(t)
+	real := writeHandleFile(t, dir, "real")
+	if err := os.Link(real, filepath.Join(dir, "rel.txt")); err != nil {
+		t.Fatal(err)
+	}
+	fd := openHandleFd(t, real)
+	t.Chdir(dir) // restores the old cwd on cleanup; forbids t.Parallel, as wanted
+
+	feed := newHandleFeed(t)
+	feed.nameToHandle("rel.txt")
+	if got := feed.openByHandle(fd).File.Name(); got != real {
+		t.Fatalf("row named %q, want procfs's absolute %q (a relative stash must not be stat'ed)", got, real)
+	}
+}
+
+// TestOpenByHandleAtEmptyStashNamesFromProcfs: name_to_handle_at produced no
+// resolvable name, so nothing is stashed. The row must be named from procfs
+// rather than consuming an empty "stash" into an unnamed row.
+func TestOpenByHandleAtEmptyStashNamesFromProcfs(t *testing.T) {
+	dir := tempDir(t)
+	real := writeHandleFile(t, dir, "real")
+	fd := openHandleFd(t, real)
+
+	feed := newHandleFeed(t)
+	feed.nameToHandle("")
+	if got, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+		t.Fatalf("empty name was stashed (%q); it must count as no stash", got)
+	}
+	if got := feed.openByHandle(fd).File.Name(); got != real {
+		t.Fatalf("row named %q, want procfs's %q", got, real)
+	}
+}
+
+// TestOpenByHandleAtEmptyNameSupersedesEarlierStash: handle A is named, then
+// the thread takes handle B whose name cannot be resolved. The slot means "the
+// last handle taken", so A must not linger as the hypothesis for B; with
+// procfs readable either way the row is named from procfs.
+func TestOpenByHandleAtEmptyNameSupersedesEarlierStash(t *testing.T) {
+	dir := tempDir(t)
+	pathA := writeHandleFile(t, dir, "a")
+	pathB := writeHandleFile(t, dir, "b")
+	fdB := openHandleFd(t, pathB)
+
+	feed := newHandleFeed(t)
+	feed.nameToHandle(pathA)
+	feed.nameToHandle("")
+	if got, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+		t.Fatalf("stash after an unnamed handle = %q, want none", got)
+	}
+	if got := feed.openByHandle(fdB).File.Name(); got != pathB {
+		t.Fatalf("row named %q, want procfs's %q", got, pathB)
+	}
+}
+
+// TestOpenedHandleFileTreatsAnInjectedEmptyStashAsAbsent covers a tracker whose
+// map was filled directly (bypassing set): an empty entry must still not turn
+// into an unnamed row.
+func TestOpenedHandleFileTreatsAnInjectedEmptyStashAsAbsent(t *testing.T) {
+	dir := tempDir(t)
+	real := writeHandleFile(t, dir, "real")
+	fd := openHandleFd(t, real)
+
+	feed := newHandleFeed(t)
+	handles := feed.el.pendingHandleState()
+	handles.set(feed.pid, "/placeholder") // allocates the maps
+	handles.paths[feed.pid] = ""
+	if got := feed.openByHandle(fd).File.Name(); got != real {
+		t.Fatalf("row named %q, want procfs's %q", got, real)
+	}
+}
+
 // TestOpenByHandleAtEmptyPathStash: name_to_handle_at(dirfd, "", AT_EMPTY_PATH)
 // stashes the descriptor's resolved path, which then verifies normally.
 func TestOpenByHandleAtEmptyPathStash(t *testing.T) {
