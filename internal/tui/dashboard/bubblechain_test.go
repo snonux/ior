@@ -200,6 +200,50 @@ func TestDirGroupingToggleNeverNeedsABubbleChain(t *testing.T) {
 	}
 }
 
+// TestTabSwitchByKeyRestartsSettledBubbleChain pins tab entry: switching by
+// the real tab keys into a tab that already shows bubbles must restart the
+// settled chain (postKeyTransitionCmd -> tabEntryTickCmd). The chain ended
+// while the tab was away or quiet, so without the restart the chart would sit
+// frozen on its last frame. Leaving for a table-mode tab starts no bubble
+// chain.
+func TestTabSwitchByKeyRestartsSettledBubbleChain(t *testing.T) {
+	tabKey := tea.KeyPressMsg{Code: tea.KeyTab}
+	shiftTabKey := tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+
+	for _, tc := range []struct {
+		name      string
+		away, key tea.KeyPressMsg
+		awayTab   Tab
+	}{
+		{"away by tab, back by shift+tab", tabKey, shiftTabKey, TabFiles},
+		{"away by shift+tab, back by tab", shiftTabKey, tabKey, TabOverview},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := settledSyscallBubbles(t, syscallSnap(90, 30, 10, 10))
+			oldGen := m.ticks.bubble.gen
+
+			m, cmd := updateModel(m, tc.away)
+			if m.activeTab != tc.awayTab {
+				t.Fatalf("away key moved to %v, want %v", m.activeTab, tc.awayTab)
+			}
+			if startsBubbleChain(m, cmd) {
+				t.Fatalf("entering %v (no bubbles) started the bubble chain", m.activeTab)
+			}
+
+			m, cmd = updateModel(m, tc.key)
+			if m.activeTab != TabSyscalls {
+				t.Fatalf("back key moved to %v, want %v", m.activeTab, TabSyscalls)
+			}
+			if !startsBubbleChain(m, cmd) {
+				t.Fatal("switching back into a bubbles-mode tab must start a bubble tick of the live generation")
+			}
+			if m.ticks.bubble.gen == oldGen {
+				t.Fatal("tab entry must supersede the old chain's generation")
+			}
+		})
+	}
+}
+
 // TestFocusRegainRestartsSettledBubbleChain: a blurred dashboard drops its
 // ticks, so the chain is dead when focus returns; the parent then calls Init,
 // whose tickChainsStartMsg must start the bubble chain again.
