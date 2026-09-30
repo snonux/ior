@@ -652,7 +652,10 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		return false
 	}
 
-	if pathname, ok := e.pendingHandleState().consume(tid); ok {
+	// The stash is only the thread's LAST name_to_handle_at path; it is used
+	// only if the returned descriptor is not contradicting it (see
+	// claimPendingHandlePath), otherwise the row is named from procfs.
+	if pathname, ok := e.claimPendingHandlePath(tid, openByHandleEv.Pid, fd); ok {
 		fdFile := file.NewFd(fd, pathname, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
@@ -669,7 +672,7 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
 	// emit rows carrying a different comm. The full pair filter is the right
 	// checkpoint: ep.File is in both branches exactly the name the row reports
-	// (the cached name_to_handle_at pathname, or the /proc/<pid>/fd readlink),
+	// (the verified name_to_handle_at pathname, or the /proc/<pid>/fd readlink),
 	// so filter and displayed value can never disagree, and unlike the rename
 	// kinds there is no raw match to contradict. Applying -path to a
 	// procfs-resolved name is also not new: every fd-based kind already does

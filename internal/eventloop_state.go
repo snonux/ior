@@ -82,7 +82,9 @@ type pidFdKeys struct {
 }
 
 // pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
-// TID until the corresponding open_by_handle_at exit consumes them.
+// TID (the thread's last one only) until an open_by_handle_at exit claims
+// them; the claim verifies the entry against the returned descriptor (see
+// claimPendingHandlePath) because the key cannot say which handle was opened.
 type pendingHandleTracker struct {
 	paths        map[uint32]string
 	pathAges     map[uint32]uint64
@@ -636,6 +638,13 @@ func (t *pendingHandleTracker) consume(tid uint32) (string, bool) {
 	delete(t.paths, tid)
 	delete(t.pathAges, tid)
 	return pathname, true
+}
+
+// peek returns the stashed pathname without consuming it or refreshing its
+// LRU age, for callers that must verify the entry before claiming it.
+func (t *pendingHandleTracker) peek(tid uint32) (string, bool) {
+	pathname, ok := t.paths[tid]
+	return pathname, ok
 }
 
 func (t *pendingHandleTracker) delete(tid uint32) {
