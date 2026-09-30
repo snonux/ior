@@ -2,6 +2,7 @@ package flamegraph
 
 import (
 	"bytes"
+	"encoding/gob"
 	"errors"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"ior/internal/types"
+
+	"github.com/DataDog/zstd"
 )
 
 func counterAt(iod iorData, path pathType, traceID traceIdType, comm commType, pid pidType, tid tidType, flags flagsType) (Counter, bool) {
@@ -502,5 +505,198 @@ func TestSerializeToFileFailureLeavesNoTempFile(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir("."); len(entries) != 0 {
 		t.Errorf("failed write left %v behind", entries)
+	}
+}
+
+// writeZstdGob writes the gob encodings of values, in order, through zstd to a
+// new .ior.zst, optionally prefixed with raw bytes. It builds fixtures for
+// formats this binary no longer writes.
+func writeZstdGob(t *testing.T, prefix []byte, values ...any) string {
+	t.Helper()
+	var raw bytes.Buffer
+	raw.Write(prefix)
+	enc := gob.NewEncoder(&raw)
+	for _, v := range values {
+		if err := enc.Encode(v); err != nil {
+			t.Fatalf("gob encode fixture: %v", err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "fixture.ior.zst")
+	compressed, err := zstd.Compress(nil, raw.Bytes())
+	if err != nil {
+		t.Fatalf("compress fixture: %v", err)
+	}
+	if err := os.WriteFile(path, compressed, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return path
+}
+
+// TestLoadFromFileRejectsHeaderlessLegacyRecording is the regression for the
+// silent mislabelling: a v1.1.0-style recording (bare gob map, openat/read/
+// close stored as 788/848/782) used to load fine and print other syscalls'
+// names. It must now fail loudly and name the remedy.
+func TestLoadFromFileRejectsHeaderlessLegacyRecording(t *testing.T) {
+	legacy := map[recordKey]Counter{
+		{Path: "/etc/passwd", TraceID: 788, Comm: "cat", Pid: 1, Tid: 1}: {Count: 1},
+		{Path: "/etc/passwd", TraceID: 848, Comm: "cat", Pid: 1, Tid: 1}: {Count: 1},
+		{Path: "/etc/passwd", TraceID: 782, Comm: "cat", Pid: 1, Tid: 1}: {Count: 1},
+	}
+	path := writeZstdGob(t, nil, legacy)
+
+	seq, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatalf("legacy recording loaded (%v), want an error", seq)
+	}
+	if !errors.Is(err, errLegacyRecording) || !strings.Contains(err.Error(), "re-record") {
+		t.Fatalf("error = %v, want errLegacyRecording with a re-record hint", err)
+	}
+
+	var out bytes.Buffer
+	if err := WriteCollapsedStacks(&out, path, CollapsedOptions{}); err == nil || out.Len() != 0 {
+		t.Fatalf("collapsed of legacy recording: err=%v output=%q, want error and no output", err, out.String())
+	}
+}
+
+// TestLoadFromFileTranslatesForeignTraceIDs simulates a recording written by a
+// release whose ID table differs from this build's: the header maps its IDs to
+// names, and the reader must land on this build's IDs for those names.
+func TestLoadFromFileTranslatesForeignTraceIDs(t *testing.T) {
+	// 788/848/782 are the old numbers from the task's probe; none of them is
+	// what this build uses for these tracepoints.
+	foreign := map[traceIdType]string{
+		788: types.SYS_ENTER_OPENAT.String(),
+		848: types.SYS_ENTER_READ.String(),
+		782: types.SYS_EXIT_CLOSE.String(),
+	}
+	for id, name := range foreign {
+		if cur, _ := types.TraceIDByString(name); cur == id {
+			t.Fatalf("fixture is vacuous: this build already uses %d for %s", id, name)
+		}
+	}
+	stored := map[recordKey]Counter{
+		{Path: "/f", TraceID: 788, Comm: "cat", Pid: 7, Tid: 7}: {Count: 3, Bytes: 9},
+		{Path: "/f", TraceID: 848, Comm: "cat", Pid: 7, Tid: 7}: {Count: 1},
+		{Path: "/f", TraceID: 782, Comm: "cat", Pid: 7, Tid: 7}: {Count: 2},
+	}
+	path := writeZstdGob(t, recordingMagic[:],
+		recordingHeader{Version: recordingFormatVersion, Tracepoints: foreign}, stored)
+
+	iod, err := newIorDataFromFile(path)
+	if err != nil {
+		t.Fatalf("load foreign-table recording: %v", err)
+	}
+	for _, want := range []struct {
+		id  types.TraceId
+		cnt uint64
+	}{{types.SYS_ENTER_OPENAT, 3}, {types.SYS_ENTER_READ, 1}, {types.SYS_EXIT_CLOSE, 2}} {
+		got, ok := counterAt(iod, "/f", want.id, "cat", 7, 7, 0)
+		if !ok || got.Count != want.cnt {
+			t.Errorf("record for %s = %+v, %v; want count %d", want.id, got, ok, want.cnt)
+		}
+	}
+	if len(iod.records) != 3 {
+		t.Errorf("got %d records, want 3", len(iod.records))
+	}
+}
+
+func TestLoadFromFileRejectsTracepointUnknownToThisBuild(t *testing.T) {
+	stored := map[recordKey]Counter{{Path: "/f", TraceID: 5}: {Count: 1}}
+	path := writeZstdGob(t, recordingMagic[:], recordingHeader{
+		Version: recordingFormatVersion, Tracepoints: map[traceIdType]string{5: "enter_syscall_from_the_future"},
+	}, stored)
+	_, err := newIorDataFromFile(path)
+	if err == nil || !strings.Contains(err.Error(), "enter_syscall_from_the_future") {
+		t.Fatalf("error = %v, want one naming the unknown tracepoint", err)
+	}
+}
+
+func TestLoadFromFileRejectsUnknownFormatVersion(t *testing.T) {
+	path := writeZstdGob(t, recordingMagic[:],
+		recordingHeader{Version: recordingFormatVersion + 1}, map[recordKey]Counter{})
+	_, err := newIorDataFromFile(path)
+	if err == nil || !strings.Contains(err.Error(), "unsupported recording format version") {
+		t.Fatalf("error = %v, want an unsupported-version error", err)
+	}
+}
+
+func TestLoadFromFileRejectsRecordMissingFromTracepointTable(t *testing.T) {
+	stored := map[recordKey]Counter{{Path: "/f", TraceID: 9}: {Count: 1}}
+	path := writeZstdGob(t, recordingMagic[:],
+		recordingHeader{Version: recordingFormatVersion, Tracepoints: map[traceIdType]string{}}, stored)
+	_, err := newIorDataFromFile(path)
+	if err == nil || !strings.Contains(err.Error(), "missing from its tracepoint table") {
+		t.Fatalf("error = %v, want a missing-table-entry error", err)
+	}
+}
+
+// TestGarbageIsNotReportedAsLegacy keeps the legacy verdict honest: random or
+// truncated input must stay a plain decode error.
+func TestGarbageIsNotReportedAsLegacy(t *testing.T) {
+	for name, data := range map[string][]byte{
+		"empty":     {},
+		"short":     []byte("IOR"),
+		"garbage":   []byte("this is not valid gob data"),
+		"magic-eof": recordingMagic[:],
+	} {
+		_, err := decodeRecords(bytes.NewReader(data))
+		if err == nil || errors.Is(err, errLegacyRecording) {
+			t.Errorf("%s: err = %v, want a non-legacy decode error", name, err)
+		}
+	}
+}
+
+// TestUnknownTraceIDPlaceholderSurvivesRoundTrip: an ID missing from the
+// writer's table is stored as "unknown_trace_id_<n>" and must read back as the
+// same ID rather than fail the whole recording.
+func TestUnknownTraceIDPlaceholderSurvivesRoundTrip(t *testing.T) {
+	const unknown traceIdType = 4000000
+	if _, ok := types.TraceIDByString(unknown.String()); ok {
+		t.Fatal("test ID is unexpectedly known")
+	}
+	original := newIorData()
+	original.add("/f", unknown, "c", 1, 1, 0, Counter{Count: 1})
+	data, err := original.serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := newIorData()
+	if err := restored.deserialize(bytes.NewBuffer(data)); err != nil {
+		t.Fatalf("deserialize: %v", err)
+	}
+	if _, ok := counterAt(restored, "/f", unknown, "c", 1, 1, 0); !ok {
+		t.Fatalf("record for %s lost: %v", unknown, restored.records)
+	}
+}
+
+// TestSerializeToFileRoundTripsThroughLoad exercises the real on-disk path
+// (zstd, magic, header, records) and the collapsed rendering of it.
+func TestSerializeToFileRoundTripsThroughLoad(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	origHost, origStatus := hostnameFn, statusOut
+	t.Cleanup(func() { hostnameFn, statusOut = origHost, origStatus })
+	hostnameFn = func() (string, error) { return "h", nil }
+	statusOut = io.Discard
+
+	iod := newIorData()
+	iod.add("/etc/passwd", types.SYS_ENTER_OPENAT, "cat", 1, 1, 0, Counter{Count: 1})
+	iod.add("/etc/passwd", types.SYS_ENTER_READ, "cat", 1, 1, 0, Counter{Count: 2})
+	if err := iod.serializeToFile("rt"); err != nil {
+		t.Fatalf("serializeToFile: %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*.ior.zst"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("recordings = %v, %v; want exactly one", matches, err)
+	}
+
+	var out bytes.Buffer
+	opts := CollapsedOptions{Fields: []string{"comm", "tracepoint"}}
+	if err := WriteCollapsedStacks(&out, matches[0], opts); err != nil {
+		t.Fatalf("WriteCollapsedStacks: %v", err)
+	}
+	want := "cat;enter_openat 1\ncat;enter_read 2\n"
+	if out.String() != want {
+		t.Fatalf("collapsed = %q, want %q", out.String(), want)
 	}
 }

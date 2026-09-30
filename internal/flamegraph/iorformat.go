@@ -1,0 +1,194 @@
+package flamegraph
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/gob"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+
+	"ior/internal/types"
+)
+
+// Recording stream layout (the payload inside the zstd frame of an .ior.zst):
+//
+//	recordingMagic                      8 raw bytes
+//	gob(recordingHeader)                format version + tracepoint table
+//	gob(map[recordKey]Counter)          the records
+//
+// recordKey.TraceID is a numeric tracepoint ID, and those IDs are the
+// generating host's kernel event IDs: they change whenever the tracepoint set
+// does (openat was 784, 788, 791 and 809 in successive releases). Rendering a
+// stored ID with the reading binary's table therefore printed wrong syscall
+// names without any error. The header fixes that by carrying, for every ID
+// that occurs in the records, the tracepoint string ("enter_openat") that the
+// writer's table gave it. The reader resolves each string back to *its own*
+// ID, so the in-memory representation and every consumer stay unchanged.
+//
+// The magic prefix (instead of a header struct decoded straight from gob) is
+// what tells a headerless legacy recording apart from a new one without
+// matching gob's error strings.
+var recordingMagic = [8]byte{'I', 'O', 'R', 'R', 'E', 'C', 0, 0}
+
+// recordingFormatVersion is bumped on any incompatible change to the layout
+// above; the reader refuses versions it does not know instead of guessing.
+const recordingFormatVersion = 1
+
+// unknownTracePrefix is what types.TraceId.String yields for an ID missing
+// from the writer's table. Such a name cannot be resolved by string, so the
+// reader falls back to the ID embedded in it (see resolveTracepoint).
+const unknownTracePrefix = "unknown_trace_id_"
+
+// errLegacyRecording marks a recording written before the header existed. Its
+// numeric IDs carry no hint of the build that wrote them, so there is no
+// reliable way to translate them and it is rejected rather than mis-decoded.
+var errLegacyRecording = errors.New("recording has no format header: it was written by an older ior " +
+	"whose numeric tracepoint IDs are specific to that build and cannot be decoded reliably; " +
+	"re-record it with this version")
+
+// recordingHeader precedes the records in the stream.
+type recordingHeader struct {
+	Version     uint32
+	Tracepoints map[traceIdType]string // writer's ID -> tracepoint string, for IDs used in the records
+}
+
+// newRecordingHeader records the writer's name for every trace ID that occurs
+// in records, so the table stays small however large the recording is.
+func newRecordingHeader(records map[recordKey]Counter) recordingHeader {
+	names := make(map[traceIdType]string)
+	for key := range records {
+		if _, ok := names[key.TraceID]; !ok {
+			names[key.TraceID] = key.TraceID.String()
+		}
+	}
+	return recordingHeader{Version: recordingFormatVersion, Tracepoints: names}
+}
+
+// encodeRecords writes the full recording stream (magic, header, records) to w.
+func encodeRecords(w io.Writer, records map[recordKey]Counter) error {
+	if _, err := w.Write(recordingMagic[:]); err != nil {
+		return fmt.Errorf("write recording magic: %w", err)
+	}
+	enc := gob.NewEncoder(w)
+	if err := enc.Encode(newRecordingHeader(records)); err != nil {
+		return fmt.Errorf("encode recording header: %w", err)
+	}
+	if err := enc.Encode(records); err != nil {
+		return fmt.Errorf("encode records: %w", err)
+	}
+	return nil
+}
+
+// decodeRecords reads a recording stream and returns its records with every
+// trace ID translated to this build's table. A headerless legacy stream yields
+// errLegacyRecording; anything that is neither format yields a decode error.
+func decodeRecords(r io.Reader) (map[recordKey]Counter, error) {
+	br := bufio.NewReader(r)
+	prefix, err := br.Peek(len(recordingMagic))
+	if err != nil || !bytes.Equal(prefix, recordingMagic[:]) {
+		return nil, classifyHeaderless(br)
+	}
+	if _, err := br.Discard(len(recordingMagic)); err != nil {
+		return nil, fmt.Errorf("read recording magic: %w", err)
+	}
+	dec := gob.NewDecoder(br)
+	var header recordingHeader
+	if err := dec.Decode(&header); err != nil {
+		return nil, fmt.Errorf("decode recording header: %w", err)
+	}
+	if header.Version != recordingFormatVersion {
+		return nil, fmt.Errorf("unsupported recording format version %d (this build reads version %d)",
+			header.Version, recordingFormatVersion)
+	}
+	var stored map[recordKey]Counter
+	if err := dec.Decode(&stored); err != nil {
+		return nil, fmt.Errorf("decode records: %w", err)
+	}
+	return translateRecords(stored, header.Tracepoints)
+}
+
+// classifyHeaderless decides between "old recording" and "not a recording".
+// It only trusts the legacy verdict when the whole stream really decodes as
+// the pre-header layout, so garbage or truncated input keeps a plain decode
+// error instead of a misleading "written by an older ior".
+func classifyHeaderless(r io.Reader) error {
+	var legacy map[recordKey]Counter
+	if err := gob.NewDecoder(r).Decode(&legacy); err != nil {
+		return fmt.Errorf("not a recognised ior recording: %w", err)
+	}
+	return errLegacyRecording
+}
+
+// translateRecords rewrites the trace IDs of stored (the writer's numbering)
+// into this build's numbering through the header's tracepoint table. Records
+// that end up under the same key are summed, which cannot happen for a table
+// with unique names but keeps the function total.
+func translateRecords(stored map[recordKey]Counter, table map[traceIdType]string) (map[recordKey]Counter, error) {
+	out := make(map[recordKey]Counter, len(stored))
+	resolved := make(map[traceIdType]traceIdType, len(table))
+	for key, cnt := range stored {
+		id, ok := resolved[key.TraceID]
+		if !ok {
+			var err error
+			if id, err = resolveTracepoint(key.TraceID, table); err != nil {
+				return nil, err
+			}
+			resolved[key.TraceID] = id
+		}
+		key.TraceID = id
+		if prev, dup := out[key]; dup {
+			cnt = prev.add(cnt)
+		}
+		out[key] = cnt
+	}
+	return out, nil
+}
+
+// resolveTracepoint maps one stored ID to this build's ID via its tracepoint
+// name. A name this build does not know (a syscall newer than this binary) is
+// an error: guessing an ID would reintroduce the silent mislabelling. The
+// exception is the writer's own "unknown_trace_id_<n>" placeholder, which
+// renders identically before and after, so its embedded number is kept.
+func resolveTracepoint(stored traceIdType, table map[traceIdType]string) (traceIdType, error) {
+	name, ok := table[stored]
+	if !ok {
+		return 0, fmt.Errorf("corrupt recording: trace ID %d is missing from its tracepoint table", stored)
+	}
+	if id, ok := types.TraceIDByString(name); ok {
+		return id, nil
+	}
+	if n, ok := strings.CutPrefix(name, unknownTracePrefix); ok {
+		if v, err := strconv.ParseUint(n, 10, 32); err == nil {
+			return traceIdType(v), nil
+		}
+	}
+	return 0, fmt.Errorf("recording contains tracepoint %q, which this ior build does not know; "+
+		"use the ior version that wrote it", name)
+}
+
+// WriteRecordingFile writes records to path as a complete .ior.zst recording
+// in the current format. The tracer never calls it (it goes through
+// serializeToFile, which names and atomically publishes the file); it exists so
+// tests and tools in other packages can synthesise recordings without
+// duplicating the on-disk layout, which is what let them silently fall out of
+// step with the format before it had a header.
+func WriteRecordingFile(path string, records []IterRecord) (retErr error) {
+	iod := newIorData()
+	for _, r := range records {
+		iod.add(r.Path, r.TraceID, r.Comm, r.Pid, r.Tid, r.Flags, r.Cnt)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("close %s: %w", path, err))
+		}
+	}()
+	return iod.encodeCompressed(f, path)
+}

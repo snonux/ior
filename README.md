@@ -118,6 +118,12 @@ replaced. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper`
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
 
+A recording stores tracepoint names (`enter_openat`), not the build-specific numeric IDs, so
+it stays readable across ior releases and is translated to the reading build's IDs. A
+recording that names a tracepoint the reading build does not know is refused, as is one
+written before recordings carried names (no format header): its numbers cannot be mapped
+reliably, so re-record it instead of trusting a silently wrong syscall name.
+
 Traced comm names and paths come from other users and may contain terminal escape
 sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
 (ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible or bidi format characters

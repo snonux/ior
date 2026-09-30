@@ -2,7 +2,6 @@ package flamegraph
 
 import (
 	"bytes"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -41,6 +40,9 @@ var nowFn = time.Now
 // to check that it is only written once the file is published.
 var statusOut io.Writer = os.Stderr
 
+// recordKey identifies one aggregated row. TraceID is this build's numeric ID
+// in memory; on disk it is accompanied by the tracepoint name (see
+// iorformat.go) because the number is build-specific.
 type recordKey struct {
 	Path    pathType
 	TraceID traceIdType
@@ -156,12 +158,13 @@ func serializedFilename(flamegraphName string, now time.Time) (string, error) {
 		now.Format("2006-01-02_15:04:05"), serializedExt), nil
 }
 
-// encodeCompressed gob-encodes the records through a zstd writer into w and
-// closes that writer, which flushes the final zstd frame and releases the
+// encodeCompressed writes the recording stream (magic, header with the
+// tracepoint-name table, records; see iorformat.go) through a zstd writer into
+// w and closes that writer, which flushes the final zstd frame and releases the
 // native zstd context. name only labels errors.
 func (iod *iorData) encodeCompressed(w io.Writer, name string) error {
 	encoder := zstd.NewWriter(w)
-	if err := gob.NewEncoder(encoder).Encode(iod.records); err != nil {
+	if err := encodeRecords(encoder, iod.records); err != nil {
 		_ = encoder.Close() // release the native zstd context
 		return fmt.Errorf("encode ior records: %w", err)
 	}
@@ -189,31 +192,29 @@ func (iod *iorData) loadFromFile(filename string) (retErr error) {
 		}
 	}()
 
-	var records map[recordKey]Counter
-	if err := gob.NewDecoder(decoder).Decode(&records); err != nil {
+	// decodeRecords translates the stored tracepoint names to this build's IDs
+	// and rejects headerless (pre-format-version) recordings, whose numeric IDs
+	// would otherwise render as the wrong syscalls without any error.
+	records, err := decodeRecords(decoder)
+	if err != nil {
 		return fmt.Errorf("decode ior records from %s: %w", filename, err)
-	}
-	if records == nil {
-		records = make(map[recordKey]Counter)
 	}
 	iod.records = records
 	return nil
 }
 
+// serialize returns the uncompressed recording stream (same layout as inside
+// the .ior.zst, see iorformat.go).
 func (iod *iorData) serialize() ([]byte, error) {
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	err := enc.Encode(iod.records)
+	err := encodeRecords(&buf, iod.records)
 	return buf.Bytes(), err
 }
 
 func (iod *iorData) deserialize(buf *bytes.Buffer) error {
-	var records map[recordKey]Counter
-	if err := gob.NewDecoder(bytes.NewReader(buf.Bytes())).Decode(&records); err != nil {
+	records, err := decodeRecords(bytes.NewReader(buf.Bytes()))
+	if err != nil {
 		return err
-	}
-	if records == nil {
-		records = make(map[recordKey]Counter)
 	}
 	iod.records = records
 	return nil

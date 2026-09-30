@@ -1,8 +1,6 @@
 package integrationtests
 
 import (
-	"bytes"
-	"encoding/gob"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,58 +12,14 @@ import (
 	"github.com/DataDog/zstd"
 )
 
-// writeIorZst creates a minimal .ior.zst file from known data.
-// It encodes the current record-key map format used by flamegraph iorData.
+// writeIorZst creates a minimal .ior.zst file from known data, through the
+// production encoder so the fixture always matches the current on-disk format.
 func writeIorZst(t *testing.T, dir string, records []flamegraph.IterRecord) string {
 	t.Helper()
-
-	type recordKey struct {
-		Path    string
-		TraceID types.TraceId
-		Comm    string
-		Pid     uint32
-		Tid     uint32
-		Flags   file.Flags
-	}
-
-	flat := make(map[recordKey]flamegraph.Counter)
-	for _, r := range records {
-		key := recordKey{
-			Path:    r.Path,
-			TraceID: r.TraceID,
-			Comm:    r.Comm,
-			Pid:     r.Pid,
-			Tid:     r.Tid,
-			Flags:   r.Flags,
-		}
-		current := flat[key]
-		current.Count += r.Cnt.Count
-		current.Duration += r.Cnt.Duration
-		current.DurationToPrev += r.Cnt.DurationToPrev
-		current.Bytes += r.Cnt.Bytes
-		flat[key] = current
-	}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(flat); err != nil {
-		t.Fatalf("gob encode: %v", err)
-	}
-
 	filePath := filepath.Join(dir, "test.ior.zst")
-	f, err := os.Create(filePath)
-	if err != nil {
-		t.Fatalf("create file: %v", err)
+	if err := flamegraph.WriteRecordingFile(filePath, records); err != nil {
+		t.Fatalf("write recording: %v", err)
 	}
-	defer func() { _ = f.Close() }()
-
-	w := zstd.NewWriter(f)
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		t.Fatalf("zstd write: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("zstd close: %v", err)
-	}
-
 	return filePath
 }
 
