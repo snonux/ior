@@ -381,8 +381,9 @@ func (m *Manager) Close() error {
 // Every in-flight Destroy blocks an OS thread in close(2) for a grace period,
 // so an unbounded fan-out over a large tracepoint set (367 pairs with all
 // families) could hit a container's pids limit, which is fatal to the Go
-// runtime. 256 entries (up to 512 links) covers the default file-system set in
-// a single wave; larger sets take a few waves, still far below the serial cost.
+// runtime. 256 entries (up to 512 links) covers the default file-system set at
+// once; larger sets are detached through a sliding window of 256 entries (a
+// new entry starts as soon as one finishes), still far below the serial cost.
 const maxConcurrentDetach = 256
 
 // CloseWithProgress detaches all registered probes and reports exact progress
@@ -416,12 +417,14 @@ func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 }
 
 // detachAll detaches every entry, at most limit at a time, and returns the
-// first error in snapshot order (deterministic, unlike the random map order
-// the snapshot was taken in). Destroying a tracepoint link waits for an RCU
+// first error in snapshot order, which snapshotAndMarkClosed sorts by syscall
+// name so the result is deterministic. Destroying a tracepoint link waits for an RCU
 // grace period, and grace periods only merge when the waits overlap, so
 // detaching serially cost ~30ms per link (7.5s for the default file-system
 // set, 21s with all families) while a concurrent detach costs roughly one
-// grace period per wave. progress is called after each entry that had links,
+// grace period as long as the waits overlap. limit is a sliding window (a
+// semaphore), not a batch size: as soon as one entry finishes the next starts.
+// progress is called after each entry that had links,
 // under a mutex, so callbacks are serialized and the count is monotonic.
 func (m *Manager) detachAll(entries []pairEntry, total int, progress func(completed, total int), limit int) error {
 	errs := make([]error, len(entries))
@@ -469,7 +472,9 @@ type pairEntry struct {
 }
 
 // snapshotAndMarkClosed atomically marks the manager as closed and returns a
-// snapshot of all probe entries. Returns (nil, false) if already closed.
+// snapshot of all probe entries, sorted by syscall name. The sort makes the
+// order of detach errors (and thus Close's "first error") deterministic instead
+// of following Go's random map iteration. Returns (nil, false) if already closed.
 func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -485,6 +490,7 @@ func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 		})
 	}
 	m.closed = true
+	slices.SortFunc(entries, func(a, b pairEntry) int { return cmp.Compare(a.syscall, b.syscall) })
 	return entries, true
 }
 

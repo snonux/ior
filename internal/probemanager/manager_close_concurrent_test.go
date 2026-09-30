@@ -21,6 +21,7 @@ type destroyGate struct {
 	inflight int
 	maxSeen  int
 	reached  chan struct{}
+	closed   bool // reached is closed; inflight may return to want, so close once
 	timedOut bool
 }
 
@@ -32,7 +33,8 @@ func (g *destroyGate) hook() {
 	g.mu.Lock()
 	g.inflight++
 	g.maxSeen = max(g.maxSeen, g.inflight)
-	if g.inflight == g.want {
+	if g.inflight == g.want && !g.closed {
+		g.closed = true
 		close(g.reached)
 	}
 	g.mu.Unlock()
@@ -209,5 +211,23 @@ func TestDetachAllHonoursConcurrencyLimit(t *testing.T) {
 	maxSeen, timedOut := gate.result()
 	if timedOut || maxSeen != 2*limit {
 		t.Fatalf("max links in flight = %d (timedOut %v), want exactly %d", maxSeen, timedOut, 2*limit)
+	}
+}
+
+// TestManagerCloseReturnsFirstErrorBySyscallName pins the documented "first
+// error" contract: with two failing syscalls Close must always return the one
+// that sorts first by name, not whichever the random map iteration or the
+// goroutine scheduling produced. Repeated because a random order would only
+// fail some of the time.
+func TestManagerCloseReturnsFirstErrorBySyscallName(t *testing.T) {
+	errFirst := errors.New("sc3 destroy failed")
+	errSecond := errors.New("sc7 destroy failed")
+	for range 20 {
+		mgr, links := newGatedManager(t, 10, nil)
+		links[2*3].err = errFirst    // sc3 enter
+		links[2*7+1].err = errSecond // sc7 exit
+		if err := mgr.Close(); err != errFirst {
+			t.Fatalf("Close error = %v, want %v", err, errFirst)
+		}
 	}
 }
