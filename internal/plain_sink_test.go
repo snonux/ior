@@ -12,6 +12,8 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/flags"
+	"ior/internal/probemanager"
 	"ior/internal/textsafe"
 	"ior/internal/types"
 )
@@ -24,6 +26,10 @@ type recordingWriter struct {
 	writes []string
 	failN  int // fail the first failN writes
 	err    error
+	// partial, when > 0, makes the first failing write accept only that many
+	// bytes (recorded) before returning err, like a write(2) cut short by
+	// ENOSPC or EPIPE. It applies to writes counted by failN.
+	partial int
 }
 
 func (w *recordingWriter) Write(p []byte) (int, error) {
@@ -31,7 +37,11 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	if w.failN > 0 {
 		w.failN--
-		return 0, w.err
+		n := min(w.partial, len(p))
+		if n > 0 {
+			w.writes = append(w.writes, string(p[:n]))
+		}
+		return n, w.err
 	}
 	w.writes = append(w.writes, string(p))
 	return len(p), nil
@@ -216,9 +226,11 @@ func TestEventLoopFlushesOnShutdown(t *testing.T) {
 	}
 }
 
-// TestSetPrintCallbackDropsFlusher: replacing the callback (TUI, parquet)
-// must also drop the plain sink's flusher, so the loop does not flush a sink
-// that is no longer fed.
+// TestSetPrintCallbackDropsFlusher: a mode that replaces the callback (TUI,
+// parquet, flamegraph, pprof) must also drop the plain sink's flusher, so the
+// loop does not flush a sink that is no longer fed. Only WrapPrintCallback,
+// whose wrapper still feeds the previous callback, keeps it (see
+// TestWrapPrintCallbackKeepsFlusher).
 func TestSetPrintCallbackDropsFlusher(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
 	t.Cleanup(el.commResolver.shutdown)
@@ -228,6 +240,192 @@ func TestSetPrintCallbackDropsFlusher(t *testing.T) {
 	el.SetPrintCallback(func(ep *event.Pair) { ep.Recycle() })
 	if el.flusher != nil {
 		t.Fatal("SetPrintCallback kept the flusher")
+	}
+}
+
+// TestWrapPrintCallbackKeepsFlusher: wrapping the default callback keeps the
+// flusher and still routes pairs through the wrapper into the original sink.
+func TestWrapPrintCallbackKeepsFlusher(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
+	t.Cleanup(el.commResolver.shutdown)
+	sink := el.flusher
+	wrapped := 0
+	el.WrapPrintCallback(func(next func(*event.Pair)) func(*event.Pair) {
+		return func(ep *event.Pair) { wrapped++; next(ep) }
+	})
+	if el.flusher != sink {
+		t.Fatal("WrapPrintCallback dropped or replaced the flusher")
+	}
+	pipeR, pipeW := swapStdoutPipe(t)
+	el.emit(plainTestPair(1))
+	if wrapped != 1 || !el.flusher.Pending() {
+		t.Fatalf("wrapper calls %d, pending %v; want the pair to pass the wrapper into the sink", wrapped, el.flusher.Pending())
+	}
+	el.flushOutput()
+	_ = pipeW.Close()
+	if out := readAll(t, pipeR); strings.Count(out, "\n") != 1 {
+		t.Fatalf("flushed %q, want one row", out)
+	}
+}
+
+// swapStdoutPipe replaces os.Stdout with the write end of a real pipe (a
+// non-terminal, so the -plain sink buffers) for the rest of the test and
+// returns both ends. The caller closes the write end before reading to EOF.
+func swapStdoutPipe(t *testing.T) (r, w *os.File) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = old
+		_ = w.Close()
+		_ = r.Close()
+	})
+	return r, w
+}
+
+func readAll(t *testing.T, r *os.File) string {
+	t.Helper()
+	var sb strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		sb.Write(buf[:n])
+		if err != nil {
+			return sb.String()
+		}
+	}
+}
+
+// plainTraceInfra builds the traceInfra runTraceLoop drives in a real -plain
+// run: the default event loop (buffered stdout sink), a probe manager with
+// openat active, and a raw channel the test feeds. os.Stdout is a real pipe,
+// so a row visible on the read end has really gone through write(2).
+func plainTraceInfra(t *testing.T) (infra *traceInfra, rawCh chan []byte, pipeR *os.File) {
+	t.Helper()
+	pipeR, _ = swapStdoutPipe(t)
+	el := mustNewEventLoop(t, eventLoopConfig{plainMode: true, commResolver: newHermeticCommResolver()})
+	t.Cleanup(el.commResolver.shutdown)
+
+	mgr := probemanager.NewManager(&fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}})
+	mgr.Register("openat", probemanager.TracepointPair{Enter: "sys_enter_openat", Exit: "sys_exit_openat"})
+	if err := mgr.Attach("openat"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	profiling, err := setupProfiling(ctx, flags.NewFlags(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawCh = make(chan []byte)
+	return &traceInfra{ch: rawCh, ctx: ctx, cancel: cancel, profiling: profiling, el: el, mgr: mgr}, rawCh, pipeR
+}
+
+// runTraceLoopAsync runs runTraceLoop with configure == nil, the -plain
+// wiring, and returns a stop func that cancels the trace and waits for it.
+func runTraceLoopAsync(t *testing.T, infra *traceInfra) (stop func()) {
+	t.Helper()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		runTraceLoop(infra, false, nil, func(...any) {})
+	}()
+	return func() {
+		infra.cancel()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatal("runTraceLoop did not return after cancellation")
+		}
+	}
+}
+
+// TestPlainRunTimerFlushThroughTraceWiring is the end-to-end -plain check the
+// hand-wired loop tests missed: through runTraceLoop and
+// configureEventLoopOutput (the active-probe wrapper) a lone row must show up
+// on a real pipe within about plainFlushInterval, far below plainFlushBytes,
+// while the loop keeps running. The interval is stretched to 200ms so that a
+// row-per-write regression cannot pass for a timer flush either.
+func TestPlainRunTimerFlushThroughTraceWiring(t *testing.T) {
+	old := plainFlushInterval
+	plainFlushInterval = 200 * time.Millisecond
+	t.Cleanup(func() { plainFlushInterval = old })
+
+	infra, rawCh, pipeR := plainTraceInfra(t)
+	stop := runTraceLoopAsync(t, infra)
+	defer stop()
+
+	start := time.Now()
+	sendOpenPair(t, rawCh, defaulTime)
+
+	rowCh := make(chan string, 1)
+	go func() {
+		line := make([]byte, 0, 256)
+		b := make([]byte, 1)
+		for {
+			if _, err := pipeR.Read(b); err != nil {
+				return
+			}
+			line = append(line, b[0])
+			// The header line is written directly by run; the row is the
+			// second line.
+			if b[0] == '\n' && strings.Count(string(line), "\n") == 2 {
+				rowCh <- string(line)
+				return
+			}
+		}
+	}()
+	select {
+	case got := <-rowCh:
+		if elapsed := time.Since(start); elapsed < plainFlushInterval/2 {
+			t.Fatalf("row arrived after %v, before the flush timer could have fired: not batched", elapsed)
+		}
+		if !strings.Contains(got, ",openat,") {
+			t.Fatalf("got %q, want the openat row", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("buffered row never reached the pipe: the flush timer is not active behind runTraceLoop")
+	}
+}
+
+// TestPlainRunShutdownFlushThroughTraceWiring: with the timer stretched to an
+// hour, the rows can only leave through the flush on the loop's exit path,
+// which requires configureEventLoopOutput to have kept the flusher.
+func TestPlainRunShutdownFlushThroughTraceWiring(t *testing.T) {
+	old := plainFlushInterval
+	plainFlushInterval = time.Hour
+	t.Cleanup(func() { plainFlushInterval = old })
+
+	infra, rawCh, pipeR := plainTraceInfra(t)
+	stop := runTraceLoopAsync(t, infra)
+	sendOpenPair(t, rawCh, defaulTime)
+	sendOpenPair(t, rawCh, defaulTime+1000)
+	stop()
+
+	// runTraceLoop has returned, so the loop has flushed; close the write end
+	// (os.Stdout) and read what really went through the pipe.
+	_ = os.Stdout.Close()
+	out := readAll(t, pipeR)
+	if rows := strings.Count(out, ",openat,"); rows != 2 {
+		t.Fatalf("pipe holds %q, want both rows flushed at shutdown", out)
+	}
+}
+
+// TestPlainRunActiveProbeFilterStillApplies: the wrapper that keeps the
+// flusher must still drop pairs of inactive probes.
+func TestPlainRunActiveProbeFilterStillApplies(t *testing.T) {
+	infra, rawCh, pipeR := plainTraceInfra(t)
+	infra.mgr = probemanager.NewManager(&fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}})
+	stop := runTraceLoopAsync(t, infra)
+	sendOpenPair(t, rawCh, defaulTime)
+	stop()
+	_ = os.Stdout.Close()
+	if out := readAll(t, pipeR); strings.Contains(out, ",openat,") {
+		t.Fatalf("row of an inactive probe was printed: %q", out)
 	}
 }
 
@@ -264,4 +462,58 @@ func openDevNull(b *testing.B) *os.File {
 	}
 	b.Cleanup(func() { _ = f.Close() })
 	return f
+}
+
+// TestPlainSinkPartialWrite: a write that accepts n < len bytes and errors
+// loses the rest of that buffer (it is not retried, so no row is duplicated or
+// torn a second time), records the error, does not keep the buffer pending,
+// and later rows still go out whole.
+func TestPlainSinkPartialWrite(t *testing.T) {
+	boom := errors.New("no space left on device")
+	w := &recordingWriter{failN: 1, err: boom, partial: 10}
+	sink := newPlainSink(w, textsafe.EscapeNever)
+
+	sink.Print(plainTestPair(1))
+	sink.Print(plainTestPair(2))
+	if err := sink.Flush(); !errors.Is(err, boom) {
+		t.Fatalf("Flush error = %v, want %v", err, boom)
+	}
+	if n, out := w.snapshot(); n != 1 || len(out) != 10 {
+		t.Fatalf("partial write recorded %d writes / %d bytes, want 1 write of 10 bytes", n, len(out))
+	}
+	if sink.Pending() {
+		t.Fatal("the unwritten tail stayed buffered; it would be retried and could duplicate rows")
+	}
+	if !errors.Is(sink.Err(), boom) {
+		t.Fatalf("Err = %v, want the write error", sink.Err())
+	}
+
+	sink.Print(plainTestPair(3))
+	if err := sink.Flush(); err != nil {
+		t.Fatalf("Flush after the failure: %v", err)
+	}
+	_, out := w.snapshot()
+	tail := out[10:]
+	if !strings.HasPrefix(tail, "00000009,00000007,dd,3.3,") || strings.Count(tail, "\n") != 1 {
+		t.Fatalf("row after the partial write = %q, want exactly one whole row of pid 3", tail)
+	}
+	// Err keeps the first error; a later success does not clear it.
+	if !errors.Is(sink.Err(), boom) {
+		t.Fatalf("Err cleared by a later successful write: %v", sink.Err())
+	}
+}
+
+// TestPlainStdoutSinkErr: the wrapper exposes the inner sink's error (the
+// accessor task tr2 consumes) and is nil before it is bound.
+func TestPlainStdoutSinkErr(t *testing.T) {
+	s := newPlainStdoutSink(textsafe.EscapeNever)
+	if s.Err() != nil {
+		t.Fatal("Err before the first pair is non-nil")
+	}
+	r, _ := swapStdoutPipe(t)
+	_ = r.Close() // reader gone: writes fail with EPIPE
+	s.Print(plainTestPair(1))
+	if err := s.Flush(); err == nil || s.Err() == nil {
+		t.Fatalf("Flush error %v, Err %v; want the closed-pipe error on both", err, s.Err())
+	}
 }

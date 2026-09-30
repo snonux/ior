@@ -56,7 +56,9 @@ type plainSink struct {
 	// err is the first write error. Rows of a failed write are dropped and
 	// later rows are still attempted, as the unbuffered fmt.Fprintln did, so
 	// a transient failure loses only the affected rows; Err lets the caller
-	// surface it.
+	// surface it. A partial write (n < len, err != nil) drops the whole
+	// buffer too, including the n bytes that did get out: the unwritten tail
+	// is not retried, because a retry could duplicate or tear a row.
 	err error
 }
 
@@ -131,6 +133,16 @@ func (s *plainStdoutSink) Flush() error {
 
 // Pending implements pairFlusher.
 func (s *plainStdoutSink) Pending() bool { return s.sink != nil && s.sink.Pending() }
+
+// Err returns the first stdout write error, or nil (also before the first
+// pair). It is the accessor through which the -plain write-error handling
+// (task tr2) learns that rows were lost; nothing consumes it yet.
+func (s *plainStdoutSink) Err() error {
+	if s.sink == nil {
+		return nil
+	}
+	return s.sink.Err()
+}
 
 // flushTimer schedules the event loop's flush of a buffered sink: it is armed
 // when rows first become pending and fires plainFlushInterval later, so the

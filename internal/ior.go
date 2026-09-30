@@ -652,14 +652,21 @@ func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configur
 	if configure != nil {
 		configure(el)
 	}
-	origPrintCb := el.printCb
-	el.SetPrintCallback(func(ep *event.Pair) {
-		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
-			ep.Recycle()
-			return
-		}
-		if origPrintCb != nil {
-			origPrintCb(ep)
+	// The active-probe filter sits in front of whatever callback is now
+	// installed. It must wrap rather than replace via SetPrintCallback: when
+	// configure left the default -plain sink in place, replacing would drop
+	// the sink's flusher, and the buffered rows would then only leave in 64 KiB
+	// chunks and never at shutdown. Modes whose configure installed their own
+	// callback already dropped the flusher through SetPrintCallback.
+	el.WrapPrintCallback(func(next func(*event.Pair)) func(*event.Pair) {
+		return func(ep *event.Pair) {
+			if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
+				ep.Recycle()
+				return
+			}
+			if next != nil {
+				next(ep)
+			}
 		}
 	})
 }

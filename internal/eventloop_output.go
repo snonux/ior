@@ -24,7 +24,8 @@ type outputFormatter struct {
 	// within plainFlushInterval of a row being buffered, so buffering never
 	// hides output for long. nil for every callback installed through
 	// SetPrintCallback (TUI, parquet, flamegraph, pprof), which write
-	// synchronously or hand the pair off.
+	// synchronously or hand the pair off; WrapPrintCallback keeps it,
+	// because its wrapper still feeds the same sink.
 	flusher pairFlusher
 
 	// warningCb is an optional callback for non-fatal event-processing
@@ -51,10 +52,23 @@ type outputFormatter struct {
 // packages (plain output, TUI ingest, parquet/flamegraph recorders).
 //
 // It also drops the default -plain sink's flusher: that sink is no longer
-// fed, so there is nothing left for the loop to flush.
+// fed, so there is nothing left for the loop to flush. A wrapper that still
+// feeds the previous callback must use WrapPrintCallback instead, which keeps
+// the flusher.
 func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
 	e.printCb = cb
 	e.flusher = nil
+}
+
+// WrapPrintCallback replaces the pair-emission callback with wrap(current).
+// The wrapper must hand every pair it does not consume itself on to next (or
+// recycle it), so the buffered sink behind the current callback keeps being
+// fed and its flusher stays valid: unlike SetPrintCallback this does NOT drop
+// the flusher. That is what keeps the -plain buffer flushed (timer and
+// shutdown) when trace setup puts the active-probe filter in front of it.
+// A nil current callback is passed to wrap as nil.
+func (e *eventLoop) WrapPrintCallback(wrap func(next func(ep *event.Pair)) func(ep *event.Pair)) {
+	e.printCb = wrap(e.printCb)
 }
 
 // SetWarningCallback replaces the warning-notification sink. nil silences
