@@ -172,3 +172,118 @@ func TestPlainRunStopsOnFullDisk(t *testing.T) {
 		t.Fatalf("outputError = %v, want ENOSPC", err)
 	}
 }
+
+// TestPlainShutdownFlushFailureIsReported: rows still buffered when the trace
+// is cancelled are written by the deferred flushOutput; if that write fails
+// (reader gone) the loss must be recorded like any other failed write - the
+// timer is an hour, so this is the only write the rows ever get. The error
+// reaches outputError, the statistics count the rows, and the warning does not
+// claim to stop a trace that is already ending.
+func TestPlainShutdownFlushFailureIsReported(t *testing.T) {
+	old := plainFlushInterval
+	plainFlushInterval = time.Hour
+	t.Cleanup(func() { plainFlushInterval = old })
+
+	infra, rawCh, pipeR, _ := plainTraceInfra(t)
+	var mu sync.Mutex
+	var warnings []string
+	infra.el.SetWarningCallback(func(m string) {
+		mu.Lock()
+		defer mu.Unlock()
+		warnings = append(warnings, m)
+	})
+	stop := runTraceLoopAsync(t, infra)
+	if got := readPipeFor(t, pipeR, time.Second); !strings.Contains(got, event.EventStreamHeader) {
+		t.Fatalf("no header reached the pipe, got %q", got)
+	}
+	sendOpenPair(t, rawCh, defaulTime)
+	// The loop took the enter record of this second pair, so it has buffered
+	// the first row; nothing has been written since the header.
+	sendOpenPair(t, rawCh, defaulTime+1000)
+	_ = pipeR.Close() // the consumer goes away while rows are still buffered
+	stop()            // user-initiated shutdown: the deferred flush hits EPIPE
+
+	if err := infra.el.outputError(); !errors.Is(err, syscall.EPIPE) {
+		t.Fatalf("outputError = %v, want the shutdown flush's EPIPE", err)
+	}
+	if infra.el.rowsLost < 1 {
+		t.Fatalf("rowsLost = %d, want the buffered rows counted", infra.el.rowsLost)
+	}
+	if stats := infra.el.stats(); !strings.Contains(stats, "rows lost to stdout write errors") {
+		t.Fatalf("statistics do not report the loss:\n%s", stats)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "rows are lost") || strings.Contains(warnings[0], "stopping the trace") {
+		t.Fatalf("warnings = %q, want one loss warning without the stopping-the-trace claim", warnings)
+	}
+}
+
+// TestOutputFailedWording: a failure while the trace runs says it is stopping
+// the trace; one after the context was cancelled (shutdown flush) only reports
+// the lost rows. Both keep naming the error, and stopTrace is called either
+// way (cancelling an ending trace is harmless, and one code path is simpler).
+func TestOutputFailedWording(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		ending       func() bool
+		wantStopText bool
+	}{
+		{"no hook", nil, true},
+		{"not ending", func() bool { return false }, true},
+		{"already ending", func() bool { return true }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
+			t.Cleanup(el.commResolver.shutdown)
+			var warnings []string
+			el.SetWarningCallback(func(m string) { warnings = append(warnings, m) })
+			stops := 0
+			el.stopTrace = func() { stops++ }
+			el.traceEnding = tc.ending
+
+			el.outputFailed(syscall.ENOSPC, 1)
+			if len(warnings) != 1 || !strings.Contains(warnings[0], syscall.ENOSPC.Error()) || !strings.Contains(warnings[0], "rows are lost") {
+				t.Fatalf("warnings = %q, want one naming the error and the lost rows", warnings)
+			}
+			if got := strings.Contains(warnings[0], "stopping the trace"); got != tc.wantStopText {
+				t.Fatalf("warning %q mentions stopping the trace = %v, want %v", warnings[0], got, tc.wantStopText)
+			}
+			if stops != 1 {
+				t.Fatalf("stopTrace called %d times, want 1", stops)
+			}
+		})
+	}
+}
+
+// TestTraceResult: runTraceWithContext's exit error combines the -plain output
+// error and the finalisation error, so a failed stdout write cannot be dropped
+// (the pre-fix behaviour was exit 0) and a failing flamegraph write does not
+// hide it.
+func TestTraceResult(t *testing.T) {
+	finalise := errors.New("flamegraph write failed")
+	newLoop := func(failed bool) *eventLoop {
+		el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
+		t.Cleanup(el.commResolver.shutdown)
+		el.SetWarningCallback(func(string) {})
+		if failed {
+			el.outputFailed(syscall.ENOSPC, 2)
+		}
+		return el
+	}
+
+	if err := traceResult(newLoop(false), nil); err != nil {
+		t.Fatalf("healthy run and clean finalise: %v, want nil", err)
+	}
+	if err := traceResult(newLoop(false), finalise); !errors.Is(err, finalise) {
+		t.Fatalf("finalise error only: %v, want %v", err, finalise)
+	}
+	err := traceResult(newLoop(true), nil)
+	if !errors.Is(err, syscall.ENOSPC) || !strings.Contains(err.Error(), "writing -plain output to stdout") {
+		t.Fatalf("output error only: %v, want the wrapped ENOSPC with the stdout message", err)
+	}
+	err = traceResult(newLoop(true), finalise)
+	if !errors.Is(err, syscall.ENOSPC) || !errors.Is(err, finalise) {
+		t.Fatalf("both errors: %v, want both joined", err)
+	}
+}

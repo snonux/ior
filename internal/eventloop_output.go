@@ -53,6 +53,12 @@ type outputFormatter struct {
 	// trace's cancel func; nil (tests, other modes) just records the error.
 	stopTrace func()
 
+	// traceEnding reports whether the trace is already shutting down (its
+	// context is cancelled). outputFailed uses it to keep the warning honest:
+	// the shutdown flush of a user-initiated stop can fail too, and "stopping
+	// the trace" would then be wrong. nil (tests, other modes) means not ending.
+	traceEnding func() bool
+
 	// pendingWarnings are warnings raised before the loop's output was wired
 	// (see setupWarnings). run replays them through notifyWarningOrLog before
 	// the first event, by which time every mode has installed its sinks.
@@ -117,16 +123,34 @@ func (f *outputFormatter) notifyStatus(args ...any) {
 // that claim every row was written. Later failures only add to rowsLost, since
 // rows still in flight while the loop winds down are lost too. The warning
 // goes through notifyWarningOrLog because it reports lost data.
+//
+// A failed run therefore prints two stderr lines: this warning, when the
+// failure happens, and the caller's "Failed to run: ..." with the final
+// error. That is deliberate: the warning is the only signal a user sees
+// while the trace is still running (and it names the lost rows at once),
+// the final line is what decides the exit status.
 func (f *outputFormatter) outputFailed(err error, droppedRows int) {
 	f.rowsLost += droppedRows
 	if f.outputErr != nil {
 		return
 	}
 	f.outputErr = err
-	f.notifyWarningOrLog(fmt.Sprintf("writing the -plain output to stdout failed: %v; stopping the trace, rows are lost", err))
+	ending := f.traceEnding != nil && f.traceEnding()
+	f.notifyWarningOrLog(outputFailedMessage(err, ending))
 	if f.stopTrace != nil {
 		f.stopTrace()
 	}
+}
+
+// outputFailedMessage words the warning for a failed stdout write. When the
+// trace is already ending (user-initiated stop, -duration, target exit) the
+// failure came from the shutdown flush, so promising to stop the trace would
+// be wrong; only the data loss is news then.
+func outputFailedMessage(err error, traceEnding bool) string {
+	if traceEnding {
+		return fmt.Sprintf("writing the -plain output to stdout failed: %v; rows are lost", err)
+	}
+	return fmt.Sprintf("writing the -plain output to stdout failed: %v; stopping the trace, rows are lost", err)
 }
 
 // outputError is the error ior exits with after a run whose output could not

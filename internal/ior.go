@@ -786,6 +786,9 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 	configureEventLoopOutput(infra.el, infra.mgr, configure)
 	// A failed stdout write ends the trace instead of tracing on into the void.
 	infra.el.stopTrace = infra.cancel
+	// A failure during an already-cancelled trace is the shutdown flush
+	// failing: the warning must not claim the trace is being stopped then.
+	infra.el.traceEnding = func() bool { return infra.ctx.Err() != nil }
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has
 	// not yet exited.
@@ -872,9 +875,16 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	defer infra.Close()
 
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
-	// The -plain sink's write error (nil in every other mode) is part of the
-	// result: a run whose rows could not be written must not exit 0.
-	return errors.Join(infra.el.outputError(), finaliseTrace(recorder, totalDuration, logln))
+	return traceResult(infra.el, finaliseTrace(recorder, totalDuration, logln))
+}
+
+// traceResult is the error of a finished trace run: the -plain sink's write
+// error (nil in every other mode) joined with the finalisation error. A run
+// whose rows could not be written must not exit 0, and a failing flamegraph
+// write must not hide it (or vice versa), hence errors.Join rather than
+// "first non-nil". Call it only after the event loop has returned.
+func traceResult(el *eventLoop, finaliseErr error) error {
+	return errors.Join(el.outputError(), finaliseErr)
 }
 
 // traceInfra is the runtime infrastructure of one trace run - BPF module and
