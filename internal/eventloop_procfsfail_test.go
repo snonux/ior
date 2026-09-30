@@ -349,7 +349,10 @@ var directResolveAllowlist = map[string]string{
 // failing-readlink cost back on its EBADF stream. It scans every non-test
 // source file of the package (see resolveSelectorSites) and requires the set of
 // functions mentioning a "resolve" selector to equal directResolveAllowlist, so
-// neither a new caller nor a stale allowlist entry goes unnoticed.
+// neither a new caller nor a stale allowlist entry goes unnoticed. The guard
+// is per function, not per call site: a new direct resolve inside a function
+// that is already allowlisted would pass, so allowlist entries must stay
+// narrow (helpers, exit-less paths) and be reviewed when such a function grows.
 func TestEveryFdResolveGoesThroughTheEBADFHelper(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {

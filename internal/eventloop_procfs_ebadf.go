@@ -39,8 +39,9 @@ import (
 //     (labelled by the destination fd, EBADF for the source), pidfd_getfd
 //     (labelled by the pidfd, EBADF for a bad targetfd in the other process)
 //     and fanotify_mark (labelled by the group fd, EBADF for a bad dirfd;
-//     handleFdPathExit resolves the group through resolveOnExit, so the group
-//     row loses its name). The same shape arises for read/write and friends on
+//     handleFdPathExit resolves the group through resolveOnExit and builds the
+//     row from the captured pathname, so the row keeps that name and only its
+//     flags become unknown, -1). The same shape arises for read/write and friends on
 //     an open fd with the wrong access mode, which the kernel also answers with
 //     EBADF. close_range is not on the list: it never returns EBADF;
 //   - dirfd-relative path syscalls resolve their directory through
