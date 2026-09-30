@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"ior/internal/flags"
+	"ior/internal/flamegraph"
 )
 
 // runnerDeps bundles all injectable function dependencies used by the mode
@@ -273,7 +274,16 @@ func (h *plainTraceModeHandler) selectors() []modeSelector {
 	}
 }
 
-func (h *plainTraceModeHandler) validate(flags.Config) error { return nil }
+// validate rejects a -name that is not a base name for -flamegraph, before the
+// root-privilege gate and before any tracing: it is a pure argument check, so
+// it needs neither root nor a filesystem. The filesystem checks (writable
+// directory, ':' support) belong to trace startup, see Recorder.Prepare.
+func (h *plainTraceModeHandler) validate(cfg flags.Config) error {
+	if cfg.FlamegraphOutput {
+		return flamegraph.ValidateName(cfg.OutputName)
+	}
+	return nil
+}
 
 func (h *plainTraceModeHandler) run(cfg flags.Config, deps runnerDeps) error {
 	if deps.getEUID() != 0 {

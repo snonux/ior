@@ -53,7 +53,8 @@ type Config struct {
 	// ParquetPath is the file path for writing all traced syscall rows to
 	// Parquet in headless mode; empty string disables Parquet output.
 	ParquetPath string
-	// OutputName is the base name used for .ior.zst trace output files.
+	// OutputName is the base name (never a path) used for .ior.zst trace output
+	// files, which always land in the working directory.
 	OutputName string
 	// TestFlames runs the TUI with static synthetic flamegraph data for
 	// keyboard-navigation testing without a live BPF trace.
@@ -293,7 +294,7 @@ func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control and invisible characters in traced text (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode, replacing an existing file at that path (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
-	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name for .ior.zst trace output files")
+	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name (no '/') for .ior.zst trace output files, written to the working directory as <hostname>-<name>-<timestamp>.ior.zst")
 	fs.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
 	fs.BoolVar(&cfg.TestLiveFlames, "testliveflames", false, "Run TUI with continuously-updating synthetic flamegraph data for live keyboard-navigation testing")
 	fs.DurationVar(&cfg.LiveInterval, "live-interval", cfg.LiveInterval, "Synthetic live flamegraph refresh interval for -testliveflames")

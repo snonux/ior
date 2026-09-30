@@ -821,3 +821,95 @@ func TestPublishReplaceSkipsChownWithoutRegularFile(t *testing.T) {
 		t.Error("symlink target was modified")
 	}
 }
+
+func TestProbeLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := Probe(filepath.Join(dir, "out.parquet")); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("Probe left %v behind", entries)
+	}
+}
+
+func TestProbeBareFilenameProbesWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := Probe("out.csv"); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	// A vanished working directory is reported, naming it as such.
+	gone := t.TempDir()
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	err := Probe("out.csv")
+	if err == nil || !strings.Contains(err.Error(), "the working directory") {
+		t.Fatalf("Probe in a removed directory = %v, want an error naming the working directory", err)
+	}
+}
+
+func TestProbeMissingDirFails(t *testing.T) {
+	err := Probe(filepath.Join(t.TempDir(), "nope", "out.parquet"))
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Probe = %v, want ErrNotExist", err)
+	}
+}
+
+func TestProbeReadOnlyDirFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permission bits")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := Probe(filepath.Join(dir, "out.csv")); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Probe = %v, want ErrPermission", err)
+	}
+}
+
+func TestProbeReplaceRejectsDirectoriesOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := ProbeReplace(dir); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("ProbeReplace(dir) = %v, want a directory error", err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ProbeReplace(link); err == nil {
+		t.Error("ProbeReplace accepted a symlink to a directory")
+	}
+	existing := filepath.Join(dir, "old.parquet")
+	writeFile(t, existing, "x")
+	if err := ProbeReplace(existing); err != nil {
+		t.Errorf("ProbeReplace(existing file) = %v, want nil (it is replaced)", err)
+	}
+	if err := ProbeReplace(filepath.Join(dir, "new.parquet")); err != nil {
+		t.Errorf("ProbeReplace(new file) = %v, want nil", err)
+	}
+	if got := readFile(t, existing); got != "x" {
+		t.Errorf("ProbeReplace changed the existing file: %q", got)
+	}
+}
+
+func TestProbeNameChars(t *testing.T) {
+	dir := t.TempDir()
+	if err := ProbeNameChars(filepath.Join(dir, "final.ior.zst"), ":"); err != nil {
+		t.Fatalf("ProbeNameChars on a ':'-accepting filesystem = %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("ProbeNameChars left %v behind", entries)
+	}
+	// A bare file name probes the working directory (it once probed a
+	// directory literally called "the working directory").
+	t.Chdir(dir)
+	if err := ProbeNameChars("final.ior.zst", ":"); err != nil {
+		t.Fatalf("ProbeNameChars with a bare name = %v", err)
+	}
+	if err := ProbeNameChars(filepath.Join(dir, "no-such", "final"), ":"); err == nil {
+		t.Error("ProbeNameChars in a missing directory succeeded")
+	}
+}

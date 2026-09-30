@@ -29,6 +29,15 @@ type flagsType = file.Flags
 // when it has to add a "-N" suffix to avoid overwriting an existing file.
 const serializedExt = ".ior.zst"
 
+// Timestamp layouts of the generated recording name. The default keeps ':' in
+// the time of day, as recordings always were; the portable layout is used when
+// the output directory's filesystem rejects ':' (vfat, exFAT, many SMB shares;
+// see Recorder.Prepare). Both are fixed width, so names still sort by time.
+const (
+	timestampLayout         = "2006-01-02_15:04:05"
+	timestampLayoutPortable = "2006-01-02_15-04-05"
+)
+
 var hostnameFn = os.Hostname
 
 // nowFn supplies the timestamp in recording names; tests pin it to force the
@@ -111,7 +120,10 @@ func (iod *iorData) merge(other iorData) *iorData {
 
 // serializeToFile writes the records to
 // <hostname>-<flamegraphName>-<timestamp>.ior.zst in the working directory
-// (flamegraphName defaults to "default"). The data goes to a uniquely named
+// (flamegraphName defaults to "default"; layout is the time.Format layout of
+// the timestamp). Recorder.Prepare has already checked at startup that this
+// name can be created, so a failure here is a genuine late surprise (disk
+// full, directory removed) and not a misconfiguration. The data goes to a uniquely named
 // .tmp sibling first and is published only once fully flushed, so a reader
 // never sees a partial file; on any failure the temp file is removed.
 //
@@ -120,8 +132,8 @@ func (iod *iorData) merge(other iorData) *iorData {
 // replaces an existing file: the later run lands under "<name>-1.ior.zst"
 // (then -2, ...) and the console says so, instead of silently overwriting the
 // earlier recording.
-func (iod *iorData) serializeToFile(flamegraphName string) error {
-	filename, err := serializedFilename(flamegraphName, nowFn())
+func (iod *iorData) serializeToFile(flamegraphName, layout string) error {
+	filename, err := serializedFilename(flamegraphName, nowFn(), layout)
 	if err != nil {
 		return err
 	}
@@ -145,8 +157,9 @@ func (iod *iorData) serializeToFile(flamegraphName string) error {
 
 // serializedFilename builds the output name
 // <hostname>-<flamegraphName>-<now>.ior.zst, substituting "default" for an
-// empty flamegraphName.
-func serializedFilename(flamegraphName string, now time.Time) (string, error) {
+// empty flamegraphName; layout formats now (timestampLayout or
+// timestampLayoutPortable).
+func serializedFilename(flamegraphName string, now time.Time, layout string) (string, error) {
 	hostname, err := hostnameFn()
 	if err != nil {
 		return "", fmt.Errorf("get hostname: %w", err)
@@ -155,7 +168,7 @@ func serializedFilename(flamegraphName string, now time.Time) (string, error) {
 		flamegraphName = "default"
 	}
 	return fmt.Sprintf("%s-%s-%s%s", hostname, flamegraphName,
-		now.Format("2006-01-02_15:04:05"), serializedExt), nil
+		now.Format(layout), serializedExt), nil
 }
 
 // encodeCompressed writes the recording stream (magic, header with the

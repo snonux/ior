@@ -6,14 +6,18 @@ import "ior/internal/event"
 // Integration tests still use this artifact to assert trace output end-to-end.
 type Recorder struct {
 	name string
-	data iorData
+	// layout is the time.Format layout of the timestamp in the output name;
+	// Prepare downgrades it when the filesystem rejects ':'.
+	layout string
+	data   iorData
 }
 
 // NewRecorder creates a recorder for one trace run.
 func NewRecorder(name string) *Recorder {
 	return &Recorder{
-		name: name,
-		data: newIorData(),
+		name:   name,
+		layout: timestampLayout,
+		data:   newIorData(),
 	}
 }
 
@@ -30,5 +34,5 @@ func (r *Recorder) Write() error {
 	if r == nil {
 		return nil
 	}
-	return r.data.serializeToFile(r.name)
+	return r.data.serializeToFile(r.name, r.layout)
 }

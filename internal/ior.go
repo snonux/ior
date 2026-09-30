@@ -854,6 +854,13 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	verbose := started == nil
 	logln := newLogger(verbose)
 	configure, recorder := maybePrependFlamegraphConfigure(cfg, configure)
+	// Before BPF setup and the trace itself: an output that cannot be written
+	// (unwritable directory, name the filesystem rejects) must fail now, not
+	// after -duration seconds of tracing with nothing saved. Nil (no
+	// -flamegraph) is a no-op.
+	if err := recorder.Prepare(); err != nil {
+		return err
+	}
 
 	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
 	if err != nil {

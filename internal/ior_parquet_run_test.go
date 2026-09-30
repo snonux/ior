@@ -179,9 +179,16 @@ func TestRunHeadlessParquetSetupFailureLeavesNoRecording(t *testing.T) {
 // TestRunHeadlessParquetRecorderStartFailureReleasesTheInfrastructure covers
 // the partial failure after setup has succeeded: the probes are attached and
 // profiling may be running, so a recorder that cannot open its file must
-// still release everything setup built - and must not run the trace.
+// still release everything setup built - and must not run the trace. The
+// up-front path check (CheckOutputPath) already rejects a directory that is
+// missing from the start, so this failure is made to happen the only way it
+// still can: the directory disappears while setup runs.
 func TestRunHeadlessParquetRecorderStartFailureReleasesTheInfrastructure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing-dir", "headless.parquet")
+	dir := filepath.Join(t.TempDir(), "vanishing-dir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "headless.parquet")
 	cfg := flags.NewFlags()
 	cfg.ParquetPath = path
 	probe := &headlessParquetRunProbe{}
@@ -191,6 +198,9 @@ func TestRunHeadlessParquetRecorderStartFailureReleasesTheInfrastructure(t *test
 	err := runHeadlessParquetWith(cfg, func(cfg flags.Config, logln func(...any)) (*traceInfra, error) {
 		var setupErr error
 		infra, setupErr = setup(cfg, logln)
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
 		return infra, setupErr
 	})
 	if err == nil || !strings.Contains(err.Error(), "start parquet recording") {
@@ -273,5 +283,39 @@ func TestParquetPublishedNotice(t *testing.T) {
 	got := parquetPublishedNotice(moved)
 	if !strings.Contains(got, "out-1.parquet") || !strings.Contains(got, "out.parquet was already taken") {
 		t.Errorf("notice = %q, want the published and the requested path", got)
+	}
+}
+
+// TestRunHeadlessParquetRejectsUnusableOutputBeforeSetup is the regression for
+// a mistyped -parquet directory that only failed after the BPF load/attach
+// (seconds, plus a "Probing" line): the output is checked first and setup is
+// never entered.
+func TestRunHeadlessParquetRejectsUnusableOutputBeforeSetup(t *testing.T) {
+	dir := t.TempDir()
+	asDir := filepath.Join(dir, "out.parquet")
+	if err := os.Mkdir(asDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"missing directory":   filepath.Join(dir, "no-such-dir", "x.parquet"),
+		"path is a directory": asDir,
+		"empty path":          "  ",
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := flags.NewFlags()
+			cfg.ParquetPath = path
+			err := runHeadlessParquetWith(cfg, func(flags.Config, func(...any)) (*traceInfra, error) {
+				t.Fatal("BPF setup ran although the output path is unusable")
+				return nil, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "start parquet recording") {
+				t.Fatalf("runHeadlessParquetWith() error = %v, want a start parquet recording error", err)
+			}
+		})
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "out.parquet" {
+		t.Errorf("rejected runs left %v behind, want only the pre-existing out.parquet", entries)
 	}
 }

@@ -60,6 +60,10 @@ const (
 	nameMax = 255
 )
 
+// NameMax is nameMax for callers that build a file name themselves and must
+// reject one that cannot fit before doing any work.
+const NameMax = nameMax
+
 // tempPrefix and tempSuffix frame the random part of a temp file name.
 const (
 	tempPrefix = "ior-"
@@ -343,4 +347,58 @@ func closeAndRemove(f *os.File, path string) error {
 		removeErr = nil
 	}
 	return errors.Join(closeErr, removeErr)
+}
+
+// Probe checks, before any expensive work has been done, that a later
+// WriteFile/ReplaceFile for final can at least create its temp file: it
+// creates the same kind of temp file CreateTemp does beside final and removes
+// it again. A missing directory, an unwritable one (NFS root_squash, a
+// read-only mount, no write permission) or a full inode table therefore
+// surfaces immediately instead of after a trace that ran for minutes and had
+// nothing to save. It leaves nothing behind. The temp file is created and
+// removed by the same process, so it never races another ior's output.
+func Probe(final string) error {
+	f, err := CreateTemp(final)
+	if err != nil {
+		return fmt.Errorf("cannot create files in %s: %w", dirOf(final), err)
+	}
+	return closeAndRemove(f, f.Name())
+}
+
+// ProbeReplace is Probe for a name the user chose, which PublishReplace will
+// later rename over. On top of the temp-file check it rejects a final that is
+// an existing directory (a symlink to one included, since stat follows it),
+// which the rename would refuse only at the very end. A dangling symlink or
+// one pointing at a file is fine: PublishReplace replaces the link itself.
+func ProbeReplace(final string) error {
+	if info, err := os.Stat(final); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory", final)
+	}
+	return Probe(final)
+}
+
+// ProbeNameChars reports whether the filesystem holding final's directory
+// accepts chars inside a file name. Some filesystems reject characters Linux
+// itself allows - vfat and exFAT refuse ':', '?', '*', '"', '<', '>' and '|',
+// and SMB/CIFS mounts often do too - and the failure is EINVAL from the very
+// call that creates the file, i.e. at the end of a long trace. Creating and
+// removing a real "ior-<hex><chars>.tmp" file is the only reliable test; a
+// nil result means such names can be created. The caller decides what to do
+// on failure (ior falls back to a colon-free timestamp).
+func ProbeNameChars(final, chars string) error {
+	name := filepath.Join(filepath.Dir(final), fmt.Sprintf("%s%016x%s%s", tempPrefix, rand.Uint64(), chars, tempSuffix))
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
+	if err != nil {
+		return err
+	}
+	return closeAndRemove(f, name)
+}
+
+// dirOf is filepath.Dir spelled for messages: a bare file name lives in the
+// working directory, which "." names poorly.
+func dirOf(path string) string {
+	if dir := filepath.Dir(path); dir != "." {
+		return dir
+	}
+	return "the working directory"
 }

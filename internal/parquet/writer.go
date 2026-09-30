@@ -256,6 +256,22 @@ func normalizeWriterConfig(cfg WriterConfig) WriterConfig {
 	return cfg
 }
 
+// CheckOutputPath verifies, without writing anything, that a recording aimed
+// at path (as given with -parquet, ".parquet" appended when missing) could be
+// created: the directory exists and accepts new files, and the final name is
+// not an existing directory. A headless run calls it before loading and
+// attaching BPF, so a mistyped directory fails in milliseconds instead of
+// after the setup (seconds) or, for a failure only detectable late, after the
+// whole recording. NewWriter still creates the real temp file at Start; this
+// is a cheap early rejection, not a reservation.
+func CheckOutputPath(path string) error {
+	finalPath, err := normalizeOutputPath(path)
+	if err != nil {
+		return err
+	}
+	return atomicfile.ProbeReplace(finalPath)
+}
+
 // normalizeOutputPath maps the user-supplied path to the final ".parquet"
 // path, appending ".parquet" when missing. A trailing ".tmp" on a
 // ".parquet.tmp" name is dropped, so a "<name>.parquet.tmp" path (the temp

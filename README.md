@@ -91,9 +91,11 @@ how to attach it.
 |---|---|---|
 | TUI CSV snapshot | `e` | Current filtered stream snapshot in `ior-stream-<timestamp>.csv` |
 | TUI Parquet recording | `R` to start and stop | Rows captured while recording |
-| Native aggregate | `sudo ./ior -flamegraph -name run` | `<host>-run-<timestamp>.ior.zst` at shutdown |
+| Native aggregate | `sudo ./ior -flamegraph -name run` | `<host>-run-<timestamp>.ior.zst` in the working directory at shutdown; `-name` is a base name (no `/`) |
 | Headless Parquet | `sudo ./ior -parquet trace.parquet` | Per-event rows written during the run |
 | Plain CSV | `sudo ./ior -plain -duration 5 > events.csv` | Per-event CSV on stdout; status on stderr |
+
+Headless `-flamegraph` and `-parquet` check that their output can be written before tracing starts, so a mistyped directory fails immediately rather than after the run. If the working directory's filesystem rejects `:` (vfat, exFAT, some SMB shares), the `.ior.zst` timestamp uses `-` instead (`15-04-05`).
 
 The TUI keeps its statistics in memory until you export or start a recording.
 `-tuiExport=false` disables CSV export shortcuts; it does not disable `R` recording. The

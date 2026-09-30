@@ -327,7 +327,7 @@ func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
 	}
 
 	iod := newIorData()
-	err := iod.serializeToFile("test")
+	err := iod.serializeToFile("test", timestampLayout)
 	if err == nil {
 		t.Fatal("Expected error when hostname lookup fails, got nil")
 	}
@@ -346,7 +346,7 @@ func TestSerializedFilenameDefaultsEmptyName(t *testing.T) {
 		"":      "host-default-2026-09-30_08:05:09.ior.zst",
 		"flame": "host-flame-2026-09-30_08:05:09.ior.zst",
 	} {
-		got, err := serializedFilename(name, now)
+		got, err := serializedFilename(name, now, timestampLayout)
 		if err != nil || got != want {
 			t.Errorf("serializedFilename(%q) = %q, %v; want %q", name, got, err, want)
 		}
@@ -383,7 +383,7 @@ func TestSerializeToFileSameSecondKeepsEveryRecording(t *testing.T) {
 	for i := range runs {
 		iod := newIorData()
 		iod.add("path", types.SYS_ENTER_OPENAT, "comm", 100, 1000, 0, Counter{Count: uint64(i + 1)})
-		if err := iod.serializeToFile("default"); err != nil {
+		if err := iod.serializeToFile("default", timestampLayout); err != nil {
 			t.Fatalf("run %d: serializeToFile: %v", i, err)
 		}
 	}
@@ -464,7 +464,7 @@ func TestSerializeToFileReportsOnStderrAfterPublish(t *testing.T) {
 	const first = "host-default-2026-09-30_13:53:24.ior.zst"
 	const second = "host-default-2026-09-30_13:53:24-1.ior.zst"
 	iod := newIorData()
-	if err := iod.serializeToFile("default"); err != nil {
+	if err := iod.serializeToFile("default", timestampLayout); err != nil {
 		t.Fatalf("first serializeToFile: %v", err)
 	}
 	if got, want := probe.String(), "Wrote "+first+"\n"; got != want {
@@ -475,7 +475,7 @@ func TestSerializeToFileReportsOnStderrAfterPublish(t *testing.T) {
 	}
 
 	probe.Reset()
-	if err := iod.serializeToFile("default"); err != nil {
+	if err := iod.serializeToFile("default", timestampLayout); err != nil {
 		t.Fatalf("second serializeToFile: %v", err)
 	}
 	if got, want := probe.String(), first+" already exists; wrote "+second+" instead\n"; got != want {
@@ -501,7 +501,7 @@ func TestSerializeToFileFailureLeavesNoTempFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	iod := newIorData()
-	if err := iod.serializeToFile("x"); err == nil {
+	if err := iod.serializeToFile("x", timestampLayout); err == nil {
 		t.Fatal("serializeToFile into a missing directory succeeded, want error")
 	}
 	if entries, _ := os.ReadDir("."); len(entries) != 0 {
@@ -739,7 +739,7 @@ func TestSerializeToFileRoundTripsThroughLoad(t *testing.T) {
 	iod := newIorData()
 	iod.add("/etc/passwd", types.SYS_ENTER_OPENAT, "cat", 1, 1, 0, Counter{Count: 1})
 	iod.add("/etc/passwd", types.SYS_ENTER_READ, "cat", 1, 1, 0, Counter{Count: 2})
-	if err := iod.serializeToFile("rt"); err != nil {
+	if err := iod.serializeToFile("rt", timestampLayout); err != nil {
 		t.Fatalf("serializeToFile: %v", err)
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, "*.ior.zst"))

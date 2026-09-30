@@ -114,13 +114,21 @@ func runHeadlessParquet(cfg flags.Config) error {
 // runHeadlessParquetWith runs one headless Parquet recording on the
 // infrastructure that setup builds. The shared trace setup owns every BPF and
 // runtime resource (and releases what it built when it fails part-way); this
-// function adds only the Parquet-specific lifecycle on top: the recorder is
-// started once the trace can run, so a failed setup leaves no file behind, and
+// function adds only the Parquet-specific lifecycle on top: the output path is
+// probed first (parquet.CheckOutputPath) so an unusable one fails before the
+// costly setup, the recorder is started once the trace can run, so a failed
+// setup leaves no file behind, and
 // it is stopped - flushing and finalising the file - after the event loop has
 // drained and before the infrastructure is released.
 func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) error {
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)
+
+	// Cheap output check before the expensive BPF load/attach: a bad directory
+	// used to cost seconds of setup (and a "Probing" line) before the error.
+	if err := parquet.CheckOutputPath(cfg.ParquetPath); err != nil {
+		return fmt.Errorf("start parquet recording: %w", err)
+	}
 
 	infra, err := setup(cfg, logln)
 	if err != nil {
