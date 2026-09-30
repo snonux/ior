@@ -183,8 +183,11 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 // that built the pair without passing through storeEnter get the same
 // resolution here, against the current table. The one fact enter time could
 // not know is the outcome: an empty name only stands for the descriptor when
-// the kernel accepted it, so a failed empty-name exec reports no path. Neither
-// does an empty name BPF could not read (PATH_READ_FAILED), whatever the flags.
+// the kernel accepted it, so a failed empty-name exec reports no path. Its read
+// status decides the rest: an empty name read as "" (PATH_READ_OK) or passed
+// as NULL (PATH_READ_NULL) may name the descriptor, while one BPF could not
+// read (PATH_READ_FAILED) or with an unknown future status reports no path,
+// whatever the flags.
 func (e *eventLoop) execTarget(ep *event.Pair, execEv *types.ExecEvent) file.File {
 	if types.StringValue(execEv.Filename[:]) == "" &&
 		!execEventAllowsEmptyPath(execEv, retEventSucceeded(ep)) {
@@ -197,7 +200,7 @@ func (e *eventLoop) execTarget(ep *event.Pair, execEv *types.ExecEvent) file.Fil
 }
 
 // snapshotExecTarget resolves an exec enter's target for storeEnter. It
-// optimistically allows AT_EMPTY_PATH for a successfully read "" (execTarget
+// optimistically allows AT_EMPTY_PATH for an empty or NULL name (execTarget
 // withdraws that when the syscall fails; an unreadable name never gets it)
 // and copies a tracked descriptor so later fd-table updates cannot change
 // what this pending pair reports.
@@ -211,7 +214,7 @@ func (e *eventLoop) snapshotExecTarget(execEv *types.ExecEvent) file.File {
 
 // resolveExecTarget applies dirfd semantics to an exec's captured filename,
 // allowing an empty name whenever an execveat asked for AT_EMPTY_PATH and BPF
-// actually read that empty name.
+// actually observed it (a read "" or a NULL pointer).
 //
 // The filename read status (exec_event v1, task 9p2) separates a real ""
 // from an unreadable name, which also leaves an empty buffer:
@@ -237,13 +240,16 @@ func execEventDirfd(execEv *types.ExecEvent) int32 {
 
 // execEventAllowsEmptyPath reports whether an empty exec filename names the
 // dirfd itself: only for a successful execveat carrying AT_EMPTY_PATH whose
-// "" BPF read successfully. A failed read (PATH_READ_FAILED) is missing data,
-// not AT_EMPTY_PATH, and a NULL pointer (PATH_READ_NULL) is left out like for
-// the open kinds, because execveat's NULL-with-AT_EMPTY_PATH acceptance
-// depends on the kernel version.
+// name BPF observed as "" (PATH_READ_OK) or as a NULL pointer
+// (PATH_READ_NULL). Kernels that reject a NULL name fail the syscall, so a
+// *successful* NULL AT_EMPTY_PATH execveat can only have run the descriptor,
+// just as pathEventAllowsEmptyPath accepts NULL for statx/newfstatat. A
+// failed read (PATH_READ_FAILED) is missing data, not AT_EMPTY_PATH, and an
+// unknown status fails closed.
 func execEventAllowsEmptyPath(execEv *types.ExecEvent, succeeded bool) bool {
+	status := execEv.FilenameStatus
 	return succeeded && execEv.TraceId == types.SYS_ENTER_EXECVEAT &&
-		execEv.FilenameStatus == types.PATH_READ_OK &&
+		(status == types.PATH_READ_OK || status == types.PATH_READ_NULL) &&
 		execEv.Flags&unix.AT_EMPTY_PATH != 0
 }
 
