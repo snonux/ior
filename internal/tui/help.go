@@ -47,22 +47,25 @@ type helpSection struct {
 }
 
 func (m *Model) helpSections() []helpSection {
-	// The export key rides on the first line: appended to line1 it made the
-	// line 80 cells and the 70-cell help box (80 columns) cut it to "e st...".
+	// The Global section is capped at three lines: at 80x24 the overlay keeps
+	// only height-4 = 20 lines, and a fourth Global line pushed the last
+	// Dashboard Tabs line (the "stream: x/X export  E open" hint) out of
+	// view. Every line must also stay within 70 cells, the help box content
+	// width at 80 columns, or it is cut with an ellipsis.
+	//
+	// The export key rides on the first line. "R parquet rec" is not repeated
+	// here: the Dashboard Tabs section already lists it. Attaching a whole
+	// family at runtime is the probes modal's Families view (tab), which its
+	// own not-traced hint spells out, so the note only has to say which key
+	// opens the modal: O works on every tab, o is shadowed by the Flame tab's
+	// frame-order key.
 	line0 := "H help  esc/? close help  q quit"
 	if m.keys.ExportEnabled() {
 		line0 += "  e stream export"
 	}
-	line1 := "f filter  p pid picker  t tid picker  o/O probes  R parquet rec"
-	// '['/']' only re-scope the view; attaching a whole family at runtime is
-	// the probes modal's Families view (o/O, then tab), hence the last line.
-	// O works on every tab; o is shadowed by the Flame tab's frame-order key.
-	// The note has its own line: the help box is 70 cells wide at 80 columns
-	// and a longer combined line was cut mid-note.
 	globalLines := []string{
 		line0,
-		line1,
-		"[ ] scope view to a family  o/O tab: attach/detach families",
+		"f filter  p pid picker  t tid picker  o/O probes  [ ] scope family",
 		"O opens probes on every tab (on Flame, o cycles the frame order)",
 	}
 

@@ -2585,6 +2585,34 @@ func TestGlobalHelpOverlayKeepsFlameNoteAt80Columns(t *testing.T) {
 	}
 }
 
+// TestGlobalHelpOverlayKeepsNoteAndExportHintAt80x24: at 80x24 the overlay
+// keeps only height-4 = 20 lines. A fourth Global line (added for the O note)
+// once pushed the last Dashboard Tabs line, "stream: x/X export  E open", out
+// of the overlay so the export keys were not documented anywhere. With default
+// flags (export enabled) both the Flame/O note and the export hint must show,
+// and the Global section must stay at three lines to leave room for them.
+func TestGlobalHelpOverlayKeepsNoteAndExportHintAt80x24(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	if !m.keys.ExportEnabled() {
+		t.Fatalf("test assumes export is enabled by default")
+	}
+	sections := m.helpSections()
+	out := renderGlobalHelpOverlay(80, 24, sections)
+
+	for _, want := range []string{
+		"on Flame, o cycles the frame order",
+		"stream: x/X export  E open",
+		"e stream export",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help overlay at 80x24 lacks %q:\n%s", want, out)
+		}
+	}
+	if got := len(sections[0].lines); got > 3 {
+		t.Errorf("Global help has %d lines, want <= 3 so the export hint fits in 20 lines", got)
+	}
+}
+
 // TestNextAutoResetIntervalCyclesThroughPresets walks the full preset
 // sequence (off -> 10s -> 30s -> 60s -> 2m -> 5m -> off) to lock in the
 // user-facing behavior of the `I` hotkey. The cycle wraps so the user
