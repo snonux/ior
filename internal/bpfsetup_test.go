@@ -204,8 +204,11 @@ func skipIfUnprivilegedOpen(t *testing.T, err error) {
 }
 
 // TestResizeBPFMapsAgainstRealObject drives resizeBPFMaps against the real
-// embedded BPF object with the real libbpf, without loading it (opening and
-// resizing need no privileges). It pins the two things a unit test of
+// embedded BPF object with the real libbpf, without loading it. Resizing needs
+// no privileges, but opening does when RLIMIT_MEMLOCK's hard limit is small:
+// libbpfgo's NewModuleFromBufferArgs calls bumpMemlockRlimit() first, so an
+// unprivileged open can fail and the test then skips (see
+// skipIfUnprivilegedOpen). It pins the two things a unit test of
 // ringbufMapSize cannot: that the shipped default really reaches event_map,
 // and that a -mapSize which is not a valid ring-buffer size is accepted (libbpf
 // rounds it) instead of failing the post-resize check with "actual size is X".
