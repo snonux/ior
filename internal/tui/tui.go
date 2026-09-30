@@ -396,9 +396,9 @@ func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter)
 type keyboardState struct {
 	enhancements      tea.KeyboardEnhancementsMsg
 	enhancementsKnown bool
-	lastEventID       string
-	lastEventAt       time.Time
-	lastEventWasPress bool
+	// pressed is the set of physical keys whose press was delivered and whose
+	// release has not arrived yet; see normalizeKeyEvent. Lazily allocated.
+	pressed map[rune]struct{}
 	// Some terminals emit release+press for a single physical key event.
 	// When we fallback-handle a release as a press, suppress the immediate
 	// matching press to avoid double-handling.
