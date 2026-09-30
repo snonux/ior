@@ -919,10 +919,10 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 //
 // The legacy 40-byte record of a pre-old_tid IOR_BPF_OBJECT override is
 // decoded with OldTid 0 and ExitUntraced 0, i.e. "tid kept, exit still
-// coming": rekeyExecCaller skips OldTid 0 and an old object never suppressed
-// the execve exit, so this is exactly what that userspace assumed (a
-// non-leader exec is then paired by adoptLostExecCaller instead). Any other
-// size fails closed with nil rather than decoding fields at wrong offsets.
+// coming": rekeyExecCaller skips OldTid 0, and an old object neither re-keyed
+// a non-leader exec's enter nor suppressed an execve exit, so this is exactly
+// what that userspace assumed. Any other size fails closed with nil rather
+// than decoding fields at wrong offsets.
 func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	legacy := len(raw) == processExecEventLegacySize
 	if !legacy && len(raw) != processExecEventSize {
