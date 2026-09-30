@@ -3,6 +3,7 @@ package flamegraph
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -402,6 +403,86 @@ func TestSerializeToFileSameSecondKeepsEveryRecording(t *testing.T) {
 		if !ok || cnt.Count != uint64(i+1) {
 			t.Errorf("%s holds counter %+v (found %v), want run %d's Count %d", name, cnt, ok, i, i+1)
 		}
+	}
+}
+
+// publishProbe is a statusOut writer that records whether the recording
+// already existed on disk at the moment the status line was written.
+type publishProbe struct {
+	bytes.Buffer
+	existedAtWrite map[string]bool
+}
+
+func (p *publishProbe) Write(b []byte) (int, error) {
+	for _, name := range []string{"host-default-2026-09-30_13:53:24.ior.zst", "host-default-2026-09-30_13:53:24-1.ior.zst"} {
+		_, err := os.Stat(name)
+		p.existedAtWrite[name] = err == nil
+	}
+	return p.Buffer.Write(b)
+}
+
+// captureStdout redirects os.Stdout into a pipe for the test and returns a
+// function that restores it and yields everything written meanwhile.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = orig })
+	return func() string {
+		os.Stdout = orig
+		_ = w.Close()
+		out, _ := io.ReadAll(r)
+		_ = r.Close()
+		return string(out)
+	}
+}
+
+// TestSerializeToFileReportsOnStderrAfterPublish pins the console contract of
+// a headless -flamegraph run (task mq2): the "Wrote <file>" line goes to the
+// status writer (stderr), never to stdout, and only once the file is on disk -
+// it used to be a "Writing" line on stdout printed before the write, which
+// announced files a broken pipe then prevented. A colliding name gets the
+// "already exists; wrote X instead" variant, also on the status writer.
+func TestSerializeToFileReportsOnStderrAfterPublish(t *testing.T) {
+	origHostnameFn, origNowFn, origStatusOut := hostnameFn, nowFn, statusOut
+	t.Cleanup(func() { hostnameFn, nowFn, statusOut = origHostnameFn, origNowFn, origStatusOut })
+	hostnameFn = func() (string, error) { return "host", nil }
+	nowFn = func() time.Time { return time.Date(2026, 9, 30, 13, 53, 24, 0, time.UTC) }
+	probe := &publishProbe{existedAtWrite: map[string]bool{}}
+	statusOut = probe
+	t.Chdir(t.TempDir())
+	stdout := captureStdout(t)
+
+	const first = "host-default-2026-09-30_13:53:24.ior.zst"
+	const second = "host-default-2026-09-30_13:53:24-1.ior.zst"
+	iod := newIorData()
+	if err := iod.serializeToFile("default"); err != nil {
+		t.Fatalf("first serializeToFile: %v", err)
+	}
+	if got, want := probe.String(), "Wrote "+first+"\n"; got != want {
+		t.Fatalf("status after first run = %q, want %q", got, want)
+	}
+	if !probe.existedAtWrite[first] {
+		t.Errorf("the Wrote line was written before %s was published", first)
+	}
+
+	probe.Reset()
+	if err := iod.serializeToFile("default"); err != nil {
+		t.Fatalf("second serializeToFile: %v", err)
+	}
+	if got, want := probe.String(), first+" already exists; wrote "+second+" instead\n"; got != want {
+		t.Fatalf("status after colliding run = %q, want %q", got, want)
+	}
+	if !probe.existedAtWrite[second] {
+		t.Errorf("the collision line was written before %s was published", second)
+	}
+
+	if out := stdout(); out != "" {
+		t.Errorf("stdout = %q, want it empty: stdout is reserved for machine-readable data", out)
 	}
 }
 

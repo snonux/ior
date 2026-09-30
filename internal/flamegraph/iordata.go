@@ -36,6 +36,11 @@ var hostnameFn = os.Hostname
 // same-second collision that the publish step must survive.
 var nowFn = time.Now
 
+// statusOut receives the "Wrote <file>" line. It is stderr because stdout is
+// reserved for machine-readable data; tests replace it to capture the line and
+// to check that it is only written once the file is published.
+var statusOut io.Writer = os.Stderr
+
 type recordKey struct {
 	Path    pathType
 	TraceID traceIdType
@@ -124,14 +129,14 @@ func (iod *iorData) serializeToFile(flamegraphName string) error {
 	if err != nil {
 		return err
 	}
-	// Status goes to stderr (stdout is reserved for machine-readable data) and
-	// only after the file is published, so it never announces a file that was
-	// not written. A failed status write (closed pipe) is deliberately
-	// ignored: the recording is already safely on disk.
+	// Status goes to statusOut (stderr; stdout is reserved for
+	// machine-readable data) and only after the file is published, so it never
+	// announces a file that was not written. A failed status write (closed
+	// pipe) is deliberately ignored: the recording is already safely on disk.
 	if published != filename {
-		_, _ = fmt.Fprintln(os.Stderr, filename, "already exists; wrote", published, "instead")
+		_, _ = fmt.Fprintln(statusOut, filename, "already exists; wrote", published, "instead")
 	} else {
-		_, _ = fmt.Fprintln(os.Stderr, "Wrote", published)
+		_, _ = fmt.Fprintln(statusOut, "Wrote", published)
 	}
 	return nil
 }

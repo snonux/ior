@@ -46,13 +46,25 @@ type signalRun struct {
 // decides what to do to them.
 func startSignalRun(t *testing.T, h TestHarness, modeArgs []string, duration int) *signalRun {
 	t.Helper()
+	return startSignalRunWith(t, h, modeArgs, duration, func(iorArgs []string) *exec.Cmd {
+		return exec.Command(h.IorBinary, iorArgs...)
+	})
+}
+
+// startSignalRunWith is startSignalRun with the command construction left to
+// the caller, so a test can start ior through a wrapper (for instance a shell
+// that ignores SIGHUP first). newCmd receives ior's full argument list; the
+// command it returns must exec or run ior itself so signals sent to it reach
+// ior.
+func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration int, newCmd func(iorArgs []string) *exec.Cmd) *signalRun {
+	t.Helper()
 	startupFile := h.workloadStartupFile("open-basic")
 	workloadCmd, pid, _, err := h.startWorkload("open-basic", startupFile)
 	if err != nil {
 		t.Fatalf("start workload: %v", err)
 	}
 	args := append([]string{"-pid", strconv.Itoa(pid), "-duration", strconv.Itoa(duration)}, modeArgs...)
-	cmd := exec.Command(h.IorBinary, args...)
+	cmd := newCmd(args)
 	cmd.Dir = h.OutputDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -190,6 +202,44 @@ func TestHeadlessRecordingSurvivesClosedPipes(t *testing.T) {
 			// every later write by ior gets EPIPE / SIGPIPE.
 			_ = run.stdout.Close()
 			_ = run.stderr.Close()
+			run.requireCleanExit(t, pipeRunDuration*time.Second+iorShutdownGrace)
+			requireRecording(t, h.OutputDir, mode)
+		})
+	}
+}
+
+// hupIgnoringCmd starts ior the way `nohup ior ... &` does: through a shell
+// that sets SIGHUP to ignored and then execs ior, so ior inherits SIG_IGN. exec
+// keeps the pid, so signals to the returned command reach ior. (nohup itself
+// is avoided: it also redirects output when stdout is a terminal.)
+func hupIgnoringCmd(iorBinary string) func(iorArgs []string) *exec.Cmd {
+	return func(iorArgs []string) *exec.Cmd {
+		script := `trap "" HUP; exec "$@"`
+		return exec.Command("sh", append([]string{"-c", script, "sh", iorBinary}, iorArgs...)...)
+	}
+}
+
+// TestHeadlessRecordingKeepsInheritedSIGHUPIgnore is the nohup regression (task
+// mq2 review): a run started with SIGHUP ignored must keep ignoring it. The
+// first SIGHUP handling installed a handler over the inherited SIG_IGN, so a
+// hangup ended `nohup ior -flamegraph -duration 3600 &` early. Here the run
+// gets a SIGHUP right after start and must still be running well after it,
+// then end at its own -duration with the full recording.
+func TestHeadlessRecordingKeepsInheritedSIGHUPIgnore(t *testing.T) {
+	for _, mode := range []string{"flamegraph", "parquet"} {
+		t.Run(mode, func(t *testing.T) {
+			enableParallelIfRequested(t)
+			h := newTestHarness(t)
+			run := startSignalRunWith(t, h, modeArgs(mode, h.OutputDir), pipeRunDuration, hupIgnoringCmd(h.IorBinary))
+			time.Sleep(shutdownDrainDelay)
+			if err := run.ior.Process.Signal(syscall.SIGHUP); err != nil {
+				t.Fatalf("send SIGHUP: %v", err)
+			}
+			select {
+			case err := <-run.done:
+				t.Fatalf("ior ended right after a SIGHUP it should have ignored (wait: %v)", err)
+			case <-time.After(2 * time.Second):
+			}
 			run.requireCleanExit(t, pipeRunDuration*time.Second+iorShutdownGrace)
 			requireRecording(t, h.OutputDir, mode)
 		})

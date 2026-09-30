@@ -34,8 +34,10 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	// (drainPairs), so none of those stoppers can race with the flush. It must
 	// stay a defer: a panic that unwinds through run then still writes the rows
 	// buffered before it (TestPlainSinkPanicFlushesEarlierRows). An exit that
-	// skips defers altogether - a crash in another goroutine, SIGHUP, SIGQUIT -
-	// loses the still-buffered rows; see the plainSink doc.
+	// skips defers altogether - a crash in another goroutine, SIGQUIT,
+	// SIGKILL - loses the still-buffered rows; see the plainSink doc. SIGHUP
+	// is not one of them: headless modes cancel the context on it (unless it
+	// was inherited as ignored), so this defer runs.
 	defer e.flushOutput()
 
 	if e.cfg.pprofEnable {

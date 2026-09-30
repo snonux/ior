@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"slices"
 	"strings"
 	"syscall"
@@ -36,7 +37,7 @@ func TestShutdownSignalsAddSIGHUPOnlyForHeadlessModes(t *testing.T) {
 		"plain":      plain,
 		"parquet":    parquet,
 	} {
-		got := shutdownSignals(cfg)
+		got := shutdownSignalsFor(cfg, false)
 		for _, want := range []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP} {
 			if !slices.Contains(got, want) {
 				t.Errorf("%s: shutdownSignals = %v, missing %v", name, got, want)
@@ -44,7 +45,7 @@ func TestShutdownSignalsAddSIGHUPOnlyForHeadlessModes(t *testing.T) {
 		}
 	}
 
-	tui := shutdownSignals(flags.NewFlags())
+	tui := shutdownSignalsFor(flags.NewFlags(), false)
 	if slices.Contains(tui, os.Signal(syscall.SIGHUP)) {
 		t.Errorf("TUI: shutdownSignals = %v, must not claim SIGHUP", tui)
 	}
@@ -53,10 +54,44 @@ func TestShutdownSignalsAddSIGHUPOnlyForHeadlessModes(t *testing.T) {
 	}
 }
 
+// TestShutdownSignalsLeaveIgnoredSIGHUPAlone is the nohup regression (task
+// mq2 review): a process that started with SIGHUP ignored (`nohup ior ... &`,
+// a shell trap ignoring HUP) must not have it claimed, because signal.Notify would turn the
+// inherited SIG_IGN into a handler and the first hangup would end the run.
+// SIGINT/SIGTERM stay claimed either way.
+func TestShutdownSignalsLeaveIgnoredSIGHUPAlone(t *testing.T) {
+	plain := flags.NewFlags()
+	plain.PlainMode = true
+	for name, cfg := range map[string]flags.Config{
+		"flamegraph": headlessFlamegraphConfig(),
+		"plain":      plain,
+	} {
+		got := shutdownSignalsFor(cfg, true)
+		if slices.Contains(got, os.Signal(syscall.SIGHUP)) {
+			t.Errorf("%s: shutdownSignalsFor(ignored) = %v, must not claim an ignored SIGHUP", name, got)
+		}
+		if !slices.Contains(got, os.Interrupt) || !slices.Contains(got, os.Signal(syscall.SIGTERM)) {
+			t.Errorf("%s: shutdownSignalsFor(ignored) = %v, want SIGINT and SIGTERM", name, got)
+		}
+	}
+}
+
+// TestShutdownSignalsReadsProcessDisposition ties shutdownSignals to the real
+// process state: it claims SIGHUP exactly when the process does not ignore it.
+func TestShutdownSignalsReadsProcessDisposition(t *testing.T) {
+	got := slices.Contains(shutdownSignals(headlessFlamegraphConfig()), os.Signal(syscall.SIGHUP))
+	if want := !signal.Ignored(syscall.SIGHUP); got != want {
+		t.Fatalf("shutdownSignals claims SIGHUP = %v, but signal.Ignored(SIGHUP) = %v", got, !want)
+	}
+}
+
 // TestSetupTraceContextCancelsOnSIGHUPWhenHeadless: SIGHUP finalises a
 // headless run like SIGTERM does - the context is cancelled, not the process
 // killed (the test binary surviving the Kill below is itself the proof).
 func TestSetupTraceContextCancelsOnSIGHUPWhenHeadless(t *testing.T) {
+	if signal.Ignored(syscall.SIGHUP) {
+		t.Skip("the test process itself runs with SIGHUP ignored (nohup); ior deliberately keeps that")
+	}
 	logs := &captureLogger{}
 	ctx, cancel, stopSignals := setupTraceContext(context.Background(), headlessFlamegraphConfig(), logs.log)
 	defer cancel()

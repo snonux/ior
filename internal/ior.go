@@ -665,9 +665,23 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 // only: there it used to kill the process before -flamegraph/-parquet wrote
 // anything. In TUI mode the terminal is gone with the hangup and the TUI
 // framework owns terminal teardown, so SIGHUP keeps its default action there.
+//
+// SIGHUP is claimed only when the process did not start with it ignored.
+// signal.Notify installs a handler even over an inherited SIG_IGN, which would
+// silently undo `nohup ior -flamegraph -duration 3600 &` (or a shell wrapper
+// that traps HUP to nothing): the run would end at the first hangup instead of
+// surviving it as the user asked. signal.Ignored reflects that inherited state as long as
+// nothing has called Notify for SIGHUP yet, which holds here because this runs
+// before the only Notify that can name it.
 func shutdownSignals(cfg flags.Config) []os.Signal {
+	return shutdownSignalsFor(cfg, signal.Ignored(syscall.SIGHUP))
+}
+
+// shutdownSignalsFor is shutdownSignals with the process's SIGHUP disposition
+// passed in, so the decision is testable without touching process signal state.
+func shutdownSignalsFor(cfg flags.Config, sighupIgnored bool) []os.Signal {
 	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
-	if shouldAutoStopByDuration(cfg) {
+	if shouldAutoStopByDuration(cfg) && !sighupIgnored {
 		sigs = append(sigs, syscall.SIGHUP)
 	}
 	return sigs

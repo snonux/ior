@@ -49,9 +49,10 @@ type pairFlusher interface {
 //
 // Accepted trade-off: buffering means rows can be lost on an exit that does not
 // run the event loop's defers. The flush on loop stop covers a normal exit,
-// ctx cancellation (SIGINT/SIGTERM) and even a panic unwinding through run, but
-// not a crash in another goroutine, SIGHUP, SIGQUIT or SIGKILL: up to
-// plainFlushInterval of rows, or plainFlushBytes, are then lost, where the old
+// ctx cancellation (SIGINT/SIGTERM, and SIGHUP unless the process started with
+// it ignored, e.g. under nohup - see shutdownSignals) and even a panic
+// unwinding through run, but not a crash in another goroutine, SIGQUIT or
+// SIGKILL: up to plainFlushInterval of rows, or plainFlushBytes, are then lost, where the old
 // row-per-write writer lost nothing. That is the price of the ~2x throughput,
 // and a process dying that way is already not producing a complete trace.
 //
