@@ -306,3 +306,32 @@ func TestKeyMsgMatchesHandledNames(t *testing.T) {
 		}
 	}
 }
+
+// TestSyscallChangesRefusedWhileFamilyBatchRuns: space/enter, a and n would
+// race the batch's own attaches or detaches, so they are refused with a
+// notice while a batch is shown as running; moving and searching still work.
+func TestSyscallChangesRefusedWhileFamilyBatchRuns(t *testing.T) {
+	fm := familyTestManager()
+	m := NewModel(fm).SetSize(100, 40).Open().
+		ShowBatchProgress(FamilyBatchProgressMsg{Family: types.FamilyNetwork, Attach: true, Total: 2})
+	for _, key := range []string{"space", "enter", "a", "n"} {
+		next, cmd := m.Update(keyMsg(key))
+		if cmd != nil {
+			t.Fatalf("key %q started a probe change while a family batch runs", key)
+		}
+		if !strings.Contains(next.View(100, 40), "family batch running") {
+			t.Fatalf("key %q: refusal not shown:\n%s", key, next.View(100, 40))
+		}
+	}
+	if next, _ := m.Update(keyMsg("j")); next.cursor != 1 {
+		t.Fatal("navigation blocked while a family batch runs")
+	}
+	if len(fm.toggles)+len(fm.changes) != 0 {
+		t.Fatalf("probes changed: toggles %v changes %v", fm.toggles, fm.changes)
+	}
+	// Once the batch has finished, the keys work again.
+	m = m.FinishBatch(FamilyToggledMsg{Family: types.FamilyNetwork, Attach: true}, "")
+	if _, cmd := m.Update(keyMsg("a")); cmd == nil {
+		t.Fatal("a refused after the batch finished")
+	}
+}

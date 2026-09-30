@@ -32,11 +32,14 @@ family with its attached/total probe count and attaches or detaches a whole fami
 `space`/`enter` (detach when any of its probes is attached, attach otherwise). Family
 membership is the same registry `-trace-families` uses. A family batch runs in the
 background with a progress line; a tracepoint the kernel lacks is reported and skipped,
-and the rest of the family still attaches. Once changed, the attached set is carried into
+and the rest of the family still attaches. Only one batch runs at a time, and while it runs
+the Syscalls view refuses probe changes (`space`/`enter`, `a`, `n`); `a` and `n` set every
+probe to attached or detached, so repeating them changes nothing. Once changed, the attached set is carried into
 every later trace session, so a PID/TID reselect or a filter change that restarts the
 trace keeps it instead of reverting to the flags. The carried set is normally read back
 from the probes that are actually attached. A change still running when the trace restarts
-or stops (or a family batch overlapping another toggle) carries its intended set instead;
+or stops carries its intended set instead (a single-probe change only adds or removes that
+probe);
 probes of it that cannot attach are retried at each session start and skipped with a log
 line until the next probe change reads the attached set back. After detaching everything,
 later sessions attach nothing, and only restarting `ior` returns to the startup selection. `[`/`]` only scope the dashboard view to

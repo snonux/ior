@@ -282,13 +282,16 @@ type EventIngester = statsengine.Accumulator
 type LiveTrieSource = flamegraph.LiveTrieSource
 
 // ProbeManager exposes runtime probe controls to the TUI probes modal.
-// *probemanager.Manager implements this interface. AttachFamily and
+// *probemanager.Manager implements this interface. Attach and Detach set one
+// probe to a definite state (the modal's all-on/all-off). AttachFamily and
 // DetachFamily are the batch operations behind the modal's Families view:
 // they report per-syscall failures in the result and progress through the
 // callback, and may take seconds, so callers run them off the UI goroutine.
 type ProbeManager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
+	Attach(syscall string) error
+	Detach(syscall string) error
 	ActiveCount() (int, int)
 	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)

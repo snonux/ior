@@ -140,6 +140,8 @@ func tuiNewFakeProbeManager() tuiFakeProbeManager {
 
 func (f tuiFakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f tuiFakeProbeManager) Toggle(string) error               { return nil }
+func (f tuiFakeProbeManager) Attach(string) error               { return nil }
+func (f tuiFakeProbeManager) Detach(string) error               { return nil }
 func (f tuiFakeProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
@@ -226,6 +228,21 @@ func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
 		if f.states[i].Syscall == syscall {
 			f.states[i].Active = !f.states[i].Active
 			return nil
+		}
+	}
+	return nil
+}
+
+// Attach and Detach set the named probe's Active flag.
+func (f *tuiStatefulProbeManager) Attach(syscall string) error { return f.set(syscall, true) }
+func (f *tuiStatefulProbeManager) Detach(syscall string) error { return f.set(syscall, false) }
+
+func (f *tuiStatefulProbeManager) set(syscall string, active bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.states {
+		if f.states[i].Syscall == syscall {
+			f.states[i].Active = active
 		}
 	}
 	return nil

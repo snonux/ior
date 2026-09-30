@@ -19,6 +19,8 @@ import (
 type Manager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
+	Attach(syscall string) error
+	Detach(syscall string) error
 	ActiveCount() (int, int)
 	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
@@ -225,10 +227,26 @@ func (m Model) moveCursor(delta int) Model {
 	return m.clampCursor()
 }
 
+// batchBusyNotice is shown when a Syscalls view change is refused because a
+// family batch is running.
+const batchBusyNotice = "family batch running - wait for it to finish"
+
 // handleSyscallKey processes the Syscalls view keys: search, toggle one
-// probe, and all-on/all-off.
+// probe, and all-on/all-off. While a family batch runs, the probe changes are
+// refused: the batch flips probes of its family one by one, and a toggle or
+// all-on/all-off racing it would undo part of it or be undone by it. The TUI
+// replays a running batch into every rebuilt modal (ShowBatchProgress), so
+// the guard holds across reopening the modal.
 func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+	switch key {
+	case " ", "space", "enter", "a", "n":
+		if m.batch.active {
+			m.lastErr = batchBusyNotice
+			return m.clampCursor(), nil
+		}
+	}
+	switch key {
 	case "/", "f":
 		m.searching = true
 		m.textInput.SetValue(m.search)
@@ -243,9 +261,9 @@ func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, toggleCmd(m.manager, selected, m.session)
 	case "a":
-		return m, bulkToggleCmd(m.manager, m.probes, false, m.session)
+		return m, setAllCmd(m.manager, true, m.session)
 	case "n":
-		return m, bulkToggleCmd(m.manager, m.probes, true, m.session)
+		return m, setAllCmd(m.manager, false, m.session)
 	}
 	return m, nil
 }
@@ -526,21 +544,28 @@ func toggleCmd(manager Manager, syscall string, session uint64) tea.Cmd {
 	}
 }
 
-// bulkToggleCmd toggles every listed probe whose state is sourceActive, i.e.
-// switches all on (sourceActive false) or all off. Its intent is every
-// registered syscall, or none.
-func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActive bool, session uint64) tea.Cmd {
+// setAllCmd attaches (active) or detaches every probe. It works from a fresh
+// States() read and uses Attach/Detach rather than Toggle, so it only touches
+// probes not yet in the requested state and is idempotent: pressing a twice,
+// or after the list shown in the modal went stale, never flips a probe back.
+// Its intent is every registered syscall, or none.
+func setAllCmd(manager Manager, active bool, session uint64) tea.Cmd {
 	return func() tea.Msg {
 		if manager == nil {
 			return ProbeToggledMsg{Session: session, Err: fmt.Errorf("probe manager unavailable")}
 		}
-		intent := intendedActive(manager.States(), func(probemanager.ProbeState) bool { return !sourceActive })
+		states := manager.States()
+		intent := intendedActive(states, func(probemanager.ProbeState) bool { return active })
+		change := manager.Detach
+		if active {
+			change = manager.Attach
+		}
 		var firstErr error
-		for _, p := range probes {
-			if p.Active != sourceActive {
+		for _, p := range states {
+			if p.Active == active {
 				continue
 			}
-			if err := manager.Toggle(p.Syscall); err != nil && firstErr == nil {
+			if err := change(p.Syscall); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}

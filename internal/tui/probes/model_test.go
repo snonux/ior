@@ -3,6 +3,7 @@ package probes
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ type fakeManager struct {
 	mu         sync.Mutex
 	states     []probemanager.ProbeState
 	toggles    []string
+	changes    []string
 	failAttach map[string]bool
 }
 
@@ -36,6 +38,27 @@ func (f *fakeManager) Toggle(syscall string) error {
 	for i := range f.states {
 		if f.states[i].Syscall == syscall {
 			f.states[i].Active = !f.states[i].Active
+		}
+	}
+	return nil
+}
+
+// Attach and Detach set the named probe's state and record the call in
+// changes as "+name" / "-name".
+func (f *fakeManager) Attach(syscall string) error { return f.set(syscall, true) }
+func (f *fakeManager) Detach(syscall string) error { return f.set(syscall, false) }
+
+func (f *fakeManager) set(syscall string, active bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sign := "-"
+	if active {
+		sign = "+"
+	}
+	f.changes = append(f.changes, sign+syscall)
+	for i := range f.states {
+		if f.states[i].Syscall == syscall {
+			f.states[i].Active = active
 		}
 	}
 	return nil
@@ -139,33 +162,46 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	m := NewModel(fm).Open()
 	m.search = "read"
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'n'}[0], Text: string([]rune{'n'})})
-	if cmd == nil {
-		t.Fatalf("expected bulk off command")
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if toggled, ok := cmd().(ProbeToggledMsg); !ok || toggled.Err != nil || toggled.Intent == nil || len(toggled.Intent) != 0 {
+		t.Fatalf("unexpected bulk off msg: %#v", toggled)
 	}
-	msg := cmd()
-	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
-		t.Fatalf("unexpected bulk off msg: %#v", msg)
-	}
-	if len(fm.toggles) != 3 {
-		t.Fatalf("expected all probes toggled off despite filter, got toggles=%+v", fm.toggles)
+	if want := []string{"-read", "-write", "-openat"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want all probes detached despite the filter %v", fm.changes, want)
 	}
 
-	// Re-open with all inactive and filtered search still present; "a" should
-	// toggle all probes back on.
-	m = NewModel(fm).Open()
-	m.search = "read"
-	fm.toggles = nil
-	_, cmd = m.Update(tea.KeyPressMsg{Code: []rune{'a'}[0], Text: string([]rune{'a'})})
-	if cmd == nil {
-		t.Fatalf("expected bulk on command")
+	fm.changes = nil
+	_, cmd = NewModel(fm).Open().Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if toggled, ok := cmd().(ProbeToggledMsg); !ok || !slices.Equal(toggled.Intent, []string{"read", "write", "openat"}) {
+		t.Fatalf("unexpected bulk on msg: %#v", toggled)
 	}
-	msg = cmd()
-	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
-		t.Fatalf("unexpected bulk on msg: %#v", msg)
+	if want := []string{"+read", "+write", "+openat"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want %v", fm.changes, want)
 	}
-	if len(fm.toggles) != 3 {
-		t.Fatalf("expected all probes toggled on despite filter, got toggles=%+v", fm.toggles)
+}
+
+// TestBulkKeysAreIdempotent: a/n set a definite state from a fresh read of
+// the manager, so they only change probes not yet in that state - even when
+// the list the modal shows is stale - and repeating them changes nothing.
+// With Toggle they used to flip probes that had changed since the modal
+// loaded its list.
+func TestBulkKeysAreIdempotent(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{
+		{Syscall: "read", Active: true}, {Syscall: "write"},
+	}}
+	m := NewModel(fm).Open()   // the modal's list: read on, write off
+	fm.states[1].Active = true // write attached meanwhile (stale list)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	cmd()
+	if len(fm.changes) != 0 {
+		t.Fatalf("a with everything attached changed %v, want nothing", fm.changes)
+	}
+	for range 2 {
+		_, cmd = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+		cmd()
+	}
+	if want := []string{"-read", "-write"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want each probe detached once %v", fm.changes, want)
 	}
 }
 

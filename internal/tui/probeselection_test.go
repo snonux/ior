@@ -41,6 +41,16 @@ func (f *selectionProbeManager) setActive(syscall string, active bool) {
 	}
 }
 
+func (f *selectionProbeManager) Attach(syscall string) error {
+	f.setActive(syscall, true)
+	return nil
+}
+
+func (f *selectionProbeManager) Detach(syscall string) error {
+	f.setActive(syscall, false)
+	return nil
+}
+
 func (f *selectionProbeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
 	return f.setFamily(family, true, progress), nil
 }
