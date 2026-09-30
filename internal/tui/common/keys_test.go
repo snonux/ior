@@ -14,7 +14,7 @@ func TestDefaultKeyMapIncludesDirGroupBinding(t *testing.T) {
 	}
 
 	probesHelp := keys.Probes.Help()
-	if probesHelp.Key != "o" || probesHelp.Desc != "probes" {
+	if probesHelp.Key != "o" || probesHelp.Desc != "probes/families" {
 		t.Fatalf("unexpected probes binding help: key=%q desc=%q", probesHelp.Key, probesHelp.Desc)
 	}
 
@@ -92,7 +92,7 @@ func TestDashboardFullHelpIncludesDirGroupBinding(t *testing.T) {
 	found = false
 	for _, binding := range groups[1] {
 		help := binding.Help()
-		if help.Key == "o" && help.Desc == "probes" {
+		if help.Key == "o" && help.Desc == "probes/families" {
 			found = true
 			break
 		}
@@ -197,7 +197,7 @@ func TestDashboardStatusHelpIncludesProbesBinding(t *testing.T) {
 	foundReverseSort := false
 	for _, binding := range short {
 		help := binding.Help()
-		if help.Key == "o" && help.Desc == "probes" {
+		if help.Key == "o" && help.Desc == "probes/families" {
 			found = true
 		}
 		if help.Key == "t" && help.Desc == "select tid" {
