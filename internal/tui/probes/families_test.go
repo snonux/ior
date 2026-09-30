@@ -32,9 +32,12 @@ func openFamilies(t *testing.T, fm *fakeManager) Model {
 	return m
 }
 
-// selectFamily moves the Families cursor onto family.
+// selectFamily moves the Families cursor onto family, starting from the top.
 func selectFamily(t *testing.T, m Model, family types.SyscallFamily) Model {
 	t.Helper()
+	for m.famCursor > 0 {
+		m, _ = m.Update(keyMsg("k"))
+	}
 	for m.familyStates()[m.famCursor].Family != family {
 		before := m.famCursor
 		m, _ = m.Update(keyMsg("j"))
@@ -45,26 +48,38 @@ func selectFamily(t *testing.T, m Model, family types.SyscallFamily) Model {
 	return m
 }
 
-// runBatch follows a family batch's command chain to its end, feeding every
-// message back through Update as the TUI does, and returns the final model
-// and the progress messages seen on the way.
-func runBatch(t *testing.T, m Model, cmd tea.Cmd) (Model, []FamilyBatchProgressMsg) {
+// runBatch plays the TUI's part for the family batch the modal requested
+// with cmd: it checks the request, starts the batch with StartFamilyBatch on
+// fm, follows the command chain to its end, rendering every message into the
+// modal as the TUI does, and returns the final model and the progress seen.
+func runBatch(t *testing.T, m Model, fm *fakeManager, cmd tea.Cmd) (Model, []FamilyBatchProgressMsg) {
 	t.Helper()
+	if cmd == nil {
+		t.Fatal("the modal requested no batch")
+	}
+	req, ok := cmd().(FamilyBatchRequestMsg)
+	if !ok {
+		t.Fatal("the modal's command is not a FamilyBatchRequestMsg")
+	}
 	var progress []FamilyBatchProgressMsg
+	next := StartFamilyBatch(fm, 7, req.Family, req.Attach)
 	for range 100 {
-		if cmd == nil {
-			t.Fatal("batch command chain ended without a FamilyToggledMsg")
-		}
-		msg := cmd()
-		m, cmd = m.Update(msg)
-		switch msg := msg.(type) {
+		switch msg := next().(type) {
 		case FamilyBatchProgressMsg:
+			if msg.Run != 7 {
+				t.Fatalf("progress of run %d, want 7", msg.Run)
+			}
 			progress = append(progress, msg)
+			m = m.ShowBatchProgress(msg)
 			if m.batchLine() == "" {
 				t.Fatal("progress message did not show a progress line")
 			}
+			next = msg.Next()
 		case FamilyToggledMsg:
-			return m, progress
+			if msg.Run != 7 {
+				t.Fatalf("result of run %d, want 7", msg.Run)
+			}
+			return m.FinishBatch(msg, ""), progress
 		default:
 			t.Fatalf("unexpected batch message %T", msg)
 		}
@@ -102,7 +117,7 @@ func TestFamilyToggleAttachesWholeFamilyWithProgress(t *testing.T) {
 	if !m.batch.active || cmd == nil {
 		t.Fatal("space on a family did not start a batch")
 	}
-	m, progress := runBatch(t, m, cmd)
+	m, progress := runBatch(t, m, fm, cmd)
 	if len(progress) == 0 || progress[0].Family != types.FamilyNetwork || !progress[0].Attach {
 		t.Fatalf("progress = %+v, want Network attach updates", progress)
 	}
@@ -121,7 +136,7 @@ func TestFamilyToggleDetachesPartiallyAttachedFamily(t *testing.T) {
 	fm := familyTestManager()
 	m := selectFamily(t, openFamilies(t, fm), types.FamilyFS)
 	m, cmd := m.Update(keyMsg("enter"))
-	m, _ = runBatch(t, m, cmd)
+	m, _ = runBatch(t, m, fm, cmd)
 	if got := m.familyStates()[m.famCursor]; got.Active != 0 || got.Total != 2 {
 		t.Fatalf("FS = %+v, want 0/2 after detach", got)
 	}
@@ -135,7 +150,7 @@ func TestFamilyToggleReportsPerSyscallFailures(t *testing.T) {
 	fm.failAttach = map[string]bool{"connect": true}
 	m := selectFamily(t, openFamilies(t, fm), types.FamilyNetwork)
 	m, cmd := m.Update(keyMsg("space"))
-	m, _ = runBatch(t, m, cmd)
+	m, _ = runBatch(t, m, fm, cmd)
 	if !strings.Contains(m.lastInfo, "attached 1 of 2") {
 		t.Fatalf("lastInfo = %q, want 1 of 2 attached", m.lastInfo)
 	}
@@ -159,24 +174,60 @@ func TestFamilyToggleIgnoredWhileBatchRunsAndOnEmptyFamily(t *testing.T) {
 }
 
 func TestFamilyBatchFinishesWhileModalHidden(t *testing.T) {
-	m := selectFamily(t, openFamilies(t, familyTestManager()), types.FamilyNetwork)
+	fm := familyTestManager()
+	m := selectFamily(t, openFamilies(t, fm), types.FamilyNetwork)
 	m, cmd := m.Update(keyMsg("space"))
 	m = m.Close()
-	m, _ = runBatch(t, m, cmd)
+	m, _ = runBatch(t, m, fm, cmd)
 	if m.batch.active || m.lastInfo == "" {
-		t.Fatalf("hidden modal did not follow the batch to its end: %+v %q", m.batch, m.lastInfo)
+		t.Fatalf("hidden modal did not render the batch's end: %+v %q", m.batch, m.lastInfo)
+	}
+}
+
+// TestDetachProgressTotalCountsAttachedProbes: the provisional total shown
+// before the first update is the number of probes the batch will change -
+// for a detach the attached ones (1 of FS's 2), for an attach the detached.
+func TestDetachProgressTotalCountsAttachedProbes(t *testing.T) {
+	m := selectFamily(t, openFamilies(t, familyTestManager()), types.FamilyFS)
+	m, _ = m.Update(keyMsg("space"))
+	if m.batch.attach || m.batch.total != 1 {
+		t.Fatalf("FS detach batch = %+v, want total 1", m.batch)
+	}
+	m.batch = familyBatch{}
+	m = selectFamily(t, m, types.FamilyNetwork)
+	m, _ = m.Update(keyMsg("space"))
+	if !m.batch.attach || m.batch.total != 2 {
+		t.Fatalf("Network attach batch = %+v, want total 2", m.batch)
 	}
 }
 
 func TestFamilyBatchWithoutManagerReportsError(t *testing.T) {
-	msg := familyBatchCmd(nil, types.FamilyFS, true)()
+	msg := StartFamilyBatch(nil, 3, types.FamilyFS, true)()
 	done, ok := msg.(FamilyToggledMsg)
-	if !ok || done.Err == nil {
-		t.Fatalf("msg = %#v, want a FamilyToggledMsg with an error", msg)
+	if !ok || done.Err == nil || done.Run != 3 {
+		t.Fatalf("msg = %#v, want run 3's FamilyToggledMsg with an error", msg)
 	}
-	m, _ := NewModel(nil).Open().Update(done)
+	m := NewModel(nil).Open().FinishBatch(done, "")
 	if !strings.Contains(m.lastErr, "FS: probe manager unavailable") {
 		t.Fatalf("lastErr = %q", m.lastErr)
+	}
+}
+
+func TestFocusFamilyPreselectsFamiliesCursor(t *testing.T) {
+	m := NewModel(familyTestManager()).FocusFamily("Time").Open()
+	m, _ = m.Update(keyMsg("tab"))
+	if got := m.familyStates()[m.famCursor].Family; got != types.FamilyTime {
+		t.Fatalf("cursor on %s, want Time", got)
+	}
+	if m = m.FocusFamily("Bogus"); m.familyStates()[m.famCursor].Family != types.FamilyTime {
+		t.Fatal("an unknown family moved the cursor")
+	}
+}
+
+func TestFinishBatchAppendsNote(t *testing.T) {
+	m := NewModel(familyTestManager()).Open().FinishBatch(FamilyToggledMsg{Family: types.FamilyFS, Attach: true}, "(note)")
+	if !strings.HasSuffix(m.lastInfo, " (note)") {
+		t.Fatalf("lastInfo = %q, want the note appended", m.lastInfo)
 	}
 }
 
@@ -203,7 +254,7 @@ func TestNotTracedHint(t *testing.T) {
 		{"", ""},
 		{"FS", ""},
 		{"Network", "Network not traced: press o, tab, space to attach"},
-		{"AIO", "AIO not traced: press o, tab, space to attach"},
+		{"AIO", ""}, // no probe at all: nothing to attach
 	}
 	for _, tt := range tests {
 		if got := NotTracedHint(tt.family, states); got != tt.want {

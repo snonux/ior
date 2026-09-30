@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"ior/internal/globalfilter"
@@ -13,17 +14,23 @@ import (
 )
 
 // selectionProbeManager is a probe manager whose state the test sets
-// directly; the family batch methods are not exercised through it.
+// directly and whose family batches really flip it. mu guards states:
+// family batches run on their own goroutine.
 type selectionProbeManager struct {
 	fakeProbeManager
+	mu sync.Mutex
 }
 
 func (f *selectionProbeManager) States() []probemanager.ProbeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return slices.Clone(f.states)
 }
 
 // setActive sets the Active flag of syscall.
 func (f *selectionProbeManager) setActive(syscall string, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.states {
 		if f.states[i].Syscall == syscall {
 			f.states[i].Active = active
@@ -31,10 +38,33 @@ func (f *selectionProbeManager) setActive(syscall string, active bool) {
 	}
 }
 
+func (f *selectionProbeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, true, progress), nil
+}
+
+func (f *selectionProbeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, false, progress), nil
+}
+
+func (f *selectionProbeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result probemanager.BatchResult
+	for i := range f.states {
+		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+			f.states[i].Active = active
+			result.Total++
+			result.Changed++
+		}
+	}
+	progress(result.Total, result.Total)
+	return result
+}
+
 // newSelectionManager returns read (FS) active and socket/connect (Network)
 // and nanosleep (Time) inactive.
 func newSelectionManager() *selectionProbeManager {
-	return &selectionProbeManager{fakeProbeManager{states: []probemanager.ProbeState{
+	return &selectionProbeManager{fakeProbeManager: fakeProbeManager{states: []probemanager.ProbeState{
 		{Syscall: "connect"}, {Syscall: "nanosleep"}, {Syscall: "read", Active: true}, {Syscall: "socket"},
 	}}}
 }
@@ -63,9 +93,9 @@ func TestFamilyCycleHintsAtFamilyWithoutAttachedProbes(t *testing.T) {
 		t.Fatalf("expected the not-traced hint for Network, got:\n%s", view)
 	}
 
-	// Attaching the family (reported by the modal) clears the hint.
+	// Attaching a probe of the family clears the hint.
 	manager.setActive("socket", true)
-	next, _ := m.Update(probes.FamilyToggledMsg{Family: types.FamilyNetwork, Attach: true})
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "socket"})
 	m = next.(*Model)
 	if view := m.View().Content; strings.Contains(view, "not traced") {
 		t.Fatalf("expected the hint to go once Network is attached, got:\n%s", view)
@@ -134,7 +164,7 @@ func TestProbeChangeCarriesAttachedSetIntoRestart(t *testing.T) {
 func TestProbeSelectionKeptWhenNoManagerIsPublished(t *testing.T) {
 	m, _ := newLiveSwapModel(t)
 	m.tracer.setAttachSyscalls([]string{"read"})
-	next, _ := m.Update(probes.FamilyToggledMsg{Family: types.FamilyFS})
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read"})
 	m = next.(*Model)
 	if !slices.Equal(m.tracer.attachSyscalls, []string{"read"}) {
 		t.Fatalf("attachSyscalls = %v, want [read] kept", m.tracer.attachSyscalls)

@@ -32,18 +32,64 @@ type familyBatch struct {
 
 // NotTracedHint returns the status hint for a dashboard scoped to family
 // while none of its probes is attached - the view would otherwise just be
-// empty with no explanation. It returns "" when family is empty (unscoped) or
-// has at least one active probe.
+// empty with no explanation. It returns "" when family is empty (unscoped),
+// has at least one active probe, or has no probe at all on this kernel (there
+// is nothing to attach, so the hint's instructions would lead nowhere).
+//
+// The instructions are literal: the TUI opens the modal with the Families
+// cursor on the scoped family (FocusFamily), so o, tab, space attach exactly
+// this family.
 func NotTracedHint(family string, states []probemanager.ProbeState) string {
 	if family == "" {
 		return ""
 	}
 	for _, state := range probemanager.FamilyStates(states) {
-		if string(state.Family) == family && state.Active > 0 {
+		if string(state.Family) == family && (state.Active > 0 || state.Total == 0) {
 			return ""
 		}
 	}
 	return family + " not traced: press o, tab, space to attach"
+}
+
+// FocusFamily puts the Families view cursor on family (the view itself is
+// not switched), so the dashboard's family scope is preselected when the
+// user tabs over. An unknown family leaves the cursor unchanged.
+func (m Model) FocusFamily(family string) Model {
+	for i, candidate := range types.AllSyscallFamilies() {
+		if string(candidate) == family {
+			m.famCursor = i
+		}
+	}
+	return m.clampCursor()
+}
+
+// ShowBatchProgress displays the progress of the running family batch. It
+// only renders: following the batch (FamilyBatchProgressMsg.Next) is up to
+// the TUI, which owns the run and replays the last progress into a rebuilt
+// modal through this method.
+func (m Model) ShowBatchProgress(msg FamilyBatchProgressMsg) Model {
+	m.batch = familyBatch{active: true, family: msg.Family, attach: msg.Attach, completed: msg.Completed, total: msg.Total}
+	return m.clampCursor()
+}
+
+// FinishBatch ends the displayed family batch: it reloads the probe list and
+// reports how many probes changed and, if any failed, the first failure (the
+// failing probes also carry their error in the Syscalls view rows). A
+// non-empty note is appended to the outcome line.
+func (m Model) FinishBatch(msg FamilyToggledMsg, note string) Model {
+	m.batch = familyBatch{}
+	m = m.reload()
+	m.lastInfo, m.lastErr = familyOutcome(msg)
+	if note != "" {
+		m.lastInfo += " " + note
+	}
+	return m.clampCursor()
+}
+
+// SetError shows err in the modal's error line.
+func (m Model) SetError(err string) Model {
+	m.lastErr = err
+	return m.clampCursor()
 }
 
 // familyStates returns the per-family counts of the loaded probe list.
@@ -63,9 +109,12 @@ func (m Model) switchView() Model {
 	return m.clampCursor()
 }
 
-// toggleSelectedFamily starts detaching the selected family when any of its
-// probes is attached and attaching it otherwise. Only one family batch runs
-// at a time; a key press while one runs is ignored (its progress is shown).
+// toggleSelectedFamily requests detaching the selected family when any of
+// its probes is attached and attaching it otherwise. A key press while a
+// batch is shown as running is ignored here; the TUI, which owns the run,
+// refuses overlapping requests too (the modal may have been rebuilt). The
+// provisional progress total is the number of probes the batch has to
+// change: the attached ones for a detach, the detached ones for an attach.
 func (m Model) toggleSelectedFamily() (Model, tea.Cmd) {
 	families := m.familyStates()
 	if m.batch.active || m.famCursor < 0 || m.famCursor >= len(families) {
@@ -77,26 +126,15 @@ func (m Model) toggleSelectedFamily() (Model, tea.Cmd) {
 		return m.clampCursor(), nil
 	}
 	attach := state.Active == 0
-	m.batch = familyBatch{active: true, family: state.Family, attach: attach, total: state.Total}
+	total := state.Active
+	if attach {
+		total = state.Total - state.Active
+	}
+	m.batch = familyBatch{active: true, family: state.Family, attach: attach, total: total}
 	m.lastErr = ""
 	m.lastInfo = ""
-	return m.clampCursor(), familyBatchCmd(m.manager, state.Family, attach)
-}
-
-// handleBatchProgress records a family batch's progress and keeps waiting.
-func (m Model) handleBatchProgress(msg FamilyBatchProgressMsg) (Model, tea.Cmd) {
-	m.batch = familyBatch{active: true, family: msg.Family, attach: msg.Attach, completed: msg.Completed, total: msg.Total}
-	return m.clampCursor(), msg.waitCmd()
-}
-
-// handleFamilyToggled ends a family batch: it reloads the probe list and
-// reports how many probes changed and, if any failed, the first failure.
-// The failing probes also carry their error in the Syscalls view rows.
-func (m Model) handleFamilyToggled(msg FamilyToggledMsg) (Model, tea.Cmd) {
-	m.batch = familyBatch{}
-	m = m.reload()
-	m.lastInfo, m.lastErr = familyOutcome(msg)
-	return m.clampCursor(), nil
+	request := FamilyBatchRequestMsg{Family: state.Family, Attach: attach}
+	return m.clampCursor(), func() tea.Msg { return request }
 }
 
 // familyOutcome returns the info and error text for a finished family batch.
