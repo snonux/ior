@@ -3,8 +3,12 @@ package internal
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+
+	"golang.org/x/sys/unix"
 
 	"ior/internal/flags"
 )
@@ -74,5 +78,47 @@ func TestProcTgidOfOwnThread(t *testing.T) {
 	}
 	if _, err := procTgid(-5); err == nil {
 		t.Fatal("procTgid(-5) succeeded, want an error")
+	}
+}
+
+// TestProcTgidOfSiblingThread covers the case -tid actually needs: a thread
+// whose tid differs from the pid resolves to the owning process. Goroutines
+// locked to OS threads are held behind a barrier so their threads stay alive
+// (and distinct) while one with tid != pid is looked up.
+func TestProcTgidOfSiblingThread(t *testing.T) {
+	const threads = 4
+	tids := make(chan int, threads)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for range threads {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			tids <- unix.Gettid()
+			<-release
+		}()
+	}
+	defer func() {
+		close(release)
+		wg.Wait()
+	}()
+
+	sibling := 0
+	for range threads {
+		if tid := <-tids; tid != os.Getpid() {
+			sibling = tid
+		}
+	}
+	if sibling == 0 {
+		t.Fatal("no locked goroutine landed on a thread other than the main one")
+	}
+	got, err := procTgid(sibling)
+	if err != nil {
+		t.Fatalf("procTgid(%d) error = %v", sibling, err)
+	}
+	if got != os.Getpid() {
+		t.Fatalf("procTgid(%d) = %d, want %d", sibling, got, os.Getpid())
 	}
 }

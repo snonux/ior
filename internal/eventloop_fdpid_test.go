@@ -277,6 +277,9 @@ func TestThreadExitKeepsTheProcessFdEntries(t *testing.T) {
 	if _, ok := el.fdState().cachedProcFdFile(9, crossPidA); !ok {
 		t.Fatalf("pid %d fd 9 evicted from the procfs cache by a mere thread exit", crossPidA)
 	}
+	if el.numGroupDeadExits != 0 {
+		t.Fatalf("numGroupDeadExits = %d after a thread exit, want 0", el.numGroupDeadExits)
+	}
 
 	// The group-dead exit of the last thread then does evict.
 	el.processRawEvent(makeProcessExitEvent(t, defaulTime+1, crossPidA, crossTidA+1), make(chan *event.Pair, 1))
@@ -285,6 +288,9 @@ func TestThreadExitKeepsTheProcessFdEntries(t *testing.T) {
 	}
 	if _, ok := el.fdState().cachedProcFdFile(9, crossPidA); ok {
 		t.Fatalf("pid %d fd 9 still cached after the whole process exited", crossPidA)
+	}
+	if el.numGroupDeadExits != 1 {
+		t.Fatalf("numGroupDeadExits = %d after the group-dead exit, want 1", el.numGroupDeadExits)
 	}
 }
 

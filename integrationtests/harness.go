@@ -40,6 +40,7 @@ type TestHarness struct {
 	// IorArgsForPID, when set, returns extra ior args that depend on the
 	// workload PID (known only once it started), e.g. "-tid <pid>". They are
 	// appended after the harness's own args, so they override its -pid.
+	// Honoured by RunWithIorArgs and RunParquetWithIorArgs.
 	IorArgsForPID func(pid int) []string
 }
 
@@ -79,9 +80,7 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 		return TestResult{}, 0, err
 	}
 
-	if h.IorArgsForPID != nil {
-		extraIorArgs = append(slices.Clone(extraIorArgs), h.IorArgsForPID(workloadPID)...)
-	}
+	extraIorArgs = h.withPIDScopedArgs(extraIorArgs, workloadPID)
 	iorCmd, readyCh, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
@@ -130,6 +129,7 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 		return "", 0, err
 	}
 
+	extraIorArgs = h.withPIDScopedArgs(extraIorArgs, workloadPID)
 	iorCmd, readyCh, err := h.startIorParquetForRun(workloadPID, parquetPath, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
@@ -148,6 +148,15 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 		return "", workloadPID, workloadCommandError(workloadErr, workloadStderr.String())
 	}
 	return parquetPath, workloadPID, nil
+}
+
+// withPIDScopedArgs appends the IorArgsForPID args for pid to extra, leaving
+// the caller's slice untouched.
+func (h *TestHarness) withPIDScopedArgs(extra []string, pid int) []string {
+	if h.IorArgsForPID == nil {
+		return extra
+	}
+	return append(slices.Clone(extra), h.IorArgsForPID(pid)...)
 }
 
 func (h *TestHarness) workloadStartupFile(scenario string) string {

@@ -119,6 +119,11 @@ type eventLoop struct {
 	numTracepointMismatches uint
 	numSyscalls             uint
 	numSyscallsAfterFilter  uint
+	// numGroupDeadExits counts sched_process_exit records flagged group_dead,
+	// i.e. traced processes that ended and had their fd entries evicted
+	// (handleProcessExitEvent). Written only by the event-loop goroutine;
+	// stats() reads it after <-e.done like the counters above.
+	numGroupDeadExits uint
 	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
@@ -318,11 +323,13 @@ func (e *eventLoop) stats() string {
 			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
 			"\tsyscalls: %d (%.2f/s)\n"+
 			"\tsyscalls after filter: %d (%.2f/s)\n"+
+			"\tgroup-dead exits: %d\n"+
 			"%s",
 		duration,
 		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, mismatchPct,
 		e.numSyscalls, rate(uint64(e.numSyscalls)),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
+		e.numGroupDeadExits,
 		e.ringbufDropStatLine(rate),
 	)
 
