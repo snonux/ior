@@ -529,7 +529,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     drain (clearing its handle and source), so a SetFilter that races the stop
     swaps the filter without draining the possibly closed map.
 - **Additional metric dimensions**:
-  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
+  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`. What feeds it (task hq2, `internal/eventloop_addrspace.go`): successful `mmap`/`munmap`/`mremap` (larger of old/new size) and `brk`, each rounded up to the host page size because the kernel maps whole pages (`mmap(len=1)` maps 4096 bytes). `brk` is the movement of the per-process break since the previous `brk` (`brkTracker`, evicted on exec and group-dead exit; the first sighting and `brk(0)` only baseline). `msync`/`mprotect`/`madvise`/`mlock*` leave the extent unchanged and report 0. Huge-page mappings stay at base-page granularity.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests whose nanoseconds are unrepresentable in `__s64` saturate to `S64_MAX` (`generateExtraSleep`). The kernel similarly clamps to `KTIME_MAX`, but from `tv_sec >= KTIME_SEC_MAX` regardless of `tv_nsec`, so values within ~1s of the boundary may differ.
 - **The trace-started signal is a promise, not a progress report**: in TUI mode
   `setupTraceInfra` closing the `started` channel is what makes

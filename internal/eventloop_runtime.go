@@ -461,7 +461,8 @@ func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
 }
 
 // applyDerivedPairValues computes every filterable value the Pair does not
-// carry straight from its two events: transferred bytes, address-space extent,
+// carry straight from its two events: transferred bytes, address-space extent
+// (brk from the per-process break the loop remembers),
 // requested sleep, syscall latency and the inter-syscall gap. It reads the
 // per-tid previous-exit timestamp but deliberately does not advance it - that
 // happens in finalizeTracepointPair, so the gap keeps being measured from the
@@ -477,6 +478,7 @@ func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
 func (e *eventLoop) applyDerivedPairValues(ep *event.Pair) {
 	applyRetBytes(ep)
 	applyAddressSpaceBytes(ep)
+	e.applyBrkGrowth(ep)
 	applyRequestedSleepNs(ep)
 	ep.CalculateDurations(e.pairs.prevTime(ep.ExitEv.GetTid()))
 }

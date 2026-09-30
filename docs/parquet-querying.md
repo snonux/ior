@@ -28,7 +28,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `fd` | Int32 | File descriptor, when applicable |
 | `ret` | Int64 | Return value as seen at `sys_exit`; negative values are errno results, except the kernel-internal restart codes -512, -513, -514 and -516, which are interruptions rather than errors (see the `is_error` rule below) |
 | `bytes` | UInt64 | Classified payload bytes |
-| `address_space_bytes` | UInt64 | Memory-region extent, when applicable |
+| `address_space_bytes` | UInt64 | Virtual address space added, removed or moved by `mmap`, `munmap`, `mremap` (the larger of old and new size) and `brk` (how far the program break moved since the process's previous `brk`; the first `brk` seen for a process and `brk(0)` queries report 0), rounded up to whole host pages. `msync`, `mprotect`, `madvise` and `mlock*` do not change the address space and report 0 |
 | `requested_sleep_ns` | Int64 | Requested relative sleep duration; `-1` unknown (null/invalid timespec, `TIMER_ABSTIME`), `9223372036854775807` for requests too large for Int64 (e.g. `sleep infinity`) |
 | `nfds` | Int32 | Poll/select count or epoll `maxevents` |
 | `timeout_ns` | Int64 | Polling timeout; `-1` infinite, `-2` unknown |

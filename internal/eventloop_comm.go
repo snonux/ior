@@ -744,6 +744,8 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
 	defer ev.Recycle()
 	e.fdState().dropOnExec(ev.Pid)
+	// The new program has a fresh address space and so a fresh program break.
+	e.brkState.forget(ev.Pid)
 	e.rekeyExecCaller(ev)
 	if ev.ExitUntraced != 0 {
 		e.completeUntracedExec(ev, ch)

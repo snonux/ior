@@ -138,6 +138,7 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	if !ev.IsGroupDead() {
 		if !ev.IsGroupDeadKnown() {
 			e.fdState().deletePid(ev.Pid)
+			e.brkState.forget(ev.Pid)
 		}
 		return
 	}
@@ -150,6 +151,7 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
 	e.numGroupDeadExits++
 	e.fdState().deletePid(ev.Pid)
+	e.brkState.forget(ev.Pid)
 	e.retireStatsProcess(ev.Pid)
 }
 

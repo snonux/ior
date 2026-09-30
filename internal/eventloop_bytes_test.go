@@ -215,10 +215,12 @@ func TestAddressSpaceBytesFromMem(t *testing.T) {
 			want:    4096,
 		},
 		{
-			name:    "msync",
+			// msync flushes an existing range: the address space does not
+			// change, so it reports nothing (see eventloop_addrspace.go).
+			name:    "msync is not an extent change",
 			traceID: types.SYS_ENTER_MSYNC,
 			length:  8192,
-			want:    8192,
+			want:    0,
 		},
 		{
 			name:    "munmap",

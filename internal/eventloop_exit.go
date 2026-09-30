@@ -1456,22 +1456,6 @@ func applyRetBytes(ep *event.Pair) {
 	ep.Bytes = bytesFromRet(ep)
 }
 
-func applyAddressSpaceBytes(ep *event.Pair) {
-	if ep == nil {
-		return
-	}
-	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || event.IsErrnoRet(retEv.Ret) {
-		return
-	}
-	switch enterEv := ep.EnterEv.(type) {
-	case *types.MemEvent:
-		ep.AddressSpaceBytes = addressSpaceBytesFromMem(enterEv.TraceId, enterEv.Length, enterEv.Length2)
-	case *types.MmapEvent:
-		ep.AddressSpaceBytes = addressSpaceBytesFromMem(enterEv.TraceId, enterEv.Length, 0)
-	}
-}
-
 func applyRequestedSleepNs(ep *event.Pair) {
 	if ep == nil {
 		return
@@ -1556,19 +1540,5 @@ func isZeroSizeProbe(enterEv event.Event) bool {
 		return ev.SizeValid != 0 && ev.Size == 0
 	default:
 		return false
-	}
-}
-
-func addressSpaceBytesFromMem(traceID types.TraceId, length, length2 uint64) uint64 {
-	switch traceID {
-	case types.SYS_ENTER_MMAP, types.SYS_ENTER_MSYNC, types.SYS_ENTER_MUNMAP:
-		return length
-	case types.SYS_ENTER_MREMAP:
-		if length > length2 {
-			return length
-		}
-		return length2
-	default:
-		return 0
 	}
 }

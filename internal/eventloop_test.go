@@ -1392,8 +1392,10 @@ func makeMsyncEventTestData(t *testing.T) (td testData) {
 		if ep.File != nil {
 			t.Errorf("Expected msync event to not carry file metadata, got %v", ep.File)
 		}
-		if ep.AddressSpaceBytes != syncLength {
-			t.Errorf("Expected msync address-space bytes %d but got %d", syncLength, ep.AddressSpaceBytes)
+		// msync only flushes an existing range, so it adds nothing to the
+		// address-space metric (mmap/munmap/mremap/brk do).
+		if ep.AddressSpaceBytes != 0 {
+			t.Errorf("Expected msync address-space bytes 0 but got %d", ep.AddressSpaceBytes)
 		}
 	})
 
