@@ -11,6 +11,11 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// renderOverview renders the Overview tab: a row of summary boxes, the trend
+// line, and three full-width panels (sparklines, top-N lists, histogram
+// summaries). height is currently unused; the layout grows with content.
+// The theme is loaded once and passed to the helpers so the whole tab is
+// rendered from one consistent palette snapshot.
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	theme := common.Current()
 	_ = height
@@ -22,45 +27,60 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	}
 
 	boxWidth := summaryBoxWidth(width)
-	box1 := renderSyscallBox(snap, boxWidth)
-	box2 := renderBytesBox(snap, boxWidth)
-	box3 := renderErrorBox(snap, boxWidth)
+	row := lipgloss.JoinHorizontal(lipgloss.Top,
+		renderSyscallBox(snap, boxWidth),
+		renderBytesBox(snap, boxWidth),
+		renderErrorBox(snap, boxWidth),
+	)
+	panel := theme.PanelStyle.Width(panelWidth(width))
+	return strings.Join(
+		[]string{
+			row,
+			theme.HighlightStyle.Render(overviewTrendsLine(snap)),
+			panel.Render(overviewSparklineLines(snap, panelInnerWidth(width))),
+			panel.Render(overviewTopLines(snap)),
+			panel.Render(overviewHistogramLines(snap)),
+		},
+		"\n",
+	)
+}
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, box1, box2, box3)
-	trends := fmt.Sprintf(
+// overviewTrendsLine summarises the latency/gap/throughput trend arrows.
+func overviewTrendsLine(snap *statsengine.Snapshot) string {
+	return fmt.Sprintf(
 		"Trends: latency %s  gap %s  throughput %s",
 		trendWithArrow(snap.LatencyTrend),
 		trendWithArrow(snap.GapTrend),
 		trendWithArrow(snap.ThroughputTrend),
 	)
+}
 
-	panelW := panelWidth(width)
-	panelInner := panelInnerWidth(width)
+// overviewSparklineLines renders the three sparklines with their labels padded
+// to a common width so the graphs start in the same column.
+func overviewSparklineLines(snap *statsengine.Snapshot, panelInner int) string {
 	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
-	latencySpark := renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth)
-	gapSpark := renderOverviewSparklineAligned("Gap:", snap.GapSeriesNs(), panelInner, labelWidth)
-	throughputSpark := renderOverviewSparklineAligned("Throughput:", snap.ThroughputSeriesB(), panelInner, labelWidth)
-	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
-	topFiles := "Top files: " + summarizeTopFiles(snap)
-	topProcesses := "Top processes: " + summarizeTopProcesses(snap)
-	latencyHist := "Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram)
-	gapHist := "Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram)
+	return strings.Join([]string{
+		renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth),
+		renderOverviewSparklineAligned("Gap:", snap.GapSeriesNs(), panelInner, labelWidth),
+		renderOverviewSparklineAligned("Throughput:", snap.ThroughputSeriesB(), panelInner, labelWidth),
+	}, "\n")
+}
 
-	panel := theme.PanelStyle.Width(panelW)
-	sparkPanel := panel.Render(strings.Join([]string{latencySpark, gapSpark, throughputSpark}, "\n"))
-	topPanel := panel.Render(strings.Join([]string{topSyscalls, topFiles, topProcesses}, "\n"))
-	histPanel := panel.Render(strings.Join([]string{latencyHist, gapHist}, "\n"))
+// overviewTopLines lists the top syscalls, files and processes.
+func overviewTopLines(snap *statsengine.Snapshot) string {
+	return strings.Join([]string{
+		"Top syscalls: " + summarizeTopSyscalls(snap),
+		"Top files: " + summarizeTopFiles(snap),
+		"Top processes: " + summarizeTopProcesses(snap),
+	}, "\n")
+}
 
-	return strings.Join(
-		[]string{
-			row,
-			theme.HighlightStyle.Render(trends),
-			sparkPanel,
-			topPanel,
-			histPanel,
-		},
-		"\n",
-	)
+// overviewHistogramLines gives the brief latency and gap bucket summaries.
+func overviewHistogramLines(snap *statsengine.Snapshot) string {
+	return strings.Join([]string{
+		"Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram),
+		"Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram),
+	}, "\n")
 }
 
 func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
