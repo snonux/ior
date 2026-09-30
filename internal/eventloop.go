@@ -191,16 +191,20 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		return nil, fmt.Errorf("create event filter: %w", err)
 	}
 
+	plainSink := newPlainStdoutSink(cfg.escapeMode)
 	el := &eventLoop{
 		pairs:          newPairTracker(),
 		pendingHandles: newPendingHandleTracker(),
 		fdTracker:      fdState,
 		commResolver:   commState,
 		// Default printCb prints each pair to stdout as a CSV row (escaped
-		// as -escape selects) then recycles it; callers (e.g. TUI,
-		// headless-parquet) replace this via configureEventLoopOutput.
+		// as -escape selects) then recycles it. The rows are buffered, so
+		// the sink is also the loop's flusher; callers (e.g. TUI,
+		// headless-parquet) replace this via configureEventLoopOutput, which
+		// drops the flusher along with the callback.
 		outputFormatter: outputFormatter{
-			printCb: plainStdoutCallback(cfg.escapeMode),
+			printCb: plainSink.Print,
+			flusher: plainSink,
 		},
 		rawHandlers:  make(map[types.EventType]rawEventHandler),
 		exitHandlers: make(map[types.EventType]runtimeExitHandler),

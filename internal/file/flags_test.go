@@ -1,6 +1,7 @@
 package file
 
 import (
+	"math/rand"
 	"strings"
 	"sync"
 	"syscall"
@@ -73,5 +74,70 @@ func TestFlagsBuildStringConcurrent(t *testing.T) {
 
 	for got := range errs {
 		t.Fatalf("unexpected BuildString output %q, want %q", got, want)
+	}
+}
+
+// referenceFlagsString is the pre-AppendTo implementation ([]string plus
+// strings.Join), kept as the specification AppendTo must match.
+func referenceFlagsString(f Flags) string {
+	var strs []string
+	if f == unknownFlag {
+		return "O_NONE"
+	}
+	if int(f)&syscall.O_ACCMODE == syscall.O_RDONLY && int(f)&unix.O_PATH == 0 {
+		strs = append(strs, "O_RDONLY")
+	}
+	for _, toHuman := range flagsToHuman {
+		if int(f)&toHuman.mask == toHuman.value {
+			strs = append(strs, toHuman.name)
+		}
+	}
+	return strings.Join(strs, "|")
+}
+
+// TestFlagsAppendToMatchesReference checks AppendTo, and String on top of it,
+// against the reference for every single named bit, the empty word, O_PATH
+// alone (renders empty), the unknown word and 20000 random bit combinations
+// (the full 2^22 sweep is too slow to run on every test pass).
+func TestFlagsAppendToMatchesReference(t *testing.T) {
+	var bits []int
+	for _, h := range flagsToHuman {
+		bits = append(bits, h.value)
+	}
+	bits = append(bits, syscall.O_ACCMODE, linuxOLargefile)
+
+	words := []int{0, unix.O_PATH, -1}
+	words = append(words, bits...)
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 20000; i++ {
+		word := 0
+		for _, b := range bits {
+			if r.Intn(2) == 0 {
+				word |= b
+			}
+		}
+		words = append(words, word)
+	}
+	for _, word := range words {
+		f := Flags(word)
+		want := referenceFlagsString(f)
+		if got := string(f.AppendTo(nil)); got != want {
+			t.Fatalf("Flags(%#x).AppendTo = %q, want %q", word, got, want)
+		}
+		if got := f.String(); got != want {
+			t.Fatalf("Flags(%#x).String = %q, want %q", word, got, want)
+		}
+	}
+	if got := string(unknownFlag.AppendTo(nil)); got != "O_NONE" {
+		t.Errorf("unknown flags render %q, want O_NONE", got)
+	}
+}
+
+// TestFlagsAppendToKeepsPrefix checks AppendTo only appends: existing bytes
+// in dst survive, and no separator leaks in front of the first flag name.
+func TestFlagsAppendToKeepsPrefix(t *testing.T) {
+	got := string(Flags(syscall.O_RDWR | syscall.O_APPEND).AppendTo([]byte("x|")))
+	if got != "x|O_RDWR|O_APPEND" {
+		t.Fatalf("AppendTo = %q, want %q", got, "x|O_RDWR|O_APPEND")
 	}
 }

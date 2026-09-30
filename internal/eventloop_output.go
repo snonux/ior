@@ -1,12 +1,7 @@
 package internal
 
 import (
-	"fmt"
-	"io"
-	"os"
-
 	"ior/internal/event"
-	"ior/internal/textsafe"
 )
 
 // outputFormatter bundles the pair-emission and warning-notification callbacks
@@ -23,6 +18,14 @@ type outputFormatter struct {
 	// The callback owns the pair after the call: it must either recycle it
 	// (ep.Recycle) or hand it off to another owner.
 	printCb func(ep *event.Pair)
+
+	// flusher is the buffered sink behind printCb, when there is one (the
+	// default -plain sink). The event loop flushes it when the loop stops and
+	// within plainFlushInterval of a row being buffered, so buffering never
+	// hides output for long. nil for every callback installed through
+	// SetPrintCallback (TUI, parquet, flamegraph, pprof), which write
+	// synchronously or hand the pair off.
+	flusher pairFlusher
 
 	// warningCb is an optional callback for non-fatal event-processing
 	// warnings (e.g. malformed events, unresolved comms). nil means silent.
@@ -42,46 +45,16 @@ type outputFormatter struct {
 	pendingWarnings []string
 }
 
-// plainStdoutCallback is the eventLoop's default printCb: plainPrintCallback
-// bound to os.Stdout with the -escape mode. The binding (and with it the
-// terminal check) happens on the first pair rather than when the loop is
-// built, so the callback writes to whatever os.Stdout is once events flow,
-// as the fmt.Println it replaced did (tests swap os.Stdout after
-// constructing the loop). printCb is only ever called from the event loop
-// goroutine, so the lazy init needs no lock.
-func plainStdoutCallback(mode textsafe.EscapeMode) func(ep *event.Pair) {
-	var write func(ep *event.Pair)
-	return func(ep *event.Pair) {
-		if write == nil {
-			write = plainPrintCallback(os.Stdout, mode)
-		}
-		write(ep)
-	}
-}
-
-// plainPrintCallback returns the default pair sink, which -plain mode keeps:
-// each pair is written to w as one CSV row (event.Pair.CSVRow) and then
-// recycled. The escaper is chosen once, here, by mode.Escaper: with the
-// default auto mode a terminal gets the attacker-controlled
-// comm/name/file columns escaped with textsafe.Escape, so a traced file name
-// cannot inject escape sequences into the operator's terminal, while piped
-// or redirected rows keep the exact traced bytes for machine consumers.
-// -escape=always covers pipes that still end in a terminal (| less -R,
-// | tee); -escape=never forces raw output.
-func plainPrintCallback(w io.Writer, mode textsafe.EscapeMode) func(ep *event.Pair) {
-	escape := mode.Escaper(w)
-	return func(ep *event.Pair) {
-		_, _ = fmt.Fprintln(w, ep.CSVRow(escape))
-		ep.Recycle()
-	}
-}
-
 // SetPrintCallback replaces the pair-emission callback. The callback owns
 // each pair after the call: it must either recycle it (ep.Recycle) or hand it
 // off to another owner. This is the production wiring seam for the mode
 // packages (plain output, TUI ingest, parquet/flamegraph recorders).
+//
+// It also drops the default -plain sink's flusher: that sink is no longer
+// fed, so there is nothing left for the loop to flush.
 func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
 	e.printCb = cb
+	e.flusher = nil
 }
 
 // SetWarningCallback replaces the warning-notification sink. nil silences

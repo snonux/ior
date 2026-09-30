@@ -22,6 +22,9 @@ func logStatus(args ...any) {
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
+	// Registered after close(e.done), so it runs first: buffered -plain rows
+	// reach stdout before stats() is unblocked and before the process exits.
+	defer e.flushOutput()
 	defer e.shutdownCommResolver()
 	stopAggregateLoop := e.startAggregateDrainLoop(ctx)
 	defer stopAggregateLoop()
@@ -182,8 +185,15 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 	// deadlocking this goroutine, which is the channel's only reader.
 	pairs := make(chan *event.Pair, 1)
 
+	// Buffered output (-plain) is flushed by the timer: a row waits at most
+	// plainFlushInterval, however busy or idle the loop is.
+	flush := newFlushTimer(e.flusher)
+	defer flush.stop()
+
 	for {
 		select {
+		case <-flush.C():
+			flush.fire()
 		case raw, ok := <-rawCh:
 			if !ok {
 				return
@@ -195,10 +205,19 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 			// event cannot crash the entire process.
 			e.processRawEventSafe(raw, pairs)
 			e.drainPairs(pairs)
+			flush.armIfPending()
 		case <-ctx.Done():
 			e.notifyStatus("Stopping event loop")
 			return
 		}
+	}
+}
+
+// flushOutput writes out whatever the default -plain sink still buffers. It
+// runs when the loop stops, on the loop goroutine that owns the sink.
+func (e *eventLoop) flushOutput() {
+	if e.flusher != nil {
+		_ = e.flusher.Flush() // the sink records the error
 	}
 }
 

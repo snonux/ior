@@ -32,6 +32,31 @@ type File interface {
 	FD() int32
 }
 
+// StringAppender is the optional allocation-free companion of File.String,
+// implemented by every File in this package. The -plain output renders one
+// CSV row per syscall into a reused byte buffer; building each file column
+// with String() would allocate a string per row only to copy it into that
+// buffer.
+//
+// AppendString appends exactly String()'s text to dst and returns the
+// extended slice. When text is non-nil, every traced path component (a
+// name, an old/new name) is passed through it - the -escape rewriting of
+// attacker-controlled bytes - while the fixed decoration around the paths
+// ("%(fd,flags)", "old:", "pathname:") is appended verbatim. That equals
+// text(String()) for any per-rune escaper, because the decoration is plain
+// printable ASCII that such an escaper leaves alone.
+type StringAppender interface {
+	AppendString(dst []byte, text func(string) string) []byte
+}
+
+// appendText appends s to dst, passing it through text first when non-nil.
+func appendText(dst []byte, s string, text func(string) string) []byte {
+	if text != nil {
+		s = text(s)
+	}
+	return append(dst, s...)
+}
+
 // FdFile represents a file descriptor-backed file reference.
 type FdFile struct {
 	fd               int32
@@ -125,20 +150,23 @@ func (f *FdFile) Name() string {
 // String renders the file for the plain-mode CSV row: the name (or "E:name"
 // when empty) followed by "%(fd,flags)".
 func (f *FdFile) String() string {
-	var sb strings.Builder
+	// The scratch buffer stays on the stack, so String costs only the string copy.
+	var scratch [128]byte
+	return string(f.AppendString(scratch[:0], nil))
+}
 
+// AppendString implements StringAppender.
+func (f *FdFile) AppendString(dst []byte, text func(string) string) []byte {
 	if len(f.name) == 0 {
-		sb.WriteString("E:name") // Empty name string
+		dst = append(dst, "E:name"...) // Empty name string
 	} else {
-		sb.WriteString(f.name)
+		dst = appendText(dst, f.name, text)
 	}
-	sb.WriteString("%(")
-	sb.WriteString(strconv.FormatInt(int64(f.fd), 10))
-	sb.WriteString(",")
-	sb.WriteString(f.Flags().String())
-	sb.WriteString(")")
-
-	return sb.String()
+	dst = append(dst, "%("...)
+	dst = strconv.AppendInt(dst, int64(f.fd), 10)
+	dst = append(dst, ',')
+	dst = f.Flags().AppendTo(dst)
+	return append(dst, ')')
 }
 
 // Flags returns the file's open-flags word.
@@ -252,17 +280,20 @@ func (f oldnameNewnameFile) FD() int32 {
 }
 
 func (f oldnameNewnameFile) String() string {
-	var sb strings.Builder
+	// The scratch buffer stays on the stack, so String costs only the string copy.
+	var scratch [128]byte
+	return string(f.AppendString(scratch[:0], nil))
+}
 
-	sb.WriteString("old:")
-	sb.WriteString(f.Oldname)
-	sb.WriteString(" ->new:")
-	sb.WriteString(f.Newname)
-	sb.WriteString("%(")
-	sb.WriteString(f.Flags().String())
-	sb.WriteString(")")
-
-	return sb.String()
+// AppendString implements StringAppender.
+func (f oldnameNewnameFile) AppendString(dst []byte, text func(string) string) []byte {
+	dst = append(dst, "old:"...)
+	dst = appendText(dst, f.Oldname, text)
+	dst = append(dst, " ->new:"...)
+	dst = appendText(dst, f.Newname, text)
+	dst = append(dst, "%("...)
+	dst = f.Flags().AppendTo(dst)
+	return append(dst, ')')
 }
 
 type pathnameFile struct {
@@ -287,15 +318,18 @@ func (f pathnameFile) FD() int32 {
 }
 
 func (f pathnameFile) String() string {
-	var sb strings.Builder
+	// The scratch buffer stays on the stack, so String costs only the string copy.
+	var scratch [128]byte
+	return string(f.AppendString(scratch[:0], nil))
+}
 
-	sb.WriteString("pathname:")
-	sb.WriteString(f.Pathname)
-	sb.WriteString("%(")
-	sb.WriteString(f.Flags().String())
-	sb.WriteString(")")
-
-	return sb.String()
+// AppendString implements StringAppender.
+func (f pathnameFile) AppendString(dst []byte, text func(string) string) []byte {
+	dst = append(dst, "pathname:"...)
+	dst = appendText(dst, f.Pathname, text)
+	dst = append(dst, "%("...)
+	dst = f.Flags().AppendTo(dst)
+	return append(dst, ')')
 }
 
 type anonymousMappingFile struct{}
@@ -322,6 +356,11 @@ func (anonymousMappingFile) String() string {
 	return "anon"
 }
 
+// AppendString implements StringAppender.
+func (anonymousMappingFile) AppendString(dst []byte, _ func(string) string) []byte {
+	return append(dst, "anon"...)
+}
+
 // --- compile-time interface satisfaction assertions ---
 //
 // *FdFile is the primary public implementation of File used throughout the
@@ -330,3 +369,8 @@ func (anonymousMappingFile) String() string {
 
 var _ File = (*FdFile)(nil)
 var _ File = anonymousMappingFile{}
+
+var _ StringAppender = (*FdFile)(nil)
+var _ StringAppender = oldnameNewnameFile{}
+var _ StringAppender = pathnameFile{}
+var _ StringAppender = anonymousMappingFile{}

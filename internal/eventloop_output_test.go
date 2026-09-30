@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -65,11 +66,22 @@ func parsePlainRow(t *testing.T, out string) []string {
 	return records[0]
 }
 
+// printPlain emits the hostile pair through a plainSink on w and flushes, so
+// buffered (non-terminal) writers show the row too.
+func printPlain(t *testing.T, w io.Writer, mode textsafe.EscapeMode) {
+	t.Helper()
+	sink := newPlainSink(w, mode)
+	sink.Print(hostilePlainPair())
+	if err := sink.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+}
+
 // TestPlainPrintCallbackEscapesOnTerminal is the task 7p2 regression test:
 // when stdout is a terminal, -plain must not write the traced ESC/BEL bytes.
 func TestPlainPrintCallbackEscapesOnTerminal(t *testing.T) {
 	out := newTTYBuffer(t)
-	plainPrintCallback(out, textsafe.EscapeAuto)(hostilePlainPair())
+	printPlain(t, out, textsafe.EscapeAuto)
 
 	got := out.String()
 	if strings.ContainsAny(got, "\x1b\a") {
@@ -88,7 +100,7 @@ func TestPlainPrintCallbackEscapesOnTerminal(t *testing.T) {
 // behaviour: a non-terminal writer receives the exact traced bytes.
 func TestPlainPrintCallbackRawWhenPiped(t *testing.T) {
 	var out bytes.Buffer
-	plainPrintCallback(&out, textsafe.EscapeAuto)(hostilePlainPair())
+	printPlain(t, &out, textsafe.EscapeAuto)
 
 	fields := parsePlainRow(t, out.String())
 	if fields[2] != osc8Payload {
@@ -104,13 +116,13 @@ func TestPlainPrintCallbackRawWhenPiped(t *testing.T) {
 // never keeps the raw bytes even on a terminal.
 func TestPlainPrintCallbackEscapeOverrides(t *testing.T) {
 	var piped bytes.Buffer
-	plainPrintCallback(&piped, textsafe.EscapeAlways)(hostilePlainPair())
+	printPlain(t, &piped, textsafe.EscapeAlways)
 	if got := parsePlainRow(t, piped.String())[2]; got != osc8Escaped {
 		t.Errorf("-escape=always into a pipe: comm = %q, want %q", got, osc8Escaped)
 	}
 
 	tty := newTTYBuffer(t)
-	plainPrintCallback(tty, textsafe.EscapeNever)(hostilePlainPair())
+	printPlain(t, tty, textsafe.EscapeNever)
 	if got := parsePlainRow(t, tty.String())[2]; got != osc8Payload {
 		t.Errorf("-escape=never on a terminal: comm = %q, want raw %q", got, osc8Payload)
 	}
@@ -167,7 +179,7 @@ func readLine(t *testing.T, r *os.File) string {
 }
 
 // emitViaDefaultStdout builds an event loop with the production default
-// printCb (plainStdoutCallback), swaps os.Stdout for out only afterwards,
+// printCb (plainStdoutSink), swaps os.Stdout for out only afterwards,
 // as a test or a late redirect would, and emits the hostile pair.
 func emitViaDefaultStdout(t *testing.T, mode textsafe.EscapeMode, out *os.File) {
 	t.Helper()
@@ -177,6 +189,8 @@ func emitViaDefaultStdout(t *testing.T, mode textsafe.EscapeMode, out *os.File) 
 	os.Stdout = out
 	defer func() { os.Stdout = old }()
 	el.emit(hostilePlainPair())
+	// Rows to a pipe are buffered; flushing is the loop's job in production.
+	el.flushOutput()
 }
 
 // TestPlainStdoutCallbackFollowsStdout covers the production -plain path:

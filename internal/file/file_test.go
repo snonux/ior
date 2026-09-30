@@ -296,3 +296,48 @@ func TestFdFileCloseOnExec(t *testing.T) {
 	check("reset to unknown", f, false, false)
 	check("dup keeps state", NewFd(1, "a", syscall.O_CLOEXEC).Dup(2), true, true)
 }
+
+// escapeBrackets is a stand-in escaper that visibly rewrites its input, so a
+// test can tell which parts of a rendered file went through it.
+func escapeBrackets(s string) string { return "[" + s + "]" }
+
+// TestAppendStringMatchesString checks every File kind: AppendString with no
+// escaper is exactly String(), it appends to (never clobbers) dst, and an
+// escaper reaches the traced paths but not the fixed decoration.
+func TestAppendStringMatchesString(t *testing.T) {
+	tests := []struct {
+		name        string
+		f           interface{ String() string }
+		wantEscaped string
+	}{
+		{"fd", NewFd(5, "/tmp/a", 0), "[/tmp/a]%(5,O_RDONLY)"},
+		{"fd empty name", NewFd(5, "", 1), "E:name%(5,O_WRONLY)"},
+		{"pathname", NewPathname([]byte("/p")), "pathname:[/p]%(O_NONE)"},
+		{"oldname/newname", NewOldnameNewname([]byte("/a"), []byte("/b")), "old:[/a] ->new:[/b]%(O_NONE)"},
+		{"anonymous", NewAnonymousMapping(), "anon"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appender, ok := tt.f.(StringAppender)
+			if !ok {
+				t.Fatalf("%T does not implement StringAppender", tt.f)
+			}
+			if got := string(appender.AppendString([]byte("pre:"), nil)); got != "pre:"+tt.f.String() {
+				t.Errorf("AppendString(nil) = %q, want %q", got, "pre:"+tt.f.String())
+			}
+			if got := string(appender.AppendString(nil, escapeBrackets)); got != tt.wantEscaped {
+				t.Errorf("AppendString(escape) = %q, want %q", got, tt.wantEscaped)
+			}
+		})
+	}
+}
+
+// TestFdFileAppendStringIsAllocationFree pins the -plain hot-path property:
+// rendering into a reused buffer costs no allocation.
+func TestFdFileAppendStringIsAllocationFree(t *testing.T) {
+	f := NewFd(5, "/tmp/a", syscall.O_RDWR|syscall.O_CLOEXEC)
+	buf := make([]byte, 0, 128)
+	if allocs := testing.AllocsPerRun(100, func() { buf = f.AppendString(buf[:0], nil) }); allocs != 0 {
+		t.Fatalf("AppendString allocates %.1f times, want 0", allocs)
+	}
+}

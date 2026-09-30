@@ -85,20 +85,38 @@ func (f Flags) BuildString(sb *strings.Builder) {
 // O_RDONLY is zero, it is emitted explicitly when the access-mode bits are
 // clear. O_PATH descriptors omit it because they have no usable access mode.
 func (f Flags) String() string {
-	var strs []string
+	// 64 bytes hold every realistic combination, so the scratch buffer stays
+	// on the stack and String costs only the final string copy.
+	var scratch [64]byte
+	return string(f.AppendTo(scratch[:0]))
+}
 
+// AppendTo appends the String form of the flag word to dst and returns the
+// extended slice. It is the single renderer behind String and the -plain
+// per-row hot path, which appends into a reused buffer: it walks the small
+// flagsToHuman table directly, so it needs neither the []string plus
+// strings.Join that String used to build per call nor a cache lookup, and it
+// allocates nothing beyond growth of dst.
+func (f Flags) AppendTo(dst []byte) []byte {
 	if f == unknownFlag {
-		return "O_NONE"
+		return append(dst, "O_NONE"...)
 	}
+	sep := false
 	if int(f)&syscall.O_ACCMODE == syscall.O_RDONLY && int(f)&unix.O_PATH == 0 {
-		strs = append(strs, "O_RDONLY")
+		dst = append(dst, "O_RDONLY"...)
+		sep = true
 	}
 
 	for _, toHuman := range flagsToHuman {
-		if int(f)&toHuman.mask == toHuman.value {
-			strs = append(strs, toHuman.name)
+		if int(f)&toHuman.mask != toHuman.value {
+			continue
 		}
+		if sep {
+			dst = append(dst, '|')
+		}
+		dst = append(dst, toHuman.name...)
+		sep = true
 	}
 
-	return strings.Join(strs, "|")
+	return dst
 }

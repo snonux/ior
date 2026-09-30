@@ -2,8 +2,8 @@ package event
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -169,47 +169,98 @@ const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,fil
 // double quote, carriage return, or line feed, fields whose first rune is a
 // Unicode space, and the literal `\.`; embedded double quotes are doubled.
 // Bytes are copied verbatim (not runes) so non-UTF-8 filenames round-trip
-// unchanged. Fields that need no quoting are returned unchanged so the hot
-// plain-mode path stays allocation-free for the common case.
+// unchanged. Fields that need no quoting are returned unchanged. The -plain
+// hot path uses appendCSVText / quoteInPlace instead, which write into a
+// reused buffer; this string form remains the reference the tests compare
+// them against.
 func quoteCSVField(field string) string {
 	if !csvFieldNeedsQuotes(field) {
 		return field
 	}
-	var sb strings.Builder
-	// Worst case doubles every byte plus two delimiters; Grow is a hint.
-	sb.Grow(2*len(field) + 2)
-	sb.WriteByte('"')
-	for i := 0; i < len(field); i++ {
-		if field[i] == '"' {
-			sb.WriteString(`""`)
-			continue
-		}
-		sb.WriteByte(field[i])
-	}
-	sb.WriteByte('"')
-	return sb.String()
+	return string(appendQuoted(make([]byte, 0, 2*len(field)+2), field))
 }
 
-// csvTextField renders one free-text CSV column: escaped by escape (when
-// non-nil) and then quoted per RFC 4180. Both steps return a clean field
-// unchanged, so the common case stays allocation-free.
-func csvTextField(field string, escape func(string) string) string {
+// appendQuoted appends field to dst as a quoted CSV field, doubling embedded
+// double quotes and copying bytes verbatim.
+func appendQuoted(dst []byte, field string) []byte {
+	dst = append(dst, '"')
+	for i := 0; i < len(field); i++ {
+		if field[i] == '"' {
+			dst = append(dst, '"')
+		}
+		dst = append(dst, field[i])
+	}
+	return append(dst, '"')
+}
+
+// appendCSVText appends one free-text CSV column to dst: escaped by escape
+// (when non-nil) and then quoted per RFC 4180 only when it needs quoting, so
+// the common clean field is a plain append.
+func appendCSVText(dst []byte, field string, escape func(string) string) []byte {
 	if escape != nil {
 		field = escape(field)
 	}
-	return quoteCSVField(field)
+	if !csvFieldNeedsQuotes(field) {
+		return append(dst, field...)
+	}
+	return appendQuoted(dst, field)
+}
+
+// quoteInPlace RFC 4180 quotes the field already appended to dst[start:],
+// when it needs quoting, without a second buffer: it grows dst by the two
+// delimiters plus one byte per embedded quote and then moves the field
+// right-to-left into place, doubling the quotes as it goes. Walking backwards
+// is what makes the overlapping move safe: the write index stays strictly
+// ahead of the read index, so no byte is overwritten before it is read.
+func quoteInPlace(dst []byte, start int) []byte {
+	field := dst[start:]
+	if !csvFieldNeedsQuotes(field) {
+		return dst
+	}
+	quotes := 0
+	for _, c := range field {
+		if c == '"' {
+			quotes++
+		}
+	}
+	end := len(dst)
+	dst = slices.Grow(dst, quotes+2)[:end+quotes+2]
+	if quotes == 0 {
+		// Common case (every fd-backed file: the "%(fd,flags)" comma forces
+		// quoting): nothing to double, so one memmove shifts the field.
+		copy(dst[start+1:], dst[start:end])
+		dst[start] = '"'
+		dst[len(dst)-1] = '"'
+		return dst
+	}
+
+	w := len(dst) - 1
+	dst[w] = '"'
+	w--
+	for r := end - 1; r >= start; r-- {
+		c := dst[r]
+		dst[w] = c
+		w--
+		if c == '"' {
+			dst[w] = '"'
+			w--
+		}
+	}
+	dst[start] = '"' // w == start here: the opening delimiter
+	return dst
 }
 
 // csvFieldNeedsQuotes mirrors encoding/csv.Writer.fieldNeedsQuotes for the
-// default comma so quoteCSVField stays byte-identical to the stdlib writer:
-// empty fields are never quoted, the Postgres `\.` terminator always is, and
-// fields containing the comma/quote/CR/LF bytes or starting with a Unicode
-// space must be quoted.
-func csvFieldNeedsQuotes(field string) bool {
-	if field == "" {
+// default comma so the quoting helpers stay byte-identical to the stdlib
+// writer: empty fields are never quoted, the Postgres `\.` terminator always
+// is, and fields containing the comma/quote/CR/LF bytes or starting with a
+// Unicode space must be quoted. It is generic over string and []byte so the
+// in-place path can test the bytes it just appended without converting them.
+func csvFieldNeedsQuotes[S ~string | ~[]byte](field S) bool {
+	if len(field) == 0 {
 		return false
 	}
-	if field == `\.` {
+	if len(field) == 2 && field[0] == '\\' && field[1] == '.' {
 		return true
 	}
 	for i := 0; i < len(field); i++ {
@@ -218,7 +269,10 @@ func csvFieldNeedsQuotes(field string) bool {
 			return true
 		}
 	}
-	r1, _ := utf8.DecodeRuneInString(field)
+	// Only the first rune matters, and it lies within the first UTFMax bytes.
+	var lead [utf8.UTFMax]byte
+	n := copy(lead[:], field)
+	r1, _ := utf8.DecodeRune(lead[:n])
 	return unicode.IsSpace(r1)
 }
 
@@ -229,12 +283,43 @@ func (e *Pair) String() string {
 	return e.CSVRow(nil)
 }
 
-// CSVRow renders the Pair as one CSV row matching EventStreamHeader: seven
-// columns (durationToPrevNs,durationNs,comm,pid.tid,name,ret,file). Free-text
-// columns (comm, name, file) are quoted per RFC 4180 so embedded commas —
-// e.g. the fd/flags decoration inside the file column — stay inside their
-// field and the row stays machine-parseable with any CSV reader. The ret
-// column is empty when no return value was captured.
+// csvDurationWidth is the zero-padded width of the two duration columns.
+const csvDurationWidth = 8
+
+// csvZeros supplies the padding for appendZeroPadded.
+const csvZeros = "00000000"
+
+// appendZeroPadded appends v in decimal, left-padded with zeros to at least
+// width digits (width <= len(csvZeros)); it is fmt's "%08d" for unsigned
+// values without the formatter's allocations.
+func appendZeroPadded(dst []byte, v uint64, width int) []byte {
+	start := len(dst)
+	dst = strconv.AppendUint(dst, v, 10)
+	digits := len(dst) - start
+	if digits >= width {
+		return dst
+	}
+	pad := width - digits
+	dst = append(dst, csvZeros[:pad]...)           // grow by pad bytes
+	copy(dst[start+pad:], dst[start:start+digits]) // shift the digits right
+	copy(dst[start:start+pad], csvZeros[:pad])     // zero the vacated prefix
+	return dst
+}
+
+// CSVRow renders the Pair as one CSV row; see AppendCSVRow for the format.
+// It allocates the row string, so the -plain hot path uses AppendCSVRow into
+// a reused buffer instead.
+func (e *Pair) CSVRow(escape func(string) string) string {
+	return string(e.AppendCSVRow(make([]byte, 0, 160), escape))
+}
+
+// AppendCSVRow appends the Pair as one CSV row (without the trailing line
+// feed) matching EventStreamHeader to dst and returns the extended slice:
+// seven columns (durationToPrevNs,durationNs,comm,pid.tid,name,ret,file).
+// Free-text columns (comm, name, file) are quoted per RFC 4180 so embedded
+// commas - e.g. the fd/flags decoration inside the file column - stay inside
+// their field and the row stays machine-parseable with any CSV reader. The
+// ret column is empty when no return value was captured.
 //
 // escape, when non-nil, is applied to each free-text column before quoting.
 // -plain passes textsafe.Escape when stdout is a terminal, because comm and
@@ -243,37 +328,53 @@ func (e *Pair) String() string {
 // operator's terminal. Escaping first keeps the row valid CSV: the escape
 // notation adds no delimiter, quote or line break. A nil escape keeps the
 // exact bytes for machine consumers.
-func (e *Pair) CSVRow(escape func(string) string) string {
-	var sb strings.Builder
+//
+// The row is built with strconv.Append* and direct appends rather than
+// fmt.Fprintf and strings.Builder: -plain formats one row per syscall, and
+// with a reused dst a clean row costs no allocation at all.
+func (e *Pair) AppendCSVRow(dst []byte, escape func(string) string) []byte {
+	dst = appendZeroPadded(dst, e.DurationToPrev, csvDurationWidth)
+	dst = append(dst, ',')
+	dst = appendZeroPadded(dst, e.Duration, csvDurationWidth)
+	dst = append(dst, ',')
 
-	_, _ = fmt.Fprintf(&sb, "%08d,%08d,", e.DurationToPrev, e.Duration)
+	dst = appendCSVText(dst, e.Comm, escape)
 
-	sb.WriteString(csvTextField(e.Comm, escape))
+	dst = append(dst, ',')
+	dst = strconv.AppendInt(dst, int64(e.EnterEv.GetPid()), 10)
+	dst = append(dst, '.')
+	dst = strconv.AppendInt(dst, int64(e.EnterEv.GetTid()), 10)
 
-	sb.WriteString(",")
-	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetPid()), 10))
-	sb.WriteString(".")
-	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetTid()), 10))
+	dst = append(dst, ',')
+	dst = appendCSVText(dst, e.EnterEv.GetTraceId().Name(), escape)
 
-	sb.WriteString(",")
-	sb.WriteString(csvTextField(e.EnterEv.GetTraceId().Name(), escape))
-
-	sb.WriteString(",")
+	dst = append(dst, ',')
 	// Every exit event carrying a ret field feeds this column, not just the
 	// generic *types.RetEvent: the kind-specific exits (accept/accept4,
 	// pipe/pipe2, socketpair, eventfd/pidfd) carry one too.
 	if retEv, ok := e.ExitEv.(RetCarrier); ok {
-		sb.WriteString(strconv.FormatInt(retEv.GetRet(), 10))
+		dst = strconv.AppendInt(dst, retEv.GetRet(), 10)
 	}
 
-	sb.WriteString(",")
+	dst = append(dst, ',')
+	return e.appendCSVFile(dst, escape)
+}
+
+// appendCSVFile appends the file column. Files that implement
+// file.StringAppender (every file in this codebase) are rendered straight
+// into dst - only their traced path components pass through escape - and are
+// then quoted in place; anything else falls back to String().
+func (e *Pair) appendCSVFile(dst []byte, escape func(string) string) []byte {
 	if e.File == nil {
-		sb.WriteString(NoFileName)
-	} else {
-		sb.WriteString(csvTextField(e.File.String(), escape))
+		return append(dst, NoFileName...)
 	}
-
-	return sb.String()
+	appender, ok := e.File.(file.StringAppender)
+	if !ok {
+		return appendCSVText(dst, e.File.String(), escape)
+	}
+	start := len(dst)
+	dst = appender.AppendString(dst, escape)
+	return quoteInPlace(dst, start)
 }
 
 // Flags returns the open flags of the pair's associated file, or zero when
