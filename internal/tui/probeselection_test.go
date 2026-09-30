@@ -19,6 +19,9 @@ import (
 type selectionProbeManager struct {
 	fakeProbeManager
 	mu sync.Mutex
+	// hold, when set, stops a family batch after its first probe until it
+	// is closed, so a test can act while the batch is half done.
+	hold chan struct{}
 }
 
 func (f *selectionProbeManager) States() []probemanager.ProbeState {
@@ -47,14 +50,18 @@ func (f *selectionProbeManager) DetachFamily(family types.SyscallFamily, progres
 }
 
 func (f *selectionProbeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	var result probemanager.BatchResult
 	for i := range f.states {
-		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+		f.mu.Lock()
+		change := f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family
+		if change {
 			f.states[i].Active = active
 			result.Total++
 			result.Changed++
+		}
+		f.mu.Unlock()
+		if change && result.Changed == 1 && f.hold != nil {
+			<-f.hold
 		}
 	}
 	progress(result.Total, result.Total)
@@ -149,7 +156,7 @@ func TestProbeChangeCarriesAttachedSetIntoRestart(t *testing.T) {
 	manager := newSelectionManager()
 	manager.setActive("socket", true)
 	m.runtime.setProbeManager(manager)
-	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "socket"})
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "socket", Session: m.tracer.session})
 	m = next.(*Model)
 
 	m.beginTraceCmd()()
@@ -163,8 +170,10 @@ func TestProbeChangeCarriesAttachedSetIntoRestart(t *testing.T) {
 // being replaced by an empty ("attach nothing") one.
 func TestProbeSelectionKeptWhenNoManagerIsPublished(t *testing.T) {
 	m, _ := newLiveSwapModel(t)
+	m.tracer.beginCmd(m.runtime, m.filters.current())
+	t.Cleanup(m.tracer.stop)
 	m.tracer.setAttachSyscalls([]string{"read"})
-	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read"})
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read", Session: m.tracer.session})
 	m = next.(*Model)
 	if !slices.Equal(m.tracer.attachSyscalls, []string{"read"}) {
 		t.Fatalf("attachSyscalls = %v, want [read] kept", m.tracer.attachSyscalls)
@@ -177,8 +186,10 @@ func TestDetachingEverythingCarriesAnEmptySelection(t *testing.T) {
 	m, _ := newLiveSwapModel(t)
 	manager := newSelectionManager()
 	manager.setActive("read", false)
+	m.tracer.beginCmd(m.runtime, m.filters.current())
+	t.Cleanup(m.tracer.stop)
 	m.runtime.setProbeManager(manager)
-	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read"})
+	next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read", Session: m.tracer.session})
 	m = next.(*Model)
 	if m.tracer.attachSyscalls == nil || len(m.tracer.attachSyscalls) != 0 {
 		t.Fatalf("attachSyscalls = %#v, want a non-nil empty selection", m.tracer.attachSyscalls)

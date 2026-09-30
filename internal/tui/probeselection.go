@@ -17,13 +17,19 @@ type familyRunState struct {
 	seq     uint64
 	active  bool
 	session uint64
+	// family and attach are what the run changes; while it runs, any other
+	// probe change records its intended outcome on top (rememberProbeSelection).
+	family types.SyscallFamily
+	attach bool
 	// last is the latest progress, replayed into a rebuilt probes modal.
 	last probes.FamilyBatchProgressMsg
 }
 
 // staleBatchNote is appended to a family batch's outcome when the trace was
-// restarted or stopped while the batch ran on the old session's manager.
-const staleBatchNote = "(trace restarted meanwhile; the new session attaches the intended probe set)"
+// restarted or stopped while the batch ran on the old session's manager: the
+// intended set is kept for the next session (the current one, after a
+// restart, already started with it).
+const staleBatchNote = "(trace restarted or stopped meanwhile; the intended probe set is kept for the next session)"
 
 // newProbeModal builds the probes modal for the current probe manager. Its
 // Families cursor starts on the dashboard's scoped family, so the family
@@ -31,6 +37,7 @@ const staleBatchNote = "(trace restarted meanwhile; the new session attaches the
 // flight is shown right away rather than only at its next progress update.
 func (m *Model) newProbeModal() probes.Model {
 	modal := probes.NewModel(m.runtime.currentProbeManager()).
+		WithSession(m.tracer.session).
 		SetDarkMode(m.isDark).
 		FocusFamily(scopedFamily(m.filters.current()))
 	if m.familyRun.active {
@@ -65,6 +72,8 @@ func (m *Model) startFamilyBatch(req probes.FamilyBatchRequestMsg) tea.Cmd {
 	m.familyRun.seq++
 	m.familyRun.active = true
 	m.familyRun.session = m.tracer.session
+	m.familyRun.family = req.Family
+	m.familyRun.attach = req.Attach
 	m.familyRun.last = probes.FamilyBatchProgressMsg{
 		Run: m.familyRun.seq, Family: req.Family, Attach: req.Attach, Total: batchSize(states, req.Family, req.Attach),
 	}
@@ -146,22 +155,55 @@ func (m *Model) afterProbeChange() tea.Cmd {
 	return m.dashboard.ResetStats()
 }
 
-// rememberProbeSelection records the currently attached syscalls as the probe
-// set the next trace sessions attach, so a restart (PID/TID reselect, a filter
-// change that cannot be swapped live) keeps what the user attached or
-// detached instead of reverting to the startup -trace-* selection.
+// handleProbeToggledMsg handles the end of a single or bulk toggle. While
+// the toggle's session is current, the model reacts like to any probe change
+// (afterProbeChange). A result that arrives after a restart or stop toggled a
+// manager that is gone: reading back the new session's manager would record
+// that session's state rather than the toggle, so the toggle's intent becomes
+// the selection for the next session instead. Either way the dashboard
+// aggregates are reset; the post-reset tick goes through the dashboard's
+// normal stats handling, so a failed snapshot keeps the last good one.
+func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.probeModal, cmd = m.probeModal.Update(msg)
+	if m.tracer.isCurrent(msg.Session) {
+		return m, tea.Batch(m.afterProbeChange(), cmd)
+	}
+	if msg.Intent != nil {
+		m.tracer.setAttachSyscalls(msg.Intent)
+	}
+	m.refreshFamilyHint()
+	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
+}
+
+// rememberProbeSelection records the probe set the next trace sessions
+// attach, so a restart (PID/TID reselect, a filter change that cannot be
+// swapped live) keeps what the user attached or detached instead of
+// reverting to the startup -trace-* selection.
 //
-// It reads the attached set back from the live manager rather than tracking
-// the requested changes: that is the truth after partial failures (a probe
-// whose tracepoint is missing stays detached and is not carried over). With
-// no manager published - the change raced a restart, and the manager it hit
-// is gone - the previous selection is kept.
+// Normally it reads the attached set back from the live manager: that is the
+// truth after partial failures (a probe whose tracepoint is missing stays
+// detached and is not carried over). While a family batch of the current
+// session is still running, the read-back is half done, so the batch's
+// intended outcome is applied on top of it (intendedSelection) - otherwise a
+// single toggle finishing mid-batch would drop the rest of the family from
+// the selection. With no manager published the previous selection is kept.
+//
+// The selection is an intent, not always a read-back: a batch or toggle that
+// finished after its session ended records what it was meant to do. Probes of
+// such an intent that cannot attach are retried at each session start and
+// skipped (logged) until the next probe change reads the truth back.
 func (m *Model) rememberProbeSelection() {
 	manager := m.runtime.currentProbeManager()
 	if manager == nil {
 		return
 	}
-	m.tracer.setAttachSyscalls(activeSyscalls(manager.States()))
+	states := manager.States()
+	if m.familyRun.active && m.tracer.isCurrent(m.familyRun.session) {
+		m.tracer.setAttachSyscalls(intendedSelection(states, m.familyRun.family, m.familyRun.attach))
+		return
+	}
+	m.tracer.setAttachSyscalls(activeSyscalls(states))
 }
 
 // activeSyscalls returns the syscalls of the active probes in states. The

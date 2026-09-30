@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"ior/internal/tui/probes"
 	"ior/internal/types"
@@ -123,7 +124,7 @@ func TestFamilyBatchOverlappingARestartKeepsItsIntent(t *testing.T) {
 	if !slices.Equal(m.tracer.attachSyscalls, want) {
 		t.Fatalf("attachSyscalls = %v, want the intent %v kept", m.tracer.attachSyscalls, want)
 	}
-	if !strings.Contains(m.probeModal.View(100, 40), "trace restarted meanwhile") {
+	if !strings.Contains(m.probeModal.View(100, 40), "trace restarted") {
 		t.Fatalf("outcome does not mention the restart:\n%s", m.probeModal.View(100, 40))
 	}
 }
@@ -194,4 +195,85 @@ func TestFamilyBatchWithoutManagerIsRefused(t *testing.T) {
 	if !strings.Contains(m.probeModal.View(100, 40), "probe manager unavailable") {
 		t.Fatal("missing manager not reported")
 	}
+}
+
+// TestSingleToggleDuringFamilyBatchKeepsTheBatchIntent is the review 2
+// regression: a single toggle finishing while a family batch is half done
+// used to read back the half-done set, so a restart then carried only part
+// of the family. The batch's intent must be applied on top of the read-back.
+func TestSingleToggleDuringFamilyBatchKeepsTheBatchIntent(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+	m.tracer.beginCmd(m.runtime, m.filters.current())
+	t.Cleanup(m.tracer.stop)
+	manager := newSelectionManager()
+	manager.hold = make(chan struct{})
+	m.runtime.setProbeManager(manager)
+
+	next, batch := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
+	m = next.(*Model)
+	done := make(chan tea.Msg, 1)
+	go func() { done <- batch() }() // starts the batch; blocks on hold after connect
+	waitActive(t, manager, "connect")
+
+	manager.setActive("nanosleep", true) // the single toggle, current session
+	next, _ = m.Update(probes.ProbeToggledMsg{Syscall: "nanosleep", Session: m.tracer.session})
+	m = next.(*Model)
+	want := []string{"connect", "nanosleep", "read", "socket"}
+	if !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("attachSyscalls = %v, want %v (batch intent plus the toggle)", m.tracer.attachSyscalls, want)
+	}
+
+	close(manager.hold)
+	first := <-done
+	m = finishFamilyBatch(t, m, func() tea.Msg { return first })
+	if !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("after the batch attachSyscalls = %v, want %v", m.tracer.attachSyscalls, want)
+	}
+}
+
+// TestSingleToggleResultAfterRestartKeepsItsIntent: a toggle whose result
+// arrives after a restart toggled the old session's manager; reading back the
+// new session's manager would lose it, so its intent is kept instead.
+func TestSingleToggleResultAfterRestartKeepsItsIntent(t *testing.T) {
+	requests := make(chan TraceRequest, 4)
+	m := NewModel(-1, func(_ context.Context, req TraceRequest) error {
+		requests <- req
+		return nil
+	})
+	t.Cleanup(m.tracer.stop)
+	m.beginTraceCmd()()
+	<-requests
+	m.runtime.setProbeManager(newSelectionManager())
+
+	// Toggle socket (4th row: connect, nanosleep, read, socket) in the modal.
+	modal := m.newProbeModal().SetSize(100, 40).Open()
+	for range 3 {
+		modal, _ = modal.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	_, toggle := modal.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	result := runCmdFor[probes.ProbeToggledMsg](t, toggle)
+
+	m.beginTraceCmd()() // restart before the result is handled
+	<-requests
+	m.runtime.setProbeManager(newSelectionManager()) // new session: socket detached
+	next, _ := m.Update(result)
+	m = next.(*Model)
+	if want := []string{"read", "socket"}; !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("attachSyscalls = %v, want the toggle's intent %v", m.tracer.attachSyscalls, want)
+	}
+}
+
+// waitActive waits until syscall is active in manager.
+func waitActive(t *testing.T, manager *selectionProbeManager, syscall string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, state := range manager.States() {
+			if state.Syscall == syscall && state.Active {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%s never became active", syscall)
 }
