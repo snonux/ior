@@ -559,6 +559,7 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 		filter:                  traceFilterFromConfig(cfg),
 		pprofEnable:             cfg.PprofEnable,
 		plainMode:               cfg.PlainMode,
+		escapeMode:              cfg.EscapeMode,
 		aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
 	}
 }

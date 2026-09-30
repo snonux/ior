@@ -110,6 +110,12 @@ are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
 Backslashes are not doubled, so this display is for reading only. When stdout is piped or
 redirected, both commands write the exact traced bytes for machine consumers.
 
+That terminal check is `-escape=auto`, the default. It cannot see a terminal at the end
+of a pipe, so `ior -plain | grep`, `| tee` or `| less -R` (and `ior collapsed ... | less -R`)
+still show raw bytes. Use `-escape=always` for such pipelines, or `-escape=never` to keep
+raw bytes on a terminal. Both `-plain` and `ior collapsed` accept the flag, and any other
+value is an error.
+
 ## Bytes Classification
 
 Throughput bytes come from positive return values of these syscalls only:

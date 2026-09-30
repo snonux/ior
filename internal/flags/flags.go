@@ -14,6 +14,7 @@ import (
 	appconfig "ior/internal/config"
 	"ior/internal/csvlist"
 	"ior/internal/globalfilter"
+	"ior/internal/textsafe"
 	"ior/internal/tracepoints"
 	"ior/internal/types"
 )
@@ -40,8 +41,12 @@ type Config struct {
 	// tracepoints.Selector.ShouldAttach rather than on Config itself.
 	TracepointSelector tracepoints.Selector
 
-	// PlainMode disables the TUI and writes raw CSV rows to stdout.
+	// PlainMode disables the TUI and writes CSV rows to stdout.
 	PlainMode bool
+	// EscapeMode (-escape) decides when -plain escapes control and
+	// invisible characters in traced text: auto (only when stdout is a
+	// terminal), always (also through pipes such as `| less -R`) or never.
+	EscapeMode textsafe.EscapeMode
 	// FlamegraphOutput writes aggregated .ior.zst output for offline workflows.
 	FlamegraphOutput bool
 	// ParquetPath is the file path for writing all traced syscall rows to
@@ -113,6 +118,7 @@ func NewFlags() Config {
 		LiveInterval:               200 * time.Millisecond,
 		TUIFastRefreshInterval:     250 * time.Millisecond,
 		TUIExportEnable:            true,
+		EscapeMode:                 textsafe.EscapeAuto,
 		CollapsedFields:            collapse.DefaultFields(),
 		CountField:                 collapse.DefaultCountField(),
 		ResetTimer:                 DefaultResetTimer,
@@ -215,7 +221,8 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
 		"Comma separated syscall names to exclude from attachment")
 
-	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); on a terminal, control and invisible characters in traced text are escaped (\\x1b, \\u202e), piped or redirected output stays raw")
+	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); control and invisible characters in traced text are escaped (\\x1b, \\u202e) as selected by -escape")
+	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control and invisible characters in traced text: auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name for .ior.zst trace output files")

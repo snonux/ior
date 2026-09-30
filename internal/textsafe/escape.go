@@ -1,6 +1,7 @@
 package textsafe
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -91,10 +92,61 @@ func IsTerminal(w io.Writer) bool {
 	return ok && xterm.IsTerminal(f.Fd())
 }
 
-// ForWriter returns Escape when w is a terminal and nil otherwise. A nil
-// escaper means "write traced text raw": piped or redirected output feeds
-// CSV readers and flamegraph.pl, which must see the exact original bytes.
-func ForWriter(w io.Writer) func(string) string {
+// EscapeMode selects when traced text is escaped for output: the value of
+// the -escape flag shared by -plain and `ior collapsed`. It implements
+// flag.Value, so an invalid value is rejected while the flags are parsed.
+type EscapeMode string
+
+const (
+	// EscapeAuto escapes only when the writer is a terminal (the default).
+	EscapeAuto EscapeMode = "auto"
+	// EscapeAlways escapes regardless of the writer. Auto cannot see a
+	// terminal behind a pipe, so `ior -plain | less -R`, `| grep` or
+	// `| tee` still show raw bytes unless the operator asks for this.
+	EscapeAlways EscapeMode = "always"
+	// EscapeNever writes the exact traced bytes even to a terminal.
+	EscapeNever EscapeMode = "never"
+)
+
+// ParseEscapeMode validates s as an EscapeMode.
+func ParseEscapeMode(s string) (EscapeMode, error) {
+	switch m := EscapeMode(s); m {
+	case EscapeAuto, EscapeAlways, EscapeNever:
+		return m, nil
+	}
+	return "", fmt.Errorf("invalid escape mode %q (valid: auto, always, never)", s)
+}
+
+// String returns the mode name; the zero value reads as "auto".
+func (m EscapeMode) String() string {
+	if m == "" {
+		return string(EscapeAuto)
+	}
+	return string(m)
+}
+
+// Set parses and stores a flag value (flag.Value).
+func (m *EscapeMode) Set(s string) error {
+	parsed, err := ParseEscapeMode(s)
+	if err != nil {
+		return err
+	}
+	*m = parsed
+	return nil
+}
+
+// Escaper returns the escape function to apply to traced text written to w:
+// Escape when the mode is always, or when it is auto (or unset) and w is a
+// terminal; nil otherwise. A nil escaper means "write traced text raw", the
+// right choice for CSV readers and flamegraph.pl, which must see the exact
+// original bytes. Callers decide once per run, before writing.
+func (m EscapeMode) Escaper(w io.Writer) func(string) string {
+	switch m {
+	case EscapeAlways:
+		return Escape
+	case EscapeNever:
+		return nil
+	}
 	if IsTerminal(w) {
 		return Escape
 	}

@@ -8,6 +8,7 @@ import (
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
+	"ior/internal/textsafe"
 	"ior/internal/types"
 )
 
@@ -66,6 +67,7 @@ type eventLoopConfig struct {
 	filter                  globalfilter.Filter
 	pprofEnable             bool
 	plainMode               bool
+	escapeMode              textsafe.EscapeMode
 	fdTracker               *fdTracker
 	commResolver            *commResolver
 	aggregateDrainEvery     time.Duration
@@ -189,10 +191,10 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		fdTracker:      fdState,
 		commResolver:   commState,
 		// Default printCb prints each pair to stdout as a CSV row (escaped
-		// when stdout is a terminal) then recycles it; callers (e.g. TUI,
+		// as -escape selects) then recycles it; callers (e.g. TUI,
 		// headless-parquet) replace this via configureEventLoopOutput.
 		outputFormatter: outputFormatter{
-			printCb: plainStdoutCallback(),
+			printCb: plainStdoutCallback(cfg.escapeMode),
 		},
 		rawHandlers:  make(map[types.EventType]rawEventHandler),
 		exitHandlers: make(map[types.EventType]runtimeExitHandler),

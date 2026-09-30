@@ -143,7 +143,8 @@ func IsInvisibleFormat(r rune) bool {
 	case 0x2028, 0x2029:
 		return true
 	}
-	return unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+	return unicode.In(r, unicode.Cf, unicode.Variation_Selector,
+		unicode.Other_Default_Ignorable_Code_Point)
 }
 
 // joinsEmoji reports whether the ZWJ at s[i:i+size] sits inside an emoji

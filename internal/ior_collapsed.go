@@ -21,9 +21,11 @@ import (
 //
 //	ior collapsed trace.ior.zst | flamegraph.pl > trace.svg
 //
-// When w is a terminal the frames are escaped with textsafe.Escape (control
-// and invisible runes shown as \x1b, \u202e, ...); piped or redirected
-// output keeps the raw bytes.
+// With the default -escape=auto the frames are escaped with textsafe.Escape
+// (control and invisible runes shown as \x1b, \u202e, ...) when w is a
+// terminal, and piped or redirected output keeps the raw bytes;
+// -escape=always also escapes into pipes (| less -R), -escape=never never
+// escapes. An invalid -escape value is a flag parse error.
 func RunCollapsedConverter(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("collapsed", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -31,6 +33,9 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		"comma-separated frame fields in stack order (one of: "+strings.Join(collapse.ValidFields(), ",")+")")
 	count := fs.String("count", collapse.DefaultCountField(),
 		"counter metric used as the sample weight (one of: "+strings.Join(collapse.ValidCountFields(), ",")+")")
+	escapeMode := textsafe.EscapeAuto
+	fs.Var(&escapeMode, "escape",
+		"when to escape control and invisible characters in frames: auto (only when stdout is a terminal; a pipe such as | less -R gets raw bytes), always, or never")
 
 	if err := fs.Parse(args); err != nil {
 		// -h/-help: print the converter usage and exit cleanly instead of
@@ -40,10 +45,10 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 			fs.Usage()
 			return nil
 		}
-		return fmt.Errorf("parse flags: %w (usage: ior collapsed [-fields f1,f2] [-count metric] <trace.ior.zst>)", err)
+		return fmt.Errorf("parse flags: %w (usage: ior collapsed [-fields f1,f2] [-count metric] [-escape auto|always|never] <trace.ior.zst>)", err)
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("expected exactly one .ior.zst recording argument (usage: ior collapsed [-fields f1,f2] [-count metric] <trace.ior.zst>)")
+		return fmt.Errorf("expected exactly one .ior.zst recording argument (usage: ior collapsed [-fields f1,f2] [-count metric] [-escape auto|always|never] <trace.ior.zst>)")
 	}
 
 	return flamegraph.WriteCollapsedStacks(w, fs.Arg(0), flamegraph.CollapsedOptions{
@@ -51,9 +56,10 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		// treats as collapse.DefaultFields.
 		Fields:     csvlist.Split(*fields),
 		CountField: *count,
-		// Frames are traced comm names and paths: escape them when w is a
-		// terminal so they cannot inject escape sequences; keep them raw
-		// when piped into flamegraph.pl or redirected to a file.
-		Escape: textsafe.ForWriter(w),
+		// Frames are traced comm names and paths: by default escape them
+		// when w is a terminal so they cannot inject escape sequences, and
+		// keep them raw when piped into flamegraph.pl or redirected to a
+		// file; -escape=always|never overrides the terminal check.
+		Escape: escapeMode.Escaper(w),
 	})
 }

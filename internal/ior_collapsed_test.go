@@ -120,3 +120,46 @@ func TestRunCollapsedConverterEscapesOnTerminal(t *testing.T) {
 		t.Fatalf("piped output = %q, want %q", got, want)
 	}
 }
+
+// TestRunCollapsedConverterEscapeFlag checks -escape overrides the terminal
+// check (always escapes into a pipe, never keeps a terminal raw) and that an
+// invalid value is rejected as a usage error.
+func TestRunCollapsedConverterEscapeFlag(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	recorder := flamegraph.NewRecorder("flag")
+	recorder.AddPair(testTracePair(1, "evil\x1b[8mhidden\x1b[0m\a"))
+	if err := recorder.Write(); err != nil {
+		t.Fatalf("recorder.Write() error = %v", err)
+	}
+	matches, err := filepath.Glob("*flag*.ior.zst")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected exactly one flag recording, got %v (err %v)", matches, err)
+	}
+	const escaped = `evil\x1b[8mhidden\x1b[0m\x07 1` + "\n"
+	const raw = "evil\x1b[8mhidden\x1b[0m\a 1\n"
+
+	var piped bytes.Buffer
+	if err := RunCollapsedConverter([]string{"-escape", "always", "-fields", "comm", matches[0]}, &piped); err != nil {
+		t.Fatalf("-escape=always error = %v", err)
+	}
+	if got := piped.String(); got != escaped {
+		t.Errorf("-escape=always into a pipe = %q, want %q", got, escaped)
+	}
+
+	tty := newTTYBuffer(t)
+	if err := RunCollapsedConverter([]string{"-escape=never", "-fields", "comm", matches[0]}, tty); err != nil {
+		t.Fatalf("-escape=never error = %v", err)
+	}
+	if got := tty.String(); got != raw {
+		t.Errorf("-escape=never on a terminal = %q, want %q", got, raw)
+	}
+
+	var out bytes.Buffer
+	if err := RunCollapsedConverter([]string{"-escape", "sometimes", matches[0]}, &out); err == nil {
+		t.Fatal("-escape=sometimes succeeded, want a usage error")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("invalid -escape still wrote output: %q", out.String())
+	}
+}
