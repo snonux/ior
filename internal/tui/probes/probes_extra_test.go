@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -306,10 +307,10 @@ func TestToggleCmdNilManager(t *testing.T) {
 	}
 }
 
-// TestBulkToggleCmdNilManager verifies that setAllCmd with a nil manager
+// TestBulkToggleCmdNilManager verifies that SetAllCmd with a nil manager
 // returns a ProbeToggledMsg carrying an error.
 func TestBulkToggleCmdNilManager(t *testing.T) {
-	cmd := setAllCmd(nil, true, 0)
+	cmd := SetAllCmd(context.Background(), nil, true, 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {

@@ -152,6 +152,26 @@ func TestToggleEmitsProbeToggledMsg(t *testing.T) {
 	_ = next
 }
 
+// pressBulk presses a bulk key (a/n) in m and runs what the TUI does with the
+// modal's request: the walk over every probe of fm, as SetAllCmd runs it. It
+// returns the walk's result.
+func pressBulk(t *testing.T, m Model, fm *fakeManager, key rune) ProbeToggledMsg {
+	t.Helper()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: key, Text: string(key)})
+	if cmd == nil {
+		t.Fatalf("key %q returned no command", key)
+	}
+	request, ok := cmd().(SetAllRequestMsg)
+	if !ok || request.Active != (key == 'a') {
+		t.Fatalf("key %q yielded %#v, want a SetAllRequestMsg{Active: %v}", key, request, key == 'a')
+	}
+	toggled, ok := SetAllCmd(context.Background(), fm, request.Active, 7)().(ProbeToggledMsg)
+	if !ok {
+		t.Fatal("SetAllCmd did not yield a ProbeToggledMsg")
+	}
+	return toggled
+}
+
 func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	fm := &fakeManager{
 		states: []probemanager.ProbeState{
@@ -163,8 +183,7 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	m := NewModel(fm).Open()
 	m.search = "read"
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	if toggled, ok := cmd().(ProbeToggledMsg); !ok || toggled.Err != nil || toggled.Intent == nil || len(toggled.Intent) != 0 {
+	if toggled := pressBulk(t, m, fm, 'n'); toggled.Err != nil || toggled.Session != 7 || toggled.Intent != nil {
 		t.Fatalf("unexpected bulk off msg: %#v", toggled)
 	}
 	if want := []string{"-read", "-write", "-openat"}; !slices.Equal(fm.changes, want) {
@@ -172,10 +191,7 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	}
 
 	fm.changes = nil
-	_, cmd = NewModel(fm).Open().Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	if toggled, ok := cmd().(ProbeToggledMsg); !ok || !slices.Equal(toggled.Intent, []string{"read", "write", "openat"}) {
-		t.Fatalf("unexpected bulk on msg: %#v", toggled)
-	}
+	pressBulk(t, NewModel(fm).Open(), fm, 'a')
 	if want := []string{"+read", "+write", "+openat"}; !slices.Equal(fm.changes, want) {
 		t.Fatalf("changes = %v, want %v", fm.changes, want)
 	}
@@ -192,17 +208,32 @@ func TestBulkKeysAreIdempotent(t *testing.T) {
 	}}
 	m := NewModel(fm).Open()   // the modal's list: read on, write off
 	fm.states[1].Active = true // write attached meanwhile (stale list)
-	_, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	cmd()
+	pressBulk(t, m, fm, 'a')
 	if len(fm.changes) != 0 {
 		t.Fatalf("a with everything attached changed %v, want nothing", fm.changes)
 	}
 	for range 2 {
-		_, cmd = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-		cmd()
+		pressBulk(t, m, fm, 'n')
 	}
 	if want := []string{"-read", "-write"}; !slices.Equal(fm.changes, want) {
 		t.Fatalf("changes = %v, want each probe detached once %v", fm.changes, want)
+	}
+}
+
+// TestSetAllCmdStopsWhenItsSessionEnds: the walk runs on the trace session's
+// context, so a restart stops it before the next probe instead of attaching
+// the rest to a manager that is about to close. The result still arrives,
+// tagged with the session and carrying the cancellation.
+func TestSetAllCmdStopsWhenItsSessionEnds(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	toggled, ok := SetAllCmd(ctx, fm, true, 3)().(ProbeToggledMsg)
+	if !ok || !errors.Is(toggled.Err, context.Canceled) || toggled.Session != 3 {
+		t.Fatalf("result = %#v, want the cancellation tagged with session 3", toggled)
+	}
+	if len(fm.changes) != 0 {
+		t.Fatalf("a cancelled walk still changed %v", fm.changes)
 	}
 }
 

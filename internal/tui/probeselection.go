@@ -35,6 +35,29 @@ type familyRunState struct {
 	last probes.FamilyBatchProgressMsg
 }
 
+// bulkRunState is the all-on/all-off walk (the modal's a / n keys) the model
+// owns, in the trace session it runs in. Like a family batch it is requested
+// by the modal and run by the model on the session's context
+// (startSetAll); one runs at a time per session, and it blocks family batches
+// and further a/n meanwhile.
+//
+// intent is the probe set the walk is meant to produce, recorded as the
+// selection when the key is pressed. While the walk runs, the live manager is
+// half done, so anything that would read the selection back from it applies
+// intent instead (rememberProbeSelection).
+type bulkRunState struct {
+	active  bool
+	session uint64
+	intent  []string
+}
+
+// Refusal notices for probe changes that would race a running walk or batch.
+const (
+	bulkBusyNotice        = "all-on/all-off running - wait for it to finish"
+	batchRunningNotice    = "a family batch is already running"
+	errProbeManagerAbsent = "probe manager unavailable"
+)
+
 // staleBatchNote and cancelledBatchNote are appended to a family batch's
 // outcome when the trace was restarted or stopped while the batch ran on the
 // old session's manager: the intended set is kept for the next session (the
@@ -51,6 +74,12 @@ const (
 // cancelled with its session and must not hold up the next one.
 func (m *Model) familyBatchRunning() bool {
 	return m.familyRun.active && m.tracer.isCurrent(m.familyRun.session)
+}
+
+// bulkRunning reports whether an all-on/all-off walk of the current trace
+// session is in flight; one of an ended session no longer counts.
+func (m *Model) bulkRunning() bool {
+	return m.bulkRun.active && m.tracer.isCurrent(m.bulkRun.session)
 }
 
 // newProbeModal builds the probes modal for the current probe manager. Its
@@ -81,12 +110,17 @@ func (m *Model) newProbeModal() probes.Model {
 func (m *Model) startFamilyBatch(req probes.FamilyBatchRequestMsg) tea.Cmd {
 	if m.familyBatchRunning() {
 		m.probeModal = m.probeModal.ShowBatchProgress(m.familyRun.last).
-			SetError("a family batch is already running")
+			SetError(batchRunningNotice)
+		return nil
+	}
+	if m.bulkRunning() {
+		// The manager is half done, so the batch's intent could not be derived.
+		m.probeModal = m.probeModal.SetError(bulkBusyNotice)
 		return nil
 	}
 	manager := m.runtime.currentProbeManager()
 	if manager == nil {
-		failed := probes.FamilyToggledMsg{Family: req.Family, Attach: req.Attach, Err: errors.New("probe manager unavailable")}
+		failed := probes.FamilyToggledMsg{Family: req.Family, Attach: req.Attach, Err: errors.New(errProbeManagerAbsent)}
 		m.probeModal = m.probeModal.FinishBatch(failed, "")
 		return nil
 	}
@@ -190,40 +224,97 @@ func (m *Model) afterProbeChange() tea.Cmd {
 	return m.dashboard.ResetStats()
 }
 
-// handleProbeToggledMsg handles the end of a single or bulk toggle. While
-// the toggle's session is current, the model reacts like to any probe change
-// (afterProbeChange). A result that arrives after a restart or stop toggled a
-// manager that is gone: reading back the new session's manager would record
-// that session's state rather than the toggle, so the toggle's intent is
-// recorded for the next session instead (applyStaleToggle). Either way the
-// dashboard aggregates are reset; the post-reset tick goes through the
-// dashboard's normal stats handling, so a failed snapshot keeps the last good
-// one.
-func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	m.probeModal, cmd = m.probeModal.Update(msg)
-	if m.tracer.isCurrent(msg.Session) {
-		return m, tea.Batch(m.afterProbeChange(), cmd)
+// startSetAll starts the all-on/all-off walk the probes modal asked for, like
+// startFamilyBatch: the model, not the modal, owns it so that it belongs to
+// the trace session.
+//
+//   - The intended probe set (every registered syscall, or none) is recorded as
+//     the selection for the next sessions when the key is pressed. A restart
+//     while the walk runs - it takes seconds and keeps working on the old
+//     session's manager - then still starts the next session with what the user
+//     asked for, and the walk's late result records nothing.
+//   - The walk runs on the session's context (traceLifecycle.sessionContext),
+//     so ending the session stops it between two probes instead of attaching
+//     to a manager that is about to close, and its result is tagged with the
+//     session so a stale one is recognised (handleProbeToggledMsg).
+//   - One walk per session at a time, and none while a family batch runs; the
+//     refusal is shown in the modal.
+func (m *Model) startSetAll(req probes.SetAllRequestMsg) tea.Cmd {
+	switch {
+	case m.familyBatchRunning():
+		m.probeModal = m.probeModal.ShowBatchProgress(m.familyRun.last).SetError(batchRunningNotice)
+		return nil
+	case m.bulkRunning():
+		m.probeModal = m.probeModal.SetError(bulkBusyNotice)
+		return nil
 	}
-	m.applyStaleToggle(msg)
-	m.refreshFamilyHint()
-	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
+	manager := m.runtime.currentProbeManager()
+	if manager == nil {
+		m.probeModal = m.probeModal.SetError(errProbeManagerAbsent)
+		return nil
+	}
+	intent := allSelection(manager.States(), req.Active)
+	m.tracer.setAttachSyscalls(slices.Clone(intent))
+	m.bulkRun = bulkRunState{active: true, session: m.tracer.session, intent: intent}
+	return probes.SetAllCmd(m.tracer.sessionContext(), manager, req.Active, m.tracer.session)
 }
 
-// applyStaleToggle records the intent of a toggle whose session has ended.
-// A single toggle changes one probe, so only that delta is applied to the
-// recorded selection - replacing the whole selection with the toggle's
-// absolute intent (a snapshot of the old manager) would clobber anything
-// recorded since, such as a family batch's intent. All-on/all-off (no
-// Syscall) are absolute by nature, and so is a single toggle when nothing is
+// allSelection returns the attached set an all-on (active) or all-off walk is
+// meant to leave behind: every registered syscall, or none. Non-nil, like
+// activeSyscalls.
+func allSelection(states []probemanager.ProbeState, active bool) []string {
+	out := make([]string, 0, len(states))
+	if active {
+		for _, state := range states {
+			out = append(out, state.Syscall)
+		}
+	}
+	return out
+}
+
+// handleProbeToggledMsg handles the end of a single or bulk toggle. While
+// the toggle's session is current, the modal shows the outcome and the model
+// reacts like to any probe change (afterProbeChange).
+//
+// A result that arrives after a restart or stop toggled a manager that is
+// gone, and is dropped as far as the screen goes: it is not shown in the
+// modal (its error, typically "probe manager is closed", describes a dead
+// manager and would show up in the new session's modal). Reading back the new
+// session's manager would record that session's state rather than the toggle,
+// so a single toggle's intent is applied to the recorded selection instead
+// (applyStaleToggle); an all-on/all-off walk recorded its intent at the key
+// press already. Either way the dashboard aggregates are reset; the
+// post-reset tick goes through the dashboard's normal stats handling, so a
+// failed snapshot keeps the last good one.
+func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
+	if msg.Syscall == "" && m.bulkRun.active && msg.Session == m.bulkRun.session {
+		m.bulkRun.active = false
+	}
+	if !m.tracer.isCurrent(msg.Session) {
+		m.applyStaleToggle(msg)
+		m.refreshFamilyHint()
+		return m, m.dashboard.ResetStats()
+	}
+	var cmd tea.Cmd
+	m.probeModal, cmd = m.probeModal.Update(msg)
+	return m, tea.Batch(m.afterProbeChange(), cmd)
+}
+
+// applyStaleToggle records the intent of a single toggle whose session has
+// ended. It changes one probe, so only that delta is applied to the recorded
+// selection - replacing the whole selection with the toggle's absolute intent
+// (a snapshot of the old manager) would clobber anything recorded since, such
+// as a family batch's or all-on/all-off's intent. The exception is nothing
 // recorded yet (nil: the startup selection, which has no explicit set to
-// apply a delta to); both record the intent as is.
+// apply a delta to), where the intent is recorded as is. A result without
+// Syscall is an all-on/all-off walk: its intent was recorded when it started,
+// and a late result must not replay it over newer changes.
 func (m *Model) applyStaleToggle(msg probes.ProbeToggledMsg) {
-	if msg.Intent == nil {
-		return // the toggle never ran
+	if msg.Intent == nil || msg.Syscall == "" {
+		return // the toggle never ran, or a bulk walk that recorded at start
 	}
 	selection := m.tracer.attachSyscalls
-	if msg.Syscall == "" || selection == nil {
+	if selection == nil {
 		m.tracer.setAttachSyscalls(msg.Intent)
 		return
 	}
@@ -244,11 +335,12 @@ func (m *Model) applyStaleToggle(msg probes.ProbeToggledMsg) {
 // truth after partial failures (a probe whose tracepoint is missing stays
 // detached and is not carried over). While a family batch of the current
 // session is still running, the read-back is half done, so the batch's
-// intended outcome is applied on top of it (intendedSelection). The modal
-// refuses probe changes while a batch runs, so this only matters for a
-// change already in flight when the batch started - an all-on/all-off walks
-// every probe and can finish mid-batch - which would otherwise drop the rest
-// of the family from the selection. With no manager published the previous
+// intended outcome is applied on top of it (intendedSelection); likewise an
+// all-on/all-off walk in flight makes the selection its intent (bulkRun). The
+// modal refuses probe changes while a batch runs, so this only matters for a
+// single toggle already in flight when the batch or walk started, which would
+// otherwise record the half-done state and drop the rest of the family or of
+// the walk from the selection. With no manager published the previous
 // selection is kept.
 //
 // The selection is an intent, not always a read-back: a batch or toggle that
@@ -263,6 +355,10 @@ func (m *Model) rememberProbeSelection() {
 	states := manager.States()
 	if m.familyBatchRunning() {
 		m.tracer.setAttachSyscalls(intendedSelection(states, m.familyRun.family, m.familyRun.attach))
+		return
+	}
+	if m.bulkRunning() {
+		m.tracer.setAttachSyscalls(slices.Clone(m.bulkRun.intent))
 		return
 	}
 	m.tracer.setAttachSyscalls(activeSyscalls(states))

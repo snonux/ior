@@ -486,6 +486,9 @@ type Model struct {
 	// startFamilyBatch); it lives here, not in the probes modal, because the
 	// modal is rebuilt on every open.
 	familyRun familyRunState
+	// bulkRun is the all-on/all-off walk in flight (see startSetAll), kept
+	// here for the same reason.
+	bulkRun bulkRunState
 
 	kb keyboardState
 }
@@ -872,7 +875,7 @@ func (m *Model) dispatchExportMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// dispatchSelectionMsg handles probe/family toggles, family batch progress and
+// dispatchSelectionMsg handles probe/family/all-on-off toggles, family batch progress and
 // the PID/TID picker results.
 func (m *Model) dispatchSelectionMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
@@ -881,6 +884,8 @@ func (m *Model) dispatchSelectionMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case probes.FamilyBatchRequestMsg:
 		return m, m.startFamilyBatch(msg), true
+	case probes.SetAllRequestMsg:
+		return m, m.startSetAll(msg), true
 	case probes.FamilyBatchProgressMsg:
 		return m, m.handleFamilyBatchProgress(msg), true
 	case probes.FamilyToggledMsg:

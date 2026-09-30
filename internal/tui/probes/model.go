@@ -31,13 +31,18 @@ type Manager interface {
 // ProbeToggledMsg reports completion of an async toggle operation (one
 // probe, or all-on/all-off when Syscall is empty).
 //
-// Session is the trace session the modal's manager belongs to (WithSession),
-// so the TUI can tell a result that arrives after a trace restart - whose
-// toggle hit a manager that is gone - from a current one. Intent is the
-// attached set the toggle was meant to produce, captured before it ran; the
-// TUI keeps it as the selection for later sessions when the result is stale
-// instead of reading back the new session's manager. It is nil when the
-// toggle could not run (no manager).
+// Session is the trace session the toggle ran in, so the TUI can tell a
+// result that arrives after a trace restart - whose toggle hit a manager that
+// is gone - from a current one; it drops a stale result's error. A single
+// toggle takes it from the modal (WithSession); all-on/all-off is started by
+// the TUI (SetAllRequestMsg, SetAllCmd) with the session it runs in.
+//
+// Intent is the attached set a single toggle was meant to produce, captured
+// before it ran; the TUI applies the toggle's delta to the selection for later
+// sessions when the result is stale instead of reading back the new session's
+// manager. It is nil when the toggle could not run (no manager), and always
+// nil for all-on/all-off, whose intent the TUI records when the key is
+// pressed (before the walk over every probe starts), not from the result.
 type ProbeToggledMsg struct {
 	Syscall string
 	Session uint64
@@ -245,7 +250,9 @@ func (m Model) moveCursor(delta int) Model {
 const batchBusyNotice = "family batch running - wait for it to finish"
 
 // handleSyscallKey processes the Syscalls view keys: search, toggle one
-// probe, and all-on/all-off. While a family batch runs, the probe changes are
+// probe, and all-on/all-off. The latter only requests the change
+// (SetAllRequestMsg): the TUI owns the run, like a family batch, so it is
+// scoped to the trace session. While a family batch runs, the probe changes are
 // refused: the batch flips probes of its family one by one, and a toggle or
 // all-on/all-off racing it would undo part of it or be undone by it. The TUI
 // replays a running batch into every rebuilt modal (ShowBatchProgress), so
@@ -274,9 +281,9 @@ func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, toggleCmd(m.manager, selected, m.session)
 	case "a":
-		return m, setAllCmd(m.manager, true, m.session)
+		return m, requestSetAll(true)
 	case "n":
-		return m, setAllCmd(m.manager, false, m.session)
+		return m, requestSetAll(false)
 	}
 	return m, nil
 }
@@ -560,35 +567,6 @@ func toggleCmd(manager Manager, syscall string, session uint64) tea.Cmd {
 			return p.Active != (p.Syscall == syscall)
 		})
 		return ProbeToggledMsg{Syscall: syscall, Session: session, Intent: intent, Err: manager.Toggle(syscall)}
-	}
-}
-
-// setAllCmd attaches (active) or detaches every probe. It works from a fresh
-// States() read and uses Attach/Detach rather than Toggle, so it only touches
-// probes not yet in the requested state and is idempotent: pressing a twice,
-// or after the list shown in the modal went stale, never flips a probe back.
-// Its intent is every registered syscall, or none.
-func setAllCmd(manager Manager, active bool, session uint64) tea.Cmd {
-	return func() tea.Msg {
-		if manager == nil {
-			return ProbeToggledMsg{Session: session, Err: fmt.Errorf("probe manager unavailable")}
-		}
-		states := manager.States()
-		intent := intendedActive(states, func(probemanager.ProbeState) bool { return active })
-		change := manager.Detach
-		if active {
-			change = manager.Attach
-		}
-		var firstErr error
-		for _, p := range states {
-			if p.Active == active {
-				continue
-			}
-			if err := change(p.Syscall); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-		return ProbeToggledMsg{Session: session, Intent: intent, Err: firstErr}
 	}
 }
 
