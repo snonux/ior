@@ -795,17 +795,25 @@ func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *test
 	if !errors.Is(err, firstEnterErr) {
 		t.Fatalf("CloseWithProgress() error = %v, want %v", err, firstEnterErr)
 	}
+	// Entries detach concurrently, so a progress update may already see links
+	// of a pair that has not been counted yet. What must hold is that a pair is
+	// only counted after both its links are destroyed: destroyed is at least
+	// 2*completed, and exactly 0 before anything was reported and 4 at the end.
 	want := []update{
 		{completed: 0, total: 2, destroyed: 0},
-		{completed: 1, total: 2, destroyed: 2},
+		{completed: 1, total: 2},
 		{completed: 2, total: 2, destroyed: 4},
 	}
 	if len(updates) != len(want) {
 		t.Fatalf("progress updates = %+v, want %+v", updates, want)
 	}
 	for i := range want {
-		if updates[i] != want[i] {
-			t.Fatalf("progress[%d] = %+v, want %+v", i, updates[i], want[i])
+		got := updates[i]
+		if got.completed != want[i].completed || got.total != want[i].total {
+			t.Fatalf("progress[%d] = %+v, want %+v", i, got, want[i])
+		}
+		if got.destroyed < 2*got.completed || (i != 1 && got.destroyed != want[i].destroyed) {
+			t.Fatalf("progress[%d] = %+v, want destroyed >= %d (exactly %d for i != 1)", i, got, 2*got.completed, want[i].destroyed)
 		}
 	}
 	for i, link := range links {

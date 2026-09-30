@@ -170,11 +170,7 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 	releaseExecProbe := attachProcessExecProbe(attacher, log)
 	releaseExitProbe := attachProcessExitProbe(attacher, log)
 	releaseNewtaskProbe := attachTaskNewtaskProbe(attacher, log)
-	releaseSchedProbes := func() {
-		releaseExecProbe()
-		releaseExitProbe()
-		releaseNewtaskProbe()
-	}
+	releaseSchedProbes := releaseConcurrently(releaseExecProbe, releaseExitProbe, releaseNewtaskProbe)
 
 	attachUnlessCancelled := func(name string) bool {
 		if ctx.Err() != nil {
@@ -194,6 +190,25 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 		return nil, nil, err
 	}
 	return mgr, releaseSchedProbes, nil
+}
+
+// releaseConcurrently returns a closure that runs every release in parallel and
+// returns once all have finished. Each hand-attached tracepoint release closes
+// a perf-event fd that waits for an RCU grace period (~30ms); grace periods
+// only merge when the waits overlap, so running the sched/task probe releases
+// one after another would pay for each of them.
+func releaseConcurrently(releases ...func()) func() {
+	return func() {
+		var wg sync.WaitGroup
+		for _, release := range releases {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				release()
+			}()
+		}
+		wg.Wait()
+	}
 }
 
 // publishProbeManager hands mgr to probes (the TUI probes modal) and returns

@@ -261,20 +261,32 @@ func (m *Manager) Detach(syscall string) error {
 	return m.commitDetach(entry, enterErr, exitErr, errs)
 }
 
-// destroyLinkPair destroys both BPF links and collects any errors into a slice.
-// It returns each link's error separately so partial-success can be recorded.
+// destroyLinkPair destroys both BPF links concurrently and collects any errors
+// into a slice. It returns each link's error separately so partial-success can
+// be recorded.
+//
+// The two Destroy calls run in parallel because each one closes a
+// perf-event tracepoint fd whose release waits for an RCU grace period
+// (~30ms); grace periods only overlap when the waits are concurrent, so a
+// serial enter-then-exit destroy pays for two of them where one suffices.
 func destroyLinkPair(syscall string, enterLink, exitLink Link) (errs []string, enterErr, exitErr error) {
-	if enterLink != nil {
-		if err := enterLink.Destroy(); err != nil {
-			enterErr = err
-			errs = append(errs, fmt.Sprintf("detach enter %s: %v", syscall, err))
-		}
-	}
+	var wg sync.WaitGroup
 	if exitLink != nil {
-		if err := exitLink.Destroy(); err != nil {
-			exitErr = err
-			errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, err))
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			exitErr = exitLink.Destroy()
+		}()
+	}
+	if enterLink != nil {
+		enterErr = enterLink.Destroy()
+	}
+	wg.Wait() // also orders the write to exitErr before the reads below
+	if enterErr != nil {
+		errs = append(errs, fmt.Sprintf("detach enter %s: %v", syscall, enterErr))
+	}
+	if exitErr != nil {
+		errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, exitErr))
 	}
 	return errs, enterErr, exitErr
 }
@@ -365,11 +377,23 @@ func (m *Manager) Close() error {
 	return m.CloseWithProgress(nil)
 }
 
+// maxConcurrentDetach bounds how many probe entries Close detaches at once.
+// Every in-flight Destroy blocks an OS thread in close(2) for a grace period,
+// so an unbounded fan-out over a large tracepoint set (367 pairs with all
+// families) could hit a container's pids limit, which is fatal to the Go
+// runtime. 256 entries (up to 512 links) covers the default file-system set in
+// a single wave; larger sets take a few waves, still far below the serial cost.
+const maxConcurrentDetach = 256
+
 // CloseWithProgress detaches all registered probes and reports exact progress
 // over the active syscall probe pairs. The callback receives an initial
 // (0, total) update followed by one update after each active pair is detached.
 // Inactive registered probes do not contribute to total because they require
 // no kernel cleanup.
+//
+// Entries are detached concurrently (see detachAll), so the updates arrive in
+// bursts rather than at a steady pace, and never overlap: the callback is
+// invoked serially with a strictly increasing completed count.
 func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 	if m == nil {
 		return nil
@@ -388,21 +412,53 @@ func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 	if progress != nil {
 		progress(0, total)
 	}
+	return m.detachAll(entries, total, progress, maxConcurrentDetach)
+}
 
-	var firstErr error
+// detachAll detaches every entry, at most limit at a time, and returns the
+// first error in snapshot order (deterministic, unlike the random map order
+// the snapshot was taken in). Destroying a tracepoint link waits for an RCU
+// grace period, and grace periods only merge when the waits overlap, so
+// detaching serially cost ~30ms per link (7.5s for the default file-system
+// set, 21s with all families) while a concurrent detach costs roughly one
+// grace period per wave. progress is called after each entry that had links,
+// under a mutex, so callbacks are serialized and the count is monotonic.
+func (m *Manager) detachAll(entries []pairEntry, total int, progress func(completed, total int), limit int) error {
+	errs := make([]error, len(entries))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	var progressMu sync.Mutex
 	completed := 0
-	for _, item := range entries {
-		if err := m.detachProbeEntry(item); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if item.hasLinks {
+	for i, item := range entries {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = m.detachProbeEntry(item)
+			<-sem
+			if !item.hasLinks {
+				return
+			}
+			progressMu.Lock()
+			defer progressMu.Unlock()
 			completed++
 			if progress != nil {
 				progress(completed, total)
 			}
+		}()
+	}
+	wg.Wait()
+	return firstNonNil(errs)
+}
+
+// firstNonNil returns the first non-nil error of errs, or nil.
+func firstNonNil(errs []error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
 		}
 	}
-	return firstErr
+	return nil
 }
 
 // pairEntry groups a probe entry with its syscall name for use during Close.
@@ -438,6 +494,9 @@ func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 // release the module until that work has finished and commitAttach has cleaned
 // up any links it could not publish to the now-closed manager.
 //
+// detachAll runs this concurrently for different entries; the per-entry mutex
+// still serializes it against an Attach or Toggle of the same entry.
+//
 // The manager is marked closed before this function runs. A Close called
 // re-entrantly by a destroy/progress callback therefore returns at once rather
 // than trying to acquire this mutex again.
@@ -454,16 +513,10 @@ func (m *Manager) detachProbeEntry(item pairEntry) error {
 	item.entry.lastErr = nil
 	m.mu.Unlock()
 
-	var errForSyscall error
-	if enterLink != nil {
-		if err := enterLink.Destroy(); err != nil {
-			errForSyscall = err
-		}
-	}
-	if exitLink != nil {
-		if err := exitLink.Destroy(); err != nil && errForSyscall == nil {
-			errForSyscall = err
-		}
+	_, enterErr, exitErr := destroyLinkPair(item.syscall, enterLink, exitLink)
+	errForSyscall := enterErr
+	if errForSyscall == nil {
+		errForSyscall = exitErr
 	}
 	m.setLastError(item.syscall, errForSyscall)
 	return errForSyscall
