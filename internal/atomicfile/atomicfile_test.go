@@ -974,7 +974,6 @@ func TestRiskyNameChars(t *testing.T) {
 		"x?y*z\"q\"":            "?*\"",
 		"a<b>c|d\\e":            "<>|\\",
 		"tab\there\n":           "\t\n",
-		"unicode-\u00fc-\u65e5": "",
 	}
 	for name, want := range cases {
 		if got := RiskyNameChars(name); got != want {
@@ -1017,5 +1016,82 @@ func TestProbeReplaceProbesSpecialCharsOfTheName(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("ProbeReplace left %v behind", entries)
+	}
+}
+
+// TestProbeReplaceProbesNameCharsAgainstARealRejection pins the name-character
+// block of ProbeReplace, which the other tests cannot: ext4/tmpfs accept
+// every printable character, so only a byte the kernel interface itself
+// refuses proves the probe ran. A NUL passes Probe (its temp name is
+// unrelated to final) and fails only ProbeNameChars with EINVAL; without the
+// block ProbeReplace would return nil here.
+func TestProbeReplaceProbesNameCharsAgainstARealRejection(t *testing.T) {
+	dir := t.TempDir()
+	err := ProbeReplace(filepath.Join(dir, "a\x00b.parquet"))
+	if err == nil {
+		t.Fatal("ProbeReplace of a name with a NUL succeeded; the name-character probe did not run")
+	}
+	if !errors.Is(err, syscall.EINVAL) || !IsNameRejected(err) {
+		t.Errorf("ProbeReplace = %v, want it to wrap EINVAL", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("ProbeReplace left %v behind", entries)
+	}
+}
+
+// TestProbeReplaceAcceptsNonASCIIAndInvalidUTF8 pins that the wider probe does
+// not turn names Linux accepts (any byte but NUL and '/') into startup
+// failures on an ordinary filesystem.
+func TestProbeReplaceAcceptsNonASCIIAndInvalidUTF8(t *testing.T) {
+	dir := t.TempDir()
+	for _, base := range []string{"\u00fcber-\u65e5\u672c.parquet", "bad\xff\xfe.parquet", "half\xc3.parquet", "mix\u00e9\xc3\xa9\x80.parquet"} {
+		if err := ProbeReplace(filepath.Join(dir, base)); err != nil {
+			t.Errorf("ProbeReplace(%q) = %v, want nil", base, err)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("ProbeReplace left %v behind", entries)
+	}
+}
+
+// TestRiskyNameCharsNonASCII covers the non-ASCII part: runes and invalid
+// bytes are returned once each, after the ASCII characters, and a lone invalid
+// byte is not confused with the valid rune that starts with it.
+func TestRiskyNameCharsNonASCII(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"unicode-\u00fc-\u65e5", "\u00fc\u65e5"},
+		{"\u00fc\u00fc\u00fc", "\u00fc"},
+		{"a\xffb\xffc", "\xff"},
+		// U+00E9 is C3 A9; a lone C3 and a lone A9 are three different units.
+		{"\u00e9\xc3x\xa9", "\u00e9\xc3\xa9"},
+		// ASCII risky characters first, whatever the order in the name.
+		{"\u00fc:x?", ":?\u00fc"},
+		// U+FFFD written out is a valid rune, not an invalid byte.
+		{"\ufffd", "\ufffd"},
+	}
+	for _, c := range cases {
+		if got := RiskyNameChars(c.name); got != c.want {
+			t.Errorf("RiskyNameChars(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestRiskyNameCharsIsBounded: a name of many distinct runes must not make the
+// probe file name exceed NAME_MAX, and the ASCII characters survive the cap.
+func TestRiskyNameCharsIsBounded(t *testing.T) {
+	var b strings.Builder
+	for r := rune(0x4e00); r < 0x4e00+200; r++ {
+		b.WriteRune(r)
+	}
+	b.WriteString(":")
+	got := RiskyNameChars(b.String())
+	if !strings.HasPrefix(got, ":") {
+		t.Errorf("RiskyNameChars lost the ':' behind many runes: %q", got)
+	}
+	if len(got) > 1+maxNonASCIIProbeBytes {
+		t.Errorf("RiskyNameChars returned %d bytes, want at most %d", len(got), 1+maxNonASCIIProbeBytes)
+	}
+	if err := ProbeNameChars(filepath.Join(t.TempDir(), "final"), got); err != nil {
+		t.Errorf("ProbeNameChars with the capped set = %v (probe name too long?)", err)
 	}
 }

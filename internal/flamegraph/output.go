@@ -38,8 +38,10 @@ func ValidateName(name string) error {
 //     removed: unwritable directories, NFS root_squash, read-only mounts);
 //   - the filesystem accepts every character the recording name will contain
 //     that some filesystems refuse (checkNameChars): the time of day has ':'
-//     and -name may carry any of ? * " < > | \. vfat, exFAT and many SMB
-//     shares reject them with EINVAL. When the ':' of the time of day is the
+//     and -name may carry any of ? * " < > | \ or non-ASCII text and raw
+//     bytes. vfat, exFAT and many SMB shares reject the ASCII ones, and
+//     iocharset/utf8only/casefolded filesystems the others, with EINVAL or
+//     EILSEQ. When the ':' of the time of day is the
 //     only problem the recorder switches to a colon-free timestamp and says
 //     so on statusOut, instead of failing.
 //
@@ -70,11 +72,13 @@ func (r *Recorder) Prepare() error {
 }
 
 // checkNameChars probes the characters sample actually contains that some
-// filesystems refuse (atomicfile.RiskyNameChars), not a fixed ':', so a name
-// with '?' on vfat fails now and not at the final rename. Only EINVAL/EILSEQ
-// (atomicfile.IsNameRejected) mean a naming rule; any other probe error
-// (ENOSPC, EIO, EMFILE, ...) is returned as it is, because switching layouts
-// would not help and would hide the real problem behind a wrong note.
+// filesystems refuse (atomicfile.RiskyNameChars: reserved ASCII such as ':'
+// and '?', plus any non-ASCII runes or invalid bytes of -name), not a fixed
+// ':', so a name with '?' on vfat fails now and not at the final rename. Only
+// EINVAL/EILSEQ (atomicfile.IsNameRejected) mean a naming rule; any other
+// probe error (ENOSPC, EIO, EMFILE, ...) is returned as it is, because
+// switching layouts would not help and would hide the real problem behind a
+// wrong note.
 //
 // A rejection is cured by the colon-free timestamp only if the time of day was
 // the culprit. The probe therefore reruns for the characters left after the
@@ -103,7 +107,22 @@ func (r *Recorder) checkNameChars(sample string) error {
 		}
 	}
 	r.layout = timestampLayoutPortable
-	_, _ = fmt.Fprintf(statusOut,
-		"Note: %v; the recording name uses '-' in the time of day instead\n", err)
+	announceColonFallback(sample, err)
 	return nil
+}
+
+// announceColonFallback tells the user that the time of day switched to '-'.
+// The first probe covered every risky character of the name together, so its
+// error would list e.g. ":?" and suggest '?' is a problem too; by now the
+// remaining characters are known to be accepted, so the note is built from a
+// probe of ':' alone. If that lone probe is unexpectedly accepted (the
+// combined probe was the only one to fail) the original error is the best
+// information there is and is quoted instead.
+func announceColonFallback(sample string, combined error) {
+	culprit := probeNameChars(sample, ":")
+	if culprit == nil {
+		culprit = combined
+	}
+	_, _ = fmt.Fprintf(statusOut,
+		"Note: %v; the recording name uses '-' in the time of day instead\n", culprit)
 }

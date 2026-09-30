@@ -373,7 +373,10 @@ func Probe(final string) error {
 // later rename over. On top of the temp-file check it rejects a final that is
 // an existing directory, which the rename would refuse only at the very end,
 // and it probes that the filesystem accepts the special characters (see
-// RiskyNameChars) of final's base name. A symlink at final is not a
+// RiskyNameChars: reserved ASCII, non-ASCII runes, invalid bytes) of final's
+// base name. Unlike the flamegraph recorder it has no injection hook: tests
+// reach the rejection path with a NUL in the name, which fails with EINVAL on
+// every filesystem. A symlink at final is not a
 // directory here even when it points at one: rename(2) replaces the link
 // itself, exactly as PublishReplace does, so Lstat (not Stat) decides. A
 // dangling symlink or one pointing at a file is fine for the same reason.
@@ -400,7 +403,8 @@ func ProbeReplace(final string) error {
 // on failure, and must tell a rejected name (IsNameRejected) from a transient
 // error such as ENOSPC or EIO, which says nothing about the filesystem's
 // naming rules. The error names the absolute directory and wraps the bare
-// errno.
+// errno. chars may hold non-ASCII text and invalid UTF-8 (RiskyNameChars);
+// Linux hands those bytes to the filesystem unchanged.
 func ProbeNameChars(final, chars string) error {
 	name := filepath.Join(filepath.Dir(final), fmt.Sprintf("%s%016x%s%s", tempPrefix, rand.Uint64(), chars, tempSuffix))
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
@@ -418,20 +422,60 @@ func IsNameRejected(err error) bool {
 	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EILSEQ)
 }
 
-// RiskyNameChars returns the distinct characters of name, in order of first
-// appearance, that some filesystems (vfat, exFAT, SMB/CIFS) refuse in file
-// names although Linux allows them: ':' '?' '*' '"' '<' '>' '|' '\' and the
-// ASCII control characters. An empty result means name is safe everywhere
-// and needs no ProbeNameChars.
+// maxNonASCIIProbeBytes bounds the non-ASCII part RiskyNameChars returns. The
+// probe file name is "ior-<16 hex>" + chars + ".tmp" and must itself fit
+// NAME_MAX, and a name of hundreds of distinct characters gains nothing from
+// probing them all: a filesystem that rejects one non-ASCII character of a
+// kind (iocharset, utf8only, casefold) rejects the whole class.
+const maxNonASCIIProbeBytes = 64
+
+// RiskyNameChars returns the distinct characters of name that some
+// filesystems refuse in file names although Linux allows them, so that one
+// ProbeNameChars call can test them all. That is
+//
+//   - the ASCII characters ':' '?' '*' '"' '<' '>' '|' '\' and the control
+//     characters (vfat, exFAT, SMB/CIFS), in order of first appearance;
+//   - then the non-ASCII runes of name and any bytes that are not valid
+//     UTF-8, each distinct one once, in order of first appearance, up to
+//     maxNonASCIIProbeBytes. Linux itself takes arbitrary bytes, but vfat with
+//     an iocharset, ZFS with utf8only and case-folded ext4 directories answer
+//     EINVAL or EILSEQ for names they cannot encode, and that used to show up
+//     only when the recording was published.
+//
+// An empty result means name is plain ASCII without those characters and
+// needs no ProbeNameChars. The result may hold invalid UTF-8 on purpose; it
+// is only ever appended to a probe file name and printed with %q.
 func RiskyNameChars(name string) string {
-	var risky []byte
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if (c < 0x20 || strings.IndexByte(`:?*"<>|\`, c) >= 0) && strings.IndexByte(string(risky), c) < 0 {
-			risky = append(risky, c)
+	var ascii []byte
+	var other strings.Builder
+	seen := make(map[string]struct{})
+	for i := 0; i < len(name); {
+		r, size := utf8.DecodeRuneInString(name[i:])
+		unit := name[i : i+size]
+		i += size
+		switch {
+		case r < utf8.RuneSelf:
+			if isRiskyASCII(byte(r)) && strings.IndexByte(string(ascii), byte(r)) < 0 {
+				ascii = append(ascii, byte(r))
+			}
+		case other.Len()+size > maxNonASCIIProbeBytes:
+			// Budget spent; keep scanning for ASCII characters, which come first.
+		default:
+			// Keyed by the raw bytes, so a lone invalid byte 0xC3 is a
+			// different unit from the valid rune U+00E9 (0xC3 0xA9).
+			if _, dup := seen[unit]; !dup {
+				seen[unit] = struct{}{}
+				other.WriteString(unit)
+			}
 		}
 	}
-	return string(risky)
+	return string(ascii) + other.String()
+}
+
+// isRiskyASCII reports whether the ASCII byte c is a control character or one
+// of the characters vfat, exFAT and SMB/CIFS reserve.
+func isRiskyASCII(c byte) bool {
+	return c < 0x20 || strings.IndexByte(`:?*"<>|\`, c) >= 0
 }
 
 // absDir is final's directory as an absolute path for messages, so an error

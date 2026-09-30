@@ -3,7 +3,9 @@ package flamegraph
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -158,12 +160,16 @@ func TestPrepareReportsHostnameError(t *testing.T) {
 
 // rejectingProbe simulates a filesystem that answers EINVAL whenever the
 // probed characters include one of bad, as vfat/exFAT do for ? * " < > | :.
+// The error has the shape of the real atomicfile.ProbeNameChars error (the
+// characters probed, the absolute directory, the bare errno), so tests can pin
+// what a user is told.
 func rejectingProbe(bad string) func(string, string) error {
-	return func(_, chars string) error {
-		if strings.ContainsAny(chars, bad) {
-			return &os.PathError{Op: "open", Path: "x", Err: syscall.EINVAL}
+	return func(final, chars string) error {
+		if !strings.ContainsAny(chars, bad) {
+			return nil
 		}
-		return nil
+		dir, _ := filepath.Abs(filepath.Dir(final))
+		return fmt.Errorf("cannot create a file with %q in its name in %s: %w", chars, dir, syscall.EINVAL)
 	}
 }
 
@@ -219,6 +225,17 @@ func TestPrepareFallbackOnlyWhenTimeOfDayIsTheCulprit(t *testing.T) {
 	if r.layout != timestampLayoutPortable || !strings.Contains(status.String(), "Note:") {
 		t.Errorf("layout=%q status=%q, want the portable layout and a note", r.layout, status.String())
 	}
+	// The note names only ':' - the combined first probe covered ":?" and its
+	// error would wrongly suggest that '?' is a problem too.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Note: cannot create a file with \":\" in its name in %s: invalid argument; "+
+		"the recording name uses '-' in the time of day instead\n", cwd)
+	if status.String() != want {
+		t.Errorf("status = %q, want %q", status.String(), want)
+	}
 }
 
 // TestPrepareTransientProbeErrorIsReturnedNotSwallowed: ENOSPC/EIO/EMFILE
@@ -249,5 +266,63 @@ func TestPrepareRealProbeRejectionOnRealFilesystem(t *testing.T) {
 	err := r.checkNameChars("host-a\x00b-2026-09-30_13:53:24.ior.zst")
 	if !errors.Is(err, syscall.EINVAL) || r.layout != timestampLayout {
 		t.Fatalf("checkNameChars = %v (layout %q), want EINVAL from the real probe and no fallback", err, r.layout)
+	}
+}
+
+// TestPrepareProbesNonASCIIAndInvalidBytesOfTheName: -name text that vfat
+// (iocharset), ZFS utf8only or casefolded ext4 cannot encode used to reach the
+// final rename unprobed. The probe must now include those runes and bytes.
+func TestPrepareProbesNonASCIIAndInvalidBytesOfTheName(t *testing.T) {
+	pinOutputEnv(t)
+	var probed []string
+	probeNameChars = func(_, chars string) error { probed = append(probed, chars); return nil }
+	if err := NewRecorder("\u00fcber\xff").Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(probed) != 1 || probed[0] != ":\u00fc\xff" {
+		t.Errorf("probed %q, want the ':' plus the non-ASCII rune and the invalid byte", probed)
+	}
+}
+
+// TestPrepareEILSEQOnNameIsAStartupError drives the EILSEQ branch of
+// IsNameRejected (no real filesystem to hand it here): the filesystem cannot
+// encode the -name's text, so the colon-free layout does not help and Prepare
+// must fail now, naming the -name and wrapping EILSEQ, without a note.
+func TestPrepareEILSEQOnNameIsAStartupError(t *testing.T) {
+	status := pinOutputEnv(t)
+	probeNameChars = func(_, chars string) error {
+		if strings.ContainsRune(chars, '\u00fc') {
+			return &os.PathError{Op: "open", Path: "x", Err: syscall.EILSEQ}
+		}
+		return nil
+	}
+	r := NewRecorder("\u00fcber")
+	err := r.Prepare()
+	if !errors.Is(err, syscall.EILSEQ) || !strings.Contains(err.Error(), "-name") {
+		t.Fatalf("Prepare = %v, want an error about the -name wrapping EILSEQ", err)
+	}
+	if r.layout != timestampLayout || status.Len() != 0 {
+		t.Errorf("layout=%q status=%q: a failed Prepare must not announce a fallback", r.layout, status.String())
+	}
+}
+
+// TestPrepareAcceptsInvalidUTF8NameOnRealFilesystem uses the real probe: Linux
+// takes arbitrary bytes except NUL and '/', so widening the probe must not
+// reject such a -name on an ordinary filesystem, and the recording must be
+// writable under it.
+func TestPrepareAcceptsInvalidUTF8NameOnRealFilesystem(t *testing.T) {
+	status := pinOutputEnv(t)
+	r := NewRecorder("bad\xff\xfe-\u00fc")
+	if err := r.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if status.Len() != 0 || r.layout != timestampLayout {
+		t.Errorf("status=%q layout=%q, want no note and the default layout", status.String(), r.layout)
+	}
+	if err := r.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := os.Stat("host-bad\xff\xfe-\u00fc-2026-09-30_13:53:24.ior.zst"); err != nil {
+		t.Errorf("recording with the raw-byte name missing: %v", err)
 	}
 }
