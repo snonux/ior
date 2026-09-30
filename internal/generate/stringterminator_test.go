@@ -256,8 +256,13 @@ func TestStringFieldListsMatchTypesH(t *testing.T) {
 // TestHandWrittenBPFStringCapturesNeedNoMemset pins the same rule for the
 // hand-written string captures: the open-name fixup record is submitted only
 // after a successful (hence terminated) read, sched_process_exec's comm is
-// written in full by bpf_get_current_comm, and task_newtask's comm is copied
-// whole from the tracepoint's own (kernel-terminated) comm field.
+// written in full by bpf_get_current_comm, and so is task_newtask's (the creator's
+// context holds the name the child inherits). task_newtask deliberately does not
+// copy the tracepoint's own comm field: it is not guaranteed to be zero-padded
+// on older kernels (strlcpy leaves stale bytes after the NUL), and copying it out
+// of the context needs pointer arithmetic old verifiers reject. Userspace cuts
+// at the first NUL (types.StringValue), so either would be safe to read, but only
+// the helper needs no assumption at all.
 func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	filterC, err := readCSource("filter.c")
 	if err != nil {
@@ -301,9 +306,14 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	if strings.Contains(newtask, "__builtin_memset") {
 		t.Error("handle_task_newtask memsets comm")
 	}
-	const newtaskCommCopy = "    __builtin_memcpy(ev->comm, ctx->comm, sizeof(ev->comm));\n"
-	if !strings.Contains(newtask, newtaskCommCopy) {
-		t.Error("handle_task_newtask must copy the whole tracepoint comm unconditionally")
+	if !strings.Contains(newtask, commCaptureLine) {
+		t.Error("handle_task_newtask must capture comm with bpf_get_current_comm unconditionally")
+	}
+	// Copying ctx->comm compiles to ctx pointer arithmetic that RHEL/Rocky 8/9
+	// verifiers reject (see the comment in exec.c); the buildgate objdump test
+	// checks the compiled object, this one catches the source pattern early.
+	if strings.Contains(newtask, "ctx->comm") {
+		t.Error("handle_task_newtask must not read the tracepoint's comm array out of the context")
 	}
 }
 

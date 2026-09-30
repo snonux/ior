@@ -305,10 +305,14 @@ int handle_sched_process_exit(void *ctx) {
 // loop has a single consumer goroutine, so the cache is seeded before the
 // child's first syscall becomes a row (handleTaskNewtaskEvent).
 //
-// The name is the parent's: a fork()ed process that then execve()s is renamed
-// by the sched_process_exec record; a bare thread keeps it until
-// prctl(PR_SET_NAME)/pthread_setname_np, which no tracepoint reports (a
-// pre-existing limitation of the comm cache, unchanged here).
+// The name is the creator's, inherited by the child at fork time, so it can
+// be out of date by the child's first syscall: a fork()ed process that then
+// execve()s is renamed by the sched_process_exec record, and a thread that
+// renames itself (prctl(PR_SET_NAME)/pthread_setname_np: tokio, Java, Chrome
+// and Bun worker pools do so as their first act) is not reported by any
+// tracepoint. Userspace therefore treats the seed as provisional and re-reads
+// /proc once (setCachedProvisional); a rename after the first traced syscall
+// is still not seen (task lr2).
 //
 // The record also carries the raw clone_flags, the input later consumers need
 // to tell a thread from a process and to model the fd table the child inherits
@@ -339,8 +343,23 @@ ior_newtask_in_scope(__u32 child_pid, __u32 child_tid) {
     return 1;
 }
 
+// trace_event_raw_task_newtask___ior is a CO-RE "flavor" of the kernel's
+// struct trace_event_raw_task_newtask, reduced to the two scalars this program
+// reads; libbpf matches it to the kernel type by name (the ___ior suffix is
+// ignored) and relocates the field offsets from the running kernel's BTF. Same
+// reasoning as trace_event_raw_sched_process_exit___ior above: naming the
+// vmlinux.h struct directly ties the build to the build host's kernel headers,
+// and a host whose vmlinux.h lacks the struct could not compile the object.
+// The context arrives as void * and is cast here, so the handler's signature
+// does not depend on the vmlinux.h type either.
+struct trace_event_raw_task_newtask___ior {
+    int pid;
+    unsigned long clone_flags;
+} __attribute__((preserve_access_index));
+
 SEC("tracepoint/task/task_newtask")
-int handle_task_newtask(struct trace_event_raw_task_newtask *ctx) {
+int handle_task_newtask(void *raw_ctx) {
+    struct trace_event_raw_task_newtask___ior *ctx = raw_ctx;
     struct task_newtask_event *ev;
     __u64 clone_flags = ctx->clone_flags;
     __u32 child_tid = (__u32)ctx->pid;
@@ -367,10 +386,24 @@ int handle_task_newtask(struct trace_event_raw_task_newtask *ctx) {
     ev->pid = child_pid;
     ev->tid = child_tid;
     ev->time = bpf_ktime_get_boot_ns();
-    // The tracepoint's own comm field is the child's name at creation. It is
-    // copied whole (16 bytes, NUL-padded by the kernel), so the field needs no
-    // memset first; see "String fields in ring-buffer records" in filter.c.
-    __builtin_memcpy(ev->comm, ctx->comm, sizeof(ev->comm));
+    // The child's name at creation is the creator's, and this handler runs in
+    // the creator's context, so bpf_get_current_comm() reports it - the same
+    // helper the exec handler uses, and it writes all sizeof(ev->comm) bytes
+    // (NUL-padded), so the field needs no memset first; see "String fields in
+    // ring-buffer records" in filter.c.
+    //
+    // The tracepoint's own comm field is deliberately not used. Copying the
+    // char[16] out of the context compiles to context pointer arithmetic
+    // followed by a dereference (r2 = ctx; r2 += <CO-RE offset>; *(u32 *)(r2 +
+    // 4)), which the verifiers of the 4.18 and 5.14 kernels (RHEL/Rocky 8 and 9)
+    // reject as "dereference of modified ctx ptr" - and one rejected program
+    // fails the load of the whole object, so ior would not start at all. The
+    // scalar fields above are plain fixed-offset loads and pass. Nor would a
+    // raw copy be guaranteed clean: the tracepoint memcpy()s task->comm, which
+    // older kernels write with strlcpy(), leaving whatever bytes followed the
+    // terminator. bpf_get_current_comm() pads with NULs. Userspace cuts at the
+    // first NUL (types.StringValue) either way.
+    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->clone_flags = clone_flags;
 
     bpf_ringbuf_submit(ev, 0);

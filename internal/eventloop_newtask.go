@@ -19,29 +19,59 @@ import "ior/internal/types"
 // first woken, so it precedes every syscall the child can make; the ring buffer
 // delivers records in reservation order to a single consumer goroutine, which is
 // what makes the cache write land before the child's first pair (the same
-// argument as for handleProcessExecEvent). The write goes through
-// setCachedCommFromKernel, so it is authoritative: it bumps the tid's rename
-// generation, retiring a procfs lookup already in flight for a recycled tid
-// whose earlier owner's exit record was lost, and replaces a stale entry that
-// owner left behind.
+// argument as for handleProcessExecEvent).
 //
-// The inherited name is the parent's. A fork that then execve()s is renamed by
-// the sched_process_exec record, which arrives after this one; a bare thread
-// keeps the name until it renames itself (prctl(PR_SET_NAME)), which no
-// tracepoint reports - the same limitation the cache always had.
+// The seeded name is provisional, not authoritative (setCachedProvisional). It
+// is the *creator's* name, and a new thread very often renames itself at once
+// (prctl(PR_SET_NAME), pthread_setname_np: tokio, Java, Chrome and Bun worker
+// pools), which no tracepoint reports. Writing it as authoritative bumped the
+// tid's rename generation and so discarded every later procfs result, pinning
+// the parent's name on such a thread for good - and hiding its rows from
+// -comm <renamed>. As a provisional entry it is flagged stale instead: the
+// first use of the tid queues one /proc/<tid>/comm read whose result replaces
+// it, so a thread that renamed itself before its first traced syscall is
+// labelled with its own name from then on. Rows emitted before that read lands
+// still carry the inherited name (and under -comm are matched against it), which
+// is what the base behaviour had too: it had no name at all until the read
+// landed. An exec or open record that arrives meanwhile is authoritative and
+// still outranks the read. A rename that happens later than the first traced
+// syscall is not observed by anything (task lr2).
 //
-// An empty comm carries no information and is ignored, keeping whatever is
-// cached. A lost record (ring-buffer backpressure, counted in ringbuf_drop_map)
-// or a failed probe attach degrades to the old procfs lookup, i.e. exactly the
-// behaviour before this record existed.
+// A fork that then execve()s is renamed by the sched_process_exec record, which
+// arrives after this one and needs no read at all.
+//
+// The record also says the tid is a brand-new task, so whatever the cache and
+// the trackers still hold for that number belongs to a dead owner whose exit
+// record was lost (ring-buffer backpressure) - the same state
+// handleProcessExitEvent retires: the cached name (which also retires a procfs
+// lookup already in flight for the old owner), a parked syscall enter that the
+// new owner's own exit would otherwise pair with (a row for a syscall that never
+// happened, with a fabricated latency), the -gap baseline of the previous
+// owner's last syscall, and an unconsumed name_to_handle_at pathname. It is
+// retired before the seed is written, and regardless of whether the record
+// carries a usable comm.
+//
+// An empty comm carries no name: nothing is seeded and the tid falls back to
+// the procfs lookup on first use. A lost record or a failed probe attach
+// degrades the same way, i.e. exactly the behaviour before this record existed.
 //
 // ev.CloneFlags is not consumed here yet: it is carried so fd-table
 // inheritance and shared-table tracking can be built on the same record.
 func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 	defer ev.Recycle()
+	e.retireRecycledTid(ev.Tid)
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
 		return
 	}
-	e.setCachedCommFromKernel(ev.Tid, comm)
+	e.setCachedCommProvisional(ev.Tid, comm)
+}
+
+// retireRecycledTid drops the per-tid state a previous owner of tid left behind
+// when its exit record never arrived (see handleProcessExitEvent for what each
+// piece is and why it must not reach the next owner).
+func (e *eventLoop) retireRecycledTid(tid uint32) {
+	e.evictCachedComm(tid)
+	e.pairs.evictTid(tid)
+	e.pendingHandleState().delete(tid)
 }

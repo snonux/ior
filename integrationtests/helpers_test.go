@@ -3,6 +3,7 @@ package integrationtests
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -75,6 +76,13 @@ func runScenarioResultWithIorArgs(t *testing.T, scenario string, expected []Expe
 
 func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
 	t.Helper()
+	return runParquetScenarioRowsAllowingComms(t, scenario, duration, extraIorArgs, workloadEnv, "ioworkload")
+}
+
+// runParquetScenarioRowsAllowingComms is runParquetScenarioRows for scenarios
+// whose threads rename themselves: a row may carry any of comms (or none).
+func runParquetScenarioRowsAllowingComms(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string, comms ...string) ([]iorparquet.Record, int) {
+	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	h.WorkloadEnv = workloadEnv
@@ -87,7 +95,7 @@ func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIo
 	if len(rows) == 0 {
 		t.Fatalf("scenario %s produced no parquet rows", scenario)
 	}
-	assertParquetRowsOwnedBy(t, rows, uint32(pid), "ioworkload")
+	assertParquetRowsOwnedBy(t, rows, uint32(pid), comms...)
 	return rows, pid
 }
 
@@ -109,14 +117,14 @@ func readParquetRecords(t *testing.T, path string) []iorparquet.Record {
 	return rows
 }
 
-func assertParquetRowsOwnedBy(t *testing.T, rows []iorparquet.Record, pid uint32, comm string) {
+func assertParquetRowsOwnedBy(t *testing.T, rows []iorparquet.Record, pid uint32, comms ...string) {
 	t.Helper()
 	for _, row := range rows {
 		if row.PID != pid {
 			t.Fatalf("parquet row PID = %d, want %d: %+v", row.PID, pid, row)
 		}
-		if row.Comm != "" && row.Comm != comm {
-			t.Fatalf("parquet row comm = %q, want %q: %+v", row.Comm, comm, row)
+		if row.Comm != "" && !slices.Contains(comms, row.Comm) {
+			t.Fatalf("parquet row comm = %q, want one of %q: %+v", row.Comm, comms, row)
 		}
 	}
 }

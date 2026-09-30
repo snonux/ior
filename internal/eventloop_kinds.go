@@ -183,8 +183,9 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
 		// task:task_newtask fires for every created task (process or thread)
-		// and seeds its inherited comm before its first syscall
-		// (internal/eventloop_newtask.go).
+		// and seeds its inherited comm (provisionally: the task may rename
+		// itself) before its first syscall, retiring the state a dead previous
+		// owner of a recycled tid left behind (internal/eventloop_newtask.go).
 		controlRaw(types.TASK_NEWTASK_EVENT, rawDecoder[types.TaskNewtaskEvent](types.NewTaskNewtaskEventFast),
 			typedRuntimeControl((*eventLoop).handleTaskNewtaskEvent)),
 		// The open-name fixup carries only the pending enter's identity and the

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -21,6 +23,13 @@ const (
 	// threadCommMaxBatches bounds the retries needed when goroutines land on
 	// pre-existing threads; each batch launches only the missing goroutines.
 	threadCommMaxBatches = 50
+	// threadCommRenamedName is the name the threads of threadCommRenamed give
+	// themselves; it differs from the inherited "ioworkload".
+	threadCommRenamedName = "iorworker"
+	// threadCommRenameSettle is how long a renamed thread waits after its
+	// warm-up pread before the measured ones, so the /proc read the warm-up
+	// queued has landed. Generous: it only costs scenario wall time.
+	threadCommRenameSettle = 150 * time.Millisecond
 )
 
 // threadCommShortLived makes threadCommThreads OS threads that ior has
@@ -49,26 +58,113 @@ func threadCommShortLived() error {
 	}
 	defer cleanup()
 
-	fd, err := syscall.Open(filepath.Join(dir, "data"), syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	fd, err := openThreadCommFile(dir, "data")
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return err
 	}
 	defer syscall.Close(fd)
-	if _, err := syscall.Write(fd, []byte("thread comm race")); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
 
+	return runOnFreshThreads(threadCommThreads, func() error {
+		return preadRepeatedly(fd, threadCommPreads)
+	})
+}
+
+// threadCommRenamed is the thread-pool shape threadCommShortLived leaves out:
+// each fresh thread renames itself (prctl(PR_SET_NAME), what pthread_setname_np
+// does - tokio, Java, Chrome and Bun worker pools) before doing its work, so its
+// name is no longer the one it inherited from this process and no tracepoint
+// says so. It issues one pread on a warm-up file, sleeps threadCommRenameSettle,
+// then threadCommPreads preads on the measured file.
+//
+// The task_newtask record can only name the thread "ioworkload"; the name the
+// thread has by the time it works is learned from the one /proc read that the
+// record's provisional seed allows (task fr2 review). The warm-up pread is what
+// makes that read land: it is the first use of the tid that queues it, and rows
+// on the warm-up file may still carry the inherited name (or, under -comm
+// <renamed>, be dropped), so the test ignores them. Every row on the measured
+// file must carry the renamed comm.
+func threadCommRenamed() error {
+	dir, cleanup, err := makeTempDir("thread-comm-renamed")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	warm, err := openThreadCommFile(dir, "warmup")
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(warm)
+	data, err := openThreadCommFile(dir, "measured")
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(data)
+
+	return runOnFreshThreads(threadCommThreads, func() error {
+		if err := setThreadName(threadCommRenamedName); err != nil {
+			return err
+		}
+		if err := preadRepeatedly(warm, 1); err != nil {
+			return err
+		}
+		time.Sleep(threadCommRenameSettle)
+		return preadRepeatedly(data, threadCommPreads)
+	})
+}
+
+// setThreadName renames the calling thread with prctl(PR_SET_NAME), which the
+// kernel truncates to 15 characters.
+func setThreadName(name string) error {
+	buf := append([]byte(name), 0)
+	if err := unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(&buf[0])), 0, 0, 0); err != nil {
+		return fmt.Errorf("prctl(PR_SET_NAME, %q): %w", name, err)
+	}
+	return nil
+}
+
+// openThreadCommFile creates dir/name with a few bytes in it and returns a
+// descriptor every thread of the scenario can pread.
+func openThreadCommFile(dir, name string) (int, error) {
+	fd, err := syscall.Open(filepath.Join(dir, name), syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return -1, fmt.Errorf("open %s: %w", name, err)
+	}
+	if _, err := syscall.Write(fd, []byte("thread comm race")); err != nil {
+		syscall.Close(fd)
+		return -1, fmt.Errorf("write %s: %w", name, err)
+	}
+	return fd, nil
+}
+
+// preadRepeatedly issues n pread64 calls on fd.
+func preadRepeatedly(fd, n int) error {
+	buf := make([]byte, 8)
+	for i := 0; i < n; i++ {
+		if _, err := syscall.Pread(fd, buf, 0); err != nil {
+			return fmt.Errorf("pread: %w", err)
+		}
+	}
+	return nil
+}
+
+// runOnFreshThreads runs body on n distinct OS threads that were created after
+// ior attached and returns the first error. Each body is one goroutine locked to
+// its thread and never unlocked, so the thread is terminated when body returns
+// (see threadCommShortLived for why threads that pre-date the scenario are
+// skipped and retried).
+func runOnFreshThreads(n int, body func() error) error {
 	preexisting, err := currentThreadIDs()
 	if err != nil {
 		return err
 	}
 	var fresh atomic.Int32
 	var firstErr atomic.Value
-	for attempt := 0; fresh.Load() < threadCommThreads; attempt++ {
+	for attempt := 0; int(fresh.Load()) < n; attempt++ {
 		if attempt >= threadCommMaxBatches {
-			return fmt.Errorf("only %d of %d goroutines ran on a fresh thread", fresh.Load(), threadCommThreads)
+			return fmt.Errorf("only %d of %d goroutines ran on a fresh thread", fresh.Load(), n)
 		}
-		runThreadCommBatch(fd, int(threadCommThreads-fresh.Load()), preexisting, &fresh, &firstErr)
+		runFreshThreadBatch(n-int(fresh.Load()), preexisting, body, &fresh, &firstErr)
 		if err, _ := firstErr.Load().(error); err != nil {
 			return err
 		}
@@ -76,13 +172,14 @@ func threadCommShortLived() error {
 	return nil
 }
 
-// runThreadCommBatch starts n goroutines, each locked to its OS thread and
+// runFreshThreadBatch starts count goroutines, each locked to its OS thread and
 // never unlocked, and waits for all of them. A goroutine whose thread predates
-// the scenario (see threadCommShortLived) returns without a syscall; every
-// other one reads fd threadCommPreads times and counts itself in fresh.
-func runThreadCommBatch(fd, n int, preexisting map[int]bool, fresh *atomic.Int32, firstErr *atomic.Value) {
+// the scenario (see threadCommShortLived) returns without running body; every
+// other one runs it and counts itself in fresh when it succeeds.
+func runFreshThreadBatch(count int, preexisting map[int]bool, body func() error,
+	fresh *atomic.Int32, firstErr *atomic.Value) {
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := 0; i < count; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -90,12 +187,9 @@ func runThreadCommBatch(fd, n int, preexisting map[int]bool, fresh *atomic.Int32
 			if preexisting[unix.Gettid()] {
 				return
 			}
-			buf := make([]byte, 8)
-			for j := 0; j < threadCommPreads; j++ {
-				if _, err := syscall.Pread(fd, buf, 0); err != nil {
-					firstErr.CompareAndSwap(nil, fmt.Errorf("pread: %w", err))
-					return
-				}
+			if err := body(); err != nil {
+				firstErr.CompareAndSwap(nil, err)
+				return
 			}
 			fresh.Add(1)
 		}()

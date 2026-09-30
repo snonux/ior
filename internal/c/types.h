@@ -583,7 +583,8 @@ struct process_exit_event {
 // task (fork, vfork, clone or clone3; a new thread is a task too). Userspace
 // consumes it as a control event (no enter/exit pair, never rendered as a
 // row) that seeds the tid->comm cache with the name the child inherited from
-// its parent, before the child's first syscall.
+// its parent, before the child's first syscall. The seed is provisional: a
+// thread that renames itself is corrected by one later /proc read.
 //
 // Why: a task's comm was otherwise resolved lazily and asynchronously from
 // /proc/<tid>/comm, which loses the race against short-lived tasks (the

@@ -72,3 +72,60 @@ func TestNewThreadsSurviveACommFilter(t *testing.T) {
 		t.Fatalf("-comm ioworkload kept %d pread64 rows, want %d", total, threadCommRows)
 	}
 }
+
+const (
+	threadCommRenamedScenario = "thread-comm-renamed"
+	// renamedThreadComm is the name the scenario's threads give themselves
+	// (threadCommRenamedName in cmd/ioworkload/scenario_threadcomm.go).
+	renamedThreadComm = "iorworker"
+)
+
+// TestRenamedThreadsKeepTheirNewName is the regression test for the review of
+// task fr2: threads that rename themselves first thing (prctl(PR_SET_NAME) -
+// tokio, Java, Chrome and Bun worker pools) kept the parent's comm for good,
+// because the seed from the task_newtask record was authoritative and retired
+// the procfs read that would have found the new name. The scenario's threads
+// warm up on one file and then read a second one after a pause; every row on
+// the second file must carry the renamed comm, not "ioworkload".
+func TestRenamedThreadsKeepTheirNewName(t *testing.T) {
+	rows, _ := runParquetScenarioRowsAllowingComms(t, threadCommRenamedScenario, defaultDuration,
+		[]string{"-trace-syscalls", "pread64"}, nil, "ioworkload", renamedThreadComm)
+	measured := 0
+	for _, row := range rows {
+		if row.Syscall != "pread64" || !strings.Contains(row.File, "measured") {
+			continue
+		}
+		measured++
+		if row.Comm != renamedThreadComm {
+			t.Errorf("row comm = %q, want the thread's own %q: %+v", row.Comm, renamedThreadComm, row)
+		}
+	}
+	if measured != threadCommRows {
+		t.Fatalf("captured %d measured pread64 rows, want %d", measured, threadCommRows)
+	}
+}
+
+// TestRenamedThreadsSurviveTheRenamedCommFilter: -comm <renamed> must keep the
+// rows of the renamed threads (0 of them survived before the fix). Warm-up rows
+// are excluded from the count by path: the first enter of a thread is judged
+// against the still-provisional inherited name, exactly like before any name
+// was known.
+func TestRenamedThreadsSurviveTheRenamedCommFilter(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs(threadCommRenamedScenario, defaultDuration,
+		[]string{"-trace-syscalls", "pread64", "-comm", renamedThreadComm})
+	if err != nil {
+		t.Fatalf("run scenario %s: %v", threadCommRenamedScenario, err)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+	total := 0
+	for _, rec := range result.Records {
+		if strings.Contains(rec.TraceID.String(), "pread64") && strings.Contains(rec.Path, "measured") {
+			total += int(rec.Cnt.Count)
+		}
+	}
+	if total != threadCommRows {
+		t.Fatalf("-comm %s kept %d measured pread64 rows, want %d", renamedThreadComm, total, threadCommRows)
+	}
+}

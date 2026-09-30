@@ -44,7 +44,9 @@ const resolveCommTimeout = time.Second
 // and, with an active -comm filter, discard the tid's events at the enter-side
 // comm gate - but it triggers one asynchronous procfs re-read on next use.
 // That read happens after the exec, so it returns the new name and heals the
-// label.
+// label. The same flag marks a provisional entry - the name a new task
+// inherited from its creator (setCachedProvisional) - whose one re-read picks up
+// a rename the task performed on itself.
 type commEntry struct {
 	comm  string
 	epoch uint64
@@ -505,6 +507,39 @@ func (r *commResolver) setCachedFromKernel(tid uint32, comm string) {
 	r.setCommLocked(tid, comm)
 }
 
+// setCachedProvisional stores a best-guess name for tid without invalidating
+// procfs lookups and marks the entry stale, so it is re-read from /proc once.
+//
+// It is the write for a name that is known to be *inherited* rather than
+// current: the comm a task_newtask record reports is the creator's, and a new
+// thread commonly renames itself (prctl(PR_SET_NAME), pthread_setname_np) as
+// its very first act - tokio, Java, Chrome and Bun worker pools all do - with
+// no tracepoint to say so. Two properties follow from that, and each is the
+// opposite of setCachedFromKernel:
+//   - The epoch is not bumped, so a procfs result may overwrite the guess
+//     (storeLookupResult only discards results that predate an authoritative
+//     write). Bumping it would pin the parent's name for the thread's life.
+//   - The entry is flagged stale, which makes the first use of the tid queue
+//     exactly one /proc/<tid>/comm read (refreshStaleComm). The read happens
+//     after the thread's first traced syscall reached userspace, i.e. after any
+//     rename that precedes it, and its result replaces the guess. A read of a
+//     task that has already exited yields nothing and leaves the guess in
+//     place, which is still better than an empty comm.
+//
+// A later authoritative write (exec record, open payload) bumps the epoch and
+// so still outranks a read that was in flight at that moment.
+func (r *commResolver) setCachedProvisional(tid uint32, comm string) {
+	if comm == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setCommLocked(tid, comm)
+	entry := r.comms[tid]
+	entry.stale = true
+	r.comms[tid] = entry
+}
+
 // touchCommLocked refreshes the LRU age of an existing comms entry. Callers
 // must hold r.mu and the entry must exist.
 func (r *commResolver) touchCommLocked(tid uint32) {
@@ -632,6 +667,12 @@ func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 // commResolver.setCachedFromKernel).
 func (e *eventLoop) setCachedCommFromKernel(tid uint32, comm string) {
 	e.commState().setCachedFromKernel(tid, comm)
+}
+
+// setCachedCommProvisional applies an inherited, possibly outdated command name
+// (see commResolver.setCachedProvisional).
+func (e *eventLoop) setCachedCommProvisional(tid uint32, comm string) {
+	e.commState().setCachedProvisional(tid, comm)
 }
 
 // evictCachedComm drops the cached command name of an exited task (see

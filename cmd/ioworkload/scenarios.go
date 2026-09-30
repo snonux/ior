@@ -46,6 +46,7 @@ var scenarios = map[string]func() error{
 	"thread-exit-keeps-fd":          threadExitKeepsFd,
 	"thread-exit-tid-worker":        threadExitTidWorker,
 	"thread-comm-short-lived":       threadCommShortLived,
+	"thread-comm-renamed":           threadCommRenamed,
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,

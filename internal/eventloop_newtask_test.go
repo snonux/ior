@@ -154,17 +154,20 @@ func TestTaskNewtaskRecordReplacesAStaleRecycledComm(t *testing.T) {
 	}
 }
 
-// TestTaskNewtaskRecordWithEmptyCommKeepsTheCache: an empty name carries no
-// information and must not blank a good label.
-func TestTaskNewtaskRecordWithEmptyCommKeepsTheCache(t *testing.T) {
+// TestTaskNewtaskRecordWithEmptyCommSeedsNothing: an empty name carries no
+// information, so nothing is seeded (the tid falls back to the procfs lookup).
+// The cache entry a dead previous owner left behind is still retired - the
+// record says the tid is a brand-new task, whatever its name - because keeping
+// that name would label the new task with the dead one's.
+func TestTaskNewtaskRecordWithEmptyCommSeedsNothing(t *testing.T) {
 	el := newTaskEventLoop(t, "")
-	el.setCachedComm(newTaskTid, "bash")
+	el.setCachedComm(newTaskTid, "victim")
 
 	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, "", 0),
 		make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(newTaskTid); !ok || got != "bash" {
-		t.Fatalf("cached comm = %q (present=%v), want it left as \"bash\"", got, ok)
+	if got, ok := el.commResolver.cached(newTaskTid); ok {
+		t.Fatalf("cached comm = %q, want nothing (stale name retired, empty name not seeded)", got)
 	}
 }
 

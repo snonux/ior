@@ -815,26 +815,55 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   tracepoints, regardless of `-trace-*`) emits a 48-byte `TASK_NEWTASK_EVENT`
   control record from the creator's context, before the child is first woken:
   child tgid, child tid, the inherited comm and the raw `clone_flags`.
-  `handleTaskNewtaskEvent` (`internal/eventloop_newtask.go`) writes the comm
-  through `setCachedCommFromKernel`, so the cache is seeded in ring-buffer order
-  before the child's first pair, and - being authoritative - it also replaces
-  the stale entry of a recycled tid whose exit record was lost. The child's tgid
-  is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid) rather
-  than read from the task struct, and the record is scoped like `filter()` but
-  applied to the *child* (`ior_newtask_in_scope`): a thread of a `-pid` target is
-  in scope, its `fork()` child is not, ior's own threads are excluded. The name
-  is the parent's; a fork that execs is renamed by the exec record that follows,
-  and a thread that renames itself (`pthread_setname_np`) is not seen, exactly
-  as before. A lost record (`ringbuf_drop_map`), a failed attach or an older
-  `IOR_BPF_OBJECT` without the program degrade to the old procfs lookup.
-  `clone_flags` is carried but not consumed yet: it is the basis for fork
-  fd-table inheritance and shared-table (`CLONE_FILES`) tracking. Pinned by
-  `TestTaskNewtaskRecord*` (`internal/eventloop_newtask_test.go`, including the
-  negative fixtures without a record) and end to end by
+  `handleTaskNewtaskEvent` (`internal/eventloop_newtask.go`) seeds the comm in
+  ring-buffer order before the child's first pair, as a *provisional* name
+  (`setCachedProvisional`): the inherited name is the creator's, and a new
+  thread often renames itself at once (`prctl(PR_SET_NAME)`,
+  `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which no tracepoint
+  reports. A provisional entry does not bump the tid's rename epoch and is
+  flagged stale, so the first use of the tid queues exactly one
+  `/proc/<tid>/comm` read whose result replaces it (a read of an already-gone
+  thread comes back empty and leaves the seed). Seeding as authoritative
+  (`setCachedCommFromKernel`, which bumps the epoch and so discards later procfs
+  results) pinned the parent's name on renamed threads for good and hid their
+  rows from `-comm <renamed>`; exec and open records are still authoritative
+  and outrank an in-flight read. Rows emitted before that read lands carry the
+  inherited name (and are matched against it under `-comm`), as the first rows
+  did before any name was known. A rename *after* the first traced syscall is
+  still unseen (task lr2). The record also retires the per-tid state of a dead
+  previous owner whose exit record was lost (`retireRecycledTid`: cached comm
+  and in-flight lookup, parked enter, `-gap` baseline, pending
+  name_to_handle_at path), the same set the exit record clears. The child's
+  tgid is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid)
+  rather than read from the task struct, and the record is scoped like
+  `filter()` but applied to the *child* (`ior_newtask_in_scope`): a thread of a
+  `-pid` target is in scope, its `fork()` child is not, ior's own threads are
+  excluded. A fork that execs is renamed by the exec record that follows. A lost
+  record (`ringbuf_drop_map`), a failed attach or an older `IOR_BPF_OBJECT`
+  without the program degrade to the old procfs lookup. `clone_flags` is
+  carried but not consumed yet: it is the basis for fork fd-table inheritance
+  and shared-table (`CLONE_FILES`) tracking.
+
+  Old-kernel portability (RHEL/Rocky 8 and 9, 4.18/5.14): the handler takes
+  `void *` and reads `pid`/`clone_flags` through the local CO-RE flavor
+  `trace_event_raw_task_newtask___ior`, so the object compiles against a
+  `vmlinux.h` without the struct, and it takes the comm from
+  `bpf_get_current_comm()` (the handler runs in the creator's context) because
+  copying the tracepoint's `char comm[16]` out of the context compiles to
+  context pointer arithmetic that old verifiers reject ("dereference of modified
+  ctx ptr"), which fails the load of the whole object. Pinned by the buildgate
+  tests `TestBPFObjectCompilesWithoutTaskNewtaskStruct` and
+  `TestTaskNewtaskHandlerHasNoContextPointerArithmetic` (llvm-objdump of the
+  compiled handler). Not yet run on a real RHEL 8/9 kernel (the rocky VM was
+  unreachable when this was written). Pinned by `TestTaskNewtask*`
+  (`internal/eventloop_newtask_test.go`, `internal/eventloop_newtask_rename_test.go`,
+  including the negative fixtures without a record) and end to end by
   `TestNewThreadsAreNamedWithoutAFilter` / `TestNewThreadsSurviveACommFilter`
-  (`integrationtests/newtask_test.go`, scenario `thread-comm-short-lived`, whose
-  threads must be created after ior attached - it skips goroutines that land on
-  pre-existing Go runtime threads, for which no record can exist).
+  (scenario `thread-comm-short-lived`) and `TestRenamedThreadsKeepTheirNewName` /
+  `TestRenamedThreadsSurviveTheRenamedCommFilter` (scenario
+  `thread-comm-renamed`), all in `integrationtests/newtask_test.go`; the
+  scenarios' threads must be created after ior attached - they skip goroutines
+  that land on pre-existing Go runtime threads, for which no record can exist.
 
   **Tid recycling is a separate failure mode with the same symptom.** The two
   paths above are residuals of the exec record; this one is not about `execve`
