@@ -217,9 +217,9 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"io_pgetevents":           {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_setup":                {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_submit":               {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
-	"io_uring_enter":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
-	"io_uring_register":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
-	"io_uring_setup":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
+	"io_uring_enter":          {kind: "fd", args: map[string]int{"cmd": 3, "fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
+	"io_uring_register":       {kind: "fd", args: map[string]int{"cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
+	"io_uring_setup":          {kind: "null", args: map[string]int{"cmd": 1}, ret: "UNCLASSIFIED", family: "AIO"},
 	"ioctl":                   {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"ioperm":                  {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"iopl":                    {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
@@ -2064,13 +2064,17 @@ func validateHandlerEventStruct(name, kind, body string) error {
 	want := map[string]string{
 		"fgetxattr": "fd_size_event", "flistxattr": "fd_size_event",
 		"recvfrom": "fd_size_event", "recvmsg": "fd_size_event",
-		"move_mount":   "two_fd_names_event",
+		"move_mount": "two_fd_names_event",
+		// io_uring shares the stable "fd"/"null" kinds but needs the mode word
+		// (registered-ring flag) that only fcntl_event carries.
+		"io_uring_enter": "fcntl_event", "io_uring_register": "fcntl_event", "io_uring_setup": "fcntl_event",
 		"memfd_create": "eventfd_name_event", "fsopen": "eventfd_name_event",
 	}[name]
 	if want == "" {
 		for registeredKind, registered := range kindRegistry {
 			if registeredKind.MetadataName() == kind &&
-				registeredKind != KindFdSize && registeredKind != KindTwoFdNames && registeredKind != KindNamedEventfd {
+				registeredKind != KindFdSize && registeredKind != KindTwoFdNames && registeredKind != KindNamedEventfd &&
+				registeredKind != KindIoUringFd && registeredKind != KindIoUringSetup {
 				want = registered.structName
 				break
 			}

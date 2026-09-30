@@ -120,8 +120,9 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},
 		{"name_to_handle_at", FormatNameToHandleAt, FormatExitNameToHandleAt, KindPathname},
-		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindFd},
-		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindFd},
+		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindIoUringFd},
+		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindIoUringFd},
+		{"io_uring_setup", FormatIoUringSetup, FormatExitIoUringSetup, KindIoUringSetup},
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
@@ -571,5 +572,16 @@ func TestClassifyNameAndFieldRules(t *testing.T) {
 			t.Errorf("classifyNameAndField(%q, %q, %q) = %+v, %v; want %+v, %v",
 				tt.name, tt.fieldType, tt.fieldName, got, ok, tt.want, tt.wantOK)
 		}
+	}
+}
+
+// The io_uring kinds only change the wire record; -trace-kinds keeps selecting
+// the three calls as "fd" (enter/register) and "null" (setup), as before.
+func TestIoUringKindsKeepStableMetadataNames(t *testing.T) {
+	if got := KindIoUringFd.MetadataName(); got != "fd" {
+		t.Errorf("KindIoUringFd metadata name = %q, want fd", got)
+	}
+	if got := KindIoUringSetup.MetadataName(); got != "null" {
+		t.Errorf("KindIoUringSetup metadata name = %q, want null", got)
 	}
 }

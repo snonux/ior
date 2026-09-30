@@ -1171,21 +1171,6 @@ func perfDescriptorName(perfOpenEv *types.PerfOpenEvent) string {
 }
 
 func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool {
-	if ep.Is(types.SYS_ENTER_IO_URING_SETUP) {
-		retEvent, ok := ep.ExitEv.(*types.RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed io_uring_setup exit event")
-			return false
-		}
-		if fd, ok := fdFromRet(retEvent.Ret); ok {
-			fdFile := file.NewFdWithPid(fd, nullEv.Pid)
-			if fdFile.Flags() == file.Flags(-1) {
-				fdFile.SetFlags(syscall.O_RDWR | syscall.O_CLOEXEC)
-			}
-			e.fdState().set(fd, nullEv.Pid, fdFile)
-			ep.File = fdFile
-		}
-	}
 	if ep.Is(types.SYS_ENTER_GETCWD) {
 		retEvent, ok := ep.ExitEv.(*types.RetEvent)
 		if !ok {
@@ -1214,7 +1199,15 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 // too. They are routed by trace ID to applyIoctlFdState: an ioctl request
 // number is not an fcntl command, and one that happens to equal F_SETFD or
 // F_DUPFD must not be interpreted as one.
+//
+// The io_uring calls also use this record layout (see handleIoUringExit) and are
+// routed away before any fd lookup, because their fd may be a registered-ring
+// index rather than a descriptor.
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
+	switch fcntlEv.TraceId {
+	case types.SYS_ENTER_IO_URING_ENTER, types.SYS_ENTER_IO_URING_REGISTER, types.SYS_ENTER_IO_URING_SETUP:
+		return e.handleIoUringExit(ep, fcntlEv)
+	}
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)

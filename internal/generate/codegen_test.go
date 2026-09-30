@@ -1374,24 +1374,49 @@ func TestRtSigSiblingsAreNotNoreturn(t *testing.T) {
 	}
 }
 
+// The io_uring handlers reuse fcntl_event: the leading "fd" of enter/register
+// is a registered-ring index when IORING_ENTER_REGISTERED_RING /
+// IORING_REGISTER_USE_REGISTERED_RING is set, so userspace needs the flags word
+// (cmd) next to it. The rows stay in the stable "fd"/"null" selection kinds.
 func TestGenerateIoUringEnterHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringEnter, FormatExitIoUringEnter)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_enter")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "(kind=fd)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FCNTL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_ENTER;")
-	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->fd = ctx->args[0];")
+	// flags is the fourth argument: enter(fd, to_submit, min_complete, flags).
+	requireContains(t, output, "ev->cmd = ctx->args[3];")
+	requireContains(t, output, "ev->arg = 0;")
 }
 
 func TestGenerateIoUringRegisterHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringRegister, FormatExitIoUringRegister)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_register")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "(kind=fd)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FCNTL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_REGISTER;")
-	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->fd = ctx->args[0];")
+	// The opcode (second argument) carries IORING_REGISTER_USE_REGISTERED_RING.
+	requireContains(t, output, "ev->cmd = ctx->args[1];")
+}
+
+func TestGenerateIoUringSetupHandler(t *testing.T) {
+	output := generateFromPair(t, FormatIoUringSetup, FormatExitIoUringSetup)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_setup")`)
+	requireContains(t, output, "(kind=null)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_SETUP;")
+	// The flags live in the user io_uring_params (args[1]), not in a register.
+	requireContains(t, output, "bpf_probe_read_user(&ior_params, sizeof(ior_params), (void *)ctx->args[1]);")
+	requireContains(t, output, "ev->cmd = ior_params.flags;")
+	// No descriptor exists yet at enter; it is the return value.
+	requireContains(t, output, "ev->fd = -1;")
 }
 
 func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
@@ -2706,6 +2731,8 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
 		{KindRet, "ENTER_RET_EVENT", "EXIT_RET_EVENT"},
 		{KindFcntl, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
+		{KindIoUringFd, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
+		{KindIoUringSetup, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
 		{KindNull, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindDup3, "ENTER_DUP3_EVENT", "EXIT_DUP3_EVENT"},
 		{KindOpenByHandleAt, "ENTER_OPEN_BY_HANDLE_AT_EVENT", "EXIT_OPEN_BY_HANDLE_AT_EVENT"},
@@ -2763,6 +2790,8 @@ func TestEventStructNames(t *testing.T) {
 		{KindName, "name_event"},
 		{KindRet, "ret_event"},
 		{KindFcntl, "fcntl_event"},
+		{KindIoUringFd, "fcntl_event"},
+		{KindIoUringSetup, "fcntl_event"},
 		{KindNull, "null_event"},
 		{KindDup3, "dup3_event"},
 		{KindOpenByHandleAt, "open_by_handle_at_event"},
@@ -2811,7 +2840,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj, KindIoUringFd, KindIoUringSetup}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)

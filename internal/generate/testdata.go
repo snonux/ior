@@ -863,6 +863,35 @@ format:
 print fmt: "0x%lx", REC->ret
 `
 
+const FormatIoUringSetup = `name: sys_enter_io_uring_setup
+ID: 1494
+format:
+	field:unsigned short common_type;		offset:0;		size:2; signed:0;
+	field:unsigned char common_flags;		offset:2;		size:1; signed:0;
+	field:unsigned char common_preempt_count;		offset:3;		size:1; signed:0;
+	field:int common_pid;		offset:4;		size:4; signed:1;
+
+	field:int __syscall_nr;		offset:8;		size:4; signed:1;
+	field:u32 entries;		offset:16;		size:8; signed:0;
+	field:struct io_uring_params * params;		offset:24;		size:8; signed:0;
+
+print fmt: "entries: 0x%08lx, params: 0x%08lx", ((unsigned long)(REC->entries)), ((unsigned long)(REC->params))
+`
+
+const FormatExitIoUringSetup = `name: sys_exit_io_uring_setup
+ID: 1493
+format:
+	field:unsigned short common_type;	offset:0;	size:2;	signed:0;
+	field:unsigned char common_flags;	offset:2;	size:1;	signed:0;
+	field:unsigned char common_preempt_count;	offset:3;	size:1;	signed:0;
+	field:int common_pid;	offset:4;	size:4;	signed:1;
+
+	field:int __syscall_nr;	offset:8;	size:4;	signed:1;
+	field:long ret;	offset:16;	size:8;	signed:1;
+
+print fmt: "0x%lx", REC->ret
+`
+
 const FormatOpenat2 = `name: sys_enter_openat2
 ID: 782
 format:

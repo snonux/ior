@@ -1874,7 +1874,7 @@ int handle_sys_exit_getrandom(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_io_uring_register is a struct fd_event (kind=fd)
+/// sys_enter_io_uring_register is a struct fcntl_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_io_uring_register")
 int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -1885,18 +1885,20 @@ int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_REGISTER, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fcntl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fcntl_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FCNTL_EVENT;
     ev->trace_id = SYS_ENTER_IO_URING_REGISTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = ctx->args[0];
+    ev->cmd = ctx->args[1];
+    ev->arg = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1931,7 +1933,7 @@ int handle_sys_exit_io_uring_register(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_io_uring_enter is a struct fd_event (kind=fd)
+/// sys_enter_io_uring_enter is a struct fcntl_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_io_uring_enter")
 int handle_sys_enter_io_uring_enter(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -1942,18 +1944,20 @@ int handle_sys_enter_io_uring_enter(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_ENTER, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fcntl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fcntl_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FCNTL_EVENT;
     ev->trace_id = SYS_ENTER_IO_URING_ENTER;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = ctx->args[0];
+    ev->cmd = ctx->args[3];
+    ev->arg = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1988,7 +1992,7 @@ int handle_sys_exit_io_uring_enter(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_io_uring_setup is a struct null_event (kind=null)
+/// sys_enter_io_uring_setup is a struct fcntl_event (kind=null)
 SEC("tracepoint/syscalls/sys_enter_io_uring_setup")
 int handle_sys_enter_io_uring_setup(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -1999,17 +2003,22 @@ int handle_sys_enter_io_uring_setup(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_SETUP, now))
         return 0;
 
-    struct null_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct null_event), 0);
+    struct fcntl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fcntl_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_NULL_EVENT;
+    ev->event_type = ENTER_FCNTL_EVENT;
     ev->trace_id = SYS_ENTER_IO_URING_SETUP;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
+    struct { __u32 sq_entries; __u32 cq_entries; __u32 flags; } ior_params = {};
+    bpf_probe_read_user(&ior_params, sizeof(ior_params), (void *)ctx->args[1]);
+    ev->fd = -1;
+    ev->cmd = ior_params.flags;
+    ev->arg = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

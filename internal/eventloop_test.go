@@ -1538,6 +1538,27 @@ func makeEnterFcntlEvent(t *testing.T, time uint64, pid, tid uint32, fd uint32, 
 	return ev, bytes
 }
 
+// makeEnterIoUringEvent builds the fcntl_event record io_uring_enter,
+// io_uring_register and io_uring_setup are captured as: fd, plus the enter
+// flags / register opcode / setup flags word in Cmd.
+func makeEnterIoUringEvent(t *testing.T, time uint64, pid, tid uint32, traceID types.TraceId, fd, cmd uint32) (types.FcntlEvent, []byte) {
+	ev := types.FcntlEvent{
+		EventType: types.ENTER_FCNTL_EVENT,
+		TraceId:   traceID,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
+		Cmd:       cmd,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
 // Test data functions for PathEvent syscalls
 func makeMkdirEventTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/testdir"
@@ -1874,7 +1895,7 @@ func makeGetcwdFailureEventTestData(t *testing.T) (td testData) {
 }
 
 func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
-	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP, 0, 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	// io_uring_setup returns a file descriptor on success
@@ -1902,7 +1923,7 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 }
 
 func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
-	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP, 0, 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	// io_uring_setup returns -1 on failure
@@ -1929,7 +1950,7 @@ func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
 
 func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 	fd := int32(52)
-	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_ENTER)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_ENTER, uint32(fd), 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_ENTER, 0)
@@ -1955,7 +1976,7 @@ func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 
 func makeIoUringRegisterEventTestData(t *testing.T) (td testData) {
 	fd := int32(53)
-	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_REGISTER)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_REGISTER, uint32(fd), 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_REGISTER, 0)

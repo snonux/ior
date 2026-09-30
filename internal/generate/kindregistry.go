@@ -63,6 +63,8 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindFutex:          {structName: "null_event", enterAccepted: true},
 	KindPrctl:          {structName: "null_event", enterAccepted: true},
 	KindTimerObj:       {structName: "null_event", enterAccepted: true},
+	KindIoUringFd:      {structName: "fcntl_event", enterAccepted: true},
+	KindIoUringSetup:   {structName: "fcntl_event", enterAccepted: true},
 	// KindNone is intentionally absent: it represents "unclassified" and is
 	// never enter-accepted. lookupKind returns the zero kindMeta (enterAccepted=false)
 	// for any unregistered kind, so KindNone is implicitly rejected.

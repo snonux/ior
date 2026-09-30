@@ -92,6 +92,27 @@ func TestNewAnonymousMapping(t *testing.T) {
 	}
 }
 
+func TestNewRegisteredRing(t *testing.T) {
+	f := NewRegisteredRing(0)
+
+	if got := f.Name(); got != "io_uring:reg[0]" {
+		t.Fatalf("Name() = %q, want io_uring:reg[0]", got)
+	}
+	if got := f.String(); got != "io_uring:reg[0]" {
+		t.Fatalf("String() = %q, want io_uring:reg[0]", got)
+	}
+	// The index is not a descriptor, so the row must not claim one.
+	if got := f.FD(); got != -1 {
+		t.Fatalf("FD() = %d, want -1", got)
+	}
+	if got := f.Flags(); got != unknownFlag {
+		t.Fatalf("Flags() = %v, want unknown", got)
+	}
+	if got := NewRegisteredRing(17).Name(); got != "io_uring:reg[17]" {
+		t.Fatalf("Name() = %q, want io_uring:reg[17]", got)
+	}
+}
+
 func TestFdFileSetFlags(t *testing.T) {
 	fdFile := NewFd(1, "test.txt", 0)
 	if fdFile.Flags() != Flags(0) {
@@ -315,6 +336,8 @@ func TestAppendStringMatchesString(t *testing.T) {
 		{"pathname", NewPathname([]byte("/p")), "pathname:[/p]%(O_NONE)"},
 		{"oldname/newname", NewOldnameNewname([]byte("/a"), []byte("/b")), "old:[/a] ->new:[/b]%(O_NONE)"},
 		{"anonymous", NewAnonymousMapping(), "anon"},
+		// Fixed decoration plus a number: nothing attacker-controlled to escape.
+		{"registered ring", NewRegisteredRing(3), "io_uring:reg[3]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

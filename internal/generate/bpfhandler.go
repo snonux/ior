@@ -273,7 +273,11 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 	KindFdPathname: func(tp GeneratedTracepoint, _ bool) string { return generateExtraFdPathname(tp.Format) },
 	KindName:       func(tp GeneratedTracepoint, _ bool) string { return generateExtraName(tp.Format) },
 	KindFcntl:      func(tp GeneratedTracepoint, _ bool) string { return generateExtraFcntl(tp.Format) },
-	KindRet:        func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
+	KindIoUringFd: func(tp GeneratedTracepoint, _ bool) string {
+		return generateExtraIoUringFd(tp.Format.Name)
+	},
+	KindIoUringSetup: func(_ GeneratedTracepoint, _ bool) string { return generateExtraIoUringSetup() },
+	KindRet:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
 	// KindNull emits no extra fields — absence from the map means empty output.
 }
 
@@ -736,6 +740,44 @@ func generateExtraFcntl(f *Format) string {
 		"    ev->fd = ctx->args[%d];\n    ev->cmd = ctx->args[%d];\n    ev->arg = ctx->args[%d];\n",
 		fdIdx, cmdIdx, argIdx,
 	)
+}
+
+// ioUringModeArgument names the argument slot of the word that decides whether
+// the leading "fd" of io_uring_enter/io_uring_register is a real descriptor:
+// io_uring_enter(fd, to_submit, min_complete, flags, ...) carries
+// IORING_ENTER_REGISTERED_RING in flags (args[3]); io_uring_register(fd,
+// opcode, arg, nr_args) carries IORING_REGISTER_USE_REGISTERED_RING in the top
+// bit of opcode (args[1]). With the bit set the kernel resolves fd as an index
+// into the task's registered-ring table (io_uring_register_ring_fd(), typically
+// 0), not through the fd table, so userspace must not look it up there.
+var ioUringModeArgument = map[string]int{
+	"sys_enter_io_uring_enter":    3,
+	"sys_enter_io_uring_register": 1,
+}
+
+// generateExtraIoUringFd emits the fd plus the mode word (enter flags or
+// register opcode, in the event's cmd field). arg is written explicitly
+// because the ring-buffer reservation is not zeroed.
+func generateExtraIoUringFd(name string) string {
+	return fmt.Sprintf(
+		"    ev->fd = ctx->args[0];\n    ev->cmd = ctx->args[%d];\n    ev->arg = 0;\n",
+		ioUringModeArgument[name],
+	)
+}
+
+// generateExtraIoUringSetup emits the io_uring_params flags of io_uring_setup.
+// The flags are not a syscall argument: they sit at offset 8 of the user
+// struct io_uring_params (after sq_entries and cq_entries), so the handler
+// reads that prefix. An unreadable or NULL params pointer leaves flags 0, the
+// "ordinary descriptor" reading; the kernel fails such a call with EFAULT
+// anyway, so there is no ring to misattribute. The call creates a ring rather
+// than using a descriptor, so fd is -1.
+func generateExtraIoUringSetup() string {
+	return "    struct { __u32 sq_entries; __u32 cq_entries; __u32 flags; } ior_params = {};\n" +
+		"    bpf_probe_read_user(&ior_params, sizeof(ior_params), (void *)ctx->args[1]);\n" +
+		"    ev->fd = -1;\n" +
+		"    ev->cmd = ior_params.flags;\n" +
+		"    ev->arg = 0;\n"
 }
 
 func generateExtraSocket() string {

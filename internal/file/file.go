@@ -361,6 +361,52 @@ func (anonymousMappingFile) AppendString(dst []byte, _ func(string) string) []by
 	return append(dst, "anon"...)
 }
 
+// registeredRingFile names an io_uring instance addressed through the task's
+// registered-ring table rather than the file descriptor table.
+//
+// io_uring_enter(IORING_ENTER_REGISTERED_RING), io_uring_register with
+// IORING_REGISTER_USE_REGISTERED_RING and a ring created with
+// IORING_SETUP_REGISTERED_FD_ONLY all pass or return a small index into that
+// table (io_uring_register_ring_fd() in liburing; typically 0). The number
+// looks like a descriptor but names no entry of the fd table: resolving it
+// there attributes the call to whatever file happens to sit at that fd
+// (stdin for index 0). The index is all that is known about the ring, so the
+// row is labelled with it.
+type registeredRingFile struct {
+	index int32
+}
+
+// NewRegisteredRing creates the file representation for an io_uring ring that
+// is addressed by its registered-ring index instead of a file descriptor.
+func NewRegisteredRing(index int32) registeredRingFile {
+	return registeredRingFile{index: index}
+}
+
+func (f registeredRingFile) Name() string {
+	return string(f.AppendString(nil, nil))
+}
+
+func (registeredRingFile) Flags() Flags {
+	return unknownFlag
+}
+
+// FD reports -1: the index is not a descriptor, and callers that key state on
+// FD() must not mistake it for one.
+func (registeredRingFile) FD() int32 {
+	return -1
+}
+
+func (f registeredRingFile) String() string {
+	return f.Name()
+}
+
+// AppendString implements StringAppender, rendering "io_uring:reg[<index>]".
+func (f registeredRingFile) AppendString(dst []byte, _ func(string) string) []byte {
+	dst = append(dst, "io_uring:reg["...)
+	dst = strconv.AppendInt(dst, int64(f.index), 10)
+	return append(dst, ']')
+}
+
 // --- compile-time interface satisfaction assertions ---
 //
 // *FdFile is the primary public implementation of File used throughout the
@@ -369,8 +415,10 @@ func (anonymousMappingFile) AppendString(dst []byte, _ func(string) string) []by
 
 var _ File = (*FdFile)(nil)
 var _ File = anonymousMappingFile{}
+var _ File = registeredRingFile{}
 
 var _ StringAppender = (*FdFile)(nil)
 var _ StringAppender = oldnameNewnameFile{}
 var _ StringAppender = pathnameFile{}
 var _ StringAppender = anonymousMappingFile{}
+var _ StringAppender = registeredRingFile{}

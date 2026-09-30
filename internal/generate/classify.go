@@ -129,6 +129,21 @@ const (
 	// close_range and kcmp do not carry 512 unused name bytes. Its metadata
 	// name stays "two-fd".
 	KindTwoFdNames
+	// KindIoUringFd is the io_uring_enter/io_uring_register payload. The
+	// leading "fd" of those calls is either a real descriptor or, when the
+	// caller sets IORING_ENTER_REGISTERED_RING / IORING_REGISTER_USE_REGISTERED_RING,
+	// an index into the task's registered-ring table, so a bare fd_event cannot
+	// say which it is. The record therefore reuses fcntl_event (fd, plus the
+	// enter flags or register opcode in cmd) and userspace decides how to read
+	// the fd. Its metadata name stays "fd" so -trace-kinds selection is
+	// unchanged.
+	KindIoUringFd
+	// KindIoUringSetup is the io_uring_setup payload: fcntl_event with the
+	// io_uring_params flags in cmd (userspace needs IORING_SETUP_REGISTERED_FD_ONLY,
+	// which makes the return value a registered-ring index rather than a new
+	// descriptor). It carries no descriptor (fd is -1). Its metadata name stays
+	// "null" so -trace-kinds selection is unchanged.
+	KindIoUringSetup
 
 	// kindCount is a sentinel, not a kind: it must stay last so tests can
 	// iterate every real kind (KindNone+1 .. kindCount-1). It is unexported and
@@ -182,6 +197,8 @@ var kindMetadataNames = map[TracepointKind]string{
 	KindFutex:          "futex",
 	KindPrctl:          "prctl",
 	KindTimerObj:       "timer-obj",
+	KindIoUringFd:      "fd",
+	KindIoUringSetup:   "null",
 }
 
 // MetadataName returns the kind's stable name as written into
@@ -257,8 +274,9 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_open_by_handle_at": KindOpenByHandleAt,
 	"sys_enter_open_tree":         KindOpenTree,
 	"sys_enter_open_tree_attr":    KindOpenTree,
-	"sys_enter_io_uring_enter":    KindFd,
-	"sys_enter_io_uring_register": KindFd,
+	"sys_enter_io_uring_enter":    KindIoUringFd,
+	"sys_enter_io_uring_register": KindIoUringFd,
+	"sys_enter_io_uring_setup":    KindIoUringSetup,
 	"sys_enter_fcntl":             KindFcntl,
 	// ioctl(fd, cmd, arg) shares fcntl's argument layout. Capturing cmd lets
 	// userspace apply FIOCLEX/FIONCLEX, which set/clear close-on-exec exactly
