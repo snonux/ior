@@ -45,16 +45,19 @@ func TestFrameCoordToLineHeightMetricMapsExpandedLeafBand(t *testing.T) {
 }
 
 func TestFrameIndexAtHeightMetricMapsClicksInExpandedLeafBand(t *testing.T) {
+	// The viewport must be at least minFlameWidth wide: narrower ones draw the
+	// "terminal too narrow" placeholder, under which nothing is hittable.
+	const width = minFlameWidth
 	frames := []tuiFrame{
-		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
-		{Name: "leaf", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
+		{Name: "root", Row: 0, Col: 0, Width: width, Path: "root"},
+		{Name: "leaf", Row: 1, Col: 0, Width: width, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
 	}
 	for y := 1; y <= 5; y++ {
-		if got := frameIndexAt(frames, 10, y, 20, 9, false, true); got != 1 {
+		if got := frameIndexAt(frames, 10, y, width, 9, false, true); got != 1 {
 			t.Fatalf("y=%d: expected leaf frame index 1, got %d", y, got)
 		}
 	}
-	if got := frameIndexAt(frames, 10, 6, 20, 9, false, true); got != 0 {
+	if got := frameIndexAt(frames, 10, 6, width, 9, false, true); got != 0 {
 		t.Fatalf("y=6: expected root frame index 0, got %d", got)
 	}
 }

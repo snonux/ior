@@ -1054,8 +1054,15 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 }
 
 // frameIndexAt delegates to the renderer package-level helper to convert
-// terminal coordinates (x, y) to a frame index, accounting for UI chrome.
+// terminal coordinates (x, y) to a frame index, accounting for UI chrome. It
+// returns -1 while the view shows the "no frames match filter" placeholder
+// (an applied filter with an empty visible set): the frames still exist in
+// the model but none is drawn, so none may be clicked. The geometry-driven
+// placeholders ("terminal too narrow", ...) are handled inside frameIndexAt.
 func (m *Model) frameIndexAt(x, y int) int {
+	if filterActive(m.search.query()) && filterHidesAllFrames(m.search.visibleSet()) {
+		return -1
+	}
 	return frameIndexAt(m.anim.currentFrames(), x, y, m.width, m.height, m.showHelp, m.heightMetricActive())
 }
 

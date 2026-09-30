@@ -435,6 +435,15 @@ func computeRenderParamsForAvailableRows(frames []tuiFrame, availableRows int, h
 // frameIndexAt returns the index of the frame rendered at terminal coordinates
 // (x, y), or -1 if no frame occupies that cell. showHelp adds one extra line
 // to the UI chrome so the frame area row calculations account for it.
+//
+// When RenderTerminalView draws a placeholder message instead of frames
+// ("terminal too narrow", "viewport too short", "waiting for data"), nothing
+// is hittable, so the same width/height/frame-count test it uses
+// (layoutPlaceholder) makes this return -1 too; without it the frames laid
+// out for a width the screen no longer shows would still resolve and a click
+// on blank space would zoom into an undrawn frame. The "no frames match
+// filter" placeholder depends on the search state, not on geometry, so the
+// caller checks it with filterHidesAllFrames before calling this.
 func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMetricActive bool) int {
 	if len(frames) == 0 || width <= 0 || height <= 0 {
 		return -1
@@ -449,6 +458,9 @@ func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMe
 	renderHeight := height - extraLines
 	if renderHeight < 3 {
 		renderHeight = 3
+	}
+	if _, placeholder := layoutPlaceholder(width, renderHeight, len(frames)); placeholder {
+		return -1
 	}
 	params := computeRenderParamsForAvailableRows(frames, renderHeight-2, heightMetricActive)
 	if y < 1 || y > params.availableRows {
@@ -608,7 +620,7 @@ func RenderTerminalView(ctx RenderContext) string {
 		ctx.MetricLabel = "events"
 	}
 	filterSet, filterIsActive := resolveRenderFilterSet(ctx)
-	if filterIsActive && len(filterSet) == 0 {
+	if filterIsActive && filterHidesAllFrames(filterSet) {
 		return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", ctx.SearchQuery))
 	}
 	ctx.FilterSet = filterSet
@@ -619,15 +631,31 @@ func RenderTerminalView(ctx RenderContext) string {
 // viewport is too small or there are no frames yet. ok is false when a real
 // flamegraph can be rendered.
 func renderPlaceholder(ctx RenderContext) (msg string, ok bool) {
+	return layoutPlaceholder(ctx.Width, ctx.Height, len(ctx.Frames))
+}
+
+// layoutPlaceholder is the geometry-and-data half of the placeholder decision,
+// shared by the renderer (renderPlaceholder) and the mouse hit test
+// (frameIndexAt) so the two cannot disagree about when frames are on screen.
+// height is the render height (terminal height minus the status/help lines).
+func layoutPlaceholder(width, height, frameCount int) (msg string, ok bool) {
 	switch {
-	case ctx.Width < minFlameWidth:
+	case width < minFlameWidth:
 		return "Flame: terminal too narrow (need >= 60 columns)", true
-	case ctx.Height < 3:
+	case height < 3:
 		return "Flame: viewport too short", true
-	case len(ctx.Frames) == 0:
+	case frameCount == 0:
 		return "Flame: waiting for data...", true
 	}
 	return "", false
+}
+
+// filterHidesAllFrames reports whether an applied search filter keeps no frame
+// visible, in which case RenderTerminalView shows "no frames match filter"
+// instead of the flamegraph. filterSet is the filter-visible set; callers
+// only ask while a filter is active (filterActive(query)).
+func filterHidesAllFrames(filterSet map[int]bool) bool {
+	return len(filterSet) == 0
 }
 
 // resolveRenderFilterSet returns the set of frames kept visible by the search
