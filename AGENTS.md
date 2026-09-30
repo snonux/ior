@@ -678,8 +678,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `TestStartupPIDPickerEscStillQuitsWhileTyping`,
   `TestStartupPIDPickerQuitsOnQuitKeys`,
   `TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc`). The bounded
-  "Attaching tracepoints..." overlay still swallows quit keys until
-  `defaultStartupTimeout` resolves it; it is a wait rather than a dead end.
+  "Attaching tracepoints..." overlay does not swallow quit keys:
+  `handleQuitKeyPress` calls `quitWithBestEffortCleanup` while
+  `attachingOnDashboard()` is true
+  (`TestQuitWhileDashboardIsAttachingWaitsForBlockedStarterCleanup`).
 
   **A focused text input owns printable keys** (task xq2). In
   `handleGlobalKeyPress`, after the error screen and the help overlay but before
