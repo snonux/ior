@@ -59,8 +59,14 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 // the documented bridge to external FlameGraph tooling. Frames mirror the in-TUI flamegraph exactly (same record fields
 // and the same per-field splitting), records mapping to identical frame
 // paths are summed into one sample, and lines are sorted so the output is
-// deterministic. Records with a zero sample weight or no derived frames are
-// skipped: they would render zero-width in any flamegraph.
+// deterministic. Records with a zero sample weight are skipped: they would
+// render zero-width in any flamegraph. A record whose selected fields all
+// render empty (for example -fields path on a file whose name is empty, or
+// -fields comm with an empty comm) is NOT skipped, because its weight is
+// positive and dropping it would make the collapsed total differ from the
+// recording's event count and the other outputs (CSV, Parquet). It is
+// counted under the single placeholder frame collapsedEmptyFrame instead,
+// since a collapsed line cannot have an empty stack.
 //
 // Frame text is traced, attacker-controlled data, so every frame is made
 // structurally inert before it is joined, whatever the Escape option says
@@ -90,7 +96,7 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 		}
 		frames := buildFrames(record, opts.Fields)
 		if len(frames) == 0 {
-			continue
+			frames = append(frames, collapsedEmptyFrame)
 		}
 		for i, frame := range frames {
 			frames[i] = encodeCollapsedFrame(frame)
@@ -100,6 +106,14 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 
 	return writeCollapsedLines(w, totals, opts.Escape)
 }
+
+// collapsedEmptyFrame is the frame a record with a positive weight gets when
+// none of the selected fields yields a frame (see WriteCollapsedStacks). It is
+// free of ';', whitespace and line breaks, so it is structurally inert like
+// every other frame. Real paths always start with '/', so only a comm
+// literally named "[unknown]" can share its line, which merely adds up two
+// weights and cannot forge a stack.
+const collapsedEmptyFrame = "[unknown]"
 
 // encodeCollapsedFrame rewrites the characters of one frame that are
 // structural in the line-based collapsed format ("frame;frame weight\n")

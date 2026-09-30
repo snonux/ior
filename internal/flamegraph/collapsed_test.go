@@ -370,3 +370,64 @@ func TestEncodeCollapsedFrame(t *testing.T) {
 		t.Fatalf("clean frame allocated %v times, want 0", allocs)
 	}
 }
+
+// TestWriteCollapsedStacksKeepsRecordsWithEmptyFields pins task vq2: a record
+// whose selected fields all render empty (empty file name with -fields path,
+// empty comm with -fields comm) has a positive weight and must still be
+// counted, under the placeholder frame, so the collapsed total equals the
+// recording's event count (the same rows the CSV and Parquet outputs carry).
+func TestWriteCollapsedStacksKeepsRecordsWithEmptyFields(t *testing.T) {
+	recording := writeTestRecording(t, "emptyfields",
+		collapsedTestPair(1, "api", "/srv/a", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+		collapsedTestPair(2, "api", "", types.SYS_ENTER_READ, types.SYS_EXIT_READ, 200),
+		collapsedTestPair(3, "", "/srv/a", types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE, 300),
+		collapsedTestPair(4, "", "", types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE, 400),
+	)
+
+	tests := []struct {
+		name   string
+		fields []string
+		want   string
+	}{
+		{"path only", []string{"path"}, "/srv;/a 2\n[unknown] 2\n"},
+		{"comm only", []string{"comm"}, "[unknown] 2\napi 2\n"},
+		// One empty field is not enough to trigger the placeholder: the
+		// other field still yields real frames.
+		{"comm and path", []string{"comm", "path"}, "/srv;/a 1\n[unknown] 1\napi 1\napi;/srv;/a 1\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := WriteCollapsedStacks(&out, recording, CollapsedOptions{Fields: tc.fields}); err != nil {
+				t.Fatalf("WriteCollapsedStacks() error = %v", err)
+			}
+			total := uint64(0)
+			for _, stack := range parseCollapsedLikeFlamegraphPl(t, out.String()) {
+				total += stack.count
+			}
+			if total != 4 {
+				t.Fatalf("collapsed total = %d, want 4 (every record):\n%s", total, out.String())
+			}
+			if tc.want != "" && out.String() != tc.want {
+				t.Fatalf("output =\n%s\nwant\n%s", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestWriteCollapsedStacksStillSkipsZeroWeight keeps the other half of the
+// contract: a record with a zero sample weight is omitted even when its
+// frames are empty, since it would render zero-width anyway.
+func TestWriteCollapsedStacksStillSkipsZeroWeight(t *testing.T) {
+	pair := collapsedTestPair(1, "api", "", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100)
+	pair.Bytes = 0
+	recording := writeTestRecording(t, "zeroweight", pair)
+	var out bytes.Buffer
+	opts := CollapsedOptions{Fields: []string{"path"}, CountField: "bytes"}
+	if err := WriteCollapsedStacks(&out, recording, opts); err != nil {
+		t.Fatalf("WriteCollapsedStacks() error = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("zero-weight record was written:\n%s", out.String())
+	}
+}
