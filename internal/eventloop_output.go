@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"fmt"
+
 	"ior/internal/event"
 )
 
@@ -39,6 +41,17 @@ type outputFormatter struct {
 	// owned it. nil falls back to logStatus (stderr) so loops built outside
 	// trace setup - tests, benchmarks - keep the historical behaviour.
 	statusCb func(args ...any)
+
+	// outputErr is the first fatal output error (a failed stdout write in
+	// -plain mode), rowsLost the rows the failed writes dropped. Both are
+	// written on the event-loop goroutine only and read after run returned.
+	outputErr error
+	rowsLost  int
+
+	// stopTrace ends the trace when output fails: there is no point tracing
+	// on once the rows have nowhere to go. runTraceLoop wires it to the
+	// trace's cancel func; nil (tests, other modes) just records the error.
+	stopTrace func()
 
 	// pendingWarnings are warnings raised before the loop's output was wired
 	// (see setupWarnings). run replays them through notifyWarningOrLog before
@@ -95,6 +108,34 @@ func (f *outputFormatter) notifyStatus(args ...any) {
 		return
 	}
 	f.statusCb(args...)
+}
+
+// outputFailed is the -plain sink's reaction to a failed stdout write
+// (plainSink.onErr): it adds the dropped rows to rowsLost and, on the first
+// failure, records the error, tells the user on stderr and stops the trace,
+// so a full disk or a dead consumer no longer ends in exit 0 with statistics
+// that claim every row was written. Later failures only add to rowsLost, since
+// rows still in flight while the loop winds down are lost too. The warning
+// goes through notifyWarningOrLog because it reports lost data.
+func (f *outputFormatter) outputFailed(err error, droppedRows int) {
+	f.rowsLost += droppedRows
+	if f.outputErr != nil {
+		return
+	}
+	f.outputErr = err
+	f.notifyWarningOrLog(fmt.Sprintf("writing the -plain output to stdout failed: %v; stopping the trace, rows are lost", err))
+	if f.stopTrace != nil {
+		f.stopTrace()
+	}
+}
+
+// outputError is the error ior exits with after a run whose output could not
+// be written, or nil. Call it only after run returned.
+func (f *outputFormatter) outputError() error {
+	if f.outputErr == nil {
+		return nil
+	}
+	return fmt.Errorf("writing -plain output to stdout: %w (up to %d rows lost)", f.outputErr, f.rowsLost)
 }
 
 // deferWarnings queues warnings for replay when the loop starts running. It

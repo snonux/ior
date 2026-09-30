@@ -48,7 +48,12 @@ func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 		// safe only because no row can be buffered yet (the event loop has not
 		// started), so it always precedes the first row. Do not move it after
 		// processRawEvents starts (TestPlainRunHeaderPrecedesRows).
-		fmt.Println(event.EventStreamHeader)
+		//
+		// A failed header write is a failed stdout like any other: recorded
+		// here, it stops the trace before the first row is even decoded.
+		if _, err := fmt.Fprintln(os.Stdout, event.EventStreamHeader); err != nil {
+			e.outputFailed(err, 0)
+		}
 	}
 	e.flushPendingWarnings()
 

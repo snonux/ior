@@ -220,6 +220,9 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	if el.cfg.aggregateDrainEvery <= 0 {
 		el.cfg.aggregateDrainEvery = defaultAggregateDrainEvery
 	}
+	// Failed stdout writes of the default sink reach the loop, which stops the
+	// trace and makes the run exit non-zero (outputFailed).
+	plainSink.onErr = el.outputFailed
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.initRuntimeEventKinds()
@@ -323,8 +326,19 @@ func (e *eventLoop) stats() string {
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.ringbufDropStatLine(rate),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate),
 	)
+}
+
+// outputLossStatLine reports the rows the -plain sink dropped on failed stdout
+// writes, so "syscalls after filter" is not read as "rows written". It is
+// empty on a healthy run. The count is an upper bound: a partial write is
+// counted as losing its whole batch.
+func (e *eventLoop) outputLossStatLine() string {
+	if e.rowsLost == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\trows lost to stdout write errors: up to %d (counted in syscalls after filter)\n", e.rowsLost)
 }
 
 // perSecondRate returns a counter-to-rate converter for a run of secs seconds.

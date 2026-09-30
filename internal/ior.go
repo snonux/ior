@@ -784,6 +784,8 @@ func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop
 // the caller's.
 func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), logln func(...any)) time.Duration {
 	configureEventLoopOutput(infra.el, infra.mgr, configure)
+	// A failed stdout write ends the trace instead of tracing on into the void.
+	infra.el.stopTrace = infra.cancel
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has
 	// not yet exited.
@@ -870,7 +872,9 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	defer infra.Close()
 
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
-	return finaliseTrace(recorder, totalDuration, logln)
+	// The -plain sink's write error (nil in every other mode) is part of the
+	// result: a run whose rows could not be written must not exit 0.
+	return errors.Join(infra.el.outputError(), finaliseTrace(recorder, totalDuration, logln))
 }
 
 // traceInfra is the runtime infrastructure of one trace run - BPF module and

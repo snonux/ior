@@ -68,8 +68,19 @@ type plainSink struct {
 	// surface it. A partial write (n < len, err != nil) drops the whole
 	// buffer too, including the n bytes that did get out: the unwritten tail
 	// is not retried, because a retry could duplicate or tear a row. Err is
-	// what the -plain write-error task (tr2) consumes to report lost rows.
+	// what the loop consults after the run to exit non-zero (see onErr).
 	err error
+	// rows counts the rows appended to buf since the last write, so a failed
+	// write can report how many rows it dropped. A partial write reports the
+	// whole buffer's rows although its first n bytes did get out, so the
+	// figure is an upper bound.
+	rows int
+	// onErr, when set, is called after every failed write with that error and
+	// the number of rows the write dropped. The event loop uses it to warn,
+	// stop the trace and add the dropped rows to its statistics; without it a
+	// full disk or a dead consumer would be invisible until the process ended.
+	// It runs on the goroutine that calls Print/Flush.
+	onErr func(err error, droppedRows int)
 }
 
 func newPlainSink(w io.Writer, mode textsafe.EscapeMode) *plainSink {
@@ -85,6 +96,7 @@ func newPlainSink(w io.Writer, mode textsafe.EscapeMode) *plainSink {
 func (s *plainSink) Print(ep *event.Pair) {
 	s.buf = ep.AppendCSVRow(s.buf, s.escape)
 	s.buf = append(s.buf, '\n')
+	s.rows++
 	ep.Recycle()
 	if s.interactive || len(s.buf) >= plainFlushBytes {
 		_ = s.Flush() // recorded in s.err
@@ -98,9 +110,16 @@ func (s *plainSink) Flush() error {
 		return nil
 	}
 	_, err := s.w.Write(s.buf)
-	s.buf = s.buf[:0]
-	if err != nil && s.err == nil {
+	dropped := s.rows
+	s.buf, s.rows = s.buf[:0], 0
+	if err == nil {
+		return nil
+	}
+	if s.err == nil {
 		s.err = err
+	}
+	if s.onErr != nil {
+		s.onErr(err, dropped)
 	}
 	return err
 }
@@ -119,6 +138,8 @@ func (s *plainSink) Err() error { return s.err }
 type plainStdoutSink struct {
 	mode textsafe.EscapeMode
 	sink *plainSink
+	// onErr is handed to the plainSink when it binds, see plainSink.onErr.
+	onErr func(err error, droppedRows int)
 }
 
 func newPlainStdoutSink(mode textsafe.EscapeMode) *plainStdoutSink {
@@ -129,6 +150,7 @@ func newPlainStdoutSink(mode textsafe.EscapeMode) *plainStdoutSink {
 func (s *plainStdoutSink) Print(ep *event.Pair) {
 	if s.sink == nil {
 		s.sink = newPlainSink(os.Stdout, s.mode)
+		s.sink.onErr = s.onErr
 	}
 	s.sink.Print(ep)
 }
@@ -145,8 +167,8 @@ func (s *plainStdoutSink) Flush() error {
 func (s *plainStdoutSink) Pending() bool { return s.sink != nil && s.sink.Pending() }
 
 // Err returns the first stdout write error, or nil (also before the first
-// pair). It is the accessor through which the -plain write-error handling
-// (task tr2) learns that rows were lost; nothing consumes it yet.
+// pair). The event loop is told of every failed write through onErr, which
+// newEventLoop wires, so this accessor is for callers that hold only the sink.
 func (s *plainStdoutSink) Err() error {
 	if s.sink == nil {
 		return nil
