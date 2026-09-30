@@ -50,28 +50,51 @@ func TestStreamViewFitsAtAnyWidth(t *testing.T) {
 	if !pressLocal(t, &m, "space") || !m.paused || m.selectedIdx < 0 {
 		t.Fatalf("space should pause with a selection")
 	}
+	// The exit hint must survive narrowing for as long as the selection
+	// segment in front of it fits.
+	sel := m.streamFooterSegments(0)[0]
+	if !strings.HasPrefix(sel, "Sel ") {
+		t.Fatalf("paused footer should lead with the selection, got %q", sel)
+	}
+	undoFrom := len(sel + footerSep + "Esc/F undo")
 	for width := 20; width <= 160; width++ {
 		out := m.View(width, height)
 		assertViewFits(t, "paused", width, height, out)
-		if !strings.Contains(out, "Row ") {
-			t.Fatalf("width %d: paused footer lost its Row segment:\n%s", width, out)
+		if !strings.Contains(out, "Sel ") {
+			t.Fatalf("width %d: paused footer lost its Sel segment:\n%s", width, out)
+		}
+		if width >= undoFrom && !strings.Contains(out, "Esc/F undo") {
+			t.Fatalf("width %d: paused footer lost the Esc/F undo hint:\n%s", width, out)
 		}
 		if strings.Contains(out, "\x1b[8m") {
 			t.Fatalf("width %d: status message escape sequence was not sanitised", width)
 		}
 	}
-	if out := m.View(160, height); !strings.Contains(out, "Enter push-filter | T fd-trace | Esc/F undo") {
-		t.Fatalf("wide paused footer should keep every hint:\n%s", out)
+	want := sel + " | Esc/F undo | Enter push-filter | T fd-trace | Row "
+	if out := m.View(160, height); !strings.Contains(out, want) {
+		t.Fatalf("wide paused footer should keep every segment in priority order %q:\n%s", want, out)
+	}
+	if out := m.View(undoFrom, height); !strings.Contains(out, "\n"+sel+" | Esc/F undo\n") {
+		t.Fatalf("narrow paused footer should be the compact Sel + undo form:\n%s", out)
 	}
 }
 
+// TestFDTraceViewFitsAtAnyWidth checks the fd-trace view's height budget and
+// line widths, and that its "esc:back" exit hint survives every width.
 func TestFDTraceViewFitsAtAnyWidth(t *testing.T) {
 	const height = 24
 	m := newFooterTestModel(t)
 	m.fdTraceView.visible = true
 	m.fdTraceView.events = m.filtered
 	for width := 20; width <= 160; width++ {
-		assertViewFits(t, "fd-trace", width, height, m.View(width, height))
+		out := m.View(width, height)
+		assertViewFits(t, "fd-trace", width, height, out)
+		if !strings.Contains(out, "\nesc:back") {
+			t.Fatalf("width %d: fd-trace footer lost the esc:back hint:\n%s", width, out)
+		}
+	}
+	if out := m.View(160, height); !strings.HasSuffix(out, "\nesc:back | FD Trace Row 1/200 | j/k:scroll") {
+		t.Fatalf("wide fd-trace footer should keep every segment:\n%s", out)
 	}
 }
 
