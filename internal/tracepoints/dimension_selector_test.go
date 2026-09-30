@@ -466,3 +466,57 @@ func TestDimensionSelectorConfigHasAnySelectorIgnoresBlankValues(t *testing.T) {
 		t.Error("hasAnySelector() = false for padded non-blank value, want true")
 	}
 }
+
+// TestBuildAllowedSyscallsExcludesByFamilyAndKind pins the family and kind
+// arms of the exclusion pass (the syscall arm is covered by
+// TestParseSelectorWithDimensionsExclusionsOverridePositives): a -no-trace-*
+// family or kind removes every matching syscall a positive selector added,
+// and nothing else.
+func TestBuildAllowedSyscallsExcludesByFamilyAndKind(t *testing.T) {
+	allow, err := buildAllowedSyscalls(DimensionSelectorConfig{
+		TraceFamilies:   "FS,Time",
+		NoTraceFamilies: "Time",
+		NoTraceKinds:    "open",
+	})
+	if err != nil {
+		t.Fatalf("buildAllowedSyscalls: %v", err)
+	}
+	for syscall := range allow {
+		if syscallFamilies[syscall] == "Time" {
+			t.Errorf("%s (family Time) survived -no-trace-families Time", syscall)
+		}
+		if syscallKinds[syscall] == "open" {
+			t.Errorf("%s (kind open) survived -no-trace-kinds open", syscall)
+		}
+	}
+	if _, ok := allow["read"]; !ok {
+		t.Error("read (FS, kind fd) was excluded, want it kept")
+	}
+}
+
+// TestBuildAllowedSyscallsRejectsInvalidExclusions covers the negative
+// selectors' validation, and that a bad positive selector is the error
+// reported when both directions are invalid.
+func TestBuildAllowedSyscallsRejectsInvalidExclusions(t *testing.T) {
+	tests := []struct {
+		name string
+		dims DimensionSelectorConfig
+		want string
+	}{
+		{"family", DimensionSelectorConfig{NoTraceFamilies: "Nope"}, "invalid syscall family"},
+		{"kind", DimensionSelectorConfig{NoTraceKinds: "not-a-kind"}, "invalid syscall kind"},
+		{"syscall", DimensionSelectorConfig{NoTraceSyscalls: "not_a_syscall"}, "invalid syscall in trace selector"},
+		{"positive first", DimensionSelectorConfig{TraceKinds: "not-a-kind", NoTraceFamilies: "Nope"}, "invalid syscall kind"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			allow, err := buildAllowedSyscalls(tc.dims)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("buildAllowedSyscalls error = %v, want %q", err, tc.want)
+			}
+			if allow != nil {
+				t.Fatalf("buildAllowedSyscalls returned %d syscalls alongside its error", len(allow))
+			}
+		})
+	}
+}
