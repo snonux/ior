@@ -435,7 +435,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// only triggers on the exact kernel payload size, so a struct-layout drift
 	// must show up as a decode mismatch here.
 	t.Run("ProcessExecEvent", func(t *testing.T) {
-		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 3}
+		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 2, OldTid: 3}
 		copy(ev.Comm[:], "cat")
 		raw := rawBytes(t, ev)
 
@@ -463,6 +463,42 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exit decode mismatch")
 		}
 	})
+}
+
+// TestNewProcessExecEventFastKernelLayout pins the kernel byte offsets of
+// struct process_exec_event, in particular old_tid at 40..44 behind the comm:
+// the event loop re-keys a non-leader's parked execve enter from OldTid to
+// Tid, so a misplaced field would pair nothing or move the wrong enter.
+func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, processExecEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXEC_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 100)
+	copy(raw[24:40], "newprog")
+	binary.LittleEndian.PutUint32(raw[40:44], 102)
+
+	ev := NewProcessExecEventFast(raw)
+	if ev == nil {
+		t.Fatal("expected decoded process exec event for kernel layout payload")
+	}
+	defer ev.Recycle()
+	if ev.EventType != PROCESS_EXEC_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 100 ||
+		ev.OldTid != 102 || StringValue(ev.Comm[:]) != "newprog" {
+		t.Fatalf("unexpected process exec decode: %#v", ev)
+	}
+}
+
+// TestNewProcessExecEventFastRejectsShortPayloads pins the negative path: a
+// payload shorter than the old_tid layout - including the old 40-byte record -
+// must fail to decode rather than read as an exec that kept its tid.
+func TestNewProcessExecEventFastRejectsShortPayloads(t *testing.T) {
+	for _, n := range []int{0, 24, 40, processExecEventSize - 1} {
+		if ev := NewProcessExecEventFast(make([]byte, n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewProcessExecEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
 }
 
 // TestNewProcessExitEventFastKernelLayout pins the kernel byte offsets of

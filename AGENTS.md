@@ -470,8 +470,8 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
     diluted by threads that make only aggregate-only calls (parked futex
     waiters).
   - The partition also holds without a per-tid enter state
-    (`syscall_enter_state_map` full, clone/fork child exits, exec by a
-    non-leader thread, syscalls in flight at attach): a failed enter-state
+    (`syscall_enter_state_map` full, clone/fork child exits, syscalls in
+    flight at attach): a failed enter-state
     write is counted *untimed* into the aggregate at sys_enter unless the rate
     is `1`, and a stateless or mismatched sys_exit is emitted only at rate `1`
     and never counted (see "Enter state and its two fallbacks" in
@@ -757,6 +757,14 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
     and triggers one asynchronous procfs re-read on next use — that read happens
     after the exec, so it heals the label. Evicting instead would blank the comm
     column and, under `-comm`, drop the tid's events at the enter-side gate.
+  - *Non-leader exec.* An `execve` by a thread other than the leader enters
+    under the caller's tid but returns under the leader's (`de_thread`). The
+    record carries the pre-exec tid (`old_tid`); the BPF handler moves the
+    in-flight `syscall_enter_state_map` entry to the new tid
+    (`ior_on_exec_tid_change` in `filter.c`), and userspace re-keys the parked
+    execve enter and its gap baseline the same way (`rekeyExecCaller`, gap
+    baselines are keyed by the exit's tid), so the execve row is emitted with
+    the caller's tid and nothing leaks under the vanished one.
   - *Late lookup worker.* A resolver worker that read `/proc/<tid>/comm` before
     the exec could otherwise overwrite the authoritative post-exec name. Each
     cache entry carries an exec epoch, bumped by `handleProcessExecEvent`; a

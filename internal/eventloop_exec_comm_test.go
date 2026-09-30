@@ -23,13 +23,24 @@ const (
 	execCommTid = 4242
 )
 
+// makeProcessExecEvent builds the exec record of a task that kept its tid
+// across the exec (old_tid == tid), which is every exec except one by a
+// non-leader thread (see makeProcessExecEventFrom).
 func makeProcessExecEvent(t *testing.T, time uint64, pid, tid uint32, comm string) []byte {
+	t.Helper()
+	return makeProcessExecEventFrom(t, time, pid, tid, tid, comm)
+}
+
+// makeProcessExecEventFrom builds an exec record whose task ran as oldTid
+// before the exec and as tid after it.
+func makeProcessExecEventFrom(t *testing.T, time uint64, pid, tid, oldTid uint32, comm string) []byte {
 	t.Helper()
 	ev := types.ProcessExecEvent{
 		EventType: types.PROCESS_EXEC_EVENT,
 		Time:      time,
 		Pid:       pid,
 		Tid:       tid,
+		OldTid:    oldTid,
 	}
 	copy(ev.Comm[:], comm)
 	raw, err := ev.Bytes()
@@ -43,11 +54,11 @@ func makeProcessExecEvent(t *testing.T, time uint64, pid, tid uint32, comm strin
 }
 
 // processExecEventWireSize pins the kernel payload size of struct
-// process_exec_event (internal/c/types.h): 4+4+8+4+4+16 with no trailing
-// padding. NewProcessExecEventFast takes its fast path only at this exact
-// length, so a drift here would silently move every decode onto the slow
-// binary.Read path.
-const processExecEventWireSize = 40
+// process_exec_event (internal/c/types.h): 4+4+8+4+4+16+4(old_tid)+
+// 4(reserved) with no trailing padding. NewProcessExecEventFast takes its
+// fast path only at this exact length, so a drift here would silently move
+// every decode onto the slow binary.Read path.
+const processExecEventWireSize = 48
 
 // newEventLoopWithStaleComm builds an event loop whose comm cache reached the
 // stale state the way production does: the asynchronous resolver read

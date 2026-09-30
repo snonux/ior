@@ -526,6 +526,16 @@ struct perf_open_event {
 // a control event (no enter/exit pair, never rendered as a row) that refreshes
 // the pid->comm cache, so the first post-exec syscalls are labelled with the
 // post-exec comm instead of the pre-exec one.
+//
+// old_tid is the tid the exec'ing thread had before the exec (the
+// tracepoint's old_pid). It differs from tid when a non-leader thread
+// exec'd: de_thread() hands it the leader's tid (== pid), so the execve that
+// entered under old_tid returns under tid. Userspace re-keys the parked
+// execve enter from old_tid to tid on this record so the exit still pairs
+// (eventLoop.rekeyExecCaller); the BPF side moves the syscall_enter_state_map
+// entry the same way (ior_on_exec_tid_change in filter.c). The explicit
+// reserved word keeps the layout at 48 bytes with no implicit padding, so
+// kernel and binary.Write payloads share one size.
 struct process_exec_event {
     __u32 event_type;
     __u32 trace_id;
@@ -533,6 +543,8 @@ struct process_exec_event {
     __u32 pid;
     __u32 tid;
     char comm[MAX_PROGNAME_LENGTH];
+    __u32 old_tid;
+    __u32 reserved;
 };
 
 // process_exit_event is not a syscall tracepoint event: it is emitted by the

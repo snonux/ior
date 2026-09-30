@@ -694,9 +694,15 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // table, and markAllStale only re-resolves comms. They then stay stale until
 // the process closes, re-opens or re-dups those numbers through a traced
 // syscall, exits, or they age out of the LRU.
+//
+// A non-leader exec changes the task's tid as well; rekeyExecCaller moves the
+// execve still in flight (and the rest of the caller's tid-keyed state) to
+// the leader tid it now runs under, so the execve's exit pairs. Like the fd
+// eviction it runs before the comm check.
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
 	defer ev.Recycle()
 	e.fdState().dropOnExec(ev.Pid)
+	e.rekeyExecCaller(ev)
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
 		// A control record with an empty comm carries no information; keeping

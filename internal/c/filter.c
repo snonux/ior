@@ -225,9 +225,10 @@ static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
 //
 //   2. The exit has no entry of its own: the child side of clone/clone3/
 //      fork/vfork (its first return runs in a task that never entered the
-//      syscall), an execve by a non-leader thread (it returns under the
-//      leader's tid, see de_thread), a syscall already in flight when the
-//      tracepoints were attached, or case 1 above. A stale entry left by a
+//      syscall), a syscall already in flight when the tracepoints were
+//      attached, or case 1 above. (An execve by a non-leader thread returns
+//      under the leader's tid, see de_thread, but its entry is moved there
+//      by ior_on_exec_tid_change before the exit runs, so it pairs normally.) A stale entry left by a
 //      different syscall (enter_trace_id mismatch) is the same situation.
 //      ior_stateless_exit_emits emits such an exit only when the syscall's
 //      rate is 1, i.e. exactly when a rate-1 enter would have been emitted,
@@ -349,6 +350,58 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 
     bpf_map_delete_elem(&syscall_enter_state_map, &tid);
     return emit_event != 0;
+}
+
+// ior_on_exec_tid_change carries an in-flight execve's enter state across the
+// tid change a non-leader exec makes. It is called from sched_process_exec
+// (exec.c) with the tracepoint's old_pid (the caller's pre-exec tid) and the
+// current tid.
+//
+// When a thread other than the group leader calls execve, de_thread() kills
+// every other thread, waits for the leader to become a zombie and then
+// swaps pids with it: the exec'ing task continues under the leader's tid
+// (== tgid), and sys_exit_execve fires under that tid. The entry
+// ior_on_syscall_enter wrote under the old tid would never be looked up
+// again - it lingered until tid reuse, crowding the bounded map - and the
+// exit ran down the stateless path, so the invocation lost its duration and,
+// at a rate other than 1, was never counted at all.
+//
+// Moving the entry to the new tid lets ior_on_syscall_exit pair it as usual.
+// Whatever the new tid still holds belongs to the dead leader: a zombie
+// already passed its own sys_exit (which deleted its entry), and anything left
+// is stale, so BPF_ANY overwrites it. The old entry is deleted before the
+// insert, which frees its slot for the insert on a full map.
+//
+// Two cases cannot pair and fall back to counting (see "Enter state and its
+// two fallbacks"):
+//   - The insert fails. The exit then finds no entry and is stateless, which
+//     is exactly the lost-state case 1: ior_on_enter_state_lost counts the
+//     invocation untimed unless the rate is 1 (where the stateless exit is
+//     emitted and pairs in userspace).
+//   - The new tid is out of scope (in_scope 0, e.g. -tid traced the
+//     exec'ing thread and the leader's tid is filtered): the exit handler
+//     never runs. An invocation whose enter was not emitted would have been
+//     counted there, so it is counted here, untimed; an emitted enter is
+//     userspace's to drop, like any syscall that never returns in scope.
+static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid, int in_scope) {
+    struct syscall_enter_state moved;
+    struct syscall_enter_state *state;
+
+    if (old_tid == new_tid)
+        return;
+    state = bpf_map_lookup_elem(&syscall_enter_state_map, &old_tid);
+    if (!state)
+        return;
+    moved = *state;
+    bpf_map_delete_elem(&syscall_enter_state_map, &old_tid);
+
+    if (!in_scope) {
+        if (!moved.emit_event)
+            ior_count_untimed_syscall(moved.enter_trace_id);
+        return;
+    }
+    if (bpf_map_update_elem(&syscall_enter_state_map, &new_tid, &moved, BPF_ANY))
+        ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));
 }
 
 // Recovering an open filename whose sys_enter read faulted.
