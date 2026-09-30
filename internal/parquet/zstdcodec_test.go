@@ -81,9 +81,12 @@ func TestZstdCodecDecodeRejectsGarbage(t *testing.T) {
 	}
 }
 
-// The whole point of the small window is memory; it must also stay within the
-// window the frame header declares, or a decoder with a matching limit would
-// refuse the file.
+// The whole point of the small window is memory, but it is bounded from both
+// sides: the frame header must not declare more than zstdWindowSize (a decoder
+// with a matching limit would refuse the file), and it must not declare less
+// than one page (a smaller window could miss matches inside a page, silently
+// costing ratio). The 3 MiB input is longer than the window, so the header
+// states the encoder's own window rather than the input length.
 func TestZstdCodecFrameWindowIsSmall(t *testing.T) {
 	c := newZstdCodec()
 	enc, err := c.Encode(nil, codecTestPage(3<<20, 1))
@@ -96,6 +99,103 @@ func TestZstdCodecFrameWindowIsSmall(t *testing.T) {
 	}
 	if h.WindowSize > zstdWindowSize {
 		t.Fatalf("frame window = %d, want <= %d", h.WindowSize, zstdWindowSize)
+	}
+	if h.WindowSize < defaultPageBufferSize {
+		t.Fatalf("frame window = %d, want >= one page (%d)", h.WindowSize, defaultPageBufferSize)
+	}
+}
+
+// Level, CRC and zero-length-frame settings decide the bytes on disk, so they
+// are pinned here rather than left to the ratio test, which would not notice
+// e.g. a faster level or an added checksum.
+func TestZstdCodecFrameSettings(t *testing.T) {
+	c := newZstdCodec()
+
+	// Zero frames: an empty page must still be a valid frame (an empty output
+	// is not decodable), and it must decode back to nothing.
+	empty, err := c.Encode(nil, nil)
+	if err != nil {
+		t.Fatalf("Encode(nil) error = %v", err)
+	}
+	if len(empty) == 0 {
+		t.Fatal("Encode(nil) returned no frame, want a valid empty zstd frame")
+	}
+	if got, err := c.Decode(nil, empty); err != nil || len(got) != 0 {
+		t.Fatalf("Decode(empty frame) = %d bytes, err = %v, want 0 bytes", len(got), err)
+	}
+
+	// No CRC: the library codec writes none, and 4 bytes per page are wasted
+	// on a checksum the parquet format already covers elsewhere.
+	enc, err := c.Encode(nil, codecTestPage(defaultPageBufferSize, 2))
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	var h zstd.Header
+	if err := h.Decode(enc); err != nil {
+		t.Fatalf("Header.Decode() error = %v", err)
+	}
+	if h.HasCheckSum {
+		t.Fatal("frame header has the checksum flag set, want no CRC")
+	}
+}
+
+// Level is pinned byte for byte: apart from the window (which a page never
+// fills), the codec must produce exactly what the library's parquetgo.Zstd
+// produces, so files keep the format and ratio they had before the swap.
+func TestZstdCodecMatchesLibraryOutput(t *testing.T) {
+	c := newZstdCodec()
+	for _, size := range []int{4 << 10, defaultPageBufferSize} {
+		page := codecTestPage(size, int64(size))
+		mine, err := c.Encode(nil, page)
+		if err != nil {
+			t.Fatalf("Encode() error = %v", err)
+		}
+		library, err := parquetgo.Zstd.Encode(nil, page)
+		if err != nil {
+			t.Fatalf("library Encode() error = %v", err)
+		}
+		if !bytes.Equal(mine, library) {
+			t.Fatalf("%d-byte page: output differs from the library codec (%d vs %d bytes)", size, len(mine), len(library))
+		}
+	}
+}
+
+// distantRepeatPage builds a page whose second part repeats an incompressible
+// first part at the given distance, so the only way to compress it is a match
+// reaching back that far. The tail after the repeat is fresh random data.
+func distantRepeatPage(size, distance int, seed int64) []byte {
+	rng := rand.New(rand.NewSource(seed))
+	page := make([]byte, size)
+	rng.Read(page)
+	copy(page[distance:], page[:size-distance])
+	return page
+}
+
+// A window larger than a page loses nothing only if matches spanning most of
+// a page are still found. Repeats half a page and three quarters of a page
+// apart need a window of at least that distance; a 16 or 64 KiB window cannot
+// reach them and compresses such a page to about its full size, while the
+// library codec saves the whole repeated part.
+func TestZstdCodecFindsDistantRepeatsWithinAPage(t *testing.T) {
+	c := newZstdCodec()
+	for _, distance := range []int{defaultPageBufferSize / 2, defaultPageBufferSize * 3 / 4} {
+		page := distantRepeatPage(defaultPageBufferSize, distance, int64(distance))
+		mine, err := c.Encode(nil, page)
+		if err != nil {
+			t.Fatalf("Encode() error = %v", err)
+		}
+		library, err := parquetgo.Zstd.Encode(nil, page)
+		if err != nil {
+			t.Fatalf("library Encode() error = %v", err)
+		}
+		if float64(len(mine)) > float64(len(library))*1.005 {
+			t.Fatalf("repeat distance %d: compressed to %d bytes, library codec %d: window too small for a page", distance, len(mine), len(library))
+		}
+		// The repeat must actually be exploited, or the comparison is vacuous.
+		// The copied tail is len(page)-distance bytes; the library must save most of it.
+		if len(library) > len(page)-(len(page)-distance)/2 {
+			t.Fatalf("repeat distance %d: library codec only reached %d of %d bytes, test page has no usable repeat", distance, len(library), len(page))
+		}
 	}
 }
 
