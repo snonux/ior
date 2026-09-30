@@ -82,10 +82,12 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 // (or 1024 per CPU), and on a box churning short-lived processes PIDs wrap
 // quickly. The accumulator cannot fix it alone, because it only sees pairs;
 // the sched_process_exit records that end a lifetime are consumed inside the
-// event loop (handleProcessExitEvent) and fire per task, not per process. A
-// real fix needs a process-exit signal (or a pid+start-time key) forwarded to
-// the stats engine; until then merging is preferred over the old heuristic,
-// which was wrong for every multithreaded process rather than only on reuse.
+// event loop (handleProcessExitEvent). They fire per task, but carry a
+// group_dead flag (ProcessExitEvent.IsGroupDead) marking the exit that ends
+// the whole process. A real fix needs that process-exit signal (or a
+// pid+start-time key) forwarded to the stats engine; until then merging is
+// preferred over the old heuristic, which was wrong for every multithreaded
+// process rather than only on reuse.
 //
 // The comm is only a label, see processStats.label.
 func (a *processAccumulator) Add(pair *event.Pair) {

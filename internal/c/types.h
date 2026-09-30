@@ -529,15 +529,22 @@ struct process_exec_event {
 
 // process_exit_event is not a syscall tracepoint event: it is emitted by the
 // hand-written sched:sched_process_exit handler in exec.c, which fires when a
-// task exits. Userspace consumes it as a control event (no enter/exit pair,
-// never rendered as a row) that evicts the exited task's process (tgid) from
-// the fdTracker's per-(pid, fd) maps, so descriptors of processes that are
-// gone do not linger until LRU eviction. Like process_exec_event it carries no
-// comm: the only payload userspace needs is the identity of the process.
+// task (thread) exits. Userspace consumes it as a control event (no enter/exit
+// pair, never rendered as a row): tid-keyed state is dropped on every record,
+// while the process's (tgid) fdTracker entries are evicted only when
+// group_dead is set, i.e. when the last thread of the group has exited - a
+// sibling thread's exit must not discard descriptors the process still holds.
+// group_dead is a __u32 (0 or 1) because the Go type generator maps only
+// 32/64-bit integers; the explicit reserved word keeps the layout at 32 bytes
+// with no implicit padding, so kernel and binary.Write payloads share one size.
+// Like process_exec_event's siblings it carries no comm: the only payload
+// userspace needs is the identity of the task and whether its process died.
 struct process_exit_event {
     __u32 event_type;
     __u32 trace_id;
     __u64 time;
     __u32 pid;
     __u32 tid;
+    __u32 group_dead;
+    __u32 reserved;
 };

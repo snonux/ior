@@ -371,17 +371,17 @@ func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
 }
 
 // deletePid removes every entry of pid from the fd table and the procfs
-// cache. Called from handleProcessExitEvent on a sched_process_exit control
-// record: a process that exited owns no descriptors anymore, so its slice of
-// the (pid, fd) key space is pure garbage until this runs. The per-pid index
-// makes this O(entries of pid), and O(1) for the common case - a task exit
-// for a process that never registered a descriptor. The price is paid on the
-// syscall path: every registration and removal also updates the pid's index
-// set (a small-map insert or delete), and a pid entering the index takes a
-// recycled entry or, when none is idle, allocates one plus the set it needs.
-// That is far cheaper than the full scan of both capped maps it replaced (see
-// BenchmarkDeletePidFullTable, BenchmarkFdSetDeleteChurn and
-// BenchmarkFdNewPidLifecycle).
+// cache. Called from handleProcessExitEvent on a group-dead sched_process_exit
+// control record (the last thread of the process exited): a process that
+// exited owns no descriptors anymore, so its slice of the (pid, fd) key space
+// is pure garbage until this runs. The per-pid index makes this O(entries of
+// pid), and O(1) for the common case - a process that never registered a
+// descriptor. The price is paid on the syscall path: every registration and
+// removal also updates the pid's index set (a small-map insert or delete), and
+// a pid entering the index takes a recycled entry or, when none is idle,
+// allocates one plus the set it needs. That is far cheaper than the full scan
+// of both capped maps it replaced (see BenchmarkDeletePidFullTable,
+// BenchmarkFdSetDeleteChurn and BenchmarkFdNewPidLifecycle).
 func (t *fdTracker) deletePid(pid uint32) {
 	keys := t.pidKeySets(pid)
 	if keys == nil {

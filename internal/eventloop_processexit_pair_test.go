@@ -57,7 +57,9 @@ func feedAccessExit(t *testing.T, el *eventLoop, out chan *event.Pair,
 	return nextRow(out)
 }
 
-// feedTaskExit delivers the sched:sched_process_exit control record for tid.
+// feedTaskExit delivers the sched:sched_process_exit control record for tid as
+// the exit of a whole single-threaded process (group_dead set), the shape of
+// a task whose tid the kernel can hand to a new owner.
 func feedTaskExit(t *testing.T, el *eventLoop, out chan *event.Pair, at uint64, tid uint32) {
 	t.Helper()
 	el.processRawEvent(makeProcessExitEvent(t, at, execCommPid, tid), out)
@@ -179,7 +181,8 @@ func TestProcessExitEvictsOnlyTheExitedTasksPairState(t *testing.T) {
 	}
 	feedAccessEnter(t, el, out, defaulTime+300, siblingTid, siblingTaskPath)
 
-	feedTaskExit(t, el, out, defaulTime+400, execCommTid)
+	// A thread exit (group_dead clear), as it is while the sibling lives.
+	el.processRawEvent(makeThreadExitEvent(t, defaulTime+400, execCommPid, execCommTid), out)
 
 	ep := feedAccessExit(t, el, out, defaulTime+500, siblingTid)
 	if ep == nil {

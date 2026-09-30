@@ -83,8 +83,10 @@ const (
 	// trailing padding, so kernel and binary.Write payloads share one size.
 	processExecEventSize = 40
 	// process_exit_event is the sibling control record emitted by
-	// sched:sched_process_exit. 4+4+8+4+4 = 24 bytes, no trailing padding.
-	processExitEventSize = 24
+	// sched:sched_process_exit. 4+4+8+4+4+4(group_dead)+4(reserved) = 32
+	// bytes; the explicit reserved word leaves no trailing padding, so kernel
+	// and binary.Write payloads share one size.
+	processExitEventSize = 32
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -914,7 +916,10 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 }
 
 // NewProcessExitEventFast decodes the sched:sched_process_exit control record
-// identifying the tgid whose fd-table entries userspace must evict.
+// identifying the exited task and, via GroupDead, whether its whole process
+// (tgid) died so userspace may evict the process's fd-table entries. A
+// payload shorter than the current layout (e.g. the pre-group_dead 24-byte
+// record) is rejected rather than decoded with GroupDead defaulting to 0.
 func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	if len(raw) < processExitEventSize {
 		return nil
@@ -928,5 +933,16 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	p.Time = binary.LittleEndian.Uint64(raw[8:16])
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
+	p.Reserved = binary.LittleEndian.Uint32(raw[28:32])
 	return p
+}
+
+// IsGroupDead reports whether the exited task was the last live thread of its
+// thread group, i.e. whether process Pid as a whole is gone. Per-thread exits
+// report false: their tgid still owns its descriptors. Kept as a method so
+// consumers beyond the event loop (e.g. a future PID-reuse signal to the stats
+// engine) read the flag without depending on its wire encoding.
+func (p *ProcessExitEvent) IsGroupDead() bool {
+	return p.GroupDead != 0
 }
