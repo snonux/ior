@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ansiSGR matches the styling escapes lipgloss puts around the input text.
@@ -16,15 +17,25 @@ func newKeyTestModel() *Model {
 	return NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 }
 
-// letterPress and letterRelease mirror what bubbletea decodes from the kitty
-// sequences "\x1b[97u" and "\x1b[97;1:3u": the press carries the text, the
-// release does not.
+// newEventTypeTestModel is a model whose terminal has answered the keyboard
+// enhancements query with the kitty "report event types" flag.
+func newEventTypeTestModel() *Model {
+	m := newKeyTestModel()
+	m.kb.enhancements = tea.KeyboardEnhancementsMsg{Flags: ansi.KittyReportEventTypes}
+	m.kb.enhancementsKnown = true
+	return m
+}
+
+// letterPress and letterRelease mirror what bubbletea v2 decodes from the kitty
+// sequences "\x1b[97u" and "\x1b[97;1:3u": KeyPressMsg{Code:97, Text:"a"} and
+// KeyReleaseMsg{Code:97, Text:"a"}. The release carries the text too, which is
+// what makes a replayed release indistinguishable from a real press downstream.
 func letterPress(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
 
 func letterRelease(r rune) tea.KeyReleaseMsg {
-	return tea.KeyReleaseMsg{Code: r}
+	return tea.KeyReleaseMsg{Code: r, Text: string(r)}
 }
 
 // deliveredKeys feeds the events through the normalizer and returns the
@@ -73,7 +84,7 @@ func TestNormalizeKeyEventLongHoldReleaseIsDropped(t *testing.T) {
 	// Unrelated key typed while the space is held.
 	got = append(got, deliveredKeys(m, letterPress('x'), letterRelease('x'))...)
 	// Release much later: no fixed time heuristic may resurrect it.
-	got = append(got, deliveredKeys(m, tea.KeyReleaseMsg{Code: ' '})...)
+	got = append(got, deliveredKeys(m, tea.KeyReleaseMsg{Code: ' ', Text: " "})...)
 	if len(got) != 4 {
 		t.Fatalf("expected press + 2 repeats + x, release dropped; got %v", got)
 	}
@@ -94,7 +105,7 @@ func TestNormalizeKeyEventRepeatedKeyPressReleasePairs(t *testing.T) {
 func TestNormalizeKeyEventReleaseWithDifferentModifiersPairsWithPress(t *testing.T) {
 	m := newKeyTestModel()
 	press := tea.KeyPressMsg{Code: 'a', ShiftedCode: 'A', Mod: tea.ModShift, Text: "A"}
-	got := deliveredKeys(m, press, tea.KeyReleaseMsg{Code: 'a'})
+	got := deliveredKeys(m, press, tea.KeyReleaseMsg{Code: 'a', Text: "a"})
 	if len(got) != 1 {
 		t.Fatalf("expected shifted press delivered once, got %v", got)
 	}
@@ -110,6 +121,32 @@ func TestNormalizeKeyEventUnpairedReleaseStillFallsBackToPress(t *testing.T) {
 	}
 }
 
+// On a terminal that reports event types, an unpaired release is not a
+// keystroke (e.g. the Enter that launched the program, or a key held across a
+// blur), so it must not be replayed as a press.
+func TestNormalizeKeyEventUnpairedReleaseDroppedWhenEventTypesReported(t *testing.T) {
+	m := newEventTypeTestModel()
+	enter := tea.KeyReleaseMsg{Code: tea.KeyEnter}
+	if got := deliveredKeys(m, enter, letterRelease('a')); len(got) != 0 {
+		t.Fatalf("expected unpaired releases dropped, got %v", got)
+	}
+	// Normal press/release pairs still work on such a terminal.
+	if got := deliveredKeys(m, letterPress('a'), letterRelease('a')); strings.Join(got, "") != "a" {
+		t.Fatalf("expected paired keystroke delivered once, got %v", got)
+	}
+}
+
+// Event types being known but NOT supported (flags without the event-type bit)
+// must keep the release-only fallback.
+func TestNormalizeKeyEventUnpairedReleaseFallsBackWhenEventTypesUnsupported(t *testing.T) {
+	m := newKeyTestModel()
+	m.kb.enhancements = tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes}
+	m.kb.enhancementsKnown = true
+	if got := deliveredKeys(m, letterRelease('a')); len(got) != 1 {
+		t.Fatalf("expected release delivered as press, got %v", got)
+	}
+}
+
 // A release lost while the window was unfocused must not leave the key
 // "held" forever and swallow a later genuine release-only keystroke.
 func TestNormalizeKeyEventBlurForgetsHeldKeys(t *testing.T) {
@@ -120,6 +157,18 @@ func TestNormalizeKeyEventBlurForgetsHeldKeys(t *testing.T) {
 	}
 	if got := deliveredKeys(m, letterRelease('a')); len(got) != 1 {
 		t.Fatalf("expected unpaired release after blur to fall back to a press, got %v", got)
+	}
+}
+
+// Same blur scenario on a terminal that reports event types: the key was
+// physically pressed before the blur, so its late release must not become a
+// second keystroke.
+func TestNormalizeKeyEventBlurThenReleaseDroppedWhenEventTypesReported(t *testing.T) {
+	m := newEventTypeTestModel()
+	deliveredKeys(m, letterPress('a'))
+	m.normalizeKeyEvent(tea.BlurMsg{})
+	if got := deliveredKeys(m, letterRelease('a')); len(got) != 0 {
+		t.Fatalf("expected release after blur dropped, got %v", got)
 	}
 }
 

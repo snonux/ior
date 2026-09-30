@@ -43,10 +43,23 @@ func (m *Model) normalizeKeyEvent(msg tea.Msg) (tea.Msg, bool) {
 }
 
 // normalizeKeyRelease decides what a release event means: the end of a press we
-// already delivered (drop it) or, for terminals that report only releases, the
-// only signal that the key was struck (deliver it as a press).
+// already delivered (drop it), a stray release on a terminal that does report
+// presses (drop it), or, on a terminal that reports only releases, the only
+// signal that the key was struck (deliver it as a press).
 func (m *Model) normalizeKeyRelease(pressMsg tea.KeyPressMsg) (tea.Msg, bool) {
 	if m.markKeyReleased(pressMsg) {
+		return nil, false
+	}
+	if m.terminalReportsEventTypes() {
+		// The terminal confirmed it reports press/release/repeat events, so a
+		// key struck for real always produced a press first and a release with
+		// no tracked press is not a keystroke. Typical causes: the Enter that
+		// launched the program (its press went to the shell), or a key held
+		// across a BlurMsg, which clears the held set. Replaying such a release
+		// as a press would fire a phantom keystroke (e.g. a spurious Enter on
+		// the first screen). Trade-off: if such a terminal ever lost a press
+		// but kept the release, that keystroke is lost instead of duplicated;
+		// that is far rarer than the phantom-key cases above.
 		return nil, false
 	}
 	if !releaseHasIdentity(pressMsg) {
@@ -54,12 +67,21 @@ func (m *Model) normalizeKeyRelease(pressMsg tea.KeyPressMsg) (tea.Msg, bool) {
 		// Some terminals emit these before a usable press event.
 		return nil, false
 	}
-	// Fallback: no press was seen for this key, so treat the release as the
-	// keystroke for terminals that only emit release events.
+	// Fallback for terminals that do not (or not yet) report event types: no
+	// press was seen for this key, so treat the release as the keystroke for
+	// terminals that only emit release events.
 	if shouldSuppressMatchingPressAfterRelease(pressMsg) {
 		m.armPressSuppression(keyEventID(pressMsg))
 	}
 	return pressMsg, true
+}
+
+// terminalReportsEventTypes is true once the terminal has answered the
+// keyboard-enhancements query with the kitty "report event types" flag set.
+// Until that answer arrives (or on terminals that never answer) it is false and
+// the release-as-press fallback stays active.
+func (m *Model) terminalReportsEventTypes() bool {
+	return m.kb.enhancementsKnown && m.kb.enhancements.SupportsEventTypes()
 }
 
 // physicalKey identifies the key independent of modifier and text state. A
