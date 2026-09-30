@@ -1,6 +1,16 @@
 // ioworkload is a standalone binary that performs deterministic I/O operations
 // for integration testing of ior. It prints its PID to stdout, sleeps to allow
 // ior to attach BPF tracepoints, then executes the requested I/O scenario.
+//
+// The Go runtime (1.25+) derives GOMAXPROCS from the cgroup CPU limit and
+// re-reads <cgroup>/cpu.max on a timer from a background goroutine, i.e. it
+// issues pread64/openat calls of its own that ior faithfully traces. Scenarios
+// that count syscalls exactly (thread-comm-*) would see them as extra rows
+// whenever they run longer than the timer period, so both the initial probe and
+// the updater are switched off. No scenario needs a cgroup-derived GOMAXPROCS.
+//
+//go:debug containermaxprocs=0
+//go:debug updatemaxprocs=0
 package main
 
 import (

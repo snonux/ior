@@ -27,18 +27,33 @@ const (
 	// themselves; it differs from the inherited "ioworkload".
 	threadCommRenamedName = "iorworker"
 	// threadCommRenameSettle is how long a renamed thread waits after its
-	// warm-up pread before the measured ones, so the /proc read the warm-up
-	// queued has landed. Generous: it only costs scenario wall time.
-	threadCommRenameSettle = 150 * time.Millisecond
+	// warm-up syscall before the measured ones, so the /proc read the warm-up
+	// queued has landed. Generous: the threads sleep concurrently, so it costs
+	// the scenario wall time once, not per thread.
+	threadCommRenameSettle = 500 * time.Millisecond
+	// threadCommLinger is how long every thread, and with it the process, stays
+	// alive after the last syscall of the scenario. ior resolves things it was
+	// not told by the kernel - a renamed thread's comm (/proc/<tid>/comm), a
+	// path whose open it did not trace (/proc/<pid>/fd/<fd>) - lazily, when the
+	// event loop reaches the row. The loop can trail the workload by a while on
+	// a busy machine, and a lookup for a task that has already exited finds
+	// nothing, so the scenario must not vanish the instant its work is done.
+	// The harness has no way to know when ior has caught up, so this is a
+	// generous bound (only lag beyond it can lose a lookup), not a handshake.
+	threadCommLinger = time.Second
 )
 
 // threadCommShortLived makes threadCommThreads OS threads that ior has
 // certainly seen being created each issue threadCommPreads pread64 calls on one
-// shared file and exit at once. Each such thread is a task ior has never traced
-// before: its comm can only be known from the task:task_newtask record (task
-// fr2), because an asynchronous /proc lookup either loses the race against a
-// thread that lives a few microseconds or lands after its first rows were
-// already emitted. The threads inherit this process's comm ("ioworkload").
+// shared file within microseconds of starting. Each such thread is a task ior
+// has never traced before: its comm can only be known in time from the
+// task:task_newtask record (task fr2), because an asynchronous /proc lookup
+// lands after the thread's first rows were already emitted (and, for a thread
+// that exits at once, finds no process at all). The threads inherit this
+// process's comm ("ioworkload"). They idle for threadCommLinger afterwards
+// rather than exit, so the outcome does not hinge on how far ior's event loop
+// trails the workload: the rows' comm must come from the record, and a row's
+// lazily resolved path must not decide whether the test passes.
 //
 // A goroutine that returns while locked to its OS thread makes the Go runtime
 // terminate that thread, so each goroutine is one short-lived kernel task. The
@@ -73,16 +88,19 @@ func threadCommShortLived() error {
 // each fresh thread renames itself (prctl(PR_SET_NAME), what pthread_setname_np
 // does - tokio, Java, Chrome and Bun worker pools) before doing its work, so its
 // name is no longer the one it inherited from this process and no tracepoint
-// says so. It issues one pread on a warm-up file, sleeps threadCommRenameSettle,
-// then threadCommPreads preads on the measured file.
+// says so. It issues one pwrite64 (the warm-up), sleeps threadCommRenameSettle,
+// then threadCommPreads pread64 calls (the measured ones).
 //
 // The task_newtask record can only name the thread "ioworkload"; the name the
 // thread has by the time it works is learned from the one /proc read that the
-// record's provisional seed allows (task fr2 review). The warm-up pread is what
-// makes that read land: it is the first use of the tid that queues it, and rows
-// on the warm-up file may still carry the inherited name (or, under -comm
-// <renamed>, be dropped), so the test ignores them. Every row on the measured
-// file must carry the renamed comm.
+// record's provisional seed allows (task fr2 review). The warm-up syscall is
+// what makes that read land: it is the first use of the tid that queues it, and
+// its row may still carry the inherited name (or, under -comm <renamed>, be
+// dropped). The two phases differ by syscall rather than by file so that tests
+// can tell them apart without a path: a path ior did not see opened is resolved
+// lazily from /proc/<pid>/fd, which only works while the process is alive.
+// Every thread stays alive for threadCommLinger after its work (see
+// runOnFreshThreads) so the /proc read finds it even when ior's event loop lags.
 func threadCommRenamed() error {
 	dir, cleanup, err := makeTempDir("thread-comm-renamed")
 	if err != nil {
@@ -90,26 +108,21 @@ func threadCommRenamed() error {
 	}
 	defer cleanup()
 
-	warm, err := openThreadCommFile(dir, "warmup")
+	fd, err := openThreadCommFile(dir, "data")
 	if err != nil {
 		return err
 	}
-	defer syscall.Close(warm)
-	data, err := openThreadCommFile(dir, "measured")
-	if err != nil {
-		return err
-	}
-	defer syscall.Close(data)
+	defer syscall.Close(fd)
 
 	return runOnFreshThreads(threadCommThreads, func() error {
 		if err := setThreadName(threadCommRenamedName); err != nil {
 			return err
 		}
-		if err := preadRepeatedly(warm, 1); err != nil {
-			return err
+		if _, err := syscall.Pwrite(fd, []byte{'x'}, 0); err != nil {
+			return fmt.Errorf("pwrite: %w", err)
 		}
 		time.Sleep(threadCommRenameSettle)
-		return preadRepeatedly(data, threadCommPreads)
+		return preadRepeatedly(fd, threadCommPreads)
 	})
 }
 
@@ -150,9 +163,15 @@ func preadRepeatedly(fd, n int) error {
 
 // runOnFreshThreads runs body on n distinct OS threads that were created after
 // ior attached and returns the first error. Each body is one goroutine locked to
-// its thread and never unlocked, so the thread is terminated when body returns
-// (see threadCommShortLived for why threads that pre-date the scenario are
-// skipped and retried).
+// its thread and never unlocked, so the thread is terminated when the goroutine
+// returns (see threadCommShortLived for why threads that pre-date the scenario
+// are skipped and retried).
+//
+// A thread that has run its body does not exit at once: it parks until every
+// thread has finished and threadCommLinger has passed, so ior can still resolve
+// the comm and fd names of tasks it has not yet looked up (see
+// threadCommLinger). The threads therefore all die together at the end, and the
+// process exits right after.
 func runOnFreshThreads(n int, body func() error) error {
 	preexisting, err := currentThreadIDs()
 	if err != nil {
@@ -160,11 +179,18 @@ func runOnFreshThreads(n int, body func() error) error {
 	}
 	var fresh atomic.Int32
 	var firstErr atomic.Value
+	release := make(chan struct{})
+	var exited sync.WaitGroup
+	defer func() {
+		time.Sleep(threadCommLinger)
+		close(release)
+		exited.Wait()
+	}()
 	for attempt := 0; int(fresh.Load()) < n; attempt++ {
 		if attempt >= threadCommMaxBatches {
 			return fmt.Errorf("only %d of %d goroutines ran on a fresh thread", fresh.Load(), n)
 		}
-		runFreshThreadBatch(n-int(fresh.Load()), preexisting, body, &fresh, &firstErr)
+		runFreshThreadBatch(n-int(fresh.Load()), preexisting, body, &fresh, &firstErr, release, &exited)
 		if err, _ := firstErr.Load().(error); err != nil {
 			return err
 		}
@@ -173,28 +199,34 @@ func runOnFreshThreads(n int, body func() error) error {
 }
 
 // runFreshThreadBatch starts count goroutines, each locked to its OS thread and
-// never unlocked, and waits for all of them. A goroutine whose thread predates
-// the scenario (see threadCommShortLived) returns without running body; every
-// other one runs it and counts itself in fresh when it succeeds.
+// never unlocked, and waits until each has either declined (its thread predates
+// the scenario - see threadCommShortLived - so it returns without running body)
+// or finished body. A goroutine that ran body counts itself in fresh when it
+// succeeds and then parks on release, registered in exited, so its thread stays
+// alive after the batch returns.
 func runFreshThreadBatch(count int, preexisting map[int]bool, body func() error,
-	fresh *atomic.Int32, firstErr *atomic.Value) {
-	var wg sync.WaitGroup
+	fresh *atomic.Int32, firstErr *atomic.Value, release <-chan struct{}, exited *sync.WaitGroup) {
+	var settled sync.WaitGroup
 	for i := 0; i < count; i++ {
-		wg.Add(1)
+		settled.Add(1)
+		exited.Add(1)
 		go func() {
-			defer wg.Done()
+			defer exited.Done()
 			runtime.LockOSThread()
 			if preexisting[unix.Gettid()] {
+				settled.Done()
 				return
 			}
 			if err := body(); err != nil {
 				firstErr.CompareAndSwap(nil, err)
-				return
+			} else {
+				fresh.Add(1)
 			}
-			fresh.Add(1)
+			settled.Done()
+			<-release
 		}()
 	}
-	wg.Wait()
+	settled.Wait()
 }
 
 // currentThreadIDs lists the thread ids of this process from /proc/self/task.
