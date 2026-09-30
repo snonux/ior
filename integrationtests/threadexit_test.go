@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 const (
@@ -25,9 +24,6 @@ const (
 	// no ring-buffer record; a lost exit record would also make the
 	// assertion vacuous.
 	zeroDropsLine = "ring buffer drops: 0 ("
-	// statsLineWait bounds the wait for ior's final statistics to be
-	// scanned from its output after the process exited.
-	statsLineWait = 2 * time.Second
 )
 
 var (
@@ -138,13 +134,11 @@ func runThreadExitScenario(t *testing.T, scopeArgs func(pid int) ([]string, erro
 
 // assertExitProbeEffective fails the test when its premise did not hold: the
 // sched_process_exit probe must have attached and no record may have been
-// dropped, or a stable name would prove nothing.
+// dropped, or a stable name would prove nothing. The harness reads ior's
+// output to EOF before it reaps ior, so the capture already holds the final
+// statistics block when the run returns; no polling is needed.
 func assertExitProbeEffective(t *testing.T, out *OutputCapture) {
 	t.Helper()
-	deadline := time.Now().Add(statsLineWait)
-	for !strings.Contains(out.String(), "ring buffer drops:") && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
 	logged := out.String()
 	if strings.Contains(logged, exitProbeSkipped) {
 		t.Fatalf("ior skipped the sched_process_exit probe; the scenario would pass vacuously")

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestWaitBothIorExitError(t *testing.T) {
 		t.Fatalf("start ior: %v", err)
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, 5, iorShutdownGrace)
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, nil, 5, iorShutdownGrace)
 	if iorErr == nil {
 		t.Fatal("expected ior error, got nil")
 	}
@@ -59,7 +60,7 @@ func TestWaitBothIorTimeout(t *testing.T) {
 
 	// Use duration=0 and a short grace period so timeout fires quickly.
 	// Workload ("true") exits instantly; ior ("sleep 60") exceeds the timeout.
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, 0, 500*time.Millisecond)
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, nil, 0, 500*time.Millisecond)
 	if workloadErr != nil {
 		t.Errorf("expected nil workload error, got: %v", workloadErr)
 	}
@@ -81,7 +82,7 @@ func TestWaitBothBothTimeout(t *testing.T) {
 		t.Fatalf("start ior: %v", err)
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, 0, 500*time.Millisecond)
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, nil, 0, 500*time.Millisecond)
 	if workloadErr == nil {
 		t.Fatal("expected workload timeout error, got nil")
 	}
@@ -106,7 +107,7 @@ func TestWaitBothBothSucceed(t *testing.T) {
 		t.Fatalf("start ior: %v", err)
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, 5, iorShutdownGrace)
+	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, nil, 5, iorShutdownGrace)
 	if workloadErr != nil {
 		t.Errorf("expected nil workload error, got: %v", workloadErr)
 	}
@@ -250,5 +251,95 @@ func TestStartIorPassesBPFObjectOverrideEnv(t *testing.T) {
 	}
 	if got, want := string(data), overridePath; got != want {
 		t.Fatalf("IOR_BPF_OBJECT = %q, want %q", got, want)
+	}
+}
+
+// runFakeIor starts the fake ior script through the real startIorArgsWithReady
+// and waitBoth (exactly as RunWithIorArgs does, minus the workload release) and
+// returns what the harness captured plus waitBoth's ior error. passDone=false
+// reproduces the pre-2q2 behaviour of reaping ior without waiting for the
+// scanners.
+func runFakeIor(t *testing.T, iorBin string, passDone bool, grace time.Duration) (string, error) {
+	t.Helper()
+	capture := &OutputCapture{}
+	h := TestHarness{IorBinary: iorBin, OutputDir: t.TempDir(), IorOutput: capture}
+	ior, err := h.startIorArgsWithReady(nil)
+	if err != nil {
+		t.Fatalf("start fake ior: %v", err)
+	}
+	workloadCmd := exec.Command("true")
+	if err := workloadCmd.Start(); err != nil {
+		t.Fatalf("start workload: %v", err)
+	}
+	done := ior.outputDone
+	if !passDone {
+		done = nil
+	}
+	_, iorErr := waitBoth(workloadCmd, ior.cmd, done, 0, grace)
+	return capture.String(), iorErr
+}
+
+// TestWaitBothKeepsIorFinalOutput pins task 2q2: a fake ior that writes its
+// statistics to both streams and exits at once must never lose a line. With
+// the old waitBoth, cmd.Wait closed the pipe read ends while the scanners
+// still had unread bytes and the tail was silently dropped (16-22 of 400
+// runs under load), which made the thread-exit tests flake on a missing
+// "ring buffer drops: 0 (" line. Many parallel runs widen the scheduling
+// window so a regression shows up reliably.
+func TestWaitBothKeepsIorFinalOutput(t *testing.T) {
+	iorBin := writeScript(t, t.TempDir(), "ior", `echo "Probing for tracepoints"
+echo "stdout filler"
+echo "Statistics: ring buffer drops: 0 (" >&2
+echo "final stdout line"`)
+	const runs, parallel = 200, 32
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, parallel)
+	var mu sync.Mutex
+	lost := 0
+	for range runs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			out, err := runFakeIor(t, iorBin, true, 10*time.Second)
+			ok := err == nil &&
+				strings.Contains(out, "ring buffer drops: 0 (") &&
+				strings.Contains(out, "final stdout line")
+			if !ok {
+				mu.Lock()
+				lost++
+				mu.Unlock()
+				t.Errorf("ior output incomplete (err=%v):\n%s", err, out)
+			}
+		}()
+	}
+	wg.Wait()
+	if lost > 0 {
+		t.Fatalf("%d of %d runs lost part of ior's final output", lost, runs)
+	}
+}
+
+// TestWaitBothNoHangWhenOutputPipeStaysOpen covers the escape hatch of the 2q2
+// fix: if a child of ior keeps the output pipe open after ior exited, the
+// scanners never see EOF. waitBoth must still return once the timeout fires
+// (with a timed-out error), not block forever holding back ior's Wait.
+func TestWaitBothNoHangWhenOutputPipeStaysOpen(t *testing.T) {
+	// The background sleep inherits stdout/stderr and dies by itself after
+	// 3s; ior proper exits immediately.
+	iorBin := writeScript(t, t.TempDir(), "ior", `echo "Probing for tracepoints"
+sleep 3 &
+exit 0`)
+	start := time.Now()
+	out, err := runFakeIor(t, iorBin, true, 500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("ior error = %v, want a timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
+		t.Fatalf("waitBoth took %v, want to return shortly after the 500ms grace", elapsed)
+	}
+	if !strings.Contains(out, "Probing for tracepoints") {
+		t.Errorf("lines written before the timeout were lost: %q", out)
 	}
 }

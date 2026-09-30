@@ -34,8 +34,11 @@ type TestHarness struct {
 	OutputDir      string // temp dir for .ior.zst output
 	WorkloadEnv    []string
 	// IorOutput, when set, additionally receives every stdout/stderr line
-	// of ior runs that wait for readiness (RunWithIorArgs), so a test can
-	// assert on warnings and the end-of-run statistics.
+	// of ior runs that wait for readiness (RunWithIorArgs). waitBoth reads
+	// both pipes to EOF before it reaps ior, so once a run that ended on its
+	// own returns, the capture is complete and a test can assert on warnings
+	// and the end-of-run statistics without polling. (A run that hit the
+	// timeout is killed and may have lost its tail.)
 	IorOutput *OutputCapture
 	// IorArgsForPID, when set, returns extra ior args that depend on the
 	// workload PID (known only once it started), e.g. "-tid <pid>". They are
@@ -88,17 +91,17 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 	if err != nil {
 		return TestResult{}, workloadPID, err
 	}
-	iorCmd, readyCh, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
+	ior, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
 		_ = workloadCmd.Wait()
 		return TestResult{}, workloadPID, err
 	}
-	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, iorCmd, readyCh); err != nil {
+	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready); err != nil {
 		return TestResult{}, workloadPID, err
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, duration, iorShutdownGrace)
+	workloadErr, iorErr := waitBoth(workloadCmd, ior.cmd, ior.outputDone, duration, iorShutdownGrace)
 
 	if iorErr != nil {
 		return TestResult{}, workloadPID, fmt.Errorf("ior: %w", iorErr)
@@ -140,17 +143,17 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 	if err != nil {
 		return "", workloadPID, err
 	}
-	iorCmd, readyCh, err := h.startIorParquetForRun(workloadPID, parquetPath, duration, extraIorArgs)
+	ior, err := h.startIorParquetForRun(workloadPID, parquetPath, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
 		_ = workloadCmd.Wait()
 		return "", workloadPID, err
 	}
-	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, iorCmd, readyCh); err != nil {
+	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready); err != nil {
 		return "", workloadPID, err
 	}
 
-	workloadErr, iorErr := waitBoth(workloadCmd, iorCmd, duration, iorShutdownGrace)
+	workloadErr, iorErr := waitBoth(workloadCmd, ior.cmd, ior.outputDone, duration, iorShutdownGrace)
 	if iorErr != nil {
 		return "", workloadPID, fmt.Errorf("ior: %w", iorErr)
 	}
@@ -286,7 +289,7 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs
 	return h.startIorArgs(args)
 }
 
-func (h *TestHarness) startIorForRun(pid int, scenario string, duration int, extraArgs []string) (*exec.Cmd, <-chan error, error) {
+func (h *TestHarness) startIorForRun(pid int, scenario string, duration int, extraArgs []string) (*iorProcess, error) {
 	args := []string{
 		"-pid", strconv.Itoa(pid),
 		"-flamegraph",
@@ -307,7 +310,7 @@ func (h *TestHarness) startIorParquet(pid int, parquetPath string, duration int,
 	return h.startIorArgs(args)
 }
 
-func (h *TestHarness) startIorParquetForRun(pid int, parquetPath string, duration int, extraArgs []string) (*exec.Cmd, <-chan error, error) {
+func (h *TestHarness) startIorParquetForRun(pid int, parquetPath string, duration int, extraArgs []string) (*iorProcess, error) {
 	args := []string{
 		"-pid", strconv.Itoa(pid),
 		"-parquet", parquetPath,
@@ -332,7 +335,20 @@ func (h *TestHarness) startIorArgs(args []string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func (h *TestHarness) startIorArgsWithReady(args []string) (*exec.Cmd, <-chan error, error) {
+// iorProcess is a started ior whose stdout/stderr are scanned line by line.
+type iorProcess struct {
+	cmd *exec.Cmd
+	// ready delivers nil once ior printed iorReadyLine, or an error if its
+	// output ended (or failed) before that.
+	ready <-chan error
+	// outputDone is closed once both output scanners hit EOF, i.e. every line
+	// ior wrote has been forwarded. exec.Cmd.Wait closes the read ends of
+	// StdoutPipe/StderrPipe, discarding unread bytes, so Wait must not run
+	// before this channel is closed (see waitBoth).
+	outputDone <-chan struct{}
+}
+
+func (h *TestHarness) startIorArgsWithReady(args []string) (*iorProcess, error) {
 	cmd := exec.Command(h.IorBinary, args...)
 	cmd.Dir = h.OutputDir
 	if h.BpfObject != "" {
@@ -341,15 +357,15 @@ func (h *TestHarness) startIorArgsWithReady(args []string) (*exec.Cmd, <-chan er
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, fmt.Errorf("ior stdout pipe: %w", err)
+		return nil, fmt.Errorf("ior stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, nil, fmt.Errorf("ior stderr pipe: %w", err)
+		return nil, fmt.Errorf("ior stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start ior: %w", err)
+		return nil, fmt.Errorf("start ior: %w", err)
 	}
 
 	readyCh := make(chan error, 1)
@@ -370,12 +386,14 @@ func (h *TestHarness) startIorArgsWithReady(args []string) (*exec.Cmd, <-chan er
 	wg.Add(2)
 	go scanIorOutput(stdout, outW, signalReady, &wg)
 	go scanIorOutput(stderr, errW, signalReady, &wg)
+	outputDone := make(chan struct{})
 	go func() {
 		wg.Wait()
 		signalReady(fmt.Errorf("ior exited before readiness line"))
+		close(outputDone)
 	}()
 
-	return cmd, readyCh, nil
+	return &iorProcess{cmd: cmd, ready: readyCh, outputDone: outputDone}, nil
 }
 
 func scanIorOutput(r io.Reader, w io.Writer, signalReady func(error), wg *sync.WaitGroup) {
@@ -390,6 +408,9 @@ func scanIorOutput(r io.Reader, w io.Writer, signalReady func(error), wg *sync.W
 	}
 	if err := scanner.Err(); err != nil {
 		signalReady(fmt.Errorf("read ior output: %w", err))
+		// Keep draining after a scan error (e.g. an over-long line): stopping
+		// would leave the pipe full and block ior on its next write.
+		_, _ = io.Copy(io.Discard, r)
 	}
 }
 
@@ -432,14 +453,38 @@ func killAndWait(cmd *exec.Cmd) {
 
 // waitBoth waits for both the workload and ior commands concurrently.
 // If ior does not finish within duration + grace period, it is killed.
-func waitBoth(workloadCmd, iorCmd *exec.Cmd, duration int, grace time.Duration) (workloadErr, iorErr error) {
+//
+// iorOutputDone, when non-nil, is the outputDone channel of an ior started
+// with startIorArgsWithReady. ior's Wait is held back until it closes: Wait
+// closes the pipe read ends once the process exited, so calling it while the
+// scanners still read discards ior's last buffered lines (typically the final
+// statistics block). The channel closes on EOF, i.e. when ior and every
+// process inheriting its stdout/stderr have closed them. If that never
+// happens (ior hung, or left a child holding the pipe), the timeout below
+// kills ior, releases the held-back Wait and reports "ior timed out"; the
+// lines lost that way are irrelevant for a failed run. Pass nil when ior's
+// output is not scanned (plain exec.Cmd with Stdout/Stderr set).
+func waitBoth(workloadCmd, iorCmd *exec.Cmd, iorOutputDone <-chan struct{}, duration int, grace time.Duration) (workloadErr, iorErr error) {
 	workloadDone := make(chan error, 1)
 	iorDone := make(chan error, 1)
+	// abandon is closed on return so a Wait held back for the scanners is
+	// released even when the output pipe never reaches EOF; it also reaps
+	// ior after the timeout kill.
+	abandon := make(chan struct{})
+	defer close(abandon)
 
 	// Pass channels as parameters so subsequent nil assignments in this
 	// function do not affect the goroutines' send targets.
 	go func(ch chan error) { ch <- workloadCmd.Wait() }(workloadDone)
-	go func(ch chan error) { ch <- iorCmd.Wait() }(iorDone)
+	go func(ch chan error) {
+		if iorOutputDone != nil {
+			select {
+			case <-iorOutputDone:
+			case <-abandon:
+			}
+		}
+		ch <- iorCmd.Wait()
+	}(iorDone)
 
 	timeout := time.NewTimer(time.Duration(duration)*time.Second + grace)
 	defer stopAndDrainTimer(timeout)
