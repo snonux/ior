@@ -11,14 +11,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	// threadExitAttempts bounds the retries when the throwaway goroutine
-	// lands on the main thread, which the Go runtime never terminates.
-	threadExitAttempts = 16
-	// threadExitWait bounds how long the scenario waits for the kernel to
-	// reap the exited thread.
-	threadExitWait = 5 * time.Second
-)
+// threadExitWait bounds how long the scenario waits for the kernel to reap
+// the exited thread.
+const threadExitWait = 5 * time.Second
 
 // threadExitKeepsFd drives the sched_process_exit group_dead gate end to end:
 // it creates a pipe, writes to it, lets one *other* thread of this process
@@ -26,7 +21,8 @@ const (
 // ior must name both writes identically (its tracked pipe name), which only
 // holds if the thread exit - a record with group_dead clear - left the
 // process's fd-table entries alone. Evicting them would push the second
-// write through the /proc/<pid>/fd fallback and rename it to pipe:[inode].
+// write through the /proc/<pid>/fd fallback, which renames it (pipe:[inode])
+// or, as observed, leaves it without any name.
 func threadExitKeepsFd() error {
 	var pipefd [2]int
 	if err := syscall.Pipe2(pipefd[:], syscall.O_CLOEXEC); err != nil {
@@ -49,27 +45,26 @@ func threadExitKeepsFd() error {
 
 // exitOneThread terminates one non-main OS thread of this process and waits
 // until the kernel has reaped it. A goroutine that returns while locked to
-// its OS thread makes the Go runtime exit that thread - except the main
-// thread (tid == pid), which it parks instead; that attempt is retried.
+// its OS thread makes the Go runtime exit that thread. main.go's init() pins
+// the main goroutine to the main thread (tid == pid), so the throwaway
+// goroutine always runs on another thread; the tid == pid check only guards
+// that invariant, since returning locked on the main thread would wedge it
+// rather than exit it.
 func exitOneThread() error {
-	for range threadExitAttempts {
-		tid := make(chan int)
-		go func() {
-			runtime.LockOSThread()
-			self := unix.Gettid()
-			if self == os.Getpid() {
-				// Returning locked would wedge the main thread; release it.
-				runtime.UnlockOSThread()
-			}
-			tid <- self
-		}()
-		exited := <-tid
-		if exited == os.Getpid() {
-			continue
+	tid := make(chan int)
+	go func() {
+		runtime.LockOSThread()
+		self := unix.Gettid()
+		if self == os.Getpid() {
+			runtime.UnlockOSThread()
 		}
-		return waitForThreadGone(exited)
+		tid <- self
+	}()
+	exited := <-tid
+	if exited == os.Getpid() {
+		return errors.New("throwaway goroutine ran on the main thread; main.go init() must pin it")
 	}
-	return errors.New("could not get a goroutine onto a non-main thread")
+	return waitForThreadGone(exited)
 }
 
 // waitForThreadGone polls /proc/self/task until tid disappears. The kernel
