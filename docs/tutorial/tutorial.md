@@ -123,6 +123,10 @@ column.
 Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and the
 inter-syscall **gap** (idle time on the same thread between syscalls). The big-write
 workload running in the background spreads the latency distribution noticeably.
+The gap is measured between consecutive *traced* calls on a thread: with syscall sampling
+(`-syscall-sampling-*` rate N), or for syscalls only counted in kernel aggregates (such as
+futex), it spans the untraced calls in between. The Overview tab's `Traced gap` mean uses
+the same samples.
 
 ![Latency + gap histograms](./assets/06-latency-gaps-tab.gif)
 

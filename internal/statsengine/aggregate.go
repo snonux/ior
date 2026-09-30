@@ -6,11 +6,10 @@ import (
 	"ior/internal/types"
 )
 
-// aggregateDrainSpan is the longest interval one kernel aggregate batch is
-// spread over in the latency series. It matches the event loop's drain period
-// (defaultAggregateDrainEvery in package internal, which this package cannot
-// import).
-const aggregateDrainSpan = time.Second
+// defaultAggregateDrainPeriod is the aggregate drain period assumed until the
+// event loop reports its own via SetAggregateDrainPeriod. It equals
+// defaultAggregateDrainEvery in package internal.
+const defaultAggregateDrainPeriod = time.Second
 
 // SyscallAggregate is the kernel-side aggregate for one sys_enter trace ID.
 type SyscallAggregate struct {
@@ -41,9 +40,9 @@ func (row SyscallAggregate) timedCount() uint64 {
 //
 // Aggregate rows carry no inter-syscall gap (the kernel sums only counts and
 // latencies), so they add to totalSyscalls but not to totalGap or the gap
-// histogram and series. They still belong in the gap mean's denominator:
-// a traced pair's gap spans the untraced calls of its thread (see
-// perCallGapMean).
+// histogram and series, nor to the gap mean's sample count: the gap mean is
+// one between traced calls, whose gaps span the untraced ones (see
+// tracedGapMean).
 func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 	if e == nil || len(rows) == 0 {
 		return
@@ -79,13 +78,28 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 	e.lastAggregateAt = now
 }
 
+// SetAggregateDrainPeriod tells the engine how often the event loop drains the
+// kernel aggregates, which bounds how far back a batch is spread in the
+// latency series. A non-positive period restores the default.
+func (e *Engine) SetAggregateDrainPeriod(period time.Duration) {
+	if e == nil {
+		return
+	}
+	if period <= 0 {
+		period = defaultAggregateDrainPeriod
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.aggregateSpan = period
+}
+
 // aggregateSpanStart returns when the batch ingested at now began to accrue:
 // the previous batch's ingestion, but no earlier than one drain period
 // before now and no earlier than the engine's start. The period cap matters
 // because the drainer forwards no empty batches, so after an idle stretch
 // the previous batch can be much older than what the kernel map covers.
 func (e *Engine) aggregateSpanStart(now time.Time) time.Time {
-	from := now.Add(-aggregateDrainSpan)
+	from := now.Add(-e.aggregateSpan)
 	if e.lastAggregateAt.After(from) {
 		from = e.lastAggregateAt
 	}

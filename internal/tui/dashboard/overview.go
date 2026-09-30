@@ -93,8 +93,12 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 	if snap.TotalSyscalls > 0 {
 		errPercent = float64(snap.TotalErrors) / float64(snap.TotalSyscalls) * 100
 	}
+	// The gap mean is between consecutive traced calls on a thread; under
+	// sampling or for aggregate-only syscalls it spans untraced calls, so
+	// the label says "traced" rather than suggesting a per-call gap. It is kept
+	// short so it fits the box at 80 columns without wrapping.
 	content := fmt.Sprintf(
-		"Errors: %d\nError rate: %.2f%%\nError/s: %.2f\nLatency mean: %.0fns\nGap mean: %.0fns",
+		"Errors: %d\nError rate: %.2f%%\nError/s: %.2f\nLatency mean: %.0fns\nTraced gap: %.0fns",
 		snap.TotalErrors,
 		errPercent,
 		snap.ErrorRatePerSec,

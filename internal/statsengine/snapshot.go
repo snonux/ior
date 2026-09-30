@@ -42,12 +42,12 @@ type Snapshot struct {
 	WriteBytesPerSec        float64
 
 	LatencyMeanNs float64
-	// GapMeanNs approximates the mean inter-syscall gap per call: the gaps
-	// of the traced pairs divided by all counted calls, including the ones
-	// only known from kernel aggregate rows. A traced gap spans the untraced
-	// calls of its thread, so under sampling it is about the per-call gap
-	// plus the untraced calls' latency share (see perCallGapMean). The gap
-	// histogram and series, by contrast, hold the traced pairs' raw gaps.
+	// GapMeanNs is the mean gap between consecutive traced calls on a
+	// thread, over the same samples as GapHistogram and GapSeriesNs (a
+	// thread's first traced call has no gap and is left out). Under sampling,
+	// or for syscalls counted only in kernel aggregate rows, a gap spans the
+	// untraced calls in between, so it is not a per-call gap (see
+	// tracedGapMean).
 	GapMeanNs float64
 
 	LatencyTrend    Trend

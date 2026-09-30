@@ -99,18 +99,20 @@ func TestPairCalculateDurationsNegativeDelta(t *testing.T) {
 	}
 }
 
-// Recycling a pair must clear FirstOnTID so a pooled pair does not carry it
-// into its next use.
+// Recycle must clear FirstOnTID before the pair goes back to the pool, so a
+// pooled pair cannot carry it into its next use. The pair is inspected right
+// after Recycle (test only: nothing else takes it from the pool meanwhile).
 func TestPairRecycleClearsFirstOnTID(t *testing.T) {
 	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
 	pair.ExitEv = &types.RetEvent{Time: 1100, Tid: 2}
 	pair.CalculateDurations(0)
-	pair.Recycle()
+	if !pair.FirstOnTID {
+		t.Fatal("precondition: FirstOnTID = false, want true")
+	}
 
-	next := NewPair(&types.OpenEvent{Time: 2000, Tid: 3})
-	defer next.Recycle()
-	if next.FirstOnTID {
-		t.Fatal("pooled pair kept FirstOnTID")
+	pair.Recycle()
+	if pair.FirstOnTID {
+		t.Fatal("Recycle kept FirstOnTID")
 	}
 }
 

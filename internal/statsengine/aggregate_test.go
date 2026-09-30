@@ -68,12 +68,12 @@ func firstPair(duration uint64) *event.Pair {
 
 // Under 1-in-N sampling a traced pair's gap runs from the previous traced
 // pair of its thread, so it spans the N-1 untraced calls (counted only in
-// aggregate rows) in between. With per-call gap G=100, latency L=20 and
-// N=10, each traced gap is N*G + (N-1)*L = 1180. Dividing the traced gaps by
-// every counted call recovers the per-call figure G + L*(N-1)/N = 118,
-// where a per-pair mean would report 1180. The TID's first pair has no gap
-// and is left out of both sides.
-func TestGapMeanApproximatesPerCallGapUnderSampling(t *testing.T) {
+// aggregate rows) in between. GapMeanNs is documented as the mean gap
+// between traced calls, so with per-call gap G=100, latency L=20 and N=10 it
+// reports each traced gap N*G + (N-1)*L = 1180, the same samples as the gap
+// histogram; the untraced calls do not enter its denominator. The TID's
+// first pair has no gap and is left out.
+func TestGapMeanIsPerTracedPairUnderSampling(t *testing.T) {
 	const (
 		n        = 10
 		gap      = 100
@@ -97,13 +97,34 @@ func TestGapMeanApproximatesPerCallGapUnderSampling(t *testing.T) {
 	if snap.TotalSyscalls != 1+sampled*n {
 		t.Fatalf("TotalSyscalls = %d, want %d", snap.TotalSyscalls, 1+sampled*n)
 	}
-	want := gap + latency*float64(n-1)/n
-	if math.Abs(snap.GapMeanNs-want) > 1e-9 {
-		t.Fatalf("GapMeanNs = %v, want per-call %v", snap.GapMeanNs, want)
+	if snap.GapMeanNs != spanning {
+		t.Fatalf("GapMeanNs = %v, want traced-pair mean %d", snap.GapMeanNs, spanning)
 	}
-	// The histogram keeps the traced pairs' raw gaps, without the first pair.
 	if snap.GapHistogram.Total != sampled {
 		t.Fatalf("GapHistogram.Total = %d, want %d", snap.GapHistogram.Total, sampled)
+	}
+}
+
+// Aggregate-only syscalls (futex and clock_gettime by default) of threads
+// that make no traced calls at all, such as parked futex waiters, must not
+// dilute the gap mean: 100 reads 1ms apart next to a million aggregated
+// futex calls still have a 1ms gap mean, not ~0.1us.
+func TestGapMeanNotDilutedByAggregateOnlyThreads(t *testing.T) {
+	const gap = 1_000_000
+	engine := NewEngine(DefaultTopN)
+	for range 100 {
+		engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 0, types.UNCLASSIFIED, "reader", 1, "", 0, 0, 10, gap))
+	}
+	engine.IngestSyscallAggregates([]SyscallAggregate{
+		{TraceID: types.SYS_ENTER_FUTEX, Count: 1_000_000, TotalLatencyNs: 1_000_000},
+	})
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	if snap.TotalSyscalls != 1_000_100 || snap.GapMeanNs != gap {
+		t.Fatalf("total/gap mean = %d/%v, want 1000100/%d", snap.TotalSyscalls, snap.GapMeanNs, gap)
 	}
 }
 
@@ -150,11 +171,12 @@ func TestGapMeanWithoutGapSamplesIsZero(t *testing.T) {
 	}
 }
 
-// Reset must forget the gapless pairs, or the next session's gap mean
-// subtracts them from its own call count.
-func TestResetClearsGaplessPairs(t *testing.T) {
+// Reset must forget the gap samples, or the next session's gap mean divides
+// by pairs of the previous one.
+func TestResetClearsGapSamples(t *testing.T) {
 	engine := NewEngine(DefaultTopN)
-	engine.Ingest(firstPair(10))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 0, types.UNCLASSIFIED, "p", 1, "", 0, 0, 10, 100))
+	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 0, types.UNCLASSIFIED, "p", 1, "", 0, 0, 10, 100))
 	engine.Reset()
 	engine.Ingest(newEnginePair(types.SYS_ENTER_READ, 0, types.UNCLASSIFIED, "p", 1, "", 0, 0, 10, 30))
 
@@ -250,4 +272,56 @@ func TestAggregateSpanCappedAtDrainPeriod(t *testing.T) {
 			t.Fatalf("latency series tail = %v, want %v", tail, want)
 		}
 	}
+}
+
+// The drain period set by the event loop bounds the spread: with a 5s
+// period, a drain after 10s of idleness fills the last 10 half-second slots
+// and leaves the ones before empty. A non-positive period restores the 1s
+// default, and Reset keeps the configured period.
+func TestSetAggregateDrainPeriodBoundsSpread(t *testing.T) {
+	tests := []struct {
+		name   string
+		period time.Duration
+		reset  bool
+		filled int
+	}{
+		{name: "configured 5s", period: 5 * time.Second, filled: 10},
+		{name: "kept across reset", period: 5 * time.Second, reset: true, filled: 10},
+		{name: "zero restores default", period: 0, filled: 2},
+		{name: "negative restores default", period: -time.Second, filled: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+			engine := newEngineWithClock(DefaultTopN, clock.Now)
+			engine.SetAggregateDrainPeriod(3 * time.Second) // overwritten below
+			engine.SetAggregateDrainPeriod(tt.period)
+			if tt.reset {
+				engine.Reset()
+			}
+			clock.Advance(10 * time.Second)
+			engine.IngestSyscallAggregates([]SyscallAggregate{{TraceID: types.SYS_ENTER_FUTEX, Count: 2, TotalLatencyNs: 20}})
+			clock.Advance(-time.Millisecond)
+
+			snap, err := engine.Snapshot()
+			if err != nil {
+				t.Fatalf("snapshot error: %v", err)
+			}
+			series := snap.LatencySeriesNs()
+			tail := series[len(series)-tt.filled-1:]
+			if tail[0] != 0 {
+				t.Fatalf("series tail = %v, want slot before the spread empty", tail)
+			}
+			for _, v := range tail[1:] {
+				if math.Abs(v-10) > 1e-9 {
+					t.Fatalf("series tail = %v, want %d slots of 10", tail, tt.filled)
+				}
+			}
+		})
+	}
+}
+
+func TestSetAggregateDrainPeriodNilEngine(t *testing.T) {
+	var engine *Engine
+	engine.SetAggregateDrainPeriod(time.Second) // must not panic
 }

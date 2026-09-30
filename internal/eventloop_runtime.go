@@ -56,6 +56,11 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 	// for aggregate rows instead of gating them off.
 	scope := kernelProcessScope{pid: e.cfg.pidFilter, tid: e.cfg.tidFilter}
 	drainer := newAggregateDrainer(e.aggregateSrc, e.cfg.aggregateIngestTraceIDs, scope, e.Filter)
+	// Tell the sink the real period (it may differ from the default) before
+	// the first batch arrives.
+	if setter, ok := e.aggregateSink.(aggregateDrainPeriodSetter); ok {
+		setter.SetAggregateDrainPeriod(e.cfg.aggregateDrainEvery)
+	}
 	stop := drainer.Start(ctx, e.cfg.aggregateDrainEvery, e.handleAggregateDrainResult)
 	// Publish the drainer so SetFilter flushes it before a live swap. stop
 	// unpublishes it only AFTER the final drain: a SetFilter landing while
