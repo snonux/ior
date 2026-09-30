@@ -54,6 +54,16 @@ func main() {
 		os.Exit(2)
 	}
 
+	// A pre-start hook runs before the PID is announced, i.e. before the
+	// harness starts ior, for scenarios whose ior arguments depend on state
+	// the workload must create first (e.g. a worker thread's TID for -tid).
+	if prestart, ok := scenarioPrestarts[*scenario]; ok {
+		if err := prestart(); err != nil {
+			fmt.Fprintf(os.Stderr, "scenario %s prestart failed: %v\n", *scenario, err)
+			os.Exit(1)
+		}
+	}
+
 	fmt.Println(os.Getpid())
 	if err := waitForStartup(); err != nil {
 		fmt.Fprintf(os.Stderr, "startup wait failed: %v\n", err)

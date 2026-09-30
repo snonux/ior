@@ -1,6 +1,9 @@
 package integrationtests
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -10,6 +13,9 @@ import (
 
 const (
 	threadExitScenario = "thread-exit-keeps-fd"
+	tidWorkerScenario  = "thread-exit-tid-worker"
+	// workerTidFileEnv mirrors ioworkload's env var for the worker TID file.
+	workerTidFileEnv = "IOR_WORKLOAD_TID_FILE"
 	// exitProbeSkipped is the warning ior logs when sched_process_exit
 	// cannot be attached; without the probe no exit record exists and the
 	// name-stability assertion would pass vacuously.
@@ -23,7 +29,10 @@ const (
 	statsLineWait = 2 * time.Second
 )
 
-var threadExitTraceArgs = []string{"-trace-syscalls", "pipe2,write,close"}
+var (
+	threadExitTraceArgs = []string{"-trace-syscalls", "pipe2,write,close"}
+	groupDeadExitsLine  = regexp.MustCompile(`group-dead exits: (\d+)`)
+)
 
 // TestThreadExitKeepsFdName pins the sched_process_exit group_dead gate end to
 // end: the kernel must report a sibling thread's exit with group_dead clear,
@@ -37,15 +46,66 @@ func TestThreadExitKeepsFdName(t *testing.T) {
 }
 
 // TestThreadExitKeepsFdNameUnderTidFilter runs the same scenario under -tid
-// alone (the harness's -pid is reset to -1), exercising the BPF program with
-// TID_FILTER set and TID_FILTER_TGID resolved from /proc/<tid>/status. The
-// workload's main goroutine is pinned to the main thread (ioworkload init()),
-// whose tid equals the pid, so -tid <pid> traces exactly the thread that does
-// the pipe I/O.
+// alone (the harness's -pid is reset to -1). The workload's main goroutine is
+// pinned to the main thread (ioworkload init()), whose tid equals the pid, so
+// -tid <pid> traces the thread that does the pipe I/O. The exiting sibling
+// thread is not traced, so this covers BPF verifier acceptance and fd-name
+// stability under a tid filter; the scoped group-dead bypass is exercised by
+// TestTidFilterForwardsGroupDeadExitOfUntracedThread.
 func TestThreadExitKeepsFdNameUnderTidFilter(t *testing.T) {
 	runThreadExitScenario(t, func(pid int) []string {
 		return []string{"-pid", "-1", "-tid", strconv.Itoa(pid)}
 	})
+}
+
+// TestTidFilterForwardsGroupDeadExitOfUntracedThread pins the scoped -tid
+// bypass end to end. ior traces only a worker thread (-tid <worker>, no
+// -pid). The worker does pipe I/O and exits; then the process exits from its
+// other threads, so the record ending the thread group comes from an
+// untraced thread. filter() alone would drop it; the TID_FILTER_TGID bypass
+// must forward it, and ior's "group-dead exits" statistic must count it.
+// Without the bypass that counter stays 0, because the worker's own exit is
+// not group-dead.
+func TestTidFilterForwardsGroupDeadExitOfUntracedThread(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	h.IorOutput = &OutputCapture{}
+	tidFile := filepath.Join(h.OutputDir, "worker.tid")
+	h.WorkloadEnv = []string{workerTidFileEnv + "=" + tidFile}
+	h.IorArgsForPID = func(int) []string {
+		raw, err := os.ReadFile(tidFile)
+		if err != nil {
+			t.Errorf("read worker tid: %v", err)
+			return nil
+		}
+		return []string{"-pid", "-1", "-tid", strings.TrimSpace(string(raw))}
+	}
+	result, pid, err := h.RunWithIorArgs(tidWorkerScenario, defaultDuration, threadExitTraceArgs)
+	if err != nil {
+		t.Fatalf("run scenario %s: %v", tidWorkerScenario, err)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+	AssertEventsPresent(t, result, []ExpectedEvent{
+		{PathContains: "pipe:", Tracepoint: "enter_write", MinCount: 1},
+	})
+	assertExitProbeEffective(t, h.IorOutput)
+	if got := groupDeadExits(t, h.IorOutput.String()); got < 1 {
+		t.Fatalf("group-dead exits = %d, want >= 1: the untraced thread's group-dead record did not bypass -tid", got)
+	}
+}
+
+// groupDeadExits parses the count from ior's "group-dead exits: N" line.
+func groupDeadExits(t *testing.T, logged string) int {
+	t.Helper()
+	m := groupDeadExitsLine.FindStringSubmatch(logged)
+	if m == nil {
+		t.Fatalf("ior output lacks a %q statistics line", "group-dead exits")
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("parse group-dead exits %q: %v", m[1], err)
+	}
+	return n
 }
 
 // runThreadExitScenario runs the thread-exit scenario with the extra ior args

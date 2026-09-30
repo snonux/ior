@@ -96,6 +96,10 @@ import (
 func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	defer ev.Recycle()
 	if ev.IsGroupDead() {
+		// Counted for the end-of-run statistics: it makes the whole-process
+		// exits that reached userspace observable, including those of untraced
+		// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
+		e.numGroupDeadExits++
 		e.fdState().deletePid(ev.Pid)
 	}
 	e.evictCachedComm(ev.Tid)
