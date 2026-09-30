@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ior/internal/probemanager"
+	"ior/internal/tui/eventstream"
 	"ior/internal/tui/probes"
 
 	tea "charm.land/bubbletea/v2"
@@ -395,4 +396,63 @@ func TestAttachingOverlayIgnoresAFocusedDashboardInput(t *testing.T) {
 	}
 	next, cmd := m.Update(text("q"))
 	assertQuits(t, next, cmd)
+}
+
+// openFDTraceOverlay drives a real model to the Stream tab's FD-trace overlay:
+// 7 selects the tab, space pauses, T opens the overlay on the newest row (the
+// only one carrying an fd). The stream source holds events of one fd.
+func openFDTraceOverlay(t *testing.T) *Model {
+	t.Helper()
+	m := newTypingTestModel()
+	rb := eventstream.NewRingBuffer()
+	for i := 1; i <= 3; i++ {
+		rb.Push(eventstream.StreamEvent{Seq: uint64(i), Syscall: "write", Comm: "proc", PID: 42, TID: 42, FD: 7})
+	}
+	m.dashboard.SetStreamSource(rb)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	m = press(t, m, text("7"))
+	m = press(t, m, text(" "))
+	m = press(t, m, text("T"))
+	requireViewContains(t, m, "FD Trace")
+	return m
+}
+
+// Task 3r2: q inside the FD-trace overlay closes it, like every other overlay,
+// and only a second q quits. Before the fix the stream tab did not report the
+// overlay to the top-level model, which therefore began the shutdown at the
+// first q and left the overlay's own close-on-q unreachable.
+func TestQClosesTheFDTraceOverlayInsteadOfQuitting(t *testing.T) {
+	m := openFDTraceOverlay(t)
+	m = press(t, m, text("q"))
+	if m.quitting {
+		t.Fatalf("q inside the FD-trace overlay quit ior")
+	}
+	if strings.Contains(m.View().Content, "FD Trace") {
+		t.Fatalf("expected q to close the overlay, view:\n%s", m.View().Content)
+	}
+	m = press(t, m, text("q"))
+	if !m.quitting {
+		t.Fatalf("expected q on the stream tab to quit once the overlay is closed")
+	}
+}
+
+// Esc and ctrl+c (which the quit binding also matches) close the overlay too,
+// and the dashboard-level shortcuts stay inert behind it.
+func TestFDTraceOverlayBlocksGlobalShortcuts(t *testing.T) {
+	for _, k := range []tea.KeyPressMsg{{Code: tea.KeyEsc}, {Code: 'c', Mod: tea.ModCtrl}} {
+		m := openFDTraceOverlay(t)
+		m = press(t, m, k)
+		if m.quitting || strings.Contains(m.View().Content, "FD Trace") {
+			t.Fatalf("%v: quitting=%v, expected only the overlay to close", k, m.quitting)
+		}
+	}
+	for _, s := range []string{"1", "f", "R", "o", "r", "v"} {
+		m := openFDTraceOverlay(t)
+		m = press(t, m, text(s))
+		if m.quitting || m.filterModal.Visible() || m.recordModal.Visible() || m.probeModal.Visible() {
+			t.Fatalf("key %q acted on the dashboard behind the FD-trace overlay", s)
+		}
+		requireViewContains(t, m, "FD Trace")
+	}
 }

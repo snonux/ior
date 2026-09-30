@@ -1259,3 +1259,40 @@ func TestHandlePasteWithoutModalIsRefused(t *testing.T) {
 			m.Paused(), m.SearchModalVisible(), m.ExportModalVisible())
 	}
 }
+
+// Task 3r2: the FD-trace overlay owns the keyboard like the two stream modals.
+// A key it has no meaning for used to report "not handled", so the dashboard
+// then ran its own tab/view/reset shortcuts on the screen hidden behind it.
+func TestFDTraceOverlayConsumesEveryKey(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 5)
+	for i := 0; i < 5; i++ {
+		rb.Push(StreamEvent{Seq: uint64(100 + i), Syscall: "read", Comm: "proc", PID: 100, FD: 7})
+	}
+	m := NewModel(rb)
+	m.Refresh()
+	if !pressLocal(t, &m, "space") || !m.paused {
+		t.Fatalf("expected space to pause the stream")
+	}
+	m.selectedIdx = len(m.filtered) - 1
+	if !pressLocal(t, &m, "T") || !m.FDTraceVisible() {
+		t.Fatalf("expected T to open the FD-trace overlay on an fd row")
+	}
+	for _, k := range []string{"tab", "shift+tab", "1", "7", "v", "b", "r", "R", "f", "/", "x", "X", "E", "F", "q!"} {
+		if !pressLocal(t, &m, k) {
+			t.Fatalf("overlay did not consume %q: it would reach the dashboard behind it", k)
+		}
+		if !m.FDTraceVisible() {
+			t.Fatalf("key %q closed the overlay", k)
+		}
+	}
+	if m.SearchModalVisible() || m.ExportModalVisible() {
+		t.Fatalf("a key opened a modal behind the overlay")
+	}
+	for _, k := range []string{"q", "esc"} {
+		m.fdTraceView.visible = true
+		if !pressLocal(t, &m, k) || m.FDTraceVisible() {
+			t.Fatalf("expected %q to close the overlay", k)
+		}
+	}
+}

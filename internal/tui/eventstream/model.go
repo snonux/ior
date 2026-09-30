@@ -204,6 +204,13 @@ func (m *Model) SearchModalVisible() bool {
 	return m.searchModal.Visible()
 }
 
+// FDTraceVisible reports whether the FD-trace overlay is currently open. Like
+// the two modals it owns the keyboard while open (see handleFDTraceKey), so the
+// parent must not act on global shortcuts, q in particular, meanwhile.
+func (m *Model) FDTraceVisible() bool {
+	return m.fdTraceView.visible
+}
+
 // Paused reports whether stream refresh is currently paused.
 func (m *Model) Paused() bool {
 	return m.paused
@@ -284,6 +291,11 @@ func (m *Model) handleExportModalKey(keyStr string) bool {
 }
 
 // handleFDTraceKey routes a key press while the FD-trace overlay is visible.
+// Like the search and export modals the overlay owns the keyboard: every key
+// is consumed (the default case), so a key it has no meaning for cannot fall
+// through to the dashboard's tab, view or reset shortcuts and act on whatever
+// is hidden behind the overlay. q and esc both close it; q reaches this switch
+// because the parent re-routes it as esc while FDTraceVisible (BlocksGlobalShortcut).
 func (m *Model) handleFDTraceKey(keyStr string) bool {
 	switch keyStr {
 	case "enter", " ", "space":
@@ -316,7 +328,7 @@ func (m *Model) handleFDTraceKey(keyStr string) bool {
 		m.fdTraceView.offset = 0
 		return true
 	default:
-		return false
+		return true
 	}
 }
 

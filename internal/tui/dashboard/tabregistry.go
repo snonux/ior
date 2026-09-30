@@ -277,8 +277,12 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },
 			Render:          tabRenderStream,
 			HandleScroll:    tabScrollStream,
+			// The two modals and the FD-trace overlay each own the keyboard
+			// while open: without the overlay here q quit ior instead of
+			// closing it (the top-level model never re-routed it as esc).
 			BlocksGlobalShortcut: func(m *Model, _ tea.KeyPressMsg) bool {
-				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible() ||
+					m.streamModel.FDTraceVisible()
 			},
 			// Both stream modals are a single text input, focused while open.
 			TextInputFocused: func(m *Model) bool {

@@ -741,6 +741,16 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   does not strip them); after commit the label and header render sanitised.
   A new text input must accept `tea.PasteMsg` as well as keys.
   Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
+- **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).
+  `eventstream.Model.FDTraceVisible` joins `ExportModalVisible`/`SearchModalVisible` in the
+  Stream tab's `BlocksGlobalShortcut`, so `q` (and `ctrl+c`) is re-routed as Esc and closes
+  the overlay instead of starting the shutdown, and the `tui.go` dashboard shortcuts
+  (`f`, `R`, `o`, ...) stay inert behind it. `handleFDTraceKey` consumes every key for the same
+  reason: an unhandled key used to fall through to the dashboard's tab/view/reset shortcuts.
+  The overlay has no text input, so a paste is dropped. Any new stream overlay must add its
+  predicate there. Pinned by `TestQClosesTheFDTraceOverlayInsteadOfQuitting`,
+  `TestFDTraceOverlayBlocksGlobalShortcuts` (`internal/tui/textinput_keys_test.go`) and
+  `TestFDTraceOverlayConsumesEveryKey` (`internal/tui/eventstream/model_test.go`).
 - **The PID/TID picker selection follows the process, not the row number**
   (`pidpicker.Model.applyFilter` -> `relocateSelection`): a rescan or a typed
   filter reorders rows, so the selected pid (tid in TID mode) is looked up again
