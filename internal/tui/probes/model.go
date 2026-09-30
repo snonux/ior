@@ -14,8 +14,8 @@ import (
 )
 
 // Manager defines the probe operations used by the modal. AttachFamily and
-// DetachFamily back the Families view; the modal runs them off the Update
-// goroutine (familyBatchCmd) because a whole family takes seconds.
+// DetachFamily back the Families view; they run off the Update goroutine
+// (StartFamilyBatch) because a whole family takes seconds.
 type Manager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
@@ -139,17 +139,11 @@ func (m Model) SetSize(width, height int) Model {
 }
 
 // Update dispatches Bubble Tea messages to the appropriate handler.
-// Family batch messages are handled even while the modal is hidden, so a
-// batch keeps being followed to its end after the user closed the modal.
 // ProbeToggledMsg refreshes the probe list; key presses are forwarded to
-// the search or navigation handlers.
+// the search or navigation handlers. Family batch messages are not handled
+// here: the TUI owns family batches and renders them into the modal with
+// ShowBatchProgress and FinishBatch.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case FamilyBatchProgressMsg:
-		return m.handleBatchProgress(msg)
-	case FamilyToggledMsg:
-		return m.handleFamilyToggled(msg)
-	}
 	if !m.visible {
 		return m, nil
 	}

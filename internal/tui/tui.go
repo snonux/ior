@@ -461,6 +461,10 @@ type Model struct {
 	exportEnabled bool
 	isDark        bool
 	focused       bool
+	// familyRun is the family attach/detach batch in flight (see
+	// startFamilyBatch); it lives here, not in the probes modal, because the
+	// modal is rebuilt on every open.
+	familyRun familyRunState
 	// familyHintShown reports that the dashboard's filter notice currently
 	// holds a "family not traced" hint (see refreshFamilyHint), so it may be
 	// cleared again without erasing a filter-refusal notice.
@@ -780,12 +784,10 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case probes.ProbeToggledMsg:
 		next, cmd := m.handleProbeToggledMsg(msg)
 		return next, cmd, true
+	case probes.FamilyBatchRequestMsg:
+		return m, m.startFamilyBatch(msg), true
 	case probes.FamilyBatchProgressMsg:
-		// Always forwarded, even with the modal closed: the returned command
-		// waits for the batch's next update (see probes.FamilyBatchProgressMsg).
-		var cmd tea.Cmd
-		m.probeModal, cmd = m.probeModal.Update(msg)
-		return m, cmd, true
+		return m, m.handleFamilyBatchProgress(msg), true
 	case probes.FamilyToggledMsg:
 		next, cmd := m.handleFamilyToggledMsg(msg)
 		return next, cmd, true
@@ -1087,7 +1089,7 @@ func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea
 	}
 	if key.Matches(msg, m.keys.Probes) {
 		width, height := common.EffectiveViewport(m.width, m.height)
-		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetSize(width, height).Open()
+		m.probeModal = m.newProbeModal().SetSize(width, height).Open()
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Filter) {
@@ -1321,7 +1323,7 @@ func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.clearError()
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetSize(common.EffectiveViewport(m.width, m.height))
+	m.probeModal = m.newProbeModal().SetSize(common.EffectiveViewport(m.width, m.height))
 	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
 	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
 	var sizeCmd tea.Cmd
