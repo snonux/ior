@@ -70,3 +70,21 @@ func TestStatusMessages(t *testing.T) {
 		t.Fatalf("expected failure reason in status")
 	}
 }
+
+// The modal states that the export is the live ring only while the stream is
+// paused; a live stream keeps the original wording (task 2r2).
+func TestViewPausedNoteOnlyWhilePaused(t *testing.T) {
+	live := NewModel().Open().View(80, 24)
+	if strings.Contains(live, "paused") || !strings.Contains(live, "CSV stream rows") {
+		t.Fatalf("live modal wording changed:\n%s", live)
+	}
+	paused := strings.Join(strings.Fields(strings.ReplaceAll(NewModel().OpenFor(true).View(80, 24), "│", " ")), " ")
+	for _, want := range []string{"CSV stream rows", "Live ring, not the paused view - use x for the paused rows"} {
+		if !strings.Contains(paused, want) {
+			t.Fatalf("paused modal lacks %q:\n%s", want, paused)
+		}
+	}
+	if strings.Contains(NewModel().OpenFor(true).Open().View(80, 24), "paused") {
+		t.Fatalf("Open must reset to the live wording")
+	}
+}

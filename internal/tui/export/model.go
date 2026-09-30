@@ -52,7 +52,16 @@ type Model struct {
 	selected  int
 	exporting bool
 	status    string
+	// livePaused is set when the modal was opened while the stream tab is
+	// paused. The export always snapshots the live ring, so the table the user
+	// is looking at (the frozen rows) differs from what gets written; the
+	// modal says so and points at the stream tab's x/X, which write the frozen
+	// rows (task 2r2).
+	livePaused bool
 }
+
+// PausedNote is shown in the modal while the stream is paused.
+const PausedNote = "Live ring, not the paused view - use x for the paused rows"
 
 // NewModel creates a closed export modal.
 func NewModel() Model {
@@ -62,8 +71,17 @@ func NewModel() Model {
 // Visible reports whether the export modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
-// Open shows the export modal with the CSV option preselected.
+// Open shows the export modal with the CSV option preselected, for a live
+// (not paused) stream.
 func (m Model) Open() Model {
+	return m.OpenFor(false)
+}
+
+// OpenFor is Open for a stream tab that is paused (streamPaused true) or live.
+// While paused the modal adds PausedNote: the export writes the live ring's
+// current rows, which are not the frozen rows on screen.
+func (m Model) OpenFor(streamPaused bool) Model {
+	m.livePaused = streamPaused
 	m.visible = true
 	m.selected = 0
 	m.exporting = false
@@ -166,6 +184,9 @@ func (m Model) View(width, height int) string {
 			prefix = "> "
 		}
 		lines = append(lines, prefix+label)
+	}
+	if m.livePaused {
+		lines = append(lines, "", PausedNote)
 	}
 	if m.status != "" {
 		// The status echoes the export path and error text; sanitise it.

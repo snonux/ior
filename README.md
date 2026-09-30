@@ -89,7 +89,7 @@ how to attach it.
 
 | Mode | Command or key | Output |
 |---|---|---|
-| TUI CSV snapshot | `e` | Current filtered stream snapshot in `ior-stream-<timestamp>.csv` |
+| TUI CSV snapshot | `e` | Current filtered stream snapshot in `ior-stream-<timestamp>.csv`. `e` always snapshots the live ring, even while the stream is paused (its modal says so); on the paused Stream tab `x`/`X` write the frozen paused rows |
 | TUI Parquet recording | `R` to start and stop | Rows captured while recording |
 | Native aggregate | `sudo ./ior -flamegraph -name run` | `<host>-run-<timestamp>.ior.zst` in the working directory at shutdown; `-name` is a base name (no `/`) |
 | Headless Parquet | `sudo ./ior -parquet trace.parquet` | Per-event rows written during the run |

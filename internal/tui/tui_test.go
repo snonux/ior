@@ -1094,6 +1094,47 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	}
 }
 
+// The e export snapshots the live ring even while the stream tab is paused, so
+// a user looking at the frozen table would get different rows than shown. The
+// modal must say so (and name x as the way to write the paused rows) only while
+// paused; a live stream keeps the plain wording (task 2r2).
+func TestExportModalWarnsWhenStreamPaused(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	m.router.showDashboard()
+	m.attaching = false
+	rb := eventstream.NewRingBuffer()
+	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "write", Comm: "proc", PID: 1, FD: 3})
+	m.dashboard.SetStreamSource(rb)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: "7"})
+	m = next.(*Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: "e"})
+	m = next.(*Model)
+	if !m.exporter.Visible() {
+		t.Fatalf("expected the e modal to open")
+	}
+	if live := m.exporter.View(120, 30); strings.Contains(live, "paused") {
+		t.Fatalf("live stream: modal must not mention the paused view:\n%s", live)
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(*Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(*Model)
+	if !m.dashboard.StreamPaused() {
+		t.Fatalf("expected space to pause the stream tab")
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: "e"})
+	m = next.(*Model)
+	paused := strings.Join(strings.Fields(strings.ReplaceAll(m.exporter.View(120, 30), "│", " ")), " ")
+	if !strings.Contains(paused, "Live ring, not the paused view - use x for the paused rows") {
+		t.Fatalf("paused stream: modal lacks the live-ring warning:\n%s", paused)
+	}
+}
+
 func TestRecordKeyOpensRecordingModalOnDashboard(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.router.showDashboard()

@@ -1244,7 +1244,7 @@ func (m *Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 // must verify canHandleDashboardShortcut before calling this method.
 func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.exportEnabled && key.Matches(msg, m.keys.Export) {
-		m.exporter = m.exporter.Open()
+		m.exporter = m.exporter.OpenFor(m.dashboard.StreamPaused())
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Record) {

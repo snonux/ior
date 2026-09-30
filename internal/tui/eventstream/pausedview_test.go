@@ -75,16 +75,78 @@ func TestFDTraceOnRowWithoutDescriptorSetsStatus(t *testing.T) {
 	}
 }
 
-// T while live stays unhandled: the trace is a paused-view operation.
+// T while live stays unhandled: the trace is a paused-view operation. The
+// model is forced live with a VALID selection on an fd-7 row, so the only
+// thing standing between T and an open overlay is the handleStreamKey paused
+// guard (a resumed model has selectedIdx -1, which would make openFDTraceView
+// decline by itself and leave the guard untested).
 func TestFDTraceWhileLiveIsNotHandled(t *testing.T) {
 	m, _ := pausedFD7Model(t)
-	pressLocal(t, m, "space") // resume
+	m.paused = false
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) || m.filtered[m.selectedIdx].FD != 7 {
+		t.Fatalf("setup: want a valid selection on an fd-7 row, got idx %d of %d", m.selectedIdx, len(m.filtered))
+	}
 	if pressLocal(t, m, "T") || m.FDTraceVisible() {
 		t.Fatalf("T must not open the overlay while the stream is live")
 	}
 }
 
-// The two export paths differ on purpose (task 364, README, AGENTS.md): the
+// pausedMixedModel pauses a view of one fd-7 row (seq 1) followed by one
+// fd-less row (seq 2) and selects the fd-less one.
+func pausedMixedModel(t *testing.T) *Model {
+	t.Helper()
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 100, FD: 7, FileName: "/tmp/fd7"})
+	rb.Push(StreamEvent{Seq: 2, Syscall: "sched_yield", Comm: "proc", PID: 100, FD: UnknownFD})
+	model := NewModel(rb)
+	m := &model
+	m.SetViewport(160, 40)
+	m.Refresh()
+	if !pressLocal(t, m, "space") || len(m.filtered) != 2 {
+		t.Fatalf("setup: want a paused view of 2 rows, got %d", len(m.filtered))
+	}
+	m.selectedIdx = 1
+	return m
+}
+
+// The no-descriptor note explains T on one row; it must not outlive moving the
+// selection, resuming or pausing again (it used to stay until something else
+// overwrote the footer).
+func TestFDTraceStatusClearsOnNavigationAndPauseToggle(t *testing.T) {
+	for _, key := range []string{"k", "up", "g", "space"} {
+		m := pausedMixedModel(t)
+		pressLocal(t, m, "T")
+		if !strings.Contains(m.statusMessage, "no file descriptor") {
+			t.Fatalf("setup: status = %q", m.statusMessage)
+		}
+		pressLocal(t, m, key)
+		if m.statusMessage != "" {
+			t.Fatalf("after %q the stale FD-trace note is still shown: %q", key, m.statusMessage)
+		}
+	}
+}
+
+// Only the FD-trace note is transient: other footer messages keep their
+// existing lifetime, and T on a traceable row after a note opens the overlay
+// without leaving the note behind.
+func TestFDTraceStatusClearDoesNotTouchOtherMessages(t *testing.T) {
+	m := pausedMixedModel(t)
+	m.SetStatusMessage("Exported: /tmp/x.csv")
+	pressLocal(t, m, "k")
+	if m.statusMessage != "Exported: /tmp/x.csv" {
+		t.Fatalf("navigation cleared an unrelated message: %q", m.statusMessage)
+	}
+
+	m = pausedMixedModel(t)
+	pressLocal(t, m, "T")
+	pressLocal(t, m, "k")
+	if !pressLocal(t, m, "T") || !m.FDTraceVisible() || m.statusMessage != "" {
+		t.Fatalf("T on the fd-7 row: visible=%v status=%q", m.FDTraceVisible(), m.statusMessage)
+	}
+}
+
+// The two export paths differ on purpose (task 364; README.md and AGENTS.md
+// document it, the 'e' modal warns about it while paused): the
 // dashboard-wide 'e' (ExportInputs) writes a fresh snapshot of the live ring
 // even while paused, while the stream tab's x writes the frozen paused rows.
 // Task 2r2 confirmed this as intended behaviour and left it alone; this test

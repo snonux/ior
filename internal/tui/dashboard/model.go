@@ -1024,6 +1024,14 @@ func (m *Model) ExportStreamCSVInputs() (eventstream.Source, eventstream.Filter,
 	return m.streamModel.ExportInputs()
 }
 
+// StreamPaused reports whether the stream tab is frozen on a paused view. The
+// dashboard-wide e export ignores the pause (it snapshots the live ring), so
+// the export modal needs this to warn that the rows written are not the frozen
+// rows on screen.
+func (m *Model) StreamPaused() bool {
+	return m.streamModel.Paused()
+}
+
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
 func (m *Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {

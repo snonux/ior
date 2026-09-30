@@ -374,6 +374,11 @@ func emit(msg tea.Msg) tea.Cmd {
 // handleStreamKey handles keys for the main live/paused stream table. The
 // returned command carries any request for the parent (see HandleKey).
 func (m *Model) handleStreamKey(keyStr string) (bool, tea.Cmd) {
+	if keyStr != "T" {
+		// The FD-trace footer note belongs to the row it was raised on; any
+		// other key (navigation, resume, filter, ...) moves on from it.
+		m.clearFDTraceStatus()
+	}
 	switch keyStr {
 	case "x", "X", "E":
 		return m.handleStreamExportKey(keyStr)
@@ -419,6 +424,20 @@ func (m *Model) requestGlobalFilterUndo(allowed bool) (bool, tea.Cmd) {
 		return false, nil
 	}
 	return true, emit(messages.GlobalFilterUndoRequestedMsg{})
+}
+
+// fdTraceStatusPrefix starts every footer note raised by openFDTraceView, so
+// clearFDTraceStatus can drop exactly those and leave other transient
+// messages (Exported:, search results) alone.
+const fdTraceStatusPrefix = "FD trace: "
+
+// clearFDTraceStatus drops a stale FD-trace footer note. The note explains why
+// T did nothing on one specific row; left in place it kept describing that row
+// after the selection moved to a traceable one or after resume (task 2r2).
+func (m *Model) clearFDTraceStatus() {
+	if strings.HasPrefix(m.statusMessage, fdTraceStatusPrefix) {
+		m.statusMessage = ""
+	}
 }
 
 // handleSpaceKey toggles the paused/live state of the stream.
@@ -782,9 +801,10 @@ func (m *Model) handlePausedTableNavigation(keyStr string) bool {
 // keeps filling and evicting while paused, so a row still visible in the
 // table could already have lost its fd's events from the live ring and the
 // trace would come up empty (task 2r2). Every filtered row is a member of
-// allEvents, so the selected row always matches itself; a row without a
-// descriptor is the one case that cannot be traced, and it says so in the
-// footer instead of silently ignoring the key.
+// allEvents, so the selected row always matches itself and the trace is never
+// empty; a row without a descriptor is the one case that cannot be traced, and
+// it says so in the footer (cleared again by the next key, see
+// clearFDTraceStatus) instead of silently ignoring the key.
 func (m *Model) openFDTraceView() bool {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false
@@ -792,7 +812,7 @@ func (m *Model) openFDTraceView() bool {
 	m.statusMessage = ""
 	selected := m.filtered[m.selectedIdx]
 	if selected.FD < 0 {
-		m.statusMessage = "FD trace: selected row has no file descriptor"
+		m.statusMessage = fdTraceStatusPrefix + "selected row has no file descriptor"
 		return true
 	}
 
@@ -802,10 +822,6 @@ func (m *Model) openFDTraceView() bool {
 		if ev.PID == selected.PID && ev.FD == selected.FD {
 			matches = append(matches, *ev)
 		}
-	}
-	if len(matches) == 0 {
-		m.statusMessage = fmt.Sprintf("FD trace: no events for pid %d fd %d", selected.PID, selected.FD)
-		return true
 	}
 
 	m.fdTraceView.visible = true
