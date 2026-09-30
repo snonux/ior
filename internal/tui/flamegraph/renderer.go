@@ -594,65 +594,79 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-// The function is split into helpers (computeRenderParams, buildToolbar,
-// buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
+// The work is split into helpers so each piece stays short: renderPlaceholder
+// handles the degenerate-viewport/no-data messages, resolveRenderFilterSet
+// decides which frames the active search filter keeps visible, and
+// renderSelectedView lays out toolbar, rows and status line for the chosen
+// selection.
 func RenderTerminalView(ctx RenderContext) string {
 	theme := common.Current()
-	frames := ctx.Frames
-	width := ctx.Width
-	height := ctx.Height
-	selectedIdx := ctx.SelectedIdx
-	subtreeSet := ctx.SubtreeSet
-	matchSet := ctx.MatchSet
-	filterSet := ctx.FilterSet
-	globalTotal := ctx.GlobalTotal
-	metricLabel := ctx.MetricLabel
-	heightMetricActive := ctx.HeightMetricActive
-	isDark := ctx.IsDark
-	searchQuery := ctx.SearchQuery
+	if msg, ok := renderPlaceholder(ctx); ok {
+		return theme.PanelStyle.Render(msg)
+	}
+	if strings.TrimSpace(ctx.MetricLabel) == "" {
+		ctx.MetricLabel = "events"
+	}
+	filterSet, filterIsActive := resolveRenderFilterSet(ctx)
+	if filterIsActive && len(filterSet) == 0 {
+		return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", ctx.SearchQuery))
+	}
+	ctx.FilterSet = filterSet
+	return renderSelectedView(ctx, filterIsActive)
+}
 
-	if width < minFlameWidth {
-		return theme.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
+// renderPlaceholder returns the message shown instead of a flamegraph when the
+// viewport is too small or there are no frames yet. ok is false when a real
+// flamegraph can be rendered.
+func renderPlaceholder(ctx RenderContext) (msg string, ok bool) {
+	switch {
+	case ctx.Width < minFlameWidth:
+		return "Flame: terminal too narrow (need >= 60 columns)", true
+	case ctx.Height < 3:
+		return "Flame: viewport too short", true
+	case len(ctx.Frames) == 0:
+		return "Flame: waiting for data...", true
 	}
-	if height < 3 {
-		return theme.PanelStyle.Render("Flame: viewport too short")
+	return "", false
+}
+
+// resolveRenderFilterSet returns the set of frames kept visible by the search
+// filter and whether a filter is active at all. Without a search query the set
+// is nil so every frame is drawn. Callers without a SearchController-maintained
+// set get the same visibility rule as the live search path (matches,
+// descendants and ancestors).
+func resolveRenderFilterSet(ctx RenderContext) (map[int]bool, bool) {
+	if strings.TrimSpace(ctx.SearchQuery) == "" {
+		return nil, false
 	}
-	if len(frames) == 0 {
-		return theme.PanelStyle.Render("Flame: waiting for data...")
+	if ctx.FilterSet != nil {
+		return ctx.FilterSet, true
 	}
-	if strings.TrimSpace(metricLabel) == "" {
-		metricLabel = "events"
-	}
-	filterIsActive := strings.TrimSpace(searchQuery) != ""
-	if filterIsActive {
-		if filterSet == nil {
-			// Callers without a SearchController-maintained set get the same
-			// visibility rule as the live search path (matches, descendants
-			// and ancestors).
-			filterSet = filterVisibleSetUsingAncestry(frames, matchSet, buildFrameAncestry(frames), nil)
-		}
-		if len(filterSet) == 0 {
-			return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
-		}
-	} else {
-		filterSet = nil
-	}
-	selectedIdx = normalizeSelectedIndex(frames, selectedIdx, filterSet)
+	return filterVisibleSetUsingAncestry(ctx.Frames, ctx.MatchSet, buildFrameAncestry(ctx.Frames), nil), true
+}
+
+// renderSelectedView renders toolbar, flame rows and status line once the
+// viewport is known to be drawable and ctx.FilterSet/ctx.MetricLabel have been
+// resolved. The selection is normalised into the visible (filtered) frames.
+func renderSelectedView(ctx RenderContext, filterIsActive bool) string {
+	frames := ctx.Frames
+	selectedIdx := normalizeSelectedIndex(frames, ctx.SelectedIdx, ctx.FilterSet)
 	selected := frames[selectedIdx]
+	subtreeSet := ctx.SubtreeSet
 	if subtreeSet == nil {
 		subtreeSet = computeSubtreeSet(frames, selectedIdx)
 	}
-	params := computeRenderParams(frames, height, heightMetricActive)
-	toolbar := buildToolbar(frames, width, params)
+	params := computeRenderParams(frames, ctx.Height, ctx.HeightMetricActive)
+	toolbar := buildToolbar(frames, ctx.Width, params)
 	var status string
 	if filterIsActive {
-		status = buildFilteredStatus(frames, selected, selectedIdx, matchSet, metricLabel, searchQuery, globalTotal, params.visibleFrames)
+		status = buildFilteredStatus(frames, selected, selectedIdx, ctx.MatchSet, ctx.MetricLabel, ctx.SearchQuery, ctx.GlobalTotal, params.visibleFrames)
 	} else {
-		status = buildNormalStatus(selected, metricLabel, globalTotal)
+		status = buildNormalStatus(selected, ctx.MetricLabel, ctx.GlobalTotal)
 	}
 	rows := buildRenderRows(renderRowsContext{
 		frames:             frames,
-		width:              width,
+		width:              ctx.Width,
 		rowOffset:          params.rowOffset,
 		maxRow:             params.maxRow,
 		barHeight:          params.barHeight,
@@ -660,12 +674,12 @@ func RenderTerminalView(ctx RenderContext) string {
 		availableRows:      params.availableRows,
 		selectedPath:       selected.Path,
 		subtreeSet:         subtreeSet,
-		matchSet:           matchSet,
+		matchSet:           ctx.MatchSet,
 		selectedIdx:        selectedIdx,
-		heightMetricActive: heightMetricActive,
-		isDark:             isDark,
+		heightMetricActive: ctx.HeightMetricActive,
+		isDark:             ctx.IsDark,
 	})
-	return renderViewRows(toolbar, status, rows, width)
+	return renderViewRows(toolbar, status, rows, ctx.Width)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -687,21 +701,34 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
+// buildRenderRows draws the visible flame rows top (deepest row, maxRow) to
+// bottom (rowOffset). Each row repeats barHeight lines; with the height metric
+// active the deepest row is drawn as leafBarHeight bands instead. The result
+// is fitted to availableRows by fitRowsToViewport.
 func buildRenderRows(ctx renderRowsContext) []string {
-	frames := ctx.frames
-	width := ctx.width
-	rowOffset := ctx.rowOffset
-	maxRow := ctx.maxRow
-	barHeight := ctx.barHeight
-	leafBarHeight := ctx.leafBarHeight
-	availableRows := ctx.availableRows
-	selectedPath := ctx.selectedPath
-	subtreeSet := ctx.subtreeSet
-	matchSet := ctx.matchSet
-	selectedIdx := ctx.selectedIdx
-	heightMetricActive := ctx.heightMetricActive
-	isDark := ctx.isDark
+	rowsByDepth := groupFramesByRow(ctx.frames, ctx.rowOffset, ctx.maxRow)
+	if ctx.barHeight < 1 {
+		ctx.barHeight = 1
+	}
+	rows := make([]string, 0, (ctx.maxRow-ctx.rowOffset+1)*ctx.barHeight)
+	for row := ctx.maxRow; row >= ctx.rowOffset; row-- {
+		framesAtRow := rowsByDepth[row]
+		sortFramesByCol(framesAtRow)
+		if ctx.heightMetricActive && row == ctx.maxRow {
+			rows = appendLeafRowBands(rows, framesAtRow, ctx)
+			continue
+		}
+		for repeat := 0; repeat < ctx.barHeight; repeat++ {
+			showLabels := repeat == ctx.barHeight/2
+			rows = append(rows, renderRow(framesAtRow, ctx.width, ctx.selectedPath, ctx.subtreeSet, ctx.matchSet, ctx.selectedIdx, ctx.isDark, showLabels))
+		}
+	}
+	return fitRowsToViewport(rows, ctx.availableRows, ctx.width)
+}
 
+// groupFramesByRow buckets the frames whose Row lies in [rowOffset, maxRow],
+// remembering each frame's original index for selection/match lookups.
+func groupFramesByRow(frames []tuiFrame, rowOffset, maxRow int) map[int][]indexedFrame {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -709,42 +736,37 @@ func buildRenderRows(ctx renderRowsContext) []string {
 		}
 		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], indexedFrame{idx: idx, frame: frame})
 	}
+	return rowsByDepth
+}
 
-	if barHeight < 1 {
-		barHeight = 1
+// appendLeafRowBands appends the leafBarHeight bands of the height-metric leaf
+// row, highest band first; labels are only drawn on the bottom band (h == 0).
+func appendLeafRowBands(rows []string, framesAtRow []indexedFrame, ctx renderRowsContext) []string {
+	frameHeights := leafFrameHeights(framesAtRow, ctx.leafBarHeight)
+	for h := ctx.leafBarHeight - 1; h >= 0; h-- {
+		showLabels := h == 0
+		rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, ctx.width, ctx.selectedPath, ctx.subtreeSet, ctx.matchSet, ctx.selectedIdx, ctx.isDark, showLabels))
 	}
+	return rows
+}
 
-	rows := make([]string, 0, (maxRow-rowOffset+1)*barHeight)
-	for row := maxRow; row >= rowOffset; row-- {
-		framesAtRow := rowsByDepth[row]
-		sortFramesByCol(framesAtRow)
-		if heightMetricActive && row == maxRow {
-			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
-			for h := leafBarHeight - 1; h >= 0; h-- {
-				showLabels := h == 0
-				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
-			}
-			continue
-		}
-		for repeat := 0; repeat < barHeight; repeat++ {
-			showLabels := repeat == barHeight/2
-			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
-		}
+// fitRowsToViewport trims rows to availableRows, or top-pads them with blank
+// lines so the flamegraph stays anchored to the bottom of the viewport. A
+// non-positive availableRows leaves rows unchanged.
+func fitRowsToViewport(rows []string, availableRows, width int) []string {
+	if availableRows <= 0 {
+		return rows
 	}
-
-	if availableRows > 0 {
-		if len(rows) > availableRows {
-			rows = rows[:availableRows]
+	if len(rows) > availableRows {
+		return rows[:availableRows]
+	}
+	if len(rows) < availableRows {
+		blank := strings.Repeat(" ", width)
+		pad := make([]string, 0, availableRows)
+		for i := 0; i < availableRows-len(rows); i++ {
+			pad = append(pad, blank)
 		}
-		if len(rows) < availableRows {
-			blank := strings.Repeat(" ", width)
-			pad := make([]string, 0, availableRows)
-			for i := 0; i < availableRows-len(rows); i++ {
-				pad = append(pad, blank)
-			}
-			pad = append(pad, rows...)
-			rows = pad
-		}
+		return append(pad, rows...)
 	}
 	return rows
 }
