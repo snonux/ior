@@ -142,6 +142,15 @@ written before recordings carried names (no format header): its numbers cannot b
 reliably, so re-record it instead of trusting a silently wrong syscall name.
 
 Traced comm names and paths come from other users and may contain terminal escape
+The recording is bounded in memory: it keeps at most 2^19 (524288) distinct
+(path, comm, pid, tid, flags) records, which an ordinary trace never reaches but a
+fork-heavy system-wide run can. Past that, events of new pid/tid combinations are folded
+into a pid 0/tid 0 record of the same path and comm, and, if the path/comm population
+churns as well, into `[other]` records. Counts, durations and bytes stay exact; only the
+detail of the folded events is lost, which the default collapsed fields (`comm,tracepoint,path`)
+barely notice for pid/tid churn. ior warns on stderr when the limit is first hit and
+prints the number of folded events after `Wrote <file>`. The limit is currently fixed.
+
 sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
 (ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible or bidi format characters
 are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.

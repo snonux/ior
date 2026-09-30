@@ -7,8 +7,9 @@ import (
 
 // Recorder aggregates event pairs and writes them to the legacy .ior.zst format.
 // Integration tests still use this artifact to assert trace output end-to-end.
-// It holds at most DefaultMaxRecordKeys distinct records in memory; events of
-// further new keys are folded into "[other]" records with exact totals and
+// It holds at most DefaultMaxRecordKeys distinct records in memory (plus a
+// stage-1 headroom and the "[other]" records); events of further new keys are
+// folded into pid-less and then "[other]" records with exact totals and
 // reported on stderr (recordcap.go, task uq2).
 type Recorder struct {
 	name string
@@ -34,12 +35,10 @@ func (r *Recorder) AddPair(pair *event.Pair) {
 	if r == nil || pair == nil {
 		return
 	}
-	before := r.data.foldedEvents
+	before := r.data.folds
 	r.data.addEventPair(pair)
-	if before == 0 && r.data.foldedEvents > 0 {
-		// First fold: warn now, not at Write, which may be 900s away.
-		r.announceFold(statusOut)
-	}
+	// First fold of a stage: warn now, not at Write, which may be 900s away.
+	r.announceNewFolds(statusOut, before)
 }
 
 // SetSampling records the run's sampling outcome, which Write stores in the
