@@ -26,14 +26,14 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `comm`, `syscall`, `family` | String | Process name, syscall name and family |
 | `pid`, `tid` | UInt32 | Process and thread IDs |
 | `fd` | Int32 | File descriptor, when applicable |
-| `ret` | Int64 | Return value; negative values are errno results |
+| `ret` | Int64 | Return value as seen at `sys_exit`; negative values are errno results, except the kernel-internal restart codes -512, -513, -514 and -516, which are interruptions rather than errors (see the `is_error` rule below) |
 | `bytes` | UInt64 | Classified payload bytes |
 | `address_space_bytes` | UInt64 | Memory-region extent, when applicable |
 | `requested_sleep_ns` | Int64 | Requested relative sleep duration; `-1` unknown (null/invalid timespec, `TIMER_ABSTIME`), `9223372036854775807` for requests too large for Int64 (e.g. `sleep infinity`) |
 | `nfds` | Int32 | Poll/select count or epoll `maxevents` |
 | `timeout_ns` | Int64 | Polling timeout; `-1` infinite, `-2` unknown |
 | `file`, `old_file` | String | Resolved path and source path for rename/link calls |
-| `is_error` | Bool | Whether the return is a negative errno. The kernel-internal restart codes (-512, -513, -514, -516) that a signal-interrupted call leaves at sys_exit are not errors: `ret` keeps the raw value but `is_error` is false |
+| `is_error` | Bool | Whether the return is a negative errno the program can observe (-1 to -4095, except -512, -513, -514 and -516). See [Restart codes and `is_error`](#restart-codes-and-is_error) |
 | `filter_epoch` | UInt64 | Filter generation at capture time |
 | `epoll_op` | String | `epoll_ctl` ADD, MOD or DEL |
 | `epoll_target_fd` | Int32 | Target descriptor of `epoll_ctl` |
@@ -41,6 +41,32 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 
 Fields that do not apply to a row use zero or an empty string. In particular, `file` is the
 new path for rename and link calls, and `old_file` is the source path.
+
+### Restart codes and `is_error`
+
+When a signal interrupts a blocked syscall, the kernel leaves an internal restart code in the
+return register: -512 (`ERESTARTSYS`), -513 (`ERESTARTNOINTR`), -514 (`ERESTARTNOHAND`) or
+-516 (`ERESTART_RESTARTBLOCK`). The `sys_exit` tracepoint, which ior reads, fires before the
+signal-delivery path decides what user space gets, so these raw values are what `ret` holds.
+ior keeps them visible in `ret` but sets `is_error` to `false` and does not count them as
+errors (error counters, the errors-only filter, `is_error`). The filter `ret == -512` still
+matches, so the rows can be found on purpose.
+
+What the program experiences depends on the signal:
+
+- No handler ran (`SIGSTOP`/`SIGCONT`, a ptrace attach, cgroup freezer) or the handler was
+  installed with `SA_RESTART`: the kernel re-executes the call. The row with the restart code
+  is followed by a second row for the restarted call (for `-516` that is `restart_syscall`, which
+  carries no requested sleep). The program never saw a failure.
+- A handler ran without `SA_RESTART`, or the call is never restarted after a handler (a relative
+  `clock_nanosleep`/`nanosleep` interrupted by a handled signal, `-516`): the program gets a real
+  `EINTR`, but ior still shows -512/-514/-516 with `is_error=false`, because the rewrite to
+  -4 happens after `sys_exit`. ior cannot tell that case from a transparent restart.
+- A call that itself returns `-EINTR` (-4), for example `epoll_wait` when a signal is
+  pending, is a genuine result: `ret=-4`, `is_error=true`. Only the four restart codes are
+  excluded. `-515` (`ENOIOCTLCMD`) is not a restart code and stays an error.
+
+Folding the restart row and its continuation into one row is not done yet (task fs2).
 
 ### Invalid UTF-8 in `comm`, `file` and `old_file`
 

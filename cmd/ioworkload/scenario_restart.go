@@ -17,7 +17,8 @@ const (
 	// restartSignalDelay is how long the blocked call waits before a signal
 	// interrupts it. It only has to exceed the time the worker needs to enter
 	// the syscall; if the signal lands early the call simply is not blocked yet
-	// and the scenario is a weaker (but still hang-free) exercise.
+	// and the scenario is a weaker exercise (the -512 row may be missing), but
+	// it still terminates: the read is completed by the write that follows.
 	restartSignalDelay = 150 * time.Millisecond
 
 	// restartWriteDelay is how long after the signal the pipe becomes readable,
@@ -41,7 +42,11 @@ const (
 //     only taken when no handler runs, e.g. SIGSTOP/SIGCONT).
 //
 // The signal is delivered with tgkill to the one OS thread that issues the
-// blocking call, which is why the goroutine is pinned. SIGUSR1 goes through
+// blocking call, which is why the goroutine is pinned. The blocking read goes
+// through syscall.Syscall (not RawSyscall) so the runtime hands the P to
+// another thread while this one is blocked; the helper goroutines that send
+// the signal and write the byte need a P, so with GOMAXPROCS=1 (or a single
+// CPU) a RawSyscall would hang the scenario forever. SIGUSR1 goes through
 // os/signal.Notify so the Go runtime installs a real handler and does not
 // discard the signal.
 func signalRestart() error {
@@ -81,7 +86,10 @@ func restartedRead(fds [2]int, tid int) error {
 	}()
 
 	var buf [1]byte
-	n, _, errno := syscall.RawSyscall(syscall.SYS_READ, uintptr(fds[0]),
+	// Syscall, not RawSyscall: it enters the scheduler-aware syscall state so
+	// sysmon retakes the P while the read blocks, letting the helper goroutine
+	// above run even when GOMAXPROCS is 1.
+	n, _, errno := syscall.Syscall(syscall.SYS_READ, uintptr(fds[0]),
 		uintptr(unsafe.Pointer(&buf[0])), 1)
 	if errno != 0 && errno != syscall.EINTR {
 		return fmt.Errorf("read: %w", errno)
