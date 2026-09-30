@@ -1004,7 +1004,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   per-fd copy was rejected: O(1) per fork, but keeping the snapshot semantic
   when the parent closes or reopens a descriptor after the fork needs
   copy-on-write on the parent's side, which is unbounded again.
-  a `CLONE_FILES` process gets *no* snapshot (a shared table cannot be modelled
+  A `CLONE_FILES` process gets *no* snapshot (a shared table cannot be modelled
   with per-tgid keys and a copy would go stale on the first open/close of
   either side, worse than the procfs fallback that reads the one live table).
   In every non-thread case the entries under the child's tgid are dropped
