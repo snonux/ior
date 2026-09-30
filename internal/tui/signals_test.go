@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ior/internal/parquet"
+	"ior/internal/runtime"
 	"ior/internal/streamrow"
 
 	tea "charm.land/bubbletea/v2"
@@ -140,106 +141,328 @@ type stopFailingRecorder struct {
 func (r *stopFailingRecorder) Status() parquet.Status { return parquet.Status{Active: true} }
 func (r *stopFailingRecorder) Stop() error            { return r.stopErr }
 
-// runProgramWithSignal runs the real Bubble Tea event loop (production
-// wiring via newProgram, plus forwardHangup) on m and delivers sig to this
-// process once the loop is up. It returns what Run returned.
-func runProgramWithSignal(t *testing.T, m *Model, sig syscall.Signal) error {
+// holdSignals keeps a registration for the termination signals for the whole
+// test, so a signal sent while no watcher is registered (before the program is
+// up, or after it returned) is swallowed instead of killing the test binary.
+func holdSignals(t *testing.T) {
 	t.Helper()
+	sink := make(chan os.Signal, 64)
+	signal.Notify(sink, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	t.Cleanup(func() { signal.Stop(sink) })
+}
+
+// startWatchedProgram runs the real Bubble Tea event loop with the production
+// wiring (newProgram + watchTerminationSignals + runWithWatcher) on model and returns a channel that
+// yields what Run returned.
+func startWatchedProgram(t *testing.T, model tea.Model) <-chan error {
+	t.Helper()
+	holdSignals(t)
 	input, inputW := io.Pipe()
 	t.Cleanup(func() { _ = inputW.Close() })
-	program := newProgram(m, tea.WithInput(input), tea.WithOutput(io.Discard), tea.WithWindowSize(100, 30))
-	stopHangup := forwardHangup(program.Send)
-	defer stopHangup()
-
-	// Until Bubble Tea has registered its own SIGINT/SIGTERM handler the
-	// default action would kill the test binary, so hold a registration of
-	// our own; signals sent before Run is up land there and are retried.
-	sink := make(chan os.Signal, 64)
-	signal.Notify(sink, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sink)
-
-	var finished atomic.Bool
+	program := newProgram(model, tea.WithInput(input), tea.WithOutput(io.Discard), tea.WithWindowSize(100, 30))
+	// Registered before Run starts, so a signal sent right after this returns
+	// is already handled by the watcher.
+	watcher := watchTerminationSignals(program)
+	t.Cleanup(watcher.stop) // idempotent; covers a test that never gets to run
+	done := make(chan error, 1)
 	go func() {
-		for !finished.Load() {
-			_ = syscall.Kill(os.Getpid(), sig)
-			time.Sleep(20 * time.Millisecond)
-		}
+		_, err := runWithWatcher(program, watcher)
+		watcher.stop() // as runWatchedProgram does: no timer or handler outlives Run
+		done <- err
 	}()
-	defer finished.Store(true)
+	return done
+}
 
-	_, err := program.Run()
-	return err
+func sendSignal(t *testing.T, sig syscall.Signal) {
+	t.Helper()
+	if err := syscall.Kill(os.Getpid(), sig); err != nil {
+		t.Fatalf("kill(%v) = %v", sig, err)
+	}
+}
+
+func waitForRun(t *testing.T, done <-chan error, what string) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(20 * time.Second):
+		t.Fatalf("program did not exit: %s", what)
+		return nil
+	}
 }
 
 func TestSignalsFinaliseRecordingInTheRealProgram(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
 		t.Run(sig.String(), func(t *testing.T) {
 			if sig == syscall.SIGHUP && signal.Ignored(syscall.SIGHUP) {
-				t.Skip("SIGHUP is ignored by the test process (nohup); forwardHangup rightly stays out")
+				t.Skip("SIGHUP is ignored by the test process (nohup); the watcher rightly stays out")
 			}
 			m, path := modelRecordingTo(t)
-			done := make(chan error, 1)
-			go func() { done <- runProgramWithSignal(t, m, sig) }()
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("Run() = %v, want a clean exit through the quit path", err)
-				}
-			case <-time.After(20 * time.Second):
-				t.Fatal("program did not exit after the signal")
-			}
-			if !m.quitting {
-				t.Fatal("the model never saw the quit request")
+			done := startWatchedProgram(t, m)
+			sendSignal(t, sig)
+			if err := waitForRun(t, done, "single "+sig.String()); err != nil {
+				t.Fatalf("Run() = %v, want a clean exit through the quit path", err)
 			}
 			requireFinalisedRecording(t, path)
 		})
 	}
 }
 
-func TestForwardHangupStaysOutWhenSIGHUPIsIgnored(t *testing.T) {
-	var sent atomic.Int32
-	stop := forwardHangupFor(func(tea.Msg) { sent.Add(1) }, true)
-	defer stop()
-	// SIGHUP would kill the test binary if a handler were (wrongly) absent
-	// and the disposition default; hold one so a wrongly installed relay is
-	// the only thing that could send.
-	sink := make(chan os.Signal, 1)
-	signal.Notify(sink, syscall.SIGHUP)
-	defer signal.Stop(sink)
-	_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
-	select {
-	case <-sink:
-	case <-time.After(5 * time.Second):
-		t.Fatal("test SIGHUP was not delivered")
+// hungShutdownModel returns a model on the dashboard whose trace shutdown never
+// completes (a BPF teardown stuck in the kernel), a recorder that is active,
+// and a channel closed once the shutdown has begun.
+func hungShutdownModel(t *testing.T) (*Model, string, <-chan struct{}) {
+	t.Helper()
+	m, path := modelRecordingTo(t)
+	m.router.showDashboard()
+	m.attaching = false
+	m.tracer.shutdownReporter = runtime.NewTraceShutdownReporter() // never Complete()d
+	began := make(chan struct{})
+	m.tracer.traceStop = func() { close(began) }
+	return m, path, began
+}
+
+// shortSignalTiming shrinks the debounce and grace so the tests need not wait
+// seconds, and reports hardExit calls instead of exiting the test binary.
+func shortSignalTiming(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	window, grace, exit := repeatSignalWindow, forceExitGrace, hardExit
+	var exits atomic.Int32
+	repeatSignalWindow, forceExitGrace = 100*time.Millisecond, 200*time.Millisecond
+	hardExit = func() { exits.Add(1) }
+	t.Cleanup(func() { repeatSignalWindow, forceExitGrace, hardExit = window, grace, exit })
+	return &exits
+}
+
+// TestSecondSignalEndsAHungShutdown is the escape hatch: with a shutdown that
+// never completes, the first signal starts it (and is not enough), a signal
+// after the debounce window aborts it, Run returns errShutdownForced, and the
+// recording is still published by the safety net.
+func TestSecondSignalEndsAHungShutdown(t *testing.T) {
+	pairs := []struct{ first, second syscall.Signal }{
+		{syscall.SIGTERM, syscall.SIGTERM},
+		{syscall.SIGINT, syscall.SIGINT},
+		{syscall.SIGTERM, syscall.SIGINT},
+		{syscall.SIGHUP, syscall.SIGTERM},
 	}
-	time.Sleep(50 * time.Millisecond)
-	if n := sent.Load(); n != 0 {
-		t.Fatalf("relay sent %d messages although SIGHUP is ignored", n)
+	for _, p := range pairs {
+		t.Run(p.first.String()+"_then_"+p.second.String(), func(t *testing.T) {
+			if p.first == syscall.SIGHUP && signal.Ignored(syscall.SIGHUP) {
+				t.Skip("SIGHUP is ignored by the test process (nohup)")
+			}
+			exits := shortSignalTiming(t)
+			m, path, began := hungShutdownModel(t)
+			done := startWatchedProgram(t, m)
+
+			sendSignal(t, p.first)
+			select {
+			case <-began:
+			case <-time.After(20 * time.Second):
+				t.Fatal("the first signal did not start the shutdown")
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("Run returned after one signal (%v) although the shutdown is hung", err)
+			case <-time.After(3 * repeatSignalWindow):
+			}
+
+			sendSignal(t, p.second)
+			if err := waitForRun(t, done, "second signal during a hung shutdown"); !errors.Is(err, errShutdownForced) {
+				t.Fatalf("Run() = %v, want errShutdownForced", err)
+			}
+			// The safety net publishes what the model finalised on the first signal.
+			if err := finaliseRecording(m, nil); err != nil {
+				t.Fatalf("finaliseRecording() = %v", err)
+			}
+			requireFinalisedRecording(t, path)
+			time.Sleep(2 * forceExitGrace)
+			if n := exits.Load(); n != 0 {
+				t.Fatalf("hardExit called %d times although Run returned", n)
+			}
+		})
 	}
 }
 
-func TestRelayQuitRequestsStopsCleanly(t *testing.T) {
-	ch := make(chan os.Signal, 1)
-	got := make(chan tea.Msg, 4)
-	unregistered := false
-	stop := relayQuitRequests(ch, func(m tea.Msg) { got <- m }, func() { unregistered = true })
+// A repeat inside the debounce window (systemd's SIGTERM+SIGHUP pair) is the
+// same request and must not abort a teardown that is still healthy.
+func TestRepeatSignalInsideTheWindowDoesNotAbort(t *testing.T) {
+	shortSignalTiming(t)
+	repeatSignalWindow = 30 * time.Second
+	m, _, began := hungShutdownModel(t)
+	done := startWatchedProgram(t, m)
 
-	ch <- syscall.SIGHUP
+	sendSignal(t, syscall.SIGTERM)
+	<-began
+	sendSignal(t, syscall.SIGINT)
 	select {
-	case m := <-got:
-		if _, ok := m.(tea.QuitMsg); !ok {
-			t.Fatalf("relay sent %T, want tea.QuitMsg", m)
+	case err := <-done:
+		t.Fatalf("Run returned (%v) after a repeat inside the window", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	// Let the shutdown finish normally so the program (and the test) end.
+	m.tracer.shutdownReporter.Complete()
+	if err := waitForRun(t, done, "completed shutdown"); err != nil {
+		t.Fatalf("Run() = %v, want a clean exit once the shutdown completed", err)
+	}
+}
+
+// wedgedModel blocks in Update on the quit request, like a recorder Stop stuck
+// on a dead disk: Program.Kill cannot make Run return then.
+type wedgedModel struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *wedgedModel) Init() tea.Cmd  { return nil }
+func (w *wedgedModel) View() tea.View { return tea.NewView("") }
+func (w *wedgedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(signalQuitMsg); ok {
+		close(w.entered)
+		<-w.release
+	}
+	return w, nil
+}
+
+func TestForcedExitFallsBackToHardExitWhenUpdateIsWedged(t *testing.T) {
+	exits := shortSignalTiming(t)
+	w := &wedgedModel{entered: make(chan struct{}), release: make(chan struct{})}
+	done := startWatchedProgram(t, w)
+
+	sendSignal(t, syscall.SIGTERM)
+	<-w.entered
+	time.Sleep(2 * repeatSignalWindow)
+	sendSignal(t, syscall.SIGTERM)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for exits.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if exits.Load() != 1 {
+		t.Fatalf("hardExit calls = %d, want 1 after the grace period", exits.Load())
+	}
+	close(w.release)
+	_ = waitForRun(t, done, "released wedged model")
+}
+
+func TestCtrlCWhileShuttingDownAbortsAndOtherKeysAreIgnored(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	m.quitting = true
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd != nil || next.(*Model).lastErr != nil {
+		t.Fatalf("plain key while quitting: cmd=%v lastErr=%v, want ignored", cmd, next.(*Model).lastErr)
+	}
+
+	next, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("ctrl+c while quitting returned no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", cmd())
+	}
+	if got := signalQuitFilter(next, tea.QuitMsg{}); got != (tea.QuitMsg{}) {
+		t.Fatalf("filter converted the abort's QuitMsg: %#v", got)
+	}
+	if err := finalModelError(next); !errors.Is(err, errShutdownForced) {
+		t.Fatalf("finalModelError = %v, want errShutdownForced", err)
+	}
+}
+
+// A recorder that cannot be stopped on the signal path must not vanish
+// silently: the exit is reported (and non-zero through the run error).
+func TestSignalQuitReportsARecorderStopFailure(t *testing.T) {
+	m, path := modelRecordingTo(t)
+	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	next, cmd := m.Update(signalQuitMsg{})
+	if !next.(*Model).quitting || cmd == nil {
+		t.Fatal("a failing recorder must not keep the process from shutting down")
+	}
+	original := runTeaProgram
+	t.Cleanup(func() { runTeaProgram = original })
+	runTeaProgram = func(m *Model) (tea.Model, error) { return m, nil }
+	err := runProgram(m)
+	if err == nil {
+		t.Fatal("runProgram() = nil, the lost recording went unreported")
+	}
+}
+
+func TestSignalQuitWithAHealthyRecorderReportsNothing(t *testing.T) {
+	m, path := modelRecordingTo(t)
+	next, _ := m.Update(signalQuitMsg{})
+	if err := next.(*Model).lastErr; err != nil {
+		t.Fatalf("lastErr = %v after a healthy stop", err)
+	}
+	original := runTeaProgram
+	t.Cleanup(func() { runTeaProgram = original })
+	runTeaProgram = func(m *Model) (tea.Model, error) { return m, nil }
+	if err := runProgram(m); err != nil {
+		t.Fatalf("runProgram() = %v", err)
+	}
+	requireFinalisedRecording(t, path)
+}
+
+func TestTerminationSignalsHonourInheritedSIGHUPIgnore(t *testing.T) {
+	has := func(sigs []os.Signal, want os.Signal) bool {
+		for _, s := range sigs {
+			if s == want {
+				return true
+			}
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("relay did not forward the signal")
+		return false
+	}
+	if got := terminationSignals(false); !has(got, syscall.SIGHUP) || !has(got, syscall.SIGINT) || !has(got, syscall.SIGTERM) {
+		t.Fatalf("terminationSignals(false) = %v, want INT, TERM and HUP", got)
+	}
+	got := terminationSignals(true)
+	if has(got, syscall.SIGHUP) || !has(got, syscall.SIGINT) || !has(got, syscall.SIGTERM) {
+		t.Fatalf("terminationSignals(true) = %v, want INT and TERM only", got)
+	}
+}
+
+func TestRelayTerminationSignalsQuitsThenForcesOnceAfterTheWindow(t *testing.T) {
+	window := repeatSignalWindow
+	repeatSignalWindow = 50 * time.Millisecond
+	t.Cleanup(func() { repeatSignalWindow = window })
+
+	ch := make(chan os.Signal, 8)
+	var quits, forces atomic.Int32
+	unregistered := false
+	stop := relayTerminationSignals(ch, func() { quits.Add(1) }, func() { forces.Add(1) }, func() { unregistered = true })
+
+	ch <- syscall.SIGTERM
+	ch <- syscall.SIGHUP // inside the window: same request
+	waitFor(t, func() bool { return quits.Load() == 1 })
+	time.Sleep(100 * time.Millisecond)
+	if forces.Load() != 0 || quits.Load() != 1 {
+		t.Fatalf("inside the window: quits=%d forces=%d, want 1/0", quits.Load(), forces.Load())
+	}
+	ch <- syscall.SIGTERM
+	ch <- syscall.SIGTERM // a third one changes nothing
+	waitFor(t, func() bool { return forces.Load() == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if forces.Load() != 1 || quits.Load() != 1 {
+		t.Fatalf("after the window: quits=%d forces=%d, want 1/1", quits.Load(), forces.Load())
 	}
 	stop()
 	if !unregistered {
 		t.Fatal("stop did not unregister the signal handler")
 	}
-	ch <- syscall.SIGHUP
+	ch <- syscall.SIGTERM
 	time.Sleep(20 * time.Millisecond)
-	if len(got) != 0 {
-		t.Fatal("relay sent a message after stop returned")
+	if forces.Load() != 1 || quits.Load() != 1 {
+		t.Fatal("relay acted after stop returned")
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not reached in time")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

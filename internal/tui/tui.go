@@ -307,21 +307,24 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // every test green while a quit from the error screen exits 0 with no reason,
 // which is the state the fix exists to end.
 //
-// The program is built with signalQuitFilter so SIGTERM/SIGINT reach the
-// model's quit path (recording finalised) instead of ending Run behind its
-// back, and forwardHangup adds SIGHUP, which Bubble Tea does not handle at all.
+// The program is built by newProgram, and watchTerminationSignals owns the
+// termination signals for the whole run: the first SIGTERM/SIGINT/SIGHUP
+// reaches the model's quit path (recording finalised), a second one aborts a
+// hung shutdown (Run then returns errShutdownForced). Bubble Tea's own handler
+// is disabled because it is one-shot and skips Update, see signalQuitFilter.
 var runTeaProgram = func(model *Model) (tea.Model, error) {
-	program := newProgram(model)
-	defer forwardHangup(program.Send)()
-	return program.Run()
+	return runWatchedProgram(newProgram(model))
 }
 
 // newProgram builds the Bubble Tea program for model with the signal filter
-// installed. It is the one constructor for production and tests, so a test
-// that drives the real event loop (with its own input and output) exercises
-// exactly the wiring the binary uses. Extra options come after the filter.
-func newProgram(model *Model, opts ...tea.ProgramOption) *tea.Program {
-	return tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFilter(signalQuitFilter)}, opts...)...)
+// installed and Bubble Tea's own signal handler disabled (the caller owns
+// signals, see watchTerminationSignals). It is the one constructor for
+// production and tests, so a test that drives the real event loop (with its own
+// input and output) exercises exactly the wiring the binary uses. Extra options
+// come after the built-in ones.
+func newProgram(model tea.Model, opts ...tea.ProgramOption) *tea.Program {
+	base := []tea.ProgramOption{tea.WithFilter(signalQuitFilter), tea.WithoutSignalHandler()}
+	return tea.NewProgram(model, append(base, opts...)...)
 }
 
 // runProgram runs one Bubble Tea program and reports the error the model was
@@ -767,7 +770,7 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case tea.KeyPressMsg:
 		if m.quitting {
-			return m, nil, true
+			return m.handleKeyWhileShuttingDown(msg)
 		}
 		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
 			return next, cmd, true
