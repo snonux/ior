@@ -1,9 +1,12 @@
 package internal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/printer"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -99,6 +102,9 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 	}
 	// A method value of the real manager, not a literal that could say yes to all.
 	assertCallArguments(t, call, []string{"infra.mgr.IsActive"})
+	// Position and arguments alone stay green if the call is wrapped in a
+	// closure nobody invokes, deferred, or hidden behind `if false`.
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil")
 
 	wire := firstCallPosition(decl, "wireEventLoopLogging")
 	signal := firstCallPosition(decl, "signalTraceStarted")
@@ -114,4 +120,44 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 	if call.End() >= signal {
 		t.Fatalf("restrictSamplingToActive at %s must precede the start signal at %s", fset.Position(call.Pos()), fset.Position(signal))
 	}
+}
+
+// assertRunsUnconditionallyOnceManagerExists requires call to execute on every
+// pass of the setup that has a probe manager: it must be an expression
+// statement that is either a direct statement of the function body, or the
+// direct statement of the body of an `if <guard>` that has no init and no else.
+// Any other nesting - an unsent closure (`_ = func(){...}`), go/defer, a
+// different or inverted condition such as `if false` - does not match, because
+// the statement holding the call is then not an ExprStmt of those two shapes
+// (or the guard text differs and the test fails on it).
+func assertRunsUnconditionallyOnceManagerExists(t *testing.T, decl *ast.FuncDecl, call *ast.CallExpr, guard string) {
+	t.Helper()
+	isCallStatement := func(statement ast.Stmt) bool {
+		expression, ok := statement.(*ast.ExprStmt)
+		return ok && expression.X == call
+	}
+	for _, statement := range decl.Body.List {
+		if isCallStatement(statement) {
+			return // unguarded: runs on every pass, a superset of the guarded case
+		}
+		guarded, ok := statement.(*ast.IfStmt)
+		if !ok || guarded.Init != nil || guarded.Else != nil {
+			continue
+		}
+		for _, inner := range guarded.Body.List {
+			if !isCallStatement(inner) {
+				continue
+			}
+			var condition bytes.Buffer
+			if err := printer.Fprint(&condition, token.NewFileSet(), guarded.Cond); err != nil {
+				t.Fatalf("render guard condition: %v", err)
+			}
+			if condition.String() != guard {
+				t.Fatalf("restrictSamplingToActive is guarded by %q, want %q", condition.String(), guard)
+			}
+			return
+		}
+	}
+	t.Fatal("restrictSamplingToActive must be a plain statement of the setup body or of an `if " + guard +
+		"` directly in it, not inside a closure, go/defer, or another construct")
 }
