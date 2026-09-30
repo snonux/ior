@@ -967,8 +967,9 @@ not sufficient.
   which renames them (`pipe:0:3:4` → `pipe:[N]`), loses already-closed ones,
   and under lag can resolve a reused fd number to the wrong file
   (`TestThreadExitKeepsFdName` covers it end to end). A group-dead exit
-  bypasses `-tid` in BPF (still honouring `-pid`), because the thread that
-  ends the group is usually not the traced one.
+  bypasses `-tid` in BPF, because the thread that ends the group is usually
+  not the traced one; the bypass is scoped to the traced thread's process via
+  the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
