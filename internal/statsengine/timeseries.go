@@ -40,8 +40,20 @@ func newRingTimeSeriesWithConfig(slotSize time.Duration, slots int) *ringTimeSer
 	}
 }
 
+// Add records one sample of value at t; the slot reports the mean of all
+// samples that fell into it.
 func (r *ringTimeSeries) Add(value float64, t time.Time) {
-	if r == nil {
+	r.AddWeighted(value, 1, t)
+}
+
+// AddWeighted records count samples at t whose values sum to sum, so a
+// pre-aggregated batch (e.g. one kernel aggregate drain covering a million
+// syscalls) weighs as much in its slot's mean as the individual samples it
+// stands for, instead of counting as a single sample next to per-event ones.
+// A zero count carries no sample and is ignored, so it can neither create a
+// slot nor advance the window.
+func (r *ringTimeSeries) AddWeighted(sum float64, count uint64, t time.Time) {
+	if r == nil || count == 0 {
 		return
 	}
 
@@ -56,8 +68,8 @@ func (r *ringTimeSeries) Add(value float64, t time.Time) {
 
 	idx := r.slotIndex(key)
 	r.resetSlotIfNeeded(idx, key)
-	r.slots[idx].sum += value
-	r.slots[idx].count++
+	r.slots[idx].sum += sum
+	r.slots[idx].count += count
 }
 
 // Values returns the window ending at the most recent slot that has data.

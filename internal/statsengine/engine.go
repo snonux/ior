@@ -56,6 +56,10 @@ type Engine struct {
 	totalWriteBytes        uint64
 	totalLatency           uint64
 	totalGap               uint64
+	// gapSamples counts the per-event pairs that contributed to totalGap.
+	// It differs from totalSyscalls because kernel aggregate rows add calls
+	// without gap data (see IngestSyscallAggregates).
+	gapSamples uint64
 
 	syscalls         *syscallAccumulator
 	files            *fileRanker
@@ -80,6 +84,7 @@ type snapshotInputs struct {
 	totalWriteBytes        uint64
 	totalLatency           uint64
 	totalGap               uint64
+	gapSamples             uint64 // per-event pairs behind totalGap
 
 	latencySeries    []float64
 	gapSeries        []float64
@@ -137,6 +142,7 @@ func (e *Engine) Reset() {
 	e.totalWriteBytes = 0
 	e.totalLatency = 0
 	e.totalGap = 0
+	e.gapSamples = 0
 	e.syscalls = newSyscallAccumulator()
 	e.files = newFileRankerWithConfig(e.topN)
 	e.processes = newProcessAccumulatorWithConfig(e.topN)
@@ -162,6 +168,7 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	e.totalAddressSpaceBytes += pair.AddressSpaceBytes
 	e.totalLatency += pair.Duration
 	e.totalGap += pair.DurationToPrev
+	e.gapSamples++
 
 	e.updateErrorAndByteClasses(pair)
 	e.syscalls.Add(pair)
@@ -231,6 +238,7 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		totalWriteBytes:        e.totalWriteBytes,
 		totalLatency:           e.totalLatency,
 		totalGap:               e.totalGap,
+		gapSamples:             e.gapSamples,
 		latencySeries:          e.latencySeries.ValuesAt(now),
 		gapSeries:              e.gapSeries.ValuesAt(now),
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
@@ -306,7 +314,9 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.ReadBytesPerSec = safeRate(in.totalReadBytes, rateDiv)
 	snap.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
 	snap.LatencyMeanNs = safeMean(in.totalLatency, timedCount(in.totalSyscalls, in.totalUntimed))
-	snap.GapMeanNs = safeMean(in.totalGap, in.totalSyscalls)
+	// Only per-event pairs carry a gap, so divide by them rather than by all
+	// syscalls: aggregate rows would otherwise dilute the mean.
+	snap.GapMeanNs = safeMean(in.totalGap, in.gapSamples)
 	snap.LatencyTrend = detectTrend(in.latencySeries)
 	snap.GapTrend = detectTrend(in.gapSeries)
 	snap.ThroughputTrend = detectTrend(in.throughputSeries)
