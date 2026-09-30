@@ -1026,17 +1026,23 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   so keep its format stable.
   Both control records keep a pre-change `IOR_BPF_OBJECT` override
   compatible (`NewProcessExitEventFast`/`NewProcessExecEventFast` in
-  `internal/types/fastdecode.go`): the legacy 24-byte exit record, which
-  predates `group_dead`, decodes as group-dead (`Reserved` 0) — every exit
-  evicts its tgid's fd entries, as every exit did before the flag existed,
-  at the cost of that old per-thread over-eviction and of a group-dead count
-  and stats retirement per thread exit; reading it as a thread exit would
-  never evict a dead process at all. The legacy 40-byte exec record, which
-  predates `old_tid`/`exit_untraced`, decodes with both 0 ("tid kept", exit
-  still coming), which is all an old object can mean: it never re-keys a
-  non-leader exec's enter or suppresses an execve exit. Every other size is rejected rather than
-  decoded at the wrong offsets; dropping the legacy sizes instead flooded
-  the TUI with a malformed-event warning per task exec/exit.
+  `internal/types/fastdecode.go`). The legacy 24-byte exit record predates
+  `group_dead`, so it decodes as "group-dead unknown"
+  (`IsGroupDeadKnown` false, `IsGroupDead` false; the marker is an all-ones
+  `GroupDead` the kernel never writes, because the generated struct cannot
+  carry a Go-only field). `applyProcessDeath` still evicts the tgid's fd
+  entries on such a record, as every exit did before the flag existed —
+  a thread exit costs the survivors a `/proc/<pid>/fd` fallback, whereas
+  never evicting would keep a dead process's descriptors — but neither counts
+  it in `group-dead exits` nor retires the stats row, which would split a
+  live multi-threaded process into one row per exited thread. The legacy
+  40-byte exec record predates `old_tid`/`exit_untraced` and decodes with
+  both 0 ("tid kept", exit still coming): an old object never re-keys a
+  non-leader exec's enter or suppresses an execve exit. Payloads longer than
+  the current layout decode its prefix (forward compatible with appended
+  fields); every other shorter size is rejected rather than decoded at the
+  wrong offsets. Dropping the legacy sizes instead flooded the TUI with a
+  malformed-event warning per task exec/exit.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
