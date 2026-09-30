@@ -3543,70 +3543,82 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 		t.Fatal("no open-kind enter handlers in the generated artifact")
 	}
 	for _, m := range openEnters {
-		enter := m[1]
-		syscallName := strings.TrimPrefix(enter, "sys_enter_")
-		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-		enterBody := handlerBody(t, artifact, enter)
-		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
-			t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
-		}
-		if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
-			t.Errorf("%s still reads the filename without testing the return value", enter)
-		}
-		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not take the stashed pointer", syscallName)
-		}
-		if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
-		}
+		checkOpenFilenameRecovery(t, artifact, m[1])
 	}
-	recoveryEnters := make([]string, 0, len(openEnters)+2)
-	for _, match := range openEnters {
-		recoveryEnters = append(recoveryEnters, match[1])
+	identifyingEnters := []string{"sys_enter_fsopen", "sys_enter_memfd_create"}
+	for _, enter := range identifyingEnters {
+		checkIdentifyingStringRecovery(t, artifact, enter)
 	}
-	recoveryEnters = append(recoveryEnters, "sys_enter_fsopen", "sys_enter_memfd_create")
-	for _, enter := range recoveryEnters[len(openEnters):] {
-		syscallName := strings.TrimPrefix(enter, "sys_enter_")
-		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-		enterBody := handlerBody(t, artifact, enter)
-		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
-			t.Errorf("%s does not stash its identifying string pointer", enter)
-		}
-		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
-			!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
-		}
-	}
-
 	// The output-path syscalls (outputPathSyscalls) share the stash/take/fixup
 	// helpers: their enter stashes the output buffer unconditionally and their
 	// exit publishes it after a successful return.
 	for syscallName, argIdx := range outputPathSyscalls {
-		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-		enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
-		if !strings.Contains(enterBody, outputPathStashLine(argIdx)) {
-			t.Errorf("sys_enter_%s does not stash its output buffer", syscallName)
-		}
-		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
-			!strings.Contains(exitBody, outputPathEmitLines(enterConst)) {
-			t.Errorf("sys_exit_%s does not capture its output buffer after a successful return", syscallName)
-		}
-		recoveryEnters = append(recoveryEnters, "sys_enter_"+syscallName)
+		checkOutputPathRecovery(t, artifact, syscallName, argIdx)
 	}
 
 	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
 	// make every exit handler pay two extra map operations.
-	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_take_pending_filename call sites, want %d", got, len(recoveryEnters))
+	recoveryPairs := len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls)
+	for _, helper := range []string{"ior_take_pending_filename(", "ior_emit_open_name_fixup(", "ior_stash_pending_filename("} {
+		if got := strings.Count(artifact, helper); got != recoveryPairs {
+			t.Errorf("%d %s) call sites, want %d", got, helper, recoveryPairs)
+		}
 	}
-	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d", got, len(recoveryEnters))
+}
+
+// checkOpenFilenameRecovery asserts that an open-kind enter handler stashes
+// the user pointer when the nofault filename read fails (and no longer reads
+// it unchecked), and that its exit takes the pointer and emits the fixup.
+func checkOpenFilenameRecovery(t *testing.T, artifact, enter string) {
+	t.Helper()
+	syscallName := strings.TrimPrefix(enter, "sys_enter_")
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, enter)
+	if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
+		t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
 	}
-	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_stash_pending_filename call sites, want %d", got, len(recoveryEnters))
+	if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
+		t.Errorf("%s still reads the filename without testing the return value", enter)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameTakeLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not take the stashed pointer", syscallName)
+	}
+	if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
+	}
+}
+
+// checkIdentifyingStringRecovery asserts the stash/take/fixup splice of a
+// non-open syscall (fsopen, memfd_create) whose first argument names it.
+func checkIdentifyingStringRecovery(t *testing.T, artifact, enter string) {
+	t.Helper()
+	syscallName := strings.TrimPrefix(enter, "sys_enter_")
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, enter)
+	if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
+		t.Errorf("%s does not stash its identifying string pointer", enter)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
+		!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
+	}
+}
+
+// checkOutputPathRecovery asserts that an output-path syscall stashes its
+// output buffer (argument argIdx) at enter and captures it at exit.
+func checkOutputPathRecovery(t *testing.T, artifact, syscallName string, argIdx int) {
+	t.Helper()
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
+	if !strings.Contains(enterBody, outputPathStashLine(argIdx)) {
+		t.Errorf("sys_enter_%s does not stash its output buffer", syscallName)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
+		!strings.Contains(exitBody, outputPathEmitLines(enterConst)) {
+		t.Errorf("sys_exit_%s does not capture its output buffer after a successful return", syscallName)
 	}
 }
 
