@@ -216,8 +216,10 @@ func (h *TestHarness) workloadCommand(scenario, startupFile string) (*exec.Cmd, 
 }
 
 // readWorkloadPID parses the first stdout line as the workload PID in a
-// goroutine, delivering either the PID or an error. Afterwards it drains the
-// rest of the pipe so cmd.Wait() does not block on a full pipe.
+// goroutine, delivering either the PID or an error. After a PID (or a read
+// error / EOF) it drains the rest of the pipe so cmd.Wait() does not block on
+// a full pipe. On a PID parse error it returns without draining: startWorkload
+// then kills the workload, which closes the pipe, so Wait cannot block.
 func readWorkloadPID(stdout io.Reader) (<-chan int, <-chan error) {
 	pidCh := make(chan int, 1)
 	errCh := make(chan error, 1)

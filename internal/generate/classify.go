@@ -127,6 +127,11 @@ const (
 	// close_range and kcmp do not carry 512 unused name bytes. Its metadata
 	// name stays "two-fd".
 	KindTwoFdNames
+
+	// kindCount is a sentinel, not a kind: it must stay last so tests can
+	// iterate every real kind (KindNone+1 .. kindCount-1). It is unexported and
+	// absent from every kind table, so it never reaches generated output.
+	kindCount
 )
 
 // kindMetadataNames maps each kind to its stable metadata name. It is a data
