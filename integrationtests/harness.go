@@ -166,17 +166,11 @@ func (h *TestHarness) workloadStartupFile(scenario string) string {
 	return filepath.Join(h.OutputDir, scenario+".startup")
 }
 
+// startWorkload launches the workload for scenario and waits (bounded by
+// workloadStartupTimeout) for it to print its PID as the first stdout line.
+// The returned buffer captures the workload's stderr for error reporting.
 func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, int, *bytes.Buffer, error) {
-	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
-	stderr := &bytes.Buffer{}
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
-	if len(h.WorkloadEnv) > 0 || startupFile != "" {
-		cmd.Env = append(os.Environ(), h.WorkloadEnv...)
-		if startupFile != "" {
-			_ = os.Remove(startupFile)
-			cmd.Env = append(cmd.Env, workloadStartupFileEnv+"="+startupFile)
-		}
-	}
+	cmd, stderr := h.workloadCommand(scenario, startupFile)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -187,6 +181,44 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 		return nil, 0, nil, fmt.Errorf("start workload: %w", err)
 	}
 
+	pidCh, errCh := readWorkloadPID(stdout)
+	startupTimer := time.NewTimer(workloadStartupTimeout)
+	defer stopAndDrainTimer(startupTimer)
+
+	select {
+	case pid := <-pidCh:
+		return cmd, pid, stderr, nil
+	case err := <-errCh:
+		killAndReap(cmd)
+		return nil, 0, nil, err
+	case <-startupTimer.C:
+		killAndReap(cmd)
+		return nil, 0, nil, fmt.Errorf("timeout waiting for workload PID")
+	}
+}
+
+// workloadCommand builds the (unstarted) workload command. Its stderr is teed
+// to the test's stderr and to the returned buffer. The environment is only
+// overridden when extra env or a startup file is requested; a stale startup
+// file is removed first so the workload's fresh write is what callers see.
+func (h *TestHarness) workloadCommand(scenario, startupFile string) (*exec.Cmd, *bytes.Buffer) {
+	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
+	if len(h.WorkloadEnv) > 0 || startupFile != "" {
+		cmd.Env = append(os.Environ(), h.WorkloadEnv...)
+		if startupFile != "" {
+			_ = os.Remove(startupFile)
+			cmd.Env = append(cmd.Env, workloadStartupFileEnv+"="+startupFile)
+		}
+	}
+	return cmd, stderr
+}
+
+// readWorkloadPID parses the first stdout line as the workload PID in a
+// goroutine, delivering either the PID or an error. Afterwards it drains the
+// rest of the pipe so cmd.Wait() does not block on a full pipe.
+func readWorkloadPID(stdout io.Reader) (<-chan int, <-chan error) {
 	pidCh := make(chan int, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -206,22 +238,14 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 		// Drain remaining pipe data so cmd.Wait() does not block.
 		_, _ = io.Copy(io.Discard, stdout)
 	}()
+	return pidCh, errCh
+}
 
-	startupTimer := time.NewTimer(workloadStartupTimeout)
-	defer stopAndDrainTimer(startupTimer)
-
-	select {
-	case pid := <-pidCh:
-		return cmd, pid, stderr, nil
-	case err := <-errCh:
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, 0, nil, err
-	case <-startupTimer.C:
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, 0, nil, fmt.Errorf("timeout waiting for workload PID")
-	}
+// killAndReap kills a started workload that failed to report its PID and
+// waits for it so no zombie is left behind.
+func killAndReap(cmd *exec.Cmd) {
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 func workloadCommandError(err error, stderr string) error {
