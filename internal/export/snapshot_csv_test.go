@@ -1,6 +1,7 @@
 package export
 
 import (
+	"bytes"
 	"encoding/csv"
 	"os"
 	"path/filepath"
@@ -137,5 +138,40 @@ func TestSnapValueHelpers(t *testing.T) {
 	}
 	if got := trendSummary(&snap, func(s *statsengine.Snapshot) statsengine.Trend { return s.LatencyTrend }); got != "rising:12.50" {
 		t.Fatalf("trendSummary = %q, want rising:12.50", got)
+	}
+}
+
+// TestSnapshotCSVRecycledPIDRowsHaveDistinctIDs checks that two lifetimes of
+// one PID (task ro2) export under distinct ids: the first keeps the bare PID,
+// the later one is "PID#lifetime", in both the process and the
+// process_latency_ns sections.
+func TestSnapshotCSVRecycledPIDRowsHaveDistinctIDs(t *testing.T) {
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil,
+		[]statsengine.ProcessSnapshot{
+			{PID: 42, Lifetime: 1, Comm: "b", Syscalls: 9},
+			{PID: 42, Lifetime: 0, Comm: "a", Syscalls: 5},
+		},
+		statsengine.NewHistogramSnapshot(0, nil),
+		statsengine.NewHistogramSnapshot(0, nil),
+	)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if err := writeSnapshotRows(w, &snap); err != nil {
+		t.Fatalf("writeSnapshotRows: %v", err)
+	}
+	w.Flush()
+	records, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("parse csv: %v", err)
+	}
+	var got []string
+	for _, row := range records {
+		if row[0] == "process" || row[0] == "process_latency_ns" {
+			got = append(got, row[0]+"="+row[1])
+		}
+	}
+	want := []string{"process=42#1", "process_latency_ns=42#1", "process=42", "process_latency_ns=42"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("process ids = %v, want %v", got, want)
 	}
 }

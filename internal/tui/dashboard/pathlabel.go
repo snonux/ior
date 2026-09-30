@@ -2,9 +2,9 @@ package dashboard
 
 import (
 	"path/filepath"
-	"strconv"
 	"strings"
 
+	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 )
 
@@ -38,12 +38,13 @@ func dirRowLabel(dir string) string {
 	return common.Sanitize(dir)
 }
 
-// processLabel is the "pid:comm" display label of a process tile or bubble
-// ("pid" alone without a comm). The traced comm is attacker-controlled and
+// processLabel is the "id:comm" display label of a process tile or bubble
+// ("id" alone without a comm), where id is the row's ProcessSnapshot.ID: the
+// PID, or "PID#lifetime" for a later process handed a recycled PID. The traced comm is attacker-controlled and
 // is sanitised; the label is display-only (selection uses processKey/ID).
-func processLabel(pid uint32, comm string) string {
-	if comm = strings.TrimSpace(comm); comm != "" {
-		return strconv.FormatUint(uint64(pid), 10) + ":" + common.Sanitize(comm)
+func processLabel(proc statsengine.ProcessSnapshot) string {
+	if comm := strings.TrimSpace(proc.Comm); comm != "" {
+		return proc.ID() + ":" + common.Sanitize(comm)
 	}
-	return strconv.FormatUint(uint64(pid), 10)
+	return proc.ID()
 }

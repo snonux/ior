@@ -70,14 +70,14 @@ func TestDashboardViewsSanitizeTracedLabels(t *testing.T) {
 func TestProcessLabelKeepsSelectionKeysRaw(t *testing.T) {
 	snap := hostileSnapshot()
 	procs := processBubbleData(&snap)
-	if len(procs) != 1 || !strings.Contains(procs[0].ID, hostileComm) {
-		t.Fatalf("bubble ID should keep the raw comm, got %#v", procs)
+	if len(procs) != 1 || procs[0].ID != processKey(7, 0) {
+		t.Fatalf("bubble ID should be the process key, not the sanitised label, got %#v", procs)
 	}
 	files := buildFilesTreemapItems(&snap, bubbleMetricCount)
 	if len(files) != 1 || files[0].Key != hostileDir {
 		t.Fatalf("treemap key should keep the raw dir, got %#v", files)
 	}
-	if got := processLabel(9, "  "); got != "9" {
+	if got := processLabel(statsengine.ProcessSnapshot{PID: 9, Comm: "  "}); got != "9" {
 		t.Fatalf("processLabel without comm = %q, want 9", got)
 	}
 }

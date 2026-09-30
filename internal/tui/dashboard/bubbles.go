@@ -807,10 +807,10 @@ func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	rows := snap.Processes()
 	data := make([]bubbleDatum, 0, len(rows))
 	for _, proc := range rows {
-		label := processLabel(proc.PID, proc.Comm)
+		label := processLabel(proc)
 		detail := fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
 		data = append(data, bubbleDatum{
-			ID:       fmt.Sprintf("%d/%s", proc.PID, proc.Comm),
+			ID:       processRowKey(proc),
 			Label:    label,
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,

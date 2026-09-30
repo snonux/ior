@@ -150,7 +150,7 @@ func summarizeTopProcesses(snap *statsengine.Snapshot) string {
 	}
 	parts := make([]string, 0, len(processes))
 	for _, p := range processes {
-		parts = append(parts, fmt.Sprintf("%s/%d(%d)", common.Sanitize(p.Comm), p.PID, p.Syscalls))
+		parts = append(parts, fmt.Sprintf("%s/%s(%d)", common.Sanitize(p.Comm), p.ID(), p.Syscalls))
 	}
 	return strings.Join(parts, ", ")
 }

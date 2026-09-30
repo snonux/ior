@@ -2,6 +2,7 @@ package statsengine
 
 import (
 	"slices"
+	"strconv"
 	"time"
 
 	"ior/internal/types"
@@ -255,4 +256,21 @@ func topN[T any](rows []T, n int) []T {
 		n = len(rows)
 	}
 	return rows[:n:n]
+}
+
+// ID returns the row's process identity as shown to users: the bare PID for
+// the first lifetime, "PID#lifetime" for a later process that was handed the
+// same PID (e.g. "2000#1"). It tells apart the rows of a recycled PID in the
+// TUI and in exports while leaving the common, never-recycled case unchanged.
+func (p ProcessSnapshot) ID() string {
+	return ProcessID(p.PID, p.Lifetime)
+}
+
+// ProcessID formats a process identity the way ProcessSnapshot.ID does.
+func ProcessID(pid, lifetime uint32) string {
+	id := strconv.FormatUint(uint64(pid), 10)
+	if lifetime == 0 {
+		return id
+	}
+	return id + "#" + strconv.FormatUint(uint64(lifetime), 10)
 }
