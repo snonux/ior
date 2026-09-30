@@ -190,7 +190,9 @@ grep -aE '^--- (FAIL|SKIP)' /tmp/integ_full.log
 The Rocky 9 run took about 28 minutes at `-test.parallel 2`. The unfiltered output
 contained several hundred megabytes of libbpf debug lines, so the command keeps only test
 verdicts and file:line diagnostics. `pipefail` preserves the test binary's exit status
-through `grep`.
+through `grep`. (ior now filters libbpf INFO/DEBUG output by default and keeps only its
+warnings, so the volume is far smaller today; `IOR_LIBBPF_DEBUG=1` restores the full
+output. The trimming is kept as a safeguard for runs that set it.)
 
 Pass criteria:
 
