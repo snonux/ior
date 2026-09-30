@@ -37,8 +37,10 @@ type familyBatch struct {
 // is nothing to attach, so the hint's instructions would lead nowhere).
 //
 // The instructions are literal: the TUI opens the modal with the Families
-// cursor on the scoped family (FocusFamily), so o, tab, space attach exactly
-// this family.
+// cursor on the scoped family (FocusFamily), so O, tab, space attach exactly
+// this family. The hint names the capital O rather than o because it is shown
+// on every tab, and the Flame tab (the default) consumes lowercase o as its
+// frame-order key, so o would do nothing there; O opens the modal everywhere.
 func NotTracedHint(family string, states []probemanager.ProbeState) string {
 	if family == "" {
 		return ""
@@ -48,7 +50,7 @@ func NotTracedHint(family string, states []probemanager.ProbeState) string {
 			return ""
 		}
 	}
-	return family + " not traced: press o, tab, space to attach"
+	return family + " not traced: press O, tab, space to attach"
 }
 
 // FocusFamily puts the Families view cursor on family (the view itself is

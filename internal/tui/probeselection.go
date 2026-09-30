@@ -55,7 +55,7 @@ func (m *Model) familyBatchRunning() bool {
 
 // newProbeModal builds the probes modal for the current probe manager. Its
 // Families cursor starts on the dashboard's scoped family, so the family
-// hint's "o, tab, space" acts on that family, and a family batch still in
+// hint's "O, tab, space" acts on that family, and a family batch still in
 // flight is shown right away rather than only at its next progress update.
 func (m *Model) newProbeModal() probes.Model {
 	modal := probes.NewModel(m.runtime.currentProbeManager()).

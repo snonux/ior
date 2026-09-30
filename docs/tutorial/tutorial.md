@@ -204,7 +204,8 @@ e.g. Network without restarting ior with `-trace-families`. Your runtime selecti
 persists across trace restarts (PID/TID reselect, filter changes), replacing the startup
 `-trace-*` flags for the rest of the session. The `[` / `]` keys only re-scope the view to
 a family; cycling onto one with no attached probe shows
-`<Family> not traced: press o, tab, space to attach` in the status line.
+`<Family> not traced: press O, tab, space to attach` in the status line (capital `O`
+opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the frame order).
 
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
 filtering (`-comm`, `-path`). Tracepoint subsetting on the command line uses `-tps <regex>`

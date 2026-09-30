@@ -126,7 +126,7 @@ func TestFamilyCycleHintsAtFamilyWithoutAttachedProbes(t *testing.T) {
 	m.runtime.setProbeManager(manager)
 
 	m = cycleTo(t, m, "Network")
-	if view := m.View().Content; !strings.Contains(view, "Network not traced: press o, tab, space to attach") {
+	if view := m.View().Content; !strings.Contains(view, "Network not traced: press O, tab, space to attach") {
 		t.Fatalf("expected the not-traced hint for Network, got:\n%s", view)
 	}
 

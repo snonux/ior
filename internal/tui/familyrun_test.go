@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	dashboardui "ior/internal/tui/dashboard"
 	"ior/internal/tui/probes"
 	"ior/internal/types"
 
@@ -79,18 +80,24 @@ func pressKey(m *Model, key tea.KeyPressMsg) (*Model, tea.Cmd) {
 }
 
 // TestFollowingTheFamilyHintAttachesThatFamily is the review regression: the
-// hint says "press o, tab, space", and the modal used to open with the
+// hint says "press O, tab, space", and the modal used to open with the
 // Families cursor on the first family (Network), so following it attached
 // Network instead of the scoped family. Time is not the first family.
+//
+// The test follows the hint literally from the Flame tab, the tab users land
+// on: there lowercase o is the flamegraph's frame-order key, which is why the
+// hint names capital O (see TestFamilyHintKeyOpensProbesOnEveryTab).
 func TestFollowingTheFamilyHintAttachesThatFamily(t *testing.T) {
 	m := newSessionModel(t, newSelectionManager())
 	m = cycleTo(t, m, "Time")
-	if !strings.Contains(m.View().Content, "Time not traced: press o, tab, space") {
+	if !strings.Contains(m.View().Content, "Time not traced: press O, tab, space") {
 		t.Fatal("precondition: expected the Time hint")
 	}
 
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: '2', Text: "2"}) // leave the flame tab, where o orders frames
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if m.dashboard.ActiveTab() != dashboardui.TabFlame {
+		t.Fatalf("precondition: expected the Flame tab, got %v", m.dashboard.ActiveTab())
+	}
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'O', Text: "O"}) // the hint's key, pressed on the Flame tab
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	req := runCmdFor[probes.FamilyBatchRequestMsg](t, cmd)
@@ -105,6 +112,31 @@ func TestFollowingTheFamilyHintAttachesThatFamily(t *testing.T) {
 	}
 	if strings.Contains(m.View().Content, "not traced") {
 		t.Fatal("hint still shown after attaching Time")
+	}
+}
+
+// TestFamilyHintKeyOpensProbesOnEveryTab pins why the family hint says
+// "press O": capital O opens the probes modal on all seven dashboard tabs,
+// while lowercase o only does so off the Flame tab, where the flamegraph
+// consumes it as its frame-order key. Were O ever shadowed by a tab, the hint
+// would silently do nothing there again.
+func TestFamilyHintKeyOpensProbesOnEveryTab(t *testing.T) {
+	tabKeys := []rune("1234567")
+	for _, tabKey := range tabKeys {
+		for _, tc := range []struct {
+			key      rune
+			wantOpen bool
+		}{
+			{'O', true},
+			{'o', tabKey != '1'}, // Flame (tab 1) keeps lowercase o for itself
+		} {
+			m := newSessionModel(t, newSelectionManager())
+			m, _ = pressKey(m, tea.KeyPressMsg{Code: tabKey, Text: string(tabKey)})
+			m, _ = pressKey(m, tea.KeyPressMsg{Code: tc.key, Text: string(tc.key)})
+			if got := m.probeModal.Visible(); got != tc.wantOpen {
+				t.Errorf("tab %c, key %q: probes modal visible = %v, want %v", tabKey, tc.key, got, tc.wantOpen)
+			}
+		}
 	}
 }
 

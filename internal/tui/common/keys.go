@@ -52,6 +52,13 @@ func keyBinding(desc string, keys ...string) key.Binding {
 	return key.NewBinding(key.WithKeys(keys...), key.WithHelp(keys[0], desc))
 }
 
+// probesBinding matches "o" and "O" but labels both in the help, since the
+// status bar and help overlay must not advertise a key that the active tab
+// may swallow (see DefaultKeyMap).
+func probesBinding() key.Binding {
+	return key.NewBinding(key.WithKeys("o", "O"), key.WithHelp("o/O", "probes/families"))
+}
+
 // DefaultKeyMap builds the default key bindings used by models.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
@@ -74,7 +81,11 @@ func DefaultKeyMap() KeyMap {
 		// "o" opens the probes modal, whose Families view attaches/detaches whole
 		// probe families at runtime; "[" / "]" only re-scope the displayed view
 		// to a family, hence "family view" (they do not attach anything).
-		Probes:     keyBinding("probes/families", "o"),
+		// "O" is the same shortcut on every tab: the Flame tab (the default
+		// one) consumes lowercase "o" as its frame-order key, so "o" never
+		// reaches this binding there. The "not traced" family hint names "O"
+		// because it must be literally true wherever the user happens to be.
+		Probes:     probesBinding(),
 		Filter:     keyBinding("filter", "f"),
 		FilterUndo: keyBinding("undo filter", "F"),
 		PrevFamily: keyBinding("prev family view", "["),

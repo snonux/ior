@@ -47,16 +47,17 @@ type helpSection struct {
 }
 
 func (m *Model) helpSections() []helpSection {
-	line1 := "f filter  p pid picker  t tid picker  o probes  R parquet rec"
+	line1 := "f filter  p pid picker  t tid picker  o/O probes  R parquet rec"
 	if m.keys.ExportEnabled() {
 		line1 += "  e stream export"
 	}
 	// '['/']' only re-scope the view; attaching a whole family at runtime is
-	// the probes modal's Families view (o, then tab), hence the second line.
+	// the probes modal's Families view (o/O, then tab), hence the last line.
+	// O works on every tab; o is shadowed by the Flame tab's frame-order key.
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
 		line1,
-		"[ ] scope view to a family  o tab: attach/detach whole families",
+		"[ ] scope view to a family  o/O tab: attach/detach families (O on Flame)",
 	}
 
 	return []helpSection{

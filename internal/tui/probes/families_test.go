@@ -255,7 +255,7 @@ func TestNotTracedHint(t *testing.T) {
 	}{
 		{"", ""},
 		{"FS", ""},
-		{"Network", "Network not traced: press o, tab, space to attach"},
+		{"Network", "Network not traced: press O, tab, space to attach"},
 		{"AIO", ""}, // no probe at all: nothing to attach
 	}
 	for _, tt := range tests {

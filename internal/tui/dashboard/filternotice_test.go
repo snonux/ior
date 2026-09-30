@@ -72,7 +72,7 @@ func TestFilterNoticeClearsWhenUnset(t *testing.T) {
 // the refusal is rendered ahead of the hint so a narrow row trims the hint
 // first.
 func TestFamilyHintIsASeparateSlot(t *testing.T) {
-	const hint = "Network not traced: press o, tab, space to attach"
+	const hint = "Network not traced: press O, tab, space to attach"
 	m := noticeModel(t, 200, 40, false)
 	m.SetFamilyHint(hint)
 	summary := m.filterSummary()
