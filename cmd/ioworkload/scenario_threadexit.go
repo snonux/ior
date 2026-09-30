@@ -23,16 +23,21 @@ const workerTidFileEnv = "IOR_WORKLOAD_TID_FILE"
 // scenarioPrestarts maps scenario names to hooks that run before the PID is
 // announced (see main).
 var scenarioPrestarts = map[string]func() error{
-	"thread-exit-tid-worker": startTidWorker,
+	"thread-exit-tid-worker":     startTidWorker,
+	"exec-non-leader-thread-tid": startExecWorker,
 }
 
-// tidWorker is the parked worker thread of thread-exit-tid-worker: start
-// makes it run, done reports its I/O result and tid is its thread ID.
-var tidWorker struct {
+// parkedWorker is a goroutine locked to its own non-main OS thread, parked
+// until start is closed: tid is its thread ID, done receives its work's
+// result.
+type parkedWorker struct {
 	tid   int
 	start chan struct{}
 	done  chan error
 }
+
+// tidWorker is the parked worker thread of thread-exit-tid-worker.
+var tidWorker parkedWorker
 
 // threadExitKeepsFd drives the sched_process_exit group_dead gate end to end:
 // it creates a pipe, writes to it, lets one *other* thread of this process
@@ -102,16 +107,24 @@ func waitForThreadGone(tid int) error {
 	return fmt.Errorf("thread %d still present after %s", tid, threadExitWait)
 }
 
-// startTidWorker parks a goroutine locked to its own non-main OS thread and
-// publishes that thread's TID via $IOR_WORKLOAD_TID_FILE before ior starts,
-// so ior can trace exactly that thread with -tid.
+// startTidWorker parks the pipe-writing worker of thread-exit-tid-worker and
+// publishes its TID before ior starts, so ior can trace exactly that thread
+// with -tid.
 func startTidWorker() error {
+	var err error
+	tidWorker, err = startParkedWorker(pipeWriteOnce)
+	return err
+}
+
+// startParkedWorker parks a goroutine locked to its own non-main OS thread,
+// which runs work once start is closed, and publishes the thread's TID via
+// $IOR_WORKLOAD_TID_FILE.
+func startParkedWorker(work func() error) (parkedWorker, error) {
 	path := os.Getenv(workerTidFileEnv)
 	if path == "" {
-		return fmt.Errorf("%s is not set", workerTidFileEnv)
+		return parkedWorker{}, fmt.Errorf("%s is not set", workerTidFileEnv)
 	}
-	tidWorker.start = make(chan struct{})
-	tidWorker.done = make(chan error, 1)
+	w := parkedWorker{start: make(chan struct{}), done: make(chan error, 1)}
 	tid := make(chan int)
 	go func() {
 		// Locked and never unlocked: when this goroutine returns, the Go
@@ -119,14 +132,14 @@ func startTidWorker() error {
 		// main thread).
 		runtime.LockOSThread()
 		tid <- unix.Gettid()
-		<-tidWorker.start
-		tidWorker.done <- pipeWriteOnce()
+		<-w.start
+		w.done <- work()
 	}()
-	tidWorker.tid = <-tid
-	if tidWorker.tid == os.Getpid() {
-		return errors.New("worker goroutine ran on the main thread; main.go init() must pin it")
+	w.tid = <-tid
+	if w.tid == os.Getpid() {
+		return parkedWorker{}, errors.New("worker goroutine ran on the main thread; main.go init() must pin it")
 	}
-	return os.WriteFile(path, []byte(strconv.Itoa(tidWorker.tid)), 0o600)
+	return w, os.WriteFile(path, []byte(strconv.Itoa(w.tid)), 0o600)
 }
 
 // threadExitTidWorker drives the -tid group-dead bypass end to end: the traced

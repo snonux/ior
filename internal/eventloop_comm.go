@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"ior/internal/event"
 	"ior/internal/types"
 )
 
@@ -698,11 +699,17 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // A non-leader exec changes the task's tid as well; rekeyExecCaller moves the
 // execve still in flight (and the rest of the caller's tid-keyed state) to
 // the leader tid it now runs under, so the execve's exit pairs. Like the fd
-// eviction it runs before the comm check.
-func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent) {
+// eviction it runs before the comm check. Under -tid <that non-leader> the
+// exit never arrives (the leader tid is filtered in BPF, which flags the record
+// ExitUntraced), so completeUntracedExec turns the re-keyed enter into its row
+// here and sends it on ch.
+func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
 	defer ev.Recycle()
 	e.fdState().dropOnExec(ev.Pid)
 	e.rekeyExecCaller(ev)
+	if ev.ExitUntraced != 0 {
+		e.completeUntracedExec(ev, ch)
+	}
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
 		// A control record with an empty comm carries no information; keeping

@@ -8,7 +8,12 @@ import (
 	"testing"
 )
 
-const nonLeaderExecScenario = "exec-non-leader-thread"
+const (
+	nonLeaderExecScenario = "exec-non-leader-thread"
+	// nonLeaderExecTidScenario is the same exec, with the exec thread parked
+	// and its tid published before ior starts, for -tid runs.
+	nonLeaderExecTidScenario = "exec-non-leader-thread-tid"
+)
 
 // TestNonLeaderExecIsPaired pins task 0p2 end to end. The workload calls
 // execve from a non-main OS thread; de_thread() makes that thread continue
@@ -27,16 +32,63 @@ func TestNonLeaderExecIsPaired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run scenario %s: %v", nonLeaderExecScenario, err)
 	}
-	raw, err := os.ReadFile(tidFile)
+	callerTid := readCallerTid(t, tidFile)
+	if callerTid == pid {
+		t.Fatalf("caller tid %d must be a non-leader tid of pid %d", callerTid, pid)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+	assertOneExecveRowFor(t, result, callerTid)
+}
+
+// TestNonLeaderExecUnderTidFilterIsCompleted pins task dp2 end to end. ior
+// traces only the exec'ing non-leader thread (-pid -1 -tid <caller>). After
+// de_thread() that thread runs under the leader's tid, which the kernel-side
+// tid filter rejects, so the execve's sys_exit record never reaches ior. The
+// sched_process_exec record must still be emitted for the traced caller
+// (flagged exit_untraced) and complete the parked enter: exactly one execve
+// row under the caller's tid with a measured duration. Before the fix the
+// exec record was filtered as well and no execve row appeared at all.
+func TestNonLeaderExecUnderTidFilterIsCompleted(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	tidFile := filepath.Join(h.OutputDir, "caller.tid")
+	h.WorkloadEnv = []string{workerTidFileEnv + "=" + tidFile}
+	// The scenario parks the exec thread and publishes its tid before the
+	// PID is announced, so the tid is known when ior starts.
+	h.IorArgsForPID = func(int) []string {
+		return []string{"-pid", "-1", "-tid", strconv.Itoa(readCallerTid(t, tidFile))}
+	}
+	result, pid, err := h.RunWithIorArgs(nonLeaderExecTidScenario, defaultDuration,
+		[]string{"-trace-syscalls", "execve"})
+	if err != nil {
+		t.Fatalf("run scenario %s: %v", nonLeaderExecTidScenario, err)
+	}
+	callerTid := readCallerTid(t, tidFile)
+	if callerTid == pid {
+		t.Fatalf("caller tid %d must be a non-leader tid of pid %d", callerTid, pid)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+	assertOneExecveRowFor(t, result, callerTid)
+}
+
+// readCallerTid reads the exec'ing thread's tid published by the workload.
+func readCallerTid(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read caller tid: %v", err)
 	}
-	callerTid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || callerTid == pid {
-		t.Fatalf("caller tid %q must be a non-leader tid of pid %d", raw, pid)
+	tid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("parse caller tid %q: %v", raw, err)
 	}
-	AssertNoUnexpectedPID(t, result, pid)
+	return tid
+}
 
+// assertOneExecveRowFor asserts exactly one execve row of true(1), reported
+// under callerTid, with a measured duration.
+func assertOneExecveRowFor(t *testing.T, result TestResult, callerTid int) {
+	t.Helper()
 	exp := ExpectedEvent{Tracepoint: "enter_execve", PathContains: "true", Comm: "ioworkload"}
 	var count, duration uint64
 	for _, rec := range result.Records {
