@@ -7,8 +7,11 @@ import (
 	"sync"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"ior/internal/globalfilter"
 	"ior/internal/probemanager"
+	"ior/internal/tui/messages"
 	"ior/internal/tui/probes"
 	"ior/internal/types"
 )
@@ -144,6 +147,113 @@ func TestFamilyHintNeverClearsARefusal(t *testing.T) {
 	m.refreshFamilyHint()
 	if !showsRefusal(t, m) {
 		t.Fatal("refreshFamilyHint erased the refusal notice")
+	}
+}
+
+// refusedWhileScopedToNetwork returns a wide dashboard scoped to the untraced
+// Network family (so the "not traced" hint shows) on which a filter was then
+// refused - the state in which the kp2 bug struck. The width fits the refusal
+// and the hint side by side.
+func refusedWhileScopedToNetwork(t *testing.T) (*Model, *selectionProbeManager) {
+	t.Helper()
+	m, _ := newLiveSwapModel(t)
+	m = resized(t, m, 300)
+	manager := newSelectionManager()
+	m.runtime.setProbeManager(manager)
+	m = cycleTo(t, m, "Network")
+	refused := m.filters.current().Clone()
+	refused.Comm = &globalfilter.StringFilter{Pattern: overLongComm()}
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{Filter: refused})
+	m = next.(*Model)
+	if !showsRefusal(t, m) {
+		t.Fatalf("setup: expected a refusal notice, got:\n%s", m.View().Content)
+	}
+	return m, manager
+}
+
+// resized sends m a window size of width columns, which is what sizes the
+// dashboard chrome (m.width alone does not).
+func resized(t *testing.T, m *Model, width int) *Model {
+	t.Helper()
+	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+	return next.(*Model)
+}
+
+// TestProbeChangeKeepsARefusalVisible is the kp2 regression: every probe
+// change refreshes the family hint, and while the dashboard is scoped to an
+// untraced family that refresh used to write the hint into the filter notice,
+// replacing a refusal the user had not read yet. Both notices now show.
+func TestProbeChangeKeepsARefusalVisible(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		session func(m *Model) uint64
+	}{
+		{"current session", func(m *Model) uint64 { return m.tracer.session }},
+		{"stale session", func(m *Model) uint64 { return m.tracer.session + 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := refusedWhileScopedToNetwork(t)
+			next, _ := m.Update(probes.ProbeToggledMsg{Syscall: "read", Session: tc.session(m)})
+			m = next.(*Model)
+			view := m.View().Content
+			if !strings.Contains(view, "FILTER REFUSED") {
+				t.Fatalf("the probe change erased the refusal notice:\n%s", view)
+			}
+			if !strings.Contains(view, "Network not traced") {
+				t.Fatalf("expected the hint next to the refusal, got:\n%s", view)
+			}
+		})
+	}
+}
+
+// TestFamilyHintNeverCrowdsOutARefusal: on a row too narrow for both, the
+// hint is the one trimmed - the refusal is read first and must survive.
+func TestFamilyHintNeverCrowdsOutARefusal(t *testing.T) {
+	m, _ := refusedWhileScopedToNetwork(t)
+	m = resized(t, m, 100)
+	m.refreshFamilyHint()
+	if view := m.View().Content; !strings.Contains(view, "keeping the previous filter") {
+		t.Fatalf("the hint pushed the refusal off the status row:\n%s", view)
+	}
+}
+
+// TestFamilyHintOutlivesAClearedRefusal: accepting a filter clears the
+// refusal but, with the scope still on untraced Network, not the hint; the
+// hint goes once the family gets a probe attached.
+func TestFamilyHintOutlivesAClearedRefusal(t *testing.T) {
+	m, manager := refusedWhileScopedToNetwork(t)
+	accepted := m.filters.current().Clone()
+	accepted.Comm = &globalfilter.StringFilter{Pattern: "firefox"}
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{Filter: accepted})
+	m = next.(*Model)
+	view := m.View().Content
+	if strings.Contains(view, "FILTER REFUSED") || !strings.Contains(view, "Network not traced") {
+		t.Fatalf("expected only the hint after an accepted filter, got:\n%s", view)
+	}
+
+	manager.setActive("connect", true)
+	next, _ = m.Update(probes.ProbeToggledMsg{Syscall: "connect", Session: m.tracer.session})
+	m = next.(*Model)
+	if view := m.View().Content; strings.Contains(view, "not traced") {
+		t.Fatalf("expected the hint to go once Network is attached, got:\n%s", view)
+	}
+}
+
+// TestUndoClearsTheFamilyHint: the hint follows the filter on screen, so
+// undoing a pushed Network scope takes the hint with it.
+func TestUndoClearsTheFamilyHint(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+	m.runtime.setProbeManager(newSelectionManager())
+	network := globalfilter.Filter{Family: &globalfilter.StringFilter{Pattern: "Network"}}
+	next, _ := m.Update(messages.GlobalFilterRequestedMsg{Filter: network})
+	m = next.(*Model)
+	if view := m.View().Content; !strings.Contains(view, "Network not traced") {
+		t.Fatalf("setup: expected the hint for a pushed Network scope, got:\n%s", view)
+	}
+	next, _ = m.undoGlobalFilter()
+	m = next.(*Model)
+	if view := m.View().Content; strings.Contains(view, "not traced") {
+		t.Fatalf("expected undo to clear the hint with the scope, got:\n%s", view)
 	}
 }
 

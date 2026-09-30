@@ -247,31 +247,20 @@ func activeSyscalls(states []probemanager.ProbeState) []string {
 	return out
 }
 
-// refreshFamilyHint shows, in the dashboard's filter notice, a hint when the
-// dashboard is scoped to a syscall family none of whose probes is attached -
-// e.g. after cycling onto Network with '['/']' when only FS is traced, which
-// would otherwise just show empty tabs. It clears its own hint once the scope
-// changes or the family gets attached, but never a filter-refusal notice
-// (familyHintShown). Without a published probe manager (still attaching,
-// test-flames mode) the attach state is unknown and nothing is shown.
+// refreshFamilyHint shows a hint in the dashboard chrome when the dashboard
+// is scoped to a syscall family none of whose probes is attached - e.g. after
+// cycling onto Network with '['/']' when only FS is traced, which would
+// otherwise just show empty tabs - and clears it otherwise. The hint is
+// derived from the current filter and probe states alone, so it is refreshed
+// on every filter change on screen (syncDashboardFilterState) and every probe
+// change. It lives in its own dashboard slot (SetFamilyHint), apart from the
+// filter notice, so a refresh can never replace or clear a FILTER REFUSED
+// notice. Without a published probe manager (still attaching, test-flames
+// mode) the attach state is unknown and nothing is shown.
 func (m *Model) refreshFamilyHint() {
 	hint := ""
 	if manager := m.runtime.currentProbeManager(); manager != nil {
 		hint = probes.NotTracedHint(scopedFamily(m.filters.current()), manager.States())
 	}
-	if hint != "" {
-		m.dashboard.SetFilterNotice(hint)
-		m.familyHintShown = true
-		return
-	}
-	if m.familyHintShown {
-		m.setFilterNotice("")
-	}
-}
-
-// setFilterNotice writes the dashboard's filter notice for a filter change
-// (refusal reason or ""), which replaces any family hint showing.
-func (m *Model) setFilterNotice(notice string) {
-	m.dashboard.SetFilterNotice(notice)
-	m.familyHintShown = false
+	m.dashboard.SetFamilyHint(hint)
 }
