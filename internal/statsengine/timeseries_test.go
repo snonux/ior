@@ -77,3 +77,41 @@ func TestRingTimeSeriesValuesAtScrollsThroughIdlePeriod(t *testing.T) {
 		t.Fatalf("unexpected values: got %v want %v", got, want)
 	}
 }
+
+// A weighted batch counts as count samples in its slot's mean: one batch of
+// 3 samples summing to 300 next to a single sample of 10 gives (300+10)/4,
+// not the unweighted (100+10)/2.
+func TestRingTimeSeriesAddWeightedWeighsBatchByCount(t *testing.T) {
+	base := time.Unix(100, 0)
+	r := newRingTimeSeriesWithConfig(time.Second, 4)
+	r.AddWeighted(300, 3, base)
+	r.Add(10, base)
+
+	got := r.Values()
+	if last := got[len(got)-1]; last != 77.5 {
+		t.Fatalf("slot mean = %v, want 77.5", last)
+	}
+}
+
+// A zero-count batch carries no sample: it must neither create a slot (whose
+// 0/0 mean would be reported) nor advance the window past older data.
+func TestRingTimeSeriesAddWeightedIgnoresZeroCount(t *testing.T) {
+	base := time.Unix(100, 0)
+	r := newRingTimeSeriesWithConfig(time.Second, 4)
+	r.AddWeighted(50, 0, base)
+	if r.hasData {
+		t.Fatal("zero-count batch on an empty series marked it as having data")
+	}
+
+	r.Add(8, base)
+	r.AddWeighted(1_000, 0, base.Add(10*time.Second))
+	got := r.Values()
+	if last := got[len(got)-1]; last != 8 {
+		t.Fatalf("values = %v, want last point 8 (window not advanced)", got)
+	}
+}
+
+func TestRingTimeSeriesAddWeightedNilReceiver(t *testing.T) {
+	var r *ringTimeSeries
+	r.AddWeighted(1, 1, time.Unix(1, 0)) // must not panic
+}

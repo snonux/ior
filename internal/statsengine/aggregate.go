@@ -28,6 +28,12 @@ func (row SyscallAggregate) timedCount() uint64 {
 }
 
 // IngestSyscallAggregates folds kernel aggregate rows into the engine.
+//
+// Aggregate rows carry no inter-syscall gap (the kernel sums only counts and
+// latencies), so they add to totalSyscalls but neither to totalGap nor to
+// gapSamples, the gap mean's denominator; the gap histogram and series stay
+// per-event-pair only too. Otherwise, under -sample or aggregate-only
+// tracing, the unsampled calls would shrink the gap mean toward zero.
 func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 	if e == nil || len(rows) == 0 {
 		return
@@ -56,7 +62,9 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 		batchLatency += row.TotalLatencyNs
 		batchCount += row.timedCount()
 	}
-	if batchCount > 0 {
-		e.latencySeries.Add(float64(batchLatency)/float64(batchCount), now)
-	}
+	// Weight the batch by its timed invocations so a drain of N calls counts
+	// as N samples in its slot's mean, exactly like N per-event pairs would,
+	// rather than as one sample. A batch without timed invocations adds
+	// nothing (AddWeighted ignores a zero count).
+	e.latencySeries.AddWeighted(float64(batchLatency), batchCount, now)
 }
