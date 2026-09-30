@@ -36,8 +36,20 @@ type Accumulator interface {
 	Reset()
 }
 
-// compile-time assertion: *Engine must satisfy Accumulator.
-var _ Accumulator = (*Engine)(nil)
+// ProcessRetirer is the process-exit side of the stats engine: the event loop
+// reports each whole-process exit so that a recycled PID starts a new row in
+// the Processes table instead of merging into the dead process's one.
+type ProcessRetirer interface {
+	// RetireProcess ends the current lifetime of pid (a tgid). Only the
+	// exit that ends the whole thread group may be reported.
+	RetireProcess(pid uint32)
+}
+
+// compile-time assertions: *Engine must satisfy Accumulator and ProcessRetirer.
+var (
+	_ Accumulator    = (*Engine)(nil)
+	_ ProcessRetirer = (*Engine)(nil)
+)
 
 // Engine aggregates streaming syscall data into immutable snapshots.
 type Engine struct {
@@ -184,6 +196,21 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	e.latencyHist.Increment(pair.Duration)
 	e.latencySeries.Add(float64(pair.Duration), now)
 	e.throughputSeries.Add(float64(pair.Bytes), now)
+}
+
+// RetireProcess ends the current lifetime of pid in the per-process stats:
+// its row stays in the snapshot with its counts and label, and the next pair
+// for pid opens a new row. It must be called in stream order with Ingest (the
+// event loop does both from its own goroutine), so the dying process's last
+// pairs land before the retirement and the successor's first ones after it.
+// Reset discards retired rows along with everything else.
+func (e *Engine) RetireProcess(pid uint32) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.processes.RetireProcess(pid)
 }
 
 // ingestGap records pair's inter-syscall gap. A TID's first pair has no

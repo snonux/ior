@@ -10,14 +10,33 @@ import (
 
 const processRankTopNDefault = 20
 
+// processAccumulator folds syscall pairs into one row per process lifetime.
+//
+// A lifetime is live while its PID is in byPID. RetireProcess ends it when the
+// whole process exits: the row moves to retired, still reported by Snapshot,
+// and the next pair for that PID opens a fresh row. That keeps the Processes
+// table cumulative for the session while a recycled PID no longer merges two
+// processes into one row labelled with the newer one's comm.
 type processAccumulator struct {
 	topN    int
 	maxSeen int
 	byPID   map[uint32]*processStats
+	// retired holds the rows of processes that exited, in retirement order.
+	// It counts against maxSeen together with byPID, so compaction bounds it
+	// the same way it bounds the live rows.
+	retired []*processStats
+	// nextLifetime is the lifetime ordinal the next row of a PID gets, set
+	// only for PIDs whose last lifetime retired with no new one started yet.
+	// Ordinals keep the rows of one PID distinguishable (ProcessSnapshot.
+	// Lifetime), which the TUI uses as part of its selection key.
+	nextLifetime map[uint32]uint32
 }
 
 type processStats struct {
 	pid uint32
+	// lifetime is 0 for the first process seen with this PID in the session
+	// and counts up with every retired predecessor (see nextLifetime).
+	lifetime uint32
 	// leaderComm is the comm last seen on the thread-group leader (tid ==
 	// pid), i.e. the process name ps shows. It is the preferred label.
 	leaderComm string
@@ -32,6 +51,7 @@ type processStats struct {
 
 type processSnapshotInput struct {
 	pid          uint32
+	lifetime     uint32
 	comm         string
 	count        uint64
 	totalBytes   uint64
@@ -57,9 +77,10 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 		maxSeen = topN
 	}
 	return &processAccumulator{
-		topN:    topN,
-		maxSeen: maxSeen,
-		byPID:   make(map[uint32]*processStats),
+		topN:         topN,
+		maxSeen:      maxSeen,
+		byPID:        make(map[uint32]*processStats),
+		nextLifetime: make(map[uint32]uint32),
 	}
 }
 
@@ -74,20 +95,14 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 // two threads and made the Processes tab undercount multithreaded apps
 // drastically (200 interleaved syscalls reported as 1).
 //
-// The trade-off is that real PID reuse is not detected: when the kernel hands
-// a dead process's PID to a new one within the same trace, both lifetimes are
-// merged into one row, and the new process's comm then labels counts that
-// largely belong to the old one - misattribution, not merely a bounded
-// overcount. That is not a corner case: the kernel default pid_max is 32768
-// (or 1024 per CPU), and on a box churning short-lived processes PIDs wrap
-// quickly. The accumulator cannot fix it alone, because it only sees pairs;
-// the sched_process_exit records that end a lifetime are consumed inside the
-// event loop (handleProcessExitEvent). They fire per task, but carry a
-// group_dead flag (ProcessExitEvent.IsGroupDead) marking the exit that ends
-// the whole process. A real fix needs that process-exit signal (or a
-// pid+start-time key) forwarded to the stats engine; until then merging is
-// preferred over the old heuristic, which was wrong for every multithreaded
-// process rather than only on reuse.
+// PID reuse is detected from the process-exit signal instead: the event loop
+// forwards the sched_process_exit record that ends the whole thread group
+// (ProcessExitEvent.IsGroupDead) to RetireProcess, and the next pair for the
+// PID opens a new row. The kernel recycles PIDs quickly on a box churning
+// short-lived processes (pid_max defaults to 32768, or 1024 per CPU), and
+// without that signal the new process's counts merged into the dead one's row
+// under the new comm. A lost group-dead record (ring-buffer backpressure)
+// falls back to that merge for the one PID.
 //
 // The comm is only a label, see processStats.label.
 func (a *processAccumulator) Add(pair *event.Pair) {
@@ -98,8 +113,7 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 	pid := pair.EnterEv.GetPid()
 	stats := a.byPID[pid]
 	if stats == nil {
-		stats = &processStats{pid: pid}
-		a.byPID[pid] = stats
+		stats = a.startLifetime(pid)
 	}
 
 	stats.count++
@@ -107,6 +121,25 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 	stats.totalLatency += pair.Duration
 	stats.observeComm(pair.EnterEv.GetTid(), pair.Comm)
 	a.compactIfNeeded()
+}
+
+// RetireProcess ends the current lifetime of pid: its row keeps its counts
+// and label but stops receiving pairs, so a later process handed the same PID
+// starts a row of its own. Call it only for the exit that ends the whole
+// thread group; a single thread exiting does not end the process. A PID
+// without a live row (never traced, already retired, or compacted away) is a
+// no-op, so duplicate or unscoped exit records are harmless.
+func (a *processAccumulator) RetireProcess(pid uint32) {
+	if a == nil {
+		return
+	}
+	stats := a.byPID[pid]
+	if stats == nil {
+		return
+	}
+	delete(a.byPID, pid)
+	a.retired = append(a.retired, stats)
+	a.nextLifetime[pid] = stats.lifetime + 1
 }
 
 // Snapshot returns a slice of ProcessSnapshots for all tracked processes.
@@ -123,20 +156,26 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 	return snap
 }
 
+// startLifetime opens and registers the live row of a new process with pid,
+// numbered after any retired predecessor with the same PID.
+func (a *processAccumulator) startLifetime(pid uint32) *processStats {
+	stats := &processStats{pid: pid, lifetime: a.nextLifetime[pid]}
+	delete(a.nextLifetime, pid)
+	a.byPID[pid] = stats
+	return stats
+}
+
 func (a *processAccumulator) snapshotInputs() []processSnapshotInput {
 	if a == nil {
 		return nil
 	}
 
-	inputs := make([]processSnapshotInput, 0, len(a.byPID))
+	inputs := make([]processSnapshotInput, 0, len(a.byPID)+len(a.retired))
 	for _, stats := range a.byPID {
-		inputs = append(inputs, processSnapshotInput{
-			pid:          stats.pid,
-			comm:         stats.label(),
-			count:        stats.count,
-			totalBytes:   stats.totalBytes,
-			totalLatency: stats.totalLatency,
-		})
+		inputs = append(inputs, stats.snapshotInput())
+	}
+	for _, stats := range a.retired {
+		inputs = append(inputs, stats.snapshotInput())
 	}
 	return inputs
 }
@@ -157,20 +196,29 @@ func buildProcessSnapshots(inputs []processSnapshotInput, elapsed time.Duration)
 		if a.Bytes != b.Bytes {
 			return cmp.Compare(b.Bytes, a.Bytes)
 		}
-		return cmp.Compare(a.PID, b.PID)
+		if a.PID != b.PID {
+			return cmp.Compare(a.PID, b.PID)
+		}
+		return cmp.Compare(a.Lifetime, b.Lifetime)
 	})
 	return result, nil
 }
 
+// compactIfNeeded bounds memory on high-cardinality traces: once live and
+// retired rows together exceed maxSeen, only the topN best-ranked rows of
+// either kind survive. Retired rows compete on the same terms as live ones,
+// so a busy process that exited stays listed while idle short-lived ones are
+// dropped.
 func (a *processAccumulator) compactIfNeeded() {
-	if len(a.byPID) <= a.maxSeen {
+	if len(a.byPID)+len(a.retired) <= a.maxSeen {
 		return
 	}
 
-	ordered := make([]*processStats, 0, len(a.byPID))
+	ordered := make([]*processStats, 0, len(a.byPID)+len(a.retired))
 	for _, stats := range a.byPID {
 		ordered = append(ordered, stats)
 	}
+	ordered = append(ordered, a.retired...)
 	slices.SortFunc(ordered, func(a, b *processStats) int {
 		if betterProcessRank(a, b) {
 			return -1
@@ -183,12 +231,32 @@ func (a *processAccumulator) compactIfNeeded() {
 	if len(ordered) > a.topN {
 		ordered = ordered[:a.topN]
 	}
+	a.keepOnly(ordered)
+}
 
-	kept := make(map[uint32]*processStats, len(ordered))
-	for _, stats := range ordered {
-		kept[stats.pid] = stats
+// keepOnly rebuilds the live and retired rows from the compaction survivors.
+// A row is live exactly when byPID still points at it. nextLifetime is pruned
+// to the PIDs with a surviving retired row: once every earlier row of a PID is
+// gone, restarting its ordinals at 0 cannot collide with a listed row.
+func (a *processAccumulator) keepOnly(survivors []*processStats) {
+	kept := make(map[uint32]*processStats, len(survivors))
+	var retired []*processStats
+	for _, stats := range survivors {
+		if a.byPID[stats.pid] == stats {
+			kept[stats.pid] = stats
+			continue
+		}
+		retired = append(retired, stats)
+	}
+	nextLifetime := make(map[uint32]uint32)
+	for _, stats := range retired {
+		if next, ok := a.nextLifetime[stats.pid]; ok {
+			nextLifetime[stats.pid] = next
+		}
 	}
 	a.byPID = kept
+	a.retired = retired
+	a.nextLifetime = nextLifetime
 }
 
 func betterProcessRank(a, b *processStats) bool {
@@ -198,7 +266,21 @@ func betterProcessRank(a, b *processStats) bool {
 	if a.totalBytes != b.totalBytes {
 		return a.totalBytes > b.totalBytes
 	}
-	return a.pid < b.pid
+	if a.pid != b.pid {
+		return a.pid < b.pid
+	}
+	return a.lifetime < b.lifetime
+}
+
+func (s *processStats) snapshotInput() processSnapshotInput {
+	return processSnapshotInput{
+		pid:          s.pid,
+		lifetime:     s.lifetime,
+		comm:         s.label(),
+		count:        s.count,
+		totalBytes:   s.totalBytes,
+		totalLatency: s.totalLatency,
+	}
 }
 
 // observeComm records the comm of the thread tid of this process. Empty comms
@@ -250,6 +332,7 @@ func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 
 	return ProcessSnapshot{
 		PID:            s.pid,
+		Lifetime:       s.lifetime,
 		Comm:           s.comm,
 		Syscalls:       s.count,
 		RatePerSec:     safeRate(s.count, rateDiv),

@@ -88,7 +88,7 @@ func assertProcessesTableSelection(t *testing.T, m *Model, wantAt int, wantPID u
 
 func assertProcessSelection(t *testing.T, m *Model, name string, sel keyedSelection, mode tabVizMode, wantAt int, wantPID uint32) {
 	t.Helper()
-	if got := sel.selectedKey(); *sel.offset != wantAt || got != processKey(wantPID) {
+	if got := sel.selectedKey(); *sel.offset != wantAt || got != processKey(wantPID, 0) {
 		t.Fatalf("%s: selected PID %q at %d, want %d at %d", name, got, *sel.offset, wantPID, wantAt)
 	}
 	if m.processesTab.mode != mode {
@@ -609,7 +609,29 @@ func TestKeyedSelection(t *testing.T) {
 	if offset != 0 || sel.selectedKey() != "" {
 		t.Fatalf("keep with empty list: offset %d, key %q", offset, sel.selectedKey())
 	}
-	if got := processKey(4294967295); got != "4294967295" {
+	if got := processKey(4294967295, 0); got != "4294967295" {
 		t.Fatalf("processKey = %q", got)
+	}
+}
+
+// TestProcessKeyTellsRecycledPIDLifetimesApart checks that the rows of two
+// processes that shared a PID (task ro2) get distinct selection keys, so the
+// sort re-anchor and the treemap selection stay on the chosen lifetime, while
+// the first lifetime keeps the bare-PID key.
+func TestProcessKeyTellsRecycledPIDLifetimesApart(t *testing.T) {
+	old := statsengine.ProcessSnapshot{PID: 2000, Lifetime: 0, Comm: "a", Syscalls: 1}
+	successor := statsengine.ProcessSnapshot{PID: 2000, Lifetime: 1, Comm: "b", Syscalls: 9}
+	if got := processRowKey(old); got != "2000" {
+		t.Fatalf("first lifetime key = %q, want %q", got, "2000")
+	}
+	if got := processRowKey(successor); got != "2000#1" {
+		t.Fatalf("second lifetime key = %q, want %q", got, "2000#1")
+	}
+	rows := []statsengine.ProcessSnapshot{successor, old}
+	if idx, ok := findProcessOffset(rows, processRowKey(old)); !ok || idx != 1 {
+		t.Fatalf("findProcessOffset(old) = %d, %v; want 1, true", idx, ok)
+	}
+	if _, ok := findProcessOffset(rows, processKey(2000, 2)); ok {
+		t.Fatalf("findProcessOffset matched a lifetime that has no row")
 	}
 }

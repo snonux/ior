@@ -185,6 +185,11 @@ func (m *Model) selectedProcessFilter() (globalfilter.Filter, string, bool) {
 			return filter, presenter.DimensionSummary(filter, presenter.DimComm), true
 		}
 	}
+	// The PID filter is exact per PID, not per row: when the kernel recycled
+	// the PID during the session the table has one row per lifetime
+	// (ProcessSnapshot.Lifetime), and the filter matches all of them, since
+	// events carry no lifetime to narrow on. From then on only the process
+	// currently holding the PID produces events, so that is what it scopes.
 	filter.PID = &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: int64(proc.PID)}
 	return filter, presenter.DimensionSummary(filter, presenter.DimPID), true
 }

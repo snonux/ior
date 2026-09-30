@@ -164,7 +164,7 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 		label := processLabel(proc.PID, proc.Comm)
 		item := syscallTreemapItem{
 			Name:     label,
-			Key:      processKey(proc.PID),
+			Key:      processRowKey(proc),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
