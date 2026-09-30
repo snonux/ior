@@ -88,6 +88,88 @@ func TestBuildSyscallSamplingRatesKeepsFamilyZerosInTUIMode(t *testing.T) {
 	}
 }
 
+// samplingRatesFromCLI resolves the per-trace-ID sampling rates for a config
+// produced by the real CLI path (flags.ParseArgs), which — unlike
+// flags.NewFlags() — carries the built-in futex*/clock_gettime defaults. The
+// hand-built configs above missed that defaults used to override explicit
+// family rates.
+func samplingRatesFromCLI(t *testing.T, args ...string) map[types.TraceId]uint32 {
+	t.Helper()
+	cfg, err := flags.ParseArgs(args)
+	if err != nil {
+		t.Fatalf("ParseArgs(%v): %v", args, err)
+	}
+	return buildSyscallSamplingRates(cfg)
+}
+
+// TestBuildSyscallSamplingRatesFamilyRateBeatsBuiltInDefaults locks task jq2:
+// an explicit -syscall-sampling-families rate must reach the syscalls that
+// carry a built-in aggregate-only default (clock_gettime in Time, futex* in
+// IPC), in TUI and raw modes alike.
+func TestBuildSyscallSamplingRatesFamilyRateBeatsBuiltInDefaults(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		id   types.TraceId
+		want uint32
+	}{
+		{"Time=100 reaches clock_gettime (help example)", []string{"-syscall-sampling-families", "Time=100"}, types.SYS_ENTER_CLOCK_GETTIME, 100},
+		{"Time=100 raw mode", []string{"-plain", "-syscall-sampling-families", "Time=100"}, types.SYS_ENTER_CLOCK_GETTIME, 100},
+		{"IPC=1 reaches futex in TUI mode", []string{"-syscall-sampling-families", "IPC=1"}, types.SYS_ENTER_FUTEX, 1},
+		{"IPC=7 reaches futex", []string{"-syscall-sampling-families", "IPC=7"}, types.SYS_ENTER_FUTEX, 7},
+		{"IPC=0 keeps futex aggregate-only in TUI mode", []string{"-syscall-sampling-families", "IPC=0"}, types.SYS_ENTER_FUTEX, 0},
+		{"IPC=0 is promoted to 1 in raw mode", []string{"-flamegraph", "-syscall-sampling-families", "IPC=0"}, types.SYS_ENTER_FUTEX, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rates := samplingRatesFromCLI(t, tc.args...)
+			if got, ok := rates[tc.id]; !ok || got != tc.want {
+				t.Fatalf("%s rate = %d (present %v), want %d", tc.id.String(), got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildSyscallSamplingRatesExplicitSyscallBeatsFamilyAndDefault checks the
+// top of the precedence chain through the CLI: an explicit syscall rate wins
+// over both the family rate and the built-in default, and its family siblings
+// still follow the family rate.
+func TestBuildSyscallSamplingRatesExplicitSyscallBeatsFamilyAndDefault(t *testing.T) {
+	rates := samplingRatesFromCLI(t,
+		"-syscall-sampling-families", "Time=100",
+		"-syscall-sampling-syscalls", "clock_gettime=3")
+	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 3 {
+		t.Fatalf("clock_gettime rate = %d, want 3 (explicit syscall rate)", got)
+	}
+	if got := rates[types.SYS_ENTER_NANOSLEEP]; got != 100 {
+		t.Fatalf("nanosleep rate = %d, want 100 (family rate)", got)
+	}
+}
+
+// TestBuildSyscallSamplingRatesBuiltInDefaultsWithoutFamilyRate is the negative
+// case: with no family or syscall rate for their family, the built-in defaults
+// still apply (aggregate-only in TUI mode, promoted to 1 in raw modes), and an
+// unrelated family rate does not disturb them.
+func TestBuildSyscallSamplingRatesBuiltInDefaultsWithoutFamilyRate(t *testing.T) {
+	rates := samplingRatesFromCLI(t, "-syscall-sampling-families", "FS=5")
+	for _, id := range []types.TraceId{types.SYS_ENTER_FUTEX, types.SYS_ENTER_CLOCK_GETTIME} {
+		if got, ok := rates[id]; !ok || got != 0 {
+			t.Fatalf("%s TUI rate = %d (present %v), want built-in 0", id.String(), got, ok)
+		}
+	}
+	rates = samplingRatesFromCLI(t, "-plain", "-syscall-sampling-families", "FS=5")
+	for _, id := range []types.TraceId{types.SYS_ENTER_FUTEX, types.SYS_ENTER_CLOCK_GETTIME} {
+		if got := rates[id]; got != 1 {
+			t.Fatalf("%s raw-mode rate = %d, want promoted 1", id.String(), got)
+		}
+	}
+	// An explicit zero on a defaulted syscall stays zero in raw mode.
+	rates = samplingRatesFromCLI(t, "-plain", "-syscall-sampling-syscalls", "futex=0")
+	if got := rates[types.SYS_ENTER_FUTEX]; got != 0 {
+		t.Fatalf("explicit futex=0 in raw mode = %d, want 0", got)
+	}
+}
+
 // TestBuildAggregateIngestTraceIDsCoversAggregateOnlyAndSampled locks the fix
 // for the sampled-count under-report: the ingest set must contain every
 // syscall whose sampling rate is not 1 — aggregate-only (0) and sampled

@@ -433,35 +433,51 @@ func applySyscallSamplingRates(cfg flags.Config, module *bpf.Module) error {
 	return nil
 }
 
+// buildSyscallSamplingRates resolves the per-trace-ID sampling rates written
+// to the kernel map. Precedence, lowest to highest:
+//
+//	built-in per-syscall default < family rate < explicit syscall rate
+//
+// The built-in defaults (futex*, clock_gettime) are only a fallback for users
+// who said nothing: an explicit -syscall-sampling-families rate for their
+// family (the help text's own "Time=100" example) must win over them, and only
+// an explicit -syscall-sampling-syscalls entry beats a family rate.
 func buildSyscallSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	rates := make(map[types.TraceId]uint32)
+	applyNamedSamplingRates(rates, cfg.DefaultSyscallSamplingRates)
 	for _, enterID := range types.EnterTraceIDs() {
 		if rate, ok := cfg.SyscallFamilySamplingRates[enterID.Family()]; ok {
-			rates[enterID] = rate
+			rates[enterID] = promoteFamilyZeroForRawOutput(cfg, rate)
 		}
 	}
-	// Raw output modes (-plain, -flamegraph, headless -parquet) have no
-	// aggregate sink, so an explicit family rate of 0 (aggregate-only)
-	// would suppress every ring-buffer event for that family and silently
-	// erase it from the output. Promote those family-derived zeros to 1;
-	// the per-syscall entries below still override, so an explicit
-	// -syscall-sampling-syscalls X=0 keeps its zero. This mirrors the
-	// default-syscall promotion in flags.promoteAggregateOnlyForRawOutput.
-	if cfg.IsRawOutputMode() {
-		for enterID, rate := range rates {
-			if rate == 0 {
-				rates[enterID] = 1
-			}
-		}
+	applyNamedSamplingRates(rates, cfg.SyscallSamplingRates)
+	return rates
+}
+
+// promoteFamilyZeroForRawOutput turns an explicit family rate of 0
+// (aggregate-only) into 1 in raw output modes (-plain, -flamegraph, headless
+// -parquet). Those have no aggregate sink, so a zero would suppress every
+// ring-buffer event of the family and silently erase it from the output. The
+// explicit per-syscall rates applied afterwards still override, so an explicit
+// -syscall-sampling-syscalls X=0 keeps its zero. This mirrors the built-in
+// default promotion in flags.resolveDefaultSyscallSamplingRates.
+func promoteFamilyZeroForRawOutput(cfg flags.Config, rate uint32) uint32 {
+	if rate == 0 && cfg.IsRawOutputMode() {
+		return 1
 	}
-	for syscallName, rate := range cfg.SyscallSamplingRates {
+	return rate
+}
+
+// applyNamedSamplingRates overlays name-keyed rates onto rates, skipping names
+// that resolve to no enter trace ID.
+func applyNamedSamplingRates(rates map[types.TraceId]uint32, named map[string]uint32) {
+	for syscallName, rate := range named {
 		enterID, ok := types.EnterTraceIDByName(syscallName)
 		if !ok {
 			continue
 		}
 		rates[enterID] = rate
 	}
-	return rates
 }
 
 // buildAggregateIngestTraceIDs returns the trace IDs whose kernel aggregate

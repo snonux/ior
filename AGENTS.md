@@ -449,6 +449,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
 - **Sampling / aggregate-only mode**:
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
   - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.
+  - Precedence, lowest to highest: built-in per-syscall default < `-syscall-sampling-families` rate < explicit `-syscall-sampling-syscalls` rate. The defaults live in `Config.DefaultSyscallSamplingRates`, separate from the user-explicit `Config.SyscallSamplingRates`, so e.g. `-syscall-sampling-families Time=100` reaches `clock_gettime` and `IPC=1` reaches the futex variants (`buildSyscallSamplingRates` in `internal/syscall_aggregate_consumer.go`). Test this through `flags.ParseArgs`, not `flags.NewFlags()` (whose default map is empty).
   - In raw output modes (`-plain`, `-flamegraph`, headless `-parquet`) the default aggregate-only rates are automatically promoted to `1` because these modes lack a TUI aggregate sink. Explicit per-family rate `0` is also promoted to `1` in raw modes (a family zero would otherwise erase the whole family from output with no aggregate to preserve it); user-explicit `-syscall-sampling-syscalls` overrides are still preserved.
   - **Sampled counts are exact, not scaled.** The kernel aggregates exactly the
     events it does *not* emit (`ior_on_syscall_exit` in `internal/c/filter.c`

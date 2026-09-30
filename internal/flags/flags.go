@@ -3,6 +3,7 @@ package flags
 import (
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"slices"
@@ -84,10 +85,17 @@ type Config struct {
 	// SyscallFamilySamplingRates controls in-kernel syscall sampling by family.
 	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
 	SyscallFamilySamplingRates map[types.SyscallFamily]uint32
-	// SyscallSamplingRates controls in-kernel syscall sampling by syscall name.
-	// Keys use syscall names (for example "futex"), not tracepoint names.
-	// Rate semantics: 0 aggregate-only, 1 emit every event, N>1 emit 1-in-N events.
+	// SyscallSamplingRates holds only the rates the user set explicitly via
+	// -syscall-sampling-syscalls, keyed by syscall name (for example "futex"),
+	// not tracepoint name. Rate semantics: 0 aggregate-only, 1 emit every
+	// event, N>1 emit 1-in-N events.
 	SyscallSamplingRates map[string]uint32
+	// DefaultSyscallSamplingRates holds the built-in per-syscall defaults
+	// (futex*, clock_gettime: aggregate-only, or 1 in raw output modes). It is
+	// separate from SyscallSamplingRates so that precedence is
+	// default < SyscallFamilySamplingRates < SyscallSamplingRates: an explicit
+	// family rate must beat a built-in default.
+	DefaultSyscallSamplingRates map[string]uint32
 
 	// ShowVersion prints the banner plus version and exits without running.
 	ShowVersion bool
@@ -111,19 +119,20 @@ const DefaultResetTimer = 30 * time.Second
 // NewFlags returns a configuration instance initialized with project defaults.
 func NewFlags() Config {
 	return Config{
-		PidFilter:                  -1,
-		TidFilter:                  -1,
-		EventMapSize:               appconfig.DefaultEventMapSize,
-		Duration:                   900,
-		LiveInterval:               200 * time.Millisecond,
-		TUIFastRefreshInterval:     250 * time.Millisecond,
-		TUIExportEnable:            true,
-		EscapeMode:                 textsafe.EscapeAuto,
-		CollapsedFields:            collapse.DefaultFields(),
-		CountField:                 collapse.DefaultCountField(),
-		ResetTimer:                 DefaultResetTimer,
-		SyscallFamilySamplingRates: make(map[types.SyscallFamily]uint32),
-		SyscallSamplingRates:       make(map[string]uint32),
+		PidFilter:                   -1,
+		TidFilter:                   -1,
+		EventMapSize:                appconfig.DefaultEventMapSize,
+		Duration:                    900,
+		LiveInterval:                200 * time.Millisecond,
+		TUIFastRefreshInterval:      250 * time.Millisecond,
+		TUIExportEnable:             true,
+		EscapeMode:                  textsafe.EscapeAuto,
+		CollapsedFields:             collapse.DefaultFields(),
+		CountField:                  collapse.DefaultCountField(),
+		ResetTimer:                  DefaultResetTimer,
+		SyscallFamilySamplingRates:  make(map[types.SyscallFamily]uint32),
+		SyscallSamplingRates:        make(map[string]uint32),
+		DefaultSyscallSamplingRates: make(map[string]uint32),
 	}
 }
 
@@ -151,6 +160,7 @@ func (f Config) Clone() Config {
 	out.GlobalFilter = f.GlobalFilter.Clone()
 	out.SyscallFamilySamplingRates = cloneFamilySamplingRates(f.SyscallFamilySamplingRates)
 	out.SyscallSamplingRates = cloneSyscallSamplingRates(f.SyscallSamplingRates)
+	out.DefaultSyscallSamplingRates = cloneSyscallSamplingRates(f.DefaultSyscallSamplingRates)
 	return out
 }
 
@@ -159,6 +169,16 @@ func (f Config) Clone() Config {
 // program startup before any other flag parsing occurs.
 func Parse() (Config, error) {
 	return parseFromFlagSet(flag.CommandLine, os.Args[1:])
+}
+
+// ParseArgs parses args (without the program name) into a Config using a
+// private FlagSet, leaving the global flag.CommandLine untouched. It lets
+// tests outside this package build a Config through the real CLI resolution
+// path instead of hand-assembling maps that production never produces.
+func ParseArgs(args []string) (Config, error) {
+	fs := flag.NewFlagSet("ior", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return parseFromFlagSet(fs, args)
 }
 
 // parseFromFlagSet parses flags into a new Config using the provided FlagSet
@@ -273,7 +293,7 @@ func registerSamplingFlags(fs *flag.FlagSet, validFamilies []string) (familySamp
 	familySampling = fs.String("syscall-sampling-families", "",
 		"Per-family sampling rates as name=rate, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink; valid families: "+strings.Join(validFamilies, ",")+")")
 	syscallSampling = fs.String("syscall-sampling-syscalls", "",
-		"Per-syscall sampling rates as name=rate, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
+		"Per-syscall sampling rates as name=rate, for example \"futex=0,clock_gettime=200\" (overrides family rates, which in turn override the built-in aggregate-only defaults of futex* and clock_gettime)")
 	return familySampling, syscallSampling
 }
 
@@ -334,14 +354,11 @@ func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) 
 		return err
 	}
 	cfg.SyscallFamilySamplingRates = familyRates
-	cfg.SyscallSamplingRates = mergeSyscallSamplingRates(syscallRates)
-	// In raw output modes (-plain, -flamegraph, headless -parquet) there is
-	// no aggregate sink, so aggregate-only defaults (rate 0) would silently
-	// suppress ring-buffer events. Promote those defaults to rate 1 unless
-	// the user explicitly requested rate 0 via -syscall-sampling-syscalls.
-	if cfg.IsRawOutputMode() {
-		promoteAggregateOnlyForRawOutput(cfg.SyscallSamplingRates, syscallRates)
-	}
+	cfg.SyscallSamplingRates = syscallRates
+	// Built-in defaults stay in their own map (see Config.DefaultSyscallSamplingRates)
+	// and are promoted to rate 1 in raw output modes, which have no aggregate
+	// sink; explicit -syscall-sampling-syscalls rates are never promoted.
+	cfg.DefaultSyscallSamplingRates = resolveDefaultSyscallSamplingRates(cfg.IsRawOutputMode())
 	return nil
 }
 
