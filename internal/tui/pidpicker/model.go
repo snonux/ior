@@ -2,6 +2,7 @@ package pidpicker
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	common "ior/internal/tui/common"
@@ -63,7 +64,15 @@ type processesLoadedMsg struct {
 type Model struct {
 	input     textinput.Model
 	processes []ProcessInfo
-	filtered  []ProcessInfo
+	// search holds the lowercased searchable text of processes, index for
+	// index, so a typed query never lowercases or formats a row again (task
+	// 7r2). It is derived data: applyFilter rebuilds it whenever processes was
+	// replaced (see ensureSearch), so writers of processes need not know it.
+	search []searchText
+	// searchBase is &processes[0] at the time search was built; ensureSearch
+	// compares it to notice a replaced processes slice.
+	searchBase *ProcessInfo
+	filtered   []ProcessInfo
 	// selectedIndex is the highlighted row: 0 is the "All" row, i>0 is
 	// filtered[i-1], noSelection (PID mode only) highlights nothing.
 	selectedIndex int
@@ -252,17 +261,68 @@ func (m Model) applyFilter() Model {
 	selectedPid, hadSelection := m.selectedProcessPid()
 	query := strings.TrimSpace(strings.ToLower(m.input.Value()))
 	if query == "" {
-		m.filtered = cloneProcesses(m.processes)
+		// filtered is only ever read, so an empty query can share the scan
+		// result instead of copying every row on each keystroke.
+		m.filtered = shareProcesses(m.processes)
 	} else {
+		m = m.ensureSearch()
 		filtered := make([]ProcessInfo, 0, len(m.processes))
-		for _, process := range m.processes {
-			if matchesQuery(process, query) {
-				filtered = append(filtered, process)
+		for i := range m.processes {
+			if m.search[i].matches(query) {
+				filtered = append(filtered, m.processes[i])
 			}
 		}
 		m.filtered = filtered
 	}
 	return m.relocateSelection(selectedPid, hadSelection)
+}
+
+// searchText is the lowercased text a query is matched against, one field per
+// searchable column. The fields stay separate (rather than one joined string)
+// so a query can never match across a field boundary, exactly like the
+// per-field matching it replaces.
+type searchText struct {
+	pid, comm, cmdline string
+}
+
+// buildSearchText lowercases the searchable columns of process once.
+// strings.ToLower returns its argument unchanged (no allocation) when it has no
+// upper-case letters, so typical lowercase command lines are not duplicated.
+func buildSearchText(process ProcessInfo) searchText {
+	return searchText{
+		pid:     strconv.Itoa(process.Pid),
+		comm:    strings.ToLower(process.Comm),
+		cmdline: strings.ToLower(process.Cmdline),
+	}
+}
+
+// matches reports whether the already lowercased and trimmed query occurs in
+// the pid, the comm or the command line.
+func (s searchText) matches(query string) bool {
+	return strings.Contains(s.pid, query) ||
+		strings.Contains(s.comm, query) ||
+		strings.Contains(s.cmdline, query)
+}
+
+// ensureSearch (re)builds the lowercased search texts when m.processes is not
+// the slice they were built for. Identity is the slice's length and first
+// element address: the scan result is replaced wholesale (never edited in
+// place), and tests assign m.processes directly.
+func (m Model) ensureSearch() Model {
+	if len(m.search) == len(m.processes) &&
+		(len(m.processes) == 0 || m.searchBase == &m.processes[0]) {
+		return m
+	}
+	search := make([]searchText, len(m.processes))
+	for i, process := range m.processes {
+		search[i] = buildSearchText(process)
+	}
+	m.search = search
+	m.searchBase = nil
+	if len(m.processes) > 0 {
+		m.searchBase = &m.processes[0]
+	}
+	return m
 }
 
 // selectedProcessPid returns the Pid (the tid in TID mode; ProcessInfo.Pid is
@@ -324,24 +384,13 @@ func (m Model) lostSelectionNotice(pid int) string {
 	return fmt.Sprintf("pid %d exited - pick a process", pid)
 }
 
-func matchesQuery(process ProcessInfo, query string) bool {
-	pidStr := fmt.Sprintf("%d", process.Pid)
-	if strings.Contains(strings.ToLower(pidStr), query) {
-		return true
-	}
-	if strings.Contains(strings.ToLower(process.Comm), query) {
-		return true
-	}
-	return strings.Contains(strings.ToLower(process.Cmdline), query)
-}
-
-func cloneProcesses(in []ProcessInfo) []ProcessInfo {
+// shareProcesses returns in for read-only use as the filtered list (never nil,
+// so an empty scan still yields an empty, non-nil list).
+func shareProcesses(in []ProcessInfo) []ProcessInfo {
 	if len(in) == 0 {
 		return []ProcessInfo{}
 	}
-	out := make([]ProcessInfo, len(in))
-	copy(out, in)
-	return out
+	return in
 }
 
 // View renders the PID picker with filter input, list, and help bar.
@@ -388,31 +437,39 @@ func (m Model) SetDarkMode(isDark bool) Model {
 	return m
 }
 
+// renderRows renders only the rows inside the visible window. The list can hold
+// every process (or, in the all-PIDs TID picker, every thread) on the system,
+// each with a full command line, so formatting, sanitising and styling all of
+// them on each View cost over 100ms at 50k rows (task 7r2); the window is
+// computed from the row count alone and just its rows are formatted.
 func (m Model) renderRows() string {
-	lines := make([]string, 0, len(m.filtered)+1)
 	allLabel := allPIDsLabel
 	if m.mode == PickerModeTID {
 		allLabel = allTIDsLabel
 	}
-	lines = append(lines, m.renderRow(0, allLabel))
-	for i, process := range m.filtered {
-		label := formatProcess(process)
-		lines = append(lines, m.renderRow(i+1, label))
-	}
-
-	maxRows := m.visibleRows()
-	if maxRows > 0 && len(lines) > maxRows {
-		start := m.selectedIndex - (maxRows / 2)
-		if start < 0 {
-			start = 0
+	start, end := m.visibleWindow(len(m.filtered) + 1)
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		if i == 0 {
+			lines = append(lines, m.renderRow(0, allLabel))
+			continue
 		}
-		limit := len(lines) - maxRows
-		if start > limit {
-			start = limit
-		}
-		lines = lines[start : start+maxRows]
+		lines = append(lines, m.renderRow(i, formatProcess(m.filtered[i-1])))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// visibleWindow returns the half-open range [start, end) of the total rows
+// (the "All" row plus the filtered processes) to draw. Without a known height
+// every row is drawn; otherwise the window keeps the selected row near its
+// middle and is clamped to the list, so noSelection (-1) shows the top.
+func (m Model) visibleWindow(total int) (start, end int) {
+	maxRows := m.visibleRows()
+	if maxRows <= 0 || total <= maxRows {
+		return 0, total
+	}
+	start = clamp(m.selectedIndex-maxRows/2, 0, total-maxRows)
+	return start, start + maxRows
 }
 
 func (m Model) renderRow(index int, label string) string {
