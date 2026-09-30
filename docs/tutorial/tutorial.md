@@ -185,9 +185,22 @@ Three modal pickers reshape what the rest of the TUI sees:
 
 - `p`: **PID picker** (re-opens the launch picker).
 - `t`: **TID picker** for thread-level focus.
-- `o`: **Probes** dialog: enable / disable individual syscall tracepoints.
+- `o`: **Probes** dialog: enable / disable individual syscall tracepoints. Press `tab` inside
+  the dialog to switch between the **Syscalls** view (single probes: `space`/`enter` toggles,
+  `a` all on, `n` all off, `/` search) and the **Families** view.
 
 ![PID, TID, and probe pickers](./assets/11-pid-tid-probe.gif)
+
+The **Families** view lists all 12 syscall families with attached/total probe counts
+(`[x]` all attached, `[~]` some, `[ ]` none). `space` or `enter` detaches a family that has
+any attached probe and attaches it otherwise, with a live `attaching <family>... n/total`
+progress line while the batch runs; failures are reported (first error) without aborting
+the rest. By default only the FS family is traced, so this is the way to start tracing
+e.g. Network without restarting ior with `-trace-families`. Your runtime selection
+persists across trace restarts (PID/TID reselect, filter changes), replacing the startup
+`-trace-*` flags for the rest of the session. The `[` / `]` keys only re-scope the view to
+a family; cycling onto one with no attached probe shows
+`<Family> not traced: press o, tab, space to attach` in the status line.
 
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
 filtering (`-comm`, `-path`). Tracepoint subsetting on the command line uses `-tps <regex>`
@@ -277,7 +290,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `R` | start / stop Parquet recording |
 | `p` | re-open PID picker |
 | `t` | open TID picker |
-| `o` | open probe selection dialog |
+| `o` | open probe selection dialog (`tab` there: Syscalls / Families view; `space`/`enter` toggles a whole family) |
 | `r` | refresh dashboard snapshot |
 | `q` / `ctrl+c` | quit |
 
