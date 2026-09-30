@@ -376,10 +376,22 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 // In both cases a lost name propagates past the row itself into the fd table.
 // The control event keeps its original open-oriented name for wire/runtime
 // compatibility, but the recovery mechanism itself is intentionally shared.
+//
+// getcwd reuses the same three helpers for a different reason: its path is an
+// OUTPUT buffer the kernel only fills during the call, so there is nothing to
+// read at sys_enter (outputPathSyscalls in internal/generate/classify.go). Its
+// enter handler stashes args[0] unconditionally once ior_on_syscall_enter has
+// decided to emit the event; its exit handler takes the pointer the same way
+// but emits the fixup only when ctx->ret > 0, because a failed getcwd wrote
+// nothing into the buffer. Userspace attaches that string to the pending pair
+// instead of splicing it into the (header-only) enter event
+// (applyCapturedOutputPath / finishGetcwdPath, internal/eventloop_getcwd.go).
 
 // ior_stash_pending_filename records filename_ptr on this tid's in-flight
-// syscall state so the matching exit handler can retry the read. Called only
-// on the read-failure path, so the extra map lookup stays off the hot path.
+// syscall state so the matching exit handler can read the string there. The
+// open kinds call it only on the read-failure path, so the extra map lookup
+// stays off their hot path; getcwd calls it on every emitted enter, since its
+// output buffer can only be read at sys_exit (see above).
 static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 
@@ -388,7 +400,7 @@ static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename
 }
 
 // ior_take_pending_filename returns the pointer stashed by the matching enter
-// handler, or 0 when there is nothing to recover. It must be called BEFORE
+// handler, or 0 when there is nothing to read. It must be called BEFORE
 // ior_on_syscall_exit, which deletes the per-tid entry. The enter_trace_id
 // check makes a stale entry from a different syscall unusable rather than
 // letting it graft a foreign path onto this pair.
@@ -438,7 +450,9 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 // garbage after the NUL cannot change a row or a warning
 // (internal/eventloop_stringtail_test.go, internal/types/stringtail_test.go).
 
-// ior_emit_open_name_fixup re-reads the identifying string at sys_exit and publishes it
+// ior_emit_open_name_fixup reads the identifying string at sys_exit - a second
+// read of a faulted open name, or the first read of getcwd's output buffer,
+// which the generated caller guards with ctx->ret > 0 - and publishes it
 // as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
 // submitted before the exit event of the same syscall, and the ring buffer
 // preserves that order, so the single userspace consumer always applies the
