@@ -31,6 +31,14 @@ const (
 	startupDelayEnv     = "IOR_WORKLOAD_STARTUP_DELAY_MS"
 	startupFileEnv      = "IOR_WORKLOAD_STARTUP_FILE"
 	startupFileTimeout  = 30 * time.Second
+	// holdFileEnv names a file whose appearance lets the workload exit: after
+	// its scenario succeeded the process stays alive until the file exists
+	// (bounded by holdFileTimeout). Tests use it to keep the traced -pid
+	// target alive past its I/O, since a headless ior ends as soon as that
+	// process exits (task vr2) and signal/shutdown tests need ior to outlive
+	// the scenario. Unset: the workload exits right after the scenario.
+	holdFileEnv     = "IOR_WORKLOAD_HOLD_FILE"
+	holdFileTimeout = 60 * time.Second
 )
 
 // Pin the main goroutine to the main thread so scenario syscalls run with
@@ -84,6 +92,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "scenario %s failed: %v\n", *scenario, err)
 		os.Exit(1)
 	}
+
+	if err := waitForHold(); err != nil {
+		fmt.Fprintf(os.Stderr, "hold wait failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// waitForHold keeps the process alive until $IOR_WORKLOAD_HOLD_FILE exists;
+// without the variable it returns at once.
+func waitForHold() error {
+	path := os.Getenv(holdFileEnv)
+	if path == "" {
+		return nil
+	}
+	return waitForFile(path, holdFileTimeout, 50*time.Millisecond)
 }
 
 func waitForStartup() error {
@@ -92,14 +115,15 @@ func waitForStartup() error {
 		time.Sleep(configuredStartupDelay())
 		return nil
 	}
-	return waitForStartupFile(path)
+	return waitForFile(path, startupFileTimeout, 10*time.Millisecond)
 }
 
-func waitForStartupFile(path string) error {
-	deadline := time.NewTimer(startupFileTimeout)
+// waitForFile polls every poll until path exists, failing after timeout.
+func waitForFile(path string, timeout, poll time.Duration) error {
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
 	for {

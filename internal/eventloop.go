@@ -126,6 +126,12 @@ type eventLoop struct {
 	// (handleProcessExitEvent). Written only by the event-loop goroutine;
 	// stats() reads it after <-e.done like the counters above.
 	numGroupDeadExits uint
+	// stopOnTargetExit arms endTraceOnTargetExit: the -pid target's death
+	// cancels the trace. Set by runTraceLoop for the headless modes before the
+	// loop starts; false (the zero value) in the TUI and in tests. targetExitSeen
+	// records that it fired, so it fires once. Event-loop goroutine only.
+	stopOnTargetExit bool
+	targetExitSeen   bool
 	// recentGroupDead remembers the pids of recently counted group-dead
 	// records, so the repeated records old kernels can produce for one
 	// process death are counted once (isDuplicateGroupDead). Zero value

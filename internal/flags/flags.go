@@ -253,7 +253,7 @@ func syscallFamilyNames() []string {
 // registerFilterFlags binds the process/comm/path filters and the basic probe
 // settings (map size, duration, pprof).
 func registerFilterFlags(fs *flag.FlagSet, cfg *Config) {
-	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
+	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID (a headless -plain/-flamegraph/-parquet run stops when this process exits)")
 	fs.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
 	fs.IntVar(&cfg.EventMapSize, "mapSize", cfg.EventMapSize, "BPF event ring buffer size in bytes (non-swappable kernel memory; libbpf rounds it up to a power-of-two multiple of the page size; larger absorbs consumer stalls without dropping events)")
 	fs.IntVar(&cfg.Duration, "duration", cfg.Duration, "Probe duration in seconds")

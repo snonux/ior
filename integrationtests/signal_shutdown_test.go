@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -32,18 +34,64 @@ const (
 	shutdownDrainDelay = time.Second
 )
 
+// Task vr2: a headless -pid run ends when its target exits, so these runs keep
+// the workload alive after its I/O (IOR_WORKLOAD_HOLD_FILE) until the test
+// releases it; otherwise ior would stop by itself before the signal or pipe
+// under test ever happened.
+
+// holdFileEnv is ioworkload's "stay alive until this file exists" variable.
+const holdFileEnv = "IOR_WORKLOAD_HOLD_FILE"
+
 // signalRun is one started ior process whose stdout/stderr the test owns.
 type signalRun struct {
-	ior    *exec.Cmd
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-	done   chan error // receives ior's Wait result
+	ior      *exec.Cmd
+	stdout   io.ReadCloser
+	stderr   io.ReadCloser
+	done     chan error // receives ior's Wait result
+	workload *exec.Cmd  // the traced -pid target, alive until releaseTarget
+	holdFile string     // creating it lets the workload exit
+
+	mu        sync.Mutex
+	stdoutBuf strings.Builder // everything ior wrote to stdout
+	stderrBuf strings.Builder // everything ior wrote to stderr
+}
+
+// releaseTarget lets the traced workload exit and waits for it, the trigger
+// for an ior that should end because its -pid target died.
+func (r *signalRun) releaseTarget(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(r.holdFile, []byte("release\n"), 0o600); err != nil {
+		t.Fatalf("release target: %v", err)
+	}
+	if err := r.workload.Wait(); err != nil {
+		t.Fatalf("workload: %v", err)
+	}
+}
+
+// text returns what ior wrote to stdout and to stderr so far.
+func (r *signalRun) text() (stdout, stderr string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stdoutBuf.String(), r.stderrBuf.String()
+}
+
+// lockedWriter appends to a signalRun buffer under its mutex.
+type lockedWriter struct {
+	mu *sync.Mutex
+	b  *strings.Builder
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
 }
 
 // startSignalRun starts the open-basic workload and a real ior against it in
-// the given output mode, waits until ior is attached and releases the
-// workload. The returned run keeps ior's pipes open and drained; the caller
-// decides what to do to them.
+// the given output mode, waits until ior is attached and lets the workload run
+// its I/O. The workload then stays alive (see holdFileEnv) until the caller
+// calls releaseTarget. The returned run keeps ior's pipes open and drained;
+// the caller decides what to do to them.
 func startSignalRun(t *testing.T, h TestHarness, modeArgs []string, duration int) *signalRun {
 	t.Helper()
 	return startSignalRunWith(t, h, modeArgs, duration, func(iorArgs []string) *exec.Cmd {
@@ -59,10 +107,13 @@ func startSignalRun(t *testing.T, h TestHarness, modeArgs []string, duration int
 func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration int, newCmd func(iorArgs []string) *exec.Cmd) *signalRun {
 	t.Helper()
 	startupFile := h.workloadStartupFile("open-basic")
+	holdFile := filepath.Join(h.OutputDir, "open-basic.hold")
+	h.WorkloadEnv = append(slices.Clone(h.WorkloadEnv), holdFileEnv+"="+holdFile)
 	workloadCmd, pid, _, err := h.startWorkload("open-basic", startupFile)
 	if err != nil {
 		t.Fatalf("start workload: %v", err)
 	}
+	t.Cleanup(func() { killAndWait(workloadCmd) })
 	args := append([]string{"-pid", strconv.Itoa(pid), "-duration", strconv.Itoa(duration)}, modeArgs...)
 	cmd := newCmd(args)
 	cmd.Dir = h.OutputDir
@@ -80,9 +131,20 @@ func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration
 	}
 	t.Cleanup(func() { killAndWait(cmd) })
 
+	run := &signalRun{ior: cmd, stdout: stdout, stderr: stderr, workload: workloadCmd, holdFile: holdFile}
 	ready := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, stdout) }()
-	go scanUntilReady(stderr, ready)
+	// Wait closes the pipes' read ends, discarding unread bytes, so it runs
+	// only after both readers hit EOF (or the test closed the pipes).
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() {
+		defer readers.Done()
+		_, _ = io.Copy(lockedWriter{&run.mu, &run.stdoutBuf}, stdout)
+	}()
+	go func() {
+		defer readers.Done()
+		scanUntilReady(io.TeeReader(stderr, lockedWriter{&run.mu, &run.stderrBuf}), ready)
+	}()
 	select {
 	case <-ready:
 	case <-time.After(iorReadyTimeout):
@@ -93,13 +155,12 @@ func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration
 	if err := os.WriteFile(startupFile, []byte("ready\n"), 0o600); err != nil {
 		t.Fatalf("release workload: %v", err)
 	}
-	// The workload exits by itself once its scenario is done.
-	if err := workloadCmd.Wait(); err != nil {
-		t.Fatalf("workload: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	return &signalRun{ior: cmd, stdout: stdout, stderr: stderr, done: done}
+	run.done = make(chan error, 1)
+	go func() {
+		readers.Wait()
+		run.done <- cmd.Wait()
+	}()
+	return run
 }
 
 // scanUntilReady closes ready when ior's readiness line shows up, and keeps
@@ -164,8 +225,11 @@ func requireRecording(t *testing.T, dir, mode string) {
 }
 
 func modeArgs(mode, dir string) []string {
-	if mode == "parquet" {
+	switch mode {
+	case "parquet":
 		return []string{"-parquet", filepath.Join(dir, "signal-shutdown.parquet")}
+	case "plain":
+		return []string{"-plain"}
 	}
 	return []string{"-flamegraph", "-name", "signal-shutdown"}
 }
@@ -190,7 +254,7 @@ func TestHeadlessRecordingSurvivesSIGHUP(t *testing.T) {
 
 // TestHeadlessRecordingSurvivesClosedPipes: after the readers of ior's stdout
 // and stderr are gone (`ior ... | head -1`, a dropped SSH session), the run
-// still ends normally and publishes the recording instead of dying from
+// (ended here by its target exiting) still ends normally and publishes the recording instead of dying from
 // SIGPIPE at its first status write.
 func TestHeadlessRecordingSurvivesClosedPipes(t *testing.T) {
 	for _, mode := range []string{"flamegraph", "parquet"} {
@@ -202,6 +266,10 @@ func TestHeadlessRecordingSurvivesClosedPipes(t *testing.T) {
 			// every later write by ior gets EPIPE / SIGPIPE.
 			_ = run.stdout.Close()
 			_ = run.stderr.Close()
+			// The target's exit ends the run; its status line, the
+			// statistics and the final messages are the writes that hit the
+			// closed pipes.
+			run.releaseTarget(t)
 			run.requireCleanExit(t, pipeRunDuration*time.Second+iorShutdownGrace)
 			requireRecording(t, h.OutputDir, mode)
 		})
@@ -224,7 +292,8 @@ func hupIgnoringCmd(iorBinary string) func(iorArgs []string) *exec.Cmd {
 // first SIGHUP handling installed a handler over the inherited SIG_IGN, so a
 // hangup ended `nohup ior -flamegraph -duration 3600 &` early. Here the run
 // gets a SIGHUP right after start and must still be running well after it,
-// then end at its own -duration with the full recording.
+// then end at its own -duration (its target is held alive, so the target's
+// exit does not end it first) with the full recording.
 func TestHeadlessRecordingKeepsInheritedSIGHUPIgnore(t *testing.T) {
 	for _, mode := range []string{"flamegraph", "parquet"} {
 		t.Run(mode, func(t *testing.T) {
@@ -241,6 +310,46 @@ func TestHeadlessRecordingKeepsInheritedSIGHUPIgnore(t *testing.T) {
 			case <-time.After(2 * time.Second):
 			}
 			run.requireCleanExit(t, pipeRunDuration*time.Second+iorShutdownGrace)
+			requireRecording(t, h.OutputDir, mode)
+		})
+	}
+}
+
+// TestHeadlessPidRunEndsWhenTargetExits is the vr2 regression: with the
+// default-sized -duration (60s here, 900s in real life) a headless -pid run
+// used to keep probing after its target died, and traced whatever process was
+// handed the recycled pid. It must now end by itself shortly after the target
+// exits (nothing signals ior), say so on stderr, and still publish everything
+// the target did.
+func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
+	for _, mode := range []string{"flamegraph", "parquet", "plain"} {
+		t.Run(mode, func(t *testing.T) {
+			enableParallelIfRequested(t)
+			h := newTestHarness(t)
+			run := startSignalRun(t, h, modeArgs(mode, h.OutputDir), shutdownRunDuration)
+			time.Sleep(shutdownDrainDelay)
+			select {
+			case err := <-run.done:
+				t.Fatalf("ior ended while its target was still alive (wait: %v)", err)
+			default:
+			}
+
+			run.releaseTarget(t)
+			// Far below -duration: only the target's exit can have ended it.
+			run.requireCleanExit(t, iorShutdownGrace)
+			stdout, stderr := run.text()
+			if !strings.Contains(stderr, "exited, stopping the trace") {
+				t.Fatalf("stderr does not announce the target's exit:\n%s", stderr)
+			}
+			if !strings.Contains(stderr, "group-dead exits: 1") {
+				t.Fatalf("stderr statistics do not show the target's exit:\n%s", stderr)
+			}
+			if mode == "plain" {
+				if !strings.Contains(stdout, "testfile.txt") {
+					t.Fatalf("plain output lost the target's rows:\n%s", stdout)
+				}
+				return
+			}
 			requireRecording(t, h.OutputDir, mode)
 		})
 	}

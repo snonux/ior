@@ -124,7 +124,8 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 }
 
 // applyProcessDeath performs the tgid-keyed half of an exit record: fd-table
-// eviction, the group-dead counter and stats retirement.
+// eviction, the group-dead counter, stats retirement and, for the -pid target
+// of a headless run, ending the trace (endTraceOnTargetExit).
 //
 // A known group-dead record does all three. A record whose flag is unknown
 // (legacy 24-byte layout) still evicts the fd entries, as every exit did
@@ -153,6 +154,9 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	e.fdState().deletePid(ev.Pid)
 	e.brkState.forget(ev.Pid)
 	e.retireStatsProcess(ev.Pid)
+	// Last: the process's state is fully retired before the trace is told to
+	// end, so the shutdown statistics see the final picture.
+	e.endTraceOnTargetExit(ev)
 }
 
 // isDuplicateGroupDead reports whether ev repeats the group-dead record of a

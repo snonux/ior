@@ -818,6 +818,11 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 	// A failure during an already-cancelled trace is the shutdown flush
 	// failing: the warning must not claim the trace is being stopped then.
 	infra.el.traceEnding = func() bool { return infra.ctx.Err() != nil }
+	// A headless -pid run ends with its target (strace -p semantics) instead of
+	// idling to -duration and later tracing a recycled pid; verbose is true for
+	// exactly the headless modes. The TUI keeps its session open (see
+	// eventLoop.endTraceOnTargetExit).
+	infra.el.stopOnTargetExit = verbose
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has
 	// not yet exited.
