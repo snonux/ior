@@ -245,7 +245,10 @@ func buildTUIRuntime(cfg flags.Config, bindings runtime.TraceRuntimeBindings) (*
 func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) error {
 	// StreamBuffer returns the EventSink the core needs directly - the old
 	// read-only StreamSource return forced a downcast here, which turned a
-	// compile-time contract into a runtime failure path.
+	// compile-time contract into a runtime failure path. In the TUI it is the
+	// session's gated sink, which is also what gets published as the stream
+	// source below; it keeps the ring buffer's AppendSnapshot fast path, so
+	// the stream tab's refresh stays allocation-free.
 	if persistent := bindings.StreamBuffer(); persistent != nil {
 		rt.streamSrc = persistent
 		rt.streamBuf = persistent
