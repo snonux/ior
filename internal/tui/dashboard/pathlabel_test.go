@@ -42,8 +42,8 @@ func TestTreemapRootPathTextDirectoryOnly(t *testing.T) {
 	}
 
 	fileItems := buildFilesTreemapItems(&snap, bubbleMetricCount)
-	if len(fileItems) == 0 || fileItems[0].Name != "root/var/log" {
-		t.Fatalf("expected files treemap label root path, got %#v", fileItems)
+	if len(fileItems) == 0 || fileItems[0].Name != "/var/log" {
+		t.Fatalf("expected files treemap label to be the literal dir, got %#v", fileItems)
 	}
 
 	procItems := buildProcessesTreemapItems(&snap, bubbleMetricCount)
@@ -70,8 +70,8 @@ func TestBubbleRootPathTextDirectoryOnly(t *testing.T) {
 	}
 
 	files := filesDirBubbleData(&snap)
-	if len(files) == 0 || files[0].Label != "root/home/paul/.config" {
-		t.Fatalf("expected files bubble label full root path, got %#v", files)
+	if len(files) == 0 || files[0].Label != "/home/paul/.config" {
+		t.Fatalf("expected files bubble label to be the literal dir, got %#v", files)
 	}
 
 	procs := processBubbleData(&snap)

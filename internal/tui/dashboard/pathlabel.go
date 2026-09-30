@@ -9,9 +9,12 @@ import (
 )
 
 // rootPathLabelFromFSPath turns a traced directory path into the "root/..."
-// display label used by the bubbles, treemap and icicle views. Traced paths
-// are attacker-controlled, so the label is passed through common.Sanitize:
-// it is only ever rendered, never used as a lookup key.
+// display label of an icicle node. Traced paths are attacker-controlled, so
+// the label is passed through common.Sanitize: it is only ever rendered,
+// never used as a lookup key. It Cleans the path, which suits the icicle's
+// own segment tree; the dir rows of the treemap and bubbles views use
+// dirRowLabel instead, because Cleaning would merge distinct literal rows
+// ("./src" and "src") into one label.
 func rootPathLabelFromFSPath(path string) string {
 	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
 	if cleaned == "" || cleaned == "." || cleaned == "/" {
@@ -24,21 +27,15 @@ func rootPathLabelFromFSPath(path string) string {
 }
 
 // dirRowLabel is the display label of one dir-grouped Files row in the
-// treemap and bubbles views. Unlike rootPathLabelFromFSPath it does not Clean:
-// the rows are keyed by the literal directory text (literalDir), so "./src",
-// "src" and "//usr" are distinct rows and must not share a label. An
-// absolute dir reads "root/..." ("root" for "/"); a relative one, which is
-// not under "/", is shown as it is ("./src", "src", "."). Sanitised like
-// every traced path; display-only (the item key stays the raw Dir).
+// treemap and bubbles views: the literal directory text itself ("/", "/etc",
+// "./src", "root/etc"), sanitised like every traced path. Unlike
+// rootPathLabelFromFSPath it neither Cleans nor adds a "root" prefix. The
+// rows are keyed by the literal text (literalDir), so "./src", "src" and
+// "//usr" are distinct rows; Cleaning would merge them, and a "root" prefix
+// on absolute dirs only would make "/etc" collide with a relative "root/etc"
+// dir. Display-only: the item key stays the raw Dir.
 func dirRowLabel(dir string) string {
-	switch {
-	case dir == "/":
-		return "root"
-	case strings.HasPrefix(dir, "/"):
-		return common.Sanitize("root" + dir)
-	default:
-		return common.Sanitize(dir)
-	}
+	return common.Sanitize(dir)
 }
 
 // processLabel is the "pid:comm" display label of a process tile or bubble

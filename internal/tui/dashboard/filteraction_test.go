@@ -312,11 +312,12 @@ func TestEnterOnNoDirGroupShowsNotice(t *testing.T) {
 
 // TestDirRowLabelsStayDistinct: the treemap and bubble labels of literal dir
 // rows must not collapse the way a Cleaned label does ("./src" and "src"
-// were both "root/src"), or two tiles read the same.
+// were both "root/src"), nor through a "root" prefix ("/etc" vs a relative
+// "root/etc", "/" vs a relative "root"), or two tiles read the same.
 func TestDirRowLabelsStayDistinct(t *testing.T) {
 	want := map[string]string{
-		"/": "root", "/var/log": "root/var/log", "//usr": "root//usr",
-		"./src": "./src", "src": "src", ".": ".",
+		"/": "/", "/var/log": "/var/log", "//usr": "//usr", "/etc": "/etc",
+		"./src": "./src", "src": "src", ".": ".", "root": "root", "root/etc": "root/etc",
 	}
 	seen := map[string]string{}
 	for dir, label := range want {
