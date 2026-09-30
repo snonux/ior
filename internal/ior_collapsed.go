@@ -25,7 +25,10 @@ import (
 // (control and invisible runes shown as \x1b, \u202e, ...) when w is a
 // terminal, and piped or redirected output keeps the raw bytes;
 // -escape=always also escapes into pipes (| less -R), -escape=never never
-// escapes. An invalid -escape value is a flag parse error.
+// escapes. An invalid -escape value is a flag parse error. Whatever the
+// mode, a line break inside a frame is always written as \x0a / \x0d so a
+// traced path cannot forge extra collapsed-stack lines (see
+// flamegraph.WriteCollapsedStacks).
 func RunCollapsedConverter(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("collapsed", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -59,7 +62,8 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		// Frames are traced comm names and paths: by default escape them
 		// when w is a terminal so they cannot inject escape sequences, and
 		// keep them raw when piped into flamegraph.pl or redirected to a
-		// file; -escape=always|never overrides the terminal check.
+		// file (line breaks excepted, which the collapsed writer always
+		// encodes); -escape=always|never overrides the terminal check.
 		Escape: escapeMode.Escaper(w),
 	})
 }

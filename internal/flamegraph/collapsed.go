@@ -22,8 +22,10 @@ type CollapsedOptions struct {
 	// written. `ior collapsed` sets it to textsafe.Escape when stdout is a
 	// terminal, because frames are traced comm names and paths that could
 	// otherwise inject escape sequences into the operator's terminal. nil
-	// writes the exact bytes, which is what flamegraph.pl in a pipe needs.
-	// Aggregation and sorting always use the raw paths.
+	// writes the traced bytes, which is what flamegraph.pl in a pipe needs,
+	// except for the line breaks encodeCollapsedFrame always rewrites
+	// because they are structural in the collapsed format. Aggregation and
+	// sorting use the format-encoded (never the Escape-rewritten) paths.
 	Escape func(string) string
 }
 
@@ -59,6 +61,13 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 // paths are summed into one sample, and lines are sorted so the output is
 // deterministic. Records with a zero sample weight or no derived frames are
 // skipped: they would render zero-width in any flamegraph.
+//
+// Frame text is traced, attacker-controlled data, so every frame is made
+// structurally inert before it is joined, whatever the Escape option says
+// (see encodeCollapsedFrame): the ';' separator never occurs inside a frame
+// because buildFrames already splits on it, LF and CR are encoded so a
+// frame cannot start a forged weighted line, and the weight is always the
+// last space-separated token, so a frame ending in " 999" cannot change it.
 func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) error {
 	opts, err := opts.normalize()
 	if err != nil {
@@ -83,14 +92,40 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 		if len(frames) == 0 {
 			continue
 		}
+		for i, frame := range frames {
+			frames[i] = encodeCollapsedFrame(frame)
+		}
 		totals[strings.Join(frames, ";")] += value
 	}
 
 	return writeCollapsedLines(w, totals, opts.Escape)
 }
 
+// encodeCollapsedFrame rewrites the characters of one frame that are
+// structural in the line-based collapsed format ("frame;frame weight\n")
+// and that buildFrames does not already split on: LF becomes the four
+// characters `\x0a` and CR becomes `\x0d`. A traced path such as
+// "x\n/evil;frame 999999999" would otherwise end the current line and forge
+// a separately weighted stack in flamegraph.pl's input; CR is encoded too
+// because CRLF-aware consumers treat it as part of a line break. The
+// notation is textsafe.Escape's, so -escape=always output is unchanged by
+// this pre-encoding (Escape does not double backslashes and leaves the
+// already-escaped text alone). Like Escape it is not a full quoting scheme:
+// a frame literally containing `\x0a` reads the same as one containing LF,
+// and both aggregate into one sample. A clean frame is returned as is
+// without allocating, so ordinary output stays byte-identical.
+func encodeCollapsedFrame(frame string) string {
+	if !strings.ContainsAny(frame, "\n\r") {
+		return frame
+	}
+	return collapsedLineBreakEncoder.Replace(frame)
+}
+
+// collapsedLineBreakEncoder implements encodeCollapsedFrame's rewrite.
+var collapsedLineBreakEncoder = strings.NewReplacer("\n", `\x0a`, "\r", `\x0d`)
+
 // writeCollapsedLines writes one "path weight" line per entry of totals,
-// sorted by raw path so the output is deterministic. escape (optional) is
+// sorted by encoded path so the output is deterministic. escape (optional) is
 // applied to the path only when writing; see CollapsedOptions.Escape.
 func writeCollapsedLines(w io.Writer, totals map[string]uint64, escape func(string) string) error {
 	paths := make([]string, 0, len(totals))

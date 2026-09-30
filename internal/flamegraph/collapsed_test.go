@@ -3,6 +3,8 @@ package flamegraph
 import (
 	"bytes"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -229,5 +231,142 @@ func TestWriteCollapsedStacksEscapeOption(t *testing.T) {
 	}
 	if got, want := escaped.String(), `evil\x1b[8mhidden\x1b[0m\x07 1`+"\n"; got != want {
 		t.Fatalf("escaped output = %q, want %q", got, want)
+	}
+}
+
+// flamegraphPlLine mirrors how flamegraph.pl reads one input line: lines are
+// split on LF only, and `/^(.*)\s+?(\d+(?:\.\d*)?)$/` takes the greedy stack
+// and the trailing sample count; the stack is then split on ';' into frames.
+var flamegraphPlLine = regexp.MustCompile(`^(.*)\s+?(\d+(?:\.\d*)?)$`)
+
+type parsedCollapsedStack struct {
+	frames []string
+	count  uint64
+}
+
+// parseCollapsedLikeFlamegraphPl parses collapsed output the way
+// flamegraph.pl does, failing the test on any line it would ignore.
+func parseCollapsedLikeFlamegraphPl(t *testing.T, out string) []parsedCollapsedStack {
+	t.Helper()
+	var stacks []parsedCollapsedStack
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		m := flamegraphPlLine.FindStringSubmatch(line)
+		if m == nil {
+			t.Fatalf("flamegraph.pl would ignore line %q", line)
+		}
+		count, err := strconv.ParseUint(m[2], 10, 64)
+		if err != nil {
+			t.Fatalf("line %q count: %v", line, err)
+		}
+		stacks = append(stacks, parsedCollapsedStack{frames: strings.Split(m[1], ";"), count: count})
+	}
+	return stacks
+}
+
+// TestWriteCollapsedStacksCannotForgeStacks is the regression test for
+// traced names that carry collapsed-format structure: an LF or CR must not
+// start a new (weighted) line, a ';' must only produce the frames the in-TUI
+// flamegraph shows, and a frame ending in " 999999999" must not change the
+// weight. It runs without Escape, i.e. the raw piped `ior collapsed` path.
+func TestWriteCollapsedStacksCannotForgeStacks(t *testing.T) {
+	forgedPath := "/tmp/x\n/evil;frame 999999999"
+	crComm := "cr\rcomm 7"
+	pairs := []*event.Pair{
+		collapsedTestPair(1, "api", forgedPath, types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+		collapsedTestPair(2, crComm, "/srv", types.SYS_ENTER_READ, types.SYS_EXIT_READ, 200),
+		collapsedTestPair(3, "semi;colon 42", "/srv", types.SYS_ENTER_WRITE, types.SYS_EXIT_WRITE, 300),
+	}
+	recording := writeTestRecording(t, "forge", pairs...)
+
+	var out bytes.Buffer
+	if err := WriteCollapsedStacks(&out, recording, CollapsedOptions{}); err != nil {
+		t.Fatalf("WriteCollapsedStacks() error = %v", err)
+	}
+	if strings.Contains(out.String(), "\r") {
+		t.Fatalf("output contains a raw CR: %q", out.String())
+	}
+
+	stacks := parseCollapsedLikeFlamegraphPl(t, out.String())
+	if len(stacks) != len(pairs) {
+		t.Fatalf("parsed %d stacks, want %d (one per record):\n%s", len(stacks), len(pairs), out.String())
+	}
+	want := map[string]bool{
+		`api;enter_openat;/tmp;/x\x0a;/evil;frame 999999999`: true,
+		`cr\x0dcomm 7;enter_read;/srv`:                       true,
+		"semi;colon 42;enter_write;/srv":                     true,
+	}
+	for _, stack := range stacks {
+		if stack.count != 1 {
+			t.Fatalf("stack %q weight = %d, want 1", stack.frames, stack.count)
+		}
+		if joined := strings.Join(stack.frames, ";"); !want[joined] {
+			t.Fatalf("unexpected stack %q in output:\n%s", joined, out.String())
+		}
+	}
+}
+
+// TestWriteCollapsedStacksSemicolonMatchesLiveTrie checks a ';' inside a
+// traced name yields exactly the frames of the in-TUI flamegraph: the split
+// is the shared buildFrames model, so no frame of the output can contain
+// ';' and flamegraph.pl reconstructs the same stack.
+func TestWriteCollapsedStacksSemicolonMatchesLiveTrie(t *testing.T) {
+	pair := collapsedTestPair(1, "a;b", "/srv/x;y", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100)
+	recording := writeTestRecording(t, "semicolon", pair)
+
+	liveTrie := NewLiveTrie(collapse.DefaultFields(), collapse.DefaultCountField(), "")
+	liveTrie.Ingest(pair)
+	tree, _ := liveTrie.SnapshotTree()
+
+	var out bytes.Buffer
+	if err := WriteCollapsedStacks(&out, recording, CollapsedOptions{}); err != nil {
+		t.Fatalf("WriteCollapsedStacks() error = %v", err)
+	}
+	stacks := parseCollapsedLikeFlamegraphPl(t, out.String())
+	if len(stacks) != 1 {
+		t.Fatalf("parsed %d stacks, want 1:\n%s", len(stacks), out.String())
+	}
+	if got, want := stacks[0].frames, firstLeafFramePath(tree); !slices.Equal(got, want) {
+		t.Fatalf("frames = %q, want live trie frames %q", got, want)
+	}
+}
+
+// TestWriteCollapsedStacksLineBreakEncodingAggregates checks the encoding
+// happens before aggregation, so a frame with LF and one literally holding
+// `\x0a` (identical once written) become one summed line, not two lines with
+// the same stack, and that -escape=always leaves the encoding as is.
+func TestWriteCollapsedStacksLineBreakEncodingAggregates(t *testing.T) {
+	recording := writeTestRecording(t, "lfagg",
+		collapsedTestPair(1, "a\nb", "/srv", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+		collapsedTestPair(2, `a\x0ab`, "/srv", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 200),
+	)
+	for _, escape := range []func(string) string{nil, textsafe.Escape} {
+		var out bytes.Buffer
+		opts := CollapsedOptions{Fields: []string{"comm"}, Escape: escape}
+		if err := WriteCollapsedStacks(&out, recording, opts); err != nil {
+			t.Fatalf("WriteCollapsedStacks() error = %v", err)
+		}
+		if got, want := out.String(), `a\x0ab 2`+"\n"; got != want {
+			t.Fatalf("output (escape set: %v) = %q, want %q", escape != nil, got, want)
+		}
+	}
+}
+
+func TestEncodeCollapsedFrame(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"/srv", "/srv"},
+		{"name 999", "name 999"},
+		{"\x1b[8m", "\x1b[8m"}, // not structural: left to the Escape option
+		{"a\nb", `a\x0ab`},
+		{"a\r\nb", `a\x0d\x0ab`},
+		{"\n", `\x0a`},
+	}
+	for _, tc := range cases {
+		if got := encodeCollapsedFrame(tc.in); got != tc.want {
+			t.Errorf("encodeCollapsedFrame(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _ = encodeCollapsedFrame("/usr/lib/libc.so.6") }); allocs != 0 {
+		t.Fatalf("clean frame allocated %v times, want 0", allocs)
 	}
 }
