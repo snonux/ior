@@ -710,6 +710,18 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   asserting both "no quit/help" and "the typed text reached the input",
   the TID picker, modified-key negatives, ctrl+r and the attaching guard) and
   `TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState`.
+- **The PID/TID picker selection follows the process, not the row number**
+  (`pidpicker.Model.applyFilter` -> `relocateSelection`): a rescan or a typed
+  filter reorders rows, so the selected pid (tid in TID mode) is looked up again
+  in the rebuilt list. If it vanished (exited, or no longer matches the filter)
+  the PID picker enters `noSelection`: no row is highlighted, a one-line notice
+  (`pid 30 exited - pick a process`) is shown and Enter is a no-op, because the
+  fallback All row means a system-wide trace (`selectedPIDFilter(0) == -1`) and a
+  reflexive Enter must not start one unexplained. The state is sticky across
+  rescans and edits until Up/Down moves the selection (either key lands on the
+  All row, so tracing everything stays one deliberate keypress away). The TID
+  picker keeps the plain fallback to "All TIDs", which stays inside the process.
+  Pinned by `internal/tui/pidpicker/selection_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than
