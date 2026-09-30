@@ -306,6 +306,9 @@ func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
 // recording share. The path is ep.FileValue(): a fileless pair has an empty
 // path, which buildFrames drops (it then contributes only to the trie's
 // total, like any empty name) rather than growing an "N:file" frame (task pq2).
+// Note the asymmetry with the recording: the live TUI flame view shows such
+// events only as root self value, whereas `ior collapsed -fields path` on the
+// saved .ior.zst prints the same empty path as an "[unknown]" frame.
 func eventPairToRecord(ep *event.Pair) IterRecord {
 	return IterRecord{
 		Path:    ep.FileValue(),

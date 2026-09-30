@@ -103,7 +103,8 @@ plain CSV schema is deliberately small:
 `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file`. Use TUI CSV export or Parquet for
 timestamps, byte counts and other per-event fields. A row without a file shows the display
 placeholder `N:file` in the `file` column of `-plain` output; TUI CSV export, Parquet and the
-`.ior.zst` record store an empty file for it instead.
+`.ior.zst` record store an empty file for it instead. `.ior.zst` recordings made before this
+change still hold `N:file` as a real path frame (no format version bump; the format is unchanged).
 
 Files are written to a temporary `ior-<random>.tmp` file and renamed into place when
 complete. Names ior generates itself (`ior-stream-<timestamp>.csv`,
