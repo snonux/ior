@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
+	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
 	"ior/internal/tui/messages"
@@ -858,49 +860,20 @@ func (m *Model) ensureSelectedCol() {
 // parent applies the shared filter and pushes it back via SetFilter.
 //
 // The action label is the presenter's canonical token for the dimension just
-// set, so it reads exactly like the filter summary. A blank string cell (e.g.
-// an event without a file name) is not handled: a blank pattern constrains
-// nothing, so requesting it would only push an empty undo layer.
+// set, so it reads exactly like the filter summary. A cell that yields no
+// filter (a blank string cell, an unknown column) is not handled, so no empty
+// undo layer is pushed.
 func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false, nil
 	}
-	ev := m.filtered[m.selectedIdx]
+	ev := &m.filtered[m.selectedIdx]
 	next := m.filter.Clone()
-	var dim presenter.Dimension
-
-	switch m.selectedCol {
-	case streamColGap:
-		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
-		dim = presenter.DimGap
-	case streamColLatency:
-		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
-		dim = presenter.DimLatency
-	case streamColComm:
-		next.Comm = &StringFilter{Pattern: ev.Comm}
-		dim = presenter.DimComm
-	case streamColPID:
-		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
-		dim = presenter.DimPID
-	case streamColTID:
-		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
-		dim = presenter.DimTID
-	case streamColSyscall:
-		next.Syscall = &StringFilter{Pattern: ev.Syscall}
-		dim = presenter.DimSyscall
-	case streamColFD:
-		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
-		dim = presenter.DimFD
-	case streamColRet:
-		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
-		dim = presenter.DimRet
-	case streamColBytes:
-		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
-		dim = presenter.DimBytes
-	case streamColFile:
-		next.File = &StringFilter{Pattern: ev.FileName}
-		dim = presenter.DimFile
-	default:
+	dim, ok := setStringCellFilter(&next, ev, m.selectedCol)
+	if !ok {
+		dim, ok = setNumericCellFilter(&next, ev, m.selectedCol)
+	}
+	if !ok {
 		return false, nil
 	}
 	action := presenter.DimensionSummary(next, dim)
@@ -908,6 +881,69 @@ func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 		return false, nil
 	}
 	return true, emit(messages.GlobalFilterRequestedMsg{Filter: next, Action: action})
+}
+
+// setStringCellFilter sets next's Comm, Syscall or File filter to exactly the
+// selected string cell's value and reports the dimension it set; ok is false
+// for a non-string column or a blank cell (a blank value constrains nothing).
+//
+// The pattern is globalfilter.ExactPattern (^value$), matching the dashboard
+// row filters: Enter on "read" must not also admit readv/pread64, on
+// "/tmp/a" not also "/tmp/ab", and a value's edge blanks or literal edge ^/$
+// stay literal instead of being trimmed or read as anchors. Unlike the
+// dashboard Processes tab's Comm cell (a substring, because that row counts
+// every thread of a PID), a Stream row is one event and its Comm cell is
+// that event's own thread comm, so exact is right here too.
+func setStringCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dimension, bool) {
+	var value string
+	var target **StringFilter
+	var dim presenter.Dimension
+	switch col {
+	case streamColComm:
+		value, target, dim = ev.Comm, &next.Comm, presenter.DimComm
+	case streamColSyscall:
+		value, target, dim = ev.Syscall, &next.Syscall, presenter.DimSyscall
+	case streamColFile:
+		value, target, dim = ev.FileName, &next.File, presenter.DimFile
+	default:
+		return dim, false
+	}
+	if strings.TrimSpace(value) == "" {
+		return dim, false
+	}
+	*target = &StringFilter{Pattern: globalfilter.ExactPattern(value)}
+	return dim, true
+}
+
+// setNumericCellFilter sets next's numeric filter for the selected numeric
+// cell and reports the dimension it set; ok is false for a non-numeric
+// column. Durations become lower bounds (>=) so the filter keeps the selected
+// event and everything slower; identifiers and counts use equality.
+func setNumericCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dimension, bool) {
+	switch col {
+	case streamColGap:
+		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
+		return presenter.DimGap, true
+	case streamColLatency:
+		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
+		return presenter.DimLatency, true
+	case streamColPID:
+		next.PID = &NumericFilter{Op: OpEq, Value: int64(ev.PID)}
+		return presenter.DimPID, true
+	case streamColTID:
+		next.TID = &NumericFilter{Op: OpEq, Value: int64(ev.TID)}
+		return presenter.DimTID, true
+	case streamColFD:
+		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
+		return presenter.DimFD, true
+	case streamColRet:
+		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
+		return presenter.DimRet, true
+	case streamColBytes:
+		next.Bytes = &NumericFilter{Op: OpEq, Value: int64(ev.Bytes)}
+		return presenter.DimBytes, true
+	}
+	return 0, false
 }
 
 func (m *Model) currentSelectedSeq() uint64 {

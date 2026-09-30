@@ -440,13 +440,13 @@ func TestPausedEnterEmitsGlobalFilterRequestFromSelectedCell(t *testing.T) {
 	if m.filter.Comm != nil {
 		t.Fatalf("expected local stream filter state to remain unchanged until parent applies it")
 	}
-	if req.Action != "comm~a" {
-		t.Fatalf("expected action label comm~a, got %q", req.Action)
+	if req.Action != "comm~^a$" {
+		t.Fatalf("expected action label comm~^a$, got %q", req.Action)
 	}
 	if req.Filter.PID == nil || req.Filter.PID.Op != OpEq || req.Filter.PID.Value != 1 {
 		t.Fatalf("expected existing pid filter preserved, got %+v", req.Filter.PID)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "a" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^a$" {
 		t.Fatalf("expected selected comm folded into global filter, got %+v", req.Filter.Comm)
 	}
 	if pressLocal(t, &m, "esc") {
@@ -519,14 +519,14 @@ func TestPausedEnterActionLabelPerColumn(t *testing.T) {
 	}{
 		{streamColGap, presenter.DimGap, "gap>=40ns"},
 		{streamColLatency, presenter.DimLatency, "latency>=1.5µs"},
-		{streamColComm, presenter.DimComm, "comm~cc"},
+		{streamColComm, presenter.DimComm, "comm~^cc$"},
 		{streamColPID, presenter.DimPID, "pid=11"},
 		{streamColTID, presenter.DimTID, "tid=12"},
-		{streamColSyscall, presenter.DimSyscall, "syscall~openat"},
+		{streamColSyscall, presenter.DimSyscall, "syscall~^openat$"},
 		{streamColFD, presenter.DimFD, "fd=3"},
 		{streamColRet, presenter.DimRet, "ret=-2"},
 		{streamColBytes, presenter.DimBytes, "bytes=64"},
-		{streamColFile, presenter.DimFile, "file~/etc/x"},
+		{streamColFile, presenter.DimFile, "file~^/etc/x$"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -568,10 +568,10 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 		{"zero pid", StreamEvent{Seq: 1, PID: 0}, streamColPID, presenter.DimPID, "pid=0"},
 		{"negative fd", StreamEvent{Seq: 1, FD: -1}, streamColFD, presenter.DimFD, "fd=-1"},
 		{"zero bytes", StreamEvent{Seq: 1, Bytes: 0}, streamColBytes, presenter.DimBytes, "bytes=0"},
-		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~kworker/0:1 ~x=y"},
-		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~sh"},
-		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^/tmp/a b$"},
-		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~écrire"},
+		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~^kworker/0:1 ~x=y$"},
+		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~^  sh  $"},
+		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^^/tmp/a b$$"},
+		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~^écrire$"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -588,6 +588,60 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 			}
 			if canonical := presenter.DimensionSummary(req.Filter, tt.dim); req.Action != canonical {
 				t.Fatalf("action %q differs from presenter token %q", req.Action, canonical)
+			}
+		})
+	}
+}
+
+// TestPausedEnterStringCellFilterIsExact checks what the pushed Comm, Syscall
+// and File filters select, not just their labels: exactly the cell's value
+// (case-insensitively), never a superstring of it, with edge blanks and a
+// literal edge ^/$ kept literal. A bare substring pattern (the old behaviour)
+// admitted readv for "read" and /tmp/ab for "/tmp/a", trimmed "/tmp/a " to
+// "/tmp/a", and read "x$" as "ends with x".
+func TestPausedEnterStringCellFilterIsExact(t *testing.T) {
+	tests := []struct {
+		name   string
+		col    int
+		with   func(string) StreamEvent
+		value  string
+		match  []string
+		reject []string
+	}{
+		{"syscall", streamColSyscall, func(v string) StreamEvent { return StreamEvent{Seq: 1, Syscall: v} },
+			"read", []string{"read", "READ"}, []string{"readv", "pread64", "rea", ""}},
+		{"file", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"/tmp/a", []string{"/tmp/a"}, []string{"/tmp/ab", "/var/tmp/a", "/tmp/a ", "/tmp"}},
+		{"file with edge blank", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"/tmp/a ", []string{"/tmp/a "}, []string{"/tmp/a", "/tmp/ab", "/tmp/a  "}},
+		{"file with literal anchors", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"^/tmp/x$", []string{"^/tmp/x$"}, []string{"/tmp/x", "^/tmp/x", "/tmp/x$", "^/tmp/x$y"}},
+		{"comm", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"sh", []string{"sh", "SH"}, []string{"bash", "sshd", "sh "}},
+		{"comm with edge blanks", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"  sh  ", []string{"  sh  "}, []string{"sh", " sh ", "  sh  x"}},
+		{"comm with literal dollar", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"x$", []string{"x$"}, []string{"x", "ax", "x$y"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.with(tt.value), tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("expected enter to emit a request")
+			}
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("expected GlobalFilterRequestedMsg")
+			}
+			for _, v := range tt.match {
+				if ev := tt.with(v); !req.Filter.Matches(&ev) {
+					t.Errorf("filter for %q (%s) should match %q", tt.value, req.Action, v)
+				}
+			}
+			for _, v := range tt.reject {
+				if ev := tt.with(v); req.Filter.Matches(&ev) {
+					t.Errorf("filter for %q (%s) should not match %q", tt.value, req.Action, v)
+				}
 			}
 		})
 	}
@@ -691,8 +745,8 @@ func TestHandleTeaKeyEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !handled || cmd == nil {
 		t.Fatalf("expected enter to be handled with a command, got handled=%v cmd=%v", handled, cmd != nil)
 	}
-	if req, ok := cmd().(messages.GlobalFilterRequestedMsg); !ok || req.Action != "comm~a" {
-		t.Fatalf("expected comm~a GlobalFilterRequestedMsg, got %#v", cmd())
+	if req, ok := cmd().(messages.GlobalFilterRequestedMsg); !ok || req.Action != "comm~^a$" {
+		t.Fatalf("expected comm~^a$ GlobalFilterRequestedMsg, got %#v", cmd())
 	}
 }
 
