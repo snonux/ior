@@ -471,8 +471,10 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
     waiters).
   - The partition also holds without a per-tid enter state
     (`syscall_enter_state_map` full, clone/fork child exits, syscalls in
-    flight at attach): a failed enter-state
-    write is counted *untimed* into the aggregate at sys_enter unless the rate
+    flight at attach, and the two non-leader exec exits that stay stateless:
+    `-tid <leader>` filtered the caller's enter, or the enter-state move
+    failed; see *Non-leader exec* below): a failed enter-state write is
+    counted *untimed* into the aggregate at sys_enter unless the rate
     is `1`, and a stateless or mismatched sys_exit is emitted only at rate `1`
     and never counted (see "Enter state and its two fallbacks" in
     `internal/c/filter.c`). Untimed counts bump `count` only; userspace reports
@@ -764,7 +766,12 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
     (`ior_on_exec_tid_change` in `filter.c`), and userspace re-keys the parked
     execve enter and its gap baseline the same way (`rekeyExecCaller`, gap
     baselines are keyed by the exit's tid), so the execve row is emitted with
-    the caller's tid and nothing leaks under the vanished one.
+    the caller's tid and nothing leaks under the vanished one. If the record
+    is lost after the BPF move, a successful execve exit under `tid == pid`
+    with no enter of its own adopts the process's parked non-leader exec
+    enter (`adoptLostExecCaller`, via the pair tracker's per-pid
+    `execCallers` index). Integration test: `TestNonLeaderExecIsPaired`
+    (scenario `exec-non-leader-thread`).
   - *Late lookup worker.* A resolver worker that read `/proc/<tid>/comm` before
     the exec could otherwise overwrite the authoritative post-exec name. Each
     cache entry carries an exec epoch, bumped by `handleProcessExecEvent`; a

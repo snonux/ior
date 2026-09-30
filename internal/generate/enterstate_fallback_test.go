@@ -319,6 +319,12 @@ var accountingScenarios = []accountingScenario{
 		{"agg 100", "count=2 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
 		{"exit 1 100 0 6000", accEmit0},
 		{"agg 100", "count=2 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
+		// At rate 1 a failed insert counts nothing: the stateless exit is
+		// emitted and pairs with the emitted enter in userspace.
+		{"enter 5 200 1000", accEmit1},
+		{"fail 1", accOK}, {"exectid 5 1 1", accOK}, {"fail 0", accOK},
+		{"state 5", "nostate"}, {"state 1", "nostate"}, {"agg 200", accAggNone},
+		{"exit 1 200 0 6000", accEmit1}, {"agg 200", accAggNone},
 	}},
 	{name: "timed then untimed keeps min", steps: []accountingStep{
 		{"rate 100 0", accOK},

@@ -651,6 +651,13 @@ type pairTracker struct {
 	prevTimeAges map[uint32]uint64      // insertion order per TID, for prevTimes LRU eviction
 	maxSize      int                    // max pending enter events before pruning; 0 = default
 	age          uint64                 // monotonic counter for LRU ordering
+	// execCallers indexes the exec enters parked by a non-leader thread:
+	// pid -> the caller's tid. It lets an execve exit whose exec record was
+	// lost find its enter (parkedExecCaller). Entries are hints: the pair
+	// they name may since have been consumed or LRU-trimmed, so a lookup
+	// re-validates, and indexExecCaller drops dead hints once the index
+	// outgrows the pending-enter limit.
+	execCallers map[uint32]uint32
 }
 
 func newPairTracker() pairTracker {
@@ -690,10 +697,60 @@ func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) {
 	p.age++
 	p.enters[tid] = pair
 	p.enterAges[tid] = p.age
+	p.indexExecCaller(enterEv)
 	p.prune()
 }
 
-// consume removes and returns the pending enter pair for tid.
+// indexExecCaller records enterEv in execCallers when it is an exec enter of
+// a non-leader thread (tid != pid), the only enter whose exit arrives under
+// another tid. Once the index outgrows the pending-enter limit, hints whose
+// pair is gone are dropped, which keeps it bounded by the live exec enters.
+func (p *pairTracker) indexExecCaller(enterEv event.Event) {
+	if _, isExec := enterEv.(*types.ExecEvent); !isExec || enterEv.GetTid() == enterEv.GetPid() {
+		return
+	}
+	if p.execCallers == nil {
+		p.execCallers = make(map[uint32]uint32)
+	}
+	p.execCallers[enterEv.GetPid()] = enterEv.GetTid()
+	if len(p.execCallers) <= p.limit() {
+		return
+	}
+	for pid, tid := range p.execCallers {
+		if !p.isParkedExecCaller(pid, tid) {
+			delete(p.execCallers, pid)
+		}
+	}
+}
+
+// isParkedExecCaller reports whether tid still holds a parked exec enter of
+// process pid.
+func (p *pairTracker) isParkedExecCaller(pid, tid uint32) bool {
+	pair, ok := p.enters[tid]
+	if !ok || pair == nil {
+		return false
+	}
+	_, isExec := pair.EnterEv.(*types.ExecEvent)
+	return isExec && pair.EnterEv.GetPid() == pid
+}
+
+// parkedExecCaller returns the tid of a non-leader thread of pid whose exec
+// enter is still parked, and forgets the hint. ok is false when there is
+// none (or the hint went stale).
+func (p *pairTracker) parkedExecCaller(pid uint32) (tid uint32, ok bool) {
+	tid, ok = p.execCallers[pid]
+	if !ok {
+		return 0, false
+	}
+	delete(p.execCallers, pid)
+	if !p.isParkedExecCaller(pid, tid) {
+		return 0, false
+	}
+	return tid, true
+}
+
+// consume removes and returns the pending enter pair for tid, dropping its
+// execCallers hint if it had one.
 // Reading a nil map returns the zero value in Go, so this is safe before any set call.
 func (p *pairTracker) consume(tid uint32) (*event.Pair, bool) {
 	pair, ok := p.enters[tid]
@@ -702,6 +759,11 @@ func (p *pairTracker) consume(tid uint32) (*event.Pair, bool) {
 	}
 	delete(p.enters, tid)
 	delete(p.enterAges, tid)
+	if pair != nil && pair.EnterEv != nil {
+		if pid := pair.EnterEv.GetPid(); p.execCallers[pid] == tid {
+			delete(p.execCallers, pid)
+		}
+	}
 	return pair, true
 }
 
@@ -730,7 +792,7 @@ func (p *pairTracker) evictTid(tid uint32) {
 
 // moveExecCaller carries a non-leader exec's per-tid state from the caller's
 // pre-exec tid (oldTid) to the leader tid it continues under (newTid); see
-// eventLoop.rekeyExecCaller for when that happens.
+// eventLoop.applyExecTidChange for when that happens.
 //
 // Whatever newTid still holds belongs to the dead leader and is dropped first
 // (its own exit record normally evicted it already; this covers a lost one).
