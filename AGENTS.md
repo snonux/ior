@@ -455,7 +455,9 @@ not sufficient.
     min/max landed is deferred to the next drain instead of seeding a 0
     minimum; a baseline only advances with a new count). This relies on the
     copy reading `count` first, so `count` must stay the first field of
-    `struct syscall_aggregate` in `maps.h`. The
+    `struct syscall_aggregate` in `maps.h`. Completed invocations are recorded
+    as at least 1ns, so a settled slot's min/max are never 0; the consumer
+    relies on that to tell a settled slot from one still being written. The
     accounting functions of `filter.c` are compiled and exercised on the host
     by `internal/generate/enterstate_fallback_test.go`.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
