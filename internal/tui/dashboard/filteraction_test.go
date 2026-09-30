@@ -131,9 +131,8 @@ func TestEnterFilterRequestRejectsEmptyValues(t *testing.T) {
 // since ^value$ is case-sensitive (/TMP/A is a different file from /tmp/a).
 // The dir rows select exactly their direct files, case-sensitively too
 // (task ip2): no subdirectory file, and the root row only top-level entries.
-// The comm case pins
-// the deliberate exception: thread comms extending the process's comm still
-// match.
+// The comm case pins the deliberate exception: thread comms extending the
+// process's comm still match.
 func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
 	file := func(name string) *streamrow.Row { return &streamrow.Row{FileName: name} }
 	for _, tt := range []struct {

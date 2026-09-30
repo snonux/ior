@@ -10,6 +10,22 @@ import (
 	"testing"
 )
 
+// snapshotReferenceCase describes one randomised LiveTrie workload for
+// TestLiveTrieSnapshotMatchesFullWalkReference.
+type snapshotReferenceCase struct {
+	name    string
+	records int
+	fanout  int
+	comms   int
+	dirs    int
+	skew    bool
+	// zero records every event with a zero count, so nothing is pruned.
+	zero bool
+	// forced reports whether the fallback must have kept nodes below
+	// the fraction, so the case cannot silently stop exercising it.
+	forced bool
+}
+
 // referenceSnapshot is the former full-walk snapshot algorithm, kept as the
 // oracle for the prune-before-build snapshotBuilder: it re-sums every subtree
 // from the nodes' own values, materialises every child and only then prunes,
@@ -67,19 +83,7 @@ func referenceTotals(node *trieNode) (uint64, uint64) {
 }
 
 func TestLiveTrieSnapshotMatchesFullWalkReference(t *testing.T) {
-	tests := []struct {
-		name    string
-		records int
-		fanout  int
-		comms   int
-		dirs    int
-		skew    bool
-		// zero records every event with a zero count, so nothing is pruned.
-		zero bool
-		// forced reports whether the fallback must have kept nodes below
-		// the fraction, so the case cannot silently stop exercising it.
-		forced bool
-	}{
+	tests := []snapshotReferenceCase{
 		{name: "narrow", records: 200, fanout: 3, comms: 7, dirs: 13},
 		{name: "tiny root children trigger the root fallback", records: 20000, fanout: 4000, comms: 4000, dirs: 3, forced: true},
 		{name: "tiny depth-one children trigger their fallback", records: 20000, fanout: 4000, comms: 2, dirs: 4000, forced: true},
@@ -90,23 +94,7 @@ func TestLiveTrieSnapshotMatchesFullWalkReference(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rng := rand.New(rand.NewSource(int64(tc.records + tc.fanout)))
-			lt := NewLiveTrie([]string{"comm", "path"}, "count", "bytes")
-			for i := 0; i < tc.records; i++ {
-				n := rng.Intn(tc.fanout)
-				if tc.skew && rng.Intn(4) == 0 {
-					n %= 5
-				}
-				count := uint64(1 + rng.Intn(3))
-				if tc.zero {
-					count = 0
-				}
-				lt.AddRecord(IterRecord{
-					Comm: fmt.Sprintf("c%d", n%tc.comms),
-					Path: fmt.Sprintf("/d%d/f%d", n%tc.dirs, n),
-					Cnt:  Counter{Count: count, Bytes: uint64(rng.Intn(100))},
-				})
-			}
+			lt := randomLiveTrie(tc)
 			got, _ := lt.SnapshotTree()
 			rootTotal, _ := referenceTotals(lt.root)
 			want, _ := referenceSnapshot(lt.root, 0, rootTotal, false)
@@ -118,6 +106,30 @@ func TestLiveTrieSnapshotMatchesFullWalkReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+// randomLiveTrie fills a comm/path LiveTrie with tc.records deterministic
+// pseudo-random records (seeded from the case) shaped by tc's fanout, comm and
+// dir counts, skew and zero-count settings.
+func randomLiveTrie(tc snapshotReferenceCase) *LiveTrie {
+	rng := rand.New(rand.NewSource(int64(tc.records + tc.fanout)))
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "bytes")
+	for i := 0; i < tc.records; i++ {
+		n := rng.Intn(tc.fanout)
+		if tc.skew && rng.Intn(4) == 0 {
+			n %= 5
+		}
+		count := uint64(1 + rng.Intn(3))
+		if tc.zero {
+			count = 0
+		}
+		lt.AddRecord(IterRecord{
+			Comm: fmt.Sprintf("c%d", n%tc.comms),
+			Path: fmt.Sprintf("/d%d/f%d", n%tc.dirs, n),
+			Cnt:  Counter{Count: count, Bytes: uint64(rng.Intn(100))},
+		})
+	}
+	return lt
 }
 
 func TestInsertTriePathMaintainsSubtreeTotalsIncrementally(t *testing.T) {
