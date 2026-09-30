@@ -307,19 +307,19 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 	// Schedule comm lookup as early as possible to reduce races for short-lived processes.
 	e.queueCommLookup(tid)
 	if !e.Filter().UsesCommFilter() {
-		e.pairs.set(enterEv)
+		e.storeEnter(enterEv)
 		return
 	}
 
 	switch enterEv.(type) {
 	case *types.OpenEvent:
-		e.pairs.set(enterEv)
+		e.storeEnter(enterEv)
 	case *types.ExecEvent:
-		e.pairs.set(enterEv)
+		e.storeEnter(enterEv)
 	default:
 		// Only, when we have a comm name
 		if _, ok := e.cachedComm(tid); ok {
-			e.pairs.set(enterEv)
+			e.storeEnter(enterEv)
 		} else {
 			e.notifyWarning(fmt.Sprintf("No comm name for %v process probably already vanished?", enterEv))
 			// The event is dropped (no cached comm to match a comm filter
@@ -327,6 +327,26 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 			enterEv.Recycle()
 		}
 	}
+}
+
+// storeEnter parks enterEv until its exit record arrives.
+//
+// An exec enter resolves its dirfd-relative target right here instead of in
+// handleExecExit. A successful execve/execveat is delivered as enter record,
+// then the PROCESS_EXEC_EVENT control record (sched_process_exec fires inside
+// the syscall), then the exit record. That control record evicts the process's
+// FD_CLOEXEC descriptors (fdTracker.dropOnExec), and fexecve's descriptor is
+// typically opened O_CLOEXEC - so by the time the exit arrives, the dirfd the
+// kernel resolved against is gone from the table, and a procfs fallback would
+// read the new program's descriptor table instead. At enter time the table
+// still describes the descriptors the kernel is about to use.
+func (e *eventLoop) storeEnter(enterEv event.Event) {
+	execEv, ok := enterEv.(*types.ExecEvent)
+	if !ok {
+		e.pairs.set(enterEv)
+		return
+	}
+	e.pairs.setWithFile(enterEv, e.snapshotExecTarget(execEv))
 }
 
 func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
