@@ -126,9 +126,12 @@ func TestGroupDeadDedupBurstWithinOneWindow(t *testing.T) {
 	}
 }
 
-// TestGroupDeadDedupRecycledPidSurvivesOldQueueEntry guards the expiry's
-// delete condition: a pid counted, expired-by-time but re-counted, has two
-// queue entries, and popping the old one must not delete the newer map entry.
+// TestGroupDeadDedupRecycledPidSurvivesOldQueueEntry covers a pid counted,
+// expired by time and re-counted in the same seen() call that pops its old queue
+// entry. The old entry is popped before the new one is recorded, so this only
+// checks that expiry then recording leaves a working map entry; it does NOT
+// exercise the `last[pid] == e.time` guard in expire (that is
+// TestGroupDeadDedupStuckOldEntryDoesNotDeleteNewerMapEntry).
 func TestGroupDeadDedupRecycledPidSurvivesOldQueueEntry(t *testing.T) {
 	var d groupDeadDedup
 	base := uint64(defaulTime)
@@ -141,6 +144,47 @@ func TestGroupDeadDedupRecycledPidSurvivesOldQueueEntry(t *testing.T) {
 	}
 	if !d.seen(7, second+1) {
 		t.Fatal("repeat of the recycled pid's death was counted again: its map entry was lost")
+	}
+}
+
+// TestGroupDeadDedupStuckOldEntryDoesNotDeleteNewerMapEntry guards the expiry's
+// delete condition `last[pid] == e.time`. That needs a pid with two queue
+// entries where the older one is popped while the newer one, which the map
+// entry points at, is still live. Arrival order makes it possible: A arrives
+// first with a late timestamp, so P's old record queued behind it is stuck
+// (expiry stops at A); P is then re-counted after its own window has passed,
+// which replaces the map value and queues a second entry. When A finally
+// expires, the stuck old P entry is popped in the same pass and must leave the
+// newer map entry alone. Without the guard a repeat of P's death would be
+// counted as a new one.
+func TestGroupDeadDedupStuckOldEntryDoesNotDeleteNewerMapEntry(t *testing.T) {
+	var d groupDeadDedup
+	const w = groupDeadDedupWindowNs
+	const (
+		a  = uint32(1)
+		p  = uint32(2)
+		t0 = uint64(defaulTime)
+	)
+
+	d.seen(a, t0+2*w)       // A: late timestamp, queued first.
+	d.seen(p, t0)           // P: old record, queued behind A.
+	second := t0 + 2*w + 10 // more than a window after P's first record, and later than A.
+	if d.seen(p, second) {
+		t.Fatal("recycled pid reported as a duplicate")
+	}
+	// A blocks the front, so both P entries are still queued and the map
+	// carries the newer time; this precondition is what makes the guard matter.
+	if d.live() != 3 || d.last[p] != second {
+		t.Fatalf("precondition: live = %d, last[P] = %d, want 3 and %d", d.live(), d.last[p], second)
+	}
+
+	// This call expires A (2w) and, right behind it, P's old entry (0), but not
+	// P's newer entry (2w+10). Popping the old entry must keep the map value.
+	if !d.seen(p, t0+3*w+5) {
+		t.Fatal("repeat of P's death counted again: popping an old queue entry deleted the newer map entry")
+	}
+	if d.live() != 1 {
+		t.Fatalf("live = %d after expiry, want 1 (only P's newer entry)", d.live())
 	}
 }
 
@@ -171,9 +215,11 @@ func TestGroupDeadDedupSteadyStreamCompactsWhileLive(t *testing.T) {
 		deaths  = 40_000
 		stepNs  = 20_000
 		maxLive = groupDeadDedupWindowNs/stepNs + 2
-		// Doubling growth plus the compaction hysteresis allow a few times
-		// the live population; growth with the death count would be 8x more.
-		maxCap = 8 * maxLive
+		// Measured peak with the current policy is ~2.25x maxLive (append
+		// growth on a compacted queue). 3x leaves modest margin but fails a
+		// compaction trigger loosened to head >= 4*live, which lets the backing
+		// array reach ~6x; growth with the death count would be far beyond that.
+		maxCap = 3 * maxLive
 	)
 	base := uint64(defaulTime)
 
