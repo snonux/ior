@@ -162,7 +162,8 @@ func (e *Engine) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.startedAt = e.now()
+	resetAt := e.now()
+	e.startedAt = resetAt
 	e.totalSyscalls = 0
 	e.totalUntimed = 0
 	e.totalErrors = 0
@@ -178,7 +179,7 @@ func (e *Engine) Reset() {
 	e.files = newFileRankerWithConfig(e.topN)
 	e.dirs = newDirRankerWithConfig(e.topN)
 	// The rows go, the process identities stay: see carryOver.
-	e.processes = e.processes.carryOver()
+	e.processes = e.processes.carryOver(resetAt)
 	e.latencyHist = newHistogram()
 	e.gapHist = newHistogram()
 	e.latencySeries = newRingTimeSeries()

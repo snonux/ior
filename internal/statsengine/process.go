@@ -38,43 +38,9 @@ type processAccumulator struct {
 	// next pair reopens the same ordinal) from one that already exited (its
 	// successor takes the next one).
 	//
-	// The table is a ring of carryGenerations maps, newest first: carried[0]
-	// was filled by the latest carryOver and carried[i] by the one i resets
-	// earlier. A PID that stays silent for carryGenerations resets ages out
-	// with the map it lives in, so the table cannot grow without bound (see
-	// carryGenerations) and needs no per-entry bookkeeping or sweep.
-	carried [carryGenerations]map[uint32]carriedLifetime
-}
-
-// carryGenerations is how many Engine.Reset calls a carried lifetime ordinal
-// survives without its PID reappearing. Each generation holds at most one entry
-// per PID the accumulator tracked when it was reset, i.e. at most maxSeen
-// entries (live plus retired rows, which compaction bounds), so the carried
-// table holds at most carryGenerations*maxSeen entries in total - not one per
-// PID ever seen, which on a box churning short-lived processes only pid_max
-// (up to 4M) would bound, at hundreds of MB and a copy that stalls the event
-// loop while Reset holds the engine lock.
-//
-// The trade-off: a PID silent for this many resets restarts at ordinal 0. That
-// only loses selection stickiness - the TUI's wish for the old row is ignored
-// once it cannot match, and a different process inheriting the PID could be
-// mistaken for the old one only if the wish for that same PID and ordinal
-// outlived the entry. A wish lasts common.SelectionWishGrace (one minute), so
-// four generations cover it at the default 30s reset interval (two resets) with
-// margin; with much shorter reset intervals an idle PID's identity is lost
-// after correspondingly less wall time, which is still longer than a user
-// keeps a selection on a row that has stopped producing events.
-const carryGenerations = 4
-
-// carriedLifetime is one PID's ordinal across an accumulator swap.
-type carriedLifetime struct {
-	// next is the ordinal the PID's next row gets.
-	next uint32
-	// live is true while the process that held ordinal next is presumed to
-	// still run: the old accumulator had a live row for it and no group
-	// exit has been seen since. RetireProcess then spends the ordinal by
-	// advancing next.
-	live bool
+	// The table ages by wall-clock time and is bounded in memory; see
+	// carryTable in carry.go.
+	carried carryTable
 }
 
 type processStats struct {
@@ -138,54 +104,26 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 // that later inherits the PID gets a different ID instead of taking over the
 // selection.
 //
-// The carried maps of a are moved into the result one generation older, never
-// copied: a is discarded by the caller (Engine.Reset replaces it under the
-// engine lock, where a copy of a large table would stall Ingest), so a must
-// not be used afterwards. Only the entries for a's own rows are built, which
-// is bounded by maxSeen; the oldest generation falls off, see carryGenerations.
-func (a *processAccumulator) carryOver() *processAccumulator {
+// now is the engine clock's time of the reset: it stamps the entries built
+// here so they age by wall-clock time, see carryTable. The carried table of a
+// is moved into the result, never copied: a is discarded by the caller
+// (Engine.Reset replaces it under the engine lock, where a copy of a large
+// table would stall Ingest), so a must not be used afterwards. Only the
+// entries for a's own rows are built, which is bounded by maxSeen.
+func (a *processAccumulator) carryOver(now time.Time) *processAccumulator {
 	fresh := newProcessAccumulatorWithLimits(a.topN, a.maxSeen)
-	copy(fresh.carried[1:], a.carried[:carryGenerations-1])
+	// Retired-only PIDs continue after their last ordinal; nextLifetimes also
+	// lists the live PIDs, which the second loop then overwrites with their
+	// own, still-running ordinal.
 	newest := make(map[uint32]carriedLifetime, len(a.byPID)+len(a.retired))
 	for pid, next := range a.nextLifetimes() {
-		if a.byPID[pid] != nil {
-			continue
-		}
 		newest[pid] = carriedLifetime{next: next}
 	}
 	for pid, stats := range a.byPID {
 		newest[pid] = carriedLifetime{next: stats.lifetime, live: true}
 	}
-	fresh.carried[0] = newest
+	fresh.carried = a.carried.advance(now, newest, a.maxSeen)
 	return fresh
-}
-
-// carriedEntry returns the newest carried entry of pid and the generation
-// map holding it, or nil if the PID has none.
-func (a *processAccumulator) carriedEntry(pid uint32) (carriedLifetime, map[uint32]carriedLifetime) {
-	for _, gen := range a.carried {
-		if c, ok := gen[pid]; ok {
-			return c, gen
-		}
-	}
-	return carriedLifetime{}, nil
-}
-
-// forgetCarried removes pid from every generation, so an older, stale entry
-// for the same PID cannot resurface once the newest one is consumed.
-func (a *processAccumulator) forgetCarried(pid uint32) {
-	for _, gen := range a.carried {
-		delete(gen, pid)
-	}
-}
-
-// carriedLen is the total number of carried entries over all generations.
-func (a *processAccumulator) carriedLen() int {
-	n := 0
-	for _, gen := range a.carried {
-		n += len(gen)
-	}
-	return n
 }
 
 // Add folds one syscall pair into the stats of its process (tgid).
@@ -241,9 +179,7 @@ func (a *processAccumulator) RetireProcess(pid uint32) {
 	if stats == nil {
 		// A process carried over a reset that exits before its next pair has
 		// no row to retire, but its ordinal is spent all the same.
-		if c, gen := a.carriedEntry(pid); gen != nil && c.live {
-			gen[pid] = carriedLifetime{next: c.next + 1}
-		}
+		a.carried.spend(pid)
 		return
 	}
 	delete(a.byPID, pid)
@@ -272,9 +208,8 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 // for it before that).
 func (a *processAccumulator) startLifetime(pid uint32) *processStats {
 	lifetime := a.nextLifetime[pid]
-	if c, gen := a.carriedEntry(pid); gen != nil {
+	if c, ok := a.carried.take(pid); ok {
 		lifetime = c.next
-		a.forgetCarried(pid)
 	}
 	stats := &processStats{pid: pid, lifetime: lifetime}
 	delete(a.nextLifetime, pid)

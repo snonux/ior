@@ -9,4 +9,7 @@ import "time"
 // while the window still covers two default auto-reset intervals for a
 // workload that is quiet after a reset. One constant keeps the two tab kinds
 // from drifting apart.
+//
+// statsengine.ProcessCarryRetention (how long Engine.Reset remembers a silent
+// process's identity) must stay at least twice this; wish_test.go pins it.
 const SelectionWishGrace = time.Minute
