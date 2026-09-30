@@ -60,8 +60,10 @@ type Model struct {
 	livePaused bool
 }
 
-// PausedNote is shown in the modal while the stream is paused.
-const PausedNote = "Live ring, not the paused view - use x for the paused rows"
+// PausedNote is shown in the modal while the stream is paused. It names the
+// Stream tab because the modal opens from any dashboard tab, but x/X only write
+// the paused rows while the Stream tab itself is showing them.
+const PausedNote = "Live ring, not the paused view - use x on the Stream tab for the paused rows"
 
 // NewModel creates a closed export modal.
 func NewModel() Model {

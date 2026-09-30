@@ -1130,7 +1130,7 @@ func TestExportModalWarnsWhenStreamPaused(t *testing.T) {
 	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: "e"})
 	m = next.(*Model)
 	paused := strings.Join(strings.Fields(strings.ReplaceAll(m.exporter.View(120, 30), "│", " ")), " ")
-	if !strings.Contains(paused, "Live ring, not the paused view - use x for the paused rows") {
+	if !strings.Contains(paused, "Live ring, not the paused view - use x on the Stream tab for the paused rows") {
 		t.Fatalf("paused stream: modal lacks the live-ring warning:\n%s", paused)
 	}
 }

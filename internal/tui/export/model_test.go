@@ -79,12 +79,28 @@ func TestViewPausedNoteOnlyWhilePaused(t *testing.T) {
 		t.Fatalf("live modal wording changed:\n%s", live)
 	}
 	paused := strings.Join(strings.Fields(strings.ReplaceAll(NewModel().OpenFor(true).View(80, 24), "│", " ")), " ")
-	for _, want := range []string{"CSV stream rows", "Live ring, not the paused view - use x for the paused rows"} {
+	for _, want := range []string{"CSV stream rows", "Live ring, not the paused view - use x on the Stream tab for the paused rows"} {
 		if !strings.Contains(paused, want) {
 			t.Fatalf("paused modal lacks %q:\n%s", want, paused)
 		}
 	}
 	if strings.Contains(NewModel().OpenFor(true).Open().View(80, 24), "paused") {
 		t.Fatalf("Open must reset to the live wording")
+	}
+}
+
+// The note must survive word-wrapping intact at every plausible terminal width
+// (the modal shrinks to width-4, floor 30) and must point at the Stream tab,
+// since x/X do nothing from the other tabs (task 2r2).
+func TestPausedNoteWrapsCleanlyAtNarrowWidths(t *testing.T) {
+	if !strings.Contains(PausedNote, "Stream tab") {
+		t.Fatalf("note must name the Stream tab: %q", PausedNote)
+	}
+	for _, width := range []int{40, 60, 80, 120} {
+		view := NewModel().OpenFor(true).View(width, 24)
+		got := strings.Join(strings.Fields(strings.ReplaceAll(view, "│", " ")), " ")
+		if !strings.Contains(got, PausedNote) {
+			t.Fatalf("width %d: note lost or mangled by wrapping:\n%s", width, view)
+		}
 	}
 }
