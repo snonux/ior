@@ -128,7 +128,12 @@ sample of the sampled syscalls. It says so on stderr at startup, reports their e
 marks the files: Parquet footer keys `ior.sampling` and `ior.sampling.totals` (see
 `docs/parquet-querying.md`), and the `.ior.zst` header (format version 2, which `ior collapsed`
 reports on stderr; unsampled recordings keep version 1). Totals are reported as unavailable
-under a filter the kernel counters cannot apply (`-comm`, `-path`, ...).
+under a filter the kernel counters cannot apply (`-comm`, `-path`, ...). If the kernel's ring
+buffer dropped events (`ring buffer drops: N` in the statistics), the lost rows are in neither
+count, so the totals are labelled `at least` (Parquet: `"lower_bound":true`) instead of exact.
+A family rate (`-syscall-sampling-families FS=10`) is reported once as `FS=10`, with lines and
+totals only for the syscalls that were invoked; syscalls whose probes are not attached are not
+reported.
 
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.

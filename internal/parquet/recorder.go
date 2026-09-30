@@ -266,20 +266,23 @@ var stopUnlockedHook func()
 // in the footer of the active recording (KeySamplingTotals); it is written when
 // the recording stops, so call it before Stop, once the counts are final. A
 // Summary that sampled nothing adds no key, so the file stays unmarked.
-// Without an active session it returns ErrRecorderNotActive.
+// Without an active session it returns ErrRecorderNotActive - except for a
+// Summary that sampled nothing, which has nothing to record and succeeds
+// whatever the session's state: an unsampled run wires nothing new, so it must
+// not start failing just because its session already ended.
 func (r *Recorder) SetSamplingTotals(summary sampling.Summary) error {
+	totals := summary.Totals()
+	if totals == "" {
+		return nil
+	}
 	if r == nil {
 		return ErrRecorderNotActive
 	}
-	totals := summary.Totals()
 	r.mu.RLock()
 	session := r.active
 	r.mu.RUnlock()
 	if session == nil {
 		return ErrRecorderNotActive
-	}
-	if totals == "" {
-		return nil
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()

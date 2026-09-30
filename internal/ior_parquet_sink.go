@@ -233,11 +233,11 @@ func newHeadlessParquetEventLoop(
 		return nil, err
 	}
 	if el.samplingTally != nil {
-		aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+		aggregateSrc, err := openAggregateSource(bpfModule)
 		if err != nil {
 			return nil, fmt.Errorf("count the unsampled invocations of a sampled recording: %w", err)
 		}
-		el.aggregateSrc = aggregateConsumer
+		el.aggregateSrc = aggregateSrc
 	}
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	return el, nil

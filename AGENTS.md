@@ -526,7 +526,26 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     The totals are withheld, not guessed, when they cannot be trusted: a filter
     the syscall-keyed kernel rows cannot answer (`aggregateIngestAllowedForFilter`,
     e.g. `-comm`) or a last drain that failed gives `Unavailable` with the
-    reason, rates still reported. Surfaces: startup line on stderr
+    reason, rates still reported. Ring-buffer drops make them inexact, not
+    unavailable: a dropped event is an emitted row that is in neither `traced`
+    nor the kernel aggregate, so `samplingResult` marks the `Summary` with
+    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0` or the drop
+    counter could not be read; the stats block says "at least", the footer JSON
+    carries `"lower_bound":true` per element. The report is compact:
+    `sampling.New` folds syscalls that run at a `-syscall-sampling-families`
+    rate into `Summary.Families` (`FS=10`, once) and keeps an `Entry` only for
+    those with a nonzero total plus the explicit per-syscall rates, so neither
+    the startup line, the stats, the footer/header nor `ior collapsed` list a
+    family's 100+ syscalls. `Entry.Family` is set when the effective rate equals
+    the family's rate. The rates are intersected with the probes that really
+    attached (`restrictSamplingToActive`, called from
+    `setupTraceInfraWithEventLoop` with `Manager.IsActive`), so a syscall that
+    was never traced gets no "0 calls" line. `openAggregateSource` is the seam
+    that lets `TestHeadlessParquetLoopWiresTheKernelCountsIntoTheFooter` drive
+    the real `newHeadlessParquetEventLoop` without a BPF module. `traced` counts
+    pairs at `drainPairs`, before the Parquet queue and the active-probe filter,
+    so it can exceed the file's row count (`RowsDropped`, inactive probes).
+    Surfaces: startup line on stderr
     (`announceSampling`), a block in the end-of-run statistics
     (`samplingStatLines`, incl. "syscalls including kernel-counted only"),
     Parquet footer keys `ior.sampling` (rates, written at start) and
@@ -539,8 +558,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     (`CollapsedOptions.Notice`) and `flamegraph.LoadRecording` returns it.
     `-plain` stdout stays the fixed CSV: its marker is the stderr lines only.
     Not covered: TUI `R` recordings (the stats engine has the kernel counts but
-    the file is not marked). Verified with stubs only, not against a live kernel
-    (no root in the authoring sandbox).
+    the file is not marked). The first version was verified with stubs only;
+    the fix round checked the 1000-read scenario, a ring-buffer-drop run
+    (`-mapSize 4096`, 3M reads) and a family rate live.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,

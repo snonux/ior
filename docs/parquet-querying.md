@@ -171,13 +171,23 @@ invocations of a rate-N syscall is written as a row, and none of a rate-0 (aggre
 one. The file footer says so, in two key/value pairs that are absent from a recording that
 traced everything:
 
-- `ior.sampling`: the effective rates, for example `read=10,write=0`.
-- `ior.sampling.totals`: the exact population of each sampled syscall, written when the
-  recording ends, as JSON, for example
+- `ior.sampling`: the effective rates, for example `read=10,write=0`. A family-wide rate
+  (`-syscall-sampling-families FS=10`) is named once, as `FS=10` (upper-case family names,
+  lower-case syscall names), not once per syscall; an explicit per-syscall rate is listed
+  next to it (`FS=10,read=5`). Only syscalls whose probe was actually attached are named.
+- `ior.sampling.totals`: the exact population of each sampled syscall that was invoked,
+  written when the recording ends, as JSON, for example
   `[{"syscall":"read","rate":10,"traced":110,"counted_only":890,"total":1000}]`:
-  `traced` is the number of rows in the file, `counted_only` the invocations only the
-  kernel counted, `total` their sum. The value is the word `unavailable` when the totals
-  cannot be trusted (a filter the kernel counters cannot apply, or a failed read of them).
+  `traced` is the number of invocations ior handed to the recorder, `counted_only` the
+  invocations only the kernel counted, `total` their sum. `traced` is not always the
+  number of rows in the file: a row the recorder queue shed (`events were dropped
+  (parquet recorder queue overflow)` on stderr) or a pair of a probe that is not active is
+  counted as traced but has no row, so compare `total`, not the row count, with the
+  population. When the kernel's ring buffer dropped events (the run statistics say
+  `ring buffer drops: N`), the lost rows are in neither `traced` nor `counted_only`: every
+  element then carries `"lower_bound":true` and its numbers are a lower bound (the true
+  total is at least that). The value is the word `unavailable` when the totals cannot be
+  trusted at all (a filter the kernel counters cannot apply, or a failed read of them).
 
 Row counts of sampled syscalls in such a file are therefore not the population; use
 `ior.sampling.totals` for that. The kernel counts carry no bytes, files or latency

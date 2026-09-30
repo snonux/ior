@@ -226,7 +226,7 @@ func TestAnnounceSamplingNamesTheRatesOnlyWhenSampling(t *testing.T) {
 }
 
 func TestTallyIgnoresSyscallsItDoesNotSample(t *testing.T) {
-	tally := newSamplingTally(map[types.TraceId]uint32{types.SYS_ENTER_READ: 4})
+	tally := newSamplingTally(map[types.TraceId]uint32{types.SYS_ENTER_READ: 4}, nil)
 	tally.countTraced(types.SYS_ENTER_WRITE)
 	tally.IngestSyscallAggregates([]statsengine.SyscallAggregate{{TraceID: types.SYS_ENTER_WRITE, Count: 9}})
 	got := tally.summary("")
@@ -281,5 +281,170 @@ func TestFinaliseTraceStoresTheSamplingInTheRecording(t *testing.T) {
 	}
 	if !got.TotalsKnown() || len(got.Entries) != 1 || got.Entries[0].Total() != 100 || got.Entries[0].Rate != 10 {
 		t.Fatalf("recording sampling = %+v, want read at 1-in-10 with a total of 100", got)
+	}
+}
+
+// finalDrain runs the aggregate drain loop once, as the end of a run does: the
+// stop takes a last drain, which merges the kernel counts of the source.
+func finalDrain(el *eventLoop) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := el.startAggregateDrainLoop(ctx)
+	cancel()
+	stop()
+}
+
+// A dropped ring-buffer event is a row that was emitted and never reached the
+// loop: it is in neither the traced count nor the kernel aggregate (which only
+// counts invocations that were not emitted), so the sum falls short. Reporting
+// it as "exact kernel totals" was false; the counts must be labelled a lower
+// bound instead - in the statistics and in the summary that feeds the footer
+// and the header.
+func TestSamplingTotalsAreALowerBoundUnderRingbufDrops(t *testing.T) {
+	tests := []struct {
+		name  string
+		drops func(*eventLoop)
+	}{
+		{"events were dropped", func(el *eventLoop) { el.numRingbufDrops.Store(211176) }},
+		{"the drop counter could not be read", func(el *eventLoop) { el.ringbufDropReadFailed.Store(true) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			el := sampledLoop(t, "-plain", "-syscall-sampling-syscalls", "read=10")
+			el.aggregateSrc = &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{{{TraceID: types.SYS_ENTER_READ, Count: 90}}}}
+			for range 10 {
+				emitPair(el, types.SYS_ENTER_READ)
+			}
+			finalDrain(el)
+			tc.drops(el)
+
+			got := el.samplingResult()
+			if !got.TotalsKnown() || !got.LowerBound {
+				t.Fatalf("result = %+v, want known totals marked as a lower bound", got)
+			}
+			if !strings.Contains(got.Totals(), `"lower_bound":true`) || !strings.Contains(got.Totals(), `"total":100`) {
+				t.Fatalf("Totals() = %s, want the numbers kept and lower_bound set", got.Totals())
+			}
+			lines := el.samplingStatLines()
+			for _, want := range []string{"lower bounds", "read: at least 100 calls", "kernel-counted only: at least 100"} {
+				if !strings.Contains(lines, want) {
+					t.Fatalf("stat lines = %q, want %q", lines, want)
+				}
+			}
+			if strings.Contains(lines, "exact kernel totals") {
+				t.Fatalf("stat lines = %q claim exactness although events were lost", lines)
+			}
+		})
+	}
+}
+
+// Without drops the totals stay exact and carry no lower-bound mark.
+func TestSamplingTotalsStayExactWithoutRingbufDrops(t *testing.T) {
+	el := sampledLoop(t, "-plain", "-syscall-sampling-syscalls", "read=10")
+	el.aggregateSrc = &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{{{TraceID: types.SYS_ENTER_READ, Count: 90}}}}
+	for range 10 {
+		emitPair(el, types.SYS_ENTER_READ)
+	}
+	finalDrain(el)
+	got := el.samplingResult()
+	if !got.TotalsKnown() || got.LowerBound {
+		t.Fatalf("result = %+v, want exact totals", got)
+	}
+	if !strings.Contains(el.samplingStatLines(), "exact kernel totals") {
+		t.Fatalf("stat lines = %q, want the exactness statement", el.samplingStatLines())
+	}
+}
+
+// A syscall named in -syscall-sampling-syscalls whose probe was never attached
+// (here: only read and openat are traced) has no measured count, so it gets no
+// "0 calls" line and no entry in the startup line, footer or header.
+func TestSamplingReportsOnlySyscallsThatAttached(t *testing.T) {
+	el := sampledLoop(t, "-plain", "-trace-syscalls", "read,openat",
+		"-syscall-sampling-syscalls", "read=10,write=10,futex=0")
+	attached := map[string]bool{"read": true, "openat": true}
+	el.restrictSamplingToActive(func(name string) bool { return attached[name] })
+
+	plan := el.samplingPlan()
+	if got := plan.Rates(); got != "read=10" {
+		t.Fatalf("plan rates = %q, want only the attached read=10", got)
+	}
+	el.aggregateSrc = &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{{
+		{TraceID: types.SYS_ENTER_READ, Count: 90},
+		{TraceID: types.SYS_ENTER_WRITE, Count: 5}, // never attached: must be ignored
+	}}}
+	finalDrain(el)
+	result := el.samplingResult()
+	if len(result.Entries) != 1 || result.Entries[0].Syscall != "read" || result.Entries[0].Counted != 90 {
+		t.Fatalf("result entries = %+v, want only read with 90 counted", result.Entries)
+	}
+	lines := el.samplingStatLines()
+	for _, bad := range []string{"futex", "write"} {
+		if strings.Contains(lines, bad) || strings.Contains(result.Totals(), bad) {
+			t.Fatalf("never-attached %s is reported: %q %s", bad, lines, result.Totals())
+		}
+	}
+}
+
+// If none of the sampled syscalls attached, nothing was sampled and the run
+// carries no marker at all.
+func TestSamplingOfNothingAttachedIsNotReported(t *testing.T) {
+	el := sampledLoop(t, "-plain", "-syscall-sampling-syscalls", "futex=0")
+	el.restrictSamplingToActive(func(string) bool { return false })
+	if got := el.samplingResult(); got.Active() {
+		t.Fatalf("result = %+v, want none", got)
+	}
+	if lines := el.samplingStatLines(); lines != "" {
+		t.Fatalf("stat lines = %q, want none", lines)
+	}
+	el.SetStatusCallback(func(args ...any) { t.Errorf("announced %v", args) })
+	el.announceSampling()
+}
+
+// A family rate is one item in the startup line, the statistics and the
+// summary, however many syscalls the family has; per-syscall lines appear
+// only for syscalls that were invoked, and an explicit per-syscall rate still
+// shows next to the family.
+func TestFamilyRateDoesNotFloodTheReport(t *testing.T) {
+	el := sampledLoop(t, "-plain", "-syscall-sampling-families", "FS=10", "-syscall-sampling-syscalls", "sync=5")
+	if n := len(el.samplingTally.rates); n < 50 {
+		t.Fatalf("the family covers %d syscalls, the test needs a big family", n)
+	}
+	var announced string
+	el.SetStatusCallback(func(args ...any) { announced = args[0].(string) })
+	el.announceSampling()
+	if !strings.Contains(announced, "(FS=10,sync=5)") || len(announced) > 250 {
+		t.Fatalf("startup line (%d bytes) = %q, want FS=10 once plus the explicit sync=5", len(announced), announced)
+	}
+
+	el.aggregateSrc = &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{{{TraceID: types.SYS_ENTER_READ, Count: 90}}}}
+	for range 10 {
+		emitPair(el, types.SYS_ENTER_READ)
+	}
+	finalDrain(el)
+	result := el.samplingResult()
+	if got := result.Rates(); got != "FS=10,sync=5" {
+		t.Fatalf("Rates() = %q, want FS=10,sync=5", got)
+	}
+	// read (invoked) and sync (explicit, silent): two entries, not the whole family.
+	if len(result.Entries) != 2 {
+		t.Fatalf("entries = %+v, want read and the explicit sync only", result.Entries)
+	}
+	lines := strings.Split(strings.TrimSpace(el.samplingStatLines()), "\n")
+	if len(lines) != 3 { // headline, read, "syscalls including ..."
+		t.Fatalf("stat lines = %q, want a headline, the read line and the sum", lines)
+	}
+	if !strings.Contains(lines[1], "read: 100 calls (1-in-10: 10 traced, 90 counted only)") {
+		t.Fatalf("read line = %q", lines[1])
+	}
+}
+
+// The family rates follow the same promotion as the per-syscall ones: an
+// explicit family 0 is promoted to 1 in raw modes (nothing sampled), and
+// outside raw modes there is no tally at all.
+func TestRawModeSamplingFamilyRates(t *testing.T) {
+	if got := rawModeSamplingFamilyRates(mustParseArgs(t, "-plain", "-syscall-sampling-families", "FS=10,IPC=0")); len(got) != 1 || got[types.FamilyFS] != 10 {
+		t.Fatalf("family rates = %v, want FS=10 only (IPC=0 is promoted to 1)", got)
+	}
+	if got := rawModeSamplingFamilyRates(mustParseArgs(t, "-syscall-sampling-families", "FS=10")); got != nil {
+		t.Fatalf("family rates = %v in the TUI, want none", got)
 	}
 }

@@ -135,3 +135,52 @@ func TestWriterSetKeyValueMetadataFailsOnceClosed(t *testing.T) {
 		t.Fatalf("footer k = %q, %v; want v", got, ok)
 	}
 }
+
+// An unsampled run wires nothing new, so handing the recorder its (empty)
+// summary must succeed whatever state the session is in - in particular after
+// the session already ended, which used to fail with ErrRecorderNotActive and
+// turn a finished unsampled run into an error.
+func TestSetSamplingTotalsOfAnUnsampledRunNeverFails(t *testing.T) {
+	none := sampling.Summary{}
+	var nilRecorder *Recorder
+	if err := nilRecorder.SetSamplingTotals(none); err != nil {
+		t.Fatalf("nil recorder: error = %v, want nil", err)
+	}
+	if err := NewRecorder(RecorderConfig{}).SetSamplingTotals(none); err != nil {
+		t.Fatalf("recorder without a session: error = %v, want nil", err)
+	}
+
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 8, BatchSize: 2, FlushInterval: time.Hour})
+	if err := recorder.Start(filepath.Join(t.TempDir(), "done.parquet"), StartOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := recorder.SetSamplingTotals(none); err != nil {
+		t.Fatalf("after the session ended: error = %v, want nil", err)
+	}
+	// A sampled run, in contrast, must learn that its totals went nowhere.
+	if err := recorder.SetSamplingTotals(sampledRun()); !errors.Is(err, ErrRecorderNotActive) {
+		t.Fatalf("sampled totals after the session ended: error = %v, want ErrRecorderNotActive", err)
+	}
+}
+
+// A run that sampled a family has a footer that names the family once, lists
+// only the syscalls that were invoked, and flags ring-buffer losses.
+func TestFamilyRunFooterIsCompactAndMarksLowerBounds(t *testing.T) {
+	entries := []sampling.Entry{{Syscall: "read", Rate: 10, Family: "FS", Traced: 10, Counted: 90}}
+	for i := range 100 {
+		entries = append(entries, sampling.Entry{Syscall: "idle" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Rate: 10, Family: "FS"})
+	}
+	summary := sampling.New(entries, "").AtLeast()
+	path := record(t, FileMetadata{Sampling: summary}, &summary)
+
+	if got, _ := footerValue(t, path, KeySampling); got != "FS=10" {
+		t.Fatalf("%s = %q, want FS=10", KeySampling, got)
+	}
+	want := `[{"syscall":"read","rate":10,"traced":10,"counted_only":90,"total":100,"lower_bound":true}]`
+	if got, _ := footerValue(t, path, KeySamplingTotals); got != want {
+		t.Fatalf("%s = %q, want %s", KeySamplingTotals, got, want)
+	}
+}

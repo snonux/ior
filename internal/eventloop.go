@@ -77,6 +77,9 @@ type eventLoopConfig struct {
 	// in the TUI, whose stats engine merges the kernel counts itself. When
 	// set, newEventLoop keeps an exact tally of them (samplingTally).
 	samplingRates map[types.TraceId]uint32
+	// samplingFamilyRates are the family-wide rates among samplingRates, so
+	// the report can name a family once instead of each of its syscalls.
+	samplingFamilyRates map[types.SyscallFamily]uint32
 }
 
 type rawEventHandler func(raw []byte, ch chan<- *event.Pair)
@@ -242,7 +245,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	// Failed stdout writes of the default sink reach the loop, which stops the
 	// trace and makes the run exit non-zero (outputFailed).
 	plainSink.onErr = el.outputFailed
-	el.initSamplingTally(cfg.samplingRates)
+	el.initSamplingTally(cfg.samplingRates, cfg.samplingFamilyRates)
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.initRuntimeEventKinds()

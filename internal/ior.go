@@ -596,6 +596,7 @@ func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 		escapeMode:              cfg.EscapeMode,
 		aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
 		samplingRates:           rawModeSamplingRates(cfg),
+		samplingFamilyRates:     rawModeSamplingFamilyRates(cfg),
 	}
 }
 
@@ -1070,6 +1071,12 @@ func setupTraceInfraWithEventLoop(
 	}
 	infra.el = el
 	wireEventLoopLogging(el, logln, warnings)
+	// Report sampling only for syscalls that really attached (raw modes; a
+	// no-op for the TUI, which has no tally). It stays after the two lines
+	// above, which the structural setup tests require to be adjacent.
+	if infra.mgr != nil {
+		el.restrictSamplingToActive(infra.mgr.IsActive)
+	}
 
 	// Nothing fallible may follow. Every step above still reaches the caller
 	// through err, and in TUI mode that is the only path an error has: once
@@ -1194,14 +1201,28 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(.
 	if err != nil {
 		return nil, err
 	}
-	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+	aggregateSrc, err := openAggregateSource(bpfModule)
 	if err != nil {
 		return nil, err
 	}
-	el.aggregateSrc = aggregateConsumer
+	el.aggregateSrc = aggregateSrc
 	// Deliberately non-fatal, see attachRingbufDropCounter.
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	return el, nil
+}
+
+// openAggregateSource opens the kernel's syscall_aggregate_map of a loaded BPF
+// module as an aggregate source. It is a variable so a test can give the trace
+// setup (newTraceEventLoop, newHeadlessParquetEventLoop) a fake source instead
+// of a real module, which is what makes their wiring testable without root.
+// The error path returns an untyped nil source, never a nil *consumer wrapped
+// in a non-nil interface.
+var openAggregateSource = func(module *bpf.Module) (syscallAggregateSource, error) {
+	consumer, err := newSyscallAggregateConsumer(module)
+	if err != nil {
+		return nil, err
+	}
+	return consumer, nil
 }
 
 // attachRingbufDropCounter wires the kernel-side ring-buffer drop counter into

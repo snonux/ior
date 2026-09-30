@@ -19,6 +19,10 @@ import (
 // explicit rate: the built-in aggregate-only defaults are promoted to 1 there
 // (see flags.resolveDefaultSyscallSamplingRates), so such a run neither needs
 // the kernel aggregate map nor carries a sampling marker.
+//
+// The rates cover every syscall the configuration names, attached or not. The
+// ones that never attached cannot be told apart here, before the probes are
+// up; eventLoop.restrictSamplingToActive drops them once they are known.
 func rawModeSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	if !cfg.IsRawOutputMode() {
 		return nil
@@ -31,6 +35,24 @@ func rawModeSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	}
 	if len(rates) == 0 {
 		return nil
+	}
+	return rates
+}
+
+// rawModeSamplingFamilyRates returns the -syscall-sampling-families rates of a
+// raw output mode that samples (as effective rates: a family's 0 is promoted to
+// 1 there, see promoteFamilyZeroForRawOutput), excluding the rate 1. They are
+// what lets the report say "FS=10" once instead of naming every syscall of the
+// family. Nil when nothing is sampled.
+func rawModeSamplingFamilyRates(cfg flags.Config) map[types.SyscallFamily]uint32 {
+	if !cfg.IsRawOutputMode() {
+		return nil
+	}
+	rates := make(map[types.SyscallFamily]uint32)
+	for family, rate := range cfg.SyscallFamilySamplingRates {
+		if rate = promoteFamilyZeroForRawOutput(cfg, rate); rate != 1 {
+			rates[family] = rate
+		}
 	}
 	return rates
 }
@@ -50,7 +72,12 @@ func rawModeSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 // It is the raw-mode counterpart of the stats engine, which does this job for
 // the TUI.
 type samplingTally struct {
+	// rates holds the sampled syscalls and their effective rates. Only
+	// restrict changes it, before the event loop starts.
 	rates map[types.TraceId]uint32
+	// familyRates are the family-wide rates; a syscall whose effective rate
+	// equals its family's runs at the family rate and is reported as such.
+	familyRates map[types.SyscallFamily]uint32
 
 	// traced is written by the event-loop goroutine only and read after the
 	// loop returned, so it needs no lock.
@@ -65,11 +92,26 @@ type samplingTally struct {
 	drainFailed atomic.Bool
 }
 
-func newSamplingTally(rates map[types.TraceId]uint32) *samplingTally {
+func newSamplingTally(rates map[types.TraceId]uint32, familyRates map[types.SyscallFamily]uint32) *samplingTally {
 	return &samplingTally{
-		rates:   rates,
-		traced:  make(map[types.TraceId]uint64, len(rates)),
-		counted: make(map[types.TraceId]uint64, len(rates)),
+		rates:       rates,
+		familyRates: familyRates,
+		traced:      make(map[types.TraceId]uint64, len(rates)),
+		counted:     make(map[types.TraceId]uint64, len(rates)),
+	}
+}
+
+// restrict drops every syscall for which active is false, so the report names
+// only syscalls whose probes are attached. A syscall whose probe never attached
+// was not traced at all; "0 calls" under "exact kernel totals" for it would be
+// a claim about something nobody measured. Call it before the event loop runs.
+func (t *samplingTally) restrict(active func(types.TraceId) bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for traceID := range t.rates {
+		if !active(traceID) {
+			delete(t.rates, traceID)
+		}
 	}
 }
 
@@ -102,14 +144,30 @@ func (t *samplingTally) summary(unavailable string) sampling.Summary {
 	defer t.mu.Unlock()
 	entries := make([]sampling.Entry, 0, len(t.rates))
 	for traceID, rate := range t.rates {
-		entries = append(entries, sampling.Entry{
+		entry := sampling.Entry{
 			Syscall: traceID.Name(),
 			Rate:    rate,
 			Traced:  t.traced[traceID],
 			Counted: t.counted[traceID],
-		})
+		}
+		if familyRate, ok := t.familyRates[traceID.Family()]; ok && familyRate == rate {
+			entry.Family = string(traceID.Family())
+		}
+		entries = append(entries, entry)
 	}
 	return sampling.New(entries, unavailable)
+}
+
+// restrictSamplingToActive limits the sampling report to the syscalls whose
+// probes are attached (isActive, normally probemanager.Manager.IsActive). A run
+// that samples read=10,write=10,futex=0 but traces only read and openat has no
+// write or futex counts to report. Call it once the probes are attached and
+// before the loop runs.
+func (e *eventLoop) restrictSamplingToActive(isActive func(syscall string) bool) {
+	if e.samplingTally == nil {
+		return
+	}
+	e.samplingTally.restrict(func(id types.TraceId) bool { return isActive(id.Name()) })
 }
 
 // samplingPlan is the summary as known before the run: the rates, no counts.
@@ -129,6 +187,13 @@ func (e *eventLoop) samplingPlan() sampling.Summary {
 // nothing (aggregateIngestAllowedForFilter), and the exact totals are reported
 // as unavailable rather than as a count that ignores the filter. A drain that
 // failed at the end leaves the counts short for the same reason.
+//
+// Ring-buffer drops do not make the counts unavailable, but inexact: a dropped
+// event is an emitted row that never reached the loop (so it is in neither the
+// traced count nor the kernel aggregate, which only sees invocations that were
+// not emitted). The counts are then a lower bound and are marked as one. The
+// drop counter cannot say which syscalls lost events, so any drop, or a counter
+// that could not be read, marks all of them.
 func (e *eventLoop) samplingResult() sampling.Summary {
 	t := e.samplingTally
 	if t == nil {
@@ -142,7 +207,11 @@ func (e *eventLoop) samplingResult() sampling.Summary {
 	case t.drainFailed.Load():
 		return t.summary("reading the kernel counters failed")
 	}
-	return t.summary("")
+	summary := t.summary("")
+	if e.numRingbufDrops.Load() > 0 || e.ringbufDropReadFailed.Load() {
+		return summary.AtLeast()
+	}
+	return summary
 }
 
 // announceSampling tells the user at startup that the output of this run is a
@@ -170,7 +239,11 @@ func (e *eventLoop) samplingStatLines() string {
 		out += "\t" + line + "\n"
 	}
 	if result.TotalsKnown() {
-		out += fmt.Sprintf("\tsyscalls including kernel-counted only: %d\n", e.numSyscallsAfterFilter+sumCounted(result))
+		atLeast := ""
+		if result.LowerBound {
+			atLeast = "at least "
+		}
+		out += fmt.Sprintf("\tsyscalls including kernel-counted only: %s%d\n", atLeast, e.numSyscallsAfterFilter+sumCounted(result))
 	}
 	return out
 }
@@ -188,10 +261,10 @@ func sumCounted(s sampling.Summary) uint {
 // makes it the aggregate sink, so the drain loop (startAggregateDrainLoop) runs
 // and merges the kernel counts of the invocations that were not emitted. No
 // rates, no tally: a run that samples nothing pays for no drain loop.
-func (e *eventLoop) initSamplingTally(rates map[types.TraceId]uint32) {
+func (e *eventLoop) initSamplingTally(rates map[types.TraceId]uint32, familyRates map[types.SyscallFamily]uint32) {
 	if len(rates) == 0 {
 		return
 	}
-	e.samplingTally = newSamplingTally(rates)
+	e.samplingTally = newSamplingTally(rates, familyRates)
 	e.SetAggregateSink(e.samplingTally)
 }

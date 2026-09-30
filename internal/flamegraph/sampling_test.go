@@ -207,3 +207,29 @@ func TestVersionOneHeaderWithoutSamplingLoads(t *testing.T) {
 		t.Fatalf("sampling = %+v, want none", got)
 	}
 }
+
+// The compact family form and the lower-bound mark survive the header's gob
+// round trip, so `ior collapsed` reports what the run recorded.
+func TestRecordingHeaderKeepsFamiliesAndLowerBound(t *testing.T) {
+	entries := []sampling.Entry{{Syscall: "read", Rate: 10, Family: "FS", Traced: 110, Counted: 890}}
+	for _, idle := range []string{"close", "fsync", "lseek"} {
+		entries = append(entries, sampling.Entry{Syscall: idle, Rate: 10, Family: "FS"})
+	}
+	iod := oneRecordData()
+	iod.sampling = sampling.New(entries, "").AtLeast()
+
+	stream, err := iod.serialize()
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	var restored iorData
+	if err := restored.deserialize(bytes.NewBuffer(stream)); err != nil {
+		t.Fatalf("deserialize: %v", err)
+	}
+	if !reflect.DeepEqual(restored.sampling, iod.sampling) {
+		t.Fatalf("restored sampling = %+v, want %+v", restored.sampling, iod.sampling)
+	}
+	if !restored.sampling.LowerBound || restored.sampling.Rates() != "FS=10" || len(restored.sampling.Entries) != 1 {
+		t.Fatalf("restored sampling = %+v, want FS=10, one invoked syscall, lower bound", restored.sampling)
+	}
+}
