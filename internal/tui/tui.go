@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1162,17 +1163,38 @@ func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
 // quitFromErrorScreen leaves the full-screen error view. It performs the same
 // cleanup as the dashboard quit path - stop the recorder, cancel the trace
 // context - but treats the recorder result as best effort: the dashboard path
-// turns a recorderStop failure into m.lastErr and returns *without* quitting,
-// and doing that here would swallow the key for a second error the user is
-// already looking at. m.lastErr is left untouched so the displayed error is
-// the one runProgram reports to the caller on exit.
+// turns a recorderStop failure into an error screen and returns *without*
+// quitting, and doing that here would swallow the key for a second error the
+// user is already looking at. The displayed error stays in m.lastErr, which
+// runProgram reports to the caller on exit; a Stop failure is joined to it
+// rather than dropped (see quitWithBestEffortCleanup).
 func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 	return m.quitWithBestEffortCleanup()
 }
 
+// quitWithBestEffortCleanup stops the recorder and begins the shutdown no
+// matter what the recorder says. Stop marks the failure it returns as reported
+// (parquet.Recorder.TakeFailure will not hand it out again), so ignoring it
+// here would make the lost recording vanish without a trace: no stream row
+// (the trace is ending), no record modal, and the post-run safety net sees an
+// inactive recorder. The failure is therefore kept in m.lastErr, joined to
+// whatever the screen already shows, and leaves the program through
+// runProgram like the signal quit's does.
 func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
-	_ = m.stopRecording()
+	m.keepRecordingStopFailure(m.stopRecording())
 	return m.beginShutdown()
+}
+
+// keepRecordingStopFailure joins a recorder Stop failure (nil is a no-op) to
+// m.lastErr without replacing the error already displayed. The process is
+// leaving, so unlike the dashboard 'q' it cannot stay on an error screen; the
+// recording the user asked for is lost, so the error must reach the exit
+// status and stderr instead. Shared by the quit paths that do not stop on a
+// failing recorder.
+func (m *Model) keepRecordingStopFailure(err error) {
+	if err != nil {
+		m.lastErr = errors.Join(m.lastErr, fmt.Errorf("finalising Parquet recording: %w", err))
+	}
 }
 
 func (m *Model) beginShutdown() (tea.Model, tea.Cmd, bool) {

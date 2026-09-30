@@ -213,6 +213,31 @@ type RowRecorder interface {
 	TakeFailure() error
 }
 
+// WarningRecorder is the optional extension of RowRecorder for a recorder
+// that can publish a stream warning atomically with the recorder call that
+// produced it. The TUI's per-session recorder view implements it.
+//
+// Plain Record followed by TakeFailure and a separate warning push is three
+// steps with gaps in between: when the session is retired in a gap, the
+// failure has already been claimed (and marked reported) but its warning row
+// is dropped, so nobody ever shows it. RecordWarning runs the record call, the
+// failure claim and the warning push under one session gate instead, so the
+// failure is either claimed and its row lands, or (session already retired)
+// not claimed at all and stays available to the next session or the record
+// modal. *parquet.Recorder does not implement it; callers fall back to the
+// three steps, which is exact there because nothing retires a session.
+type WarningRecorder interface {
+	RowRecorder
+	// RecordWarning records row like Record, then calls describe with the
+	// underlying recorder and Record's result. A non-empty message it returns
+	// is published as a stream warning before the gate is released. describe
+	// runs inside the gate, so it must not call back into the session view;
+	// it may call rec.TakeFailure. A retired session ignores the row and never
+	// calls describe. Pass a long-lived function, not a per-row closure:
+	// this is on the per-event hot path.
+	RecordWarning(row streamrow.Row, filterEpoch uint64, describe func(rec RowRecorder, result error) string)
+}
+
 // RecordingController is the full recorder surface the TUI needs on top of
 // row recording: opening and closing recordings and polling their status.
 // Declaring it here (rather than handing the TUI *parquet.Recorder) keeps the

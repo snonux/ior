@@ -234,3 +234,70 @@ func assertWarnings(t *testing.T, got, want []string) {
 		}
 	}
 }
+
+// gatedRowRecorder is a runtime.WarningRecorder fake that, like the TUI's
+// session view, runs the record call, the failure claim and the warning push
+// as one step: retired makes it ignore everything (the session is over), and
+// the warning lands in pushed only from inside RecordWarning.
+type gatedRowRecorder struct {
+	scriptedRowRecorder
+	retired     bool
+	pushed      []string
+	plainRecord int
+}
+
+func (g *gatedRowRecorder) Record(row streamrow.Row, epoch uint64) error {
+	g.plainRecord++
+	return g.scriptedRowRecorder.Record(row, epoch)
+}
+
+func (g *gatedRowRecorder) RecordWarning(row streamrow.Row, epoch uint64, describe func(runtime.RowRecorder, error) string) {
+	if g.retired {
+		return
+	}
+	if message := describe(&g.scriptedRowRecorder, g.scriptedRowRecorder.Record(row, epoch)); message != "" {
+		g.pushed = append(g.pushed, message)
+	}
+}
+
+// TestRecordRowUsesTheGatedRecorderAtomically checks the dispatch task xp2
+// added: a recorder that can publish its own warning is asked to (so the
+// claim and the push cannot be split by a retiring session), its plain
+// Record/TakeFailure/notifyWarning steps are not used, and a retired session
+// neither claims the failure nor warns.
+func TestRecordRowUsesTheGatedRecorderAtomically(t *testing.T) {
+	diskFull := errors.New("disk full")
+	rec := &gatedRowRecorder{scriptedRowRecorder: scriptedRowRecorder{
+		errs: []error{nil, diskFull, diskFull}, failures: []error{diskFull},
+	}}
+	var viaLoop []string
+	el := &eventLoop{}
+	el.SetWarningCallback(func(msg string) { viaLoop = append(viaLoop, msg) })
+
+	for i := 0; i < 3; i++ {
+		recordRow(el, rec, streamrow.Row{}, 0)
+	}
+	assertWarnings(t, rec.pushed, []string{"Parquet recorder failed: disk full"})
+	if rec.plainRecord != 0 || len(viaLoop) != 0 {
+		t.Fatalf("plain Record calls = %d, event-loop warnings = %q, want the gated path only", rec.plainRecord, viaLoop)
+	}
+
+	retired := &gatedRowRecorder{retired: true, scriptedRowRecorder: scriptedRowRecorder{
+		errs: []error{diskFull}, failures: []error{diskFull},
+	}}
+	recordRow(el, retired, streamrow.Row{}, 0)
+	if retired.takes != 0 || len(retired.pushed) != 0 {
+		t.Fatalf("retired session took %d failures and pushed %q, want neither", retired.takes, retired.pushed)
+	}
+}
+
+// TestRecordRowFallsBackForPlainRecorders keeps the ungated form working for
+// recorders that are not session views.
+func TestRecordRowFallsBackForPlainRecorders(t *testing.T) {
+	rec := &scriptedRowRecorder{errs: []error{parquet.ErrRecorderStartedDropping}}
+	var got []string
+	el := &eventLoop{}
+	el.SetWarningCallback(func(msg string) { got = append(got, msg) })
+	recordRow(el, rec, streamrow.Row{}, 0)
+	assertWarnings(t, got, []string{"queue full"})
+}

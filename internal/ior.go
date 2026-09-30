@@ -273,8 +273,8 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
-// warnRecorderResult reports one recorder.Record result from the TUI print
-// callback as a stream warning when it is news.
+// recorderWarningText turns one recorder.Record result into the stream
+// warning text it deserves, or "" when it is not news.
 //
 // The TUI owns a single recorder for its lifetime, but a recording only runs
 // while the user has started one, so most results are not news:
@@ -294,20 +294,49 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 // event reaches before the user opens the record modal again is claimed and
 // shown there instead (Start would discard it); one no event and no modal
 // ever reaches is not reported in the stream at all.
-func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
+//
+// TakeFailure marks the failure reported, so the caller must deliver the text
+// this returns or the failure is lost: that is why the TUI's session view runs
+// this inside the same gate that pushes the warning (recordRow).
+func recorderWarningText(rec runtime.RowRecorder, err error) string {
 	switch {
 	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):
 	case errors.Is(err, parquet.ErrRecorderStartedDropping):
-		el.notifyWarning("Parquet recorder queue full: rows are being dropped")
+		return "Parquet recorder queue full: rows are being dropped"
 	case errors.Is(err, parquet.ErrRecorderQueueFull):
 	default:
 		// Record may return the failure while the session is still being
 		// torn down, when TakeFailure yields nil; a later Record (in this or
 		// a later session) then reports it.
 		if failure := rec.TakeFailure(); failure != nil {
-			el.notifyWarning(fmt.Sprintf("Parquet recorder failed: %v", failure))
+			return fmt.Sprintf("Parquet recorder failed: %v", failure)
 		}
 	}
+	return ""
+}
+
+// warnRecorderResult reports one recorder.Record result as a stream warning
+// when it is news (see recorderWarningText). It is the fallback for a recorder
+// without a session gate; the gap between the claim inside recorderWarningText
+// and this delivery is harmless there because nothing can retire the session
+// in between (see runtime.WarningRecorder).
+func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
+	el.notifyWarning(recorderWarningText(rec, err))
+}
+
+// recordRow records one stream row and reports the result when it is news.
+// A session-gated recorder (runtime.WarningRecorder) records, claims a failure
+// and publishes its warning in one atomic step, so a session retired in the
+// middle can neither drop the warning of a failure it already claimed nor
+// consume one it can no longer show; the failure then stays with the recorder
+// for the next session or the record modal. Other recorders use the plain
+// three-step form.
+func recordRow(el *eventLoop, rec runtime.RowRecorder, row streamrow.Row, filterEpoch uint64) {
+	if gated, ok := rec.(runtime.WarningRecorder); ok {
+		gated.RecordWarning(row, filterEpoch, recorderWarningText)
+		return
+	}
+	warnRecorderResult(el, rec, rec.Record(row, filterEpoch))
 }
 
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
@@ -340,7 +369,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 			rt.accumulator.Ingest(ep)
 			rt.streamBuf.Push(row)
 			if rt.recorder != nil {
-				warnRecorderResult(el, rt.recorder, rt.recorder.Record(row, rt.currentFilterEpoch()))
+				recordRow(el, rt.recorder, row, rt.currentFilterEpoch())
 			}
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so

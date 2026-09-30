@@ -47,8 +47,12 @@ type sessionEventSink struct {
 
 // sessionRecorder is the recorder as one session sees it: Record is dropped
 // (reported as ErrRecorderNotActive, which callers treat as "not news") once
-// the session is no longer current; the controller methods go straight
-// through.
+// the session is no longer current, and TakeFailure claims nothing then, so a
+// retired session cannot consume a failure it can no longer show. The other
+// controller methods go straight through: they are the TUI's own calls, not
+// the session's. RecordWarning (runtime.WarningRecorder) is the session's way
+// to report what Record returned: it publishes the warning under the same
+// gate that claimed the failure.
 type sessionRecorder struct {
 	runtime.RecordingController
 	view traceSessionBindings
@@ -60,6 +64,7 @@ var (
 	_ runtime.TraceRuntimeBindings = traceSessionBindings{}
 	_ runtime.EventSink            = sessionEventSink{}
 	_ runtime.RecordingController  = sessionRecorder{}
+	_ runtime.WarningRecorder      = sessionRecorder{}
 )
 
 // beginSession starts a new trace session generation and returns its bindings
@@ -257,4 +262,46 @@ func (k sessionRecorder) Record(row streamrow.Row, filterEpoch uint64) error {
 		err = k.RecordingController.Record(row, filterEpoch)
 	})
 	return err
+}
+
+// TakeFailure claims the last recording's failure while the session is current.
+// A retired session gets nil and leaves the failure untaken: TakeFailure marks
+// it reported, and this session's warning row would be dropped, so claiming it
+// would lose the failure for everyone (the next session and the record modal
+// would both see nothing). The record modal reads the TUI-owned recorder
+// directly, ungated, so it still claims what a retired session left.
+func (k sessionRecorder) TakeFailure() error {
+	var failure error
+	k.view.bindings.emitIfCurrent(k.view.session, func() {
+		failure = k.RecordingController.TakeFailure()
+	})
+	return failure
+}
+
+// RecordWarning records row while the session is current and publishes the
+// warning describe derives from the result, all under one session gate (see
+// runtime.WarningRecorder for why the claim and the push must not be separate
+// steps). The row's closure captures only what Record's already does and never
+// escapes emitIfCurrent, so the per-event cost matches Record.
+func (k sessionRecorder) RecordWarning(row streamrow.Row, filterEpoch uint64, describe func(rec runtime.RowRecorder, result error) string) {
+	r := k.view.bindings
+	r.emitIfCurrent(k.view.session, func() {
+		result := k.RecordingController.Record(row, filterEpoch)
+		if message := describe(k.RecordingController, result); message != "" {
+			r.pushWarningLocked(message)
+		}
+	})
+}
+
+// pushWarningLocked appends a warning row to the stream buffer. The caller is
+// inside emitIfCurrent, so the session is known to be current and the gated
+// sink must not be used here: it would take the read lock a second time, which
+// deadlocks when endSession is waiting for the write lock in between. The
+// sequence number comes from the same sequencer the trace core's warning
+// callback uses, so rows stay strictly ordered.
+func (r *runtimeBindings) pushWarningLocked(message string) {
+	if r.streamBuffer == nil || r.streamSeq == nil {
+		return
+	}
+	r.streamBuffer.Push(streamrow.NewWarning(r.streamSeq.Next(), message))
 }
