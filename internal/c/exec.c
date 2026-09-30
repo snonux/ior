@@ -152,6 +152,16 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 // Cost: one 32-byte record per task exit, comparable to the per-exec record
 // above, on the same ring buffer.
 
+// trace_event_raw_sched_process_exit___ior is a CO-RE "flavor" of the kernel's
+// struct trace_event_raw_sched_process_exit, reduced to the one field this
+// program reads. libbpf matches it to the kernel type by name (everything from
+// "___" on is dropped); preserve_access_index turns the field access into a
+// relocation instead of a fixed offset, so group_dead's real offset comes from
+// the running kernel's BTF and the leading members need not be repeated here.
+struct trace_event_raw_sched_process_exit___ior {
+    bool group_dead;
+} __attribute__((preserve_access_index));
+
 // ior_exit_group_dead reports whether the exiting task was the last live
 // member of its thread group, i.e. whether the process as a whole is dead.
 //
@@ -163,14 +173,26 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 // branch as dead code, and libbpf's poisoned relocation for ctx->group_dead is
 // never executed.
 //
+// The relocation goes through the local flavor type declared below rather
+// than through vmlinux.h's struct trace_event_raw_sched_process_exit. That
+// vmlinux.h is dumped from the BUILD host's kernel (Magefile.go), and kernels
+// predating the group_dead change (RHEL/Rocky 8 and 9) define sched_process_exit
+// from the shared sched_process_template, so their vmlinux.h has no such
+// struct at all and naming it here made the object fail to compile there.
+// libbpf matches the flavor to the target kernel's type by name (the ___ior
+// suffix is ignored) at load time, so the runtime behaviour is unchanged. On a
+// kernel whose BTF lacks the type entirely, libbpf resolves the
+// field-exists relocation to 0 rather than failing the load.
+//
 // Older kernels fall back to reading task->signal->live directly. do_exit()
 // decrements live before it fires the tracepoint and nothing can increment it
 // again once the group is exiting, so live == 0 here means every thread has
 // passed that point: the process is dead. The last thread to decrement always
 // reads its own decrement, so at least one exit record of a group carries
 // group_dead = 1. Two threads exiting concurrently can both observe 0 and
-// both report it; userspace eviction is idempotent, so the duplicate is
-// harmless. A failed read (NULL signal) reports 0 rather than guessing - the
+// both report it (the earlier thread fires its tracepoint after the later
+// one's decrement); userspace eviction is idempotent and the group-dead
+// counter drops the duplicate (see applyProcessDeath). A failed read (NULL signal) reports 0 rather than guessing - the
 // fd entries then linger until LRU trimming, the same outcome as a record lost
 // to ring-buffer backpressure.
 //
@@ -181,7 +203,8 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 // kernel lacking the field; its correctness rests on the do_exit() ordering
 // argued above.
 static __always_inline __u32
-ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
+ior_exit_group_dead(void *raw_ctx) {
+    struct trace_event_raw_sched_process_exit___ior *ctx = raw_ctx;
     struct task_struct *task;
     struct signal_struct *signal;
 
@@ -215,7 +238,7 @@ ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
 // there is no bypass at all. group_dead is only read once the pid matched,
 // so exits of unrelated processes cost no extra reads.
 static __always_inline int
-ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
+ior_process_exit_in_scope(void *ctx,
                           __u32 *pid, __u32 *tid, __u32 *group_dead) {
     if (!filter(pid, tid)) {
         *group_dead = ior_exit_group_dead(ctx);
@@ -231,7 +254,9 @@ ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
 }
 
 SEC("tracepoint/sched/sched_process_exit")
-int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
+// ctx is void *: the tracepoint's context struct has a different name (and
+// layout) per kernel generation and the handler only needs its address.
+int handle_sched_process_exit(void *ctx) {
     // Zero-initialised: filter() leaves tid unwritten on its early ior-self
     // return, and the verifier cannot prove the bypass never reaches the
     // ev->tid store on that path.

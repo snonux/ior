@@ -141,12 +141,69 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 		}
 		return
 	}
+	// A repeat record of a death already handled has nothing left to do.
+	if e.isDuplicateGroupDead(ev) {
+		return
+	}
 	// Counted for the end-of-run statistics: it makes the whole-process
 	// exits that reached userspace observable, including those of untraced
 	// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
 	e.numGroupDeadExits++
 	e.fdState().deletePid(ev.Pid)
 	e.retireStatsProcess(ev.Pid)
+}
+
+// groupDeadDedupWindowNs is how close (in kernel boot-clock nanoseconds) two
+// group-dead records of one pid must be to count as the same process death.
+// The duplicates come from threads of one exit_group racing through do_exit()
+// within microseconds of each other; 100ms leaves ample slack for ring-buffer
+// reordering across CPUs while staying far below the time a pid takes to be
+// recycled and die again.
+const groupDeadDedupWindowNs = 100_000_000
+
+// groupDeadDedupPruneAt bounds recentGroupDead: once it holds this many pids
+// the entries outside the window are dropped.
+const groupDeadDedupPruneAt = 256
+
+// isDuplicateGroupDead reports whether ev repeats the group-dead record of a
+// process death already handled, and remembers ev otherwise.
+//
+// Kernels whose sched_process_exit tracepoint lacks a group_dead field make
+// the BPF side derive it from signal->live == 0 (ior_exit_group_dead in
+// internal/c/exec.c). do_exit() decrements live before it fires the
+// tracepoint, so when several threads of one exit_group exit concurrently the
+// earlier ones can fire after the last one's decrement and every one of them
+// reads 0: one process death, several group_dead=1 records. (Derived from the
+// kernel's do_exit() ordering; not yet observed on a real old kernel.) Fd
+// eviction and stats retirement are idempotent, but numGroupDeadExits is not,
+// so the repeats must not be counted or replayed.
+//
+// A time window rather than a permanent "seen" set: pids are recycled, and a
+// later process legitimately dying under the same pid must count again.
+func (e *eventLoop) isDuplicateGroupDead(ev *types.ProcessExitEvent) bool {
+	if last, ok := e.recentGroupDead[ev.Pid]; ok && absDiffNs(last, ev.Time) <= groupDeadDedupWindowNs {
+		return true
+	}
+	if e.recentGroupDead == nil {
+		e.recentGroupDead = make(map[uint32]uint64)
+	}
+	if len(e.recentGroupDead) >= groupDeadDedupPruneAt {
+		for pid, t := range e.recentGroupDead {
+			if absDiffNs(t, ev.Time) > groupDeadDedupWindowNs {
+				delete(e.recentGroupDead, pid)
+			}
+		}
+	}
+	e.recentGroupDead[ev.Pid] = ev.Time
+	return false
+}
+
+// absDiffNs returns |a-b| for unsigned nanosecond timestamps.
+func absDiffNs(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // retireStatsProcess tells the stats engine that process pid has exited, when
