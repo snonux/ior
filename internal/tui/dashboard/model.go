@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"strings"
+	"sync/atomic"
 
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/globalfilter"
@@ -66,6 +67,11 @@ type Model struct {
 	// built by statsTick is versioned, and advances on every stats reset so
 	// handleStatsTick can drop ticks built before the reset.
 	statsGen uint64
+	// refreshBuilding is set while a periodic refresh command is building a
+	// snapshot off the UI goroutine (refreshStatsCmd). It is a pointer so the
+	// command can clear it after the build ends, and created lazily so a
+	// zero-value Model works.
+	refreshBuilding *atomic.Bool
 
 	width  int
 	height int
@@ -902,20 +908,6 @@ func (m *Model) processesRowCount() int {
 	return m.snapshotOrZero().ProcessesCount()
 }
 
-// statsTick fetches the latest engine snapshot as a StatsTickMsg. Without an
-// engine it carries a nil snapshot and no error; a failed Snapshot is reported
-// through Err so handleStatsTick keeps the last successful snapshot.
-func (m *Model) statsTick() messages.StatsTickMsg {
-	if m.engine == nil {
-		return messages.StatsTickMsg{Generation: m.statsGen}
-	}
-	snap, err := m.engine.Snapshot()
-	if err != nil {
-		return messages.StatsTickMsg{Err: err, Generation: m.statsGen}
-	}
-	return messages.StatsTickMsg{Snap: snap, Generation: m.statsGen}
-}
-
 func (m *Model) snapshotOrZero() statsengine.Snapshot {
 	if m.latest == nil {
 		return statsengine.Snapshot{}
@@ -930,24 +922,34 @@ func (m *Model) snapshotOrZero() statsengine.Snapshot {
 // (both the `r` key and auto-reset ticks) and are only cleared when a new
 // PID/TID selection starts a fresh trace (runtime.resetStreamBuffer).
 // This retention is locked by TestTUIIntegration_Global_ResetKeepsStreamRows.
+// The engine is cleared and the generation bumped here on the UI goroutine
+// (so every older in-flight tick is dropped on arrival), while the post-reset
+// snapshot is built by the returned command like any other refresh.
 func (m *Model) resetBaselineCmd() tea.Cmd {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()
 	}
-	tick := m.resetStats()
-	return func() tea.Msg { return tick }
+	m.beginStatsGeneration()
+	return m.statsTickCmd()
 }
 
-// resetStats resets the stats engine, starts a new stats generation so every
-// tick built before the reset is dropped on arrival, and returns the
-// post-reset snapshot as a tick of the new generation. A Snapshot failure
-// travels as StatsTickMsg.Err, so the dashboard keeps displaying the last
-// successful snapshot.
-func (m *Model) resetStats() messages.StatsTickMsg {
+// beginStatsGeneration resets the stats engine and starts a new stats
+// generation, so every tick built before the reset is dropped on arrival.
+func (m *Model) beginStatsGeneration() {
 	m.statsGen++
 	if m.engine != nil {
 		m.engine.Reset()
 	}
+}
+
+// resetStats resets the stats engine (beginStatsGeneration) and returns the
+// post-reset snapshot as a tick of the new generation, built synchronously:
+// the engine was just cleared, so there are no percentile reservoirs to
+// select from and the build is cheap. A Snapshot failure travels as
+// StatsTickMsg.Err, so the dashboard keeps displaying the last successful
+// snapshot.
+func (m *Model) resetStats() messages.StatsTickMsg {
+	m.beginStatsGeneration()
 	return m.statsTick()
 }
 
@@ -1076,10 +1078,11 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetDarkMode(isDark) })
 }
 
-// SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
+// SnapshotCmd returns a command that fetches and emits a fresh dashboard
+// snapshot. The snapshot is built when the command runs (off the UI
+// goroutine), not when SnapshotCmd is called.
 func (m *Model) SnapshotCmd() tea.Cmd {
-	tick := m.statsTick()
-	return func() tea.Msg { return tick }
+	return m.statsTickCmd()
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.

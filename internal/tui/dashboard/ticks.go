@@ -194,11 +194,11 @@ func (m *Model) handleRefreshTick(msg refreshTickMsg) (tea.Model, tea.Cmd) {
 	if !m.focused || !m.ticks.refresh.isCurrent(msg.generation) {
 		return m, nil
 	}
-	tick := m.statsTick()
-	return m, tea.Batch(
-		m.ticks.refreshCmd(),
-		func() tea.Msg { return tick },
-	)
+	// The snapshot is built by a command, not here: Update runs on the UI
+	// goroutine and a build with stale percentile reservoirs takes up to
+	// ~22ms (statstick.go). refreshStatsCmd is nil while the previous build
+	// is still running; tea.Batch drops nil commands.
+	return m, tea.Batch(m.ticks.refreshCmd(), m.refreshStatsCmd())
 }
 
 func (m *Model) handleStreamTick(msg streamTickMsg) (tea.Model, tea.Cmd) {

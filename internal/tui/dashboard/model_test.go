@@ -1681,8 +1681,10 @@ func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected tick command batch")
 	}
-	if engine.snapshots != 1 {
-		t.Fatalf("expected one snapshot call, got %d", engine.snapshots)
+	// The snapshot is built by the returned command, not by Update itself
+	// (TestRefreshTickBuildsTheSnapshotOffTheUpdatePath pins this).
+	if engine.snapshots != 0 {
+		t.Fatalf("Update built a snapshot on the UI goroutine: %d calls", engine.snapshots)
 	}
 
 	msg := cmd()
@@ -1702,6 +1704,9 @@ func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 		t.Fatalf("expected batch message, got %T", msg)
 	}
 
+	if engine.snapshots != 1 {
+		t.Fatalf("expected one snapshot call once the commands ran, got %d", engine.snapshots)
+	}
 	_ = next
 }
 
