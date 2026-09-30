@@ -128,40 +128,79 @@ func TestProcTgidOfSiblingThread(t *testing.T) {
 // TestRingbufMapSize pins the mirror of libbpf's adjust_ringbuf_sz(): the
 // kernel wants a power-of-two multiple of the page size, libbpf rounds any
 // other request up to the next such size, and a request that cannot be
-// rounded inside uint32 must be an error rather than libbpf's silent 0.
+// rounded inside uint32 must be an error rather than an opaque kernel EINVAL
+// at load time. The page size is a parameter of the function precisely so
+// that the 16 KiB (arm64) and 64 KiB (ppc64le/arm64) page hosts are covered
+// here even though the tests run on a 4 KiB page x86 machine.
 func TestRingbufMapSize(t *testing.T) {
-	const page = 4096
+	const (
+		page4k  = 4096
+		page16k = 16384
+		page64k = 65536
+	)
 	for _, tc := range []struct {
 		name      string
+		page      uint32
 		requested uint32
 		want      uint32
 		wantErr   bool
 	}{
-		{"one page passes through", page, page, false},
-		{"legacy 64KiB default passes through", 65536, 65536, false},
-		{"16MiB default passes through", 1 << 24, 1 << 24, false},
-		{"largest uint32 power of two passes through", 1 << 31, 1 << 31, false},
-		{"below a page rounds up to a page", 100, page, false},
-		{"just above a page rounds to two pages", page + 1, 2 * page, false},
-		{"three pages round to four", 3 * page, 4 * page, false},
-		{"non power of two rounds up", 100000, 131072, false},
-		{"just below a power of two rounds up to it", (1 << 24) - 1, 1 << 24, false},
-		{"above 2GiB cannot be represented", 1<<31 + 1, 0, true},
-		{"zero is rejected", 0, 0, true},
+		{"4k: one page passes through", page4k, page4k, page4k, false},
+		{"4k: 64KiB passes through", page4k, 65536, 65536, false},
+		{"4k: 16MiB default passes through", page4k, 1 << 24, 1 << 24, false},
+		{"4k: largest uint32 power of two passes through", page4k, 1 << 31, 1 << 31, false},
+		{"4k: below a page rounds up to a page", page4k, 100, page4k, false},
+		{"4k: just above a page rounds to two pages", page4k, page4k + 1, 2 * page4k, false},
+		{"4k: three pages round to four", page4k, 3 * page4k, 4 * page4k, false},
+		{"4k: non power of two rounds up", page4k, 100000, 131072, false},
+		{"4k: just below a power of two rounds up to it", page4k, (1 << 24) - 1, 1 << 24, false},
+		{"4k: above 2GiB cannot be represented", page4k, 1<<31 + 1, 0, true},
+		{"4k: zero is rejected", page4k, 0, 0, true},
+
+		{"16k: one page passes through", page16k, page16k, page16k, false},
+		{"16k: 64KiB passes through", page16k, 65536, 65536, false},
+		{"16k: below a page rounds up to a page", page16k, 100, page16k, false},
+		{"16k: 4KiB (one 4k page) rounds up to a 16k page", page16k, page4k, page16k, false},
+		{"16k: just above a page rounds to two pages", page16k, page16k + 1, 2 * page16k, false},
+		{"16k: three pages round to four", page16k, 3 * page16k, 4 * page16k, false},
+		{"16k: 16MiB default passes through", page16k, 1 << 24, 1 << 24, false},
+		{"16k: above 2GiB cannot be represented", page16k, 1<<31 + 1, 0, true},
+
+		{"64k: one page passes through", page64k, page64k, page64k, false},
+		{"64k: just above a page rounds to two pages", page64k, page64k + 1, 2 * page64k, false},
+		{"64k: below a page rounds up to a page", page64k, 100, page64k, false},
+		{"64k: 16MiB default passes through", page64k, 1 << 24, 1 << 24, false},
+		{"64k: three pages round to four", page64k, 3 * page64k, 4 * page64k, false},
+		{"64k: above 2GiB cannot be represented", page64k, 1<<31 + 1, 0, true},
+		{"64k: zero is rejected", page64k, 0, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ringbufMapSize(tc.requested, page)
+			got, err := ringbufMapSize(tc.requested, tc.page)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("ringbufMapSize(%d) error = %v, wantErr %v", tc.requested, err, tc.wantErr)
+				t.Fatalf("ringbufMapSize(%d, %d) error = %v, wantErr %v", tc.requested, tc.page, err, tc.wantErr)
 			}
 			if got != tc.want {
-				t.Fatalf("ringbufMapSize(%d) = %d, want %d", tc.requested, got, tc.want)
+				t.Fatalf("ringbufMapSize(%d, %d) = %d, want %d", tc.requested, tc.page, got, tc.want)
 			}
 		})
 	}
 	if _, err := ringbufMapSize(4096, 0); err == nil {
 		t.Fatal("a zero page size must be rejected instead of dividing by it")
 	}
+}
+
+// skipIfUnprivilegedOpen decides what an error from opening the embedded BPF
+// object means. libbpfgo raises RLIMIT_MEMLOCK while opening, which fails with
+// "error setting rlimit: operation not permitted" for an unprivileged user
+// and is the ONLY reason this test may skip (and only when not root). Any
+// other error, or any error as root, means the embedded object or libbpf is
+// broken and must fail the test rather than silently skipping it.
+func skipIfUnprivilegedOpen(t *testing.T, err error) {
+	t.Helper()
+	if os.Geteuid() != 0 && strings.Contains(err.Error(), "error setting rlimit") {
+		t.Skipf("unprivileged: cannot raise RLIMIT_MEMLOCK to open the BPF object: %v", err)
+	}
+	t.Fatalf("cannot open embedded BPF object (euid %d): %v", os.Geteuid(), err)
 }
 
 // TestResizeBPFMapsAgainstRealObject drives resizeBPFMaps against the real
@@ -188,7 +227,7 @@ func TestResizeBPFMapsAgainstRealObject(t *testing.T) {
 			// Use the embedded object directly: tests elsewhere stub the loader vars.
 			mod, err := bpf.NewModuleFromBuffer(embeddedBPFObject, embeddedBPFObjectName)
 			if err != nil {
-				t.Skipf("cannot open BPF object: %v", err)
+				skipIfUnprivilegedOpen(t, err)
 			}
 			defer mod.Close()
 			if err := resizeBPFMaps(flags.Config{EventMapSize: tc.size}, mod); err != nil {

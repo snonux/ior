@@ -15,7 +15,8 @@ const (
 	// (~1,300 read/write records, ~200 open records) in well under a
 	// millisecond, so any consumer pause longer than that (GC, stats/trie
 	// locks, the ~50ms LiveTrie compaction) dropped events: a bursty ~300k
-	// records/s load lost 0.18-0.28% of them at 64 KiB and none at 16 MiB.
+	// records/s load lost 0.12-0.21% of them at 64 KiB (1,706 to 3,015 kernel
+	// drops per 5s run) and none at 16 MiB.
 	//
 	// Cost: ring-buffer pages are allocated up front and are non-swappable
 	// kernel memory (charged to the memory cgroup on kernel >= 5.11, to

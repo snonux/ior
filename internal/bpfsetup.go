@@ -118,8 +118,10 @@ func resizeBPFMaps(cfg flags.Config, bpfModule *bpf.Module) error {
 // matches pass through unchanged. It returns the size the map will really
 // have, so the post-resize sanity check compares against that rather than
 // rejecting every -mapSize that is not already a valid ring-buffer size. A
-// request too large to round up inside uint32 is an error (libbpf would hand
-// back 0 there).
+// request too large to round up inside uint32 is an error: libbpf's own
+// adjust_ringbuf_sz() gives up there and returns the original size unchanged
+// (leaving the kernel to reject it with EINVAL at load time), so failing early
+// here gives the user a clear message instead of an opaque load error.
 func ringbufMapSize(requested, pageSize uint32) (uint32, error) {
 	if requested == 0 || pageSize == 0 {
 		return 0, fmt.Errorf("invalid ring buffer size %d (page size %d)", requested, pageSize)
