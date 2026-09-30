@@ -11,6 +11,16 @@ import (
 	"ior/internal/types"
 )
 
+// NoFileName is the placeholder a pair renders in its file column (CSV
+// output, FileName, the stream tab's File cell) when it carries no file. It
+// is display text only: the global filter's file dimension sees such a pair
+// as the empty value (globalfilter pairCandidate.FileValue), so consumers that
+// turn a displayed file name back into a filter or a ranking key must treat
+// NoFileName like a blank value. A real file literally named "N:file" is
+// indistinguishable from the placeholder once rendered and is treated the
+// same way by those consumers.
+const NoFileName = "N:file"
+
 // Pair represents a matched syscall enter/exit pair together with derived metadata.
 //
 // Timing semantics for Duration (durationNs) and DurationToPrev (durationToPrevNs),
@@ -257,7 +267,7 @@ func (e *Pair) CSVRow(escape func(string) string) string {
 
 	sb.WriteString(",")
 	if e.File == nil {
-		sb.WriteString("N:file")
+		sb.WriteString(NoFileName)
 	} else {
 		sb.WriteString(csvTextField(e.File.String(), escape))
 	}
@@ -274,11 +284,11 @@ func (e *Pair) Flags() file.Flags {
 	return e.File.Flags()
 }
 
-// FileName returns the associated file's path, or the "N:file" placeholder
+// FileName returns the associated file's path, or the NoFileName placeholder
 // when the pair carries no file.
 func (e *Pair) FileName() string {
 	if e.File == nil {
-		return "N:file"
+		return NoFileName
 	}
 	return e.File.Name()
 }

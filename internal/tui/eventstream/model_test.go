@@ -6,8 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/event"
+	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/messages"
+	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -660,6 +663,7 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 		{"blank comm", StreamEvent{Seq: 1, PID: 5, Comm: "   "}, streamColComm},
 		{"empty syscall", StreamEvent{Seq: 1, PID: 5}, streamColSyscall},
 		{"empty file", StreamEvent{Seq: 1, PID: 5}, streamColFile},
+		{"no-file placeholder", StreamEvent{Seq: 1, PID: 5, FileName: event.NoFileName}, streamColFile},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
@@ -667,6 +671,39 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 				t.Fatalf("expected blank cell enter to be ignored, got handled=%v cmd=%v", handled, cmd != nil)
 			}
 		})
+	}
+}
+
+// TestPausedEnterOnFilelessPairRowPushesNoFilter is the task hp2 regression:
+// a pair without a file renders its File cell as event.NoFileName, but the
+// global filter reads that pair's file as "". Enter on the cell used to push
+// ^N:file$, which kept the buffered placeholder rows yet rejected every new
+// event, so the stream went silent. The placeholder must be treated like a
+// blank cell. The MatchPair check pins the mismatch that made the old filter
+// harmful; the last check shows a real file cell still yields a filter.
+func TestPausedEnterOnFilelessPairRowPushesNoFilter(t *testing.T) {
+	enter := &types.FdEvent{TraceId: types.SYS_ENTER_CLOSE, Time: 10, Pid: 5, Tid: 5, Fd: 3}
+	pair := event.NewPair(enter)
+	pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_CLOSE, Time: 20, Pid: 5, Tid: 5}
+	row := NewStreamEvent(1, pair)
+	if row.FileName != event.NoFileName {
+		t.Fatalf("fileless row FileName = %q, want %q", row.FileName, event.NoFileName)
+	}
+
+	handled, cmd := pressEnterOnCell(t, row, streamColFile)
+	if handled || cmd != nil {
+		t.Fatalf("enter on the no-file placeholder must push nothing, got handled=%v cmd=%v", handled, cmd != nil)
+	}
+
+	placeholderFilter := Filter{File: &StringFilter{Pattern: globalfilter.ExactPattern(event.NoFileName)}}
+	if placeholderFilter.MatchPair(pair) {
+		t.Fatalf("expected ^N:file$ to reject the live fileless pair (root cause changed?)")
+	}
+
+	withFile := row
+	withFile.FileName = "/tmp/a"
+	if handled, cmd := pressEnterOnCell(t, withFile, streamColFile); !handled || cmd == nil {
+		t.Fatalf("enter on a real file cell must still push a filter")
 	}
 }
 
