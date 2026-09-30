@@ -58,7 +58,10 @@ type Writer struct {
 	tempPath  string
 	file      *os.File
 	writer    *parquetgo.GenericWriter[Record]
-	state     writerState
+	// codec is this writer's own zstd encoder holder; Close and Abort release
+	// it so the encoder's buffers do not outlive the recording.
+	codec *zstdCodec
+	state writerState
 }
 
 // NewWriter creates a parquet writer for a path the user chose explicitly. It
@@ -93,8 +96,11 @@ func newWriter(path string, cfg WriterConfig, meta FileMetadata, noClobber bool)
 	}
 	tempPath := file.Name()
 
+	// A per-writer codec with one small-window encoder instead of the
+	// library's global parquetgo.Zstd (see zstdCodec for the memory it saves).
+	codec := newZstdCodec()
 	options := []parquetgo.WriterOption{
-		parquetgo.Compression(&parquetgo.Zstd),
+		parquetgo.Compression(codec),
 		parquetgo.CreatedBy("ior", normalizeMetadata(meta).IORVersion, ""),
 		parquetgo.MaxRowsPerRowGroup(cfg.MaxRowsPerRowGroup),
 		parquetgo.PageBufferSize(cfg.PageBufferSize),
@@ -107,6 +113,7 @@ func newWriter(path string, cfg WriterConfig, meta FileMetadata, noClobber bool)
 		tempPath:  tempPath,
 		file:      file,
 		writer:    parquetgo.NewGenericWriter[Record](file, options...),
+		codec:     codec,
 		state:     writerStateOpen,
 	}, nil
 }
@@ -172,13 +179,18 @@ func (w *Writer) Close() error {
 	}
 	file := w.file
 	writer := w.writer
+	codec := w.codec
 	tempPath := w.tempPath
 	finalPath := w.finalPath
 	noClobber := w.noClobber
 	w.state = writerStateClosed
 	w.mu.Unlock()
 
-	if err := writer.Close(); err != nil {
+	err := writer.Close()
+	// Closing flushed the last page; the encoder is not needed any more, on
+	// the failure paths below either.
+	codec.release()
+	if err != nil {
 		closeErr := file.Close()
 		removeErr := os.Remove(tempPath)
 		return errors.Join(fmt.Errorf("close parquet writer: %w", err), closeErr, removeErr)
@@ -221,6 +233,9 @@ func (w *Writer) Abort() error {
 	tempPath := w.tempPath
 	w.state = writerStateAborted
 	w.mu.Unlock()
+
+	// No further page will be compressed; drop the encoder's buffers now.
+	w.codec.release()
 
 	closeErr := file.Close()
 	removeErr := os.Remove(tempPath)
