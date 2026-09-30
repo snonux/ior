@@ -41,8 +41,10 @@ func (m *Model) appendStreamFooter(base string, start int) string {
 }
 
 // streamFooterSegments returns the stream footer's segments in priority
-// order: position first, then the paused selection and its key hints. The
-// order matters because fitFooterSegments drops trailing segments first.
+// order, because fitFooterSegments drops trailing segments first on narrow
+// terminals. While paused, the selection and the "Esc/F undo" way back out
+// come first and the pure "Row x/N" scroll position (also implied by Sel)
+// comes last; the live footer is just the position.
 func (m *Model) streamFooterSegments(start int) []string {
 	total := len(m.filtered)
 	row := fmt.Sprintf("Row %d/%d", rowNumber(start, total), total)
@@ -50,17 +52,18 @@ func (m *Model) streamFooterSegments(start int) []string {
 		return []string{row}
 	}
 	sel := fmt.Sprintf("Sel %d/%d Col %d/%d", rowNumber(m.selectedIdx, total), total, m.selectedCol+1, streamColumnCount)
-	return []string{row, sel, "Enter push-filter", "T fd-trace", "Esc/F undo"}
+	return []string{sel, "Esc/F undo", "Enter push-filter", "T fd-trace", row}
 }
 
-// fdTraceFooterLine renders the fd-trace view's footer fitted to width.
+// fdTraceFooterLine renders the fd-trace view's footer fitted to width. The
+// "esc:back" exit hint leads so it survives the narrowest terminals.
 func fdTraceFooterLine(width, row, total int) string {
-	return fitFooterSegments([]string{fmt.Sprintf("FD Trace Row %d/%d", row, total), "esc:back j/k:scroll"}, width)
+	return fitFooterSegments([]string{"esc:back", fmt.Sprintf("FD Trace Row %d/%d", row, total), "j/k:scroll"}, width)
 }
 
 // fitFooterSegments joins segments with footerSep, keeping the longest prefix
 // of whole segments that fits width display cells, so narrow terminals get a
-// compact footer (e.g. just "Row x/N | Sel x/N Col x/N") instead of hints cut
+// compact footer (e.g. just "Sel x/N Col x/N | Esc/F undo") instead of hints cut
 // mid-word. Only when not even the first segment fits is it truncated with
 // footerTail. Segments are ior-generated (counters and fixed hints), so they
 // need no sanitising. A width of zero or less yields "".
