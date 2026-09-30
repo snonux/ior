@@ -420,6 +420,85 @@ func (t *fdTracker) deletePid(pid uint32) {
 	}
 }
 
+// inheritedFd is one descriptor of a parent process captured by inherit: its
+// number and the file (fd-table entry) or cached procfs resolution behind it.
+type inheritedFd struct {
+	fd   int32
+	file file.File
+}
+
+// inherit makes child's slice of the fd table and of the procfs cache a copy
+// of parent's, the way fork(2) gives a new process a copy of its creator's
+// descriptor table (dup_fd). It is what keeps a forked child's rows named after
+// the traced name of an inherited descriptor ("pipe:0:3:4", "memfd:name",
+// "eventfd:0") instead of the degraded procfs form ("pipe:[N]",
+// "/memfd:name (deleted)", "anon_inode:[eventfd]") or, once the child has gone,
+// an unresolvable E:name - the table is keyed by tgid, so without the copy every
+// new process starts with no entries at all.
+//
+// Whatever child already owns is dropped first: a new process's tgid is its
+// own fresh tid, so entries under it can only belong to a previous owner of the
+// number whose exit record was lost (the same staleness retireRecycledTid
+// clears for the tid-keyed state).
+//
+// Both maps are copied as they are. The copies are independent objects (Dup):
+// a status-flag or FD_CLOEXEC change the child makes through fcntl/dup3/
+// ioctl must not show on the parent's descriptor, and FD_CLOEXEC in particular
+// belongs to the descriptor, not the shared open file description. The one
+// thing the kernel shares that the copies do not is the status word
+// (F_SETFL O_NONBLOCK/O_APPEND act on the shared open file description), which
+// ior can only learn per process from that process's own fcntl records, so after
+// the fork each table tracks its own changes. Entries whose close-on-exec
+// state is known to be set are dropped by the child's exec record as for any
+// process (dropOnExec).
+//
+// The parent's entries are snapshotted before anything is written: set and
+// setProcFdCache prune the LRU, which may evict parent entries mid-copy, and the
+// copy must not depend on the order of a map range. The cost is O(descriptors
+// of the parent), like the kernel's own copy, and only paid per created
+// process; a parent that tracks nothing costs a map lookup.
+func (t *fdTracker) inherit(parent, child uint32) {
+	if parent == child {
+		// Not a fork: the "child" is the creator itself (a record that says so
+		// is malformed); dropping its entries first would erase the table.
+		return
+	}
+	t.deletePid(child)
+	keys := t.pidKeySets(parent)
+	if keys == nil {
+		return
+	}
+	files := make([]inheritedFd, 0, len(keys.files))
+	for key := range keys.files {
+		_, fd := fdKeyParts(key)
+		files = append(files, inheritedFd{fd, t.files[key]})
+	}
+	cache := make([]inheritedFd, 0, len(keys.cache))
+	for key := range keys.cache {
+		_, fd := fdKeyParts(key)
+		cache = append(cache, inheritedFd{fd, t.procFdCache[key]})
+	}
+	for _, in := range files {
+		t.set(in.fd, child, copyForChild(in.file, in.fd))
+	}
+	for _, in := range cache {
+		if fdFile, ok := in.file.(*file.FdFile); ok && fdFile != nil {
+			t.setProcFdCache(in.fd, child, fdFile.Dup(in.fd))
+		}
+	}
+}
+
+// copyForChild returns the entry a forked child starts with for descriptor fd:
+// a detached copy of a mutable FdFile (see inherit), the value itself for the
+// immutable kinds (pathname, anonymous mapping, ... files carry no
+// per-descriptor state).
+func copyForChild(f file.File, fd int32) file.File {
+	if fdFile, ok := f.(*file.FdFile); ok && fdFile != nil {
+		return fdFile.Dup(fd)
+	}
+	return f
+}
+
 // dropOnExec forgets the descriptors of pid that a successful execve(2) closed.
 // Called from handleProcessExecEvent on a sched_process_exec control record:
 // the kernel closes every FD_CLOEXEC descriptor of the exec'ing process

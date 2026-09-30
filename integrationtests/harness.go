@@ -81,17 +81,38 @@ func (h *TestHarness) Run(scenario string, duration int) (TestResult, int, error
 
 // RunWithIorArgs behaves like Run but forwards additional args to ior.
 func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs []string) (TestResult, int, error) {
+	return h.runFlamegraph(scenario, duration, extraIorArgs, true)
+}
+
+// RunSystemWideWithIorArgs is RunWithIorArgs without the -pid scope: ior traces
+// every process (narrowed only by extraIorArgs, typically -comm), so a process
+// the workload creates is traced too. A -pid run skips it by design, which is
+// the wrong shape for anything about fork children. Without -pid ior does not
+// end when the workload does, so the run lasts the full duration seconds: pass a
+// short one, long enough for the scenario.
+func (h *TestHarness) RunSystemWideWithIorArgs(scenario string, duration int, extraIorArgs []string) (TestResult, int, error) {
+	return h.runFlamegraph(scenario, duration, extraIorArgs, false)
+}
+
+// runFlamegraph is the shared body of RunWithIorArgs (pidScoped) and
+// RunSystemWideWithIorArgs.
+func (h *TestHarness) runFlamegraph(scenario string, duration int, extraIorArgs []string, pidScoped bool) (TestResult, int, error) {
 	startupFile := h.workloadStartupFile(scenario)
 	workloadCmd, workloadPID, workloadStderr, err := h.startWorkload(scenario, startupFile)
 	if err != nil {
 		return TestResult{}, 0, err
 	}
 
-	extraIorArgs, err = h.withPIDScopedArgs(extraIorArgs, workloadPID, workloadCmd)
-	if err != nil {
-		return TestResult{}, workloadPID, err
+	iorPID := workloadPID
+	if pidScoped {
+		extraIorArgs, err = h.withPIDScopedArgs(extraIorArgs, workloadPID, workloadCmd)
+		if err != nil {
+			return TestResult{}, workloadPID, err
+		}
+	} else {
+		iorPID = 0 // startIorForRun: no -pid
 	}
-	ior, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
+	ior, err := h.startIorForRun(iorPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
 		_ = workloadCmd.Wait()
@@ -290,12 +311,15 @@ func (h *TestHarness) startIor(pid int, scenario string, duration int, extraArgs
 }
 
 func (h *TestHarness) startIorForRun(pid int, scenario string, duration int, extraArgs []string) (*iorProcess, error) {
-	args := []string{
-		"-pid", strconv.Itoa(pid),
+	var args []string
+	if pid > 0 {
+		args = append(args, "-pid", strconv.Itoa(pid))
+	}
+	args = append(args,
 		"-flamegraph",
 		"-name", scenario,
 		"-duration", strconv.Itoa(duration),
-	}
+	)
 	args = append(args, extraArgs...)
 	return h.startIorArgsWithReady(args)
 }

@@ -49,6 +49,7 @@ var scenarios = map[string]func() error{
 	"thread-comm-short-lived":       threadCommShortLived,
 	"thread-comm-renamed":           threadCommRenamed,
 	"thread-comm-fdtable":           threadCommFdTable,
+	"fork-inherit-fds":              forkInheritFds,
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,

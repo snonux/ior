@@ -95,10 +95,12 @@ const (
 	processExitEventSize       = 32
 	processExitEventLegacySize = 24
 	// task_newtask_event is the control record emitted by task:task_newtask.
-	// 4+4+8+4+4+16(comm)+8(clone_flags) = 48 bytes with clone_flags naturally
-	// aligned at offset 40, so there is no padding and kernel and binary.Write
-	// payloads share one size. It has no legacy layout: it is new.
-	taskNewtaskEventSize = 48
+	// 4+4+8+4+4+16(comm)+8(clone_flags)+4(creator_pid)+4(reserved) = 56 bytes;
+	// clone_flags is naturally aligned at offset 40 and the explicit reserved
+	// word leaves no trailing padding, so kernel and binary.Write payloads share
+	// one size. The legacy 48-byte record (task fr2) predates creator_pid.
+	taskNewtaskEventSize       = 56
+	taskNewtaskEventLegacySize = 48
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -961,14 +963,19 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 }
 
 // NewTaskNewtaskEventFast decodes the task:task_newtask control record: the
-// child's tgid (Pid) and tid, the comm it inherited and the raw clone flags.
+// child's tgid (Pid) and tid, the comm it inherited, the raw clone flags and
+// the creator's tgid (CreatorPid).
 //
-// Accepted sizes: the current 48-byte layout and anything longer (its prefix is
-// decoded, so a newer object that appends fields stays readable). Every
-// shorter size fails closed with nil rather than decoding fields at wrong
+// Accepted sizes: the current 56-byte layout, anything longer (its prefix is
+// decoded, so a newer object that appends fields stays readable) and exactly
+// the legacy 48-byte record of a pre-creator_pid IOR_BPF_OBJECT override,
+// which decodes with CreatorPid 0: "creator unknown", so the fd-table
+// inheritance it feeds is skipped (a tgid is never 0 for a userspace task).
+// Every other size fails closed with nil rather than decoding fields at wrong
 // offsets.
 func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
-	if len(raw) < taskNewtaskEventSize {
+	legacy := len(raw) == taskNewtaskEventLegacySize
+	if !legacy && len(raw) < taskNewtaskEventSize {
 		return nil
 	}
 	p := poolOfTaskNewtaskEvents.Get().(*TaskNewtaskEvent)
@@ -979,6 +986,14 @@ func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	copy(p.Comm[:], raw[24:40])
 	p.CloneFlags = binary.LittleEndian.Uint64(raw[40:48])
+	// Every pooled decode assigns both fields, so a recycled event never leaks
+	// the previous record's creator into a legacy one.
+	p.CreatorPid = 0
+	p.Reserved = 0
+	if !legacy {
+		p.CreatorPid = binary.LittleEndian.Uint32(raw[48:52])
+		p.Reserved = binary.LittleEndian.Uint32(raw[52:56])
+	}
 	return p
 }
 

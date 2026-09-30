@@ -315,11 +315,13 @@ int handle_sched_process_exit(void *ctx) {
 // /proc once (setCachedProvisional); a rename after the first traced syscall
 // is still not seen (task lr2).
 //
-// The record also carries the raw clone_flags, the input later consumers need
-// to tell a thread from a process and to model the fd table the child inherits
-// or shares (CLONE_FILES).
+// The record also carries the raw clone_flags and the creator's tgid, the inputs
+// userspace needs to tell a thread from a process and to model the fd table the
+// child inherits: a fork()ed child starts with a copy of the creator's
+// descriptor table (handleTaskNewtaskEvent copies the tracked entries), while
+// CLONE_FILES shares it.
 //
-// Cost: one 48-byte record per created task, the same order as the per-exec and
+// Cost: one 56-byte record per created task, the same order as the per-exec and
 // per-exit records, on the same ring buffer.
 
 // IOR_CLONE_THREAD is CLONE_THREAD from include/uapi/linux/sched.h: the new
@@ -364,12 +366,15 @@ int handle_task_newtask(void *raw_ctx) {
     struct task_newtask_event *ev;
     __u64 clone_flags = ctx->clone_flags;
     __u32 child_tid = (__u32)ctx->pid;
+    // The creator's tgid: this handler runs in the context of the task that
+    // called clone, so the current task is the creator.
+    __u32 creator_pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
     // The child's tgid: the creator's for a new thread, its own tid for a new
     // process. Derived rather than read from the child's task_struct so the
     // handler does not depend on when copy_process() assigns p->tgid relative to
     // the tracepoint.
     __u32 child_pid = (clone_flags & IOR_CLONE_THREAD)
-        ? (__u32)(bpf_get_current_pid_tgid() >> 32)
+        ? creator_pid
         : child_tid;
 
     if (!ior_newtask_in_scope(child_pid, child_tid))
@@ -406,6 +411,11 @@ int handle_task_newtask(void *raw_ctx) {
     // first NUL (types.StringValue) either way.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->clone_flags = clone_flags;
+    // The process whose descriptor table a non-thread, non-CLONE_FILES child
+    // starts as a copy of (handleTaskNewtaskEvent). Ring-buffer memory is not
+    // zeroed, so the explicit reserved word must be written too.
+    ev->creator_pid = creator_pid;
+    ev->reserved = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

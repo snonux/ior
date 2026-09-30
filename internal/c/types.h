@@ -608,8 +608,13 @@ struct process_exit_event {
 // clone_flags is the raw flag word of the creating clone (CLONE_THREAD tells
 // a new thread from a new process; CLONE_VM/CLONE_FILES tell which resources
 // are shared - the basis for fd-table inheritance and shared-table tracking).
-// The layout has no implicit padding (clone_flags starts at offset 40), so
-// the kernel record and a binary.Write payload share one size, 48 bytes.
+// creator_pid is the tgid of the task that called clone (the handler's own
+// context): the process whose descriptor table a fork()ed child starts from,
+// which the child's pid/tid alone cannot name. A record of a pre-creator_pid
+// IOR_BPF_OBJECT is 48 bytes long and decodes with creator_pid 0 ("unknown").
+// The layout has no implicit padding (clone_flags starts at offset 40 and the
+// explicit reserved word completes the trailing 8-byte alignment), so the
+// kernel record and a binary.Write payload share one size, 56 bytes.
 struct task_newtask_event {
     __u32 event_type;
     __u32 trace_id;
@@ -618,4 +623,6 @@ struct task_newtask_event {
     __u32 tid;
     char comm[MAX_PROGNAME_LENGTH];
     __u64 clone_flags;
+    __u32 creator_pid;
+    __u32 reserved;
 };

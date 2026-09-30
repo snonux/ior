@@ -909,9 +909,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `^` and `$` match an empty comm), so those rows were dropped silently (0 of
   200 in the report). The hand-written `task:task_newtask` handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
   `attachTaskNewtaskProbe` next to the exec and exit probes, before the syscall
-  tracepoints, regardless of `-trace-*`) emits a 48-byte `TASK_NEWTASK_EVENT`
+  tracepoints, regardless of `-trace-*`) emits a 56-byte `TASK_NEWTASK_EVENT`
   control record from the creator's context, before the child is first woken:
-  child tgid, child tid, the inherited comm and the raw `clone_flags`.
+  child tgid, child tid, the inherited comm, the raw `clone_flags` and the
+  creator's tgid (`creator_pid`; a legacy 48-byte record of an older
+  `IOR_BPF_OBJECT` decodes with `CreatorPid` 0 = unknown).
   `handleTaskNewtaskEvent` (`internal/eventloop_newtask.go`) seeds the comm in
   ring-buffer order before the child's first pair, as a *provisional* name
   (`setCachedProvisional`): the inherited name is the creator's, and a new
@@ -937,9 +939,43 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `-pid` target is in scope, its `fork()` child is not, ior's own threads are
   excluded. A fork that execs is renamed by the exec record that follows. A lost
   record (`ringbuf_drop_map`), a failed attach or an older `IOR_BPF_OBJECT`
-  without the program degrade to the old procfs lookup. `clone_flags` is
-  carried but not consumed yet: it is the basis for fork fd-table inheritance
-  and shared-table (`CLONE_FILES`) tracking.
+  without the program degrade to the old procfs lookup.
+
+  **A forked child inherits its creator's fd-table entries (task gr2).** The fd
+  table is keyed by tgid and nothing modelled fork, so a new process started
+  with no entries and every descriptor it inherited fell back to
+  `/proc/<pid>/fd`, which renames it (`pipe:0:3:4` -> `pipe:[N]`,
+  `memfd:name` -> `/memfd:name (deleted)`, `eventfd:0` ->
+  `anon_inode:[eventfd]`) and, once the child was gone before the lazy read, to
+  `E:name`; a child's `dup2` of an inherited fd then copied a procfs answer.
+  `handleTaskNewtaskEvent` now calls `inheritFdTable`
+  (`internal/eventloop_newtask.go`) from the record's flags: `CLONE_THREAD`
+  does nothing (the thread already uses the creator's tgid entries);
+  a new process without `CLONE_FILES` (fork, vfork, posix_spawn, plain clone)
+  gets a copy of the creator's fd-table entries *and* procfs-cache entries
+  (`fdTracker.inherit`: snapshot first, because writing the child's entries
+  prunes the LRU, then independent `FdFile.Dup` copies so FD_CLOEXEC and later
+  flag changes stay per table; the kernel-shared status word is not mirrored
+  across the two tables, each learns changes from its own process's fcntl);
+  a `CLONE_FILES` process gets *no* snapshot (a shared table cannot be modelled
+  with per-tgid keys and a copy would go stale on the first open/close of
+  either side, worse than the procfs fallback that reads the one live table).
+  In every non-thread case the entries under the child's tgid are dropped
+  first: a new process's tgid is fresh, so they belong to a previous owner whose
+  exit record was lost. A fork+exec child then loses the close-on-exec entries
+  through the ordinary exec record (`dropOnExec`). A record without a creator
+  (legacy object), a lost record or a child out of scope (`-pid` fork children)
+  leave the child's table empty as before. The inherited copy is only as good as the
+  creator's table: entries the trace never saw (a `-path`/`-comm` run drops
+  non-matching opens at enter) stay on the procfs path. Pinned by
+  `internal/eventloop_newtask_fdinherit_test.go` (including a real child process
+  against real procfs) and end to end by
+  `TestForkedChildReadsInheritedPipeUnderItsTracedName` (scenario
+  `fork-inherit-fds`, a raw `fork(2)` child reading an inherited pipe end: the
+  row says `pipe:<flags>:<r>:<w>`, the pre-fix procfs spelling was `pipe:[N]`).
+  The fork child is out of scope under `-pid`, so that test uses
+  `TestHarness.RunSystemWideWithIorArgs` (no `-pid`, narrowed by `-comm`; ior
+  then lasts the full `-duration`, so pass a short one).
 
   Old-kernel portability (RHEL/Rocky 8 and 9, 4.18/5.14): the handler takes
   `void *` and reads `pid`/`clone_flags` through the local CO-RE flavor

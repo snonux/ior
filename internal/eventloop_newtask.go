@@ -2,6 +2,14 @@ package internal
 
 import "ior/internal/types"
 
+// The clone(2) flags that decide what a new task shares with its creator
+// (include/uapi/linux/sched.h); the same values the BPF handler tests
+// (IOR_CLONE_THREAD in internal/c/exec.c).
+const (
+	cloneFlagFiles  = 0x00000400 // CLONE_FILES: share the descriptor table
+	cloneFlagThread = 0x00010000 // CLONE_THREAD: join the creator's thread group
+)
+
 // handleTaskNewtaskEvent seeds the comm cache with the name a freshly created
 // task (a forked process or a new thread) inherited, as reported by the
 // kernel's task:task_newtask tracepoint (internal/c/exec.c).
@@ -58,11 +66,13 @@ import "ior/internal/types"
 // the procfs lookup on first use. A lost record or a failed probe attach
 // degrades the same way, i.e. exactly the behaviour before this record existed.
 //
-// ev.CloneFlags is not consumed here yet: it is carried so fd-table
-// inheritance and shared-table tracking can be built on the same record.
+// The record also carries what a new *process* inherits (inheritFdTable, task
+// gr2): the fd table is keyed by tgid, so a fork()ed child used to start empty
+// and every inherited descriptor fell back to procfs, which renames it.
 func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 	defer ev.Recycle()
 	e.retireRecycledTid(ev.Tid)
+	e.inheritFdTable(ev)
 	comm := types.StringValue(ev.Comm[:])
 	if comm == "" {
 		return
@@ -77,4 +87,47 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 	e.evictCachedComm(tid)
 	e.pairs.evictTid(tid)
 	e.pendingHandleState().delete(tid)
+}
+
+// inheritFdTable models what the kernel does with the descriptor table of a new
+// task, from the record's clone flags:
+//
+//   - CLONE_THREAD: the thread joins its creator's process and shares its
+//     table. The table is keyed by tgid, so the thread already reads and writes
+//     the creator's entries; nothing to do, and above all nothing to drop (the
+//     child's pid is the live creator's).
+//   - a new process without CLONE_FILES (fork, vfork, plain clone): the child
+//     gets a *copy* of the creator's table, made by the kernel inside clone, so
+//     the creator's entries as of this record (ring-buffer order) are the
+//     child's entries (fdTracker.inherit). This is the case the fix is for:
+//     without it the child's inherited descriptors degrade to procfs names
+//     (pipe:0:3:4 -> pipe:[N], memfd:x -> /memfd:x (deleted)) and, once the
+//     child has exited before the lazy read, to E:name.
+//   - a new process with CLONE_FILES: the table is *shared* between two tgids.
+//     Modelling that needs one table with several owners (the table is keyed by
+//     tgid, and every open/close of either process must show in both), which it
+//     cannot express; a snapshot copy would go stale on the first open or close
+//     of the other process and then mislabel rows, worse than the procfs
+//     fallback, which reads the one live table. Such a child starts with no
+//     entries, as before this record was consumed. It is rare (a clone without
+//     fork semantics, never plain fork()/vfork()/posix_spawn()).
+//
+// A record with no creator (CreatorPid 0: an object that predates the field, see
+// NewTaskNewtaskEventFast) cannot name the table to copy: the child starts
+// empty, the old behaviour. A new process's stale entries from a dead previous
+// owner of its tgid are dropped in every non-thread case (fdTracker.inherit).
+//
+// Scope: the record is only emitted for a child that is in scope (see
+// ior_newtask_in_scope), so under -pid the fork()ed children of the target, which
+// are not traced, cost nothing here.
+func (e *eventLoop) inheritFdTable(ev *types.TaskNewtaskEvent) {
+	if ev.CloneFlags&cloneFlagThread != 0 {
+		return
+	}
+	if ev.CloneFlags&cloneFlagFiles != 0 || ev.CreatorPid == 0 {
+		// Only the dead previous owner's entries are dropped: nothing to copy.
+		e.fdState().deletePid(ev.Pid)
+		return
+	}
+	e.fdState().inherit(ev.CreatorPid, ev.Pid)
 }

@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -229,5 +230,50 @@ func TestFdTableChangeOfAnUncachedThreadReachesRowsUnderCommFilter(t *testing.T)
 	}
 	if onA != 0 || onB != 1 {
 		t.Fatalf("pread64 after the other thread's dup3: %d row(s) on a's path, %d on b's path; want 0 and 1", onA, onB)
+	}
+}
+
+const (
+	forkInheritScenario = "fork-inherit-fds"
+	// forkInheritDuration is how long the system-wide ior of the fork test runs.
+	forkInheritDuration = 4
+)
+
+// TestForkedChildReadsInheritedPipeUnderItsTracedName pins task gr2 end to end.
+// The workload creates a pipe (traced pipe2, named "pipe:<flags>:<r>:<w>"),
+// writes a byte, fork()s, and the child reads the byte from its inherited copy
+// of the read end. The child is a process ior has never seen: before the
+// task_newtask record carried the creator's tgid, the child started with an
+// empty fd table and its read row fell back to /proc/<child>/fd/<fd>, which
+// spells the pipe "pipe:[N]" (or, once the child has exited, names nothing).
+//
+// The run is system-wide and narrowed by -comm: the fork child is out of scope
+// under -pid, and it inherits the name "ioworkload", which the newtask record
+// seeds (the parent's own rows are not matched: a pre-existing pid has no record
+// and, without -pid, no startup seed, so they are not what is asserted).
+// The child's read is the only reader, so its record must exist and carry the
+// traced spelling, never the procfs one. No timing is involved.
+func TestForkedChildReadsInheritedPipeUnderItsTracedName(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	result, _, err := h.RunSystemWideWithIorArgs(forkInheritScenario, forkInheritDuration,
+		[]string{"-trace-syscalls", "pipe2,read,write", "-comm", "ioworkload"})
+	if err != nil {
+		t.Fatalf("run scenario %s: %v", forkInheritScenario, err)
+	}
+
+	tracedPipe := regexp.MustCompile(`^pipe:\d+:\d+:\d+$`)
+	pipeReads := 0
+	for _, rec := range result.Records {
+		if !strings.HasSuffix(rec.TraceID.String(), "_read") || !strings.HasPrefix(rec.Path, "pipe:") {
+			continue
+		}
+		pipeReads += int(rec.Cnt.Count)
+		if !tracedPipe.MatchString(rec.Path) {
+			t.Errorf("forked child's read is named %q, want the inherited traced pipe name (pipe:<flags>:<r>:<w>), not a procfs form", rec.Path)
+		}
+	}
+	if pipeReads == 0 {
+		t.Fatal("the forked child's read on the inherited pipe produced no record")
 	}
 }

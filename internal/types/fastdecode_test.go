@@ -467,7 +467,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// TaskNewtaskEvent is the control record of task:task_newtask that seeds
 	// a new task's comm; same table membership rationale as above.
 	t.Run("TaskNewtaskEvent", func(t *testing.T) {
-		ev := &TaskNewtaskEvent{EventType: TASK_NEWTASK_EVENT, Time: 1, Pid: 2, Tid: 3, CloneFlags: 0x10f00}
+		ev := &TaskNewtaskEvent{EventType: TASK_NEWTASK_EVENT, Time: 1, Pid: 2, Tid: 3, CloneFlags: 0x10f00, CreatorPid: 9}
 		copy(ev.Comm[:], "worker")
 		raw := rawBytes(t, ev)
 
@@ -483,7 +483,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 
 // TestNewTaskNewtaskEventFastKernelLayout pins the byte offsets of struct
 // task_newtask_event as the BPF handler writes them: comm at 24..40 and
-// clone_flags at 40..48. The wire size must equal what encoding/binary makes of
+// clone_flags at 40..48, creator_pid at 48..52. The wire size must equal what encoding/binary makes of
 // the generated Go struct, so a padding change on either side is caught here
 // rather than as a silently misread thread flag.
 func TestNewTaskNewtaskEventFastKernelLayout(t *testing.T) {
@@ -502,13 +502,36 @@ func TestNewTaskNewtaskEventFastKernelLayout(t *testing.T) {
 	if StringValue(ev.Comm[:]) != "child" || ev.CloneFlags != 0x0000000100011111 {
 		t.Fatalf("comm=%q flags=%#x, want child / 0x100011111", StringValue(ev.Comm[:]), ev.CloneFlags)
 	}
+	if ev.CreatorPid != 99 {
+		t.Fatalf("CreatorPid = %d, want 99 (offset 48)", ev.CreatorPid)
+	}
+}
+
+// TestNewTaskNewtaskEventFastLegacyRecord pins the compatibility path: the
+// 48-byte record of a pre-creator_pid IOR_BPF_OBJECT decodes with CreatorPid 0
+// (unknown), even when the pooled event last held a record with a creator, so
+// no stale creator can leak into a legacy record.
+func TestNewTaskNewtaskEventFastLegacyRecord(t *testing.T) {
+	full := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventSize))
+	if full == nil || full.CreatorPid != 99 {
+		t.Fatalf("full record decode = %#v, want CreatorPid 99", full)
+	}
+	full.Recycle()
+	ev := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventLegacySize))
+	if ev == nil {
+		t.Fatal("legacy 48-byte record rejected")
+	}
+	defer ev.Recycle()
+	if ev.Tid != 101 || ev.CloneFlags != 0x0000000100011111 || ev.CreatorPid != 0 {
+		t.Fatalf("legacy decode = %#v, want tid 101, flags kept, CreatorPid 0", ev)
+	}
 }
 
 // TestNewTaskNewtaskEventFastRejectsShortRecords is the negative path: anything
-// below the 48-byte layout fails closed, and an oversized record still decodes
+// that is neither the 56-byte layout nor the legacy 48-byte one fails closed, and an oversized record still decodes
 // its prefix (forward compatibility with an object that appends fields).
 func TestNewTaskNewtaskEventFastRejectsShortRecords(t *testing.T) {
-	for _, n := range []int{0, 24, 40, taskNewtaskEventSize - 1} {
+	for _, n := range []int{0, 24, 40, taskNewtaskEventLegacySize - 1, taskNewtaskEventLegacySize + 1, taskNewtaskEventSize - 1} {
 		if ev := NewTaskNewtaskEventFast(taskNewtaskRaw(n)); ev != nil {
 			ev.Recycle()
 			t.Fatalf("NewTaskNewtaskEventFast(%d bytes) decoded, want nil", n)
@@ -535,9 +558,12 @@ func taskNewtaskRaw(n int) []byte {
 		binary.LittleEndian.PutUint32(raw[16:20], 100)
 		binary.LittleEndian.PutUint32(raw[20:24], 101)
 	}
-	if n >= taskNewtaskEventSize {
+	if n >= taskNewtaskEventLegacySize {
 		copy(raw[24:40], "child")
 		binary.LittleEndian.PutUint64(raw[40:48], 0x0000000100011111)
+	}
+	if n >= taskNewtaskEventSize {
+		binary.LittleEndian.PutUint32(raw[48:52], 99)
 		for i := taskNewtaskEventSize; i < n; i++ {
 			raw[i] = 0xff
 		}

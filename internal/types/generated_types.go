@@ -3330,10 +3330,12 @@ type TaskNewtaskEvent struct {
 	Tid        uint32
 	Comm       [MAX_PROGNAME_LENGTH]byte
 	CloneFlags uint64
+	CreatorPid uint32
+	Reserved   uint32
 }
 
 func (t TaskNewtaskEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v CloneFlags:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]), t.CloneFlags)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v CloneFlags:%v CreatorPid:%v Reserved:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]), t.CloneFlags, t.CreatorPid, t.Reserved)
 }
 
 func (t TaskNewtaskEvent) Equals(other any) bool {
@@ -3341,7 +3343,7 @@ func (t TaskNewtaskEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm && t.CloneFlags == otherConcrete.CloneFlags
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm && t.CloneFlags == otherConcrete.CloneFlags && t.CreatorPid == otherConcrete.CreatorPid && t.Reserved == otherConcrete.Reserved
 }
 
 func (t *TaskNewtaskEvent) GetEventType() EventType {

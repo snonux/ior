@@ -44,10 +44,11 @@ func makeTaskNewtaskEvent(t *testing.T, pid, tid uint32, comm string, cloneFlags
 }
 
 // taskNewtaskEventWireSize pins the kernel payload size of struct
-// task_newtask_event (internal/c/types.h): 4+4+8+4+4+16+8(clone_flags), no
-// padding. NewTaskNewtaskEventFast rejects anything shorter, so a drift would
-// turn every record into a dropped malformed event.
-const taskNewtaskEventWireSize = 48
+// task_newtask_event (internal/c/types.h): 4+4+8+4+4+16+8(clone_flags)+
+// 4(creator_pid)+4(reserved), no padding. NewTaskNewtaskEventFast rejects
+// anything that is neither this length nor the legacy 48 bytes, so a drift
+// would turn every record into a dropped malformed event.
+const taskNewtaskEventWireSize = 56
 
 // newTaskEventLoop builds a loop whose resolver never learns a name from
 // procfs, optionally filtering on -comm.
@@ -190,7 +191,8 @@ func TestTaskNewtaskRecordSeedsOnlyTheChild(t *testing.T) {
 }
 
 // TestTruncatedTaskNewtaskRecordIsRejected: a payload shorter than the layout
-// must not be decoded at wrong offsets - no cache write and no row.
+// (and not the legacy 48 bytes) must not be decoded at wrong offsets - no cache
+// write and no row.
 func TestTruncatedTaskNewtaskRecordIsRejected(t *testing.T) {
 	el := newTaskEventLoop(t, "")
 	raw := makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, newTaskComm, cloneThread)
