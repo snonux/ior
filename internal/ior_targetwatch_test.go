@@ -267,3 +267,47 @@ func TestHeadlessPidRunEndsWithoutTheExitRecord(t *testing.T) {
 		t.Fatal("the liveness watcher ended a non-headless (TUI) trace")
 	}
 }
+
+// TestTargetWatchOpensBeforeTheProbesAttach pins the ordering the watch exists
+// for: the process snapshot (pidfd and start time) must be taken before the
+// probe load/attach, which takes seconds. A target that dies in that window
+// leaves no exit record, and a pid recycled before the snapshot would be
+// recorded under the new process's start time, so gone() could never fire.
+// It is structural, like the filter-before-BPF ordering test, because the
+// real setup needs root and the BPF toolchain. Both headless entry points are
+// checked: the parquet one bypasses runTraceWithContext.
+func TestTargetWatchOpensBeforeTheProbesAttach(t *testing.T) {
+	for _, tc := range []struct{ file, function, setup string }{
+		{"ior.go", "runTraceWithContext", "setupTraceInfra"},
+		{"ior_parquet_sink.go", "runHeadlessParquetWith", "setup"},
+	} {
+		t.Run(tc.function, func(t *testing.T) {
+			decl, _ := parseInternalFunction(t, tc.file, tc.function)
+			open := firstCallPosition(decl, "openHeadlessTargetWatch")
+			setup := firstCallPosition(decl, tc.setup)
+			if !open.IsValid() || !setup.IsValid() {
+				t.Fatalf("%s must call openHeadlessTargetWatch and %s", tc.function, tc.setup)
+			}
+			if open >= setup {
+				t.Fatalf("%s opens the target watch after %s: a target dying during the probe attach could no longer be told from a recycled pid", tc.function, tc.setup)
+			}
+			// The watch only reaches the trace loop through the infra, so the
+			// handover must follow the setup that builds it.
+			if attach := firstCallPosition(decl, "attachTo"); !attach.IsValid() || attach <= setup {
+				t.Fatalf("%s must hand the watch to the infra (attachTo) after %s", tc.function, tc.setup)
+			}
+		})
+	}
+}
+
+// TestTargetExitRecordHookIsExactlyOne pins the test hook's contract: only
+// "1" disables the group-dead-record trigger, so a stray or empty value in the
+// environment cannot silently turn the primary trigger off.
+func TestTargetExitRecordHookIsExactlyOne(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false, "yes": false, "11": false} {
+		t.Setenv(disableTargetExitRecordEnv, value)
+		if got := targetExitRecordDisabled(); got != want {
+			t.Errorf("%s=%q: targetExitRecordDisabled() = %v, want %v", disableTargetExitRecordEnv, value, got, want)
+		}
+	}
+}

@@ -359,7 +359,8 @@ func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
 }
 
 // testDisableTargetExitRecordEnv is ior's test hook that turns the
-// group-dead-record trigger off (internal.disableTargetExitRecordEnv), leaving
+// group-dead-record trigger off (internal.disableTargetExitRecordEnv; it reads
+// exactly "1", other values leave the trigger on), leaving
 // the liveness watcher as the only thing that can end a run with its target.
 const testDisableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 

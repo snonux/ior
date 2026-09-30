@@ -800,7 +800,6 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 	return totalDuration
 }
 
-// finaliseTrace flushes the flamegraph recorder if one was created and logs
 // startTargetLivenessWatcher starts the fallback trigger for a headless -pid
 // run (watchTargetLiveness): it polls infra.targetGone, which
 // runTraceWithContext set up before the probes attached, so a target whose
@@ -824,6 +823,7 @@ func startTargetLivenessWatcher(infra *traceInfra, verbose bool) (stop func()) {
 	}
 }
 
+// finaliseTrace flushes the flamegraph recorder if one was created and logs
 // the total run duration. It runs after runTraceLoop has returned, which is
 // what makes samples final: the recording's header carries them, so a run that
 // sampled says so and keeps the exact totals (a run that sampled nothing passes
@@ -893,19 +893,19 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 		return err
 	}
 
-	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
 	// Opened before the probes attach (about five seconds): a target that dies
 	// in that window leaves no exit record, and only a snapshot of the process
 	// taken now can tell a recycled pid from the original (targetWatch).
 	watch := openHeadlessTargetWatch(cfg, verbose)
 	defer watch.Close()
 
+	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
 	if err != nil {
 		return err
 	}
 	defer infra.Close()
-
 	watch.attachTo(infra)
+
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
 	// The event loop has returned, so the sampling totals are final.
 	return traceResult(infra.el, finaliseTrace(recorder, infra.el.samplingResult(), totalDuration, logln))
@@ -959,12 +959,12 @@ type traceInfra struct {
 	progress    func(completed, total int)
 	releasing   func()
 
-	cleanups []func()
 	// targetGone reports that the -pid target exited or its pid was recycled
 	// (targetWatch.gone); nil when there is nothing to watch (no -pid, the
 	// TUI). Set by runTraceWithContext, whose watch predates the probe attach.
 	targetGone func() bool
 
+	cleanups []func()
 }
 
 // onClose registers a cleanup for Close to run. Call it only after the step
