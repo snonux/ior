@@ -417,8 +417,8 @@ func (t *fdTracker) deletePid(pid uint32) {
 // Both maps keep an entry only when its close-on-exec state is known to be
 // clear (survivesExec). Procfs cache entries carry that state too: the fdinfo
 // flags word NewFdWithPid parses includes O_CLOEXEC, and later traced
-// fcntl/dup3/close_range updates reach the cached object because resolve
-// hands it out. An unresolvable cache entry has unknown flags and is dropped.
+// fcntl/ioctl FIOCLEX/FIONCLEX/dup3/close_range updates reach the cached
+// object because resolve hands it out. An unresolvable cache entry has unknown flags and is dropped.
 //
 // Unknown state is dropped on purpose: the costs are asymmetric. Keeping an
 // entry the kernel closed mislabels every later row on that number with the
