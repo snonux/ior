@@ -45,7 +45,7 @@ func (a *recordingAttacher) attached() (total, live int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, link := range a.links {
-		if link.destroys == 0 {
+		if link.destroyCount() == 0 {
 			live++
 		}
 	}

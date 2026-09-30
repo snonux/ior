@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"ior/internal/probemanager"
@@ -14,14 +15,31 @@ import (
 // but through the same Attacher/Program/Link seam, so its non-fatal failure
 // paths and its detach path are reachable without a live BPF module.
 
+// fakeProbeLink counts Destroy calls. Destroy is goroutine-safe because the
+// probemanager destroys a syscall's enter and exit links concurrently (see
+// probemanager.destroyLinkPair) and detaches entries in parallel on Close, and
+// these tests hand the same link to both sides of a pair; an unguarded counter
+// is a data race under -race. Read the count through destroyCount. err is set
+// before the link is shared and never written afterwards.
 type fakeProbeLink struct {
+	mu       sync.Mutex
 	destroys int
 	err      error
 }
 
 func (l *fakeProbeLink) Destroy() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.destroys++
 	return l.err
+}
+
+// destroyCount returns how many times Destroy was called, synchronised with
+// concurrent Destroy calls.
+func (l *fakeProbeLink) destroyCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.destroys
 }
 
 type fakeProbeProgram struct {
@@ -124,8 +142,8 @@ func TestAttachProcessExecProbeAttachesTheSchedTracepoint(t *testing.T) {
 
 	release()
 	release()
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 }
 
@@ -196,8 +214,8 @@ func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
 	})
 	requireNoConsoleOutput(t, stdout, stderr)
 
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 	// Teardown errors stay visible in every mode, so they must use the
 	// always-on teardown sink, never the status sink that TUI mode silences.
@@ -237,8 +255,8 @@ func TestAttachProcessExitProbeAttachesTheSchedTracepoint(t *testing.T) {
 
 	release()
 	release()
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 }
 
@@ -313,8 +331,8 @@ func TestAttachTaskNewtaskProbeAttachesTheTaskTracepoint(t *testing.T) {
 
 	release()
 	release()
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 }
 
