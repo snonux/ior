@@ -142,10 +142,10 @@ func (f tuiFakeProbeManager) States() []probemanager.ProbeState { return f.state
 func (f tuiFakeProbeManager) Toggle(string) error               { return nil }
 func (f tuiFakeProbeManager) Attach(string) error               { return nil }
 func (f tuiFakeProbeManager) Detach(string) error               { return nil }
-func (f tuiFakeProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (f tuiFakeProbeManager) AttachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
-func (f tuiFakeProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (f tuiFakeProbeManager) DetachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
 
@@ -250,12 +250,12 @@ func (f *tuiStatefulProbeManager) set(syscall string, active bool) error {
 
 // AttachFamily activates every inactive probe of family, reporting one
 // progress step per probe like the real manager.
-func (f *tuiStatefulProbeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+func (f *tuiStatefulProbeManager) AttachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
 	return f.setFamily(family, true, progress), nil
 }
 
 // DetachFamily deactivates every active probe of family.
-func (f *tuiStatefulProbeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+func (f *tuiStatefulProbeManager) DetachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
 	return f.setFamily(family, false, progress), nil
 }
 

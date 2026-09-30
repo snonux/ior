@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -15,15 +16,16 @@ import (
 
 // Manager defines the probe operations used by the modal. AttachFamily and
 // DetachFamily back the Families view; they run off the Update goroutine
-// (StartFamilyBatch) because a whole family takes seconds.
+// (StartFamilyBatch) because a whole family takes seconds, and stop between
+// probes once ctx - the trace session's - is cancelled.
 type Manager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
 	Attach(syscall string) error
 	Detach(syscall string) error
 	ActiveCount() (int, int)
-	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
-	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	DetachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
 // ProbeToggledMsg reports completion of an async toggle operation (one

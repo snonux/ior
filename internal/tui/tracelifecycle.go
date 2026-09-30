@@ -19,7 +19,11 @@ import (
 // trace so the Model can stop tracing without understanding the context
 // machinery.
 type traceLifecycle struct {
-	startTrace       TraceStarter
+	startTrace TraceStarter
+	// traceCtx is the running session's context and traceStop cancels it;
+	// both are nil while no session runs. Work bound to the session, such as
+	// a family batch on its probe manager, shares traceCtx (sessionContext).
+	traceCtx         context.Context
 	traceStop        context.CancelFunc
 	shutdownReporter *runtime.TraceShutdownReporter
 	// session numbers the sessions begun by this lifecycle; the running one
@@ -86,7 +90,7 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.traceStop = cancel
+	t.traceCtx, t.traceStop = ctx, cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
 	t.session++
 	var sessionBindings runtime.TraceRuntimeBindings
@@ -134,6 +138,20 @@ func (t *traceLifecycle) isCurrent(session uint64) bool {
 	return t.running() && session == t.session
 }
 
+// sessionContext returns the running session's context, which stop cancels.
+// Without a running session it returns an already cancelled context: work
+// started then has no session to belong to (and no probe manager is
+// published without one, see runtimeBindings.endSessionLocked), so it must
+// not run at all.
+func (t *traceLifecycle) sessionContext() context.Context {
+	if t.traceCtx != nil {
+		return t.traceCtx
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
 // running reports whether a trace session is live, i.e. started and not yet
 // stopped.
 func (t *traceLifecycle) running() bool {
@@ -145,7 +163,7 @@ func (t *traceLifecycle) running() bool {
 func (t *traceLifecycle) stop() {
 	if t.traceStop != nil {
 		t.traceStop()
-		t.traceStop = nil
+		t.traceCtx, t.traceStop = nil, nil
 	}
 	// Retire the session's bindings view synchronously, here on the Update
 	// goroutine: once stop returns, none of the stopped session's rows can

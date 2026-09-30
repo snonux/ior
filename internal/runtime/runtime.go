@@ -286,15 +286,17 @@ type LiveTrieSource = flamegraph.LiveTrieSource
 // probe to a definite state (the modal's all-on/all-off). AttachFamily and
 // DetachFamily are the batch operations behind the modal's Families view:
 // they report per-syscall failures in the result and progress through the
-// callback, and may take seconds, so callers run them off the UI goroutine.
+// callback, and may take seconds, so callers run them off the UI goroutine;
+// they stop between probes once ctx is cancelled (the TUI passes the trace
+// session's context, so a restart does not wait for a stale batch).
 type ProbeManager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
 	Attach(syscall string) error
 	Detach(syscall string) error
 	ActiveCount() (int, int)
-	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
-	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	DetachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
 // RuntimePublisher is the write side of the TUI runtime contract.

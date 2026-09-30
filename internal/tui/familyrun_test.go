@@ -13,6 +13,21 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// newSessionModel returns a dashboard model with a running trace session
+// (its starter is never run) that has published manager - as in production,
+// where a probe manager only exists within a session and a family batch runs
+// on that session's context. The live-filter setter is published again,
+// since beginning the session dropped it.
+func newSessionModel(t *testing.T, manager *selectionProbeManager) *Model {
+	t.Helper()
+	m, recorder := newLiveSwapModel(t)
+	m.tracer.beginCmd(m.runtime, m.filters.current())
+	t.Cleanup(m.tracer.stop)
+	m.runtime.setLiveFilterSetter(recorder.set)
+	m.runtime.setProbeManager(manager)
+	return m
+}
+
 // runCmdFor runs cmd - flattening tea.Batch - and returns the first message
 // of type T it yields.
 func runCmdFor[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
@@ -68,9 +83,7 @@ func pressKey(m *Model, key tea.KeyPressMsg) (*Model, tea.Cmd) {
 // Families cursor on the first family (Network), so following it attached
 // Network instead of the scoped family. Time is not the first family.
 func TestFollowingTheFamilyHintAttachesThatFamily(t *testing.T) {
-	m, _ := newLiveSwapModel(t)
-	manager := newSelectionManager()
-	m.runtime.setProbeManager(manager)
+	m := newSessionModel(t, newSelectionManager())
 	m = cycleTo(t, m, "Time")
 	if !strings.Contains(m.View().Content, "Time not traced: press o, tab, space") {
 		t.Fatal("precondition: expected the Time hint")
@@ -124,19 +137,19 @@ func TestFamilyBatchOverlappingARestartKeepsItsIntent(t *testing.T) {
 	if !slices.Equal(m.tracer.attachSyscalls, want) {
 		t.Fatalf("attachSyscalls = %v, want the intent %v kept", m.tracer.attachSyscalls, want)
 	}
-	if !strings.Contains(m.probeModal.View(100, 40), "trace restarted") {
-		t.Fatalf("outcome does not mention the restart:\n%s", m.probeModal.View(100, 40))
+	view := m.probeModal.View(100, 40)
+	if !strings.Contains(view, "trace restarted") {
+		t.Fatalf("outcome does not mention the restart:\n%s", view)
+	}
+	if strings.Contains(view, "context canceled") {
+		t.Fatalf("the cancellation is reported as an error:\n%s", view)
 	}
 }
 
 // TestFamilyBatchResultReadsBackTheManager is the non-restart counterpart:
 // the selection becomes what the manager actually has attached.
 func TestFamilyBatchResultReadsBackTheManager(t *testing.T) {
-	m, _ := newLiveSwapModel(t)
-	m.tracer.beginCmd(m.runtime, m.filters.current())
-	t.Cleanup(m.tracer.stop)
-	manager := newSelectionManager()
-	m.runtime.setProbeManager(manager)
+	m := newSessionModel(t, newSelectionManager())
 	next, cmd := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyFS, Attach: false})
 	m = finishFamilyBatch(t, next.(*Model), cmd)
 	if m.tracer.attachSyscalls == nil || len(m.tracer.attachSyscalls) != 0 {
@@ -149,8 +162,7 @@ func TestFamilyBatchResultReadsBackTheManager(t *testing.T) {
 // forgets the running batch nor allows a second one, and messages of any
 // other run are ignored.
 func TestOnlyOneFamilyBatchRunsAcrossModalRebuilds(t *testing.T) {
-	m, _ := newLiveSwapModel(t)
-	m.runtime.setProbeManager(newSelectionManager())
+	m := newSessionModel(t, newSelectionManager())
 	next, first := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
 	m = next.(*Model)
 
@@ -204,12 +216,9 @@ func TestFamilyBatchWithoutManagerIsRefused(t *testing.T) {
 // The modal now refuses new changes during a batch, but one already in flight
 // when the batch started (an all-on/all-off walks every probe) still lands.
 func TestSingleToggleDuringFamilyBatchKeepsTheBatchIntent(t *testing.T) {
-	m, _ := newLiveSwapModel(t)
-	m.tracer.beginCmd(m.runtime, m.filters.current())
-	t.Cleanup(m.tracer.stop)
 	manager := newSelectionManager()
 	manager.hold = make(chan struct{})
-	m.runtime.setProbeManager(manager)
+	m := newSessionModel(t, manager)
 
 	next, batch := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
 	m = next.(*Model)
@@ -284,12 +293,9 @@ func waitActive(t *testing.T, manager *selectionProbeManager, syscall string) {
 // is held half done, space, a and n in a freshly opened modal start no probe
 // change and the modal says why.
 func TestProbeChangesRefusedWhileFamilyBatchRuns(t *testing.T) {
-	m, _ := newLiveSwapModel(t)
-	m.tracer.beginCmd(m.runtime, m.filters.current())
-	t.Cleanup(m.tracer.stop)
 	manager := newSelectionManager()
 	manager.hold = make(chan struct{})
-	m.runtime.setProbeManager(manager)
+	m := newSessionModel(t, manager)
 	next, batch := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
 	m = next.(*Model)
 	done := make(chan tea.Msg, 1)
@@ -353,5 +359,123 @@ func TestStaleSingleToggleAppliesOnlyItsDelta(t *testing.T) {
 		if got := next.(*Model).tracer.attachSyscalls; !slices.Equal(got, tt.wantAfter) || (got == nil) != (tt.wantAfter == nil) {
 			t.Errorf("%s: selection = %#v, want %#v", tt.name, got, tt.wantAfter)
 		}
+	}
+}
+
+// startHeldBatch starts attaching Network through m with manager held after
+// its first probe (connect), and returns the channel that yields the batch
+// command's first message.
+func startHeldBatch(t *testing.T, m *Model, manager *selectionProbeManager) (*Model, <-chan tea.Msg) {
+	t.Helper()
+	next, batch := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
+	done := make(chan tea.Msg, 1)
+	go func() { done <- batch() }()
+	waitActive(t, manager, "connect")
+	return next.(*Model), done
+}
+
+// receiveWithin returns the next message of ch, failing after a second.
+func receiveWithin(t *testing.T, ch <-chan tea.Msg) tea.Msg {
+	t.Helper()
+	select {
+	case msg := <-ch:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("the family batch did not stop promptly")
+		return nil
+	}
+}
+
+// TestRestartCancelsTheFamilyBatch is the lp2 regression: a batch held half
+// done on the old session's manager used to keep going (here: stay blocked)
+// until it had walked the whole family. Restarting the trace cancels it, so
+// it returns at once, leaves the rest of the family on the dying manager
+// alone, and its goroutine is gone. The intent recorded at start is kept.
+func TestRestartCancelsTheFamilyBatch(t *testing.T) {
+	old := newSelectionManager()
+	old.hold = make(chan struct{}) // never closed: only cancellation ends the hold
+	m := newSessionModel(t, old)
+	m, done := startHeldBatch(t, m, old)
+
+	m.beginTraceCmd() // restart
+	msg := receiveWithin(t, done)
+	if old.inFlight.Load() != 0 {
+		t.Fatal("the cancelled batch is still running")
+	}
+	for _, state := range old.States() {
+		if state.Syscall == "socket" && state.Active {
+			t.Fatal("the cancelled batch attached socket after the restart")
+		}
+	}
+	m = finishFamilyBatch(t, m, func() tea.Msg { return msg })
+	if want := []string{"connect", "read", "socket"}; !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("attachSyscalls = %v, want the intent %v", m.tracer.attachSyscalls, want)
+	}
+	if m.familyRun.active {
+		t.Fatal("the cancelled run is still in flight after its result")
+	}
+}
+
+// TestNewSessionStartsAFamilyBatchBeforeTheStaleResult: the stale run must
+// not hold up the next session, neither the family batch guard nor the
+// Syscalls view; its late result is then ignored and does not disturb the
+// new run or the recorded intent.
+func TestNewSessionStartsAFamilyBatchBeforeTheStaleResult(t *testing.T) {
+	old := newSelectionManager()
+	old.hold = make(chan struct{})
+	m := newSessionModel(t, old)
+	m, done := startHeldBatch(t, m, old)
+
+	m.beginTraceCmd() // restart; the stale result is not handled yet
+	current := newSelectionManager()
+	current.setActive("connect", true) // the new session attached the intent
+	current.setActive("socket", true)
+	m.runtime.setProbeManager(current)
+	if view := m.newProbeModal().SetSize(100, 40).Open().View(100, 40); strings.Contains(view, "attaching Network") {
+		t.Fatalf("the new session's modal replays the stale run:\n%s", view)
+	}
+	next, cmd := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyTime, Attach: true})
+	m = next.(*Model)
+	if cmd == nil {
+		t.Fatal("the new session's family batch was refused")
+	}
+	want := []string{"connect", "nanosleep", "read", "socket"} // Network intent + Time
+	if !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("attachSyscalls = %v, want %v", m.tracer.attachSyscalls, want)
+	}
+
+	stale := receiveWithin(t, done) // the stale run's first message, then its result
+	for range 10 {
+		next, staleCmd := m.Update(stale)
+		m = next.(*Model)
+		if _, isResult := stale.(probes.FamilyToggledMsg); isResult || staleCmd == nil {
+			break
+		}
+		stale = staleCmd()
+	}
+	if !m.familyBatchRunning() {
+		t.Fatal("the stale result ended the new session's batch")
+	}
+	m = finishFamilyBatch(t, m, cmd)
+	if !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("after the new batch attachSyscalls = %v, want %v", m.tracer.attachSyscalls, want)
+	}
+	if old.inFlight.Load() != 0 {
+		t.Fatal("the stale batch is still running")
+	}
+}
+
+// TestFamilyBatchWithoutRunningSessionChangesNothing: with no session (never
+// the case in production, where no manager is published then) a batch has no
+// session context to run on and must not touch the manager.
+func TestFamilyBatchWithoutRunningSessionChangesNothing(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+	manager := newSelectionManager()
+	m.runtime.setProbeManager(manager)
+	before := manager.States()
+	next, cmd := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
+	finishFamilyBatch(t, next.(*Model), cmd)
+	if !slices.Equal(manager.States(), before) {
+		t.Fatalf("probe states changed without a session: %v -> %v", before, manager.States())
 	}
 }

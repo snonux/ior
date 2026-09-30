@@ -1,6 +1,7 @@
 package probemanager
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -56,29 +57,36 @@ func (r BatchResult) Err() error {
 // so each failure is collected into the result (and, as with every Attach,
 // recorded on the probe entry for States). progress, when non-nil, receives
 // (0, total) first and then one update after each probe, like
-// CloseWithProgress. The only error returned directly is a nil manager or
+// CloseWithProgress.
+//
+// ctx cancels the batch between probes: the TUI ties it to the trace session
+// whose manager this is, so a restart stops a batch that would otherwise keep
+// attaching tracepoints to a module that is about to close (slowing its
+// teardown). A cancelled batch returns what it did so far - Changed and
+// Errors cover the visited probes only, Total still the whole batch - with
+// ctx.Err(). The only other errors returned directly are a nil manager or
 // match.
-func (m *Manager) AttachMatching(match func(syscall string) bool, progress func(completed, total int)) (BatchResult, error) {
-	return m.runBatch(match, false, m.Attach, progress)
+func (m *Manager) AttachMatching(ctx context.Context, match func(syscall string) bool, progress func(completed, total int)) (BatchResult, error) {
+	return m.runBatch(ctx, match, false, m.Attach, progress)
 }
 
 // DetachMatching detaches every currently active probe whose syscall match
-// selects. Errors and progress are reported as for AttachMatching.
-func (m *Manager) DetachMatching(match func(syscall string) bool, progress func(completed, total int)) (BatchResult, error) {
-	return m.runBatch(match, true, m.Detach, progress)
+// selects. Cancellation, errors and progress are as for AttachMatching.
+func (m *Manager) DetachMatching(ctx context.Context, match func(syscall string) bool, progress func(completed, total int)) (BatchResult, error) {
+	return m.runBatch(ctx, match, true, m.Detach, progress)
 }
 
 // AttachFamily attaches every inactive probe of family (see AttachMatching).
 // Family membership is the attach-time one -trace-families uses
 // (tracepoints.SyscallFamily), so the TUI's family toggle and the startup
 // flag select exactly the same syscalls.
-func (m *Manager) AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (BatchResult, error) {
-	return m.AttachMatching(inFamily(family), progress)
+func (m *Manager) AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (BatchResult, error) {
+	return m.AttachMatching(ctx, inFamily(family), progress)
 }
 
 // DetachFamily detaches every active probe of family (see DetachMatching).
-func (m *Manager) DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (BatchResult, error) {
-	return m.DetachMatching(inFamily(family), progress)
+func (m *Manager) DetachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (BatchResult, error) {
+	return m.DetachMatching(ctx, inFamily(family), progress)
 }
 
 // FamilyStates groups probe states by syscall family and returns one entry
@@ -120,8 +128,10 @@ func inFamily(family types.SyscallFamily) func(string) bool {
 
 // runBatch applies change (Attach or Detach) to every probe that match
 // selects and whose active state equals wantActive, i.e. every probe the
-// batch actually has to change, and collects the per-syscall outcome.
-func (m *Manager) runBatch(match func(string) bool, wantActive bool, change func(string) error, progress func(completed, total int)) (BatchResult, error) {
+// batch actually has to change, and collects the per-syscall outcome. It
+// checks ctx before each probe and stops at the first check that finds it
+// cancelled; a probe already being changed is finished, never interrupted.
+func (m *Manager) runBatch(ctx context.Context, match func(string) bool, wantActive bool, change func(string) error, progress func(completed, total int)) (BatchResult, error) {
 	if m == nil {
 		return BatchResult{}, errors.New("probe manager is nil")
 	}
@@ -135,6 +145,9 @@ func (m *Manager) runBatch(match func(string) bool, wantActive bool, change func
 	result := BatchResult{Total: len(syscalls)}
 	progress(0, result.Total)
 	for i, syscall := range syscalls {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if err := change(syscall); err != nil {
 			result.Errors = append(result.Errors, SyscallError{Syscall: syscall, Err: err})
 		} else {

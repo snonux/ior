@@ -1,6 +1,7 @@
 package probemanager
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -48,7 +49,7 @@ func familyCount(t *testing.T, mgr *Manager, family types.SyscallFamily) FamilyS
 func TestAttachFamilyReportsPerSyscallErrorsAndProgress(t *testing.T) {
 	mgr := newFamilyTestManager(t)
 	var progress [][2]int
-	result, err := mgr.AttachFamily(types.FamilyNetwork, func(done, total int) {
+	result, err := mgr.AttachFamily(context.Background(), types.FamilyNetwork, func(done, total int) {
 		progress = append(progress, [2]int{done, total})
 	})
 	if err != nil {
@@ -77,7 +78,7 @@ func TestAttachFamilyReportsPerSyscallErrorsAndProgress(t *testing.T) {
 
 func TestDetachFamilyOnlyTouchesActiveProbes(t *testing.T) {
 	mgr := newFamilyTestManager(t)
-	result, err := mgr.DetachFamily(types.FamilyFS, nil)
+	result, err := mgr.DetachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil {
 		t.Fatalf("DetachFamily: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestDetachFamilyOnlyTouchesActiveProbes(t *testing.T) {
 		t.Fatalf("active = %d, want 0", active)
 	}
 	// A second detach has nothing left to do.
-	result, err = mgr.DetachFamily(types.FamilyFS, nil)
+	result, err = mgr.DetachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil || result.Total != 0 || result.Changed != 0 {
 		t.Fatalf("second detach = %+v, %v; want an empty result", result, err)
 	}
@@ -98,7 +99,7 @@ func TestDetachFamilyOnlyTouchesActiveProbes(t *testing.T) {
 func TestBatchOnEmptyOrUnknownFamilyIsANoop(t *testing.T) {
 	mgr := newFamilyTestManager(t)
 	calls := 0
-	result, err := mgr.AttachFamily(types.FamilyAIO, func(done, total int) {
+	result, err := mgr.AttachFamily(context.Background(), types.FamilyAIO, func(done, total int) {
 		calls++
 		if done != 0 || total != 0 {
 			t.Fatalf("progress (%d, %d), want (0, 0)", done, total)
@@ -107,7 +108,7 @@ func TestBatchOnEmptyOrUnknownFamilyIsANoop(t *testing.T) {
 	if err != nil || result.Total != 0 || calls != 1 {
 		t.Fatalf("result = %+v err = %v calls = %d; want empty result, one progress call", result, err, calls)
 	}
-	result, err = mgr.AttachFamily(types.SyscallFamily("Bogus"), nil)
+	result, err = mgr.AttachFamily(context.Background(), types.SyscallFamily("Bogus"), nil)
 	if err != nil || result.Total != 0 {
 		t.Fatalf("unknown family = %+v, %v; want an empty result", result, err)
 	}
@@ -115,10 +116,10 @@ func TestBatchOnEmptyOrUnknownFamilyIsANoop(t *testing.T) {
 
 func TestBatchRejectsNilManagerAndPredicate(t *testing.T) {
 	var nilMgr *Manager
-	if _, err := nilMgr.AttachFamily(types.FamilyFS, nil); err == nil {
+	if _, err := nilMgr.AttachFamily(context.Background(), types.FamilyFS, nil); err == nil {
 		t.Fatal("nil manager AttachFamily: want error")
 	}
-	if _, err := newFamilyTestManager(t).DetachMatching(nil, nil); err == nil {
+	if _, err := newFamilyTestManager(t).DetachMatching(context.Background(), nil, nil); err == nil {
 		t.Fatal("nil predicate: want error")
 	}
 }
@@ -128,7 +129,7 @@ func TestAttachMatchingOnClosedManagerReportsEachSyscall(t *testing.T) {
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	result, err := mgr.AttachMatching(func(string) bool { return true }, nil)
+	result, err := mgr.AttachMatching(context.Background(), func(string) bool { return true }, nil)
 	if err != nil {
 		t.Fatalf("AttachMatching: %v", err)
 	}
@@ -175,5 +176,47 @@ func TestBatchResultErrIsNilWithoutErrors(t *testing.T) {
 	err := BatchResult{Errors: []SyscallError{{Syscall: "x", Err: sentinel}}}.Err()
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Err() = %v, want to wrap the syscall error", err)
+	}
+}
+
+// TestFamilyBatchStopsBetweenProbesWhenCancelled: the TUI cancels a batch
+// when its trace session ends. Cancelling from the progress callback after
+// the first probe must leave the remaining probes untouched and return the
+// partial result with the context's error.
+func TestFamilyBatchStopsBetweenProbesWhenCancelled(t *testing.T) {
+	mgr := newFamilyTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result, err := mgr.AttachMatching(ctx, func(s string) bool { return s != "read" }, func(done, _ int) {
+		if done == 1 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	// Sorted batch: connect (fails, no exit program), nanosleep, socket, write.
+	if result.Total != 4 || result.Changed != 0 || len(result.Errors) != 1 || result.Errors[0].Syscall != "connect" {
+		t.Fatalf("result = %+v, want only connect visited out of 4", result)
+	}
+	for _, family := range []types.SyscallFamily{types.FamilyTime, types.FamilyNetwork} {
+		if got := familyCount(t, mgr, family).Active; got != 0 {
+			t.Fatalf("%s has %d active probes after the cancelled batch, want 0", family, got)
+		}
+	}
+}
+
+// TestFamilyBatchWithCancelledContextChangesNothing: a batch whose session
+// already ended must not touch a single probe (negative case of the above).
+func TestFamilyBatchWithCancelledContextChangesNothing(t *testing.T) {
+	mgr := newFamilyTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := mgr.DetachFamily(ctx, types.FamilyFS, nil)
+	if !errors.Is(err, context.Canceled) || result.Total != 1 || result.Changed != 0 || len(result.Errors) != 0 {
+		t.Fatalf("result = %+v err = %v, want an untouched batch of 1 and context.Canceled", result, err)
+	}
+	if got := familyCount(t, mgr, types.FamilyFS).Active; got != 1 {
+		t.Fatalf("FS active = %d, want read still attached", got)
 	}
 }

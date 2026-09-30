@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -67,12 +68,12 @@ func (f *fakeManager) set(syscall string, active bool) error {
 // AttachFamily activates the family's inactive probes one by one, reporting
 // progress after each like the real manager. failAttach names probes whose
 // attach fails.
-func (f *fakeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+func (f *fakeManager) AttachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
 	return f.setFamily(family, true, progress), nil
 }
 
 // DetachFamily deactivates the family's active probes.
-func (f *fakeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+func (f *fakeManager) DetachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
 	return f.setFamily(family, false, progress), nil
 }
 
