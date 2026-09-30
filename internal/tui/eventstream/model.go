@@ -775,29 +775,37 @@ func (m *Model) handlePausedTableNavigation(keyStr string) bool {
 	return true
 }
 
+// openFDTraceView opens the per-descriptor trace overlay for the selected row
+// and reports whether the key was consumed. It is reachable only while the
+// stream is paused (see handleStreamKey), so it reads m.allEvents - the
+// frozen snapshot the table is showing - and never the live source: the ring
+// keeps filling and evicting while paused, so a row still visible in the
+// table could already have lost its fd's events from the live ring and the
+// trace would come up empty (task 2r2). Every filtered row is a member of
+// allEvents, so the selected row always matches itself; a row without a
+// descriptor is the one case that cannot be traced, and it says so in the
+// footer instead of silently ignoring the key.
 func (m *Model) openFDTraceView() bool {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false
 	}
+	m.statusMessage = ""
 	selected := m.filtered[m.selectedIdx]
 	if selected.FD < 0 {
-		return false
+		m.statusMessage = "FD trace: selected row has no file descriptor"
+		return true
 	}
 
-	snapshot := m.allEvents
-	if m.source != nil {
-		snapshot = m.source.Snapshot()
-	}
-
-	matches := make([]StreamEvent, 0, len(snapshot))
-	for i := range snapshot {
-		ev := snapshot[i]
+	matches := make([]StreamEvent, 0, len(m.allEvents))
+	for i := range m.allEvents {
+		ev := &m.allEvents[i]
 		if ev.PID == selected.PID && ev.FD == selected.FD {
-			matches = append(matches, ev)
+			matches = append(matches, *ev)
 		}
 	}
 	if len(matches) == 0 {
-		return false
+		m.statusMessage = fmt.Sprintf("FD trace: no events for pid %d fd %d", selected.PID, selected.FD)
+		return true
 	}
 
 	m.fdTraceView.visible = true
