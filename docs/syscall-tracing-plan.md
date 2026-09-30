@@ -26,7 +26,7 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 set. `-no-trace-families`, `-no-trace-kinds` and `-no-trace-syscalls` remove matches. The
 generated registry, not this page, is the authority for each syscall's family and kind.
 
-The flags only choose the startup set. In the TUI, the probes modal (`o`) changes it at
+The flags only choose the startup set. In the TUI, the probes modal (`o`, or `O` on the Flame tab where `o` cycles the frame order) changes it at
 runtime: its Syscalls view toggles single probes, and its Families view (`tab`) lists every
 family with its attached/total probe count and attaches or detaches a whole family with
 `space`/`enter` (detach when any of its probes is attached, attach otherwise). Family

@@ -189,7 +189,7 @@ Three modal pickers reshape what the rest of the TUI sees:
 
 - `p`: **PID picker** (re-opens the launch picker).
 - `t`: **TID picker** for thread-level focus.
-- `o`: **Probes** dialog: enable / disable individual syscall tracepoints. Press `tab` inside
+- `o` / `O`: **Probes** dialog (on the Flame tab, the default, `o` cycles the frame order, so use `O` there): enable / disable individual syscall tracepoints. Press `tab` inside
   the dialog to switch between the **Syscalls** view (single probes: `space`/`enter` toggles,
   `a` all on, `n` all off, `/` search) and the **Families** view.
 
@@ -295,7 +295,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `R` | start / stop Parquet recording |
 | `p` | re-open PID picker |
 | `t` | open TID picker |
-| `o` | open probe selection dialog (`tab` there: Syscalls / Families view; `space`/`enter` toggles a whole family) |
+| `o` / `O` | open probe selection dialog (`O` on the Flame tab, where `o` cycles the frame order; `tab` there: Syscalls / Families view; `space`/`enter` toggles a whole family) |
 | `r` | refresh dashboard snapshot |
 | `q` / `ctrl+c` | quit |
 

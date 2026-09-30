@@ -2565,6 +2565,26 @@ func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
 	}
 }
 
+// TestGlobalHelpOverlayKeepsFlameNoteAt80Columns: the probes-key note ("O on
+// Flame") used to share a line with the family hint and was cut to "(O on
+// Fla..." by the 70-cell help box at 80 columns. The Global section is the
+// first thing in the overlay, so each of its lines must appear untruncated
+// (other sections may still be cut; they are not this test's concern).
+func TestGlobalHelpOverlayKeepsFlameNoteAt80Columns(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	sections := m.helpSections()
+	out := renderGlobalHelpOverlay(80, 24, sections)
+
+	for _, line := range sections[0].lines {
+		if !strings.Contains(out, line) {
+			t.Errorf("global help line cut or missing at 80 columns: %q\n%s", line, out)
+		}
+	}
+	if !strings.Contains(out, "on Flame, o cycles the frame order") {
+		t.Fatalf("help overlay lacks the Flame note for O:\n%s", out)
+	}
+}
+
 // TestNextAutoResetIntervalCyclesThroughPresets walks the full preset
 // sequence (off -> 10s -> 30s -> 60s -> 2m -> 5m -> off) to lock in the
 // user-facing behavior of the `I` hotkey. The cycle wraps so the user

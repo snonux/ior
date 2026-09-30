@@ -72,12 +72,13 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 `./ior -help` lists the valid values. [Syscall tracing](./docs/syscall-tracing-plan.md)
 explains classification and sampling.
 
-In the TUI you can change the traced set at runtime: press `o` for the probes modal (on the Flame tab, the default, `o` cycles the frame order,
-so press `O` there; `O` works on every tab), `tab` to switch to the Families view
-(attached/total probes per family), and `space` to attach the selected family, or detach
-it if any of its probes is attached. The Syscalls view toggles single probes. Runtime changes survive trace restarts (PID/TID reselect, filter
-changes), and newly attached syscalls get the same sampling rates as at startup. The carried
-set is what you asked for: normally exactly what is attached, but a change that finishes
+In the TUI you can change the traced set at runtime: press `o` for the probes modal (on the
+Flame tab, the default, `o` cycles the frame order, so press `O` there; `O` works on every
+tab), `tab` to switch to the Families view (attached/total probes per family), and `space`
+to attach the selected family, or detach it if any of its probes is attached. The Syscalls
+view toggles single probes. Runtime changes survive trace restarts (PID/TID reselect,
+filter changes), and newly attached syscalls get the same sampling rates as at startup. The
+carried set is what you asked for: normally exactly what is attached, but a change that finishes
 after the trace restarted keeps its intended set, whose unattachable probes are retried and
 skipped with a log line until your next probe change. Detaching everything makes later
 sessions attach nothing; only restarting `ior` returns to the `-trace-*` startup selection. `[`/`]`

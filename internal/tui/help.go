@@ -47,17 +47,23 @@ type helpSection struct {
 }
 
 func (m *Model) helpSections() []helpSection {
-	line1 := "f filter  p pid picker  t tid picker  o/O probes  R parquet rec"
+	// The export key rides on the first line: appended to line1 it made the
+	// line 80 cells and the 70-cell help box (80 columns) cut it to "e st...".
+	line0 := "H help  esc/? close help  q quit"
 	if m.keys.ExportEnabled() {
-		line1 += "  e stream export"
+		line0 += "  e stream export"
 	}
+	line1 := "f filter  p pid picker  t tid picker  o/O probes  R parquet rec"
 	// '['/']' only re-scope the view; attaching a whole family at runtime is
 	// the probes modal's Families view (o/O, then tab), hence the last line.
 	// O works on every tab; o is shadowed by the Flame tab's frame-order key.
+	// The note has its own line: the help box is 70 cells wide at 80 columns
+	// and a longer combined line was cut mid-note.
 	globalLines := []string{
-		"H help  esc/? close help  q quit",
+		line0,
 		line1,
-		"[ ] scope view to a family  o/O tab: attach/detach families (O on Flame)",
+		"[ ] scope view to a family  o/O tab: attach/detach families",
+		"O opens probes on every tab (on Flame, o cycles the frame order)",
 	}
 
 	return []helpSection{

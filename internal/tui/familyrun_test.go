@@ -121,8 +121,7 @@ func TestFollowingTheFamilyHintAttachesThatFamily(t *testing.T) {
 // consumes it as its frame-order key. Were O ever shadowed by a tab, the hint
 // would silently do nothing there again.
 func TestFamilyHintKeyOpensProbesOnEveryTab(t *testing.T) {
-	tabKeys := []rune("1234567")
-	for _, tabKey := range tabKeys {
+	for _, tabKey := range "1234567" {
 		for _, tc := range []struct {
 			key      rune
 			wantOpen bool
@@ -138,6 +137,41 @@ func TestFamilyHintKeyOpensProbesOnEveryTab(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestCapitalOInTextInputsDoesNotOpenProbes: the probes binding matches the
+// capital O, so typing it into the Flame search box or the filter modal (both
+// text inputs) must stay text and must not pop the probes modal open.
+func TestCapitalOInTextInputsDoesNotOpenProbes(t *testing.T) {
+	t.Run("flame search", func(t *testing.T) {
+		m := newSessionModel(t, newSelectionManager())
+		m.width, m.height = 120, 30
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: '/', Text: "/"})
+		if !strings.Contains(m.View().Content, "0/0 matches") {
+			t.Fatal("precondition: flame search footer should be open")
+		}
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: 'O', Text: "O"})
+		if m.probeModal.Visible() {
+			t.Fatal("O typed into the flame search opened the probes modal")
+		}
+		if !strings.Contains(m.View().Content, "0/0 matches") {
+			t.Fatal("flame search closed after typing O")
+		}
+	})
+	t.Run("filter modal", func(t *testing.T) {
+		m := newSessionModel(t, newSelectionManager())
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: 'f', Text: "f"})
+		if !m.filterModal.Visible() {
+			t.Fatal("precondition: filter modal should be open")
+		}
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: 'O', Text: "O"})
+		if m.probeModal.Visible() {
+			t.Fatal("O typed into the filter modal opened the probes modal")
+		}
+		if !m.filterModal.Visible() {
+			t.Fatal("filter modal closed after typing O")
+		}
+	})
 }
 
 // TestFamilyBatchOverlappingARestartKeepsItsIntent: the batch works on the
