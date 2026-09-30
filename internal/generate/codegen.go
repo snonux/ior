@@ -98,29 +98,12 @@ func groupBySyscall(formats []Format) []Syscall {
 	return result
 }
 
+// classifySyscall classifies both halves of a syscall and returns the
+// tracepoints to generate for it, or a human-readable skip reason when the
+// syscall is incomplete, unclassifiable or enter-rejected.
 func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
-	var enterClass, exitClass ClassificationResult
-	allCanGenerate := true
-
-	if sc.Enter != nil {
-		enterClass = classifyEnterForGeneration(sc.Enter)
-		if enterClass.Kind == KindNone {
-			allCanGenerate = false
-		}
-	} else {
-		allCanGenerate = false
-	}
-
-	if sc.Exit != nil {
-		exitClass = ClassifyFormat(sc.Exit)
-		if exitClass.Kind == KindNone {
-			allCanGenerate = false
-		}
-	} else {
-		allCanGenerate = false
-	}
-
-	if !allCanGenerate {
+	enterClass, exitClass, ok := classifySyscallHalves(sc)
+	if !ok {
 		names := syscallFormatNames(sc)
 		return nil, fmt.Sprintf("Skipping %s as incomplete or unclassifiable", strings.Join(names, " "))
 	}
@@ -130,6 +113,37 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 		return nil, fmt.Sprintf("Ignoring %s as enter-rejected", strings.Join(names, " "))
 	}
 
+	return generatedTracepointsFor(sc, enterClass, exitClass), ""
+}
+
+// classifySyscallHalves classifies the enter and exit formats. ok is false
+// when either half is missing or classifies as KindNone; the exit half is
+// still classified in that case so behaviour matches the pre-split code.
+func classifySyscallHalves(sc Syscall) (enterClass, exitClass ClassificationResult, ok bool) {
+	ok = true
+	if sc.Enter != nil {
+		enterClass = classifyEnterForGeneration(sc.Enter)
+		if enterClass.Kind == KindNone {
+			ok = false
+		}
+	} else {
+		ok = false
+	}
+
+	if sc.Exit != nil {
+		exitClass = ClassifyFormat(sc.Exit)
+		if exitClass.Kind == KindNone {
+			ok = false
+		}
+	} else {
+		ok = false
+	}
+	return enterClass, exitClass, ok
+}
+
+// generatedTracepointsFor builds the enter and exit tracepoints of an accepted
+// syscall.
+func generatedTracepointsFor(sc Syscall, enterClass, exitClass ClassificationResult) []GeneratedTracepoint {
 	var result []GeneratedTracepoint
 	if sc.Enter != nil {
 		result = append(result, GeneratedTracepoint{Format: sc.Enter, Classification: enterClass})
@@ -146,7 +160,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 			EnterKind:      enterClass.Kind,
 		})
 	}
-	return result, ""
+	return result
 }
 
 func classifyEnterForGeneration(f *Format) ClassificationResult {

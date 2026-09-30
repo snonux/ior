@@ -129,89 +129,62 @@ const (
 	KindTwoFdNames
 )
 
+// kindMetadataNames maps each kind to its stable metadata name. It is a data
+// table rather than a switch so adding a kind is a one-line change. Several
+// kinds deliberately share a name: the size/names variants (KindFdSize,
+// KindTwoFdNames) keep their base kind's name, and KindNamedEventfd shares
+// "eventfd", so downstream metadata consumers see one stable label.
+var kindMetadataNames = map[TracepointKind]string{
+	KindFd:             "fd",
+	KindFdSize:         "fd",
+	KindOpen:           "open",
+	KindMqOpen:         "mq-open",
+	KindOpenTree:       "open-tree",
+	KindExec:           "exec",
+	KindPathname:       "pathname",
+	KindFdPathname:     "fd-pathname",
+	KindName:           "name",
+	KindRet:            "ret",
+	KindFcntl:          "fcntl",
+	KindNull:           "null",
+	KindDup3:           "dup3",
+	KindOpenByHandleAt: "open-by-handle-at",
+	KindSocket:         "socket",
+	KindSocketpair:     "socketpair",
+	KindAccept:         "accept",
+	KindPipe:           "pipe",
+	KindEventfd:        "eventfd",
+	KindNamedEventfd:   "eventfd",
+	KindPidfd:          "pidfd",
+	KindEpollCtl:       "epoll-ctl",
+	KindTwoFd:          "two-fd",
+	KindTwoFdNames:     "two-fd",
+	KindPoll:           "poll",
+	KindMem:            "mem",
+	KindMmap:           "mmap",
+	KindSleep:          "sleep",
+	KindKeyctl:         "keyctl",
+	KindPtrace:         "ptrace",
+	KindPerfOpen:       "perf-open",
+	KindSeccomp:        "seccomp",
+	KindModule:         "module",
+	KindSysVId:         "sysv-id",
+	KindSysVOp:         "sysv-op",
+	KindProc:           "proc",
+	KindBpf:            "bpf",
+	KindFutex:          "futex",
+	KindPrctl:          "prctl",
+	KindTimerObj:       "timer-obj",
+}
+
 // MetadataName returns the kind's stable name as written into
 // generated_tracepoints.c metadata comments and the Go tracepoint list.
+// KindNone and any kind missing from kindMetadataNames report "none".
 func (k TracepointKind) MetadataName() string {
-	switch k {
-	case KindFd, KindFdSize:
-		return "fd"
-	case KindOpen:
-		return "open"
-	case KindMqOpen:
-		return "mq-open"
-	case KindOpenTree:
-		return "open-tree"
-	case KindExec:
-		return "exec"
-	case KindPathname:
-		return "pathname"
-	case KindFdPathname:
-		return "fd-pathname"
-	case KindName:
-		return "name"
-	case KindRet:
-		return "ret"
-	case KindFcntl:
-		return "fcntl"
-	case KindNull:
-		return "null"
-	case KindDup3:
-		return "dup3"
-	case KindOpenByHandleAt:
-		return "open-by-handle-at"
-	case KindSocket:
-		return "socket"
-	case KindSocketpair:
-		return "socketpair"
-	case KindAccept:
-		return "accept"
-	case KindPipe:
-		return "pipe"
-	case KindEventfd:
-		return "eventfd"
-	case KindNamedEventfd:
-		return "eventfd"
-	case KindPidfd:
-		return "pidfd"
-	case KindEpollCtl:
-		return "epoll-ctl"
-	case KindTwoFd, KindTwoFdNames:
-		return "two-fd"
-	case KindPoll:
-		return "poll"
-	case KindMem:
-		return "mem"
-	case KindMmap:
-		return "mmap"
-	case KindSleep:
-		return "sleep"
-	case KindKeyctl:
-		return "keyctl"
-	case KindPtrace:
-		return "ptrace"
-	case KindPerfOpen:
-		return "perf-open"
-	case KindSeccomp:
-		return "seccomp"
-	case KindModule:
-		return "module"
-	case KindSysVId:
-		return "sysv-id"
-	case KindSysVOp:
-		return "sysv-op"
-	case KindProc:
-		return "proc"
-	case KindBpf:
-		return "bpf"
-	case KindFutex:
-		return "futex"
-	case KindPrctl:
-		return "prctl"
-	case KindTimerObj:
-		return "timer-obj"
-	default:
-		return "none"
+	if name, ok := kindMetadataNames[k]; ok {
+		return name
 	}
+	return "none"
 }
 
 // RetClassification labels what a KindRet syscall's return value counts, so
@@ -610,66 +583,55 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 	return ClassificationResult{}, false
 }
 
+// nameFieldRule classifies one specific syscall-enter tracepoint when it
+// carries the expected field: the field must be named fieldName and its C type
+// must satisfy typeOK.
+type nameFieldRule struct {
+	fieldName string
+	typeOK    func(string) bool
+	result    ClassificationResult
+}
+
+// isUnsignedIntType matches the exact "unsigned int" type the dup family uses
+// for its descriptor argument (stricter than isFdType on purpose).
+func isUnsignedIntType(t string) bool { return t == "unsigned int" }
+
+// pathnameRule builds a rule that captures the given C-string field as the
+// tracepoint's pathname.
+func pathnameRule(field string) nameFieldRule {
+	return nameFieldRule{
+		fieldName: field,
+		typeOK:    isCStringPtrType,
+		result:    ClassificationResult{Kind: KindPathname, PathnameField: field},
+	}
+}
+
+// nameFieldRules holds the tracepoints that need both their name and a
+// specific field to classify. A tracepoint whose field does not match its rule
+// is not rejected: it falls through to the generic open-filename check below.
+var nameFieldRules = map[string]nameFieldRule{
+	"sys_enter_dup":               {fieldName: "fildes", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_dup2":              {fieldName: "oldfd", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_dup3":              {fieldName: "oldfd", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindDup3}},
+	"sys_enter_name_to_handle_at": pathnameRule("name"),
+	"sys_enter_copy_file_range":   {fieldName: "fd_in", typeOK: isFdType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_mount":             pathnameRule("dir_name"),
+	"sys_enter_umount":            pathnameRule("name"),
+	"sys_enter_acct":              pathnameRule("name"),
+	"sys_enter_pivot_root":        pathnameRule("new_root"),
+	"sys_enter_quotactl":          pathnameRule("special"),
+	"sys_enter_swapon":            pathnameRule("specialfile"),
+	"sys_enter_swapoff":           pathnameRule("specialfile"),
+	"sys_enter_mq_open":           {fieldName: "u_name", typeOK: isCStringPtrType, result: ClassificationResult{Kind: KindMqOpen}},
+	"sys_enter_mq_unlink":         pathnameRule("u_name"),
+}
+
 // classifyNameAndField handles tracepoints that need both the name and
-// a specific field to classify.
+// a specific field to classify: first the per-name rules in nameFieldRules,
+// then the generic "any sys_enter_*open* with a filename string" rule.
 func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResult, bool) {
-	switch name {
-	case "sys_enter_dup":
-		if fieldType == "unsigned int" && fieldName == "fildes" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_dup2":
-		if fieldType == "unsigned int" && fieldName == "oldfd" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_dup3":
-		if fieldType == "unsigned int" && fieldName == "oldfd" {
-			return ClassificationResult{Kind: KindDup3}, true
-		}
-	case "sys_enter_name_to_handle_at":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_copy_file_range":
-		if isFdType(fieldType) && fieldName == "fd_in" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_mount":
-		if isCStringPtrType(fieldType) && fieldName == "dir_name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true
-		}
-	case "sys_enter_umount":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_acct":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_pivot_root":
-		if isCStringPtrType(fieldType) && fieldName == "new_root" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "new_root"}, true
-		}
-	case "sys_enter_quotactl":
-		if isCStringPtrType(fieldType) && fieldName == "special" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "special"}, true
-		}
-	case "sys_enter_swapon":
-		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
-		}
-	case "sys_enter_swapoff":
-		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
-		}
-	case "sys_enter_mq_open":
-		if isCStringPtrType(fieldType) && fieldName == "u_name" {
-			return ClassificationResult{Kind: KindMqOpen}, true
-		}
-	case "sys_enter_mq_unlink":
-		if isCStringPtrType(fieldType) && fieldName == "u_name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "u_name"}, true
-		}
+	if rule, ok := nameFieldRules[name]; ok && rule.fieldName == fieldName && rule.typeOK(fieldType) {
+		return rule.result, true
 	}
 
 	if strings.HasPrefix(name, "sys_enter") &&

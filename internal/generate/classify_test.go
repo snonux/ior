@@ -521,3 +521,53 @@ func mustParseAll(t *testing.T, data string) []Format {
 	}
 	return formats
 }
+
+// TestMetadataNameCoversEveryKind guards the kindMetadataNames table: every
+// kind after KindNone must have a real name, and unknown kinds report "none".
+func TestMetadataNameCoversEveryKind(t *testing.T) {
+	if got := KindNone.MetadataName(); got != "none" {
+		t.Fatalf("KindNone.MetadataName() = %q, want none", got)
+	}
+	for k := KindNone + 1; k <= KindTwoFdNames; k++ {
+		if got := k.MetadataName(); got == "none" || got == "" {
+			t.Errorf("kind %d has no metadata name (got %q)", k, got)
+		}
+	}
+	if got := (KindTwoFdNames + 1).MetadataName(); got != "none" {
+		t.Errorf("out-of-range kind MetadataName() = %q, want none", got)
+	}
+	aliases := map[TracepointKind]string{KindFdSize: "fd", KindTwoFdNames: "two-fd", KindNamedEventfd: "eventfd"}
+	for k, want := range aliases {
+		if got := k.MetadataName(); got != want {
+			t.Errorf("kind %d MetadataName() = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestClassifyNameAndFieldRules checks the per-name rule table, including the
+// exact-type dup rule and the fall-through to the generic open-filename rule
+// when a named tracepoint's field does not match.
+func TestClassifyNameAndFieldRules(t *testing.T) {
+	tests := []struct {
+		name, fieldType, fieldName string
+		want                       ClassificationResult
+		wantOK                     bool
+	}{
+		{"sys_enter_dup", "unsigned int", "fildes", ClassificationResult{Kind: KindFd}, true},
+		{"sys_enter_dup", "int", "fildes", ClassificationResult{}, false},
+		{"sys_enter_dup3", "unsigned int", "oldfd", ClassificationResult{Kind: KindDup3}, true},
+		{"sys_enter_mount", "char *", "dir_name", ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true},
+		{"sys_enter_mount", "char *", "dev_name", ClassificationResult{}, false},
+		{"sys_enter_mq_open", "const char *", "u_name", ClassificationResult{Kind: KindMqOpen}, true},
+		{"sys_enter_mq_open", "const char *", "filename", ClassificationResult{Kind: KindOpen}, true},
+		{"sys_enter_openat", "const char *", "filename", ClassificationResult{Kind: KindOpen}, true},
+		{"sys_enter_read", "const char *", "filename", ClassificationResult{}, false},
+	}
+	for _, tt := range tests {
+		got, ok := classifyNameAndField(tt.name, tt.fieldType, tt.fieldName)
+		if ok != tt.wantOK || got != tt.want {
+			t.Errorf("classifyNameAndField(%q, %q, %q) = %+v, %v; want %+v, %v",
+				tt.name, tt.fieldType, tt.fieldName, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
