@@ -25,13 +25,14 @@ import (
 // characters literal instead of letting the matcher trim them or read them
 // as anchors. Three dimensions differ on purpose:
 //   - a directory row counts only the files directly in its directory
-//     (aggregateFilesByDir keys rows by the literal directory text,
-//     literalDir), so it becomes the directory-children pattern
+//     (the engine's directory ranking keys rows by the literal directory text,
+//     statsengine.DirOf), so it becomes the directory-children pattern
 //     globalfilter.DirPattern (^dir/*), which the matcher defines by that
 //     same literal directory text: files of subdirectories (their own rows)
 //     are not selected, and the "/" row selects only top-level entries. Like
-//     ^exact$ it is case-sensitive. The noDirGroup row has no such pattern
-//     and yields a filter notice instead;
+//     ^exact$ it is case-sensitive. The noDirGroup row and the
+//     remainder ("other") row have no such pattern and yield a filter
+//     notice instead;
 //   - a family row keeps the bare family name: families are a closed set in
 //     which no name contains another, so bare is already exact, and the
 //     [/] family cycle (familycycle.go) identifies the current family by its
@@ -84,13 +85,31 @@ func handleFilesEnter(m *Model) (bool, tea.Cmd) {
 		return false, nil
 	}
 	if m.filesDirGrouped {
-		if selected, ok := m.selectedDirSnapshot(); ok && selected.Dir == noDirGroup {
-			m.SetFilterNotice(noDirGroupNotice)
-			return true, nil
+		if selected, ok := m.selectedDirSnapshot(); ok {
+			if notice := dirRowRefusalNotice(selected); notice != "" {
+				m.SetFilterNotice(notice)
+				return true, nil
+			}
 		}
 	}
 	return requestSelectedFilter(m.selectedFileFilter())
 }
+
+// dirRowRefusalNotice returns the notice explaining why Enter on the dir row
+// sets no filter, or "" when the row can become one.
+func dirRowRefusalNotice(row DirSnapshot) string {
+	switch {
+	case row.IsRemainder():
+		return otherDirsNotice
+	case !usableDir(row.Dir):
+		return noDirGroupNotice
+	}
+	return ""
+}
+
+// otherDirsNotice is the filter notice for Enter on the remainder row, which
+// sums many directories that share no filterable pattern.
+const otherDirsNotice = `NO FILTER (the "(other)" row sums the directories outside the top ranked ones) - keeping the current filter`
 
 // noDirGroupNotice is the filter notice for Enter on the noDirGroup row,
 // worded like the TUI's refusal notice ("FILTER REFUSED (...) - keeping the
@@ -146,7 +165,7 @@ func (m *Model) selectedFileFilter() (globalfilter.Filter, string, bool) {
 		if !ok {
 			return globalfilter.Filter{}, "", false
 		}
-		if !usableDir(selected.Dir) {
+		if selected.IsRemainder() || !usableDir(selected.Dir) {
 			return globalfilter.Filter{}, "", false
 		}
 		filter.File = &globalfilter.StringFilter{Pattern: globalfilter.DirPattern(selected.Dir)}

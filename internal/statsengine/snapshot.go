@@ -63,6 +63,14 @@ type Snapshot struct {
 	files     []FileSnapshot
 	processes []ProcessSnapshot
 
+	// dirs and otherDirs are the engine's own per-directory ranking (see
+	// WithDirs); hasDirs tells a snapshot carrying it - possibly with no
+	// rows - from one built without it, whose Dirs fall back to grouping
+	// files.
+	dirs      []DirSnapshot
+	otherDirs DirSnapshot
+	hasDirs   bool
+
 	LatencyHistogram HistogramSnapshot
 	GapHistogram     HistogramSnapshot
 }
@@ -97,6 +105,38 @@ type FileSnapshot struct {
 	AvgLatencyNs   float64
 	MaxLatencyNs   uint64
 	TotalLatencyNs uint64
+}
+
+// DirSnapshot is one aggregated directory row of the Files tab's dir-grouped
+// view: the counters of every file whose DirOf is Dir. Engine snapshots build
+// it from all ranked traffic, not only the top-N files.
+type DirSnapshot struct {
+	Dir string
+
+	Accesses     uint64
+	BytesRead    uint64
+	BytesWritten uint64
+
+	AvgLatencyNs   float64
+	MaxLatencyNs   uint64
+	TotalLatencyNs uint64
+	// FileCount is the number of distinct files seen in the directory:
+	// exact up to a few hundred, a ~6% estimate beyond (see fileSketch). On
+	// the remainder row it sums its directories' counts.
+	FileCount uint64
+
+	// Folded is the number of directories summed into this row. It is zero
+	// for a real directory row and non-zero only for the remainder ("other")
+	// row of Snapshot.DirsOther, whose Dir is empty. A directory that was
+	// dropped by the ranker's cardinality guard and later reappeared counts
+	// once per stay, so Folded can exceed the true number of directories.
+	Folded uint64
+}
+
+// IsRemainder reports whether the row is the remainder row summing the
+// directories outside the top-N rather than one directory.
+func (d DirSnapshot) IsRemainder() bool {
+	return d.Folded > 0
 }
 
 // ProcessSnapshot is an aggregated per-process entry: one process lifetime.
@@ -154,6 +194,17 @@ func NewSnapshot(
 		LatencyHistogram:  latencyHistogram.Clone(),
 		GapHistogram:      gapHistogram.Clone(),
 	}
+}
+
+// WithDirs returns a copy of the snapshot carrying the given per-directory
+// ranking: the top-N rows (accesses descending) and the remainder row summing
+// every directory outside them (zero-valued, Folded == 0, when there is
+// none). The slices are copied.
+func (s Snapshot) WithDirs(dirs []DirSnapshot, other DirSnapshot) Snapshot {
+	s.dirs = slices.Clone(dirs)
+	s.otherDirs = other
+	s.hasDirs = true
+	return s
 }
 
 // NewHistogramSnapshot creates an immutable histogram snapshot by copying
@@ -229,6 +280,27 @@ func (s Snapshot) TopNFiles(n int) []FileSnapshot {
 // Callers must treat returned data as read-only.
 func (s Snapshot) Processes() []ProcessSnapshot {
 	return s.processes
+}
+
+// Dirs returns the per-directory rows, accesses descending then directory.
+// An engine snapshot ranks directories over ALL traffic (bounded top-N, the
+// rest in DirsOther), so a directory holding thousands of once-read files
+// appears even though none of them is in Files. A snapshot built without
+// directory rows (NewSnapshot alone) falls back to grouping Files, which can
+// only see those files.
+// Callers must treat returned data as read-only.
+func (s Snapshot) Dirs() []DirSnapshot {
+	if s.hasDirs {
+		return s.dirs
+	}
+	return AggregateFilesByDir(s.files)
+}
+
+// DirsOther returns the remainder row summing every directory that is not in
+// Dirs, and false when there is none (always so for a snapshot without
+// engine-provided directory rows).
+func (s Snapshot) DirsOther() (DirSnapshot, bool) {
+	return s.otherDirs, s.otherDirs.IsRemainder()
 }
 
 // ProcessesCount returns number of process rows without cloning backing slices.

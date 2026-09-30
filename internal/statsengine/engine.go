@@ -18,7 +18,7 @@ const (
 	trendWindowSlots = 20
 
 	// DefaultTopN is the default maximum number of top entries tracked per
-	// category (files, processes). It is exported so callers can use it as the
+	// category (files, directories, processes). It is exported so callers can use it as the
 	// standard capacity when constructing a new Engine via NewEngine.
 	DefaultTopN = 64
 )
@@ -81,6 +81,7 @@ type Engine struct {
 
 	syscalls         *syscallAccumulator
 	files            *fileRanker
+	dirs             *dirRanker
 	processes        *processAccumulator
 	latencyHist      *histogram
 	gapHist          *histogram
@@ -110,6 +111,8 @@ type snapshotInputs struct {
 
 	syscalls  syscallCapture
 	files     []fileSnapshotInput
+	dirs      dirSnapshotInputs
+	topN      int // directory rows kept by buildDirSnapshots
 	processes []processSnapshotInput
 
 	latencyHist histogramSnapshotInput
@@ -133,6 +136,7 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		aggregateSpan:    defaultAggregateDrainPeriod,
 		syscalls:         newSyscallAccumulator(),
 		files:            newFileRankerWithConfig(topN),
+		dirs:             newDirRankerWithConfig(topN),
 		processes:        newProcessAccumulatorWithConfig(topN),
 		latencyHist:      newHistogram(),
 		gapHist:          newHistogram(),
@@ -165,6 +169,7 @@ func (e *Engine) Reset() {
 	e.lastAggregateAt = time.Time{}
 	e.syscalls = newSyscallAccumulator()
 	e.files = newFileRankerWithConfig(e.topN)
+	e.dirs = newDirRankerWithConfig(e.topN)
 	e.processes = newProcessAccumulatorWithConfig(e.topN)
 	e.latencyHist = newHistogram()
 	e.gapHist = newHistogram()
@@ -192,6 +197,7 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	e.ingestGap(pair, now)
 	e.syscalls.Add(pair)
 	e.files.Add(pair)
+	e.dirs.Add(pair)
 	e.processes.Add(pair)
 	e.latencyHist.Increment(pair.Duration)
 	e.latencySeries.Add(float64(pair.Duration), now)
@@ -257,6 +263,8 @@ type subSnapshots struct {
 	syscalls    []SyscallSnapshot
 	syscallJobs []percentileJob // resolved, to be cached by storeSyscallPercentiles
 	files       []FileSnapshot
+	dirs        []DirSnapshot
+	dirsOther   DirSnapshot // remainder row; Folded == 0 when there is none
 	processes   []ProcessSnapshot
 	latencyHist HistogramSnapshot
 	gapHist     HistogramSnapshot
@@ -291,6 +299,8 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
 		syscalls:               e.syscalls.captureInputs(),
 		files:                  e.files.snapshotInputs(),
+		dirs:                   e.dirs.snapshotInputs(),
+		topN:                   e.topN,
 		processes:              e.processes.snapshotInputs(),
 		latencyHist:            e.latencyHist.snapshotInputs(),
 		gapHist:                e.gapHist.snapshotInputs(),
@@ -319,6 +329,11 @@ func buildSubSnapshots(in snapshotInputs, elapsed time.Duration) (subSnapshots, 
 	eg.Go(func() error {
 		var err error
 		ss.files, err = buildFileSnapshots(in.files)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		ss.dirs, ss.dirsOther, err = buildDirSnapshots(in.dirs, in.topN)
 		return err
 	})
 	eg.Go(func() error {
@@ -408,6 +423,7 @@ func (e *Engine) Snapshot() (*Snapshot, error) {
 		ss.latencyHist, ss.gapHist,
 	)
 	populateSnapshotFields(&snap, in, elapsed)
+	snap = snap.WithDirs(ss.dirs, ss.dirsOther)
 
 	return &snap, nil
 }

@@ -518,7 +518,8 @@ func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 }
 
 func (m *Model) sortedDirRows() []DirSnapshot {
-	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirTab.sort)
+	snap := m.snapshotOrZero()
+	return sortedDirSnapshots(snapshotDirRows(&snap), m.filesDirTab.sort)
 }
 
 func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -798,7 +799,8 @@ func (m *Model) filesPlainRowCount() int {
 }
 
 func (m *Model) filesDirRowCount() int {
-	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
+	snap := m.snapshotOrZero()
+	return len(snapshotDirRows(&snap))
 }
 
 // filesDirRowCountForMode is the navigation bound of the dir-grouped view:
@@ -822,7 +824,7 @@ func (m *Model) filesDirSelectionKeys() []string {
 		width, height := m.contentViewport(TabFiles, m.width, m.height)
 		return filesIcicleTileKeys(m.latest, width, height, metric)
 	default:
-		return keysOf(m.sortedDirRows(), func(row DirSnapshot) string { return row.Dir })
+		return keysOf(m.sortedDirRows(), dirKey)
 	}
 }
 

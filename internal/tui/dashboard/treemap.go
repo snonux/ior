@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"ior/internal/statsengine"
-	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 )
@@ -128,20 +127,19 @@ func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []s
 	if snap == nil {
 		return nil
 	}
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	items := make([]syscallTreemapItem, 0, len(dirs))
 	for _, dir := range dirs {
-		pathLabel := dirRowLabel(dir.Dir)
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
-			Name:     pathLabel,
-			Key:      dir.Dir,
+			Name:     dirDisplayLabel(dir),
+			Key:      dirKey(dir),
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,
 			Detail: fmt.Sprintf(
 				"dir %s, files %d, read %s, write %s, max %s",
-				common.Sanitize(dir.Dir),
+				dirDisplayLabel(dir),
 				dir.FileCount,
 				formatBytes(float64(dir.BytesRead)),
 				formatBytes(float64(dir.BytesWritten)),

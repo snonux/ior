@@ -783,14 +783,14 @@ func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
 	if snap == nil {
 		return nil
 	}
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	data := make([]bubbleDatum, 0, len(dirs))
 	for _, dir := range dirs {
 		totalBytes := dir.BytesRead + dir.BytesWritten
-		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", common.Sanitize(dir.Dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dirDisplayLabel(dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
 		data = append(data, bubbleDatum{
-			ID:       dir.Dir,
-			Label:    dirRowLabel(dir.Dir),
+			ID:       dirKey(dir),
+			Label:    dirDisplayLabel(dir),
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,

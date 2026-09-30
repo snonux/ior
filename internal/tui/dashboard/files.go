@@ -1,29 +1,19 @@
 package dashboard
 
 import (
-	"cmp"
-	"slices"
+	"fmt"
 	"strconv"
 
-	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 )
 
 // DirSnapshot is one aggregated directory row of the Files tab's dir-grouped
-// view: the directory's access, byte, latency and file-count totals.
-type DirSnapshot struct {
-	Dir string
-
-	Accesses     uint64
-	BytesRead    uint64
-	BytesWritten uint64
-
-	AvgLatencyNs   float64
-	MaxLatencyNs   uint64
-	TotalLatencyNs uint64
-	FileCount      uint64
-}
+// view: the directory's access, byte, latency and file-count totals. The
+// stats engine ranks directories over all traffic (not only the top-N
+// files), and its remainder row - the directories outside the top-N summed
+// up - is a DirSnapshot with Folded > 0 (see DirSnapshot.IsRemainder).
+type DirSnapshot = statsengine.DirSnapshot
 
 type fileSortKey uint8
 
@@ -84,7 +74,7 @@ func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, of
 	}
 
 	pathWidth := dirPathWidth(width)
-	rows := dirRows(sortedDirSnapshots(aggregateFilesByDir(snap.Files()), sortState), pathWidth)
+	rows := dirRows(sortedDirSnapshots(snapshotDirRows(snap), sortState), pathWidth)
 	if len(rows) == 0 {
 		return "Files (dirs): no data"
 	}
@@ -174,8 +164,21 @@ func sortedFileSnapshots(rows []statsengine.FileSnapshot, sortState tableSortSta
 	return sortedWithState(rows, sortState, compareFileBySort, compareFileDefault)
 }
 
+// sortedDirSnapshots orders the dir-grouped rows by the sort state. The
+// remainder row is not a directory to rank against the others - it is their
+// leftover - so it stays last whatever the sort key and direction.
 func sortedDirSnapshots(rows []DirSnapshot, sortState tableSortState[fileDirSortKey]) []DirSnapshot {
-	return sortedWithState(rows, sortState, compareDirBySort, compareDirDefault)
+	dirs := rows
+	var remainder []DirSnapshot
+	if n := len(rows); n > 0 && rows[n-1].IsRemainder() {
+		dirs, remainder = rows[:n-1], rows[n-1:]
+	}
+	sorted := sortedWithState(dirs, sortState, compareDirBySort, compareDirDefault)
+	if len(remainder) == 0 {
+		return sorted
+	}
+	out := make([]DirSnapshot, 0, len(sorted)+1)
+	return append(append(out, sorted...), remainder...)
 }
 
 func compareFileBySort(left, right statsengine.FileSnapshot, key fileSortKey) int {
@@ -353,68 +356,53 @@ func truncatePathMiddle(path string, limit int) string {
 }
 
 // noDirGroup is the Dir of the dir-grouped row collecting every name without
-// a separator: relative names such as "a.log", and non-path file names such
-// as "socket:[123]" or "pipe:[456]". It matches filepath.Dir's answer for
-// those names, so the row reads as before. literalDir also puts "./a" here
-// (its literal directory text is "."), so the group mixes names that share no
-// path prefix and cannot become a filter (see handleFilesEnter).
-const noDirGroup = "."
+// a separator (see statsengine.NoDirGroup). The engine groups files by
+// statsengine.DirOf, the same literal-directory rule the row filter's
+// directory-children pattern uses (globalfilter.DirPattern), so a row's
+// filter selects exactly the files the row counts.
+const noDirGroup = statsengine.NoDirGroup
 
-// literalDir returns the dir-grouped row key of path: its literal directory
-// text (globalfilter.LiteralDir - the text before the last separator, "/" for
-// a top-level entry), or noDirGroup when there is no separator. Unlike
-// filepath.Dir it does not Clean. A directory row turns into the
-// directory-children filter ^dir/* (globalfilter.DirPattern), which the
-// matcher defines by the same LiteralDir, so the filter selects exactly the
-// files the row counts: none of a subdirectory's (those have their own rows)
-// and none outside. With filepath.Dir, "./src/main.go" grouped under "src",
-// "//usr/lib/x" under "/usr/lib" and "a/../b/c" under "b" - and Enter on
-// those rows selected none of the files they counted.
-func literalDir(path string) string {
-	if dir, ok := globalfilter.LiteralDir(path); ok {
-		return dir
+// remainderDirKey is the selection identity of the remainder row. A real
+// directory key is a path, which cannot contain NUL, so it never collides
+// with one - whatever the traced directories are called.
+const remainderDirKey = "\x00other"
+
+// dirKey is the stable identity of a dir-grouped row: the literal directory
+// text, or remainderDirKey for the remainder row.
+func dirKey(d DirSnapshot) string {
+	if d.IsRemainder() {
+		return remainderDirKey
 	}
-	return noDirGroup
+	return d.Dir
 }
 
-// aggregateFilesByDir groups the files by literalDir and sums each group's
-// counters into one DirSnapshot, ordered by accesses (desc), then dir.
-func aggregateFilesByDir(files []statsengine.FileSnapshot) []DirSnapshot {
-	if len(files) == 0 {
+// dirDisplayLabel is the display text of a dir-grouped row: the sanitised
+// directory, or "(other: N dirs)" for the remainder row.
+func dirDisplayLabel(d DirSnapshot) string {
+	if d.IsRemainder() {
+		return fmt.Sprintf("(other: %d dirs)", d.Folded)
+	}
+	return dirRowLabel(d.Dir)
+}
+
+// snapshotDirRows returns the dir-grouped rows of a snapshot: the engine's
+// top-N directories followed by the remainder row when directories fell
+// outside the top-N. The result is a fresh slice the caller may reorder.
+func snapshotDirRows(snap *statsengine.Snapshot) []DirSnapshot {
+	if snap == nil {
 		return nil
 	}
-
-	dirs := make(map[string]DirSnapshot, len(files))
-	for _, f := range files {
-		dir := literalDir(f.Path)
-		s := dirs[dir]
-		s.Dir = dir
-		s.Accesses += f.Accesses
-		s.BytesRead += f.BytesRead
-		s.BytesWritten += f.BytesWritten
-		if f.MaxLatencyNs > s.MaxLatencyNs {
-			s.MaxLatencyNs = f.MaxLatencyNs
-		}
-		s.FileCount++
-		s.TotalLatencyNs += f.TotalLatencyNs
-		dirs[dir] = s
+	dirs := snap.Dirs()
+	other, hasOther := snap.DirsOther()
+	if len(dirs) == 0 && !hasOther {
+		return nil
 	}
-
-	out := make([]DirSnapshot, 0, len(dirs))
-	for _, s := range dirs {
-		if s.Accesses > 0 {
-			s.AvgLatencyNs = float64(s.TotalLatencyNs) / float64(s.Accesses)
-		}
-		out = append(out, s)
+	rows := make([]DirSnapshot, 0, len(dirs)+1)
+	rows = append(rows, dirs...)
+	if hasOther {
+		rows = append(rows, other)
 	}
-
-	slices.SortFunc(out, func(a, b DirSnapshot) int {
-		if a.Accesses != b.Accesses {
-			return cmp.Compare(b.Accesses, a.Accesses)
-		}
-		return cmp.Compare(a.Dir, b.Dir)
-	})
-	return out
+	return rows
 }
 
 func dirRows(dirs []DirSnapshot, pathWidth int) [][]string {
@@ -427,7 +415,7 @@ func dirRows(dirs []DirSnapshot, pathWidth int) [][]string {
 			formatDurationNs(d.AvgLatencyNs),
 			formatDurationUintNs(d.MaxLatencyNs),
 			strconv.FormatUint(d.FileCount, 10),
-			truncatePathMiddle(d.Dir, pathWidth),
+			truncatePathMiddle(dirDisplayLabel(d), pathWidth),
 		})
 	}
 	return rows

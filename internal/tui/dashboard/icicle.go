@@ -9,15 +9,20 @@ import (
 	"strings"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 )
 
 type icicleNode struct {
 	name     string
 	fullPath string
-	accesses uint64
-	bytes    uint64
-	duration uint64
-	children map[string]*icicleNode
+	// remainder marks the leaf standing for the directories outside the
+	// engine's top-N: it has no path, so fullPath holds remainderDirKey (its
+	// selection identity) and name its label.
+	remainder bool
+	accesses  uint64
+	bytes     uint64
+	duration  uint64
+	children  map[string]*icicleNode
 }
 
 type icicleTile struct {
@@ -54,7 +59,7 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 // buildIcicleTiles constructs the icicle tile layout from the snapshot's file data.
 // Returns (nil, false) when there is no data to display.
 func buildIcicleTiles(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) ([]icicleTile, bool) {
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	if len(dirs) == 0 {
 		return nil, false
 	}
@@ -120,9 +125,13 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 		children: make(map[string]*icicleNode),
 	}
 	for _, dir := range dirs {
+		metricBytes := dir.BytesRead + dir.BytesWritten
+		if dir.IsRemainder() {
+			addIcicleRemainder(root, dir, metricBytes)
+			continue
+		}
 		segments := splitIcicleSegments(dir.Dir)
 		current := root
-		metricBytes := dir.BytesRead + dir.BytesWritten
 		current.accesses += dir.Accesses
 		current.bytes += metricBytes
 		current.duration += dir.TotalLatencyNs
@@ -152,6 +161,33 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 		}
 	}
 	return root
+}
+
+// addIcicleRemainder adds the remainder row as a root-level leaf next to the
+// real top-level directories, so the chart accounts for the traffic of the
+// directories outside the engine's top-N instead of silently omitting it.
+func addIcicleRemainder(root *icicleNode, dir DirSnapshot, metricBytes uint64) {
+	root.accesses += dir.Accesses
+	root.bytes += metricBytes
+	root.duration += dir.TotalLatencyNs
+	root.children[remainderDirKey] = &icicleNode{
+		name:      dirDisplayLabel(dir),
+		fullPath:  remainderDirKey,
+		remainder: true,
+		accesses:  dir.Accesses,
+		bytes:     metricBytes,
+		duration:  dir.TotalLatencyNs,
+		children:  map[string]*icicleNode{},
+	}
+}
+
+// label is the tile text of the node: "root/..." for a directory, the
+// "(other: N dirs)" name for the remainder leaf.
+func (n *icicleNode) label() string {
+	if n.remainder {
+		return common.Sanitize(n.name)
+	}
+	return rootPathLabelFromFSPath(n.fullPath)
 }
 
 func splitIcicleSegments(dir string) []string {
@@ -286,7 +322,7 @@ func drawIcicleLabel(grid [][]gridCell, tile icicleTile, selected bool) {
 		return
 	}
 	maxLabel := tile.w - 1
-	label := abbreviateLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
+	label := abbreviateLabel(tile.node.label(), maxLabel)
 	writeGridLabel(grid[tile.depth], tile.x, label, tile.colorSlot, selected)
 }
 
@@ -310,7 +346,7 @@ func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) str
 		"sel:%d/%d %s | %s=%s | accesses=%d | bytes=%s",
 		selected+1,
 		len(tiles),
-		rootPathLabelFromFSPath(tile.node.fullPath),
+		tile.node.label(),
 		treemapMetricLabel(metric),
 		metricText,
 		tile.node.accesses,

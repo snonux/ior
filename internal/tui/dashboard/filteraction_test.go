@@ -246,7 +246,7 @@ func TestEnterDirRowFilterSelectsExactlyTheFilesItCounts(t *testing.T) {
 		counted := 0
 		for _, p := range paths {
 			selected := req.Filter.Matches(&streamrow.Row{FileName: p})
-			counts := literalDir(p) == dir.Dir
+			counts := statsengine.DirOf(p) == dir.Dir
 			if counts {
 				counted++
 			}
@@ -277,8 +277,8 @@ func TestLiteralDir(t *testing.T) {
 		"./src/main.go": "./src", "./a": ".", "a/../b/c": "a/../b", "a//b": "a/",
 		"   /z": "   ", "a.log": noDirGroup, "socket:[1]": noDirGroup, "": noDirGroup,
 	} {
-		if got := literalDir(path); got != want {
-			t.Errorf("literalDir(%q) = %q, want %q", path, got, want)
+		if got := statsengine.DirOf(path); got != want {
+			t.Errorf("DirOf(%q) = %q, want %q", path, got, want)
 		}
 	}
 }
