@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"ior/internal/types"
 )
@@ -327,6 +328,54 @@ func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "get hostname") {
 		t.Fatalf("Expected get hostname context, got %v", err)
+	}
+}
+
+// TestWriteTempFileRoundTripsThroughLoadFromFile pins that the file
+// serializeToFile renames into place is exactly what loadFromFile reads back:
+// zstd-compressed gob records, fully flushed and closed.
+func TestWriteTempFileRoundTripsThroughLoadFromFile(t *testing.T) {
+	original := newIorData()
+	original.add("path1", types.SYS_ENTER_OPENAT, "comm1", 100, 1000, flagsType(syscall.O_RDWR),
+		Counter{Count: 3, Duration: 30, DurationToPrev: 3, Bytes: 12})
+	path := filepath.Join(t.TempDir(), "out.ior.zst.tmp")
+
+	if err := original.writeTempFile(path); err != nil {
+		t.Fatalf("writeTempFile: %v", err)
+	}
+	restored := newIorData()
+	if err := restored.loadFromFile(path); err != nil {
+		t.Fatalf("loadFromFile: %v", err)
+	}
+	cnt, ok := counterAt(restored, "path1", types.SYS_ENTER_OPENAT, "comm1", 100, 1000, flagsType(syscall.O_RDWR))
+	if !ok || cnt.Count != 3 || cnt.Duration != 30 || cnt.DurationToPrev != 3 || cnt.Bytes != 12 {
+		t.Fatalf("restored counter = %+v (found %v), want the written one", cnt, ok)
+	}
+}
+
+func TestWriteTempFileCreateErrorReturnsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-dir", "out.ior.zst.tmp")
+	iod := newIorData()
+	err := iod.writeTempFile(path)
+	if err == nil || !strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("writeTempFile error = %v, want create temp file context", err)
+	}
+}
+
+func TestSerializedFilenameDefaultsEmptyName(t *testing.T) {
+	origHostnameFn := hostnameFn
+	t.Cleanup(func() { hostnameFn = origHostnameFn })
+	hostnameFn = func() (string, error) { return "host", nil }
+	now := time.Date(2026, 9, 30, 8, 5, 9, 0, time.UTC)
+
+	for name, want := range map[string]string{
+		"":      "host-default-2026-09-30_08:05:09.ior.zst",
+		"flame": "host-flame-2026-09-30_08:05:09.ior.zst",
+	} {
+		got, err := serializedFilename(name, now)
+		if err != nil || got != want {
+			t.Errorf("serializedFilename(%q) = %q, %v; want %q", name, got, err, want)
+		}
 	}
 }
 
