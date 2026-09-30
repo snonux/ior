@@ -117,7 +117,7 @@ func TestPrepareFallsBackToColonFreeTimestamp(t *testing.T) {
 	if err := r.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if !strings.Contains(status.String(), "rejects ':'") {
+	if !strings.Contains(status.String(), "invalid argument") || !strings.Contains(status.String(), "time of day") {
 		t.Errorf("status = %q, want a note about the ':' fallback", status.String())
 	}
 	if err := r.Write(); err != nil {
@@ -153,5 +153,101 @@ func TestPrepareReportsHostnameError(t *testing.T) {
 	hostnameFn = func() (string, error) { return "", errors.New("no hostname") }
 	if err := NewRecorder("run").Prepare(); err == nil || !strings.Contains(err.Error(), "get hostname") {
 		t.Fatalf("Prepare = %v, want the hostname error", err)
+	}
+}
+
+// rejectingProbe simulates a filesystem that answers EINVAL whenever the
+// probed characters include one of bad, as vfat/exFAT do for ? * " < > | :.
+func rejectingProbe(bad string) func(string, string) error {
+	return func(_, chars string) error {
+		if strings.ContainsAny(chars, bad) {
+			return &os.PathError{Op: "open", Path: "x", Err: syscall.EINVAL}
+		}
+		return nil
+	}
+}
+
+// TestPrepareProbesTheCharactersTheNameActuallyHas is the vfat regression for
+// -name values with characters other than ':': the probe used to cover only
+// ':' and the recording then failed at the final rename after the whole trace.
+func TestPrepareProbesTheCharactersTheNameActuallyHas(t *testing.T) {
+	status := pinOutputEnv(t)
+	var probed []string
+	probeNameChars = func(_, chars string) error { probed = append(probed, chars); return nil }
+	if err := NewRecorder(`a?b"c`).Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if len(probed) != 1 || probed[0] != `?":` {
+		t.Errorf("probed %q, want one probe of the characters the name really contains", probed)
+	}
+	if status.Len() != 0 {
+		t.Errorf("unexpected status %q", status.String())
+	}
+
+	// A name without special characters still probes the time of day's ':'.
+	probed = nil
+	if err := NewRecorder("plain").Prepare(); err != nil || len(probed) != 1 || probed[0] != ":" {
+		t.Errorf("plain name: err=%v probed=%q, want a ':' probe", err, probed)
+	}
+}
+
+// TestPrepareRejectsNameCharsTheFilesystemRefuses: colon-free timestamps do
+// not help when the -name itself carries a refused character, so Prepare must
+// fail at startup with a message about the name.
+func TestPrepareRejectsNameCharsTheFilesystemRefuses(t *testing.T) {
+	status := pinOutputEnv(t)
+	probeNameChars = rejectingProbe(`:?`)
+	r := NewRecorder("we?rd")
+	err := r.Prepare()
+	if err == nil || !strings.Contains(err.Error(), `"we?rd"`) || !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("Prepare = %v, want an error about the -name wrapping EINVAL", err)
+	}
+	if r.layout != timestampLayout || status.Len() != 0 {
+		t.Errorf("layout=%q status=%q: a failed Prepare must not announce a fallback", r.layout, status.String())
+	}
+}
+
+// TestPrepareFallbackOnlyWhenTimeOfDayIsTheCulprit: the filesystem refuses
+// ':' but accepts the name's '?': the colon-free layout cures it.
+func TestPrepareFallbackOnlyWhenTimeOfDayIsTheCulprit(t *testing.T) {
+	status := pinOutputEnv(t)
+	probeNameChars = rejectingProbe(":")
+	r := NewRecorder("a?b")
+	if err := r.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if r.layout != timestampLayoutPortable || !strings.Contains(status.String(), "Note:") {
+		t.Errorf("layout=%q status=%q, want the portable layout and a note", r.layout, status.String())
+	}
+}
+
+// TestPrepareTransientProbeErrorIsReturnedNotSwallowed: ENOSPC/EIO/EMFILE
+// during the probe say nothing about naming rules, so no layout switch and no
+// note may hide them.
+func TestPrepareTransientProbeErrorIsReturnedNotSwallowed(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EIO, syscall.EMFILE, syscall.EDQUOT} {
+		status := pinOutputEnv(t)
+		probeNameChars = func(string, string) error { return &os.PathError{Op: "open", Path: "x", Err: errno} }
+		r := NewRecorder("run")
+		err := r.Prepare()
+		if !errors.Is(err, errno) {
+			t.Errorf("Prepare with %v = %v, want that errno returned", errno, err)
+		}
+		if r.layout != timestampLayout || status.Len() != 0 {
+			t.Errorf("%v: layout=%q status=%q, want no fallback", errno, r.layout, status.String())
+		}
+	}
+}
+
+// TestPrepareRealProbeRejectionOnRealFilesystem drives the real (unstubbed)
+// probe down its EINVAL path: a name with a NUL is refused by the kernel
+// interface on every filesystem. ValidateName screens NUL in -name, so this
+// calls checkNameChars directly with a sample that carries one.
+func TestPrepareRealProbeRejectionOnRealFilesystem(t *testing.T) {
+	pinOutputEnv(t)
+	r := NewRecorder("a\x00b")
+	err := r.checkNameChars("host-a\x00b-2026-09-30_13:53:24.ior.zst")
+	if !errors.Is(err, syscall.EINVAL) || r.layout != timestampLayout {
+		t.Fatalf("checkNameChars = %v (layout %q), want EINVAL from the real probe and no fallback", err, r.layout)
 	}
 }

@@ -870,7 +870,7 @@ func TestProbeReadOnlyDirFails(t *testing.T) {
 	}
 }
 
-func TestProbeReplaceRejectsDirectoriesOnly(t *testing.T) {
+func TestProbeReplaceRejectsRealDirectoriesOnly(t *testing.T) {
 	dir := t.TempDir()
 	if err := ProbeReplace(dir); err == nil || !strings.Contains(err.Error(), "is a directory") {
 		t.Fatalf("ProbeReplace(dir) = %v, want a directory error", err)
@@ -879,8 +879,10 @@ func TestProbeReplaceRejectsDirectoriesOnly(t *testing.T) {
 	if err := os.Symlink(dir, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProbeReplace(link); err == nil {
-		t.Error("ProbeReplace accepted a symlink to a directory")
+	// rename(2) of a file over a symlink replaces the link itself, so a
+	// symlink to a directory is a valid target (it worked before the probe).
+	if err := ProbeReplace(link); err != nil {
+		t.Errorf("ProbeReplace(symlink to dir) = %v, want nil (the link is replaced)", err)
 	}
 	existing := filepath.Join(dir, "old.parquet")
 	writeFile(t, existing, "x")
@@ -911,5 +913,109 @@ func TestProbeNameChars(t *testing.T) {
 	}
 	if err := ProbeNameChars(filepath.Join(dir, "no-such", "final"), ":"); err == nil {
 		t.Error("ProbeNameChars in a missing directory succeeded")
+	}
+}
+
+// TestProbeNameCharsRejectedNameIsEINVAL uses a real failing case that needs
+// no vfat mount: a NUL byte makes os.OpenFile fail with EINVAL before any
+// syscall, which is what a filesystem refusing a character reports.
+func TestProbeNameCharsRejectedNameIsEINVAL(t *testing.T) {
+	dir := t.TempDir()
+	err := ProbeNameChars(filepath.Join(dir, "final.ior.zst"), "\x00")
+	if err == nil {
+		t.Fatal("ProbeNameChars with a NUL byte succeeded")
+	}
+	if !IsNameRejected(err) || !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("err = %v, want it to wrap EINVAL and count as a rejected name", err)
+	}
+	if !strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), tempPrefix) {
+		t.Errorf("err = %q, want the directory named and no internal temp name", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("failed probe left %v behind", entries)
+	}
+}
+
+// TestProbeNameCharsTransientErrorIsNotARejection pins that a failure which
+// is not a naming rule (here ENOENT for a missing directory; ENOSPC/EIO/EMFILE
+// look the same to the caller) is returned as such and never mistaken for a
+// filesystem that refuses the characters.
+func TestProbeNameCharsTransientErrorIsNotARejection(t *testing.T) {
+	err := ProbeNameChars(filepath.Join(t.TempDir(), "no-such", "final"), ":")
+	if err == nil {
+		t.Fatal("ProbeNameChars in a missing directory succeeded")
+	}
+	if IsNameRejected(err) {
+		t.Errorf("IsNameRejected(%v) = true for a missing directory", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("err = %v, want it to wrap ErrNotExist", err)
+	}
+}
+
+func TestIsNameRejected(t *testing.T) {
+	for _, err := range []error{syscall.EINVAL, syscall.EILSEQ, &fs.PathError{Op: "open", Path: "x", Err: syscall.EINVAL}} {
+		if !IsNameRejected(err) {
+			t.Errorf("IsNameRejected(%v) = false, want true", err)
+		}
+	}
+	for _, err := range []error{nil, syscall.ENOSPC, syscall.EIO, syscall.EMFILE, syscall.EDQUOT, fs.ErrNotExist} {
+		if IsNameRejected(err) {
+			t.Errorf("IsNameRejected(%v) = true, want false", err)
+		}
+	}
+}
+
+func TestRiskyNameChars(t *testing.T) {
+	cases := map[string]string{
+		"":                      "",
+		"host-run-2026.ior.zst": "",
+		"a:b:c":                 ":",
+		"x?y*z\"q\"":            "?*\"",
+		"a<b>c|d\\e":            "<>|\\",
+		"tab\there\n":           "\t\n",
+		"unicode-\u00fc-\u65e5": "",
+	}
+	for name, want := range cases {
+		if got := RiskyNameChars(name); got != want {
+			t.Errorf("RiskyNameChars(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestProbeErrorNamesDirectoryNotTempFile checks the message shape: the
+// absolute directory and the bare errno text, no internal ior-<hex>.tmp name.
+func TestProbeErrorNamesDirectoryNotTempFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nope")
+	err := Probe(filepath.Join(dir, "out.parquet"))
+	if err == nil {
+		t.Fatal("Probe in a missing directory succeeded")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, dir) || !strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, tempPrefix) || strings.Contains(msg, "open ") {
+		t.Errorf("Probe error = %q, want the directory and bare errno without the temp name", msg)
+	}
+	// A bare name reports the absolute working directory.
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := os.Chmod(cwd, 0o555); err == nil && os.Geteuid() != 0 {
+		t.Cleanup(func() { _ = os.Chmod(cwd, 0o755) })
+		if err := Probe("out.csv"); err == nil || !strings.Contains(err.Error(), cwd) {
+			t.Errorf("Probe(bare name) = %v, want the absolute working directory %s", err, cwd)
+		}
+	}
+}
+
+// TestProbeReplaceProbesSpecialCharsOfTheName covers ProbeReplace's name
+// character check on a normal filesystem: names with characters vfat would
+// refuse pass here and leave nothing behind.
+func TestProbeReplaceProbesSpecialCharsOfTheName(t *testing.T) {
+	dir := t.TempDir()
+	if err := ProbeReplace(filepath.Join(dir, `we:ird?*"<>|.parquet`)); err != nil {
+		t.Fatalf("ProbeReplace: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("ProbeReplace left %v behind", entries)
 	}
 }

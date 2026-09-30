@@ -258,8 +258,10 @@ func normalizeWriterConfig(cfg WriterConfig) WriterConfig {
 
 // CheckOutputPath verifies, without writing anything, that a recording aimed
 // at path (as given with -parquet, ".parquet" appended when missing) could be
-// created: the directory exists and accepts new files, and the final name is
-// not an existing directory. A headless run calls it before loading and
+// created: the directory exists and accepts new files, the final name is not
+// an existing directory (a symlink to one is fine: it is replaced, not
+// followed) and the filesystem accepts the special characters in the name.
+// A headless run calls it before loading and
 // attaching BPF, so a mistyped directory fails in milliseconds instead of
 // after the setup (seconds) or, for a failure only detectable late, after the
 // whole recording. NewWriter still creates the real temp file at Start; this

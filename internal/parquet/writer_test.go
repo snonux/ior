@@ -225,3 +225,42 @@ func TestNormalizeOutputPath(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckOutputPath pins the early -parquet check: a missing directory and
+// a real directory at the final name are rejected, while a symlink to a
+// directory is accepted because publishing renames over the link itself (the
+// pre-check once rejected it although -parquet <link> always worked).
+func TestCheckOutputPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := CheckOutputPath(filepath.Join(dir, "out")); err != nil {
+		t.Errorf("CheckOutputPath(new file) = %v, want nil", err)
+	}
+	if err := CheckOutputPath(filepath.Join(dir, "missing", "out.parquet")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("CheckOutputPath(missing dir) = %v, want ErrNotExist", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "adir.parquet"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOutputPath(filepath.Join(dir, "adir")); err == nil {
+		t.Error("CheckOutputPath accepted a real directory at the final name")
+	}
+
+	link := filepath.Join(dir, "link.parquet")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOutputPath(link); err != nil {
+		t.Fatalf("CheckOutputPath(symlink to dir) = %v, want nil", err)
+	}
+	// The accepted path really works: the writer replaces the link itself.
+	writer, err := NewWriter(link, WriterConfig{}, FileMetadata{Hostname: "h", Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewWriter over a symlink to a directory: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("Lstat(%s) = %v, %v, want the link replaced by a regular file", link, info, err)
+	}
+}

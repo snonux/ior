@@ -357,24 +357,37 @@ func closeAndRemove(f *os.File, path string) error {
 // surfaces immediately instead of after a trace that ran for minutes and had
 // nothing to save. It leaves nothing behind. The temp file is created and
 // removed by the same process, so it never races another ior's output.
+//
+// The error names the absolute directory and the bare errno text ("no such
+// file or directory"), not the random temp name CreateTemp tried: that name
+// means nothing to the user. The errno stays reachable through errors.Is.
 func Probe(final string) error {
 	f, err := CreateTemp(final)
 	if err != nil {
-		return fmt.Errorf("cannot create files in %s: %w", dirOf(final), err)
+		return fmt.Errorf("cannot create files in %s: %w", absDir(final), errnoOf(err))
 	}
 	return closeAndRemove(f, f.Name())
 }
 
 // ProbeReplace is Probe for a name the user chose, which PublishReplace will
 // later rename over. On top of the temp-file check it rejects a final that is
-// an existing directory (a symlink to one included, since stat follows it),
-// which the rename would refuse only at the very end. A dangling symlink or
-// one pointing at a file is fine: PublishReplace replaces the link itself.
+// an existing directory, which the rename would refuse only at the very end,
+// and it probes that the filesystem accepts the special characters (see
+// RiskyNameChars) of final's base name. A symlink at final is not a
+// directory here even when it points at one: rename(2) replaces the link
+// itself, exactly as PublishReplace does, so Lstat (not Stat) decides. A
+// dangling symlink or one pointing at a file is fine for the same reason.
 func ProbeReplace(final string) error {
-	if info, err := os.Stat(final); err == nil && info.IsDir() {
+	if info, err := os.Lstat(final); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a directory", final)
 	}
-	return Probe(final)
+	if err := Probe(final); err != nil {
+		return err
+	}
+	if chars := RiskyNameChars(filepath.Base(final)); chars != "" {
+		return ProbeNameChars(final, chars)
+	}
+	return nil
 }
 
 // ProbeNameChars reports whether the filesystem holding final's directory
@@ -384,18 +397,67 @@ func ProbeReplace(final string) error {
 // call that creates the file, i.e. at the end of a long trace. Creating and
 // removing a real "ior-<hex><chars>.tmp" file is the only reliable test; a
 // nil result means such names can be created. The caller decides what to do
-// on failure (ior falls back to a colon-free timestamp).
+// on failure, and must tell a rejected name (IsNameRejected) from a transient
+// error such as ENOSPC or EIO, which says nothing about the filesystem's
+// naming rules. The error names the absolute directory and wraps the bare
+// errno.
 func ProbeNameChars(final, chars string) error {
 	name := filepath.Join(filepath.Dir(final), fmt.Sprintf("%s%016x%s%s", tempPrefix, rand.Uint64(), chars, tempSuffix))
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot create a file with %q in its name in %s: %w", chars, absDir(final), errnoOf(err))
 	}
 	return closeAndRemove(f, name)
 }
 
+// IsNameRejected reports whether err from ProbeNameChars means the
+// filesystem refuses the tested characters (EINVAL, or EILSEQ for a name it
+// cannot encode) as opposed to a transient failure that must not be mistaken
+// for a naming rule.
+func IsNameRejected(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EILSEQ)
+}
+
+// RiskyNameChars returns the distinct characters of name, in order of first
+// appearance, that some filesystems (vfat, exFAT, SMB/CIFS) refuse in file
+// names although Linux allows them: ':' '?' '*' '"' '<' '>' '|' '\' and the
+// ASCII control characters. An empty result means name is safe everywhere
+// and needs no ProbeNameChars.
+func RiskyNameChars(name string) string {
+	var risky []byte
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 0x20 || strings.IndexByte(`:?*"<>|\`, c) >= 0) && strings.IndexByte(string(risky), c) < 0 {
+			risky = append(risky, c)
+		}
+	}
+	return string(risky)
+}
+
+// absDir is final's directory as an absolute path for messages, so an error
+// about a bare file name says which working directory was meant. When the
+// working directory itself is gone it falls back to dirOf's wording.
+func absDir(final string) string {
+	if dir, err := filepath.Abs(filepath.Dir(final)); err == nil {
+		return dir
+	}
+	return dirOf(final)
+}
+
+// errnoOf strips the operation and path an *fs.PathError adds, leaving the
+// bare cause: the path is an internal temp name the user never chose, and the
+// message already names the directory. Other errors pass through unchanged.
+func errnoOf(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
+}
+
 // dirOf is filepath.Dir spelled for messages: a bare file name lives in the
-// working directory, which "." names poorly.
+// working directory, which "." names poorly. absDir prefers the absolute
+// path and uses this only when the working directory cannot be determined.
 func dirOf(path string) string {
 	if dir := filepath.Dir(path); dir != "." {
 		return dir

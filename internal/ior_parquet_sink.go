@@ -116,10 +116,10 @@ func runHeadlessParquet(cfg flags.Config) error {
 // runtime resource (and releases what it built when it fails part-way); this
 // function adds only the Parquet-specific lifecycle on top: the output path is
 // probed first (parquet.CheckOutputPath) so an unusable one fails before the
-// costly setup, the recorder is started once the trace can run, so a failed
-// setup leaves no file behind, and
-// it is stopped - flushing and finalising the file - after the event loop has
-// drained and before the infrastructure is released.
+// costly setup; the recorder is started once the trace can run, so a failed
+// setup leaves no file behind; and it is stopped - flushing and finalising the
+// file - after the event loop has drained and before the infrastructure is
+// released.
 func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) error {
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)

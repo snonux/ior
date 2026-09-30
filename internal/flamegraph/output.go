@@ -36,13 +36,16 @@ func ValidateName(name string) error {
 //     fits the filesystem's 255-byte NAME_MAX;
 //   - the working directory accepts new files (a real temp file is created and
 //     removed: unwritable directories, NFS root_squash, read-only mounts);
-//   - the filesystem accepts ':' in file names. Generated names carry a
-//     time-of-day with ':', which vfat, exFAT and many SMB shares reject with
-//     EINVAL. When that is the only problem the recorder switches to a
-//     colon-free timestamp and says so on statusOut, instead of failing.
+//   - the filesystem accepts every character the recording name will contain
+//     that some filesystems refuse (checkNameChars): the time of day has ':'
+//     and -name may carry any of ? * " < > | \. vfat, exFAT and many SMB
+//     shares reject them with EINVAL. When the ':' of the time of day is the
+//     only problem the recorder switches to a colon-free timestamp and says
+//     so on statusOut, instead of failing.
 //
 // A nil Recorder (no -flamegraph) has nothing to prepare. It is called once,
-// before the trace starts; Write is otherwise unaffected. Nothing is left behind on success or failure.
+// before the trace starts; Write is otherwise unaffected. Nothing is left
+// behind on success or failure.
 func (r *Recorder) Prepare() error {
 	if r == nil {
 		return nil
@@ -63,10 +66,44 @@ func (r *Recorder) Prepare() error {
 	if err := atomicfile.Probe(sample); err != nil {
 		return fmt.Errorf("-flamegraph output would fail at the end of the trace: %w", err)
 	}
-	if err := probeNameChars(sample, ":"); err != nil {
-		r.layout = timestampLayoutPortable
-		_, _ = fmt.Fprintf(statusOut,
-			"Note: this filesystem rejects ':' in file names (%v); the recording name uses '-' in the time of day instead\n", err)
+	return r.checkNameChars(sample)
+}
+
+// checkNameChars probes the characters sample actually contains that some
+// filesystems refuse (atomicfile.RiskyNameChars), not a fixed ':', so a name
+// with '?' on vfat fails now and not at the final rename. Only EINVAL/EILSEQ
+// (atomicfile.IsNameRejected) mean a naming rule; any other probe error
+// (ENOSPC, EIO, EMFILE, ...) is returned as it is, because switching layouts
+// would not help and would hide the real problem behind a wrong note.
+//
+// A rejection is cured by the colon-free timestamp only if the time of day was
+// the culprit. The probe therefore reruns for the characters left after the
+// switch: if those are still refused the -name itself is the problem and the
+// error says so; otherwise the switch stands and a status note explains it.
+func (r *Recorder) checkNameChars(sample string) error {
+	chars := atomicfile.RiskyNameChars(sample)
+	if chars == "" {
+		return nil
 	}
+	err := probeNameChars(sample, chars)
+	if err == nil {
+		return nil
+	}
+	if !atomicfile.IsNameRejected(err) || r.layout == timestampLayoutPortable {
+		return fmt.Errorf("-flamegraph output would fail at the end of the trace: %w", err)
+	}
+	portable, nameErr := serializedFilename(r.name, nowFn(), timestampLayoutPortable)
+	if nameErr != nil {
+		return nameErr
+	}
+	if rest := atomicfile.RiskyNameChars(portable); rest != "" {
+		if err := probeNameChars(portable, rest); err != nil {
+			return fmt.Errorf("-name %q contains characters this filesystem rejects; "+
+				"the recording would fail at the end of the trace: %w", r.name, err)
+		}
+	}
+	r.layout = timestampLayoutPortable
+	_, _ = fmt.Fprintf(statusOut,
+		"Note: %v; the recording name uses '-' in the time of day instead\n", err)
 	return nil
 }

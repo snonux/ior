@@ -123,9 +123,10 @@ func (iod *iorData) merge(other iorData) *iorData {
 // (flamegraphName defaults to "default"; layout is the time.Format layout of
 // the timestamp). Recorder.Prepare has already checked at startup that this
 // name can be created, so a failure here is a genuine late surprise (disk
-// full, directory removed) and not a misconfiguration. The data goes to a uniquely named
-// .tmp sibling first and is published only once fully flushed, so a reader
-// never sees a partial file; on any failure the temp file is removed.
+// full, directory removed) and not a misconfiguration. The data goes to a
+// uniquely named .tmp sibling first and is published only once fully flushed,
+// so a reader never sees a partial file; on any failure the temp file is
+// removed.
 //
 // The timestamp is accurate to the second, so two runs finishing in the same
 // second (or the repeated DST hour) compute the same name. Publishing never
