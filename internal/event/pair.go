@@ -13,9 +13,11 @@ import (
 
 // NoFileName is the placeholder a pair renders in its file column (-plain
 // output, FileName, the stream tab's File cell) when it carries no file. It
-// is display text only. Data files never store it: the stream CSV export and
-// the Parquet recorder write an empty file for such a row (streamrow
-// Row.FileValue, task pq2), so a non-empty file selects the rows that have a file.
+// is display text only. Data files never store it: the stream CSV export, the
+// Parquet recorder (streamrow Row.FileValue) and the .ior.zst flamegraph record
+// (Pair.FileValue, task pq2) all write an empty file for such a row, so a
+// non-empty file selects the rows that have a file. Only the -plain stdout CSV
+// (appendCSVFile) prints the placeholder, since it is a display stream.
 // The global filter's file dimension likewise sees such a pair, and the
 // stream row built from it, as the empty value (globalfilter
 // pairCandidate.FileValue, streamrow Row.FileValue, which keys off the row's
@@ -396,10 +398,22 @@ func (e *Pair) Flags() file.Flags {
 }
 
 // FileName returns the associated file's path, or the NoFileName placeholder
-// when the pair carries no file.
+// when the pair carries no file. Use it for display; data files use FileValue.
 func (e *Pair) FileName() string {
 	if e.File == nil {
 		return NoFileName
+	}
+	return e.File.Name()
+}
+
+// FileValue returns the associated file's path, or "" when the pair carries
+// no file. It is the value persisted into data files (the .ior.zst flamegraph
+// record, task pq2): the decision is File == nil, not a comparison of the text
+// with NoFileName, so a real file literally named "N:file" keeps its name
+// (the same rule as streamrow Row.FileValue for the Parquet and CSV exports).
+func (e *Pair) FileValue() string {
+	if e.File == nil {
+		return ""
 	}
 	return e.File.Name()
 }

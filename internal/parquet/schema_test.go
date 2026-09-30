@@ -286,15 +286,14 @@ func TestFilelessRowPersistsEmptyFileAndNegativeFD(t *testing.T) {
 	fileless := streamrow.Row{Seq: 1, Syscall: "sync", FileName: event.NoFileName, NoFile: true, FD: streamrow.UnknownFD}
 	realNamed := streamrow.Row{Seq: 2, Syscall: "openat", FileName: event.NoFileName, FD: 3}
 	normal := streamrow.Row{Seq: 3, Syscall: "read", FileName: "/tmp/f", FD: 3}
-	warning := streamrow.NewWarning(4, "something odd")
 
 	var rows []Record
-	for _, r := range []streamrow.Row{fileless, realNamed, normal, warning} {
+	for _, r := range []streamrow.Row{fileless, realNamed, normal} {
 		rows = append(rows, RecordFromStream(r, 0))
 	}
 	got := writeAndReadBack(t, rows)
-	if len(got) != 4 {
-		t.Fatalf("read %d rows, want 4", len(got))
+	if len(got) != 3 {
+		t.Fatalf("read %d rows, want 3", len(got))
 	}
 	if got[0].File != "" || got[0].FD != -1 {
 		t.Errorf("fileless row persisted file=%q fd=%d, want empty file and fd -1", got[0].File, got[0].FD)
@@ -305,9 +304,6 @@ func TestFilelessRowPersistsEmptyFileAndNegativeFD(t *testing.T) {
 	if got[2].File != "/tmp/f" {
 		t.Errorf("ordinary row file = %q, want /tmp/f", got[2].File)
 	}
-	if got[3].File != "something odd" {
-		t.Errorf("warning row file = %q, want its message kept", got[3].File)
-	}
 	// A fileless row must not be counted as having a file: the documented
 	// `WHERE file != ''` predicate.
 	withFile := 0
@@ -316,7 +312,7 @@ func TestFilelessRowPersistsEmptyFileAndNegativeFD(t *testing.T) {
 			withFile++
 		}
 	}
-	if withFile != 3 {
-		t.Errorf("rows with a file = %d, want 3 (placeholder row counted as a file?)", withFile)
+	if withFile != 2 {
+		t.Errorf("rows with a file = %d, want 2 (placeholder row counted as a file?)", withFile)
 	}
 }

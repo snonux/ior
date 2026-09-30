@@ -45,8 +45,10 @@ new path for rename and link calls, and `old_file` is the source path.
 
 A row whose syscall has no file (for example `sync`) has an empty `file` and
 `fd = -1`. The terminal views and `-plain` show such rows with the placeholder `N:file`, but the
-placeholder is display text only and is never written to a recording (or to the stream CSV
-export of the `e` key, which uses the same empty `file` and `fd = -1`). `WHERE file != ''`
+placeholder is display text only and is never written to a Parquet recording, to the stream CSV
+export of the `e` key (both use an empty `file` and `fd = -1`) or to the `.ior.zst` flamegraph
+record (an empty path, which `ior collapsed -fields path` shows as `[unknown]`). Only the
+`-plain` stdout CSV prints `N:file`, because it is a display stream. `WHERE file != ''`
 therefore selects exactly the rows that have a file, and a file really named `N:file` is stored
 under that name. To count descriptor-carrying rows use `fd >= 0`. Recordings made before
 this change hold `N:file` and `fd = -1` in those rows; filter them with

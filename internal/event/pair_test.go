@@ -404,3 +404,22 @@ func TestPairCSVRowRawWithoutEscaper(t *testing.T) {
 		t.Errorf("file = %q, want raw %q", fields[6], want)
 	}
 }
+
+// TestPairFileValueVersusFileName pins task pq2: FileName is display text
+// (placeholder for a fileless pair), FileValue is what data files store
+// (empty for it), and a real file named like the placeholder keeps its name.
+func TestPairFileValueVersusFileName(t *testing.T) {
+	fileless := &Pair{}
+	if got := fileless.FileName(); got != NoFileName {
+		t.Errorf("fileless FileName() = %q, want %q", got, NoFileName)
+	}
+	if got := fileless.FileValue(); got != "" {
+		t.Errorf("fileless FileValue() = %q, want empty", got)
+	}
+	for _, name := range []string{"/tmp/f", NoFileName} {
+		p := &Pair{File: file.NewFd(3, name, 0)}
+		if p.FileName() != name || p.FileValue() != name {
+			t.Errorf("file %q: FileName()=%q FileValue()=%q, want both the real name", name, p.FileName(), p.FileValue())
+		}
+	}
+}

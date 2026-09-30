@@ -302,9 +302,13 @@ func (lt *LiveTrie) SnapshotTree() (*SnapshotNode, uint64) {
 	return tree, version
 }
 
+// eventPairToRecord converts a pair into the record the live trie and the
+// recording share. The path is ep.FileValue(): a fileless pair has an empty
+// path, which buildFrames drops (it then contributes only to the trie's
+// total, like any empty name) rather than growing an "N:file" frame (task pq2).
 func eventPairToRecord(ep *event.Pair) IterRecord {
 	return IterRecord{
-		Path:    ep.FileName(),
+		Path:    ep.FileValue(),
 		TraceID: ep.EnterEv.GetTraceId(),
 		Comm:    strings.TrimSpace(ep.Comm),
 		Pid:     ep.EnterEv.GetPid(),

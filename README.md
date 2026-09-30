@@ -101,7 +101,9 @@ The TUI keeps its statistics in memory until you export or start a recording.
 `-tuiExport=false` disables CSV export shortcuts; it does not disable `R` recording. The
 plain CSV schema is deliberately small:
 `durationToPrevNs,durationNs,comm,pid.tid,name,ret,file`. Use TUI CSV export or Parquet for
-timestamps, byte counts and other per-event fields.
+timestamps, byte counts and other per-event fields. A row without a file shows the display
+placeholder `N:file` in the `file` column of `-plain` output; TUI CSV export, Parquet and the
+`.ior.zst` record store an empty file for it instead.
 
 Files are written to a temporary `ior-<random>.tmp` file and renamed into place when
 complete. Names ior generates itself (`ior-stream-<timestamp>.csv`,

@@ -29,8 +29,8 @@ import (
 //
 // No-file and no-descriptor conventions (task pq2): File is empty when the
 // syscall has no file. The "N:file" placeholder of the terminal views is
-// display text and is never persisted, so `file != ”` selects exactly the rows
-// with a file and a real file literally named "N:file" keeps that name. FD is
+// display text and is never persisted, so a non-empty `file` selects exactly the
+// rows with a file and a real file literally named "N:file" keeps that name. FD is
 // -1 (streamrow.UnknownFD) when the syscall has no descriptor, not 0: 0 is a
 // real descriptor (stdin), so a zero would make "none" indistinguishable from it.
 type Record struct {

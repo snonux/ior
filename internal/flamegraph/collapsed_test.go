@@ -475,3 +475,47 @@ func TestWriteCollapsedStacksStillSkipsZeroWeight(t *testing.T) {
 		t.Fatalf("zero-weight record was written:\n%s", out.String())
 	}
 }
+
+// filelessPair is collapsedTestPair without a file: pair.File stays nil, the
+// state of syscalls such as sync(2) in production.
+func filelessPair(seq uint64, comm string, enterID, exitID types.TraceId, pid uint32) *event.Pair {
+	pair := collapsedTestPair(seq, comm, "", enterID, exitID, pid)
+	pair.File = nil
+	return pair
+}
+
+// TestRecordingPersistsEmptyPathForFilelessPair pins task pq2 for the
+// .ior.zst record: a pair without a file is stored with an empty path, so
+// `ior collapsed -fields path` counts it under "[unknown]" (task vq2) instead
+// of printing the "N:file" display placeholder as if it were a file, while a
+// real file literally named "N:file" keeps its name. The pairs go through the
+// production recorder, the encoder and the decoder.
+func TestRecordingPersistsEmptyPathForFilelessPair(t *testing.T) {
+	recording := writeTestRecording(t, "fileless",
+		filelessPair(1, "sync", types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC, 100),
+		collapsedTestPair(2, "api", event.NoFileName, types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 200),
+	)
+
+	records, err := LoadFromFile(recording)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	paths := map[string]string{}
+	for rec := range records {
+		paths[rec.Comm] = rec.Path
+	}
+	if got, ok := paths["sync"]; !ok || got != "" {
+		t.Errorf("fileless record path = %q (present %v), want empty", got, ok)
+	}
+	if got := paths["api"]; got != event.NoFileName {
+		t.Errorf("record of a real file named %q has path %q, want its real name", event.NoFileName, got)
+	}
+
+	var out bytes.Buffer
+	if err := WriteCollapsedStacks(&out, recording, CollapsedOptions{Fields: []string{"path"}}); err != nil {
+		t.Fatalf("WriteCollapsedStacks: %v", err)
+	}
+	if want := "N:file 1\n[unknown] 1\n"; out.String() != want {
+		t.Fatalf("collapsed -fields path =\n%q\nwant\n%q", out.String(), want)
+	}
+}

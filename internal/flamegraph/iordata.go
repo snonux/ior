@@ -86,9 +86,14 @@ func LoadFromFile(filename string) (iter.Seq[IterRecord], error) {
 	return iod.iter(), nil
 }
 
+// addEventPair aggregates ev into the record. The path is ev.FileValue(), not
+// FileName(): a pair without a file persists an empty path (shown as the
+// "[unknown]" frame by `ior collapsed -fields path`) instead of the "N:file"
+// display placeholder, which would read as a real file; a real file named
+// "N:file" keeps that name (task pq2).
 func (iod *iorData) addEventPair(ev *event.Pair) {
 	cnt := Counter{Count: 1, Duration: ev.Duration, DurationToPrev: ev.DurationToPrev, Bytes: ev.Bytes}
-	iod.add(ev.FileName(), ev.EnterEv.GetTraceId(), strings.TrimSpace(ev.Comm), ev.EnterEv.GetPid(),
+	iod.add(ev.FileValue(), ev.EnterEv.GetTraceId(), strings.TrimSpace(ev.Comm), ev.EnterEv.GetPid(),
 		ev.EnterEv.GetTid(), ev.Flags(), cnt)
 }
 
