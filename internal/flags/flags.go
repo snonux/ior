@@ -164,6 +164,23 @@ func (f Config) Clone() Config {
 	return out
 }
 
+// LibbpfDebugEnv is the environment variable that re-enables libbpf's INFO and
+// DEBUG output for the headless modes (internal.libbpfDebugEnv reads it). It is
+// not a flag, so the usage epilogue is where -h users can discover it.
+const LibbpfDebugEnv = "IOR_LIBBPF_DEBUG"
+
+// setUsage makes -h/-help print the flag defaults followed by the environment
+// variables ior reads, which the flag package cannot list by itself.
+func setUsage(fs *flag.FlagSet) {
+	fs.Usage = func() {
+		// Best effort like the flag package's own default usage: a closed
+		// stderr must not turn -h into a failure.
+		_, _ = fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fs.PrintDefaults()
+		_, _ = fmt.Fprintf(fs.Output(), "\nEnvironment:\n  %s=1\n    \tPrint libbpf's INFO and DEBUG output (about 23k lines on every start) to stderr in the\n    \theadless modes; by default only libbpf warnings are shown. 0, false, no and off keep it\n    \toff. Ignored by the TUI, whose screen owns stderr.\n", LibbpfDebugEnv)
+	}
+}
+
 // Parse parses CLI flags from os.Args and returns the resulting Config.
 // It uses the global flag.CommandLine set, so it must be called once at
 // program startup before any other flag parsing occurs.
@@ -187,6 +204,7 @@ func ParseArgs(args []string) (Config, error) {
 func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	cfg := NewFlags()
 	tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dims := registerFlags(fs, &cfg)
+	setUsage(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err

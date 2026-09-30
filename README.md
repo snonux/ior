@@ -135,6 +135,21 @@ still show raw bytes. Use `-escape=always` for such pipelines, or `-escape=never
 raw bytes on a terminal. Both `-plain` and `ior collapsed` accept the flag, and any other
 value is an error.
 
+## Troubleshooting
+
+libbpf's own diagnostics are reduced to its warnings: in `-plain`, `-flamegraph` and
+`-parquet` runs they go to stderr (a failed BPF load is explained there), in the TUI they
+appear as setup warnings. The thousands of INFO/DEBUG lines libbpf prints while loading are
+dropped by default. To see them in a headless run, for example when a BPF program fails to
+load, set `IOR_LIBBPF_DEBUG=1` (`0`, `false`, `no` and `off` keep it off; the TUI ignores it
+because its screen owns stderr):
+
+```sh
+sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
+```
+
+`./ior -help` lists the variable too.
+
 ## Bytes Classification
 
 Throughput bytes come from positive return values of these syscalls only:

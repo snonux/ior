@@ -1,6 +1,8 @@
 package flags
 
 import (
+	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -642,5 +644,28 @@ func TestEscapeHelpShowsDefaultAndPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(rest, "(default auto)") {
 		t.Errorf("-escape help lacks '(default auto)':\n%s", rest)
+	}
+}
+
+// TestUsageDocumentsTheLibbpfDebugVariable: IOR_LIBBPF_DEBUG is not a flag, so
+// without the usage epilogue nobody running `ior -h` could learn that the
+// libbpf DEBUG output is one variable away. The flag defaults must still be
+// printed ahead of it.
+func TestUsageDocumentsTheLibbpfDebugVariable(t *testing.T) {
+	fs := flag.NewFlagSet("ior", flag.ContinueOnError)
+	var out bytes.Buffer
+	fs.SetOutput(&out)
+
+	if _, err := parseFromFlagSet(fs, []string{"-h"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("-h error = %v, want flag.ErrHelp", err)
+	}
+	help := out.String()
+	for _, want := range []string{"-plain", LibbpfDebugEnv + "=1", "Environment:"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("-h output lacks %q:\n%s", want, help)
+		}
+	}
+	if strings.Index(help, "-plain") > strings.Index(help, "Environment:") {
+		t.Errorf("environment section must follow the flag defaults:\n%s", help)
 	}
 }

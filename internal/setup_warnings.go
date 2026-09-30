@@ -3,6 +3,7 @@ package internal
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // setupWarnings collects non-fatal degradations found while a trace is being
@@ -18,9 +19,13 @@ import (
 // warnings once its output is wired: warning rows in the TUI, stderr in the
 // headless modes (see notifyWarningOrLog).
 //
-// Setup is single-threaded, so the collector needs no locking; the event loop
-// takes ownership of the messages before run starts.
+// The collector is locked because setup is not strictly single-threaded: a TUI
+// restart cancels the old session without waiting for it, so its libbpf
+// warnings (routed here by libbpfLogger from whichever goroutine is inside
+// libbpf) can arrive while the new session's own setup code adds to the same
+// collector. The event loop takes ownership of the messages before run starts.
 type setupWarnings struct {
+	mu       sync.Mutex
 	messages []string
 }
 
@@ -31,12 +36,16 @@ func (w *setupWarnings) add(args ...any) {
 	if message == "" {
 		return
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.messages = append(w.messages, message)
 }
 
 // drain hands over the collected warnings and empties the collector, so a
 // warning is replayed at most once.
 func (w *setupWarnings) drain() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	messages := w.messages
 	w.messages = nil
 	return messages

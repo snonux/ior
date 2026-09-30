@@ -397,7 +397,10 @@ func startTUITrace(
 	}
 	// libbpf's output must never reach stderr while the dashboard owns the
 	// screen; its WARN lines are collected as setup warnings instead (see
-	// libbpfLogger and setupTraceInfraBPF), the rest is dropped.
+	// libbpfLogger and setupTraceInfraBPF), the rest is dropped. This only
+	// selects the mode: the previous session is cancelled without being
+	// awaited, so it may still be loading, and its warning routing is not
+	// this call's to reset.
 	setLibbpfLogging(true)
 	backgroundOwnsCompletion := false
 	defer func() {
@@ -1020,7 +1023,8 @@ func setupTraceInfraBPF(
 	// libbpf's WARN lines explain a failed load or attach. In TUI mode they
 	// join the setup warnings for the duration of the load/attach only (the
 	// collector is drained once, when the event loop starts); headless they
-	// already went to stderr and this is a no-op.
+	// already went to stderr and this is a no-op. The route belongs to this
+	// call: ending it never disturbs a newer session's routing.
 	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
 	defer endLibbpfRouting()
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
