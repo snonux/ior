@@ -30,6 +30,16 @@ const dashboardTabBarRows = 1
 // and in-place filter swaps), so it is part of the contract rather than an
 // optional capability. It mirrors
 // runtime.ResettableSnapshotSource.
+//
+// Concurrency contract: implementations must be goroutine-safe. Snapshot is
+// called from Bubble Tea command goroutines (statstick.go), not from the UI
+// goroutine, so it can run while Reset is called on the UI goroutine (a reset
+// key press, auto-reset or ResetStats during an in-flight build), and two
+// Snapshot calls can overlap (a SnapshotCmd or reset command alongside a
+// periodic refresh; only the refresh path is single-flighted). The real
+// engine qualifies: it hands its scratch buffers out exclusively per call and
+// a Reset during an in-flight Snapshot is documented as harmless (the
+// dashboard's generation check drops such a snapshot anyway).
 type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
 	Reset()
@@ -64,8 +74,10 @@ type Model struct {
 	latest   *statsengine.Snapshot
 	liveTrie coreflamegraph.LiveTrieSource
 	// statsGen is the current stats generation. It starts at 1 so every tick
-	// built by statsTick is versioned, and advances on every stats reset so
-	// handleStatsTick can drop ticks built before the reset.
+	// is versioned (statsTick, statsTickCmd and refreshStatsCmd all build
+	// through buildStatsTick and stamp the generation captured when the
+	// request was made), and advances on every stats reset so handleStatsTick
+	// can drop ticks built before the reset.
 	statsGen uint64
 	// refreshBuilding is set while a periodic refresh command is building a
 	// snapshot off the UI goroutine (refreshStatsCmd). It is a pointer so the

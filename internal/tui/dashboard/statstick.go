@@ -19,6 +19,12 @@ import (
 // before a reset. Snapshot is safe to call off the UI goroutine: the engine
 // captures its state under its own lock and resolves the percentiles outside
 // it (exporters call it from other goroutines as well).
+//
+// Known and accepted: a refresh command and a SnapshotCmd/reset command run on
+// separate goroutines and can deliver out of order within one generation, so
+// an older snapshot may be shown in place of a newer one for at most one
+// refresh interval, until the next refresh replaces it. Only a reset needs
+// strict ordering, and the generation check provides that.
 
 // buildStatsTick asks engine for a snapshot and wraps the outcome as the
 // StatsTickMsg of stats generation gen. Without an engine it carries a nil

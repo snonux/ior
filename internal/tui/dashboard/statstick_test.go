@@ -51,6 +51,12 @@ func (g *gatedSource) Reset() {
 	g.resets++
 }
 
+func (g *gatedSource) resetCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.resets
+}
+
 func (g *gatedSource) callCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -261,5 +267,129 @@ func TestSnapshotCmdAndBaselineResetBuildWhenRun(t *testing.T) {
 	}
 	if tick, ok := reset().(messages.StatsTickMsg); !ok || tick.Generation != m.statsGen {
 		t.Fatalf("expected a tick of the new generation, got %#v", tick)
+	}
+}
+
+// captureCmdCases lists the commands that build a snapshot off the UI
+// goroutine, each created by a function that must capture the engine and the
+// stats generation at creation time (on the UI goroutine) and not read them
+// from the model when the command runs.
+var captureCmdCases = []struct {
+	name string
+	make func(m *Model) tea.Cmd
+}{
+	{"statsTickCmd", func(m *Model) tea.Cmd { return m.statsTickCmd() }},
+	{"SnapshotCmd", func(m *Model) tea.Cmd { return m.SnapshotCmd() }},
+	{"refreshStatsCmd", func(m *Model) tea.Cmd { return m.refreshStatsCmd() }},
+	{"resetBaselineCmd", func(m *Model) tea.Cmd { return m.resetBaselineCmd() }},
+}
+
+// TestStatsCmdsCaptureGenerationAndEngineWhenCreated pins the capture-at-
+// creation contract across a reset: a command made at generation N and run
+// after a reset (generation N+1, and here even after the model's engine was
+// swapped) must still build from the engine it was made with, label its tick
+// with generation N, and have that tick dropped by handleStatsTick. A command
+// that read m.statsGen / m.engine when it ran would label the stale snapshot
+// as current and let it overwrite the post-reset numbers.
+func TestStatsCmdsCaptureGenerationAndEngineWhenCreated(t *testing.T) {
+	for _, tc := range captureCmdCases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldSnap := &statsengine.Snapshot{TotalSyscalls: 99}
+			src := newGatedSource(oldSnap)
+			close(src.release) // builds finish immediately
+			m := NewModelWithConfig(src, nil, 100, 200, common.DefaultKeyMap())
+
+			cmd := tc.make(m)
+			if cmd == nil {
+				t.Fatal("expected a command")
+			}
+			// Read after creation: resetBaselineCmd bumps the generation
+			// itself before it returns the command.
+			madeAt := m.statsGen
+
+			// Reset after the command was made, then point the model at a
+			// different engine: neither may leak into the old command.
+			other := newGatedSource(&statsengine.Snapshot{TotalSyscalls: 1})
+			close(other.release)
+			postReset := &statsengine.Snapshot{TotalSyscalls: 0}
+			src.mu.Lock()
+			src.snap = postReset
+			src.mu.Unlock()
+			m.ResetStats()
+			m.engine = other
+			if m.statsGen == madeAt {
+				t.Fatal("precondition: the reset must advance the generation")
+			}
+			post := m.LatestSnapshot()
+
+			tick, ok := cmd().(messages.StatsTickMsg)
+			if !ok {
+				t.Fatalf("expected a StatsTickMsg, got %#v", tick)
+			}
+			if tick.Generation != madeAt {
+				t.Fatalf("tick labelled generation %d, want the creation-time %d (model is at %d)",
+					tick.Generation, madeAt, m.statsGen)
+			}
+			if other.callCount() != 0 {
+				t.Fatal("the command read the model's engine when it ran instead of the captured one")
+			}
+			m.handleStatsTick(tick)
+			if got := m.LatestSnapshot(); got != post {
+				t.Fatalf("a pre-reset command's tick replaced the post-reset snapshot: %+v", got)
+			}
+		})
+	}
+}
+
+// TestStatsCmdRunningDuringAResetIsDropped is the -race friendly variant: the
+// command runs on its own goroutine, held inside Snapshot, while the UI
+// goroutine resets the stats (writing statsGen and m.engine). The command
+// touches only what it captured, so the race detector stays quiet, and its
+// tick is dropped on arrival.
+func TestStatsCmdRunningDuringAResetIsDropped(t *testing.T) {
+	for _, tc := range captureCmdCases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := newGatedSource(&statsengine.Snapshot{TotalSyscalls: 99})
+			m := NewModelWithConfig(src, nil, 100, 200, common.DefaultKeyMap())
+			m.activeTab = TabOverview
+
+			cmd := tc.make(m)
+			madeAt := m.statsGen
+			result := runAsync(cmd)
+			awaitEntered(t, src)
+
+			// The reset's own post-reset build goes through the same gated
+			// source, so it needs a second release: let both through.
+			postReset := &statsengine.Snapshot{TotalSyscalls: 0}
+			src.mu.Lock()
+			src.snap = postReset
+			src.mu.Unlock()
+			resetsBefore := src.resetCount()
+			go func() {
+				// Release the in-flight build only after the reset has
+				// run, so the two genuinely overlap.
+				awaitResetAfter(src, resetsBefore)
+				close(src.release)
+			}()
+			m.ResetStats()
+			m.engine = nil
+
+			tick := awaitMsg(t, result).(messages.StatsTickMsg)
+			if tick.Generation != madeAt {
+				t.Fatalf("tick labelled generation %d, want %d", tick.Generation, madeAt)
+			}
+			m.handleStatsTick(tick)
+			if got := m.LatestSnapshot(); got != postReset {
+				t.Fatalf("the in-flight pre-reset build replaced the post-reset snapshot: %+v", got)
+			}
+		})
+	}
+}
+
+// awaitResetAfter blocks until src.Reset has been called more than before
+// times.
+func awaitResetAfter(g *gatedSource, before int) {
+	for g.resetCount() <= before {
+		time.Sleep(time.Millisecond)
 	}
 }
