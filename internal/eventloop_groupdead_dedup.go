@@ -12,6 +12,13 @@ const groupDeadDedupWindowNs = 100_000_000
 // worth reclaiming; below it the copy would cost more than the memory saves.
 const groupDeadDedupCompactMin = 64
 
+// groupDeadDedupReleaseCap is the queue capacity (in entries) above which the
+// storage is handed back to the garbage collector once the dedup goes idle.
+// It is far above the population of a normal trace (a few hundred deaths per
+// window), so ordinary operation keeps and reuses its backing array and only a
+// one-off burst pays for a reallocation.
+const groupDeadDedupReleaseCap = 1024
+
 // groupDeadEntry is one counted process death: the pid and the boot-clock
 // time of the record that was counted.
 type groupDeadEntry struct {
@@ -30,6 +37,13 @@ type groupDeadEntry struct {
 // more pids than that threshold within one window nothing was expired, so
 // every later death rescanned the whole map on the event-loop goroutine. Both
 // structures are now bounded by the deaths seen within one window.
+//
+// The bound is on the live entries, not on the storage: a slice never shrinks
+// and neither does a Go map's bucket array, so after a burst of N pids in one
+// window the queue capacity and the map buckets stay at N-sized for as long as
+// deaths keep arriving inside each other's windows. Once the window has drained
+// completely (see release) an oversized queue and the map are dropped, so the
+// memory of a burst is returned as soon as the process-death rate calms down.
 //
 // Records may arrive slightly out of time order (different CPUs), so the queue
 // is only approximately sorted by time. Expiry stops at the first entry still
@@ -78,12 +92,34 @@ func (d *groupDeadDedup) expire(now uint64) {
 		}
 		d.head++
 	}
+	if d.live() == 0 {
+		d.release()
+		return
+	}
 	d.compact()
+}
+
+// release is called when nothing is remembered any more. It rewinds the queue
+// for reuse, and when a burst had grown the queue past groupDeadDedupReleaseCap
+// it drops the queue and the map instead: the map is empty at this point (every
+// map entry has a queue entry carrying the same time, and all of those were
+// popped) but keeps its burst-sized bucket array, which only replacing it can
+// give back. Normal-sized storage is kept so a steady trace never reallocates.
+func (d *groupDeadDedup) release() {
+	if cap(d.queue) > groupDeadDedupReleaseCap {
+		d.queue = nil
+		d.last = nil
+	} else {
+		d.queue = d.queue[:0]
+	}
+	d.head = 0
 }
 
 // compact reclaims the consumed prefix of the queue once it is at least as
 // large as the live part, which keeps the copying amortised O(1) per pop and
-// the backing array proportional to the live entries.
+// keeps the backing array within a constant factor of the largest live
+// population seen since the dedup was last idle (see release), not of the
+// number of deaths seen overall.
 func (d *groupDeadDedup) compact() {
 	if d.head < groupDeadDedupCompactMin || d.head < len(d.queue)-d.head {
 		return

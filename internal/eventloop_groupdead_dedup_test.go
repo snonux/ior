@@ -159,6 +159,92 @@ func TestGroupDeadDedupOutOfOrderArrival(t *testing.T) {
 	}
 }
 
+// TestGroupDeadDedupSteadyStreamCompactsWhileLive drives compact() while live
+// entries remain: at 20us spacing and a 100ms window about 5000 entries are
+// live at any moment and the head keeps overtaking both 64 and the live count,
+// so the queue is repeatedly compacted with a non-empty live part. Duplicate
+// detection must stay exact throughout and storage must not grow with the
+// number of deaths.
+func TestGroupDeadDedupSteadyStreamCompactsWhileLive(t *testing.T) {
+	var d groupDeadDedup
+	const (
+		deaths  = 40_000
+		stepNs  = 20_000
+		maxLive = groupDeadDedupWindowNs/stepNs + 2
+		// Doubling growth plus the compaction hysteresis allow a few times
+		// the live population; growth with the death count would be 8x more.
+		maxCap = 8 * maxLive
+	)
+	base := uint64(defaulTime)
+
+	for i := uint32(0); i < deaths; i++ {
+		now := base + uint64(i)*stepNs
+		if d.seen(i, now) {
+			t.Fatalf("first death of pid %d reported as a duplicate", i)
+		}
+		if d.live() > maxLive || len(d.last) > d.live() {
+			t.Fatalf("at death %d: live = %d (max %d), map = %d", i, d.live(), maxLive, len(d.last))
+		}
+		if cap(d.queue) > maxCap {
+			t.Fatalf("at death %d: queue capacity %d exceeds %d", i, cap(d.queue), maxCap)
+		}
+		// The previous pid and one from mid-window are repeats of counted
+		// deaths and must be recognised, however often the queue was compacted.
+		if i >= 3000 && !d.seen(i-3000, now) {
+			t.Fatalf("at death %d: repeat of pid %d (60ms earlier) counted as a new death", i, i-3000)
+		}
+		if i > 0 && !d.seen(i-1, now) {
+			t.Fatalf("at death %d: repeat of pid %d counted as a new death", i, i-1)
+		}
+	}
+	// A pid from long ago has expired and is a new death (recycled pid).
+	if d.seen(0, base+deaths*stepNs) {
+		t.Fatal("pid 0, expired long ago, reported as a duplicate")
+	}
+}
+
+// TestGroupDeadDedupReleasesBurstStorageWhenIdle asserts that the memory of a
+// burst is handed back once the window drains, and that ordinary small
+// populations keep their storage.
+func TestGroupDeadDedupReleasesBurstStorageWhenIdle(t *testing.T) {
+	var d groupDeadDedup
+	base := uint64(defaulTime)
+	const burst = 10_000
+	for i := uint32(0); i < burst; i++ {
+		d.seen(i, base+uint64(i)*1_000)
+	}
+	if cap(d.queue) < burst {
+		t.Fatalf("precondition: queue capacity %d smaller than the burst", cap(d.queue))
+	}
+
+	// Still inside the window: nothing may be released.
+	d.expire(base + burst*1_000)
+	if d.live() != burst || d.last == nil {
+		t.Fatalf("live = %d, map nil = %v inside the window, want everything kept", d.live(), d.last == nil)
+	}
+
+	// After the window the queue and the map are dropped, not just emptied.
+	d.expire(base + burst*1_000 + 2*groupDeadDedupWindowNs)
+	if d.live() != 0 || d.queue != nil || d.last != nil {
+		t.Fatalf("after drain: live = %d, queue nil = %v, map nil = %v, want released", d.live(), d.queue == nil, d.last == nil)
+	}
+	// The zero-value state keeps working, including duplicate detection.
+	late := base + 10*groupDeadDedupWindowNs
+	if d.seen(5, late) || !d.seen(5, late+1) {
+		t.Fatal("dedup misbehaves after release")
+	}
+
+	// Negative: a small population is kept for reuse rather than reallocated.
+	var small groupDeadDedup
+	for i := uint32(0); i < 10; i++ {
+		small.seen(i, base)
+	}
+	small.expire(base + 2*groupDeadDedupWindowNs)
+	if small.live() != 0 || cap(small.queue) == 0 || small.last == nil {
+		t.Fatalf("small population: cap = %d, map nil = %v, want storage kept", cap(small.queue), small.last == nil)
+	}
+}
+
 // BenchmarkGroupDeadDedupBurst measures seen() at a steady 50k deaths/s of
 // distinct pids, i.e. ~5000 live entries in the window. With O(1) amortised
 // expiry the cost per call is independent of that population; a full-map scan
