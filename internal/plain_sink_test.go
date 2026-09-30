@@ -203,25 +203,34 @@ func sendOpenPair(t *testing.T, rawCh chan<- []byte, at uint64) {
 
 // TestEventLoopFlushesBufferedRowsWhileRunning: a lone row must reach the
 // writer within the flush interval even though the loop is still running and
-// idle (the `tail -f` case), not only at shutdown.
+// idle (the `tail -f` case), not only at shutdown. Three bursts follow each
+// other, each sent only after the previous one was flushed, so every one needs
+// the timer to be re-armed after firing: if flushTimer.fire left `armed` set,
+// C() would stay nil and only the first burst would ever appear before
+// shutdown.
 func TestEventLoopFlushesBufferedRowsWhileRunning(t *testing.T) {
 	w := &recordingWriter{}
 	rawCh, _, stop := runPlainLoop(t, w)
 	defer stop()
 
-	sendOpenPair(t, rawCh, defaulTime)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if n, out := w.snapshot(); n > 0 {
-			if !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
-				t.Fatalf("flushed %q, want exactly one complete row", out)
+	const bursts = 3
+	for i := 1; i <= bursts; i++ {
+		sendOpenPair(t, rawCh, defaulTime+uint64(i)*1000)
+		// Generous deadline: the assertion is that the timer delivers the row,
+		// not how fast, so a stalled host cannot make this flaky.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, out := w.snapshot(); strings.Count(out, "\n") >= i {
+				if !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != i {
+					t.Fatalf("burst %d: flushed %q, want exactly %d complete rows", i, out, i)
+				}
+				break
 			}
-			return
+			if time.Now().After(deadline) {
+				t.Fatalf("burst %d was not flushed while the loop was idle (timer not re-armed after firing?)", i)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("buffered row was not flushed while the loop was idle")
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -395,7 +404,8 @@ func readPipeFor(t *testing.T, r *os.File, d time.Duration) string {
 // TestPlainRunTimerFlushThroughTraceWiring is the end-to-end -plain check the
 // hand-wired loop tests missed: through runTraceLoop and
 // configureEventLoopOutput (the active-probe wrapper) a lone row, far below
-// plainFlushBytes, must show up on a real pipe while the loop keeps running.
+// plainFlushBytes, must show up on a real pipe while the loop keeps running,
+// and so must each later burst.
 // Only the timer can put it there, so the wait has a generous deadline: the
 // assertion is that it arrives, not how fast, which a stalled host could
 // otherwise turn into a flaky failure. That the timer (and not the row)
@@ -411,18 +421,22 @@ func TestPlainRunTimerFlushThroughTraceWiring(t *testing.T) {
 	stop := runTraceLoopAsync(t, infra)
 	defer stop()
 
-	sendOpenPair(t, rawCh, defaulTime)
-
-	deadline := time.Now().Add(10 * time.Second)
+	// Three bursts, each sent after the previous one arrived: every one needs
+	// the timer re-armed after it fired (the `tail -f` case), not just the
+	// first.
 	var got string
-	for !strings.Contains(got, ",openat,") {
-		if time.Now().After(deadline) {
-			t.Fatalf("buffered row never reached the pipe (got %q): the flush timer is not active behind runTraceLoop", got)
+	for i := 1; i <= 3; i++ {
+		sendOpenPair(t, rawCh, defaulTime+uint64(i)*1000)
+		deadline := time.Now().Add(10 * time.Second)
+		for strings.Count(got, ",openat,") < i {
+			if time.Now().After(deadline) {
+				t.Fatalf("burst %d never reached the pipe (got %q): the flush timer is not active behind runTraceLoop or was not re-armed after firing", i, got)
+			}
+			got += readPipeFor(t, pipeR, 100*time.Millisecond)
 		}
-		got += readPipeFor(t, pipeR, 100*time.Millisecond)
 	}
-	if rows := strings.Count(got, ",openat,"); rows != 1 {
-		t.Fatalf("got %q, want exactly the one openat row", got)
+	if rows := strings.Count(got, ",openat,"); rows != 3 {
+		t.Fatalf("got %q, want exactly the three openat rows", got)
 	}
 }
 
