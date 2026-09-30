@@ -526,8 +526,11 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	// leave every later descriptor that lands on it (opened by an untraced
 	// syscall such as pipe(2)) nameless with O_NONE for as long as the entry
 	// lives, although procfs answers correctly by then. Re-reading costs one
-	// failing readlink(2) per event on a number that is not open, which is
-	// cheap next to a permanently wrong row.
+	// failing readlink(2) (~4.5 us) per event on a number that procfs cannot
+	// answer, which is cheap next to a permanently wrong row. The hottest such
+	// stream, syscalls answering EBADF, never gets here: exit handlers go
+	// through resolveOnExit, which skips procfs for it (see
+	// eventloop_procfs_ebadf.go).
 	if discovered.Name() != "" {
 		t.setProcFdCache(fd, pid, discovered)
 	}

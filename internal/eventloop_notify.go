@@ -16,7 +16,7 @@ func (e *eventLoop) handleFdPathExit(ep *event.Pair, ev *types.FdPathEvent) bool
 		e.recyclePair(ep, "Dropped malformed notification exit event")
 		return false
 	}
-	group := e.fdState().resolve(ev.Fd, ev.Pid)
+	group := e.resolveOnExit(ep, ev.Fd, ev.Pid)
 	pathname := types.StringValue(ev.Pathname[:])
 	if ev.TraceId == types.SYS_ENTER_FANOTIFY_MARK {
 		if ev.Flags&unix.FAN_MARK_FLUSH != 0 {

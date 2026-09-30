@@ -44,7 +44,7 @@ func (e *eventLoop) handleIoUringExit(ep *event.Pair, ev *types.FcntlEvent) bool
 	if ioUringFdIsRegisteredIndex(ev) {
 		ep.File = file.NewRegisteredRing(int32(ev.Fd))
 	} else {
-		ep.File = e.fdState().resolve(int32(ev.Fd), ev.Pid)
+		ep.File = e.resolveOnExit(ep, int32(ev.Fd), ev.Pid)
 	}
 	return e.finishPair(ep)
 }

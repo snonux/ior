@@ -1232,10 +1232,25 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
 - **Procfs cache hygiene (task ir2)**: `fdTracker.resolve` caches only a *successful*
   procfs lookup (non-empty name). A failed readlink is returned for that row but
   never stored, so a number that later names a descriptor created by an untraced
-  syscall (pipe/socketpair) is re-read instead of staying nameless with O_NONE;
-  and any fd syscall that exits with EBADF evicts that number's procfs-cache
-  entry (`dropProcfsCacheOnEBADF`), but not the fd-table entry, which traced
-  syscalls own and a reordered exit must not erase.
+  syscall (pipe/socketpair) is re-read instead of staying nameless with O_NONE.
+  The price is one failing readlink (~3-4.5 us, 7 allocs) per event on a number
+  procfs cannot answer, so EBADF, the hot shape of that (close loops, the
+  `fcntl(F_GETFD)` closefrom sweep over ~1000 numbers), never reaches procfs:
+  every fd-resolving exit handler (read/write family, fcntl/ioctl, dup3, mmap,
+  two-fd, epoll_ctl, poll, accept, inotify/fanotify, io_uring) calls
+  `eventLoop.resolveOnExit`, which on an EBADF exit evicts the procfs-cache
+  entry and uses the fd-table entry if present, else an unnamed file with
+  unknown flags, with no procfs read (`TestEveryFdResolveGoesThroughTheEBADFHelper`
+  fails on a new direct `fdState().resolve(` call). The fd table itself is left
+  alone on EBADF: traced syscalls own it and a reordered exit must not erase a
+  correct name. Known gaps: an fd-table entry whose close event was lost stays
+  stale after EBADF; a two-descriptor syscall (epoll_ctl, dup3's new fd) can
+  answer EBADF for the *other* number, so its row may lack the name of a valid
+  fd that has no table entry (the next non-EBADF event resolves it);
+  dirfd-relative path resolution (`resolveDirfdPath`) has no exit record and is
+  not shortened; and successful events of an already-exited pid or an fd closed
+  before the event was processed still cost one failing readlink each (no
+  per-pid "dead" marker: a failing readlink cannot tell dead pid from closed fd).
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
