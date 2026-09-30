@@ -72,14 +72,52 @@ var invisibleFormatCases = []struct{ name, in, want string }{
 	{"ZWJ after invalid byte", "\xff\u200dx", "??x"},
 	{"trailing ZWJ after emoji", "\U0001F600\u200d", "\U0001F600?"},
 	{"ZWJ between emoji and letter", "\U0001F600\u200dx", "\U0001F600?x"},
-	{"ZWJ before VS16", "\U0001F600\u200d\ufe0f", "\U0001F600?\ufe0f"},
+	{"ZWJ before VS16", "\U0001F600\u200d\ufe0f", "\U0001F600??"},
 	{"ZWJ before invalid byte", "\U0001F600\u200d\xff", "\U0001F600??"},
 	{"fire heart kept", "\u2764\ufe0f\u200d\U0001F525", "\u2764\ufe0f\u200d\U0001F525"},
 	{"England flag degrades", englandFlag, "\U0001F3F4??????"},
 	{"mixed with controls", "\x1b\u202e\n", "?? "},
 	{"clean emoji kept", cleanEmoji, cleanEmoji},
-	{"ZWNJ kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+	{"ZWNJ between Arabic letters kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+	{"ZWNJ after Devanagari virama kept", "\u0915\u094d\u200c\u0937", "\u0915\u094d\u200c\u0937"},
+	{"ZWNJ in Latin name", "pass\u200cwd", "pass?wd"},
+	{"ZWNJ at start and end", "\u200cab\u200c", "?ab?"},
+	{"ZWNJ next to space", "\u0645 \u200c\u06cc", "\u0645 ?\u06cc"},
+	{"ZWNJ between emoji", "\U0001F600\u200c\U0001F600", "\U0001F600?\U0001F600"},
+	{"ZWNJ between Arabic and Latin", "\u0645\u200cx", "\u0645?x"},
+	{"ZWNJ between Arabic and Devanagari", "\u0645\u200c\u0915", "\u0645?\u0915"},
+	{"VS15 after letter", "pass\ufe0ewd", "pass?wd"},
+	{"VS16 after letter", "pass\ufe0fwd", "pass?wd"},
+	{"VS16 after digit without keycap", "1\ufe0f2", "1?2"},
+	{"VS16 at start", "\ufe0fabc", "?abc"},
+	{"VS16 after space", "a \ufe0fb", "a ?b"},
+	{"VS16 after VS16", "\u2764\ufe0f\ufe0f", "\u2764\ufe0f?"},
+	{"VS16 after CJK", "\u65e5\ufe0f", "\u65e5?"},
+	{"VS15 after emoji kept", "\u2603\ufe0e", "\u2603\ufe0e"},
+	{"VS16 after skin tone emoji kept", "\U0001F44D\U0001F3FD\ufe0f", "\U0001F44D\U0001F3FD\ufe0f"},
+	{"keycap base with letter before VS16", "a\ufe0f\u20e3", "a?\u20e3"},
+	{"ZWJ after letter plus VS16", "a\ufe0f\u200d\U0001F525", "a??\U0001F525"},
+	{"ZWJ after VS16 after VS16", "\u2764\ufe0f\ufe0f\u200d\U0001F525", "\u2764\ufe0f??\U0001F525"},
 	{"boundary neighbours kept", boundaryNeighbours, boundaryNeighbours},
+}
+
+// keycapCases are kept out of invisibleFormatCases: the keycap clusters are
+// valid and stay untouched, but the width helpers still undercount them
+// (task vp2), which TestSanitizeFormatWidthIsExact would trip over.
+var keycapCases = []struct{ name, in, want string }{
+	{"keycap kept", "1\ufe0f\u20e3 #\ufe0f\u20e3 *\ufe0e\u20e3", "1\ufe0f\u20e3 #\ufe0f\u20e3 *\ufe0e\u20e3"},
+	{"ZWJ after keycap", "1\ufe0f\u20e3\u200d\U0001F525", "1\ufe0f\u20e3?\U0001F525"},
+	{"keycap after stray VS16", "\ufe0f1\ufe0f\u20e3", "?1\ufe0f\u20e3"},
+}
+
+// TestSanitizeKeepsKeycaps checks "digit + VS16 + U+20E3" survives while a
+// selector that does not belong to a keycap is still replaced.
+func TestSanitizeKeepsKeycaps(t *testing.T) {
+	for _, tt := range keycapCases {
+		if got := Sanitize(tt.in); got != tt.want {
+			t.Errorf("%s: Sanitize(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
 }
 
 // assertTerminalSafe fails when s contains any byte or rune a terminal could

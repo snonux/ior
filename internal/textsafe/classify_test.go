@@ -22,8 +22,8 @@ func TestInvisibleFormatMatchesClasses(t *testing.T) {
 	}
 }
 
-// TestClassAt covers each class, including the context-dependent ZWJ and
-// the size reported for invalid bytes and multi-byte runes.
+// TestClassAt covers each class, including the context-dependent ZWJ, ZWNJ
+// and variation selectors and the size reported for invalid bytes and multi-byte runes.
 func TestClassAt(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -45,7 +45,17 @@ func TestClassAt(t *testing.T) {
 		{"RLO", "\u202e", 0, Unsafe, 3},
 		{"tag rune", "\U000E0041", 0, Unsafe, 4},
 		{"CJK", "日", 0, Safe, 3},
-		{"ZWNJ", "\u200c", 0, Safe, 3},
+		{"ZWNJ alone", "\u200c", 0, Unsafe, 3},
+		{"ZWNJ between Persian letters", "\u0645\u200c\u06cc", 2, Safe, 3},
+		{"ZWNJ between Latin letters", "a\u200cb", 1, Unsafe, 3},
+		{"VS16 alone", "\ufe0f", 0, Unsafe, 3},
+		{"VS16 after letter", "a\ufe0f", 1, Unsafe, 3},
+		{"VS16 after heart", "\u2764\ufe0f", 3, Safe, 3},
+		{"VS15 after letter", "a\ufe0e", 1, Unsafe, 3},
+		{"VS16 in keycap", "1\ufe0f\u20e3", 1, Safe, 3},
+		{"VS16 after digit without keycap", "1\ufe0f", 1, Unsafe, 3},
+		{"ZWJ after letter plus VS16", "a\ufe0f\u200d\U0001F600", 4, Unsafe, 3},
+		{"ZWJ after heart plus VS16", "\u2764\ufe0f\u200d\U0001F525", 6, Safe, 3},
 		{"ZWJ in emoji sequence", "\U0001F468\u200d\U0001F469", 4, Safe, 3},
 		{"ZWJ between letters", "a\u200db", 1, Unsafe, 3},
 		{"literal U+FFFD is text", "\ufffd", 0, Safe, 3},
@@ -80,6 +90,42 @@ func TestFirstUnsafe(t *testing.T) {
 	for _, tt := range tests {
 		if got := FirstUnsafe(tt.s, tt.keepLF); got != tt.want {
 			t.Errorf("FirstUnsafe(%q, %v) = %d, want %d", tt.s, tt.keepLF, got, tt.want)
+		}
+	}
+}
+
+// TestContextualRunesDoNotLookLikePlainText is the lookalike regression
+// (task 1q2): inserting an invisible joiner or selector between ASCII
+// letters must never survive, whichever of the three context-dependent
+// runes is used, so "pass<rune>wd" cannot pose as "passwd".
+func TestContextualRunesDoNotLookLikePlainText(t *testing.T) {
+	for _, r := range []rune{zeroWidthJoiner, zeroWidthNonJoiner, textPresentation, emojiPresentation} {
+		s := "pass" + string(r) + "wd"
+		if i := FirstUnsafe(s, false); i != 4 {
+			t.Errorf("FirstUnsafe(%q) = %d, want 4 (the %U)", s, i, r)
+		}
+		want := `pass\u` + map[rune]string{
+			zeroWidthJoiner: "200d", zeroWidthNonJoiner: "200c",
+			textPresentation: "fe0e", emojiPresentation: "fe0f",
+		}[r] + "wd"
+		if got := Escape(s); got != want {
+			t.Errorf("Escape(%q) = %q, want %q", s, got, want)
+		}
+	}
+}
+
+// TestContextRulesAreStableUnderEscape checks the rune that vouches for a
+// contextual rune (emoji base, keycap base, letter) is itself never
+// rewritten, so escaping a string once decides everything and a second pass
+// changes nothing, including for text where several contextual runes touch.
+func TestContextRulesAreStableUnderEscape(t *testing.T) {
+	for _, s := range []string{
+		"\u2764\ufe0f\u200d\U0001F525", "a\ufe0f\u200d\u2764\ufe0f", "1\ufe0f\u20e3\ufe0e",
+		"\u0645\u200c\u200c\u06cc", "\u0915\u094d\u200c\u200c\u0937", "\ufe0f\ufe0f\u200c\u200d",
+	} {
+		once := Escape(s)
+		if twice := Escape(once); twice != once {
+			t.Errorf("Escape(%q) = %q, but escaping again gives %q", s, once, twice)
 		}
 	}
 }

@@ -13,8 +13,8 @@ const (
 	// ControlPlaceholder replaces non-whitespace control runes (ESC, BEL,
 	// DEL, C1 U+0080..U+009F, ...), invisible format runes (bidi controls,
 	// zero-width and default-ignorable runes, see
-	// textsafe.IsInvisibleFormat), a ZWJ
-	// outside an emoji sequence and every byte of invalid UTF-8. '?' is used
+	// textsafe.IsInvisibleFormat), a ZWJ, ZWNJ or variation selector
+	// outside the context where it is visible and every byte of invalid UTF-8. '?' is used
 	// rather than U+FFFD or a Control Pictures glyph such as U+241B, because
 	// those are East-Asian-ambiguous or font-dependent and could render two
 	// cells wide, breaking column alignment.
@@ -45,10 +45,14 @@ const (
 // and zero-width or blank-rendering runes can hide text, smuggle data or
 // make two different paths look identical. Replacing them with a visible
 // one-cell placeholder both exposes the trick and keeps the measured width
-// equal to the rendered width. U+200D ZWJ is kept only where it glues two
-// emoji together. Printable non-ASCII text (CJK, emoji incl. ZWJ sequences,
-// U+FE0E/U+FE0F and skin-tone modifiers, combining marks) is kept
-// unchanged.
+// equal to the rendered width. Three invisible runes are context-dependent
+// and kept only where they do something visible: U+200D ZWJ where it glues
+// two emoji together, U+FE0E/U+FE0F directly after an emoji (or after a
+// keycap base that is followed by U+20E3) and U+200C ZWNJ between two letters
+// of an Arabic, Indic or similar script (textsafe.ClassAt has the rules).
+// "pass\u200cwd" and "pass\ufe0fwd" therefore render as "pass?wd", not as
+// "passwd". Printable non-ASCII text (CJK, emoji incl. ZWJ sequences,
+// skin-tone modifiers, combining marks) is kept unchanged.
 //
 // Sanitize runs per cell per frame, so a clean string is returned as is
 // without allocating; printable ASCII is checked byte-wise without decoding.

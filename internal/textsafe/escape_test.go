@@ -13,7 +13,7 @@ import (
 const osc8Payload = "\x1b]8;;http://evil\aclick\x1b]8;;\a"
 
 // TestEscape checks the notation for every unsafe class and that safe text
-// (ASCII, CJK, emoji ZWJ sequences, ZWNJ, backslashes) is kept verbatim.
+// (ASCII, CJK, emoji ZWJ sequences, contextual ZWNJ and variation selectors, backslashes) is kept verbatim.
 func TestEscape(t *testing.T) {
 	tests := []struct{ name, in, want string }{
 		{"OSC 8 link", osc8Payload, `\x1b]8;;http://evil\x07click\x1b]8;;\x07`},
@@ -28,7 +28,12 @@ func TestEscape(t *testing.T) {
 		{"tag rune", "a\U000E0041b", `a\U000e0041b`},
 		{"line separator", "a\u2028b", `a\u2028b`},
 		{"emoji ZWJ sequence kept", "\U0001F468\u200d\U0001F469", "\U0001F468\u200d\U0001F469"},
-		{"ZWNJ kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+		{"ZWNJ between Persian letters kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+		{"stray ZWNJ", "pass\u200cwd", `pass\u200cwd`},
+		{"stray VS16", "pass\ufe0fwd", `pass\ufe0fwd`},
+		{"stray VS15", "pass\ufe0ewd", `pass\ufe0ewd`},
+		{"VS16 after emoji kept", "\u2764\ufe0f", "\u2764\ufe0f"},
+		{"keycap kept", "1\ufe0f\u20e3", "1\ufe0f\u20e3"},
 		{"CJK kept", "日本語/ファイル-é", "日本語/ファイル-é"},
 		{"backslash kept", `C:\dir\x`, `C:\dir\x`},
 		{"empty", "", ""},
