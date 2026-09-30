@@ -415,6 +415,50 @@ func TestWriteCollapsedStacksKeepsRecordsWithEmptyFields(t *testing.T) {
 	}
 }
 
+// TestWriteCollapsedStacksPlaceholderCollisionMerges pins the documented
+// (benign) collision: a comm or relative path name literally "[unknown]" gets
+// the same first frame as the placeholder, so their weights add up on one
+// line instead of forging or hiding anything.
+func TestWriteCollapsedStacksPlaceholderCollisionMerges(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []string
+		pairs  []*event.Pair
+		want   string
+	}{
+		{
+			name:   "comm named like the placeholder",
+			fields: []string{"comm"},
+			pairs: []*event.Pair{
+				collapsedTestPair(1, "[unknown]", "/a", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+				collapsedTestPair(2, "", "/a", types.SYS_ENTER_READ, types.SYS_EXIT_READ, 200),
+			},
+			want: "[unknown] 2\n",
+		},
+		{
+			name:   "relative path named like the placeholder",
+			fields: []string{"path"},
+			pairs: []*event.Pair{
+				collapsedTestPair(1, "api", "[unknown]", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+				collapsedTestPair(2, "api", "", types.SYS_ENTER_READ, types.SYS_EXIT_READ, 200),
+			},
+			want: "[unknown] 2\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recording := writeTestRecording(t, "collision", tc.pairs...)
+			var out bytes.Buffer
+			if err := WriteCollapsedStacks(&out, recording, CollapsedOptions{Fields: tc.fields}); err != nil {
+				t.Fatalf("WriteCollapsedStacks() error = %v", err)
+			}
+			if out.String() != tc.want {
+				t.Fatalf("output =\n%q\nwant\n%q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
 // TestWriteCollapsedStacksStillSkipsZeroWeight keeps the other half of the
 // contract: a record with a zero sample weight is omitted even when its
 // frames are empty, since it would render zero-width anyway.

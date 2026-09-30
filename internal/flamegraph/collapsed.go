@@ -110,9 +110,12 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 // collapsedEmptyFrame is the frame a record with a positive weight gets when
 // none of the selected fields yields a frame (see WriteCollapsedStacks). It is
 // free of ';', whitespace and line breaks, so it is structurally inert like
-// every other frame. Real paths always start with '/', so only a comm
-// literally named "[unknown]" can share its line, which merely adds up two
-// weights and cannot forge a stack.
+// every other frame. It is not collision-free: a comm, or a relative path
+// component (appendPathFrames does not require a leading '/'), that equals
+// "[unknown]" yields the same first frame and merges into the placeholder's
+// line, which merely adds up the weights and cannot forge a stack. A
+// collision-free placeholder is impossible in the collapsed text format,
+// because a ';' inside a frame would be split by flamegraph.pl.
 const collapsedEmptyFrame = "[unknown]"
 
 // encodeCollapsedFrame rewrites the characters of one frame that are

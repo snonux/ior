@@ -22,6 +22,10 @@ import (
 //
 //	ior collapsed trace.ior.zst | flamegraph.pl > trace.svg
 //
+// Records whose selected fields are all empty are counted under an
+// "[unknown]" frame so the totals match the event count; zero-weight records
+// are omitted.
+//
 // With the default -escape=auto the frames are escaped with textsafe.Escape
 // (control and invisible runes shown as \x1b, \u202e, ...) when w is a
 // terminal, and piped or redirected output keeps the raw bytes;
@@ -34,7 +38,8 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 	fs := flag.NewFlagSet("collapsed", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fields := fs.String("fields", strings.Join(collapse.DefaultFields(), ","),
-		"comma-separated frame fields in stack order (one of: "+strings.Join(collapse.ValidFields(), ",")+")")
+		"comma-separated frame fields in stack order (one of: "+strings.Join(collapse.ValidFields(), ",")+
+			"); records whose selected fields are all empty are counted under [unknown] so totals match the event count; zero-weight records are omitted")
 	count := fs.String("count", collapse.DefaultCountField(),
 		"counter metric used as the sample weight (one of: "+strings.Join(collapse.ValidCountFields(), ",")+")")
 	escapeMode := textsafe.EscapeAuto

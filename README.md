@@ -119,6 +119,9 @@ replaced. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper`
 
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
+Records whose selected `-fields` are all empty (for example an empty file name with
+`-fields path`) are counted under a `[unknown]` frame so the totals match the event count;
+zero-weight records are omitted.
 
 A recording stores tracepoint names (`enter_openat`), not the build-specific numeric IDs, so
 it stays readable across ior releases and is translated to the reading build's IDs. A

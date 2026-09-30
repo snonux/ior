@@ -182,3 +182,15 @@ func TestRunCollapsedConverterHelpShowsEscapeDefault(t *testing.T) {
 		t.Errorf("collapsed help lacks '(default auto)':\n%s", help)
 	}
 }
+
+// TestRunCollapsedConverterHelpMentionsUnknownPlaceholder pins that `ior
+// collapsed -h` tells users why the totals include an [unknown] line.
+func TestRunCollapsedConverterHelpMentionsUnknownPlaceholder(t *testing.T) {
+	var out bytes.Buffer
+	if err := RunCollapsedConverter([]string{"-h"}, &out); err != nil {
+		t.Fatalf("RunCollapsedConverter(-h) error = %v", err)
+	}
+	if help := out.String(); !strings.Contains(help, "[unknown]") || !strings.Contains(help, "zero-weight") {
+		t.Errorf("collapsed help does not document the [unknown] placeholder:\n%s", help)
+	}
+}
