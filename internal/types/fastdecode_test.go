@@ -492,11 +492,49 @@ func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
 	}
 }
 
-// TestNewProcessExecEventFastRejectsShortPayloads pins the negative path: a
-// payload shorter than the old_tid layout - including the old 40-byte record -
-// must fail to decode rather than read as an exec that kept its tid.
-func TestNewProcessExecEventFastRejectsShortPayloads(t *testing.T) {
-	for _, n := range []int{0, 24, 40, processExecEventSize - 1} {
+// TestNewProcessExecEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
+// compatibility path: the 40-byte record of an object built before old_tid
+// must decode with OldTid 0 ("tid kept") and ExitUntraced 0 ("exit still
+// coming") rather than be dropped as malformed, which lost the post-exec comm
+// refresh and FD_CLOEXEC eviction of every exec. The pooled event is dirtied
+// first so the defaults cannot come from a zeroed allocation.
+func TestNewProcessExecEventFastDecodesLegacyRecord(t *testing.T) {
+	dirty := NewProcessExecEventFast(func() []byte {
+		raw := make([]byte, processExecEventSize)
+		binary.LittleEndian.PutUint32(raw[40:44], 99)
+		binary.LittleEndian.PutUint32(raw[44:48], 1)
+		return raw
+	}())
+	dirty.Recycle()
+
+	raw := make([]byte, processExecEventLegacySize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXEC_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 100)
+	copy(raw[24:40], "newprog")
+
+	ev := NewProcessExecEventFast(raw)
+	if ev == nil {
+		t.Fatal("legacy 40-byte process exec record rejected, want decoded")
+	}
+	defer ev.Recycle()
+	if ev.EventType != PROCESS_EXEC_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 100 ||
+		StringValue(ev.Comm[:]) != "newprog" {
+		t.Fatalf("unexpected legacy process exec decode: %#v", ev)
+	}
+	if ev.OldTid != 0 || ev.ExitUntraced != 0 {
+		t.Fatalf("legacy record OldTid=%d ExitUntraced=%d, want 0 and 0", ev.OldTid, ev.ExitUntraced)
+	}
+}
+
+// TestNewProcessExecEventFastRejectsOtherSizes pins the negative path: only
+// the current 48-byte and the legacy 40-byte layouts decode. A truncated,
+// in-between or oversized payload fails closed instead of being read at the
+// wrong offsets (e.g. as an exec that kept its tid).
+func TestNewProcessExecEventFastRejectsOtherSizes(t *testing.T) {
+	for _, n := range []int{0, 24, processExecEventLegacySize - 1, processExecEventLegacySize + 4,
+		processExecEventSize - 1, processExecEventSize + 1, processExecEventSize + 8} {
 		if ev := NewProcessExecEventFast(make([]byte, n)); ev != nil {
 			ev.Recycle()
 			t.Fatalf("NewProcessExecEventFast(%d bytes) decoded, want nil", n)
@@ -540,11 +578,47 @@ func TestNewProcessExitEventFastKernelLayout(t *testing.T) {
 	}
 }
 
-// TestNewProcessExitEventFastRejectsShortPayloads pins the negative path: a
-// payload shorter than the group_dead layout - including the old 24-byte
-// record - must fail to decode rather than read as a thread exit.
-func TestNewProcessExitEventFastRejectsShortPayloads(t *testing.T) {
-	for _, n := range []int{0, 23, 24, processExitEventSize - 1} {
+// TestNewProcessExitEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
+// compatibility path: the 24-byte record of an object built before group_dead
+// cannot tell a thread exit from a process exit, so it must decode as
+// group-dead (Reserved 0) - evicting on every exit as that userspace did -
+// rather than be dropped as malformed or read as a thread exit that never
+// evicts a dead process's descriptors. The pooled event is dirtied first so
+// the defaults cannot come from a zeroed allocation.
+func TestNewProcessExitEventFastDecodesLegacyRecord(t *testing.T) {
+	dirty := NewProcessExitEventFast(func() []byte {
+		raw := make([]byte, processExitEventSize)
+		binary.LittleEndian.PutUint32(raw[28:32], 5)
+		return raw
+	}())
+	dirty.Recycle()
+
+	raw := make([]byte, processExitEventLegacySize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 101)
+
+	ev := NewProcessExitEventFast(raw)
+	if ev == nil {
+		t.Fatal("legacy 24-byte process exit record rejected, want decoded")
+	}
+	defer ev.Recycle()
+	if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected legacy process exit decode: %#v", ev)
+	}
+	if !ev.IsGroupDead() || ev.GroupDead != 1 || ev.Reserved != 0 {
+		t.Fatalf("legacy record GroupDead=%d Reserved=%d, want 1 and 0", ev.GroupDead, ev.Reserved)
+	}
+}
+
+// TestNewProcessExitEventFastRejectsOtherSizes pins the negative path: only
+// the current 32-byte and the legacy 24-byte layouts decode. A truncated,
+// in-between or oversized payload fails closed instead of being read at the
+// wrong offsets (e.g. as a thread exit or, worse, a group-dead one).
+func TestNewProcessExitEventFastRejectsOtherSizes(t *testing.T) {
+	for _, n := range []int{0, processExitEventLegacySize - 1, processExitEventLegacySize + 4,
+		processExitEventSize - 1, processExitEventSize + 1, processExitEventSize + 8} {
 		if ev := NewProcessExitEventFast(make([]byte, n)); ev != nil {
 			ev.Recycle()
 			t.Fatalf("NewProcessExitEventFast(%d bytes) decoded, want nil", n)
