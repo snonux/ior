@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/globalfilter"
 )
 
 func TestResolveEditorCommandPrefersEditor(t *testing.T) {
@@ -601,4 +602,85 @@ func TestExportRowsToCSVDoesNotFollowPlantedSymlink(t *testing.T) {
 	if data, _ := os.ReadFile(victim); string(data) != "precious" {
 		t.Errorf("typed-name export wrote through the symlink: %q", data)
 	}
+}
+
+// readCSVSeqs parses the CSV at path and returns its data rows' seq and
+// syscall columns, failing the test on any read or parse error.
+func readCSVSeqs(t *testing.T, path string) (seqs, syscalls []string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	records, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+	if err != nil {
+		t.Fatalf("parse export: %v", err)
+	}
+	for _, rec := range records[1:] { // records[0] is the header
+		seqs = append(seqs, rec[0])
+		syscalls = append(syscalls, rec[7])
+	}
+	return seqs, syscalls
+}
+
+// TestExportsWithActiveFilterKeepRealRowAndDropWarning pins the interplay of
+// the two halves of task ur2's fix: filterRows lets synthetic warning rows
+// through any user filter (so the Stream tab can explain an empty trace), and
+// writeStreamCSV leaves them out of every CSV. With an active PID filter and a
+// warning row in the ring, both export paths must contain exactly the one
+// matching real row: the snapshot export (the dashboard-wide 'e' path, which
+// runs filterRows itself) and the paused x/X export of m.filtered (which
+// inherits the warning row from filterRows). Neither may contain the warning
+// or the real row the filter rejects. The two paths do not share a skip, so a
+// regression in either leaks a fake "warning" syscall into the data file.
+func TestExportsWithActiveFilterKeepRealRowAndDropWarning(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(NewWarningEvent(1, "ior: -tid 1: not a thread of -pid 7: the trace will stay empty"))
+	rb.Push(StreamEvent{Seq: 2, TimeNs: 20, Syscall: "read", Family: "FS", Comm: "cat", PID: 7, TID: 7, FD: UnknownFD})
+	rb.Push(StreamEvent{Seq: 3, TimeNs: 30, Syscall: "write", Family: "FS", Comm: "dd", PID: 99, TID: 99, FD: UnknownFD})
+	filter := Filter{PID: globalfilter.NewEqFilter(7)}
+
+	// want is the single row both exports must hold: the PID 7 read.
+	check := func(t *testing.T, path string) {
+		t.Helper()
+		seqs, syscalls := readCSVSeqs(t, path)
+		if !reflect.DeepEqual(seqs, []string{"2"}) || !reflect.DeepEqual(syscalls, []string{"read"}) {
+			t.Fatalf("export rows seq=%v syscall=%v, want only seq 2 read (no warning, no pid 99 write)", seqs, syscalls)
+		}
+	}
+
+	t.Run("snapshot export (e)", func(t *testing.T) {
+		path, err := exportSnapshotToCSV(rb, filter, t.TempDir(), "snapshot.csv")
+		if err != nil {
+			t.Fatalf("exportSnapshotToCSV: %v", err)
+		}
+		check(t, path)
+	})
+
+	t.Run("paused export of m.filtered (x/X)", func(t *testing.T) {
+		m := NewModel(rb)
+		m.exportDir = t.TempDir()
+		m.SetFilter(filter)
+		m.Refresh()
+		// Precondition: the Stream tab does show the warning row, so the
+		// export's own skip is what keeps it out of the file, not a filter
+		// that already dropped it.
+		if len(m.filtered) != 2 || !m.filtered[0].IsWarning || m.filtered[1].Seq != 2 {
+			t.Fatalf("m.filtered = %+v, want the warning row then the pid 7 read", m.filtered)
+		}
+		if handled, _ := m.HandleKey(" "); !handled || !m.Paused() {
+			t.Fatalf("space did not pause the stream (handled=%v paused=%v)", handled, m.Paused())
+		}
+		if handled, _ := m.HandleKey("x"); !handled || m.lastExportPath == "" {
+			t.Fatalf("x did not export (handled=%v status=%q)", handled, m.statusMessage)
+		}
+		check(t, m.lastExportPath)
+
+		// X (modal) goes through the same exportFilteredToCSV.
+		path, err := m.exportFilteredToCSV("modal.csv")
+		if err != nil {
+			t.Fatalf("exportFilteredToCSV: %v", err)
+		}
+		check(t, path)
+	})
 }
