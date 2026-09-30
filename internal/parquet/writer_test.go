@@ -112,3 +112,82 @@ func readAllRecords(t *testing.T, path string) []Record {
 		t.Fatalf("Read() error = %v", err)
 	}
 }
+
+// TestWritersAimedAtOnePathKeepEveryRecording is the regression for two
+// recordings that resolve to the same name (default names are only accurate to
+// the second): they used to share one ".tmp" and the later rename replaced the
+// earlier file. Now each has its own temp file and the later publish lands
+// under a "-1" name, reported by FinalPath.
+func TestWritersAimedAtOnePathKeepEveryRecording(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trace.parquet")
+	rowsA := []Record{{Seq: 1, Comm: "a", Syscall: "read"}}
+	rowsB := []Record{{Seq: 2, Comm: "b", Syscall: "write"}}
+
+	a, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewWriter a: %v", err)
+	}
+	b, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewWriter b: %v", err)
+	}
+	if a.TempPath() == b.TempPath() {
+		t.Fatalf("both writers share temp file %q", a.TempPath())
+	}
+	if err := a.WriteRows(rowsA); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteRows(rowsB); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close a: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close b: %v", err)
+	}
+
+	if a.FinalPath() != path {
+		t.Errorf("a.FinalPath() = %q, want %q", a.FinalPath(), path)
+	}
+	wantB := filepath.Join(dir, "trace-1.parquet")
+	if b.FinalPath() != wantB {
+		t.Errorf("b.FinalPath() = %q, want %q", b.FinalPath(), wantB)
+	}
+	if got := readAllRecords(t, a.FinalPath()); !reflect.DeepEqual(got, rowsA) {
+		t.Errorf("a's file = %+v, want %+v", got, rowsA)
+	}
+	if got := readAllRecords(t, b.FinalPath()); !reflect.DeepEqual(got, rowsB) {
+		t.Errorf("b's file = %+v, want %+v", got, rowsB)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("dir holds %v, want exactly the two recordings", entries)
+	}
+}
+
+func TestNewWriterMissingDirectoryFails(t *testing.T) {
+	_, err := NewWriter(filepath.Join(t.TempDir(), "missing", "trace"), WriterConfig{}, FileMetadata{})
+	if err == nil {
+		t.Fatal("NewWriter in a missing directory succeeded, want error")
+	}
+}
+
+func TestNormalizeOutputPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"trace":             "trace.parquet",
+		"trace.parquet":     "trace.parquet",
+		"trace.parquet.tmp": "trace.parquet",
+		"  dir/x.PARQUET  ": "dir/x.PARQUET",
+	} {
+		got, err := normalizeOutputPath(in)
+		if err != nil || got != want {
+			t.Errorf("normalizeOutputPath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "   ", "."} {
+		if _, err := normalizeOutputPath(in); err == nil {
+			t.Errorf("normalizeOutputPath(%q) succeeded, want error", in)
+		}
+	}
+}

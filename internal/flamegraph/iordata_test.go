@@ -331,37 +331,6 @@ func TestSerializeToFileHostnameErrorReturnsError(t *testing.T) {
 	}
 }
 
-// TestWriteTempFileRoundTripsThroughLoadFromFile pins that the file
-// serializeToFile renames into place is exactly what loadFromFile reads back:
-// zstd-compressed gob records, fully flushed and closed.
-func TestWriteTempFileRoundTripsThroughLoadFromFile(t *testing.T) {
-	original := newIorData()
-	original.add("path1", types.SYS_ENTER_OPENAT, "comm1", 100, 1000, flagsType(syscall.O_RDWR),
-		Counter{Count: 3, Duration: 30, DurationToPrev: 3, Bytes: 12})
-	path := filepath.Join(t.TempDir(), "out.ior.zst.tmp")
-
-	if err := original.writeTempFile(path); err != nil {
-		t.Fatalf("writeTempFile: %v", err)
-	}
-	restored := newIorData()
-	if err := restored.loadFromFile(path); err != nil {
-		t.Fatalf("loadFromFile: %v", err)
-	}
-	cnt, ok := counterAt(restored, "path1", types.SYS_ENTER_OPENAT, "comm1", 100, 1000, flagsType(syscall.O_RDWR))
-	if !ok || cnt.Count != 3 || cnt.Duration != 30 || cnt.DurationToPrev != 3 || cnt.Bytes != 12 {
-		t.Fatalf("restored counter = %+v (found %v), want the written one", cnt, ok)
-	}
-}
-
-func TestWriteTempFileCreateErrorReturnsContext(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing-dir", "out.ior.zst.tmp")
-	iod := newIorData()
-	err := iod.writeTempFile(path)
-	if err == nil || !strings.Contains(err.Error(), "create temp file") {
-		t.Fatalf("writeTempFile error = %v, want create temp file context", err)
-	}
-}
-
 func TestSerializedFilenameDefaultsEmptyName(t *testing.T) {
 	origHostnameFn := hostnameFn
 	t.Cleanup(func() { hostnameFn = origHostnameFn })
@@ -392,5 +361,65 @@ func TestLoadFromFileCorruptDataReturnsContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decode ior records from") {
 		t.Fatalf("Expected decode context, got %v", err)
+	}
+}
+
+// TestSerializeToFileSameSecondKeepsEveryRecording is the regression for two
+// runs finishing in the same second: they compute the same file name, and the
+// second used to truncate the first's temp file and rename over its result.
+func TestSerializeToFileSameSecondKeepsEveryRecording(t *testing.T) {
+	origHostnameFn, origNowFn := hostnameFn, nowFn
+	t.Cleanup(func() { hostnameFn, nowFn = origHostnameFn, origNowFn })
+	hostnameFn = func() (string, error) { return "host", nil }
+	nowFn = func() time.Time { return time.Date(2026, 9, 30, 13, 53, 24, 0, time.UTC) }
+	t.Chdir(t.TempDir())
+
+	const runs = 4
+	for i := range runs {
+		iod := newIorData()
+		iod.add("path", types.SYS_ENTER_OPENAT, "comm", 100, 1000, 0, Counter{Count: uint64(i + 1)})
+		if err := iod.serializeToFile("default"); err != nil {
+			t.Fatalf("run %d: serializeToFile: %v", i, err)
+		}
+	}
+
+	want := []string{
+		"host-default-2026-09-30_13:53:24.ior.zst",
+		"host-default-2026-09-30_13:53:24-1.ior.zst",
+		"host-default-2026-09-30_13:53:24-2.ior.zst",
+		"host-default-2026-09-30_13:53:24-3.ior.zst",
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil || len(entries) != runs {
+		t.Fatalf("directory = %v (err %v), want exactly %d recordings and no temp files", entries, err, runs)
+	}
+	for i, name := range want {
+		restored := newIorData()
+		if err := restored.loadFromFile(name); err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		cnt, ok := counterAt(restored, "path", types.SYS_ENTER_OPENAT, "comm", 100, 1000, 0)
+		if !ok || cnt.Count != uint64(i+1) {
+			t.Errorf("%s holds counter %+v (found %v), want run %d's Count %d", name, cnt, ok, i, i+1)
+		}
+	}
+}
+
+// TestSerializeToFileFailureLeavesNoTempFile pins that a write that cannot
+// even create its temp file reports an error and leaves no ".tmp" debris.
+func TestSerializeToFileFailureLeavesNoTempFile(t *testing.T) {
+	origHostnameFn := hostnameFn
+	t.Cleanup(func() { hostnameFn = origHostnameFn })
+	// A hostname containing a path separator points the output into a
+	// directory that does not exist, so creating the temp file fails.
+	hostnameFn = func() (string, error) { return "no-such-dir/host", nil }
+	t.Chdir(t.TempDir())
+
+	iod := newIorData()
+	if err := iod.serializeToFile("x"); err == nil {
+		t.Fatal("serializeToFile into a missing directory succeeded, want error")
+	}
+	if entries, _ := os.ReadDir("."); len(entries) != 0 {
+		t.Errorf("failed write left %v behind", entries)
 	}
 }

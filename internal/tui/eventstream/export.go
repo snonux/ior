@@ -4,11 +4,14 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"ior/internal/atomicfile"
 )
 
 // shellSplit tokenizes s using POSIX-like shell quoting rules so that paths
@@ -131,7 +134,14 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 }
 
 // exportRowsToCSV writes rows to a CSV file under exportDir with the given
-// filename (which is validated and sanitised by ensureCSVFilename).
+// filename (which is validated and sanitised by ensureCSVFilename) and returns
+// its absolute path.
+//
+// The rows go to a uniquely named temp file that is published without
+// replacing anything: if the name is already taken (an earlier export in the
+// same second, or a file the user keeps under that name) the new file gets a
+// "-N" suffix, so an export can never overwrite another file or write through
+// a symlink planted at the predictable default name.
 func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
 	name, err := ensureCSVFilename(filename)
 	if err != nil {
@@ -142,45 +152,23 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 		path = filepath.Join(exportDir, name)
 	}
 
-	f, err := os.Create(path)
+	published, err := atomicfile.WriteFile(path, ".csv", func(w io.Writer) error {
+		return writeStreamCSV(csv.NewWriter(w), rows)
+	})
 	if err != nil {
 		return "", err
 	}
-	// closeFile is idempotent; fail wraps any write error with a best-effort close.
-	closed := false
-	closeFile := func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return f.Close()
-	}
-	fail := func(baseErr error) (string, error) {
-		if closeErr := closeFile(); closeErr != nil {
-			return "", errors.Join(baseErr, closeErr)
-		}
-		return "", baseErr
-	}
-
-	if err := writeStreamCSV(csv.NewWriter(f), rows, fail); err != nil {
-		return "", err
-	}
-	if err := closeFile(); err != nil {
-		return "", err
-	}
-	absPath, err := filepath.Abs(path)
+	absPath, err := filepath.Abs(published)
 	if err != nil {
-		return path, nil
+		return published, nil
 	}
 	return absPath, nil
 }
 
-// writeStreamCSV writes the CSV header and all event rows to w, calling fail
-// on the first write error to close the underlying file before returning.
-func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string, error)) error {
+// writeStreamCSV writes the CSV header and all event rows to w and flushes it.
+func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
 	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
 	if err := w.Write(header); err != nil {
-		_, err = fail(err)
 		return err
 	}
 	for i := range rows {
@@ -205,16 +193,11 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string,
 			fmt.Sprintf("%d", ev.TimeoutNs),
 		}
 		if err := w.Write(record); err != nil {
-			_, err = fail(err)
 			return err
 		}
 	}
 	w.Flush()
-	if err := w.Error(); err != nil {
-		_, err = fail(err)
-		return err
-	}
-	return nil
+	return w.Error()
 }
 
 // ensureCSVFilename validates and normalises a user-supplied export filename.

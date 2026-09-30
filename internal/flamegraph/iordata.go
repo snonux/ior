@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ior/internal/atomicfile"
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
@@ -25,7 +26,15 @@ type pidType = uint32
 type tidType = uint32
 type flagsType = file.Flags
 
+// serializedExt is the extension of every recording; atomicfile keeps it last
+// when it has to add a "-N" suffix to avoid overwriting an existing file.
+const serializedExt = ".ior.zst"
+
 var hostnameFn = os.Hostname
+
+// nowFn supplies the timestamp in recording names; tests pin it to force the
+// same-second collision that the publish step must survive.
+var nowFn = time.Now
 
 type recordKey struct {
 	Path    pathType
@@ -95,24 +104,30 @@ func (iod *iorData) merge(other iorData) *iorData {
 
 // serializeToFile writes the records to
 // <hostname>-<flamegraphName>-<timestamp>.ior.zst in the working directory
-// (flamegraphName defaults to "default"). The data goes to a .tmp sibling
-// first and is renamed into place only once fully flushed, so a reader never
-// sees a partial file; on any failure the temp file is removed.
+// (flamegraphName defaults to "default"). The data goes to a uniquely named
+// .tmp sibling first and is published only once fully flushed, so a reader
+// never sees a partial file; on any failure the temp file is removed.
+//
+// The timestamp is accurate to the second, so two runs finishing in the same
+// second (or the repeated DST hour) compute the same name. Publishing never
+// replaces an existing file: the later run lands under "<name>-1.ior.zst"
+// (then -2, ...) and the console says so, instead of silently overwriting the
+// earlier recording.
 func (iod *iorData) serializeToFile(flamegraphName string) error {
-	filename, err := serializedFilename(flamegraphName, time.Now())
+	filename, err := serializedFilename(flamegraphName, nowFn())
 	if err != nil {
 		return err
 	}
 	fmt.Println("Writing", filename)
-	tmpFilename := fmt.Sprintf("%s.tmp", filename)
 
-	if err := iod.writeTempFile(tmpFilename); err != nil {
+	published, err := atomicfile.WriteFile(filename, serializedExt, func(w io.Writer) error {
+		return iod.encodeCompressed(w, filename)
+	})
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmpFilename, filename); err != nil {
-		// Don't leave the complete but unpublished temp file behind.
-		_ = os.Remove(tmpFilename)
-		return fmt.Errorf("rename %s to %s: %w", tmpFilename, filename, err)
+	if published != filename {
+		fmt.Println(filename, "already exists; wrote", published, "instead")
 	}
 	return nil
 }
@@ -128,46 +143,8 @@ func serializedFilename(flamegraphName string, now time.Time) (string, error) {
 	if flamegraphName == "" {
 		flamegraphName = "default"
 	}
-	return fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flamegraphName,
-		now.Format("2006-01-02_15:04:05")), nil
-}
-
-// writeTempFile creates tmpFilename and writes the zstd-compressed gob
-// encoding of the records to it, closing the file before returning so its
-// content is flushed and ready to rename. On error the file is closed (if
-// still open) and removed.
-func (iod *iorData) writeTempFile(tmpFilename string) (retErr error) {
-	out, err := os.Create(tmpFilename)
-	if err != nil {
-		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
-	}
-	fileClosed := false
-	defer func() {
-		// Close file on error paths; on success it is already closed.
-		// Capture the close error and join it with retErr so filesystem issues
-		// (e.g. full disk detected only on close) are not silently discarded.
-		if retErr == nil {
-			return
-		}
-		if !fileClosed {
-			if closeErr := out.Close(); closeErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, closeErr))
-			}
-		}
-		// Don't leave a partial temp file behind.
-		_ = os.Remove(tmpFilename)
-	}()
-
-	if err := iod.encodeCompressed(out, tmpFilename); err != nil {
-		return err
-	}
-	// The encoder is closed, so the final zstd frame is in the file; closing
-	// the file flushes OS buffers. Both must complete before rename.
-	fileClosed = true
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("close temp file %s: %w", tmpFilename, err)
-	}
-	return nil
+	return fmt.Sprintf("%s-%s-%s%s", hostname, flamegraphName,
+		now.Format("2006-01-02_15:04:05"), serializedExt), nil
 }
 
 // encodeCompressed gob-encodes the records through a zstd writer into w and

@@ -294,7 +294,13 @@ func (r *Recorder) runSession(session *recordingSession, writer rowWriter, cfg R
 			}
 
 		case <-session.stopC:
-			r.completeSession(session, r.stopSession(session, writer, &batch, &written, cfg.BatchSize))
+			err := r.stopSession(session, writer, &batch, &written, cfg.BatchSize)
+			if err == nil {
+				// Close never replaces an existing file, so the recording may
+				// have been published under a "-N" name; report where it is.
+				r.updatePublishedPath(session, writer.FinalPath())
+			}
+			r.completeSession(session, err)
 			return
 		}
 	}
@@ -377,6 +383,17 @@ func (r *Recorder) updateRowsWritten(session *recordingSession, rowsWritten uint
 		return
 	}
 	r.status.RowsWritten = rowsWritten
+}
+
+// updatePublishedPath records the path a finished recording was actually
+// published at, which differs from the requested one when that name was taken.
+func (r *Recorder) updatePublishedPath(session *recordingSession, path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != session {
+		return
+	}
+	r.status.Path = path
 }
 
 // finishSession publishes the session's terminal state. A failure of a

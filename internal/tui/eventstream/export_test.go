@@ -220,9 +220,8 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 		Nfds:             8,
 		TimeoutNs:        -1,
 	}}
-	fail := func(err error) (string, error) { return "", err }
 
-	if err := writeStreamCSV(csv.NewWriter(&buf), rows, fail); err != nil {
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
 		t.Fatalf("writeStreamCSV() error = %v", err)
 	}
 
@@ -320,5 +319,59 @@ func TestExportSnapshotMatchesRenameOnEitherName(t *testing.T) {
 	}
 	if strings.Contains(got, "openat") {
 		t.Fatalf("the export must not include rows the filter rejects, got:\n%s", got)
+	}
+}
+
+// TestExportRowsToCSVNeverOverwrites pins the no-clobber contract: exporting
+// twice under one name (the default name is only accurate to the second) keeps
+// both files, the second under a "-1" suffix before the extension.
+func TestExportRowsToCSVNeverOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	first := []StreamEvent{{Seq: 1, Comm: "first", Syscall: "read"}}
+	second := []StreamEvent{{Seq: 2, Comm: "second", Syscall: "write"}}
+
+	p1, err := exportRowsToCSV(first, dir, "same.csv")
+	if err != nil {
+		t.Fatalf("first export: %v", err)
+	}
+	p2, err := exportRowsToCSV(second, dir, "same.csv")
+	if err != nil {
+		t.Fatalf("second export: %v", err)
+	}
+	if p1 != filepath.Join(dir, "same.csv") || p2 != filepath.Join(dir, "same-1.csv") {
+		t.Fatalf("paths = %q, %q; want same.csv then same-1.csv", p1, p2)
+	}
+	for path, want := range map[string]string{p1: "first", p2: "second"} {
+		data, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Errorf("%s = %q (err %v), want it to hold the %q export", path, data, err, want)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("dir holds %v, want exactly the two exports and no temp files", entries)
+	}
+}
+
+// TestExportRowsToCSVDoesNotFollowPlantedSymlink pins that a symlink sitting
+// at the export name is neither written through nor replaced.
+func TestExportRowsToCSVDoesNotFollowPlantedSymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, "out.csv")); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := exportRowsToCSV(nil, dir, "out.csv")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if path == filepath.Join(dir, "out.csv") {
+		t.Fatal("export replaced the symlink")
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "precious" {
+		t.Errorf("symlink target was overwritten: %q", data)
 	}
 }

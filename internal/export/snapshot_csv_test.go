@@ -175,3 +175,32 @@ func TestSnapshotCSVRecycledPIDRowsHaveDistinctIDs(t *testing.T) {
 		t.Fatalf("process ids = %v, want %v", got, want)
 	}
 }
+
+// TestSnapshotCSVSameSecondKeepsBothFiles pins that two snapshots taken within
+// one second (same timestamped name) both survive instead of the second
+// overwriting the first.
+func TestSnapshotCSVSameSecondKeepsBothFiles(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var names []string
+	for range 3 {
+		name, err := SnapshotCSV(nil)
+		if err != nil {
+			t.Fatalf("SnapshotCSV: %v", err)
+		}
+		names = append(names, name)
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			t.Fatalf("SnapshotCSV returned %q twice: %v", name, names)
+		}
+		seen[name] = true
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("returned file %q missing: %v", name, err)
+		}
+	}
+	if entries, _ := os.ReadDir("."); len(entries) != len(names) {
+		t.Errorf("dir holds %v, want %d snapshots and no temp files", entries, len(names))
+	}
+}

@@ -2,36 +2,32 @@ package export
 
 import (
 	"encoding/csv"
-	"errors"
 	"fmt"
-	"os"
+	"io"
 	"time"
 
+	"ior/internal/atomicfile"
 	"ior/internal/statsengine"
 )
 
-// SnapshotCSV writes a dashboard snapshot to a timestamped CSV file.
-func SnapshotCSV(snap *statsengine.Snapshot) (filename string, retErr error) {
-	filename = fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
-	f, err := os.Create(filename)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close %s: %w", filename, err))
+// SnapshotCSV writes a dashboard snapshot to a timestamped CSV file in the
+// working directory and returns the name it was written under.
+//
+// The timestamp is accurate to the second, so two snapshots in the same second
+// compute the same name. The file is built in a uniquely named temp file and
+// published without replacing anything, so the later snapshot gets a "-N"
+// suffix instead of overwriting (or writing through a symlink planted at) the
+// earlier one.
+func SnapshotCSV(snap *statsengine.Snapshot) (string, error) {
+	name := fmt.Sprintf("ior-snapshot-%s.csv", time.Now().Format("20060102-150405"))
+	return atomicfile.WriteFile(name, ".csv", func(out io.Writer) error {
+		w := csv.NewWriter(out)
+		if err := writeSnapshotRows(w, snap); err != nil {
+			return err
 		}
-	}()
-
-	w := csv.NewWriter(f)
-	if err := writeSnapshotRows(w, snap); err != nil {
-		return "", err
-	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		return "", err
-	}
-	return filename, nil
+		w.Flush()
+		return w.Error()
+	})
 }
 
 // writeSnapshotRows writes all CSV sections to w in order:

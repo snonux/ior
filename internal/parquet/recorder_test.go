@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -320,4 +321,41 @@ func (w *blockingWriter) TempPath() string {
 
 func (w *blockingWriter) releaseWrites() {
 	w.releaseOnce.Do(func() { close(w.release) })
+}
+
+// TestRecorderStatusPathFollowsSuffixedPublish pins that when the requested
+// path is already taken, the recording is published under a "-N" name and
+// Status().Path names the file that actually holds it.
+func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.parquet")
+	taken := []byte("someone else's file")
+	if err := os.WriteFile(path, taken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 4, BatchSize: 2, FlushInterval: time.Hour})
+	if err := recorder.Start(path, StartOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := recorder.Status().Path; got != path {
+		t.Fatalf("Status().Path while recording = %q, want the requested %q", got, path)
+	}
+	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	want := filepath.Join(dir, "session-1.parquet")
+	if got := recorder.Status().Path; got != want {
+		t.Fatalf("Status().Path after Stop = %q, want %q", got, want)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(taken) {
+		t.Errorf("existing file was clobbered: %q", got)
+	}
+	if rows := readAllRecords(t, want); len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("published file rows = %+v, want the one recorded row", rows)
+	}
 }
