@@ -127,19 +127,23 @@ ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
 
 // ior_process_exit_in_scope decides whether an exit record is emitted and
 // fills *group_dead for the records that are. It is filter() with one
-// exception: a group-dead exit bypasses the TID_FILTER dimension, while still
-// honouring PID_FILTER and the exclusion of ior itself.
+// exception: a group-dead exit of the traced process bypasses the TID_FILTER
+// dimension, while ior itself stays excluded.
 //
 // Why the exception: under -tid, filter() only admits the traced thread, but
 // the thread that ends the group - the only record userspace evicts the
 // process's fd entries on - is usually another one. Without the bypass a
 // -tid run would never evict its process's descriptors at all, a regression
 // against the old evict-on-every-exit behaviour that did fire for the traced
-// thread. The price, only under -tid without -pid, is one record per process
-// death system-wide; userspace eviction of a pid it never tracked is O(1),
-// and dropping the dying thread's tid-keyed state is correct for any tid.
-// group_dead is only read once the pid dimension has passed, so -pid runs pay
-// no extra cost for the exits of unrelated processes.
+// thread.
+//
+// The bypass is scoped to TID_FILTER_TGID, the traced thread's process, which
+// userspace resolves at setup (PID_FILTER when -pid is also given, else
+// /proc/<tid>/status; see tidFilterTgid in internal/bpfsetup.go). An unscoped
+// bypass would emit a record for every process death on the system under
+// -tid without -pid. When the tgid is unresolved (-1) no pid matches, so
+// there is no bypass at all. group_dead is only read once the pid matched,
+// so exits of unrelated processes cost no extra reads.
 static __always_inline int
 ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
                           __u32 *pid, __u32 *tid, __u32 *group_dead) {
@@ -147,12 +151,10 @@ ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
         *group_dead = ior_exit_group_dead(ctx);
         return 1;
     }
-    // Rejected by the pid dimension (or ior itself): no bypass. filter() only
-    // consults TID_FILTER after both pid checks passed, so with no TID_FILTER
-    // the rejection was necessarily a pid one.
-    if (*pid == IOR_PID_FILTER || -1 == TID_FILTER)
-        return 0;
-    if (-1 != PID_FILTER && *pid != PID_FILTER)
+    // No tid filter means the rejection was a pid one (or ior itself): no
+    // bypass. Otherwise only the traced thread's own process qualifies; that
+    // also excludes ior, whose tgid is never the traced one.
+    if (-1 == TID_FILTER || *pid != TID_FILTER_TGID)
         return 0;
     *group_dead = ior_exit_group_dead(ctx);
     return *group_dead;
@@ -160,7 +162,10 @@ ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
 
 SEC("tracepoint/sched/sched_process_exit")
 int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
-    __u32 pid, tid, group_dead;
+    // Zero-initialised: filter() leaves tid unwritten on its early ior-self
+    // return, and the verifier cannot prove the bypass never reaches the
+    // ev->tid store on that path.
+    __u32 pid = 0, tid = 0, group_dead = 0;
     struct process_exit_event *ev;
 
     if (!ior_process_exit_in_scope(ctx, &pid, &tid, &group_dead))

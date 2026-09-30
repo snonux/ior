@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,35 @@ type TestHarness struct {
 	BpfObject      string // optional path to external BPF object override
 	OutputDir      string // temp dir for .ior.zst output
 	WorkloadEnv    []string
+	// IorOutput, when set, additionally receives every stdout/stderr line
+	// of ior runs that wait for readiness (RunWithIorArgs), so a test can
+	// assert on warnings and the end-of-run statistics.
+	IorOutput *OutputCapture
+	// IorArgsForPID, when set, returns extra ior args that depend on the
+	// workload PID (known only once it started), e.g. "-tid <pid>". They are
+	// appended after the harness's own args, so they override its -pid.
+	IorArgsForPID func(pid int) []string
+}
+
+// OutputCapture is a goroutine-safe line sink: ior's stdout and stderr are
+// scanned by two goroutines at once.
+type OutputCapture struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+// Write appends p; it never fails.
+func (c *OutputCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+// String returns everything captured so far.
+func (c *OutputCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
 }
 
 // Run executes a single integration test scenario. It starts the ioworkload
@@ -49,6 +79,9 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 		return TestResult{}, 0, err
 	}
 
+	if h.IorArgsForPID != nil {
+		extraIorArgs = append(slices.Clone(extraIorArgs), h.IorArgsForPID(workloadPID)...)
+	}
 	iorCmd, readyCh, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
@@ -276,10 +309,15 @@ func (h *TestHarness) startIorArgsWithReady(args []string) (*exec.Cmd, <-chan er
 		})
 	}
 
+	var outW, errW io.Writer = os.Stdout, os.Stderr
+	if h.IorOutput != nil {
+		outW = io.MultiWriter(os.Stdout, h.IorOutput)
+		errW = io.MultiWriter(os.Stderr, h.IorOutput)
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go scanIorOutput(stdout, os.Stdout, signalReady, &wg)
-	go scanIorOutput(stderr, os.Stderr, signalReady, &wg)
+	go scanIorOutput(stdout, outW, signalReady, &wg)
+	go scanIorOutput(stderr, errW, signalReady, &wg)
 	go func() {
 		wg.Wait()
 		signalReady(fmt.Errorf("ior exited before readiness line"))

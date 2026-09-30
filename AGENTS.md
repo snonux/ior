@@ -761,7 +761,8 @@ not sufficient.
   its `ev.Tid` (`commResolver.evictTid`, called from `handleProcessExitEvent`).
   The record fires per *task* and this cache is keyed per task, so this runs
   on every exit record and is precise: a thread exit drops only that thread's
-  name (the fd-table eviction, keyed by tgid, waits for the group-dead record). Eviction, not `markAllStale`, is right here because
+  name (the fd-table eviction, keyed by tgid, waits for the group-dead
+  record). Eviction, not `markAllStale`, is right here because
   there is nothing left to serve - the value is not merely at risk of being
   outdated, its owner is gone; the recycled tid then behaves exactly like a
   never-before-seen one (async lookup, and under `-comm` its first
