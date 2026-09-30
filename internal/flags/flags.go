@@ -429,6 +429,15 @@ func validateConfig(cfg Config) error {
 	if err := validateProcessID("tid", cfg.TidFilter); err != nil {
 		return err
 	}
+	// A -tps/-tpsExclude/-trace-* selection that matches no traceable syscall
+	// attaches nothing and produces an empty trace for the whole -duration,
+	// so name it at startup. The runtime guard for headless runs (see
+	// attachRequiredTraceProbes) also covers a kernel that lacks the
+	// tracepoints; this one additionally protects the TUI, where zero probes
+	// is otherwise only a warning, and needs no root or BPF load to fire.
+	if err := validateTracepointSelection(cfg.TracepointSelector, tracepoints.List); err != nil {
+		return err
+	}
 	// A -comm/-path pattern longer than the fixed-size kernel event field it
 	// is matched against can never be found in anything the tracepoint gates
 	// see, so it is another silently empty trace - the same class as the
@@ -437,6 +446,20 @@ func validateConfig(cfg Config) error {
 	// screen; refusing it here means the user gets the reason on stderr with
 	// a non-zero exit, before any terminal is taken over at all.
 	return BuildTraceFilter(cfg).ValidateTracepointFields()
+}
+
+// validateTracepointSelection fails when sel attaches none of tpNames, the
+// tracepoints this build can trace. A selector that has no restrictions at
+// all (the zero value of a hand-built Config) attaches everything and passes.
+// The message names the flags because the selector itself is a compiled form
+// the user never typed.
+func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) error {
+	for _, name := range tpNames {
+		if sel.ShouldAttach(name) {
+			return nil
+		}
+	}
+	return fmt.Errorf("the -tps/-tpsExclude/-trace-* selection matches none of the %d traceable syscall tracepoints, so the trace would stay empty", len(tpNames))
 }
 
 // fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for

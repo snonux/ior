@@ -669,3 +669,34 @@ func TestUsageDocumentsTheLibbpfDebugVariable(t *testing.T) {
 		t.Errorf("environment section must follow the flag defaults:\n%s", help)
 	}
 }
+
+// TestParseRejectsSelectionThatMatchesNoTracepoint is the regression test for
+// "-tps nonexistent_zzz": the trace used to start, attach zero probes and run
+// its whole -duration empty with exit 0. Every way of emptying the selection
+// (-tps, -tpsExclude, the -trace-* dimensions) must now fail at startup, and
+// selections that still match something must not.
+func TestParseRejectsSelectionThatMatchesNoTracepoint(t *testing.T) {
+	bad := [][]string{
+		{"-tps", "nonexistent_zzz"},
+		{"-tps", "^sys_enter_openat$", "-tpsExclude", "openat"},
+		{"-tpsExclude", "."},
+		{"-trace-families", "Time", "-tps", "^sys_enter_openat$"},
+	}
+	for _, args := range bad {
+		_, err := parseForTest(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") {
+			t.Errorf("args %v: error = %v, want the empty-selection diagnostic", args, err)
+		}
+	}
+	good := [][]string{
+		nil,
+		{"-tps", "^sys_enter_openat$"},
+		{"-tpsExclude", "^sys_enter_openat$"},
+		{"-tps", "nonexistent_zzz,^sys_enter_openat$"},
+	}
+	for _, args := range good {
+		if _, err := parseForTest(t, args...); err != nil {
+			t.Errorf("args %v: unexpected error %v", args, err)
+		}
+	}
+}

@@ -92,6 +92,12 @@ func (l bpfSetupLog) withDefaults() bpfSetupLog {
 // requested stop (errors.Is(err, context.Canceled)) from a real failure. Most
 // importantly it never publishes the probe manager: a session the user has
 // already abandoned must not hand the TUI a manager that is about to close.
+//
+// Two checks keep a session from being silently empty: the -pid/-tid scope
+// must name a process/thread that exists (reportTraceTarget) and at least one
+// syscall probe must attach (attachRequiredTraceProbes). Both are errors when
+// probes is nil (a headless run nobody can correct afterwards) and warnings in
+// the TUI, where the user can still pick a target or enable probes.
 func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*bpf.Module, *probemanager.Manager, func(), error) {
 	noRelease := func() {}
 	log = log.withDefaults()
@@ -99,7 +105,13 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 		return nil, nil, noRelease, setupBPFModuleError("start", err)
 	}
 
-	bpfModule, stage, err := loadConfiguredBPFModule(cfg, log.withDefaults().warn)
+	// An impossible -pid/-tid scope is reported before the slow load/attach so
+	// a headless run fails at once instead of tracing nothing for -duration.
+	if err := reportTraceTarget(cfg, probes == nil, log.warn); err != nil {
+		return nil, nil, noRelease, err
+	}
+
+	bpfModule, stage, err := loadConfiguredBPFModule(cfg, log.warn)
 	if err != nil {
 		if bpfModule != nil {
 			bpfModule.Close()
@@ -114,7 +126,7 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 	}
 
 	attacher := libbpfTracepointModule{module: bpfModule}
-	mgr, releaseSchedProbes, err := attachTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, log)
+	mgr, releaseSchedProbes, err := attachRequiredTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, probes == nil, log)
 	if err != nil {
 		bpfModule.Close()
 		return nil, nil, noRelease, setupBPFModuleError("attach probes", err)
@@ -191,6 +203,60 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 		return nil, nil, err
 	}
 	return mgr, releaseSchedProbes, nil
+}
+
+// attachRequiredTraceProbes is attachTraceProbes plus the guard against a
+// session that attached no syscall probe at all. Such a session - a -tps or
+// -trace-* selection matching nothing, or every attach failing on the running
+// kernel - used to run its whole -duration, print "Detaching 0 active BPF probe
+// pairs" and exit 0 with an empty trace.
+//
+// What to do about it depends on whether anybody can still attach probes
+// later. A headless run (headless == true) cannot, so zero probes is an error:
+// the probes and the sched probes are released again and the caller aborts
+// setup. In the TUI the probes modal can attach probes at runtime, and a user
+// who switched every probe off before a restart legitimately ends up here, so
+// it is only a warning row.
+func attachRequiredTraceProbes(ctx context.Context, attacher probemanager.Attacher, shouldAttach func(string) bool, tpNames []string, headless bool, log bpfSetupLog) (*probemanager.Manager, func(), error) {
+	log = log.withDefaults()
+	mgr, releaseSchedProbes, err := attachTraceProbes(ctx, attacher, shouldAttach, tpNames, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	noProbes := noProbesError(mgr.States())
+	if noProbes == nil {
+		return mgr, releaseSchedProbes, nil
+	}
+	if !headless {
+		log.warn("ior: " + noProbes.Error())
+		return mgr, releaseSchedProbes, nil
+	}
+	if closeErr := mgr.Close(); closeErr != nil {
+		noProbes = fmt.Errorf("%w (close probe manager: %v)", noProbes, closeErr)
+	}
+	releaseSchedProbes()
+	return nil, nil, noProbes
+}
+
+// noProbesError returns the reason no syscall probe is active in states, or
+// nil when at least one is. It separates the two causes because they call for
+// different fixes: probes that were selected but failed to attach carry an
+// Error (the kernel lacks the tracepoints), while a selection that matched
+// nothing leaves every probe merely registered and inactive.
+func noProbesError(states []probemanager.ProbeState) error {
+	failed := 0
+	for _, state := range states {
+		if state.Active {
+			return nil
+		}
+		if state.Error != "" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("no syscall probe attached: all %d selected tracepoint pairs failed to attach (see the skipped-tracepoint messages)", failed)
+	}
+	return fmt.Errorf("no syscall probe attached: the -trace-*/-tps/-tpsExclude selection matches none of the %d traceable syscalls", len(states))
 }
 
 // releaseConcurrently returns a closure that runs every release in parallel and
