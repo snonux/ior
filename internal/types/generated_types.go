@@ -3249,10 +3249,12 @@ type ProcessExitEvent struct {
 	Time      uint64
 	Pid       uint32
 	Tid       uint32
+	GroupDead uint32
+	Reserved  uint32
 }
 
 func (p ProcessExitEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v GroupDead:%v Reserved:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.GroupDead, p.Reserved)
 }
 
 func (p ProcessExitEvent) Equals(other any) bool {
@@ -3260,7 +3262,7 @@ func (p ProcessExitEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.GroupDead == otherConcrete.GroupDead && p.Reserved == otherConcrete.Reserved
 }
 
 func (p *ProcessExitEvent) GetEventType() EventType {

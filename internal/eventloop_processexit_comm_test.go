@@ -199,7 +199,9 @@ func TestProcessExitEvictsOnlyTheExitedTasksComm(t *testing.T) {
 	el.setCachedComm(execCommTid, deadComm)
 	el.setCachedComm(siblingTid, "sibling")
 
-	el.processRawEvent(makeProcessExitEvent(t, defaulTime, execCommPid, execCommTid),
+	// A thread exit (group_dead clear): the process lives on, yet the dead
+	// thread's tid-keyed name must still go.
+	el.processRawEvent(makeThreadExitEvent(t, defaulTime, execCommPid, execCommTid),
 		make(chan *event.Pair, 1))
 
 	if got, ok := el.cachedComm(execCommTid); ok {

@@ -64,17 +64,60 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 // eviction got around to it - pure garbage for any fd number that process ever
 // held, and memory that only grows with process churn.
 //
-// sched:sched_process_exit fires per exiting task and carries the task in
-// context, so this handler emits a small control record with the tgid, and
-// userspace evicts that tgid's entries (internal/eventloop_processexit.go).
-// The record fires for *thread* exits too, so a multithreaded process whose
-// thread dies while the rest live has its fd entries evicted early - that is
-// correct-but-degraded, not wrong: the next syscall on such a descriptor falls
-// back to the procfs resolution path (/proc/<pid>/fd), which still answers
-// correctly while the process lives, and re-populates the table.
+// sched:sched_process_exit fires per exiting *task* (thread) and carries the
+// task in context, so this handler emits a small control record with the tgid,
+// the tid and a group_dead flag (internal/eventloop_processexit.go consumes
+// it). Per-task firing is exactly right for the tid-keyed userspace state (comm
+// cache, parked enters, pending handles), but the fd table belongs to the
+// whole thread group: a thread dying while its siblings live must not evict
+// the process's descriptors. Doing so used to push every later syscall on
+// them through the /proc/<pid>/fd fallback, which renames the same descriptor
+// (pipe:0:3:4 becomes pipe:[73538387]), returns nothing for an fd closed in
+// the meantime, and can even attribute a reused fd number to the wrong file
+// when userspace lags. group_dead tells userspace when the last thread of the
+// group is gone, so it evicts the fd table only then. The flag is also the
+// process-lifetime signal later consumers (e.g. the stats engine's PID-reuse
+// handling) can forward.
 //
-// Cost: one 24-byte record per task exit, comparable to the per-exec record
+// Cost: one 32-byte record per task exit, comparable to the per-exec record
 // above, on the same ring buffer.
+
+// ior_exit_group_dead reports whether the exiting task was the last live
+// member of its thread group, i.e. whether the process as a whole is dead.
+//
+// Newer kernels expose exactly this as the tracepoint's own group_dead field,
+// which do_exit() computed with atomic_dec_and_test(&tsk->signal->live). The
+// field access below is a CO-RE relocation against the running kernel's
+// trace_event_raw_sched_process_exit: on a kernel without the field,
+// bpf_core_field_exists() resolves to the constant 0, the verifier prunes the
+// branch as dead code, and libbpf's poisoned relocation for ctx->group_dead is
+// never executed.
+//
+// Older kernels fall back to reading task->signal->live directly. do_exit()
+// decrements live before it fires the tracepoint and nothing can increment it
+// again once the group is exiting, so live == 0 here means every thread has
+// passed that point: the process is dead. The last thread to decrement always
+// reads its own decrement, so at least one exit record of a group carries
+// group_dead = 1. Two threads exiting concurrently can both observe 0 and
+// both report it; userspace eviction is idempotent, so the duplicate is
+// harmless. A failed read (NULL signal) reports 0 rather than guessing - the
+// fd entries then linger until LRU trimming, the same outcome as a record lost
+// to ring-buffer backpressure.
+static __always_inline __u32
+ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
+    struct task_struct *task;
+    struct signal_struct *signal;
+
+    if (bpf_core_field_exists(ctx->group_dead))
+        return ctx->group_dead ? 1 : 0;
+
+    task = (struct task_struct *)bpf_get_current_task();
+    signal = BPF_CORE_READ(task, signal);
+    if (!signal)
+        return 0;
+    return BPF_CORE_READ(signal, live.counter) == 0 ? 1 : 0;
+}
+
 SEC("tracepoint/sched/sched_process_exit")
 int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
     __u32 pid, tid;
@@ -95,6 +138,9 @@ int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
+    ev->group_dead = ior_exit_group_dead(ctx);
+    // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
+    ev->reserved = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

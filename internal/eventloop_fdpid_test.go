@@ -179,17 +179,36 @@ func TestOnePidsCloseDoesNotEvictTheOthersFd(t *testing.T) {
 }
 
 // processExitEventWireSize pins the kernel payload size of struct
-// process_exit_event (internal/c/types.h): 4+4+8+4+4 with no trailing padding,
-// so kernel and binary.Write payloads share one size.
-const processExitEventWireSize = 24
+// process_exit_event (internal/c/types.h): 4+4+8+4+4+4(group_dead)+
+// 4(reserved) with no trailing padding, so kernel and binary.Write payloads
+// share one size.
+const processExitEventWireSize = 32
 
+// makeProcessExitEvent builds the exit record of a task that was the last
+// thread of its process (group_dead set) - the record that also evicts the
+// process's fd-table entries.
 func makeProcessExitEvent(t *testing.T, time uint64, pid, tid uint32) []byte {
+	t.Helper()
+	return makeTaskExitEvent(t, time, pid, tid, true)
+}
+
+// makeThreadExitEvent builds the exit record of a thread whose siblings still
+// live (group_dead clear): only tid-keyed state may be dropped.
+func makeThreadExitEvent(t *testing.T, time uint64, pid, tid uint32) []byte {
+	t.Helper()
+	return makeTaskExitEvent(t, time, pid, tid, false)
+}
+
+func makeTaskExitEvent(t *testing.T, time uint64, pid, tid uint32, groupDead bool) []byte {
 	t.Helper()
 	ev := types.ProcessExitEvent{
 		EventType: types.PROCESS_EXIT_EVENT,
 		Time:      time,
 		Pid:       pid,
 		Tid:       tid,
+	}
+	if groupDead {
+		ev.GroupDead = 1
 	}
 	raw, err := ev.Bytes()
 	if err != nil {
@@ -240,6 +259,56 @@ func TestProcessExitEventEvictsOnlyThatPidsFdEntries(t *testing.T) {
 	if _, ok := el.fdState().cachedProcFdFile(9, crossPidB); !ok {
 		t.Fatalf("pid %d fd 9 must stay cached: another process exited, not this one", crossPidB)
 	}
+}
+
+// TestThreadExitKeepsTheProcessFdEntries pins the group_dead gate:
+// sched_process_exit fires per thread, and a thread dying while its siblings
+// live must not evict the process's descriptors. Evicting used to push every
+// later syscall on them through the /proc/<pid>/fd fallback, renaming the
+// descriptor (pipe:0:3:4 -> pipe:[N]) or losing it entirely once closed.
+func TestThreadExitKeepsTheProcessFdEntries(t *testing.T) {
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	el.fdState().set(crossFd, crossPidA, file.NewFd(crossFd, "/tmp/thread-exit.txt", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(9, crossPidA, file.NewFdWithPid(9, crossPidA))
+
+	el.processRawEvent(makeThreadExitEvent(t, defaulTime, crossPidA, crossTidA), make(chan *event.Pair, 1))
+
+	verifyFileDescriptor(t, el, crossPidA, crossFd, "/tmp/thread-exit.txt")
+	if _, ok := el.fdState().cachedProcFdFile(9, crossPidA); !ok {
+		t.Fatalf("pid %d fd 9 evicted from the procfs cache by a mere thread exit", crossPidA)
+	}
+
+	// The group-dead exit of the last thread then does evict.
+	el.processRawEvent(makeProcessExitEvent(t, defaulTime+1, crossPidA, crossTidA+1), make(chan *event.Pair, 1))
+	if _, ok := el.fdState().get(crossFd, crossPidA); ok {
+		t.Fatalf("pid %d fd %d still tracked after the whole process exited", crossPidA, crossFd)
+	}
+	if _, ok := el.fdState().cachedProcFdFile(9, crossPidA); ok {
+		t.Fatalf("pid %d fd 9 still cached after the whole process exited", crossPidA)
+	}
+}
+
+// TestTruncatedProcessExitRecordIsIgnored pins the negative path: a record
+// shorter than the group_dead layout (such as the old 24-byte one) fails to
+// decode instead of being read as a thread exit or, worse, a group-dead one,
+// so it changes no state and emits no row.
+func TestTruncatedProcessExitRecordIsIgnored(t *testing.T) {
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	el.fdState().set(crossFd, crossPidA, file.NewFd(crossFd, "/tmp/truncated.txt", syscall.O_RDONLY))
+
+	raw := makeProcessExitEvent(t, defaulTime, crossPidA, crossTidA)
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(raw[:24], out)
+
+	select {
+	case ep := <-out:
+		if ep != nil {
+			ep.Recycle()
+			t.Fatal("truncated process exit record was emitted as a row")
+		}
+	default:
+	}
+	verifyFileDescriptor(t, el, crossPidA, crossFd, "/tmp/truncated.txt")
 }
 
 // TestFdTableRetainsRecentlyUsedEntries pins the LRU cap the per-(pid, fd)

@@ -8,12 +8,14 @@ import (
 // the four pieces of state that would otherwise outlive the task the kernel
 // just reported dead.
 //
-// The fd table: the exited task belonged to tgid ev.Pid, so every (pid, fd)
-// entry of that process is dropped from the fdTracker and its procfs cache.
-// Without this, descriptors of dead processes lingered in the table until LRU
-// eviction - stale garbage for any fd number they ever held, and unbounded
-// growth on process-churning traces (see the note on
-// defaultMaxFdTableEntries).
+// The fd table: when the record says the whole thread group is dead
+// (ev.IsGroupDead), every (pid, fd) entry of tgid ev.Pid is dropped from the
+// fdTracker and its procfs cache. Without this, descriptors of dead processes
+// lingered in the table until LRU eviction - stale garbage for any fd number
+// they ever held, and unbounded growth on process-churning traces (see the
+// note on defaultMaxFdTableEntries). A record for a thread whose siblings
+// still live leaves the table alone: the descriptors belong to the process,
+// which still holds them.
 //
 // The comm cache: it is keyed by tid, and tids are recycled, so the entry for
 // ev.Tid would otherwise label the *next* process handed that tid number with
@@ -72,11 +74,15 @@ import (
 // on the sum.
 //
 // sched_process_exit fires per *task*, which lands differently on the four:
-//   - For the fd table, keyed by tgid, a thread exit inside a still-living
-//     multithreaded process evicts that process's entries early. That is
-//     degraded, not wrong: the next syscall on one of those descriptors
-//     resolves through the procfs fallback (/proc/<pid>/fd), which still
-//     answers correctly while the process lives and re-populates the table.
+//   - For the fd table, keyed by tgid, per-task is the wrong granularity, so
+//     the BPF handler flags the exit that ends the thread group (group_dead,
+//     see ior_exit_group_dead in internal/c/exec.c) and only that one
+//     evicts. Evicting on every thread exit, as this used to, was not merely
+//     degraded: the next syscall on a surviving descriptor went through the
+//     procfs fallback (/proc/<pid>/fd), which renames it (pipe:0:3:4 becomes
+//     pipe:[N], splitting one fd's rows across names in aggregates and -path
+//     filters), yields nothing for an fd closed in the meantime, and under
+//     event-loop lag can resolve a reused fd number to the wrong file.
 //   - For the comm cache, the pair tracker and the pending-handle tracker, all
 //     keyed by tid, per-task is exactly the right granularity: only the name,
 //     parked enter, gap baseline and unconsumed name_to_handle_at pathname of
@@ -85,10 +91,13 @@ import (
 // A record lost to ring-buffer backpressure simply never evicts (counted in
 // ringbuf_drop_map like every other record); the stale entries linger until
 // the LRU cap trims them, which is the same trade the procfs cache already
-// makes per (pid, fd).
+// makes per (pid, fd). Losing the one group-dead record of a process has the
+// same effect for its fd entries.
 func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	defer ev.Recycle()
-	e.fdState().deletePid(ev.Pid)
+	if ev.IsGroupDead() {
+		e.fdState().deletePid(ev.Pid)
+	}
 	e.evictCachedComm(ev.Tid)
 	// Neither of these guards tid == 0 the way commResolver.evictTid does:
 	// there the guard exists because a zero tid is the resolver's "unknown"

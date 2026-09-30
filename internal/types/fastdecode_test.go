@@ -451,7 +451,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// that evicts a dead process's fdTracker entries. Same table membership
 	// rationale as ProcessExecEvent above.
 	t.Run("ProcessExitEvent", func(t *testing.T) {
-		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3}
+		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3, GroupDead: 1}
 		raw := rawBytes(t, ev)
 
 		slow := NewProcessExitEvent(raw)
@@ -462,6 +462,54 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exit decode mismatch")
 		}
 	})
+}
+
+// TestNewProcessExitEventFastKernelLayout pins the kernel byte offsets of
+// struct process_exit_event, in particular group_dead at 24..28: the event
+// loop evicts a process's fd table only when it is set, so a misplaced field
+// would either keep dead processes' descriptors or evict living ones.
+func TestNewProcessExitEventFastKernelLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		groupDead uint32
+		want      bool
+	}{
+		{name: "thread exit", groupDead: 0, want: false},
+		{name: "group dead", groupDead: 1, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make([]byte, processExitEventSize)
+			binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
+			binary.LittleEndian.PutUint64(raw[8:16], 7)
+			binary.LittleEndian.PutUint32(raw[16:20], 100)
+			binary.LittleEndian.PutUint32(raw[20:24], 101)
+			binary.LittleEndian.PutUint32(raw[24:28], tc.groupDead)
+
+			ev := NewProcessExitEventFast(raw)
+			if ev == nil {
+				t.Fatal("expected decoded process exit event for kernel layout payload")
+			}
+			defer ev.Recycle()
+			if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+				t.Fatalf("unexpected process exit decode: %#v", ev)
+			}
+			if ev.IsGroupDead() != tc.want {
+				t.Fatalf("IsGroupDead() = %v, want %v", ev.IsGroupDead(), tc.want)
+			}
+		})
+	}
+}
+
+// TestNewProcessExitEventFastRejectsShortPayloads pins the negative path: a
+// payload shorter than the group_dead layout - including the old 24-byte
+// record - must fail to decode rather than read as a thread exit.
+func TestNewProcessExitEventFastRejectsShortPayloads(t *testing.T) {
+	for _, n := range []int{0, 23, 24, processExitEventSize - 1} {
+		if ev := NewProcessExitEventFast(make([]byte, n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewProcessExitEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
