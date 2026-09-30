@@ -28,7 +28,8 @@ func openBasic() error {
 }
 
 // openDirfdPaths exercises forms that require userspace dirfd attribution: a
-// relative openat pathname plus AT_EMPTY_PATH statx and utimensat calls.
+// relative openat pathname plus AT_EMPTY_PATH statx and utimensat calls, in
+// that order, all against the same directory descriptor.
 func openDirfdPaths() error {
 	dir, cleanup, err := makeTempDir("open-dirfd-paths")
 	if err != nil {
@@ -36,13 +37,9 @@ func openDirfdPaths() error {
 	}
 	defer cleanup()
 
-	base := filepath.Join(dir, "dirfd-base")
-	if err := os.Mkdir(base, 0o755); err != nil {
-		return fmt.Errorf("mkdir dirfd base: %w", err)
-	}
-	dirFD, err := syscall.Open(base, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	dirFD, err := openDirfdBase(filepath.Join(dir, "dirfd-base"))
 	if err != nil {
-		return fmt.Errorf("open dirfd base: %w", err)
+		return err
 	}
 	defer syscall.Close(dirFD)
 
@@ -54,6 +51,28 @@ func openDirfdPaths() error {
 		return fmt.Errorf("close relative openat file: %w", err)
 	}
 
+	if err := statxEmptyPath(dirFD); err != nil {
+		return err
+	}
+	return utimensatEmptyPath(dirFD)
+}
+
+// openDirfdBase creates the base directory and opens it as an O_DIRECTORY
+// descriptor for the dirfd-relative calls.
+func openDirfdBase(base string) (int, error) {
+	if err := os.Mkdir(base, 0o755); err != nil {
+		return -1, fmt.Errorf("mkdir dirfd base: %w", err)
+	}
+	dirFD, err := syscall.Open(base, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open dirfd base: %w", err)
+	}
+	return dirFD, nil
+}
+
+// statxEmptyPath calls statx(dirFD, "", AT_EMPTY_PATH) so the stat target is
+// the descriptor itself and ior must attribute the path from the dirfd.
+func statxEmptyPath(dirFD int) error {
 	empty := []byte{0}
 	var statx [256]byte
 	_, _, errno := syscall.Syscall6(
@@ -70,12 +89,18 @@ func openDirfdPaths() error {
 	if errno != 0 {
 		return fmt.Errorf("statx AT_EMPTY_PATH: %w", errno)
 	}
+	return nil
+}
 
+// utimensatEmptyPath calls utimensat(dirFD, "", times, AT_EMPTY_PATH), the
+// descriptor-targeted form of utimensat.
+func utimensatEmptyPath(dirFD int) error {
+	empty := []byte{0}
 	times := [2]syscall.Timespec{
 		{Sec: 1_000_000_000},
 		{Sec: 1_000_000_000},
 	}
-	_, _, errno = syscall.Syscall6(
+	_, _, errno := syscall.Syscall6(
 		syscall.SYS_UTIMENSAT,
 		uintptr(dirFD),
 		uintptr(unsafe.Pointer(&empty[0])),

@@ -62,9 +62,27 @@ func createEventfd(number uintptr, initval, flags uintptr) (int, error) {
 	return int(fd), nil
 }
 
-func fdFromAirEventfdUsers() error {
-	const kernelSigsetSize = uintptr(8) // _NSIG / 8 on Linux
+// kernelSigsetSize is the kernel's sigset size (_NSIG / 8 on Linux), which
+// the legacy signalfd syscall expects as its size argument.
+const kernelSigsetSize = uintptr(8)
 
+// fdFromAirEventfdUsers exercises the syscalls that create descriptors "from
+// thin air" (no pathname): memfd_create, memfd_secret, userfaultfd, the
+// signalfd pair and timerfd. The groups run in this fixed order and every
+// descriptor is closed right after use.
+func fdFromAirEventfdUsers() error {
+	if err := createAnonMemoryFds(); err != nil {
+		return err
+	}
+	exerciseSignalfds()
+	exerciseTimerfd()
+	return nil
+}
+
+// createAnonMemoryFds issues memfd_create, memfd_secret and userfaultfd,
+// closing whatever descriptors they return. Their failures are tolerated
+// (e.g. memfd_secret is often disabled); only the traced calls matter.
+func createAnonMemoryFds() error {
 	memfdName, err := syscall.BytePtrFromString("ior-memfd")
 	if err != nil {
 		return fmt.Errorf("memfd name: %w", err)
@@ -78,9 +96,14 @@ func fdFromAirEventfdUsers() error {
 
 	fd, _, _ = syscall.RawSyscall(unix.SYS_USERFAULTFD, uintptr(unix.O_CLOEXEC), 0, 0)
 	closeIfValid(int(fd))
+	return nil
+}
 
+// exerciseSignalfds creates descriptors with signalfd and signalfd4, then
+// updates an existing signalfd through both syscalls.
+func exerciseSignalfds() {
 	var mask unix.Sigset_t
-	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), kernelSigsetSize)
+	fd, _, _ := syscall.RawSyscall(unix.SYS_SIGNALFD, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), kernelSigsetSize)
 	closeIfValid(int(fd))
 
 	fd, _, _ = syscall.RawSyscall(unix.SYS_SIGNALFD4, ^uintptr(0), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Sizeof(mask)))
@@ -100,20 +123,21 @@ func fdFromAirEventfdUsers() error {
 		_, _ = unix.Signalfd(signalFd, &mask, unix.SFD_NONBLOCK)
 		closeIfValid(signalFd)
 	}
+}
 
-	// Create a timerfd and, while it is still open, arm it with
-	// timerfd_settime and read it back with timerfd_gettime. Both of those
-	// syscalls take the timerfd as arg0 (kind=fd@arg0), so tracing them
-	// exercises the fd_event capture path fixed in commit 6ac9fa4: the enter
-	// handlers must resolve arg0 to the registered "timerfd:" descriptor
-	// rather than emitting a null event. We close the fd only after both
-	// operations so the descriptor stays registered for the duration.
-	fd, _, _ = syscall.RawSyscall(unix.SYS_TIMERFD_CREATE, uintptr(unix.CLOCK_MONOTONIC), uintptr(unix.TFD_CLOEXEC), 0)
+// exerciseTimerfd creates a timerfd and, while it is still open, arms it with
+// timerfd_settime and reads it back with timerfd_gettime. Both of those
+// syscalls take the timerfd as arg0 (kind=fd@arg0), so tracing them
+// exercises the fd_event capture path fixed in commit 6ac9fa4: the enter
+// handlers must resolve arg0 to the registered "timerfd:" descriptor
+// rather than emitting a null event. The fd is closed only after both
+// operations so the descriptor stays registered for the duration.
+func exerciseTimerfd() {
+	fd, _, _ := syscall.RawSyscall(unix.SYS_TIMERFD_CREATE, uintptr(unix.CLOCK_MONOTONIC), uintptr(unix.TFD_CLOEXEC), 0)
 	if int(fd) >= 0 {
 		armAndReadTimerfd(int(fd))
 		closeIfValid(int(fd))
 	}
-	return nil
 }
 
 func fanotifyFlags() error {
