@@ -268,17 +268,17 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read filter.c: %v", err)
 	}
-	fixup := regexp.MustCompile(`(?s)static __always_inline void ior_emit_open_name_fixup\(.*?\n\}\n`).FindString(filterC)
+	fixup := regexp.MustCompile(`(?s)static __always_inline void ior_emit_name_fixup\(.*?\n\}\n`).FindString(filterC)
 	if fixup == "" {
-		t.Fatal("ior_emit_open_name_fixup not found in filter.c")
+		t.Fatal("ior_emit_name_fixup not found in filter.c")
 	}
 	if strings.Contains(fixup, "__builtin_memset") {
-		t.Error("ior_emit_open_name_fixup memsets its filename")
+		t.Error("ior_emit_name_fixup memsets its filename")
 	}
 	failedReadDiscards := "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {\n" +
 		"        bpf_ringbuf_discard(ev, 0);\n        return;\n    }\n"
 	if !strings.Contains(fixup, failedReadDiscards) {
-		t.Error("ior_emit_open_name_fixup must discard a record whose read failed; only a successful read is terminated")
+		t.Error("ior_emit_name_fixup must discard a record whose read failed; only a successful read is terminated")
 	}
 	if !strings.Contains(filterC, "// String fields in ring-buffer records.") {
 		t.Error("filter.c lost the documented decision about stale bytes after the terminator")
@@ -338,6 +338,8 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 		unlinkNull   = "        ev->pathname[0] = 0;\n        ev->pathname_status = PATH_READ_NULL;\n"
 		unlinkFailed = "            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;\n"
 		execFailed   = "            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n"
+		// The failed branch of a recovering kind ends with the pointer stash.
+		unlinkStash = "            ior_stash_pending_filename(tid, ctx->args[0]);\n"
 	)
 	cases := []struct {
 		name, handler, old, replacement string
@@ -348,7 +350,8 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 		{"NULL branch unterminated", "sys_enter_unlink", unlinkNull, "        ev->pathname_status = PATH_READ_NULL;\n"},
 		{"failed read unterminated", "sys_enter_unlink", unlinkFailed, "            ev->pathname_status = PATH_READ_FAILED;\n"},
 		{"terminator on the success path", "sys_enter_unlink",
-			unlinkFailed + "        }\n", "            ev->pathname_status = PATH_READ_FAILED;\n        }\n        ev->pathname[0] = 0;\n"},
+			unlinkFailed + unlinkStash + "        }\n",
+			"            ev->pathname_status = PATH_READ_FAILED;\n" + unlinkStash + "        }\n        ev->pathname[0] = 0;\n"},
 		{"terminator at the wrong index", "sys_enter_unlink", unlinkNull,
 			"        ev->pathname[1] = 0;\n        ev->pathname_status = PATH_READ_NULL;\n"},
 		{"probe result unchecked", "sys_enter_unlink", "        if (bpf_probe_read_user_str(", "        (void)(bpf_probe_read_user_str("},

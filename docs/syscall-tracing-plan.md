@@ -171,9 +171,12 @@ succeeds does it store that word, truncated to the 32-bit `flags` field of the e
 NULL or unreadable pointer therefore stays
 distinguishable from `O_RDONLY` (zero).
 
-Open-family handlers retry a filename read at syscall exit when the enter-side nofault
-`bpf_probe_read_user_str` failed; the `OPEN_NAME_FIXUP_EVENT` control record repairs the
-pending enter event. Other pathname, name and exec handlers do not yet have that retry.
+Every path-capturing handler except exec and move_mount retries a path read at syscall exit
+when the enter-side nofault `bpf_probe_read_user_str` failed (open, pathname, fd-pathname and
+name kinds, memfd_create, fsopen); the `OPEN_NAME_FIXUP_EVENT` control record repairs the
+pending enter event, with a slot field telling the rename/link family's two names apart.
+exec does not retry (a successful exec replaces the address space) and move_mount's two paths
+are not covered yet.
 
 Polling records preserve `nfds` (or `maxevents` for epoll waits), timeout and the epoll
 instance descriptor where applicable. `timeout_ns = -1` means an infinite wait; `-2` means

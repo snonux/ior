@@ -1532,24 +1532,70 @@ func TestNewOpenNameFixupEventFastCompactKernelLayout(t *testing.T) {
 	if got := unsafe.Sizeof(OpenEvent{}); got != openEventSize {
 		t.Fatalf("sizeof(OpenEvent) = %d, want %d", got, openEventSize)
 	}
-	if got := openEventSize - openNameFixupEventSize; got != 52 {
-		t.Fatalf("compact fixup saves %d bytes over an open event, want 52", got)
+	if got := openEventSize - openNameFixupEventSize; got != 48 {
+		t.Fatalf("compact fixup saves %d bytes over an open event, want 48", got)
+	}
+	// The slot trails the string, so the pre-slot record is an exact prefix.
+	if got := openNameFixupEventSize - openNameFixupEventLegacySize; got != 4 {
+		t.Fatalf("slot widens the fixup by %d bytes, want 4", got)
 	}
 
-	raw := make([]byte, openNameFixupEventSize)
+	for _, slot := range []uint32{OPEN_NAME_FIXUP_SLOT_FIRST, OPEN_NAME_FIXUP_SLOT_SECOND} {
+		raw := make([]byte, openNameFixupEventSize)
+		binary.LittleEndian.PutUint32(raw[0:4], uint32(OPEN_NAME_FIXUP_EVENT))
+		binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_RENAMEAT2))
+		binary.LittleEndian.PutUint32(raw[8:12], 33)
+		copy(raw[12:268], "recovered")
+		binary.LittleEndian.PutUint32(raw[268:272], slot)
+
+		fast := NewOpenNameFixupEventFast(raw)
+		if fast == nil {
+			t.Fatalf("slot %d: expected decoded open-name fixup event for compact kernel payload", slot)
+		}
+		if fast.EventType != OPEN_NAME_FIXUP_EVENT || fast.TraceId != SYS_ENTER_RENAMEAT2 ||
+			fast.Tid != 33 || StringValue(fast.Filename[:]) != "recovered" || fast.Slot != slot {
+			t.Fatalf("slot %d: unexpected open-name fixup decode: %#v", slot, fast)
+		}
+		// Whatever the generated codec writes must decode to the same record.
+		written, err := fast.Bytes()
+		if err != nil || len(written) != openNameFixupEventSize {
+			t.Fatalf("slot %d: Bytes() = %d bytes, %v; want %d", slot, len(written), err, openNameFixupEventSize)
+		}
+		again := NewOpenNameFixupEventFast(written)
+		if again == nil || !again.Equals(fast) {
+			t.Fatalf("slot %d: round trip lost the record: %#v vs %#v", slot, again, fast)
+		}
+		again.Recycle()
+		fast.Recycle()
+	}
+}
+
+// A BPF object from before the slot existed emits 268-byte records, which only
+// ever carried the first (only) path; they must keep decoding as that, and must
+// not inherit a slot left over in a recycled pooled event.
+func TestNewOpenNameFixupEventFastPreSlotLayoutReadsAsFirstSlot(t *testing.T) {
+	stale := NewOpenNameFixupEventFast(func() []byte {
+		raw := make([]byte, openNameFixupEventSize)
+		binary.LittleEndian.PutUint32(raw[268:272], OPEN_NAME_FIXUP_SLOT_SECOND)
+		return raw
+	}())
+	if stale == nil || stale.Slot != OPEN_NAME_FIXUP_SLOT_SECOND {
+		t.Fatalf("setup: current-layout decode = %#v", stale)
+	}
+	stale.Recycle()
+
+	raw := make([]byte, openNameFixupEventLegacySize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(OPEN_NAME_FIXUP_EVENT))
 	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_OPENAT))
 	binary.LittleEndian.PutUint32(raw[8:12], 33)
-	copy(raw[12:268], "recovered")
-
+	copy(raw[12:268], "pre-slot")
 	fast := NewOpenNameFixupEventFast(raw)
 	if fast == nil {
-		t.Fatal("expected decoded open-name fixup event for compact kernel payload")
+		t.Fatal("expected the pre-slot 268-byte record to decode")
 	}
 	defer fast.Recycle()
-	if fast.EventType != OPEN_NAME_FIXUP_EVENT || fast.TraceId != SYS_ENTER_OPENAT ||
-		fast.Tid != 33 || StringValue(fast.Filename[:]) != "recovered" {
-		t.Fatalf("unexpected open-name fixup decode: %#v", fast)
+	if fast.Tid != 33 || StringValue(fast.Filename[:]) != "pre-slot" || fast.Slot != OPEN_NAME_FIXUP_SLOT_FIRST {
+		t.Fatalf("unexpected pre-slot decode: %#v", fast)
 	}
 }
 
@@ -1573,9 +1619,11 @@ func TestNewOpenNameFixupEventFastLegacyOpenEventLayout(t *testing.T) {
 }
 
 func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
-	if got := NewOpenNameFixupEventFast(make([]byte, openNameFixupEventSize+1)); got != nil {
-		got.Recycle()
-		t.Fatal("unexpected fixup layout decoded instead of being rejected")
+	for _, size := range []int{openNameFixupEventSize + 1, openNameFixupEventLegacySize + 1, openNameFixupEventLegacySize - 1, 0} {
+		if got := NewOpenNameFixupEventFast(make([]byte, size)); got != nil {
+			got.Recycle()
+			t.Fatalf("a %d-byte fixup layout decoded instead of being rejected", size)
+		}
 	}
 }
 

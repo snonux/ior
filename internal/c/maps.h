@@ -12,15 +12,19 @@ struct {
 } event_map SEC(".maps");
 
 // pending_filename carries a user-space string pointer from sys_enter to
-// sys_exit: the filename of an open whose sys_enter bpf_probe_read_user_str
-// faulted, so the sys_exit handler can read the string once the kernel has
-// faulted the page in, and the output buffer of getcwd (outputPathSyscalls in
+// sys_exit: the path argument of a syscall whose sys_enter
+// bpf_probe_read_user_str faulted (open, stat, access, unlink, rename, ...), so
+// the sys_exit handler can read the string once the kernel has faulted the page
+// in, and the output buffer of getcwd (outputPathSyscalls in
 // internal/generate/classify.go), whose path the kernel only writes during the
-// call. 0 means "nothing to read" and is the state ior_on_syscall_enter leaves
-// behind for every other syscall (the struct is zero-initialised there).
+// call. pending_filename2 is the same for the second path of the rename/link
+// family (newname); rename(old, new) can fault either, both or neither. 0
+// means "nothing to read" and is the state ior_on_syscall_enter leaves behind
+// for every other syscall (the struct is zero-initialised there).
 struct syscall_enter_state {
     __u64 start_ns;
     __u64 pending_filename;
+    __u64 pending_filename2;
     __u32 enter_trace_id;
     __u8 emit_event;
 };

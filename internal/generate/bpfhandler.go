@@ -47,7 +47,9 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		// "long ret", so the exit's own classification cannot tell us that -
 		// EnterKind carries it across (see codegen.go).
 		recoverFilename: !isEnter && kindRecoversFilename(tp.EnterKind),
-		outputPathArg:   outputPathArgForHandler(f.Name),
+		// The rename/link family has a second path with its own slot.
+		recoverSecondFilename: !isEnter && kindRecoversSecondFilename(tp.EnterKind),
+		outputPathArg:         outputPathArgForHandler(f.Name),
 	})
 }
 
@@ -89,13 +91,16 @@ type handlerSpec struct {
 	noreturn        bool
 	enterName       string
 	recoverFilename bool
+	// recoverSecondFilename adds the newname slot of the rename/link family to
+	// recoverFilename: a second stashed pointer and a second fixup record.
+	recoverSecondFilename bool
 	// outputPathArg is the argument index of an output path buffer the exit
 	// handler captures (outputPathSyscalls), or -1 for every other syscall.
 	outputPathArg int
 }
 
 // takesPendingFilename reports whether this exit handler takes the pointer the
-// enter handler stashed: the faulted-filename recovery and the output-path
+// enter handler stashed: the faulted-path recovery and the output-path
 // capture share the enter-state slot and the fixup record.
 func (h handlerSpec) takesPendingFilename() bool {
 	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0)
@@ -114,9 +119,10 @@ func enterConstForHandler(name string, isEnter bool) string {
 }
 
 // renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
-// scope gate, the per-tid enter/exit hook, and - for the open kinds and the
-// output-path syscalls (outputPathSyscalls) only - the stash/take/emit of a
-// user pointer carried on the enter state. Those lines are position-critical,
+// scope gate, the per-tid enter/exit hook, and - for the path-capturing kinds
+// and the output-path syscalls (outputPathSyscalls) only - the stash/take/emit
+// of a user pointer (two for the rename/link family) carried on the enter
+// state. Those lines are position-critical,
 // which is why they live here rather than in the kind emitters: the enter-side
 // stash must follow ior_on_syscall_enter (which creates this tid's enter-state
 // entry), the take must precede ior_on_syscall_exit (which deletes it) and the
@@ -134,6 +140,9 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 	b.WriteString("\n")
 	if h.takesPendingFilename() {
 		fmt.Fprintf(b, "    __u64 pending_filename = ior_take_pending_filename(tid, %s);\n", h.enterName)
+		if h.recoverSecondFilename {
+			fmt.Fprintf(b, "    __u64 pending_filename2 = ior_take_pending_filename2(tid, %s);\n", h.enterName)
+		}
 		b.WriteString("\n")
 	}
 	renderSyscallHook(b, h)
@@ -179,8 +188,9 @@ func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 // be paired with the fixup. Its exit publishes the buffer only after a
 // successful return (ret > 0, the copied byte count including the NUL): on
 // failure the kernel wrote nothing, so the buffer holds whatever the caller
-// left there. The faulted-filename recovery instead always emits, because its
-// pointer is only stashed when the enter-side read failed.
+// left there. The faulted-path recovery instead always emits, because its
+// pointers are only stashed when the enter-side read failed (a slot whose read
+// succeeded holds 0, for which ior_emit_name_fixup emits nothing).
 func renderPendingFilenameUse(b *strings.Builder, h handlerSpec) {
 	switch {
 	case h.isEnter && !h.noreturn && h.outputPathArg >= 0:
@@ -192,6 +202,9 @@ func renderPendingFilenameUse(b *strings.Builder, h handlerSpec) {
 		b.WriteString("\n")
 	case h.takesPendingFilename():
 		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
+		if h.recoverSecondFilename {
+			fmt.Fprintf(b, "    ior_emit_second_name_fixup(tid, %s, pending_filename2);\n", h.enterName)
+		}
 		b.WriteString("\n")
 	}
 }
@@ -557,7 +570,7 @@ func writeOpenFlagsCapture(b *strings.Builder, f *Format, flagsField string) {
 func generateExtraFdPathname(f *Format) string {
 	var b strings.Builder
 	b.WriteString("    ev->fd = (__s32)ctx->args[0];\n")
-	writePathReadCapture(&b, "pathname", "pathname_status", f.FieldNumber("pathname"))
+	writeRecoverablePathCapture(&b, "pathname", "pathname_status", f.FieldNumber("pathname"), "ior_stash_pending_filename")
 	writeDirfdCapture(&b, f, "dirfd", "dfd")
 	if f.Name == "sys_enter_fanotify_mark" {
 		writeArgumentCapture(&b, f, "flags", "flags")
@@ -573,7 +586,9 @@ func generateExtraPathname(tp GeneratedTracepoint, f *Format) string {
 	fieldName := tp.Classification.PathnameField
 	fieldIdx := f.FieldNumber(fieldName)
 	var b strings.Builder
-	writePathReadCapture(&b, "pathname", "pathname_status", fieldIdx)
+	// A failed nofault read is retried at sys_exit (ior_stash_pending_filename),
+	// so a stat/access/unlink of a never-touched path page still names its file.
+	writeRecoverablePathCapture(&b, "pathname", "pathname_status", fieldIdx, "ior_stash_pending_filename")
 	writeDirfdCapture(&b, f, "dirfd", "dfd", "dirfd")
 	writePathFlagsCapture(&b, f)
 	writePathTargetCapture(&b, f)
@@ -616,8 +631,9 @@ func generateExtraName(f *Format) string {
 	oldIdx := f.FieldNumber("oldname")
 	newIdx := f.FieldNumber("newname")
 	var b strings.Builder
-	writePathReadCapture(&b, "oldname", "oldname_status", oldIdx)
-	writePathReadCapture(&b, "newname", "newname_status", newIdx)
+	// Each name has its own stash slot: either read can fault on its own.
+	writeRecoverablePathCapture(&b, "oldname", "oldname_status", oldIdx, "ior_stash_pending_filename")
+	writeRecoverablePathCapture(&b, "newname", "newname_status", newIdx, "ior_stash_pending_filename2")
 	writeDirfdCapture(&b, f, "olddirfd", "olddfd", "olddirfd")
 	writeDirfdCapture(&b, f, "newdirfd", "newdfd", "newdirfd")
 	if f.Name == "sys_enter_linkat" {
@@ -671,33 +687,43 @@ func writeArgumentCapture(b *strings.Builder, f *Format, eventField string, form
 // if guard so the independent syscall-semantics oracle can verify its source
 // argument and destination. The NULL and failed-read branches each write the
 // string's terminator (writeStringTerminator); a successful read terminates it
-// itself.
+// itself. This variant is for the kinds whose failed read is NOT retried at
+// sys_exit (exec, move_mount); see writeRecoverablePathCapture for the rest.
 func writePathReadCapture(b *strings.Builder, eventField, statusField string, argIdx int) {
+	writePathCapture(b, eventField, statusField, argIdx, "(void*)", "")
+}
+
+// writeRecoverablePathCapture is writePathReadCapture for the path fields of
+// the kinds whose failed enter-side read is retried at sys_exit: the failed
+// branch also stashes the user pointer with stashFn
+// (ior_stash_pending_filename for the first path, ior_stash_pending_filename2
+// for the newname of the rename/link family).
+func writeRecoverablePathCapture(b *strings.Builder, eventField, statusField string, argIdx int, stashFn string) {
+	writePathCapture(b, eventField, statusField, argIdx, "(void*)", stashFn)
+}
+
+// writeRecoverableFilenameCapture is writeRecoverablePathCapture for
+// ev->filename of the open kinds and named descriptor creators.
+func writeRecoverableFilenameCapture(b *strings.Builder, argIdx int) {
+	writePathCapture(b, "filename", "filename_status", argIdx, "(void *)", "ior_stash_pending_filename")
+}
+
+// writePathCapture emits the shared three-state capture. The stash goes after
+// the terminator and inside the failure branch only, so the extra map lookup
+// stays off the hot path. cast is the spelling of the pointer cast, which the
+// committed artifact and its tests pin per kind.
+func writePathCapture(b *strings.Builder, eventField, statusField string, argIdx int, cast, stashFn string) {
 	fmt.Fprintf(b, "    if (ctx->args[%d] == 0) {\n", argIdx)
 	writeStringTerminator(b, "        ", eventField)
 	fmt.Fprintf(b, "        ev->%s = PATH_READ_NULL;\n", statusField)
 	b.WriteString("    } else {\n")
 	fmt.Fprintf(b, "        ev->%s = PATH_READ_OK;\n", statusField)
-	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->%s, sizeof(ev->%s), (void*)ctx->args[%d]) < 0) {\n", eventField, eventField, argIdx)
+	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->%s, sizeof(ev->%s), %sctx->args[%d]) < 0) {\n", eventField, eventField, cast, argIdx)
 	fmt.Fprintf(b, "            ev->%s = PATH_READ_FAILED;\n", statusField)
 	writeStringTerminator(b, "            ", eventField)
-	b.WriteString("        }\n")
-	b.WriteString("    }\n")
-}
-
-// writeRecoverableFilenameCapture is writePathReadCapture for ev->filename of
-// the kinds whose failed enter-side read is retried at sys_exit: the failed
-// branch also stashes the user pointer (ior_stash_pending_filename).
-func writeRecoverableFilenameCapture(b *strings.Builder, argIdx int) {
-	fmt.Fprintf(b, "    if (ctx->args[%d] == 0) {\n", argIdx)
-	writeStringTerminator(b, "        ", "filename")
-	b.WriteString("        ev->filename_status = PATH_READ_NULL;\n")
-	b.WriteString("    } else {\n")
-	b.WriteString("        ev->filename_status = PATH_READ_OK;\n")
-	fmt.Fprintf(b, "        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0) {\n", argIdx)
-	b.WriteString("            ev->filename_status = PATH_READ_FAILED;\n")
-	writeStringTerminator(b, "            ", "filename")
-	fmt.Fprintf(b, "            ior_stash_pending_filename(tid, ctx->args[%d]);\n", argIdx)
+	if stashFn != "" {
+		fmt.Fprintf(b, "            %s(tid, ctx->args[%d]);\n", stashFn, argIdx)
+	}
 	b.WriteString("        }\n")
 	b.WriteString("    }\n")
 }
@@ -712,7 +738,7 @@ func writeRecoverableFilenameCapture(b *strings.Builder, argIdx int) {
 // the copied bytes; every other outcome (a NULL pointer, a failed read, a
 // field the syscall does not capture) gets this terminator. What follows the
 // NUL is never interpreted. Why stale bytes there are acceptable is recorded
-// next to ior_emit_open_name_fixup in internal/c/filter.c.
+// next to ior_emit_name_fixup in internal/c/filter.c.
 func writeStringTerminator(b *strings.Builder, indent, eventField string) {
 	fmt.Fprintf(b, "%sev->%s[0] = 0;\n", indent, eventField)
 }

@@ -2799,6 +2799,7 @@ int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -2819,9 +2820,13 @@ int handle_sys_exit_mq_unlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MQ_UNLINK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MQ_UNLINK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MQ_UNLINK, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -3771,6 +3776,7 @@ int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -3791,9 +3797,13 @@ int handle_sys_exit_quotactl(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_QUOTACTL);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_QUOTACTL, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_QUOTACTL, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -3900,6 +3910,7 @@ int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -3920,9 +3931,13 @@ int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_NAME_TO_HANDLE_AT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_NAME_TO_HANDLE_AT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -5362,6 +5377,7 @@ int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[4]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[4]);
         }
     }
     ev->dirfd = (__s32)ctx->args[3];
@@ -5379,9 +5395,13 @@ int handle_sys_exit_fanotify_mark(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FANOTIFY_MARK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FANOTIFY_MARK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FANOTIFY_MARK, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -5570,6 +5590,7 @@ int handle_sys_enter_inotify_add_watch(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -5587,9 +5608,13 @@ int handle_sys_exit_inotify_add_watch(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_INOTIFY_ADD_WATCH);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_INOTIFY_ADD_WATCH, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_INOTIFY_ADD_WATCH, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -5696,6 +5721,7 @@ int handle_sys_enter_file_getattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -5716,9 +5742,13 @@ int handle_sys_exit_file_getattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FILE_GETATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FILE_GETATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FILE_GETATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -5768,6 +5798,7 @@ int handle_sys_enter_file_setattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -5788,9 +5819,13 @@ int handle_sys_exit_file_setattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FILE_SETATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FILE_SETATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FILE_SETATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -5925,6 +5960,7 @@ int handle_sys_enter_fspick(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -5945,9 +5981,13 @@ int handle_sys_exit_fspick(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FSPICK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FSPICK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FSPICK, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -6054,6 +6094,7 @@ int handle_sys_enter_statfs(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -6074,9 +6115,13 @@ int handle_sys_exit_statfs(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_STATFS);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_STATFS, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_STATFS, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -6302,6 +6347,7 @@ int handle_sys_enter_utimensat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -6331,9 +6377,13 @@ int handle_sys_exit_utimensat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UTIMENSAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIMENSAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UTIMENSAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -6383,6 +6433,7 @@ int handle_sys_enter_futimesat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -6403,9 +6454,13 @@ int handle_sys_exit_futimesat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FUTIMESAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FUTIMESAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FUTIMESAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -6455,6 +6510,7 @@ int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -6475,9 +6531,13 @@ int handle_sys_exit_utimes(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UTIMES);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIMES, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UTIMES, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -6527,6 +6587,7 @@ int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -6547,9 +6608,13 @@ int handle_sys_exit_utime(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UTIME);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UTIME, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UTIME, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7054,6 +7119,7 @@ int handle_sys_enter_setxattrat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -7074,9 +7140,13 @@ int handle_sys_exit_setxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SETXATTRAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SETXATTRAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SETXATTRAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7126,6 +7196,7 @@ int handle_sys_enter_setxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7146,9 +7217,13 @@ int handle_sys_exit_setxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SETXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SETXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SETXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7198,6 +7273,7 @@ int handle_sys_enter_lsetxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7218,9 +7294,13 @@ int handle_sys_exit_lsetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LSETXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LSETXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LSETXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7327,6 +7407,7 @@ int handle_sys_enter_getxattrat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -7354,9 +7435,13 @@ int handle_sys_exit_getxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETXATTRAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_GETXATTRAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_GETXATTRAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7406,6 +7491,7 @@ int handle_sys_enter_getxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7428,9 +7514,13 @@ int handle_sys_exit_getxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_GETXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_GETXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7480,6 +7570,7 @@ int handle_sys_enter_lgetxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7502,9 +7593,13 @@ int handle_sys_exit_lgetxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LGETXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LGETXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LGETXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7617,6 +7712,7 @@ int handle_sys_enter_listxattrat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -7639,9 +7735,13 @@ int handle_sys_exit_listxattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LISTXATTRAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTXATTRAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LISTXATTRAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7691,6 +7791,7 @@ int handle_sys_enter_listxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7713,9 +7814,13 @@ int handle_sys_exit_listxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LISTXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LISTXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LISTXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7765,6 +7870,7 @@ int handle_sys_enter_llistxattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7787,9 +7893,13 @@ int handle_sys_exit_llistxattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LLISTXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LLISTXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LLISTXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7902,6 +8012,7 @@ int handle_sys_enter_removexattrat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -7922,9 +8033,13 @@ int handle_sys_exit_removexattrat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_REMOVEXATTRAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_REMOVEXATTRAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_REMOVEXATTRAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -7974,6 +8089,7 @@ int handle_sys_enter_removexattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -7994,9 +8110,13 @@ int handle_sys_exit_removexattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_REMOVEXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_REMOVEXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_REMOVEXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -8046,6 +8166,7 @@ int handle_sys_enter_lremovexattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -8066,9 +8187,13 @@ int handle_sys_exit_lremovexattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LREMOVEXATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LREMOVEXATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LREMOVEXATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -8175,6 +8300,7 @@ int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -8195,9 +8321,13 @@ int handle_sys_exit_umount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UMOUNT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UMOUNT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UMOUNT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -8323,6 +8453,7 @@ int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -8343,9 +8474,13 @@ int handle_sys_exit_mount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MOUNT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MOUNT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MOUNT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -8544,6 +8679,7 @@ int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -8564,9 +8700,13 @@ int handle_sys_exit_pivot_root(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_PIVOT_ROOT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_PIVOT_ROOT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_PIVOT_ROOT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -8616,6 +8756,7 @@ int handle_sys_enter_mount_setattr(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -8636,9 +8777,13 @@ int handle_sys_exit_mount_setattr(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MOUNT_SETATTR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MOUNT_SETATTR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MOUNT_SETATTR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -9680,6 +9825,7 @@ int handle_sys_enter_mknodat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -9700,9 +9846,13 @@ int handle_sys_exit_mknodat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MKNODAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MKNODAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MKNODAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -9752,6 +9902,7 @@ int handle_sys_enter_mknod(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -9772,9 +9923,13 @@ int handle_sys_exit_mknod(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MKNOD);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MKNOD, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MKNOD, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -9824,6 +9979,7 @@ int handle_sys_enter_mkdirat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -9844,9 +10000,13 @@ int handle_sys_exit_mkdirat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MKDIRAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MKDIRAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MKDIRAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -9896,6 +10056,7 @@ int handle_sys_enter_mkdir(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -9916,9 +10077,13 @@ int handle_sys_exit_mkdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MKDIR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MKDIR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MKDIR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -9968,6 +10133,7 @@ int handle_sys_enter_rmdir(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -9988,9 +10154,13 @@ int handle_sys_exit_rmdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_RMDIR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_RMDIR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_RMDIR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10040,6 +10210,7 @@ int handle_sys_enter_unlinkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -10060,9 +10231,13 @@ int handle_sys_exit_unlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UNLINKAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UNLINKAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UNLINKAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10112,6 +10287,7 @@ int handle_sys_enter_unlink(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10132,9 +10308,13 @@ int handle_sys_exit_unlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_UNLINK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_UNLINK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_UNLINK, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10184,6 +10364,7 @@ int handle_sys_enter_symlinkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     if (ctx->args[2] == 0) {
@@ -10194,6 +10375,7 @@ int handle_sys_enter_symlinkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[2]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[2]);
         }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10212,9 +10394,15 @@ int handle_sys_exit_symlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SYMLINKAT);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_SYMLINKAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SYMLINKAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SYMLINKAT, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_SYMLINKAT, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10264,6 +10452,7 @@ int handle_sys_enter_symlink(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     if (ctx->args[1] == 0) {
@@ -10274,6 +10463,7 @@ int handle_sys_enter_symlink(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[1]);
         }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10292,9 +10482,15 @@ int handle_sys_exit_symlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SYMLINK);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_SYMLINK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SYMLINK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SYMLINK, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_SYMLINK, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10344,6 +10540,7 @@ int handle_sys_enter_linkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     if (ctx->args[3] == 0) {
@@ -10354,6 +10551,7 @@ int handle_sys_enter_linkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[3]);
         }
     }
     ev->olddirfd = (__s32)ctx->args[0];
@@ -10372,9 +10570,15 @@ int handle_sys_exit_linkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LINKAT);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_LINKAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LINKAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LINKAT, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_LINKAT, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10424,6 +10628,7 @@ int handle_sys_enter_link(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     if (ctx->args[1] == 0) {
@@ -10434,6 +10639,7 @@ int handle_sys_enter_link(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[1]);
         }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10452,9 +10658,15 @@ int handle_sys_exit_link(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LINK);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_LINK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LINK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LINK, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_LINK, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10504,6 +10716,7 @@ int handle_sys_enter_renameat2(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     if (ctx->args[3] == 0) {
@@ -10514,6 +10727,7 @@ int handle_sys_enter_renameat2(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[3]);
         }
     }
     ev->olddirfd = (__s32)ctx->args[0];
@@ -10532,9 +10746,15 @@ int handle_sys_exit_renameat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_RENAMEAT2);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_RENAMEAT2);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAMEAT2, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_RENAMEAT2, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_RENAMEAT2, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10584,6 +10804,7 @@ int handle_sys_enter_renameat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     if (ctx->args[3] == 0) {
@@ -10594,6 +10815,7 @@ int handle_sys_enter_renameat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[3]);
         }
     }
     ev->olddirfd = (__s32)ctx->args[0];
@@ -10612,9 +10834,15 @@ int handle_sys_exit_renameat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_RENAMEAT);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_RENAMEAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAMEAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_RENAMEAT, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_RENAMEAT, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -10664,6 +10892,7 @@ int handle_sys_enter_rename(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[0]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     if (ctx->args[1] == 0) {
@@ -10674,6 +10903,7 @@ int handle_sys_enter_rename(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[1]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[1]);
         }
     }
     ev->olddirfd = -100; // AT_FDCWD: no dirfd argument
@@ -10692,9 +10922,15 @@ int handle_sys_exit_rename(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_RENAME);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_RENAME);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_RENAME, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_RENAME, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_RENAME, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11048,6 +11284,7 @@ int handle_sys_enter_newstat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -11068,9 +11305,13 @@ int handle_sys_exit_newstat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_NEWSTAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWSTAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_NEWSTAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11120,6 +11361,7 @@ int handle_sys_enter_newlstat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -11140,9 +11382,13 @@ int handle_sys_exit_newlstat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_NEWLSTAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWLSTAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_NEWLSTAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11192,6 +11438,7 @@ int handle_sys_enter_newfstatat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -11212,9 +11459,13 @@ int handle_sys_exit_newfstatat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_NEWFSTATAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_NEWFSTATAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_NEWFSTATAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11321,6 +11572,7 @@ int handle_sys_enter_readlinkat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -11341,9 +11593,13 @@ int handle_sys_exit_readlinkat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_READLINKAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_READLINKAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_READLINKAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11393,6 +11649,7 @@ int handle_sys_enter_readlink(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -11413,9 +11670,13 @@ int handle_sys_exit_readlink(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_READLINK);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_READLINK, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_READLINK, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -11465,6 +11726,7 @@ int handle_sys_enter_statx(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -11485,9 +11747,13 @@ int handle_sys_exit_statx(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_STATX);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_STATX, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_STATX, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12278,6 +12544,7 @@ int handle_sys_enter_truncate(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -12298,9 +12565,13 @@ int handle_sys_exit_truncate(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_TRUNCATE);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_TRUNCATE, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_TRUNCATE, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12464,6 +12735,7 @@ int handle_sys_enter_faccessat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -12484,9 +12756,13 @@ int handle_sys_exit_faccessat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FACCESSAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FACCESSAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FACCESSAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12536,6 +12812,7 @@ int handle_sys_enter_faccessat2(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -12556,9 +12833,13 @@ int handle_sys_exit_faccessat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FACCESSAT2);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FACCESSAT2, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FACCESSAT2, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12608,6 +12889,7 @@ int handle_sys_enter_access(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -12628,9 +12910,13 @@ int handle_sys_exit_access(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_ACCESS);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCESS, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_ACCESS, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12680,6 +12966,7 @@ int handle_sys_enter_chdir(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -12700,9 +12987,13 @@ int handle_sys_exit_chdir(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_CHDIR);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_CHDIR, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_CHDIR, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12809,6 +13100,7 @@ int handle_sys_enter_chroot(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -12829,9 +13121,13 @@ int handle_sys_exit_chroot(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_CHROOT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_CHROOT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_CHROOT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -12938,6 +13234,7 @@ int handle_sys_enter_fchmodat2(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -12958,9 +13255,13 @@ int handle_sys_exit_fchmodat2(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FCHMODAT2);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHMODAT2, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FCHMODAT2, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13010,6 +13311,7 @@ int handle_sys_enter_fchmodat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -13030,9 +13332,13 @@ int handle_sys_exit_fchmodat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FCHMODAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHMODAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FCHMODAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13082,6 +13388,7 @@ int handle_sys_enter_chmod(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -13102,9 +13409,13 @@ int handle_sys_exit_chmod(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_CHMOD);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_CHMOD, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_CHMOD, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13154,6 +13465,7 @@ int handle_sys_enter_fchownat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     ev->dirfd = (__s32)ctx->args[0];
@@ -13174,9 +13486,13 @@ int handle_sys_exit_fchownat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_FCHOWNAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_FCHOWNAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_FCHOWNAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13226,6 +13542,7 @@ int handle_sys_enter_chown(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -13246,9 +13563,13 @@ int handle_sys_exit_chown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_CHOWN);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_CHOWN, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_CHOWN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13298,6 +13619,7 @@ int handle_sys_enter_lchown(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -13318,9 +13640,13 @@ int handle_sys_exit_lchown(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_LCHOWN);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_LCHOWN, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_LCHOWN, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -13661,6 +13987,7 @@ int handle_sys_enter_creat(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -13681,9 +14008,13 @@ int handle_sys_exit_creat(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_CREAT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_CREAT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_CREAT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -14405,6 +14736,7 @@ int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -14425,9 +14757,13 @@ int handle_sys_exit_swapoff(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SWAPOFF);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SWAPOFF, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SWAPOFF, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -14477,6 +14813,7 @@ int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -14497,9 +14834,13 @@ int handle_sys_exit_swapon(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_SWAPON);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_SWAPON, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_SWAPON, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -16307,6 +16648,7 @@ int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[0]) < 0) {
             ev->pathname_status = PATH_READ_FAILED;
             ev->pathname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[0]);
         }
     }
     ev->dirfd = -100; // AT_FDCWD: no dirfd argument
@@ -16327,9 +16669,13 @@ int handle_sys_exit_acct(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_ACCT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_ACCT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_ACCT, pending_filename);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {

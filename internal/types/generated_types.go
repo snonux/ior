@@ -156,6 +156,8 @@ const POLL_EVENT_SCHEMA_VERSION = 1
 const EXEC_EVENT_SCHEMA_VERSION = 1
 const POLL_TIMEOUT_INFINITE_NS = -1
 const POLL_TIMEOUT_UNKNOWN_NS = -2
+const OPEN_NAME_FIXUP_SLOT_FIRST = 0
+const OPEN_NAME_FIXUP_SLOT_SECOND = 1
 const SYS_ENTER_SOCKET TraceId = 1899
 const SYS_EXIT_SOCKET TraceId = 1898
 const SYS_ENTER_SOCKETPAIR TraceId = 1897
@@ -967,10 +969,11 @@ type OpenNameFixupEvent struct {
 	TraceId   TraceId
 	Tid       uint32
 	Filename  [MAX_FILENAME_LENGTH]byte
+	Slot      uint32
 }
 
 func (o OpenNameFixupEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v", o.EventType, o.TraceId, o.Tid, StringValue(o.Filename[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v Slot:%v", o.EventType, o.TraceId, o.Tid, StringValue(o.Filename[:]), o.Slot)
 }
 
 func (o OpenNameFixupEvent) Equals(other any) bool {
@@ -978,7 +981,7 @@ func (o OpenNameFixupEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Tid == otherConcrete.Tid && o.Filename == otherConcrete.Filename
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Tid == otherConcrete.Tid && o.Filename == otherConcrete.Filename && o.Slot == otherConcrete.Slot
 }
 
 func (o *OpenNameFixupEvent) GetEventType() EventType {

@@ -20,7 +20,8 @@ const (
 	openEventCompactSize         = 316
 	openEventLegacyKernelSize    = 304
 	openEventLegacyCompactSize   = 300
-	openNameFixupEventSize       = 268
+	openNameFixupEventSize       = 272
+	openNameFixupEventLegacySize = 268
 	execEventSize                = 312
 	execEventLegacySize          = 304
 	nullEventSize                = 24
@@ -144,18 +145,32 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 }
 
 // NewOpenNameFixupEventFast decodes the compact control record that carries a
-// filename recovered at sys_exit. It also accepts the former open_event layout
-// so a pre-change IOR_BPF_OBJECT remains compatible. Unknown layouts return
-// nil rather than risk interpreting an unrelated offset as the tid or name.
+// path recovered at sys_exit. Three layouts are accepted, each from a BPF
+// object of a different age, and all read as a fixup for the FIRST path slot
+// except the current one:
+//
+//   - 272 bytes: the current record, with the path slot appended after the
+//     string (needed by the rename/link family's second name).
+//   - 268 bytes: the record before the slot existed. Its prefix is the current
+//     one, and it only ever carried the first (only) path.
+//   - the former open_event layouts: OPEN_NAME_FIXUP_EVENT originally reused
+//     struct open_event.
+//
+// Unknown layouts return nil rather than risk interpreting an unrelated offset
+// as the tid or name.
 func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
 	var tidOffset, filenameOffset int
+	slot := uint32(OPEN_NAME_FIXUP_SLOT_FIRST)
 	switch len(raw) {
 	case openNameFixupEventSize:
 		tidOffset = 8
 		filenameOffset = 12
+		slot = binary.LittleEndian.Uint32(raw[12+MAX_FILENAME_LENGTH:])
+	case openNameFixupEventLegacySize:
+		tidOffset = 8
+		filenameOffset = 12
 	case openEventLegacyKernelSize, openEventLegacyCompactSize:
-		// OPEN_NAME_FIXUP_EVENT originally reused struct open_event. Accept
-		// both its kernel sizeof and historical binary.Write layouts.
+		// Accept both its kernel sizeof and historical binary.Write layouts.
 		tidOffset = 20
 		filenameOffset = 28
 	default:
@@ -165,6 +180,7 @@ func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
 	o.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
 	o.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
 	o.Tid = binary.LittleEndian.Uint32(raw[tidOffset : tidOffset+4])
+	o.Slot = slot
 	copy(o.Filename[:], raw[filenameOffset:filenameOffset+MAX_FILENAME_LENGTH])
 	return o
 }

@@ -4,13 +4,16 @@ import (
 	"ior/internal/types"
 )
 
-// handleOpenNameFixupEvent splices a recovered open filename into the enter
-// event that is still waiting for its exit.
+// handleOpenNameFixupEvent splices a recovered path into the enter event that
+// is still waiting for its exit: the filename of an open, the pathname of a
+// stat/access/unlink/inotify_add_watch, or the oldname/newname of a
+// rename/link (the record's slot says which).
 //
 // Why the name can be missing in the first place: bpf_probe_read_user_str() is
 // a nofault read, so at sys_enter it returns -EFAULT and the handler leaves an
 // empty name whenever the path string's page is not resident - routinely the
-// case for the first open a program makes through a freshly mmap'ed library.
+// case for the first open a program makes through a freshly mmap'ed library,
+// and for any path argument living in never-touched memory.
 // The kernel's own getname() faults that page in as part of servicing the
 // call, so the identical read succeeds at sys_exit; the generated exit handler
 // re-reads it there and publishes it as this OPEN_NAME_FIXUP_EVENT control
@@ -24,9 +27,9 @@ import (
 // unpaired. A record lost to ring-buffer backpressure simply never arrives and
 // the row keeps its empty name, exactly as before this mechanism existed.
 //
-// The one residual case is a tid whose pending open enter never got its exit
-// (its exit record was itself lost to backpressure): a later open on the same
-// tid can then splice its name onto that orphan. It takes a counted drop to
+// The one residual case is a tid whose pending enter never got its exit
+// (its exit record was itself lost to backpressure): a later recovering call
+// on the same tid can then splice its name onto that orphan. It takes a counted drop to
 // reach, and the orphan can only ever be emitted by being mispaired with a
 // later exit - which is already broken with or without this splice - so it is
 // left to the drop counter rather than to extra per-record identity state.
@@ -49,51 +52,83 @@ func (e *eventLoop) handleOpenNameFixupEvent(ev *types.OpenNameFixupEvent) {
 	applyRecoveredFilename(pair.EnterEv, ev)
 }
 
+// applyRecoveredFilename splices the recovered string into the path field of
+// the pending enter event that the fixup's slot names.
 func applyRecoveredFilename(enterEv any, fixup *types.OpenNameFixupEvent) {
 	switch typed := enterEv.(type) {
 	case *types.OpenEvent:
 		applyRecoveredOpenFilename(typed, fixup)
 	case *types.EventfdEvent:
 		applyRecoveredEventfdFilename(typed, fixup)
+	case *types.PathEvent:
+		if fixup.Slot == types.OPEN_NAME_FIXUP_SLOT_FIRST {
+			spliceRecoveredPath(typed.GetTraceId(), &typed.Pathname, &typed.PathnameStatus, fixup)
+		}
+	case *types.FdPathEvent:
+		if fixup.Slot == types.OPEN_NAME_FIXUP_SLOT_FIRST {
+			spliceRecoveredPath(typed.GetTraceId(), &typed.Pathname, &typed.PathnameStatus, fixup)
+		}
+	case *types.NameEvent:
+		applyRecoveredNameEvent(typed, fixup)
 	}
 }
 
 func applyRecoveredOpenFilename(openEv *types.OpenEvent, ev *types.OpenNameFixupEvent) {
+	if ev.Slot != types.OPEN_NAME_FIXUP_SLOT_FIRST {
+		return
+	}
+	spliceRecoveredPath(openEv.GetTraceId(), &openEv.Filename, &openEv.FilenameStatus, ev)
+}
+
+func applyRecoveredEventfdFilename(eventfdEv *types.EventfdEvent, ev *types.OpenNameFixupEvent) {
+	if ev.Slot != types.OPEN_NAME_FIXUP_SLOT_FIRST {
+		return
+	}
+	spliceRecoveredPath(eventfdEv.GetTraceId(), &eventfdEv.Filename, &eventfdEv.FilenameStatus, ev)
+}
+
+// applyRecoveredNameEvent picks the rename/link name the fixup's slot belongs
+// to: the first slot is oldname, the second newname. The two are recovered
+// independently - either read can fault while the other succeeds - so a slot
+// only ever touches its own field, and one recovered name can never stand in
+// for the other.
+func applyRecoveredNameEvent(nameEv *types.NameEvent, ev *types.OpenNameFixupEvent) {
+	switch ev.Slot {
+	case types.OPEN_NAME_FIXUP_SLOT_FIRST:
+		spliceRecoveredPath(nameEv.GetTraceId(), &nameEv.Oldname, &nameEv.OldnameStatus, ev)
+	case types.OPEN_NAME_FIXUP_SLOT_SECOND:
+		spliceRecoveredPath(nameEv.GetTraceId(), &nameEv.Newname, &nameEv.NewnameStatus, ev)
+	}
+}
+
+// spliceRecoveredPath copies the fixup's string into one captured path field
+// of an enter event, under the three guards every recovering kind shares.
+func spliceRecoveredPath(enterTrace types.TraceId, name *[types.MAX_FILENAME_LENGTH]byte,
+	status *uint32, ev *types.OpenNameFixupEvent) {
 	// The kernel stamps the fixup with the enter trace ID it recovered the name
 	// for, and only after checking that the per-tid enter state still belongs
 	// to that syscall. Re-checking it here closes the userspace half of the
 	// same hazard: a fixup must never graft a path onto some *other* pending
-	// open of the same tid.
-	if openEv.GetTraceId() != ev.GetTraceId() {
+	// syscall of the same tid.
+	if enterTrace != ev.GetTraceId() {
 		return
 	}
 	// Only a failed non-NULL enter-side read can have stashed a pointer for the
 	// exit helper. Requiring that state prevents a synthetic or stale control
 	// record from turning a genuine NULL argument into a valid empty path.
-	if openEv.FilenameStatus != types.PATH_READ_FAILED {
+	if *status != types.PATH_READ_FAILED {
 		return
 	}
 	// Never overwrite a name the enter side captured itself. That read is the
 	// authoritative one - it saw the caller's buffer at the moment of the call,
 	// while this one saw it after the kernel had already copied it in.
-	if types.StringValue(openEv.Filename[:]) != "" {
+	if types.StringValue(name[:]) != "" {
 		return
 	}
-	copy(openEv.Filename[:], ev.Filename[:])
+	copy(name[:], ev.Filename[:])
 	// A submitted fixup is proof that the non-NULL pointer which failed at
 	// sys_enter was read successfully at sys_exit. That includes a return of 1
 	// for a valid empty C string, whose all-zero payload must remain
 	// distinguishable from receiving no control record at all.
-	openEv.FilenameStatus = types.PATH_READ_OK
-}
-
-func applyRecoveredEventfdFilename(eventfdEv *types.EventfdEvent, ev *types.OpenNameFixupEvent) {
-	if eventfdEv.GetTraceId() != ev.GetTraceId() || eventfdEv.FilenameStatus != types.PATH_READ_FAILED {
-		return
-	}
-	if types.StringValue(eventfdEv.Filename[:]) != "" {
-		return
-	}
-	copy(eventfdEv.Filename[:], ev.Filename[:])
-	eventfdEv.FilenameStatus = types.PATH_READ_OK
+	*status = types.PATH_READ_OK
 }

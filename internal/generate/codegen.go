@@ -21,9 +21,9 @@ type GeneratedTracepoint struct {
 	// EnterKind is the classification of the *enter* side of the same syscall.
 	// It is only meaningful on an exit tracepoint, where the handler otherwise
 	// has no idea what the enter side captured: a sys_exit_* format is always
-	// just "long ret", so every exit classifies as KindRet. The filename
+	// just "long ret", so every exit classifies as KindRet. The faulted-path
 	// recovery in renderHandler needs exactly that missing context - it must
-	// run on the exit of an open, not on the exit of a read.
+	// run on the exit of an open or a stat, not on the exit of a read.
 	EnterKind TracepointKind
 }
 

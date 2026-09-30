@@ -112,6 +112,7 @@ var scenarios = map[string]func() error{
 	"unlink-enoent":                 unlinkEnoent,
 	"unlink-rmdir-notempty":         unlinkRmdirNotempty,
 	"unlink-unlinkat-enoent":        unlinkUnlinkatEnoent,
+	"path-faulted-names":            faultedPathNames,
 	"dir-basic":                     dirBasic,
 	"dir-mkdirat":                   dirMkdirat,
 	"dir-mknodat-fifo":              dirMknodatFifo,

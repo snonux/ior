@@ -678,9 +678,15 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 			t.Fatal("mkdirat empty path must never defer to descriptor resolution")
 		}
 		pathEv.TraceId = types.SYS_ENTER_STATX
+		// A failed non-NULL read defers, but for the faulted-path recovery, not
+		// as AT_EMPTY_PATH: its fixup may still arrive at sys_exit, so the path
+		// dimension is judged at the exit checkpoint. That the deferral is not an
+		// empty-path claim is pinned where it matters, at the exit:
+		// TestHandlePathExitDistinguishesEmptyNullAndFailedPathReads and
+		// TestPathFixupNeverGraftsTheWrongName.
 		pathEv.PathnameStatus = types.PATH_READ_FAILED
-		if matchRawPathEvent(filter, pathEv) {
-			t.Fatal("failed non-NULL pathname read must not defer as AT_EMPTY_PATH")
+		if !matchRawPathEvent(filter, pathEv) {
+			t.Fatal("failed non-NULL pathname read must defer to the exit checkpoint, where its fixup may have landed")
 		}
 
 		pathEv.TraceId = types.SYS_ENTER_UTIMENSAT
@@ -720,8 +726,8 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 			t.Fatal("futimesat empty string must not defer to descriptor resolution")
 		}
 		pathEv.PathnameStatus = types.PATH_READ_FAILED
-		if matchRawPathEvent(filter, pathEv) {
-			t.Fatal("futimesat failed non-NULL pathname read must not defer")
+		if !matchRawPathEvent(filter, pathEv) {
+			t.Fatal("futimesat failed non-NULL pathname read must defer for fixup recovery")
 		}
 		pathEv.PathnameStatus = 99
 		if matchRawPathEvent(filter, pathEv) {
@@ -748,11 +754,17 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 					t.Fatalf("%s status %d without AT_EMPTY_PATH deferred", traceID.Name(), status)
 				}
 			}
-			for _, status := range []uint32{types.PATH_READ_FAILED, 99} {
-				ev := &types.PathEvent{TraceId: traceID, Dirfd: 7, PathnameStatus: status, Flags: unix.AT_EMPTY_PATH}
-				if matchRawPathEvent(filter, ev) {
-					t.Fatalf("%s untrusted status %d deferred", traceID.Name(), status)
-				}
+			// An unknown status is untrusted and never defers. A failed read does
+			// defer - not as an empty path but because the faulted-path fixup may
+			// still name it by sys_exit - whatever the flags say.
+			ev := &types.PathEvent{TraceId: traceID, Dirfd: 7, PathnameStatus: 99, Flags: unix.AT_EMPTY_PATH}
+			if matchRawPathEvent(filter, ev) {
+				t.Fatalf("%s untrusted status 99 deferred", traceID.Name())
+			}
+			ev.PathnameStatus = types.PATH_READ_FAILED
+			ev.Flags = 0
+			if !matchRawPathEvent(filter, ev) {
+				t.Fatalf("%s failed read did not defer for fixup recovery", traceID.Name())
 			}
 		}
 	})

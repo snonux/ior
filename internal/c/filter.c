@@ -433,11 +433,11 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
         ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));
 }
 
-// Recovering an open filename whose sys_enter read faulted.
+// Recovering a path whose sys_enter read faulted.
 //
 // bpf_probe_read_user_str() is a *nofault* read: it runs with page faults
 // disabled, so it cannot bring in a user page that is not resident and returns
-// -EFAULT instead, leaving no name in the destination buffer. For open-family
+// -EFAULT instead, leaving no name in the destination buffer. For path-taking
 // syscalls that is not a rare corner case. The path string usually lives in
 // freshly mapped, never-touched memory - the classic case is the very first
 // openat a program makes through a library it has only just mmap'ed, where the
@@ -451,17 +451,30 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
 // Retrying at sys_enter cannot help (the page is still not resident and the
 // read still cannot fault), but by sys_exit the kernel itself has copied the
 // path in through getname(), so the page is resident and the identical read
-// succeeds. The three helpers below implement exactly that: the enter handler
+// succeeds. The helpers below implement exactly that: the enter handler
 // stashes the user pointer on failure, the exit handler takes it back and
 // re-reads the string into a control record that userspace splices into the
 // still-pending enter event before the pair is completed.
 //
-// Open handlers and named descriptor creators (memfd_create/fsopen) do this.
-// In both cases a lost name propagates past the row itself into the fd table.
+// Every kind that captures a path does this: the open kinds and named
+// descriptor creators (memfd_create/fsopen), where a lost name also propagates
+// past the row into the fd table, and the pathname, fd-pathname and name
+// (rename/link) kinds - stat, access, unlink, inotify_add_watch, rename, ...
+// - where a lost name leaves the row with an empty file so -path cannot match
+// it and the Files tab attributes it to ''. The exit-side kernel read only
+// fails again when the kernel never copied the path in (the syscall bailed out
+// before getname(), e.g. on a bad flags word or descriptor); that read is then
+// discarded and the row keeps its empty name, exactly as before.
 // The control event keeps its original open-oriented name for wire/runtime
 // compatibility, but the recovery mechanism itself is intentionally shared.
 //
-// getcwd reuses the same three helpers for a different reason: its path is an
+// The rename/link family captures two paths. Each has its own stash slot
+// (pending_filename / pending_filename2 in syscall_enter_state) and its fixup
+// record says which it belongs to (open_name_fixup_event.slot), because
+// either, both or neither read can fault and the two recoveries are
+// independent: the first being recovered must never be spliced over the second.
+//
+// getcwd reuses the same helpers for a different reason: its path is an
 // OUTPUT buffer the kernel only fills during the call, so there is nothing to
 // read at sys_enter (outputPathSyscalls in internal/generate/classify.go). Its
 // enter handler stashes args[0] unconditionally once ior_on_syscall_enter has
@@ -473,7 +486,7 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
 
 // ior_stash_pending_filename records filename_ptr on this tid's in-flight
 // syscall state so the matching exit handler can read the string there. The
-// open kinds call it only on the read-failure path, so the extra map lookup
+// path kinds call it only on the read-failure path, so the extra map lookup
 // stays off their hot path; getcwd calls it on every emitted enter, since its
 // output buffer can only be read at sys_exit (see above).
 static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr) {
@@ -494,6 +507,24 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
     if (!state || state->enter_trace_id != enter_trace_id)
         return 0;
     return state->pending_filename;
+}
+
+// ior_stash_pending_filename2 / ior_take_pending_filename2 are the second-path
+// slot of the rename/link family (newname), with the same contract as the
+// first-slot helpers above.
+static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr) {
+    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
+
+    if (state)
+        state->pending_filename2 = filename_ptr;
+}
+
+static __always_inline __u64 ior_take_pending_filename2(__u32 tid, __u32 enter_trace_id) {
+    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
+
+    if (!state || state->enter_trace_id != enter_trace_id)
+        return 0;
+    return state->pending_filename2;
 }
 
 // String fields in ring-buffer records.
@@ -534,19 +565,20 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 // garbage after the NUL cannot change a row or a warning
 // (internal/eventloop_stringtail_test.go, internal/types/stringtail_test.go).
 
-// ior_emit_open_name_fixup reads the identifying string at sys_exit - a second
-// read of a faulted open name, or the first read of getcwd's output buffer,
-// which the generated caller guards with ctx->ret > 0 - and publishes it
-// as a compact OPEN_NAME_FIXUP_EVENT control record. It is reserved and
-// submitted before the exit event of the same syscall, and the ring buffer
-// preserves that order, so the single userspace consumer always applies the
-// fix while the enter event is still pending and unpaired.
+// ior_emit_name_fixup reads the identifying string at sys_exit - a second
+// read of a faulted path, or the first read of getcwd's output buffer, which
+// the generated caller guards with ctx->ret > 0 - and publishes it as a
+// compact OPEN_NAME_FIXUP_EVENT control record tagged with the path slot it
+// belongs to. It is reserved and submitted before the exit event of the same
+// syscall, and the ring buffer preserves that order, so the single userspace
+// consumer always applies the fix while the enter event is still pending and
+// unpaired.
 //
 // A still-failing read is discarded rather than submitted. A successful read
 // of an empty C string returns 1 and is deliberately submitted: that control
 // record proves the original non-NULL pathname was a valid empty string.
-static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,
-                                                     __u64 filename_ptr) {
+static __always_inline void ior_emit_name_fixup(__u32 tid, __u32 enter_trace_id,
+                                                __u64 filename_ptr, __u32 slot) {
     struct open_name_fixup_event *ev;
 
     if (!filename_ptr)
@@ -561,6 +593,7 @@ static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trac
     ev->event_type = OPEN_NAME_FIXUP_EVENT;
     ev->trace_id = enter_trace_id;
     ev->tid = tid;
+    ev->slot = slot;
     // No memset: a submitted record always holds a successful read, which is
     // NUL-terminated (see "String fields in ring-buffer records" above).
     if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {
@@ -569,6 +602,21 @@ static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trac
     }
 
     bpf_ringbuf_submit(ev, 0);
+}
+
+// ior_emit_open_name_fixup publishes the fixup of the first (or only) path of
+// an enter event: filename, pathname or oldname. Despite the name it serves
+// every recovering kind, not just open.
+static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,
+                                                     __u64 filename_ptr) {
+    ior_emit_name_fixup(tid, enter_trace_id, filename_ptr, OPEN_NAME_FIXUP_SLOT_FIRST);
+}
+
+// ior_emit_second_name_fixup publishes the fixup of the newname of the
+// rename/link family (see "Recovering a path whose sys_enter read faulted").
+static __always_inline void ior_emit_second_name_fixup(__u32 tid, __u32 enter_trace_id,
+                                                       __u64 filename_ptr) {
+    ior_emit_name_fixup(tid, enter_trace_id, filename_ptr, OPEN_NAME_FIXUP_SLOT_SECOND);
 }
 
 // filter() decides whether the current task's syscall is in scope. Today this is

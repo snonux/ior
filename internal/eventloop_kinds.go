@@ -302,10 +302,20 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	return filter.MatchOpenEvent(openEv)
 }
 
+// matchRawNameEvent is the enter-side gate for the rename/link kinds. A name
+// whose sys_enter read faulted (PATH_READ_FAILED) arrives empty and is
+// recovered by a fixup record at sys_exit, exactly like a faulted open name
+// (see matchRawOpenEvent), so its path dimension is deferred to the exit
+// checkpoint, where handleNameExit ends in finishPairForTid and every
+// dimension is applied against the recovered names. Judging the empty name now
+// would drop the row before the fixup could ever land.
 func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	nameEv, ok := ev.(*types.NameEvent)
 	if !ok || nameEv == nil {
 		return false
+	}
+	if nameEv.OldnameStatus == types.PATH_READ_FAILED || nameEv.NewnameStatus == types.PATH_READ_FAILED {
+		return true
 	}
 	if capturedPathNeedsDeferredResolution(nameEv.Olddirfd, types.StringValue(nameEv.Oldname[:]),
 		nameEv.OldnameStatus, nameEventAllowsEmptyPath(nameEv, true, true)) ||
@@ -316,10 +326,20 @@ func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	return filter.MatchNameEvent(nameEv)
 }
 
+// matchRawPathEvent is the enter-side gate for the pathname kinds. Like
+// matchRawNameEvent it defers the path dimension of a name whose sys_enter read
+// faulted (PATH_READ_FAILED): the recovered name only arrives as a fixup record
+// at sys_exit, and handlePathExit's finishPairForTid applies the filter then.
+// A name the fixup cannot recover (the read still fails, or the record is lost
+// to backpressure) reaches that checkpoint empty, which no non-empty -path
+// pattern matches, so the row is dropped there instead of here.
 func matchRawPathEvent(filter globalfilter.Filter, ev event.Event) bool {
 	pathEv, ok := ev.(*types.PathEvent)
 	if !ok || pathEv == nil {
 		return false
+	}
+	if pathEv.PathnameStatus == types.PATH_READ_FAILED {
+		return true
 	}
 	if pathEventTargetRequired(pathEv) && capturedPathNeedsDeferredResolution(pathEv.Dirfd, types.StringValue(pathEv.Pathname[:]),
 		pathEv.PathnameStatus, pathEventAllowsEmptyPath(pathEv, true)) {

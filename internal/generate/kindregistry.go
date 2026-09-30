@@ -10,12 +10,22 @@ type kindMeta struct {
 	// Kinds that are exit-only (e.g. KindRet) must not appear on enter.
 	enterAccepted bool
 	// recoversFilename reports whether this enter kind stashes its user-space
-	// filename pointer when bpf_probe_read_user_str faults, so that the matching
+	// path pointer when bpf_probe_read_user_str faults, so that the matching
 	// exit handler re-reads the string once the kernel has faulted the page in
-	// (see internal/c/filter.c). Only the open kinds do: they are the ones
-	// measurably losing names, and the only ones whose loss also poisons the fd
-	// table for every later read/write/close on the descriptor.
+	// (see internal/c/filter.c). Every kind that captures a path does: the open
+	// kinds and named descriptor creators, where a lost name also poisons the
+	// fd table for every later read/write/close on the descriptor, and the
+	// pathname, fd-pathname and name kinds (stat, access, unlink, inotify,
+	// rename, ...), where a lost name leaves the row's file empty so -path
+	// cannot match it. Kinds that capture a path but are not listed (exec,
+	// which replaces the address space the pointer belonged to, and move_mount)
+	// are deliberate or known gaps, see the notes on those kinds.
 	recoversFilename bool
+	// recoversSecondFilename reports whether the kind also recovers a second
+	// path (the newname of the rename/link family). It implies recoversFilename
+	// and uses its own stash slot and fixup slot, because either read can fault
+	// independently of the other.
+	recoversSecondFilename bool
 }
 
 // kindRegistry maps every known TracepointKind to its static metadata.
@@ -29,9 +39,9 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true},
 	KindExec:           {structName: "exec_event", enterAccepted: true},
-	KindPathname:       {structName: "path_event", enterAccepted: true},
-	KindFdPathname:     {structName: "fd_path_event", enterAccepted: true},
-	KindName:           {structName: "name_event", enterAccepted: true},
+	KindPathname:       {structName: "path_event", enterAccepted: true, recoversFilename: true},
+	KindFdPathname:     {structName: "fd_path_event", enterAccepted: true, recoversFilename: true},
+	KindName:           {structName: "name_event", enterAccepted: true, recoversFilename: true, recoversSecondFilename: true},
 	KindRet:            {structName: "ret_event", enterAccepted: false},
 	KindFcntl:          {structName: "fcntl_event", enterAccepted: true},
 	KindNull:           {structName: "null_event", enterAccepted: true},
@@ -74,6 +84,12 @@ var kindRegistry = map[TracepointKind]kindMeta{
 // filename recovery described in internal/c/filter.c.
 func kindRecoversFilename(kind TracepointKind) bool {
 	return lookupKind(kind).recoversFilename
+}
+
+// kindRecoversSecondFilename reports whether kind also recovers a second path
+// (newname) through its own stash and fixup slot.
+func kindRecoversSecondFilename(kind TracepointKind) bool {
+	return lookupKind(kind).recoversSecondFilename
 }
 
 // lookupKind returns the metadata for kind. If kind is not registered (e.g.

@@ -679,8 +679,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "string terminator erases a successful read",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "mq_unlink",
-					"            ev->pathname[0] = 0;\n        }\n",
-					"        }\n        ev->pathname[0] = 0;\n")
+					"            ev->pathname[0] = 0;\n            ior_stash_pending_filename(tid, ctx->args[0]);\n        }\n",
+					"            ior_stash_pending_filename(tid, ctx->args[0]);\n        }\n        ev->pathname[0] = 0;\n")
 			},
 		},
 		{
