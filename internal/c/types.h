@@ -533,9 +533,16 @@ struct perf_open_event {
 // entered under old_tid returns under tid. Userspace re-keys the parked
 // execve enter from old_tid to tid on this record so the exit still pairs
 // (eventLoop.rekeyExecCaller); the BPF side moves the syscall_enter_state_map
-// entry the same way (ior_on_exec_tid_change in filter.c). The explicit
-// reserved word keeps the layout at 48 bytes with no implicit padding, so
-// kernel and binary.Write payloads share one size.
+// entry the same way (ior_on_exec_tid_change in filter.c).
+//
+// exit_untraced (0 or 1; a __u32 because the Go type generator maps only
+// 32/64-bit integers) is set when only the pre-exec caller was in scope:
+// -tid traced a non-leader thread, whose post-exec (leader) tid the filter
+// rejects, so the execve's sys_exit record will never arrive. Userspace then
+// completes the parked execve enter from this record
+// (eventLoop.completeUntracedExec). The word occupies what used to be an
+// explicit tail pad, so the layout stays 48 bytes with no implicit padding
+// and kernel and binary.Write payloads share one size.
 struct process_exec_event {
     __u32 event_type;
     __u32 trace_id;
@@ -544,7 +551,7 @@ struct process_exec_event {
     __u32 tid;
     char comm[MAX_PROGNAME_LENGTH];
     __u32 old_tid;
-    __u32 reserved;
+    __u32 exit_untraced;
 };
 
 // process_exit_event is not a syscall tracepoint event: it is emitted by the

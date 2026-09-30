@@ -421,8 +421,9 @@ Scenarios whose ior arguments depend on workload state use two harness hooks.
 by both `RunWithIorArgs` and `RunParquetWithIorArgs`. On the workload side,
 `scenarioPrestarts` (`cmd/ioworkload/scenario_threadexit.go`) runs a hook
 *before* the PID is printed, i.e. before ior starts: `thread-exit-tid-worker`
-uses it to park a worker thread and write its TID to `$IOR_WORKLOAD_TID_FILE`,
-which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
+and `exec-non-leader-thread-tid` use it (`startParkedWorker`) to park a worker
+thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
+`IorArgsForPID` reads to pass `-tid <worker>`.
 
 ## TUI Behavior
 
@@ -743,8 +744,9 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
   taken after the kernel installed the new name. It is not a syscall
   tracepoint, so it lives outside `probemanager` and is attached directly by
   `attachProcessExecProbe` — **before** the syscall tracepoints, and regardless
-  of `-trace-*` selection. Control records never become rows; they only refresh
-  the cache (`handleProcessExecEvent`), and because the ring buffer preserves
+  of `-trace-*` selection. Control records never become rows themselves (the
+  exec record may complete an untraced-exit execve pair, see *Non-leader exec*);
+  they refresh the cache (`handleProcessExecEvent`), and because the ring buffer preserves
   reservation order and the event loop has a single consumer goroutine, the
   refresh lands before the new program's first syscall pair — **for every record
   that is actually delivered**. Two residual paths are handled explicitly:
@@ -772,6 +774,19 @@ which the test's `IorArgsForPID` reads to pass `-tid <worker>`.
     enter (`adoptLostExecCaller`, via the pair tracker's per-pid
     `execCallers` index). Integration test: `TestNonLeaderExecIsPaired`
     (scenario `exec-non-leader-thread`).
+    Under `-tid <that non-leader>` the post-exec (leader) tid is filtered, so
+    the execve's exit never reaches userspace. The exec record is still
+    emitted for the traced caller (`ior_exec_record_scope` in `exec.c`:
+    `old_pid == TID_FILTER`, `PID_FILTER` still applies, ior excluded) and
+    flagged `exit_untraced`; userspace evicts the FD_CLOEXEC descriptors and
+    completes the parked enter from the record (`completeUntracedExec`: ret
+    0, duration ending at `sched_process_exec`). **`-tid` tracing of that
+    thread ends at the exec**: `TID_FILTER` is a load-time constant and
+    following the renumbered task would cost a map lookup in `filter()` for
+    every rejected event. Integration test:
+    `TestNonLeaderExecUnderTidFilterIsCompleted` (scenario
+    `exec-non-leader-thread-tid`, which parks the exec thread in a prestart
+    hook so its tid is known before ior starts).
   - *Late lookup worker.* A resolver worker that read `/proc/<tid>/comm` before
     the exec could otherwise overwrite the authoritative post-exec name. Each
     cache entry carries an exec epoch, bumped by `handleProcessExecEvent`; a

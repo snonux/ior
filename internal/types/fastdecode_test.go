@@ -435,7 +435,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// only triggers on the exact kernel payload size, so a struct-layout drift
 	// must show up as a decode mismatch here.
 	t.Run("ProcessExecEvent", func(t *testing.T) {
-		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 2, OldTid: 3}
+		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 2, OldTid: 3, ExitUntraced: 1}
 		copy(ev.Comm[:], "cat")
 		raw := rawBytes(t, ev)
 
@@ -466,9 +466,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 }
 
 // TestNewProcessExecEventFastKernelLayout pins the kernel byte offsets of
-// struct process_exec_event, in particular old_tid at 40..44 behind the comm:
-// the event loop re-keys a non-leader's parked execve enter from OldTid to
-// Tid, so a misplaced field would pair nothing or move the wrong enter.
+// struct process_exec_event, in particular old_tid at 40..44 behind the comm
+// and exit_untraced at 44..48: the event loop re-keys a non-leader's parked
+// execve enter from OldTid to Tid, and completes it from the record itself
+// when ExitUntraced is set, so a misplaced field would pair nothing, move the
+// wrong enter or complete an execve whose exit is still coming.
 func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
 	raw := make([]byte, processExecEventSize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXEC_EVENT))
@@ -477,6 +479,7 @@ func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[20:24], 100)
 	copy(raw[24:40], "newprog")
 	binary.LittleEndian.PutUint32(raw[40:44], 102)
+	binary.LittleEndian.PutUint32(raw[44:48], 1)
 
 	ev := NewProcessExecEventFast(raw)
 	if ev == nil {
@@ -484,7 +487,7 @@ func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
 	}
 	defer ev.Recycle()
 	if ev.EventType != PROCESS_EXEC_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 100 ||
-		ev.OldTid != 102 || StringValue(ev.Comm[:]) != "newprog" {
+		ev.OldTid != 102 || ev.ExitUntraced != 1 || StringValue(ev.Comm[:]) != "newprog" {
 		t.Fatalf("unexpected process exec decode: %#v", ev)
 	}
 }

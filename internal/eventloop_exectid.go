@@ -96,3 +96,62 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event) (*event.Pair, bool) 
 	e.applyExecTidChange(callerTid, ret.Tid)
 	return e.pairs.consume(ret.Tid)
 }
+
+// completeUntracedExec finishes a traced thread's successful execve whose
+// exit ior will never see, using the sched_process_exec record as its exit.
+//
+// BPF sets ExitUntraced only under -tid <non-leader> when that very thread
+// exec'd (ior_exec_record_scope in internal/c/exec.c): the execve entered
+// under the traced tid, but after de_thread() it returns under the leader's
+// tid, which the kernel-side tid filter rejects, so no sys_exit record
+// arrives. Without this the enter stayed parked until LRU trimming and the
+// thread's last traced syscall was never shown; at a sampling rate N the
+// emitted invocation was not counted anywhere either, since BPF leaves an
+// emitted enter to userspace (ior_on_exec_tid_change).
+//
+// sched_process_exec only fires once the exec is past its point of no return,
+// so the execve returns 0; its record's timestamp stands in for the exit's.
+// The duration therefore ends at the tracepoint, a little before the syscall
+// actually returns (the remaining tail is bprm teardown and the return to
+// user mode). rekeyExecCaller has already moved the enter to ev.Tid, so the
+// synthetic exit carries that tid and takes the ordinary exit path: exec
+// target handling, pair filters, gap bookkeeping. The row keeps the caller's
+// tid from the enter, like every non-leader execve row.
+//
+// Only a parked execve/execveat enter is completed. If there is none (execve
+// not traced, the enter filtered or trimmed), there is nothing to report.
+// Tracing of the thread ends here: its post-exec syscalls run under the
+// filtered leader tid.
+func (e *eventLoop) completeUntracedExec(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
+	pair, ok := e.pairs.pending(ev.Tid)
+	if !ok {
+		return
+	}
+	exitTraceID, ok := execExitTraceID(pair.EnterEv.GetTraceId())
+	if !ok {
+		return
+	}
+	e.tracepointExited(&types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   exitTraceID,
+		Time:      ev.Time,
+		Ret:       0,
+		Pid:       ev.Pid,
+		Tid:       ev.Tid,
+		RetType:   types.UNCLASSIFIED,
+	}, ch)
+}
+
+// execExitTraceID maps an exec-family enter trace id to its exit's. Any other
+// syscall reports false: only an execve/execveat can be completed by an exec
+// record.
+func execExitTraceID(enter types.TraceId) (types.TraceId, bool) {
+	switch enter {
+	case types.SYS_ENTER_EXECVE:
+		return types.SYS_EXIT_EXECVE, true
+	case types.SYS_ENTER_EXECVEAT:
+		return types.SYS_EXIT_EXECVEAT, true
+	default:
+		return 0, false
+	}
+}

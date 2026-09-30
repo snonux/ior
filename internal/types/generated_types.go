@@ -3179,18 +3179,18 @@ func (p *PerfOpenEvent) Recycle() {
 }
 
 type ProcessExecEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Comm      [MAX_PROGNAME_LENGTH]byte
-	OldTid    uint32
-	Reserved  uint32
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Comm         [MAX_PROGNAME_LENGTH]byte
+	OldTid       uint32
+	ExitUntraced uint32
 }
 
 func (p ProcessExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v OldTid:%v Reserved:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Comm[:]), p.OldTid, p.Reserved)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v OldTid:%v ExitUntraced:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Comm[:]), p.OldTid, p.ExitUntraced)
 }
 
 func (p ProcessExecEvent) Equals(other any) bool {
@@ -3198,7 +3198,7 @@ func (p ProcessExecEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Comm == otherConcrete.Comm && p.OldTid == otherConcrete.OldTid && p.Reserved == otherConcrete.Reserved
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Comm == otherConcrete.Comm && p.OldTid == otherConcrete.OldTid && p.ExitUntraced == otherConcrete.ExitUntraced
 }
 
 func (p *ProcessExecEvent) GetEventType() EventType {

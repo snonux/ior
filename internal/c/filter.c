@@ -384,8 +384,10 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 //   - The new tid is out of scope (in_scope 0, e.g. -tid traced the
 //     exec'ing thread and the leader's tid is filtered): the exit handler
 //     never runs. An invocation whose enter was not emitted would have been
-//     counted there, so it is counted here, untimed; an emitted enter is
-//     userspace's to drop, like any syscall that never returns in scope.
+//     counted there, so it is counted here, untimed. An emitted enter is
+//     userspace's: the exec record, still emitted for the traced caller and
+//     flagged exit_untraced (ior_exec_record_scope in exec.c), makes
+//     userspace complete it, so it is counted exactly once either way.
 static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid, int in_scope) {
     struct syscall_enter_state moved;
     struct syscall_enter_state *state;

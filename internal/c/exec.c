@@ -36,7 +36,53 @@
  * thread's exec lands on the filtered leader tid, and its entry must still be
  * reclaimed. For every exec that keeps its tid the move returns after one
  * compare.
+ *
+ * -tid <non-leader> is the one case where the exec'ing task is in scope before
+ * the exec but not after it: filter() accepted the caller's tid, while the
+ * record's tid is the leader's, which TID_FILTER rejects. The record is still
+ * emitted for it (ior_exec_record_scope below), flagged exit_untraced, because
+ * it is userspace's only notice that the process's FD_CLOEXEC descriptors are
+ * gone and that the execve it parked under the caller's tid has succeeded.
+ * The execve's own exit returns under the filtered leader tid and never
+ * arrives, so userspace completes the parked enter from this record instead.
+ *
+ * -tid tracing of that thread ends at such an exec. TID_FILTER is a
+ * load-time constant, and following the task onto the leader tid would need
+ * a map lookup in filter() on every event of every task the tid filter
+ * rejects; the renumbered thread is therefore not traced any further (see
+ * the -tid notes in AGENTS.md).
  */
+
+// Emission scope of a sched_process_exec record.
+enum ior_exec_scope {
+    IOR_EXEC_OUT_OF_SCOPE = 0,
+    // filter() accepts the post-exec task: the execve's exit is traced too.
+    IOR_EXEC_IN_SCOPE,
+    // Only the pre-exec caller was traced (-tid <non-leader>): emit, but flag
+    // the record exit_untraced.
+    IOR_EXEC_CALLER_TRACED,
+};
+
+// ior_exec_record_scope classifies an exec for emission. in_scope is
+// filter()'s verdict on the post-exec task, pid its tgid and old_tid the
+// caller's pre-exec tid. ior itself was already excluded by the caller.
+//
+// The caller-traced case mirrors ior_process_exit_in_scope's bypass for the
+// sched_process_exit record, with a narrower key: it is not "some thread of
+// the traced process" but the traced thread itself, identified exactly by
+// old_tid == TID_FILTER (tid reuse aside, the same ambiguity filter() has).
+// PID_FILTER still applies, so -pid P -tid T never emits for a T outside P.
+static __always_inline enum ior_exec_scope
+ior_exec_record_scope(int in_scope, __u32 pid, __u32 old_tid) {
+    if (in_scope)
+        return IOR_EXEC_IN_SCOPE;
+    if (-1 == TID_FILTER || old_tid != TID_FILTER)
+        return IOR_EXEC_OUT_OF_SCOPE;
+    if (-1 != PID_FILTER && pid != PID_FILTER)
+        return IOR_EXEC_OUT_OF_SCOPE;
+    return IOR_EXEC_CALLER_TRACED;
+}
+
 SEC("tracepoint/sched/sched_process_exec")
 int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     // Zero-initialised: filter() leaves tid unwritten on its early ior-self
@@ -44,11 +90,13 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     __u32 pid = 0, tid = 0;
     struct process_exec_event *ev;
     int in_scope = !filter(&pid, &tid);
+    enum ior_exec_scope scope;
 
     if (pid == IOR_PID_FILTER)
         return 0;
     ior_on_exec_tid_change((__u32)ctx->old_pid, tid, in_scope);
-    if (!in_scope)
+    scope = ior_exec_record_scope(in_scope, pid, (__u32)ctx->old_pid);
+    if (scope == IOR_EXEC_OUT_OF_SCOPE)
         return 0;
 
     ev = bpf_ringbuf_reserve(&event_map, sizeof(struct process_exec_event), 0);
@@ -68,8 +116,7 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     // records" in filter.c.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->old_tid = (__u32)ctx->old_pid;
-    // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
-    ev->reserved = 0;
+    ev->exit_untraced = scope == IOR_EXEC_CALLER_TRACED ? 1 : 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

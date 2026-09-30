@@ -55,7 +55,7 @@ func makeProcessExecEventFrom(t *testing.T, time uint64, pid, tid, oldTid uint32
 
 // processExecEventWireSize pins the kernel payload size of struct
 // process_exec_event (internal/c/types.h): 4+4+8+4+4+16+4(old_tid)+
-// 4(reserved) with no trailing padding. NewProcessExecEventFast takes its
+// 4(exit_untraced) with no trailing padding. NewProcessExecEventFast takes its
 // fast path only at this exact length, so a drift here would silently move
 // every decode onto the slow binary.Read path.
 const processExecEventWireSize = 48
@@ -382,8 +382,8 @@ func TestTypedRuntimeControlDropsMalformedEvent(t *testing.T) {
 	}
 
 	var recycles int32
-	control := typedRuntimeControl((*eventLoop).handleProcessExecEvent)
-	control(el, &recycleCountingEvent{tid: execCommTid, recycleCount: &recycles})
+	control := typedRuntimePairControl((*eventLoop).handleProcessExecEvent)
+	control(el, &recycleCountingEvent{tid: execCommTid, recycleCount: &recycles}, nil)
 
 	if got := atomic.LoadInt32(&recycles); got != 1 {
 		t.Fatalf("malformed control event recycled %d times, want 1", got)

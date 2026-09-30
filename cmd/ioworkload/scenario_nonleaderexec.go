@@ -37,6 +37,32 @@ func execNonLeaderThread() error {
 	return <-result
 }
 
+// execWorker is the parked exec thread of exec-non-leader-thread-tid.
+var execWorker parkedWorker
+
+// startExecWorker parks the thread that will exec in exec-non-leader-thread-tid
+// and publishes its TID before ior starts, so the harness can run ior with
+// -tid <that thread> (task dp2). The plain scenario learns the tid only right
+// before the exec, which is too late for a -tid argument.
+func startExecWorker() error {
+	target, err := exec.LookPath("true")
+	if err != nil {
+		return fmt.Errorf("look up true: %w", err)
+	}
+	execWorker, err = startParkedWorker(func() error { return execFromThisThread(target) })
+	return err
+}
+
+// execNonLeaderThreadTid releases the parked exec thread. Like
+// execNonLeaderThread it returns only if the exec failed: on success the
+// process becomes true(1). ior traces only the exec'ing thread here, whose
+// post-exec (leader) tid its filter rejects, so the execve's exit record never
+// reaches it; the exec record flagged exit_untraced must complete the row.
+func execNonLeaderThreadTid() error {
+	close(execWorker.start)
+	return <-execWorker.done
+}
+
 // execFromThisThread publishes the calling thread's tid and execs target. It
 // returns only on failure.
 func execFromThisThread(target string) error {

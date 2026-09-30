@@ -18,8 +18,11 @@ type runtimeEnterFilter func(filter globalfilter.Filter, ev event.Event) bool
 
 // runtimeControlHandler consumes a control event: a ring-buffer record that
 // carries state for the event loop instead of a syscall to report. The handler
-// owns the event and must recycle it.
-type runtimeControlHandler func(e *eventLoop, ev runtimeDecodedEvent)
+// owns the event and must recycle it. ch is the completed-pair channel of the
+// raw record being processed: a control record is never a row itself, but it
+// may complete at most one pending pair (the exec record under -tid, see
+// eventLoop.completeUntracedExec) and send it there like an exit record would.
+type runtimeControlHandler func(e *eventLoop, ev runtimeDecodedEvent, ch chan<- *event.Pair)
 
 type runtimeEventKind struct {
 	enterEventType types.EventType
@@ -64,15 +67,23 @@ func rawDecoder[T any, P decodedEventPtr[T]](decode func([]byte) P) runtimeEvent
 	}
 }
 
+// typedRuntimeControl adapts a control handler that only updates event-loop
+// state and never completes a pair.
 func typedRuntimeControl[T any, P decodedEventPtr[T]](handle func(*eventLoop, P)) runtimeControlHandler {
-	return func(e *eventLoop, ev runtimeDecodedEvent) {
+	return typedRuntimePairControl(func(e *eventLoop, ev P, _ chan<- *event.Pair) { handle(e, ev) })
+}
+
+// typedRuntimePairControl adapts a control handler that may complete a pending
+// pair and send it on ch. A record of the wrong type is reported and recycled.
+func typedRuntimePairControl[T any, P decodedEventPtr[T]](handle func(*eventLoop, P, chan<- *event.Pair)) runtimeControlHandler {
+	return func(e *eventLoop, ev runtimeDecodedEvent, ch chan<- *event.Pair) {
 		typed, ok := ev.(P)
 		if !ok {
 			e.notifyWarning("Dropped malformed control event")
 			ev.Recycle()
 			return
 		}
-		handle(e, typed)
+		handle(e, typed, ch)
 	}
 }
 
@@ -160,7 +171,7 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
 		enterRaw(types.ENTER_BPF_EVENT, rawDecoder[types.BpfEvent](types.NewBpfEvent), nil),
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
-			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
+			typedRuntimePairControl((*eventLoop).handleProcessExecEvent)),
 		// sched:sched_process_exit reports the tgid of an exiting task so the
 		// fdTracker can evict that process's (pid, fd) entries instead of
 		// holding them until LRU eviction (internal/eventloop_processexit.go).
