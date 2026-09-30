@@ -35,11 +35,16 @@ type familyRunState struct {
 	last probes.FamilyBatchProgressMsg
 }
 
-// staleBatchNote is appended to a family batch's outcome when the trace was
-// restarted or stopped while the batch ran on the old session's manager,
-// which cancels the batch: the intended set is kept for the next session (the
-// current one, after a restart, already started with it).
-const staleBatchNote = "(trace restarted or stopped meanwhile, batch cancelled; the intended probe set is kept for the next session)"
+// staleBatchNote and cancelledBatchNote are appended to a family batch's
+// outcome when the trace was restarted or stopped while the batch ran on the
+// old session's manager: the intended set is kept for the next session (the
+// current one, after a restart, already started with it). Ending the session
+// cancels the batch, but one that had already visited every probe finishes
+// uncancelled, so only a batch that reports the cancellation says so.
+const (
+	staleBatchNote     = "(trace restarted or stopped meanwhile; the intended probe set is kept for the next session)"
+	cancelledBatchNote = "(trace restarted or stopped meanwhile, batch cancelled; the intended probe set is kept for the next session)"
+)
 
 // familyBatchRunning reports whether a family batch of the current trace
 // session is in flight. A batch of an ended session no longer counts: it was
@@ -129,10 +134,11 @@ func (m *Model) handleFamilyToggledMsg(msg probes.FamilyToggledMsg) (tea.Model, 
 	}
 	m.familyRun.active = false
 	if !m.tracer.isCurrent(m.familyRun.session) {
+		note := staleBatchNote
 		if errors.Is(msg.Err, context.Canceled) {
-			msg.Err = nil
+			msg.Err, note = nil, cancelledBatchNote
 		}
-		m.probeModal = m.probeModal.FinishBatch(msg, staleBatchNote)
+		m.probeModal = m.probeModal.FinishBatch(msg, note)
 		m.refreshFamilyHint()
 		return m, nil
 	}

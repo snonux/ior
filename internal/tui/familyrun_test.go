@@ -141,8 +141,41 @@ func TestFamilyBatchOverlappingARestartKeepsItsIntent(t *testing.T) {
 	if !strings.Contains(view, "trace restarted") {
 		t.Fatalf("outcome does not mention the restart:\n%s", view)
 	}
-	if strings.Contains(view, "context canceled") {
-		t.Fatalf("the cancellation is reported as an error:\n%s", view)
+	if strings.Contains(view, "context canceled") || !strings.Contains(view, "batch cancelled") {
+		t.Fatalf("want the cancellation as a note, not an error:\n%s", view)
+	}
+}
+
+// TestFamilyBatchFinishedBeforeRestartIsNotCalledCancelled: a batch that
+// walked every probe just before its session ended was not cancelled, so its
+// late outcome notes the restart but must not claim a cancellation.
+func TestFamilyBatchFinishedBeforeRestartIsNotCalledCancelled(t *testing.T) {
+	m := newSessionModel(t, newSelectionManager())
+	m.probeModal = m.newProbeModal().SetSize(100, 40).Open()
+	next, cmd := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
+	m = next.(*Model)
+	msg := cmd()
+	for {
+		progress, ok := msg.(probes.FamilyBatchProgressMsg)
+		if !ok {
+			break
+		}
+		msg = progress.Next()()
+	}
+	result, ok := msg.(probes.FamilyToggledMsg)
+	if !ok || result.Err != nil || result.Result.Changed != 2 {
+		t.Fatalf("batch result = %#v, want a complete uncancelled attach", msg)
+	}
+
+	m.beginTraceCmd() // the session ends before the result is handled
+	next, _ = m.Update(result)
+	m = next.(*Model)
+	view := m.probeModal.View(100, 40)
+	if !strings.Contains(view, "trace restarted") || strings.Contains(view, "cancelled") {
+		t.Fatalf("want the restart noted without a cancellation:\n%s", view)
+	}
+	if want := []string{"connect", "read", "socket"}; !slices.Equal(m.tracer.attachSyscalls, want) {
+		t.Fatalf("attachSyscalls = %v, want the intent %v", m.tracer.attachSyscalls, want)
 	}
 }
 
