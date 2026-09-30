@@ -316,8 +316,10 @@ func TestTruncatedProcessExitRecordIsIgnored(t *testing.T) {
 // TestLegacyProcessExitRecordEvictsTheProcessFdEntries pins IOR_BPF_OBJECT
 // compatibility end to end: an object built before group_dead emits a
 // 24-byte exit record, which must not be dropped as malformed (a warning per
-// task exit, and no fd eviction at all) but read conservatively as group-dead,
-// evicting the tgid's fd entries on every exit as that userspace did.
+// task exit, and no fd eviction at all). Its unknown group_dead evicts the
+// tgid's fd entries on every exit as that userspace did, but is not counted
+// as a confirmed group-dead exit (stats retirement is covered by
+// TestGroupDeadExitSplitsRecycledPidStatsRows).
 func TestLegacyProcessExitRecordEvictsTheProcessFdEntries(t *testing.T) {
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
 	var warnings []string
@@ -343,8 +345,8 @@ func TestLegacyProcessExitRecordEvictsTheProcessFdEntries(t *testing.T) {
 		t.Fatalf("pid %d fd 9 still cached after a legacy exit record", crossPidA)
 	}
 	verifyFileDescriptor(t, el, crossPidB, crossFd, "/tmp/legacy-B.txt")
-	if el.numGroupDeadExits != 1 {
-		t.Fatalf("numGroupDeadExits = %d after a legacy exit record, want 1", el.numGroupDeadExits)
+	if el.numGroupDeadExits != 0 {
+		t.Fatalf("numGroupDeadExits = %d after a legacy exit record, want 0", el.numGroupDeadExits)
 	}
 }
 

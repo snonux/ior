@@ -61,7 +61,10 @@ func openAccess(t *testing.T, at uint64, pathname string) [][]byte {
 // test for task ro2: a group-dead sched_process_exit must end the PID's row in
 // the stats engine, so the next process handed the PID gets its own row and
 // label instead of merging into the dead one's under the new comm. A thread
-// exit (group_dead clear) must not split the row.
+// exit (group_dead clear) must not split the row, and neither may the legacy
+// 24-byte record of a pre-group_dead IOR_BPF_OBJECT, which cannot say whether
+// the process died (task gp2 review): retiring on it would split a live
+// multi-threaded process into one row per exited thread.
 func TestGroupDeadExitSplitsRecycledPidStatsRows(t *testing.T) {
 	tests := []struct {
 		name string
@@ -85,6 +88,17 @@ func TestGroupDeadExitSplitsRecycledPidStatsRows(t *testing.T) {
 			},
 			// One merged row: the leader's latest comm labels it, exactly
 			// as for an exec, and nothing is lost.
+			want: []statsengine.ProcessSnapshot{
+				{PID: recycledStatsPid, Lifetime: 0, Comm: "b", Syscalls: 5},
+			},
+		},
+		{
+			name: "legacy exit record keeps the row",
+			exit: func(t *testing.T, at uint64) []byte {
+				// The legacy layout is the current one minus group_dead
+				// and reserved.
+				return makeThreadExitEvent(t, at, recycledStatsPid, recycledStatsPid+1)[:24]
+			},
 			want: []statsengine.ProcessSnapshot{
 				{PID: recycledStatsPid, Lifetime: 0, Comm: "b", Syscalls: 5},
 			},

@@ -917,15 +917,17 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 // carrying the post-exec task comm, the caller's pre-exec tid (OldTid) and
 // whether the execve's exit is untraced (ExitUntraced, -tid <non-leader>).
 //
-// The legacy 40-byte record of a pre-old_tid IOR_BPF_OBJECT override is
-// decoded with OldTid 0 and ExitUntraced 0, i.e. "tid kept, exit still
-// coming": rekeyExecCaller skips OldTid 0, and an old object neither re-keyed
-// a non-leader exec's enter nor suppressed an execve exit, so this is exactly
-// what that userspace assumed. Any other size fails closed with nil rather
-// than decoding fields at wrong offsets.
+// Accepted sizes: the current 48-byte layout, and anything longer (its
+// prefix is decoded, so a newer object that appends fields stays readable);
+// and exactly the legacy 40-byte record of a pre-old_tid IOR_BPF_OBJECT
+// override. That one is decoded with OldTid 0 and ExitUntraced 0, i.e. "tid
+// kept, exit still coming": rekeyExecCaller skips OldTid 0, and an old object
+// neither re-keyed a non-leader exec's enter nor suppressed an execve exit,
+// so this is exactly what that userspace assumed. Every other size fails
+// closed with nil rather than decoding fields at wrong offsets.
 func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	legacy := len(raw) == processExecEventLegacySize
-	if !legacy && len(raw) != processExecEventSize {
+	if !legacy && len(raw) < processExecEventSize {
 		return nil
 	}
 	p := poolOfProcessExecEvents.Get().(*ProcessExecEvent)
@@ -944,22 +946,30 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	return p
 }
 
+// processExitGroupDeadUnknown is the GroupDead value NewProcessExitEventFast
+// stores for a legacy record that carries no group_dead word. The kernel only
+// ever writes 0 or 1 (ior_exit_group_dead), so the all-ones value cannot be
+// confused with a real flag. It lives in the wire field rather than in a
+// Go-only one because ProcessExitEvent is generated from types.h and read and
+// written with encoding/binary, which would serialise any extra field; every
+// pooled decode assigns GroupDead, so the marker can never leak from a
+// recycled event into the next record.
+const processExitGroupDeadUnknown = ^uint32(0)
+
 // NewProcessExitEventFast decodes the sched:sched_process_exit control record
 // identifying the exited task and, via GroupDead, whether its whole process
 // (tgid) died so userspace may evict the process's fd-table entries.
 //
-// The legacy 24-byte record of a pre-group_dead IOR_BPF_OBJECT override
-// cannot tell a thread exit from a process exit, so it is decoded with
-// GroupDead 1 (Reserved 0): every exit then evicts its tgid's fd entries, as
-// every exit did before group_dead existed. Reading it as a thread exit
-// instead would never evict a dead process's descriptors. The cost is the
-// old per-thread over-eviction (surviving threads fall back to
-// /proc/<pid>/fd) and a group-dead count and stats retirement per thread
-// exit. Any other size fails closed with nil rather than decoding fields at
-// wrong offsets.
+// Accepted sizes: the current 32-byte layout, and anything longer (its
+// prefix is decoded, so a newer object that appends fields stays readable);
+// and exactly the legacy 24-byte record of a pre-group_dead IOR_BPF_OBJECT
+// override. That record cannot tell a thread exit from a process exit, so it
+// is decoded as "group-dead unknown" (IsGroupDeadKnown false, Reserved 0);
+// see handleProcessExitEvent for how that is consumed. Every other size fails
+// closed with nil rather than decoding fields at wrong offsets.
 func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	legacy := len(raw) == processExitEventLegacySize
-	if !legacy && len(raw) != processExitEventSize {
+	if !legacy && len(raw) < processExitEventSize {
 		return nil
 	}
 	p := poolOfProcessExitEvents.Get().(*ProcessExitEvent)
@@ -968,7 +978,7 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	p.Time = binary.LittleEndian.Uint64(raw[8:16])
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
-	p.GroupDead = 1
+	p.GroupDead = processExitGroupDeadUnknown
 	p.Reserved = 0
 	if !legacy {
 		p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
@@ -977,13 +987,23 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	return p
 }
 
-// IsGroupDead reports whether the exited task was the last live thread of its
-// thread group, i.e. whether process Pid as a whole is gone. Per-thread exits
-// report false: their tgid still owns its descriptors. Kept as a method so
-// consumers read the flag without depending on its wire encoding. The event
-// loop uses it to forward group-dead exits to statsengine.Engine.RetireProcess
-// (see retireStatsProcess in internal/eventloop_processexit.go), so a recycled
-// PID starts a fresh stats row.
+// IsGroupDead reports whether the record says the exited task was the last
+// live thread of its thread group, i.e. that process Pid as a whole is gone.
+// Per-thread exits report false: their tgid still owns its descriptors. A
+// legacy record whose flag is unknown also reports false, so callers that
+// must act on a possible process death check IsGroupDeadKnown as well. Kept
+// as a method so consumers read the flag without depending on its wire
+// encoding. The event loop uses it to forward group-dead exits to
+// statsengine.Engine.RetireProcess (see retireStatsProcess in
+// internal/eventloop_processexit.go), so a recycled PID starts a fresh stats
+// row.
 func (p *ProcessExitEvent) IsGroupDead() bool {
-	return p.GroupDead != 0
+	return p.GroupDead != 0 && p.IsGroupDeadKnown()
+}
+
+// IsGroupDeadKnown reports whether the record carried a group_dead flag at
+// all. It is false only for the legacy 24-byte record of a pre-group_dead
+// IOR_BPF_OBJECT override, where any exit may have ended the process.
+func (p *ProcessExitEvent) IsGroupDeadKnown() bool {
+	return p.GroupDead != processExitGroupDeadUnknown
 }
