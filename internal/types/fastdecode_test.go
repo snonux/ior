@@ -528,17 +528,41 @@ func TestNewProcessExecEventFastDecodesLegacyRecord(t *testing.T) {
 	}
 }
 
-// TestNewProcessExecEventFastRejectsOtherSizes pins the negative path: only
-// the current 48-byte and the legacy 40-byte layouts decode. A truncated,
-// in-between or oversized payload fails closed instead of being read at the
+// TestNewProcessExecEventFastRejectsOtherSizes pins the negative path: below
+// the current 48-byte layout only the exact legacy 40-byte record decodes. A
+// truncated or in-between payload fails closed instead of being read at the
 // wrong offsets (e.g. as an exec that kept its tid).
 func TestNewProcessExecEventFastRejectsOtherSizes(t *testing.T) {
-	for _, n := range []int{0, 24, processExecEventLegacySize - 1, processExecEventLegacySize + 4,
-		processExecEventSize - 1, processExecEventSize + 1, processExecEventSize + 8} {
+	for _, n := range []int{0, 24, processExecEventLegacySize - 1, processExecEventLegacySize + 1,
+		processExecEventLegacySize + 4, processExecEventSize - 1} {
 		if ev := NewProcessExecEventFast(make([]byte, n)); ev != nil {
 			ev.Recycle()
 			t.Fatalf("NewProcessExecEventFast(%d bytes) decoded, want nil", n)
 		}
+	}
+}
+
+// TestNewProcessExecEventFastDecodesOversizedPrefix pins forward
+// compatibility: a newer object that appends fields to the record must still
+// have the current layout's prefix decoded, not be dropped as malformed.
+func TestNewProcessExecEventFastDecodesOversizedPrefix(t *testing.T) {
+	for _, extra := range []int{1, 8} {
+		raw := make([]byte, processExecEventSize+extra)
+		binary.LittleEndian.PutUint32(raw[20:24], 100)
+		copy(raw[24:40], "newprog")
+		binary.LittleEndian.PutUint32(raw[40:44], 102)
+		binary.LittleEndian.PutUint32(raw[44:48], 1)
+		for i := processExecEventSize; i < len(raw); i++ {
+			raw[i] = 0xff
+		}
+		ev := NewProcessExecEventFast(raw)
+		if ev == nil {
+			t.Fatalf("NewProcessExecEventFast(%d bytes) rejected, want prefix decoded", len(raw))
+		}
+		if ev.Tid != 100 || ev.OldTid != 102 || ev.ExitUntraced != 1 || StringValue(ev.Comm[:]) != "newprog" {
+			t.Fatalf("unexpected oversized process exec decode: %#v", ev)
+		}
+		ev.Recycle()
 	}
 }
 
@@ -581,48 +605,81 @@ func TestNewProcessExitEventFastKernelLayout(t *testing.T) {
 // TestNewProcessExitEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
 // compatibility path: the 24-byte record of an object built before group_dead
 // cannot tell a thread exit from a process exit, so it must decode as
-// group-dead (Reserved 0) - evicting on every exit as that userspace did -
-// rather than be dropped as malformed or read as a thread exit that never
-// evicts a dead process's descriptors. The pooled event is dirtied first so
-// the defaults cannot come from a zeroed allocation.
+// "group-dead unknown" (Reserved 0) rather than be dropped as malformed or
+// read as either a thread exit or a confirmed process exit. The pooled event
+// is dirtied with a confirmed group-dead record first, so neither the flag nor
+// the unknown marker can come from a zeroed allocation.
 func TestNewProcessExitEventFastDecodesLegacyRecord(t *testing.T) {
-	dirty := NewProcessExitEventFast(func() []byte {
-		raw := make([]byte, processExitEventSize)
-		binary.LittleEndian.PutUint32(raw[28:32], 5)
-		return raw
-	}())
-	dirty.Recycle()
+	NewProcessExitEventFast(processExitRaw(processExitEventSize, 1, 5)).Recycle()
 
-	raw := make([]byte, processExitEventLegacySize)
+	ev := NewProcessExitEventFast(processExitRaw(processExitEventLegacySize, 0, 0))
+	if ev == nil {
+		t.Fatal("legacy 24-byte process exit record rejected, want decoded")
+	}
+	if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected legacy process exit decode: %#v", ev)
+	}
+	if ev.IsGroupDeadKnown() || ev.IsGroupDead() || ev.Reserved != 0 {
+		t.Fatalf("legacy record known=%v dead=%v Reserved=%d, want false, false, 0",
+			ev.IsGroupDeadKnown(), ev.IsGroupDead(), ev.Reserved)
+	}
+	ev.Recycle()
+
+	// The marker must not leak into the next pooled decode either.
+	ev = NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, 0))
+	defer ev.Recycle()
+	if !ev.IsGroupDeadKnown() || ev.IsGroupDead() {
+		t.Fatalf("thread exit after a legacy record known=%v dead=%v, want true, false",
+			ev.IsGroupDeadKnown(), ev.IsGroupDead())
+	}
+}
+
+// processExitRaw builds an n-byte exit record for pid 100 / tid 101 whose
+// group_dead and reserved words are set when n reaches them; bytes past the
+// current layout are 0xff so an oversized decode cannot read them unnoticed.
+func processExitRaw(n int, groupDead, reserved uint32) []byte {
+	raw := make([]byte, n)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
 	binary.LittleEndian.PutUint64(raw[8:16], 7)
 	binary.LittleEndian.PutUint32(raw[16:20], 100)
 	binary.LittleEndian.PutUint32(raw[20:24], 101)
-
-	ev := NewProcessExitEventFast(raw)
-	if ev == nil {
-		t.Fatal("legacy 24-byte process exit record rejected, want decoded")
+	if n >= processExitEventSize {
+		binary.LittleEndian.PutUint32(raw[24:28], groupDead)
+		binary.LittleEndian.PutUint32(raw[28:32], reserved)
+		for i := processExitEventSize; i < n; i++ {
+			raw[i] = 0xff
+		}
 	}
-	defer ev.Recycle()
-	if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
-		t.Fatalf("unexpected legacy process exit decode: %#v", ev)
-	}
-	if !ev.IsGroupDead() || ev.GroupDead != 1 || ev.Reserved != 0 {
-		t.Fatalf("legacy record GroupDead=%d Reserved=%d, want 1 and 0", ev.GroupDead, ev.Reserved)
-	}
+	return raw
 }
 
-// TestNewProcessExitEventFastRejectsOtherSizes pins the negative path: only
-// the current 32-byte and the legacy 24-byte layouts decode. A truncated,
-// in-between or oversized payload fails closed instead of being read at the
+// TestNewProcessExitEventFastRejectsOtherSizes pins the negative path: below
+// the current 32-byte layout only the exact legacy 24-byte record decodes. A
+// truncated or in-between payload fails closed instead of being read at the
 // wrong offsets (e.g. as a thread exit or, worse, a group-dead one).
 func TestNewProcessExitEventFastRejectsOtherSizes(t *testing.T) {
-	for _, n := range []int{0, processExitEventLegacySize - 1, processExitEventLegacySize + 4,
-		processExitEventSize - 1, processExitEventSize + 1, processExitEventSize + 8} {
+	for _, n := range []int{0, processExitEventLegacySize - 1, processExitEventLegacySize + 1,
+		processExitEventLegacySize + 4, processExitEventSize - 1} {
 		if ev := NewProcessExitEventFast(make([]byte, n)); ev != nil {
 			ev.Recycle()
 			t.Fatalf("NewProcessExitEventFast(%d bytes) decoded, want nil", n)
 		}
+	}
+}
+
+// TestNewProcessExitEventFastDecodesOversizedPrefix pins forward
+// compatibility: a newer object that appends fields must still have the
+// current layout's prefix decoded, including a known group_dead flag.
+func TestNewProcessExitEventFastDecodesOversizedPrefix(t *testing.T) {
+	for _, extra := range []int{1, 8} {
+		ev := NewProcessExitEventFast(processExitRaw(processExitEventSize+extra, 1, 0))
+		if ev == nil {
+			t.Fatalf("NewProcessExitEventFast(%d bytes) rejected, want prefix decoded", processExitEventSize+extra)
+		}
+		if ev.Tid != 101 || !ev.IsGroupDeadKnown() || !ev.IsGroupDead() || ev.Reserved != 0 {
+			t.Fatalf("unexpected oversized process exit decode: %#v", ev)
+		}
+		ev.Recycle()
 	}
 }
 

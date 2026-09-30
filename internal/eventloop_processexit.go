@@ -94,6 +94,10 @@ import (
 // PID gets a row and label of its own. A thread exit does not, for the same
 // reason it does not evict fds.
 //
+// A legacy record from a pre-group_dead IOR_BPF_OBJECT override does not say
+// whether the process died (ev.IsGroupDeadKnown is false); see
+// applyProcessDeath for how the two halves treat it.
+//
 // A record lost to ring-buffer backpressure simply never evicts (counted in
 // ringbuf_drop_map like every other record); the stale entries linger until
 // the LRU cap trims them, which is the same trade the procfs cache already
@@ -101,14 +105,7 @@ import (
 // same effect for its fd entries.
 func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	defer ev.Recycle()
-	if ev.IsGroupDead() {
-		// Counted for the end-of-run statistics: it makes the whole-process
-		// exits that reached userspace observable, including those of untraced
-		// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
-		e.numGroupDeadExits++
-		e.fdState().deletePid(ev.Pid)
-		e.retireStatsProcess(ev.Pid)
-	}
+	e.applyProcessDeath(ev)
 	e.evictCachedComm(ev.Tid)
 	// Neither of these guards tid == 0 the way commResolver.evictTid does:
 	// there the guard exists because a zero tid is the resolver's "unknown"
@@ -124,6 +121,32 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// write and close on the descriptor reports it too: a wrong row rather
 	// than a missing one, and a persistent one.
 	e.pendingHandleState().delete(ev.Tid)
+}
+
+// applyProcessDeath performs the tgid-keyed half of an exit record: fd-table
+// eviction, the group-dead counter and stats retirement.
+//
+// A known group-dead record does all three. A record whose flag is unknown
+// (legacy 24-byte layout) still evicts the fd entries, as every exit did
+// before group_dead existed: keeping them would leave a dead process's
+// descriptors until LRU trimming, while a wrong eviction only costs the
+// surviving threads a /proc/<pid>/fd fallback. It neither counts nor retires,
+// though: retiring on every thread exit would split a live multi-threaded
+// process into one Processes-table lifetime row per exited thread, and the
+// counter reports only exits the kernel confirmed as whole-process.
+func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
+	if !ev.IsGroupDead() {
+		if !ev.IsGroupDeadKnown() {
+			e.fdState().deletePid(ev.Pid)
+		}
+		return
+	}
+	// Counted for the end-of-run statistics: it makes the whole-process
+	// exits that reached userspace observable, including those of untraced
+	// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
+	e.numGroupDeadExits++
+	e.fdState().deletePid(ev.Pid)
+	e.retireStatsProcess(ev.Pid)
 }
 
 // retireStatsProcess tells the stats engine that process pid has exited, when
