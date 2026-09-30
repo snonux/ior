@@ -51,13 +51,12 @@ type Model struct {
 }
 
 // defaultWidth and defaultHeight are the terminal size assumed when the
-// caller has not reported one; defaultRows is the row budget without a height.
+// caller has not reported one (View renders into the same default size).
 // maxModalWidth is the preferred modal width and minModalWidth the narrowest
 // it shrinks to before simply taking the whole (tiny) terminal width.
 const (
 	defaultWidth  = 80
 	defaultHeight = 24
-	defaultRows   = 10
 	maxModalWidth = 66
 	minModalWidth = 24
 )
@@ -215,7 +214,10 @@ func (m Model) reload() Model {
 }
 
 // clampCursor returns m with the cursor and scroll offset kept inside the
-// filtered probe list.
+// filtered probe list. Besides keeping the cursor inside the window, the
+// offset is pulled back when the row budget grows (terminal resized taller,
+// search line or error dropped) so a list scrolled to its end still fills
+// the window instead of leaving blank rows below the last probe.
 func (m Model) clampCursor() Model {
 	items := m.filtered()
 	if len(items) == 0 {
@@ -236,9 +238,7 @@ func (m Model) clampCursor() Model {
 	if rows > 0 && m.cursor >= m.offset+rows {
 		m.offset = m.cursor - rows + 1
 	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	m.offset = min(m.offset, max(len(items)-rows, 0))
 	return m
 }
 
@@ -281,13 +281,14 @@ type probeLayout struct {
 // one row is kept so the selection stays visible; View clips the degenerate
 // tiny-terminal case.
 func (m Model) layout() probeLayout {
-	l := probeLayout{header: m.headerLines(), footer: m.footerLines(), box: m.boxStyle(), rows: defaultRows}
-	if m.height <= 0 {
-		return l
+	l := probeLayout{header: m.headerLines(), footer: m.footerLines(), box: m.boxStyle()}
+	height := m.height
+	if height <= 0 {
+		height = defaultHeight // same fallback View renders into
 	}
 	chrome := make([]string, 0, len(l.header)+len(l.footer))
 	chrome = append(append(chrome, l.header...), l.footer...)
-	l.rows = max(m.height-lipgloss.Height(l.box.Render(strings.Join(chrome, "\n"))), 1)
+	l.rows = max(height-lipgloss.Height(l.box.Render(strings.Join(chrome, "\n"))), 1)
 	return l
 }
 
