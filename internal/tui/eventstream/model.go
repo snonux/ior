@@ -682,6 +682,13 @@ func (m *Model) takeSnapshot() {
 // runs over the whole ring buffer on every stream tick. Both Model.applyFilter
 // and the CSV export use it, so the export contains exactly the rows the
 // Stream tab shows.
+//
+// Synthetic warning rows (Row.IsWarning) always pass, whatever the filter says.
+// They describe the trace itself (a -tid that is not a thread of -pid, zero
+// probes attached, dropped events), not a traced syscall, so a user filter has
+// nothing to say about them - and the active -pid/-tid predicates of exactly
+// the scopes that raise such warnings used to hide the explanation of why the
+// trace stays empty (tasks ur2/wr2). The CSV export skips them separately.
 func filterRows(dst, src []StreamEvent, filter Filter) []StreamEvent {
 	if !filter.IsActive() {
 		return append(dst, src...)
@@ -692,6 +699,10 @@ func filterRows(dst, src []StreamEvent, filter Filter) []StreamEvent {
 		// boxes a copy into the Candidate interface (a heap allocation per
 		// row per tick).
 		ev := &src[i]
+		if ev.IsWarning {
+			dst = append(dst, *ev)
+			continue
+		}
 		// Plain Matches: the either-name rule for rename rows lives inside it
 		// (Candidate.OldFileValue), so this stage cannot re-narrow what the
 		// event loop and the dashboard ingest already applied.

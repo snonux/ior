@@ -2787,11 +2787,11 @@ func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
 // TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
 // path real users take. Every field is asserted across its two subtests
 // (tidFilter is exercised by the -tid tests below): a modelStartup field is
-// silently optional where a positional
-// argument would not compile, so an omission anywhere in this literal is valid
-// Go that no other test in the repo would notice. Dropping initialPID made
-// `ior -pid <n>` open the PID picker instead of the dashboard; dropping
-// `filter` would strip -comm/-path from the trace filter just as quietly.
+// silently optional where a positional argument would not compile, so an
+// omission anywhere in this literal is valid Go that no other test in the repo
+// would notice. Dropping initialPID made `ior -pid <n>` open the PID picker
+// instead of the dashboard; dropping `filter` would strip -comm/-path from the
+// trace filter just as quietly.
 func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = 1234
