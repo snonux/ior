@@ -466,7 +466,7 @@ func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) err
 	}
 	msg := fmt.Sprintf("the -tps/-tpsExclude/-trace-* selection matches none of the %d traceable syscall tracepoints, so the trace would stay empty", len(tpNames))
 	if retry, ok := anchorlessRetry(sel, tpNames); ok {
-		msg += fmt.Sprintf("; -tps patterns match tracepoint names such as sys_enter_openat, not bare syscall names, so try -tps %s (without ^ and $ anchors)", retry)
+		msg += fmt.Sprintf("; -tps patterns match tracepoint names such as sys_enter_openat, not bare syscall names, so try -tps %s (without ^ and $ anchors)", shellQuote(retry))
 	}
 	return errors.New(msg)
 }
@@ -480,7 +480,11 @@ func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) err
 // sys_exit_* name or an allowlist that rejects the syscall correctly suppresses
 // the hint instead of sending the user into a second identical failure. A
 // retry identical to sel (no anchors to strip) attaches nothing either, since
-// sel itself already failed, so it needs no separate check.
+// sel itself already failed, so it needs no separate check. A pattern that is
+// nothing but anchors ("^$") strips to the empty regex, which matches every
+// tracepoint: suggesting "-tps " (an empty, ignored value) would be nonsense,
+// and the retry only "works" by accident of the empty pattern, so no hint is
+// given at all for it.
 func anchorlessRetry(sel tracepoints.Selector, tpNames []string) (string, bool) {
 	if len(sel.Attach) == 0 {
 		return "", false
@@ -490,6 +494,9 @@ func anchorlessRetry(sel tracepoints.Selector, tpNames []string) (string, bool) 
 	patterns := make([]string, 0, len(sel.Attach))
 	for _, re := range sel.Attach {
 		stripped := stripAnchors(re.String())
+		if stripped == "" {
+			return "", false
+		}
 		compiled, err := regexp.Compile(stripped)
 		if err != nil {
 			return "", false
@@ -503,6 +510,21 @@ func anchorlessRetry(sel tracepoints.Selector, tpNames []string) (string, bool) 
 		}
 	}
 	return "", false
+}
+
+// shellSafe matches values that a POSIX shell passes through unchanged, so
+// the hint keeps the plain "-tps openat,read" form for simple syscall names.
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_.,:/=+-]+$`)
+
+// shellQuote returns s ready to paste into a shell command line: plain when
+// it has no metacharacters, otherwise single-quoted (an embedded single quote
+// is closed, escaped and reopened). A regex such as (read|write) would otherwise be a shell syntax
+// error or a pipeline when the user copies the suggested -tps value.
+func shellQuote(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // stripAnchors removes one leading ^ and one trailing unescaped $ from a

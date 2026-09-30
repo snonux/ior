@@ -719,6 +719,10 @@ func TestParseHintsAtBareSyscallNamePattern(t *testing.T) {
 		{[]string{"-tps", "^read$,^getpid$"}, hint + "read,getpid (without"},
 		// An allowlist that admits the syscall does not block the retry.
 		{[]string{"-tps", "^openat$", "-trace-syscalls", "openat"}, hint + "openat (without"},
+		// Regex metacharacters are single-quoted so the suggestion can be
+		// pasted into a shell; simple names above stay plain.
+		{[]string{"-tps", "^(read|write)$"}, hint + "'(read|write)' (without"},
+		{[]string{"-tps", "^open.*$"}, hint + "'open.*' (without"},
 	}
 	for _, tc := range hinted {
 		_, err := parseForTest(t, tc.args...)
@@ -740,6 +744,9 @@ func TestParseHintsAtBareSyscallNamePattern(t *testing.T) {
 		{"-tps", "openat", "-tpsExclude", "sys_enter_openat,sys_exit_openat"},
 		// Stripping gives "openat", which "_openat" excludes again.
 		{"-tps", "^openat$", "-tpsExclude", "_openat"},
+		// Stripping gives the empty regex: "try -tps " would be nonsense.
+		{"-tps", "^$"},
+		{"-tps", "^read$,^$"},
 	}
 	for _, args := range noHint {
 		_, err := parseForTest(t, args...)
@@ -763,6 +770,25 @@ func TestStripAnchors(t *testing.T) {
 	} {
 		if got := stripAnchors(in); got != want {
 			t.Errorf("stripAnchors(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestShellQuote pins the quoting of the suggested -tps value: plain for
+// simple names, single-quoted (with ' escaped) for anything a shell would
+// interpret.
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"openat":       "openat",
+		"read,getpid":  "read,getpid",
+		"(read|write)": "'(read|write)'",
+		"open.*":       "'open.*'",
+		"a b":          "'a b'",
+		"it's":         `'it'\''s'`,
+		"$HOME":        "'$HOME'",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
