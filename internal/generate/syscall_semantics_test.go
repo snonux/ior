@@ -36,6 +36,19 @@ type temporarySyscallSemantics struct {
 	current syscallSemantics
 }
 
+// localArgSources records, for each local that holds a syscall argument, the
+// argument index and the offset where that read ends.
+type localArgSources struct {
+	args map[string]int
+	ends map[string]int
+}
+
+// timerAbstimeGuard is the brace span of an enter handler's TIMER_ABSTIME
+// guard and the flags argument it tests; all fields are -1 without a guard.
+type timerAbstimeGuard struct {
+	start, end, flagsArg int
+}
+
 var (
 	handlerRE         = regexp.MustCompile(`(?ms)^int handle_sys_(enter|exit)_([a-z0-9_]+)\([^)]*\) \{\n(.*?)^\}\n`)
 	eventStructRE     = regexp.MustCompile(`struct ([a-z0-9_]+_event) \*ev = bpf_ringbuf_reserve`)
@@ -2071,10 +2084,39 @@ func validateHandlerEventStruct(name, kind, body string) error {
 	return nil
 }
 
+// parseEnterArgSources maps each event field of sys_enter_<name> to the
+// syscall argument index it captures, after validating how every capture is
+// written. Sources come from direct/string/pending/output-buffer captures and
+// from locals that hold an argument and are later emitted into the event.
 func parseEnterArgSources(name, enterBody, exitBody string) (map[string]int, error) {
 	enterBody = stripCComments(enterBody)
 	exitBody = stripCComments(exitBody)
 	result := map[string]int{}
+	if err := addCaptureArgSources(name, enterBody, exitBody, result); err != nil {
+		return nil, err
+	}
+	locals, err := collectLocalArgSources(name, enterBody)
+	if err != nil {
+		return nil, err
+	}
+	guard, err := parseTimerAbstimeGuard(name, enterBody)
+	if err != nil {
+		return nil, err
+	}
+	if err := addLocalEventArgSources(name, enterBody, result, locals, guard); err != nil {
+		return nil, err
+	}
+	if guard.flagsArg >= 0 {
+		if err := addArgSource(name, result, "flags", guard.flagsArg); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// addCaptureArgSources validates and records the direct, string-read,
+// pending-map and output-buffer captures of an enter handler.
+func addCaptureArgSources(name, enterBody, exitBody string, result map[string]int) error {
 	addMatches := func(matches [][]string) error {
 		for _, match := range matches {
 			if err := addArgSource(name, result, match[1], mustArgIndex(match[2])); err != nil {
@@ -2085,145 +2127,115 @@ func parseEnterArgSources(name, enterBody, exitBody string) (map[string]int, err
 	}
 	directMatches := directEventArgRE.FindAllStringSubmatch(enterBody, -1)
 	if err := validateDirectCaptureAssignments(name, enterBody, directMatches); err != nil {
-		return nil, err
+		return err
 	}
 	stringMatches := stringReadArgRE.FindAllStringSubmatch(enterBody, -1)
 	if err := validateStringCaptureWrites(name, enterBody, stringMatches); err != nil {
-		return nil, err
+		return err
 	}
-	for _, matches := range [][][]string{
-		directMatches,
-		stringMatches,
-	} {
+	for _, matches := range [][][]string{directMatches, stringMatches} {
 		if err := addMatches(matches); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	pendingMatches := pendingArgRE.FindAllStringSubmatch(enterBody, -1)
 	if err := validatePendingCaptureTransport(name, enterBody, exitBody); err != nil {
-		return nil, err
+		return err
 	}
 	if err := addMatches(pendingMatches); err != nil {
-		return nil, err
+		return err
 	}
-	if argIndex, ok, err := parseOutputBufferCapture(name, enterBody, exitBody); err != nil {
-		return nil, err
-	} else if ok {
-		if err := addArgSource(name, result, "buf", argIndex); err != nil {
-			return nil, err
-		}
+	argIndex, ok, err := parseOutputBufferCapture(name, enterBody, exitBody)
+	if err != nil || !ok {
+		return err
 	}
+	return addArgSource(name, result, "buf", argIndex)
+}
 
-	localSources := map[string]int{}
-	localSourceEnds := map[string]int{}
+// collectLocalArgSources finds the locals assigned (or user-read) from a
+// syscall argument and checks that none is overwritten afterwards.
+func collectLocalArgSources(name, enterBody string) (localArgSources, error) {
+	locals := localArgSources{args: map[string]int{}, ends: map[string]int{}}
 	for _, re := range []*regexp.Regexp{localArgRE, localReadArgRE} {
 		for _, match := range re.FindAllStringSubmatchIndex(enterBody, -1) {
 			local := enterBody[match[2]:match[3]]
 			argIndex := mustArgIndex(enterBody[match[4]:match[5]])
-			if err := addLocalArgSource(name, localSources, local, argIndex); err != nil {
-				return nil, err
+			if err := addLocalArgSource(name, locals.args, local, argIndex); err != nil {
+				return locals, err
 			}
 			if err := validateLocalNotWrittenAfter(name, local, enterBody, match[1]); err != nil {
-				return nil, err
+				return locals, err
 			}
-			localSourceEnds[local] = match[1]
+			locals.ends[local] = match[1]
 		}
 	}
-	timerGuardStart := -1
-	timerGuardEnd := -1
-	timerFlagsArg := -1
-	if match := timerAbstimeArgRE.FindStringSubmatchIndex(enterBody); match != nil {
-		openingBrace := match[0] + strings.LastIndex(enterBody[match[0]:match[1]], "{")
-		var ok bool
-		timerGuardEnd, ok = matchingBrace(enterBody, openingBrace)
-		if !ok {
-			return nil, fmt.Errorf("sys_enter_%s has an unbalanced TIMER_ABSTIME guard", name)
-		}
-		timerGuardStart = openingBrace
-		timerFlagsArg = mustArgIndex(enterBody[match[2]:match[3]])
-	}
-	eventAssignments := eventAssignmentRE.FindAllStringSubmatchIndex(enterBody, -1)
-	for _, match := range eventAssignments {
-		field := enterBody[match[2]:match[3]]
-		rightHandSide := enterBody[match[4]:match[5]]
-		for local, argIndex := range localSources {
-			if regexp.MustCompile(`\b` + regexp.QuoteMeta(local) + `\b`).MatchString(rightHandSide) {
-				if match[0] < localSourceEnds[local] {
-					return nil, fmt.Errorf("sys_enter_%s emits local %s before reading its syscall argument", name, local)
-				}
-				if err := validateEventAssignmentIsLast(name, field, enterBody, match[0]); err != nil {
-					return nil, err
-				}
-				if field == "requested_ns" && timerGuardStart >= 0 && (match[0] <= timerGuardStart || match[0] >= timerGuardEnd) {
-					return nil, fmt.Errorf("sys_enter_%s emits requested_ns outside its TIMER_ABSTIME guard", name)
-				}
-				if err := addArgSource(name, result, field, argIndex); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-	if timerFlagsArg >= 0 {
-		if err := addArgSource(name, result, "flags", timerFlagsArg); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
+	return locals, nil
 }
 
+// parseTimerAbstimeGuard locates the TIMER_ABSTIME guard of an enter handler.
+func parseTimerAbstimeGuard(name, enterBody string) (timerAbstimeGuard, error) {
+	guard := timerAbstimeGuard{start: -1, end: -1, flagsArg: -1}
+	match := timerAbstimeArgRE.FindStringSubmatchIndex(enterBody)
+	if match == nil {
+		return guard, nil
+	}
+	openingBrace := match[0] + strings.LastIndex(enterBody[match[0]:match[1]], "{")
+	end, ok := matchingBrace(enterBody, openingBrace)
+	if !ok {
+		return guard, fmt.Errorf("sys_enter_%s has an unbalanced TIMER_ABSTIME guard", name)
+	}
+	guard.start, guard.end = openingBrace, end
+	guard.flagsArg = mustArgIndex(enterBody[match[2]:match[3]])
+	return guard, nil
+}
+
+// addLocalEventArgSources records event fields assigned from an argument
+// local: the assignment must follow the local's read, be the field's last
+// write, and (for requested_ns) sit inside the TIMER_ABSTIME guard.
+func addLocalEventArgSources(name, enterBody string, result map[string]int, locals localArgSources, guard timerAbstimeGuard) error {
+	for _, match := range eventAssignmentRE.FindAllStringSubmatchIndex(enterBody, -1) {
+		field := enterBody[match[2]:match[3]]
+		rightHandSide := enterBody[match[4]:match[5]]
+		for local, argIndex := range locals.args {
+			if !regexp.MustCompile(`\b` + regexp.QuoteMeta(local) + `\b`).MatchString(rightHandSide) {
+				continue
+			}
+			if match[0] < locals.ends[local] {
+				return fmt.Errorf("sys_enter_%s emits local %s before reading its syscall argument", name, local)
+			}
+			if err := validateEventAssignmentIsLast(name, field, enterBody, match[0]); err != nil {
+				return err
+			}
+			if field == "requested_ns" && guard.start >= 0 && (match[0] <= guard.start || match[0] >= guard.end) {
+				return fmt.Errorf("sys_enter_%s emits requested_ns outside its TIMER_ABSTIME guard", name)
+			}
+			if err := addArgSource(name, result, field, argIndex); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validatePendingCaptureTransport checks the structured pending-map transport
+// between sys_enter_<name> and sys_exit_<name>: both sides use the same
+// fields and map, the exit takes the entry under a null-check guard before
+// reserving ring-buffer space, the enter captures every field before the
+// update, and each field is emitted exactly once.
 func validatePendingCaptureTransport(name, enterBody, exitBody string) error {
-	enterFields := map[string]struct{}{}
-	for _, match := range pendingFieldRE.FindAllStringSubmatch(enterBody, -1) {
-		enterFields[match[1]] = struct{}{}
-	}
-	exitFields := map[string]struct{}{}
-	for _, match := range pendingRefRE.FindAllStringSubmatch(exitBody, -1) {
-		exitFields[match[1]] = struct{}{}
-	}
+	enterFields := pendingFieldSet(pendingFieldRE, enterBody)
+	exitFields := pendingFieldSet(pendingRefRE, exitBody)
 	if len(enterFields) == 0 && len(exitFields) == 0 {
 		return nil
 	}
 	if !maps.Equal(enterFields, exitFields) {
 		return fmt.Errorf("%s pending fields differ between enter %v and exit %v", name, mapKeysOf(enterFields), mapKeysOf(exitFields))
 	}
-	updateIndexes := pendingUpdateRE.FindAllStringSubmatchIndex(enterBody, -1)
-	if len(updateIndexes) != 1 {
-		return fmt.Errorf("sys_enter_%s has %d pending-map updates, want 1", name, len(updateIndexes))
+	update, lookup, updateMap, err := matchPendingMapAccess(name, enterBody, exitBody)
+	if err != nil {
+		return err
 	}
-	lookupIndexes := pendingLookupRE.FindAllStringSubmatchIndex(exitBody, -1)
-	if len(lookupIndexes) != 1 {
-		return fmt.Errorf("sys_exit_%s has %d pending-map lookups, want 1", name, len(lookupIndexes))
-	}
-	update := updateIndexes[0]
-	lookup := lookupIndexes[0]
-	updateMap := enterBody[update[2]:update[3]]
-	lookupMap := exitBody[lookup[2]:lookup[3]]
-	if updateMap != lookupMap {
-		return fmt.Errorf("%s pending-map update uses %s but lookup uses %s", name, updateMap, lookupMap)
-	}
-	pendingGuardRE := regexp.MustCompile(`(?m)^\s*if\s*\(pending\)\s*\{`)
-	pendingGuards := pendingGuardRE.FindAllStringIndex(exitBody, -1)
-	if len(pendingGuards) != 1 || pendingGuards[0][0] < lookup[1] {
-		return fmt.Errorf("sys_exit_%s has %d null-check guards after its pending lookup, want 1", name, len(pendingGuards))
-	}
-	pendingGuardEnd, ok := matchingBrace(exitBody, pendingGuards[0][1]-1)
-	if !ok {
-		return fmt.Errorf("sys_exit_%s has an unbalanced pending null-check guard", name)
-	}
-	pendingReferences := pendingRefRE.FindAllStringIndex(exitBody, -1)
-	lastPendingReferenceEnd := -1
-	for _, reference := range pendingReferences {
-		if reference[0] < pendingGuards[0][1] || reference[0] >= pendingGuardEnd {
-			return fmt.Errorf("sys_exit_%s reads structured pending state outside its null-check guard", name)
-		}
-		lastPendingReferenceEnd = max(lastPendingReferenceEnd, reference[1])
-	}
-	deleteRE := regexp.MustCompile(`(?m)^\s*bpf_map_delete_elem\(&` + regexp.QuoteMeta(updateMap) + `,\s*&tid\);`)
-	deletes := deleteRE.FindAllStringIndex(exitBody, -1)
-	if len(deletes) != 1 || deletes[0][0] < pendingGuards[0][1] || deletes[0][0] < lastPendingReferenceEnd || deletes[0][0] >= pendingGuardEnd {
-		return fmt.Errorf("sys_exit_%s deletes structured pending state %d times after its final guarded read, want 1", name, len(deletes))
-	}
-	if err := requirePendingTakeBeforeReserve(name, exitBody, pendingGuardEnd); err != nil {
+	if err := validatePendingTake(name, exitBody, updateMap, lookup[1]); err != nil {
 		return err
 	}
 	for field := range enterFields {
@@ -2235,6 +2247,70 @@ func validatePendingCaptureTransport(name, enterBody, exitBody string) error {
 			return fmt.Errorf("sys_enter_%s updates its pending map before pending.%s is captured", name, field)
 		}
 	}
+	return validatePendingFieldOutputs(name, enterBody, exitBody, enterFields)
+}
+
+// pendingFieldSet returns the set of pending field names re captures in body.
+func pendingFieldSet(re *regexp.Regexp, body string) map[string]struct{} {
+	fields := map[string]struct{}{}
+	for _, match := range re.FindAllStringSubmatch(body, -1) {
+		fields[match[1]] = struct{}{}
+	}
+	return fields
+}
+
+// matchPendingMapAccess requires exactly one pending-map update at enter and
+// one lookup at exit, on the same map, and returns both match indexes and
+// the map name.
+func matchPendingMapAccess(name, enterBody, exitBody string) (update, lookup []int, updateMap string, err error) {
+	updateIndexes := pendingUpdateRE.FindAllStringSubmatchIndex(enterBody, -1)
+	if len(updateIndexes) != 1 {
+		return nil, nil, "", fmt.Errorf("sys_enter_%s has %d pending-map updates, want 1", name, len(updateIndexes))
+	}
+	lookupIndexes := pendingLookupRE.FindAllStringSubmatchIndex(exitBody, -1)
+	if len(lookupIndexes) != 1 {
+		return nil, nil, "", fmt.Errorf("sys_exit_%s has %d pending-map lookups, want 1", name, len(lookupIndexes))
+	}
+	update, lookup = updateIndexes[0], lookupIndexes[0]
+	updateMap = enterBody[update[2]:update[3]]
+	if lookupMap := exitBody[lookup[2]:lookup[3]]; updateMap != lookupMap {
+		return nil, nil, "", fmt.Errorf("%s pending-map update uses %s but lookup uses %s", name, updateMap, lookupMap)
+	}
+	return update, lookup, updateMap, nil
+}
+
+// validatePendingTake checks the exit's take of the structured pending entry
+// looked up ending at lookupEnd: one null-check guard after the lookup, every
+// pending read inside it, one delete of updateMap after the last read and
+// still inside the guard, all before the ring-buffer reserve.
+func validatePendingTake(name, exitBody, updateMap string, lookupEnd int) error {
+	pendingGuardRE := regexp.MustCompile(`(?m)^\s*if\s*\(pending\)\s*\{`)
+	pendingGuards := pendingGuardRE.FindAllStringIndex(exitBody, -1)
+	if len(pendingGuards) != 1 || pendingGuards[0][0] < lookupEnd {
+		return fmt.Errorf("sys_exit_%s has %d null-check guards after its pending lookup, want 1", name, len(pendingGuards))
+	}
+	pendingGuardEnd, ok := matchingBrace(exitBody, pendingGuards[0][1]-1)
+	if !ok {
+		return fmt.Errorf("sys_exit_%s has an unbalanced pending null-check guard", name)
+	}
+	lastPendingReferenceEnd := -1
+	for _, reference := range pendingRefRE.FindAllStringIndex(exitBody, -1) {
+		if reference[0] < pendingGuards[0][1] || reference[0] >= pendingGuardEnd {
+			return fmt.Errorf("sys_exit_%s reads structured pending state outside its null-check guard", name)
+		}
+		lastPendingReferenceEnd = max(lastPendingReferenceEnd, reference[1])
+	}
+	deleteRE := regexp.MustCompile(`(?m)^\s*bpf_map_delete_elem\(&` + regexp.QuoteMeta(updateMap) + `,\s*&tid\);`)
+	deletes := deleteRE.FindAllStringIndex(exitBody, -1)
+	if len(deletes) != 1 || deletes[0][0] < pendingGuards[0][1] || deletes[0][0] < lastPendingReferenceEnd || deletes[0][0] >= pendingGuardEnd {
+		return fmt.Errorf("sys_exit_%s deletes structured pending state %d times after its final guarded read, want 1", name, len(deletes))
+	}
+	return requirePendingTakeBeforeReserve(name, exitBody, pendingGuardEnd)
+}
+
+// validatePendingFieldOutputs validates each pending field's emission and
+// requires the array-buffer outputs to match pendingArrayOutputExpectations.
+func validatePendingFieldOutputs(name, enterBody, exitBody string, enterFields map[string]struct{}) error {
 	seenArrayOutputs := map[string][]string{}
 	for field := range enterFields {
 		outputs, err := validatePendingFieldEmission(name, field, enterBody, exitBody)
@@ -2342,41 +2418,60 @@ func validatePendingEnterFieldEmission(name, field, enterBody string) error {
 	return validateEventAssignmentIsLast(name, field, enterBody, assignments[0][0])
 }
 
+// validateScalarPendingTransport checks a scalar pending field carried from
+// sys_enter_<name> to sys_exit_<name> through a per-tid map: produced once
+// and emitted at enter, stored after it is produced, then restored, deleted
+// and emitted at exit.
 func validateScalarPendingTransport(name, field, enterBody, exitBody string) error {
 	enterBody = stripCComments(enterBody)
 	exitBody = stripCComments(exitBody)
+	updateMap, err := validateScalarPendingStore(name, field, enterBody)
+	if err != nil {
+		return err
+	}
+	return validateScalarPendingRestore(name, field, exitBody, updateMap)
+}
+
+// validateScalarPendingStore checks the enter side of a scalar pending field:
+// one producer, one map update after it, no later write, and its emission.
+// It returns the updated map's name.
+func validateScalarPendingStore(name, field, enterBody string) (string, error) {
 	quotedField := regexp.QuoteMeta(field)
 	producerRE := regexp.MustCompile(`(?m)^\s*(?:[a-z_][a-z0-9_ ]+\s+)?` + quotedField + `\s*=[^;]+;`)
 	producers := producerRE.FindAllStringIndex(enterBody, -1)
 	if len(producers) != 1 {
-		return fmt.Errorf("sys_enter_%s produces scalar pending field %s %d times, want 1", name, field, len(producers))
+		return "", fmt.Errorf("sys_enter_%s produces scalar pending field %s %d times, want 1", name, field, len(producers))
 	}
 	updateRE := regexp.MustCompile(`(?m)^\s*bpf_map_update_elem\(&([a-z0-9_]+),\s*&tid,\s*&` + quotedField + `,\s*BPF_ANY\);`)
 	updates := updateRE.FindAllStringSubmatchIndex(enterBody, -1)
 	if len(updates) != 1 {
-		return fmt.Errorf("sys_enter_%s has %d scalar pending-map updates for %s, want 1", name, len(updates), field)
+		return "", fmt.Errorf("sys_enter_%s has %d scalar pending-map updates for %s, want 1", name, len(updates), field)
 	}
 	if producers[0][1] > updates[0][0] {
-		return fmt.Errorf("sys_enter_%s updates its scalar pending map before producing %s", name, field)
+		return "", fmt.Errorf("sys_enter_%s updates its scalar pending map before producing %s", name, field)
 	}
 	if err := validateLocalNotWrittenAfter(name, field, enterBody, producers[0][1]); err != nil {
-		return err
+		return "", err
 	}
 	if err := requireLocalEventEmission(name, field, field, field, enterBody, producers[0][1]); err != nil {
-		return err
+		return "", err
 	}
+	return enterBody[updates[0][2]:updates[0][3]], nil
+}
 
+// validateScalarPendingRestore checks the exit side of a scalar pending field:
+// one lookup of updateMap, one restore inside the null-check guard, a delete
+// after the restore and before the ring-buffer reserve, and its emission.
+func validateScalarPendingRestore(name, field, exitBody, updateMap string) error {
 	lookupRE := regexp.MustCompile(`(?m)^\s*[a-z_][a-z0-9_ ]+\s+\*pending\s*=\s*bpf_map_lookup_elem\(&([a-z0-9_]+),\s*&tid\);`)
 	lookups := lookupRE.FindAllStringSubmatchIndex(exitBody, -1)
 	if len(lookups) != 1 {
 		return fmt.Errorf("sys_exit_%s has %d scalar pending-map lookups for %s, want 1", name, len(lookups), field)
 	}
-	updateMap := enterBody[updates[0][2]:updates[0][3]]
-	lookupMap := exitBody[lookups[0][2]:lookups[0][3]]
-	if updateMap != lookupMap {
+	if lookupMap := exitBody[lookups[0][2]:lookups[0][3]]; updateMap != lookupMap {
 		return fmt.Errorf("%s scalar pending-map update uses %s but lookup uses %s", name, updateMap, lookupMap)
 	}
-	restoreRE := regexp.MustCompile(`(?m)^\s*` + quotedField + `\s*=\s*\*pending\s*;`)
+	restoreRE := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(field) + `\s*=\s*\*pending\s*;`)
 	restores := restoreRE.FindAllStringIndex(exitBody, -1)
 	if len(restores) != 1 || restores[0][0] < lookups[0][1] {
 		return fmt.Errorf("sys_exit_%s restores scalar pending field %s %d times after lookup, want 1", name, field, len(restores))
