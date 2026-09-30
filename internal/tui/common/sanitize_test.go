@@ -21,7 +21,33 @@ const (
 	unterminated  = "abc\x1b["
 	invalidUTF8   = "ok\xff\xfe"
 	cleanNonASCII = "日本語/ファイル-é"
+	// rloSpoof renders as "invoiceexe.pdf" without sanitising: U+202E
+	// (RLO) reverses the rest of the line (Trojan-Source style).
+	rloSpoof = "invoice\u202efdp.exe"
+	// cleanEmoji holds sequences whose glue runes must survive: a ZWJ family,
+	// a skin-tone modifier, text/emoji variation selectors and a regional-
+	// indicator flag.
+	cleanEmoji = "\U0001F468\u200D\U0001F469\u200D\U0001F467 \U0001F44D\U0001F3FD \u2764\uFE0F \u2603\uFE0E \U0001F1E9\U0001F1EA"
 )
+
+// invisibleFormatCases lists one payload per neutralised rune class and the
+// expected sanitised output.
+var invisibleFormatCases = []struct{ name, in, want string }{
+	{"RLO spoof", rloSpoof, "invoice?fdp.exe"},
+	{"bidi embeddings LRE..RLO", "a\u202a\u202b\u202c\u202d\u202eb", "a?????b"},
+	{"bidi isolates LRI..PDI", "a\u2066\u2067\u2068\u2069b", "a????b"},
+	{"LRM RLM ALM", "a\u200e\u200f\u061cb", "a???b"},
+	{"line and paragraph separators", "a\u2028b\u2029c", "a?b?c"},
+	{"zero-width space", "pass\u200bwd", "pass?wd"},
+	{"BOM", "\ufeffname", "?name"},
+	{"soft hyphen", "ab\u00adc", "ab?c"},
+	{"interlinear annotations", "a\ufff9b\ufffac\ufffbd", "a?b?c?d"},
+	{"tag chars first and last", "a\U000E0000\U000E0041\U000E007Fb", "a???b"},
+	{"mixed with controls", "\x1b\u202e\n", "?? "},
+	{"clean emoji kept", cleanEmoji, cleanEmoji},
+	{"ZWNJ kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
+	{"boundary neighbours kept", "\u00ac\u00ae\u2027\u202f\u2065\u206a\ufff8\ufffc", "\u00ac\u00ae\u2027\u202f\u2065\u206a\ufff8\ufffc"},
+}
 
 // assertTerminalSafe fails when s contains any byte or rune a terminal could
 // interpret as control: C0, DEL, C1 runes or invalid UTF-8.
@@ -70,6 +96,59 @@ func TestSanitizeReplacesControls(t *testing.T) {
 	}
 }
 
+// TestSanitizeReplacesInvisibleFormat checks bidi controls, separators and
+// zero-width format runes become the visible '?', while emoji glue (ZWJ,
+// variation selectors, skin tones), regional-indicator flags and ZWNJ, as
+// well as the code points right next to each replaced range, are kept.
+func TestSanitizeReplacesInvisibleFormat(t *testing.T) {
+	for _, tt := range invisibleFormatCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Sanitize(tt.in)
+			if got != tt.want {
+				t.Fatalf("Sanitize(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			if again := Sanitize(got); again != got {
+				t.Fatalf("Sanitize is not idempotent: %q -> %q", got, again)
+			}
+			for _, r := range got {
+				if isInvisibleFormat(r) {
+					t.Fatalf("%q still contains format rune %U", got, r)
+				}
+			}
+		})
+	}
+}
+
+// TestSanitizeLinesReplacesInvisibleFormat checks the multi-line variant
+// applies the same format-rune rule on both its fast and slow path.
+func TestSanitizeLinesReplacesInvisibleFormat(t *testing.T) {
+	if got, want := SanitizeLines("a\u202eb\nc\u200bd"), "a?b\nc?d"; got != want {
+		t.Fatalf("SanitizeLines = %q, want %q", got, want)
+	}
+}
+
+// TestSanitizeFormatWidthIsExact checks a replaced format rune (0 cells
+// before) is measured as the one cell it now renders as, so FitRight keeps
+// columns exact, and that emoji sequences stay one grapheme wide.
+func TestSanitizeFormatWidthIsExact(t *testing.T) {
+	for _, tt := range invisibleFormatCases {
+		s := Sanitize(tt.in)
+		for _, width := range []int{1, 2, 4, 7, 12, 40} {
+			if got := DisplayWidth(FitRight(s, width, ASCIIEllipsis)); got != width {
+				t.Fatalf("%s: FitRight(%q, %d) width = %d", tt.name, s, width, got)
+			}
+		}
+	}
+	if got, want := DisplayWidth(Sanitize(rloSpoof)), len("invoice?fdp.exe"); got != want {
+		t.Fatalf("RLO spoof width = %d, want %d", got, want)
+	}
+	// Family (2) + space + thumbs-up (2) + space + heart (2) + space +
+	// snowman text-style (1) + space + flag (2).
+	if got, want := DisplayWidth(Sanitize(cleanEmoji)), 13; got != want {
+		t.Fatalf("emoji width = %d, want %d", got, want)
+	}
+}
+
 // TestSanitizeWidthIsExact checks every replaced rune or byte costs exactly
 // one cell, so a sanitised cell fitted by FitRight is exactly width wide.
 func TestSanitizeWidthIsExact(t *testing.T) {
@@ -103,7 +182,7 @@ func TestSanitizeLinesKeepsLineFeeds(t *testing.T) {
 // Sanitize runs for every table cell on every frame.
 func TestSanitizeCleanStringsDoNotAllocate(t *testing.T) {
 	ascii := "/usr/lib/x86_64-linux-gnu/libc.so.6"
-	for _, in := range []string{ascii, cleanNonASCII, ""} {
+	for _, in := range []string{ascii, cleanNonASCII, cleanEmoji, ""} {
 		var out string
 		allocs := testing.AllocsPerRun(100, func() { out = Sanitize(in) })
 		if allocs != 0 {
@@ -138,5 +217,23 @@ func BenchmarkSanitizeCleanASCII(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = Sanitize(s)
+	}
+}
+
+// BenchmarkSanitizeCleanNonASCII measures the fast path for clean non-ASCII
+// text, where every rune now also passes the isInvisibleFormat check.
+func BenchmarkSanitizeCleanNonASCII(b *testing.B) {
+	s := cleanNonASCII + cleanEmoji
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Sanitize(s)
+	}
+}
+
+// BenchmarkSanitizeBidiSpoof measures the slow path for a spoofed name.
+func BenchmarkSanitizeBidiSpoof(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Sanitize(rloSpoof)
 	}
 }
