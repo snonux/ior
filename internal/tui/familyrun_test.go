@@ -198,9 +198,11 @@ func TestFamilyBatchWithoutManagerIsRefused(t *testing.T) {
 }
 
 // TestSingleToggleDuringFamilyBatchKeepsTheBatchIntent is the review 2
-// regression: a single toggle finishing while a family batch is half done
+// regression: a probe change finishing while a family batch is half done
 // used to read back the half-done set, so a restart then carried only part
 // of the family. The batch's intent must be applied on top of the read-back.
+// The modal now refuses new changes during a batch, but one already in flight
+// when the batch started (an all-on/all-off walks every probe) still lands.
 func TestSingleToggleDuringFamilyBatchKeepsTheBatchIntent(t *testing.T) {
 	m, _ := newLiveSwapModel(t)
 	m.tracer.beginCmd(m.runtime, m.filters.current())
@@ -276,4 +278,80 @@ func waitActive(t *testing.T, manager *selectionProbeManager, syscall string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("%s never became active", syscall)
+}
+
+// TestProbeChangesRefusedWhileFamilyBatchRuns drives the TUI: while a batch
+// is held half done, space, a and n in a freshly opened modal start no probe
+// change and the modal says why.
+func TestProbeChangesRefusedWhileFamilyBatchRuns(t *testing.T) {
+	m, _ := newLiveSwapModel(t)
+	m.tracer.beginCmd(m.runtime, m.filters.current())
+	t.Cleanup(m.tracer.stop)
+	manager := newSelectionManager()
+	manager.hold = make(chan struct{})
+	m.runtime.setProbeManager(manager)
+	next, batch := m.Update(probes.FamilyBatchRequestMsg{Family: types.FamilyNetwork, Attach: true})
+	m = next.(*Model)
+	done := make(chan tea.Msg, 1)
+	go func() { done <- batch() }()
+	waitActive(t, manager, "connect")
+
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: '2', Text: "2"})
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	before := manager.States()
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeySpace, Text: " "}, {Code: 'a', Text: "a"}, {Code: 'n', Text: "n"}} {
+		var cmd tea.Cmd
+		m, cmd = pressKey(m, key)
+		if cmd != nil {
+			if _, toggled := cmd().(probes.ProbeToggledMsg); toggled {
+				t.Fatalf("key %q changed probes during a family batch", key.String())
+			}
+		}
+	}
+	if !slices.Equal(manager.States(), before) {
+		t.Fatalf("probe states changed during the batch: %v -> %v", before, manager.States())
+	}
+	if !strings.Contains(m.View().Content, "family batch running") {
+		t.Fatalf("refusal not shown:\n%s", m.View().Content)
+	}
+	close(manager.hold)
+	first := <-done
+	finishFamilyBatch(t, m, func() tea.Msg { return first })
+}
+
+// TestStaleSingleToggleAppliesOnlyItsDelta: a single toggle whose result
+// arrives after its session ended changes only its own probe in the recorded
+// selection; its absolute intent (a snapshot of the old manager) must not
+// clobber what was recorded since, e.g. a family batch's intent.
+func TestStaleSingleToggleAppliesOnlyItsDelta(t *testing.T) {
+	tests := []struct {
+		name      string
+		recorded  []string
+		msg       probes.ProbeToggledMsg
+		wantAfter []string
+	}{
+		{"attach adds", []string{"connect", "read", "socket"},
+			probes.ProbeToggledMsg{Syscall: "nanosleep", Intent: []string{"nanosleep", "read"}},
+			[]string{"connect", "nanosleep", "read", "socket"}},
+		{"detach removes", []string{"connect", "read", "socket"},
+			probes.ProbeToggledMsg{Syscall: "read", Intent: []string{}},
+			[]string{"connect", "socket"}},
+		{"nothing recorded takes the intent", nil,
+			probes.ProbeToggledMsg{Syscall: "read", Intent: []string{"read"}},
+			[]string{"read"}},
+		{"bulk is absolute", []string{"connect"},
+			probes.ProbeToggledMsg{Intent: []string{}},
+			[]string{}},
+		{"toggle that never ran changes nothing", []string{"connect"},
+			probes.ProbeToggledMsg{Syscall: "read"},
+			[]string{"connect"}},
+	}
+	for _, tt := range tests {
+		m, _ := newLiveSwapModel(t) // no session running: every result is stale
+		m.tracer.setAttachSyscalls(tt.recorded)
+		next, _ := m.Update(tt.msg)
+		if got := next.(*Model).tracer.attachSyscalls; !slices.Equal(got, tt.wantAfter) || (got == nil) != (tt.wantAfter == nil) {
+			t.Errorf("%s: selection = %#v, want %#v", tt.name, got, tt.wantAfter)
+		}
+	}
 }

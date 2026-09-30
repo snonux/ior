@@ -306,10 +306,10 @@ func TestToggleCmdNilManager(t *testing.T) {
 	}
 }
 
-// TestBulkToggleCmdNilManager verifies that bulkToggleCmd with a nil manager
+// TestBulkToggleCmdNilManager verifies that setAllCmd with a nil manager
 // returns a ProbeToggledMsg carrying an error.
 func TestBulkToggleCmdNilManager(t *testing.T) {
-	cmd := bulkToggleCmd(nil, nil, false, 0)
+	cmd := setAllCmd(nil, true, 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {

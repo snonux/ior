@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 
 	"ior/internal/probemanager"
 	"ior/internal/tui/probes"
@@ -159,21 +160,45 @@ func (m *Model) afterProbeChange() tea.Cmd {
 // the toggle's session is current, the model reacts like to any probe change
 // (afterProbeChange). A result that arrives after a restart or stop toggled a
 // manager that is gone: reading back the new session's manager would record
-// that session's state rather than the toggle, so the toggle's intent becomes
-// the selection for the next session instead. Either way the dashboard
-// aggregates are reset; the post-reset tick goes through the dashboard's
-// normal stats handling, so a failed snapshot keeps the last good one.
+// that session's state rather than the toggle, so the toggle's intent is
+// recorded for the next session instead (applyStaleToggle). Either way the
+// dashboard aggregates are reset; the post-reset tick goes through the
+// dashboard's normal stats handling, so a failed snapshot keeps the last good
+// one.
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
 	if m.tracer.isCurrent(msg.Session) {
 		return m, tea.Batch(m.afterProbeChange(), cmd)
 	}
-	if msg.Intent != nil {
-		m.tracer.setAttachSyscalls(msg.Intent)
-	}
+	m.applyStaleToggle(msg)
 	m.refreshFamilyHint()
 	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
+}
+
+// applyStaleToggle records the intent of a toggle whose session has ended.
+// A single toggle changes one probe, so only that delta is applied to the
+// recorded selection - replacing the whole selection with the toggle's
+// absolute intent (a snapshot of the old manager) would clobber anything
+// recorded since, such as a family batch's intent. All-on/all-off (no
+// Syscall) are absolute by nature, and so is a single toggle when nothing is
+// recorded yet (nil: the startup selection, which has no explicit set to
+// apply a delta to); both record the intent as is.
+func (m *Model) applyStaleToggle(msg probes.ProbeToggledMsg) {
+	if msg.Intent == nil {
+		return // the toggle never ran
+	}
+	selection := m.tracer.attachSyscalls
+	if msg.Syscall == "" || selection == nil {
+		m.tracer.setAttachSyscalls(msg.Intent)
+		return
+	}
+	selection = slices.DeleteFunc(slices.Clone(selection), func(s string) bool { return s == msg.Syscall })
+	if slices.Contains(msg.Intent, msg.Syscall) {
+		selection = append(selection, msg.Syscall)
+		slices.Sort(selection)
+	}
+	m.tracer.setAttachSyscalls(selection)
 }
 
 // rememberProbeSelection records the probe set the next trace sessions
@@ -185,9 +210,12 @@ func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, te
 // truth after partial failures (a probe whose tracepoint is missing stays
 // detached and is not carried over). While a family batch of the current
 // session is still running, the read-back is half done, so the batch's
-// intended outcome is applied on top of it (intendedSelection) - otherwise a
-// single toggle finishing mid-batch would drop the rest of the family from
-// the selection. With no manager published the previous selection is kept.
+// intended outcome is applied on top of it (intendedSelection). The modal
+// refuses probe changes while a batch runs, so this only matters for a
+// change already in flight when the batch started - an all-on/all-off walks
+// every probe and can finish mid-batch - which would otherwise drop the rest
+// of the family from the selection. With no manager published the previous
+// selection is kept.
 //
 // The selection is an intent, not always a read-back: a batch or toggle that
 // finished after its session ended records what it was meant to do. Probes of

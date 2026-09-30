@@ -21,6 +21,8 @@ type sessionProbeManager struct{ name string }
 
 func (sessionProbeManager) States() []probemanager.ProbeState { return nil }
 func (sessionProbeManager) Toggle(string) error               { return nil }
+func (sessionProbeManager) Attach(string) error               { return nil }
+func (sessionProbeManager) Detach(string) error               { return nil }
 func (sessionProbeManager) ActiveCount() (int, int)           { return 0, 0 }
 func (sessionProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
