@@ -12,6 +12,15 @@ import (
 	"ior/internal/types"
 )
 
+// aggregateDrainStep is one Drain of TestSyscallAggregateConsumerDrainEmitsDeltas:
+// the per-CPU cumulative values to load first (nil keeps the map unchanged)
+// and the delta row Drain must emit (nil means no row at all).
+type aggregateDrainStep struct {
+	name   string
+	perCPU []rawSyscallAggregate
+	want   *statsengine.SyscallAggregate
+}
+
 func TestBuildSyscallSamplingRatesFamilyAndSyscallOverride(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 100
@@ -194,121 +203,76 @@ func TestDecodeRawSyscallAggregatePerCPURejectsEmptyValue(t *testing.T) {
 
 func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 	const traceID = uint32(types.SYS_ENTER_FUTEX)
-	fakeMap := newFakeSyscallAggregateMap(traceID, encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         2,
-			Errors:        1,
-			TotalDuration: 30,
-			MinDuration:   10,
-			MaxDuration:   20,
-			Histogram:     [8]uint64{1, 0, 1},
-		},
-		rawSyscallAggregate{
-			Count:         3,
-			TotalDuration: 90,
-			MinDuration:   5,
-			MaxDuration:   50,
-			Histogram:     [8]uint64{0, 2, 1},
-		},
-	))
+	steps := syscallAggregateDrainSteps(types.TraceId(traceID))
+	fakeMap := newFakeSyscallAggregateMap(traceID, encodeRawAggregates(t, steps[0].perCPU...))
 	consumer := &syscallAggregateConsumer{
 		aggregateMap: fakeMap,
 		last:         make(map[types.TraceId]rawSyscallAggregate),
 	}
 
-	rows, err := consumer.Drain()
-	if err != nil {
-		t.Fatalf("first Drain error: %v", err)
+	for i, step := range steps {
+		if i > 0 && step.perCPU != nil {
+			fakeMap.values[traceID] = encodeRawAggregates(t, step.perCPU...)
+		}
+		rows, err := consumer.Drain()
+		if err != nil {
+			t.Fatalf("%s Drain error: %v", step.name, err)
+		}
+		if step.want == nil {
+			if len(rows) != 0 {
+				t.Fatalf("%s Drain rows = %+v, want none for zero delta", step.name, rows)
+			}
+			continue
+		}
+		assertAggregateRows(t, rows, *step.want)
 	}
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          5,
-		Errors:         1,
-		TotalLatencyNs: 120,
-		MinLatencyNs:   5,
-		MaxLatencyNs:   50,
-		LatencyHistogramNs: [8]uint64{
-			1, 2, 2,
-		},
-	})
+}
 
-	fakeMap.values[traceID] = encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         4,
-			Errors:        2,
-			TotalDuration: 80,
-			MinDuration:   4,
-			MaxDuration:   40,
-			Histogram:     [8]uint64{2, 1, 1},
+// syscallAggregateDrainSteps is the per-CPU cumulative map content before each
+// Drain of TestSyscallAggregateConsumerDrainEmitsDeltas and the delta row that
+// Drain must emit for traceID.
+func syscallAggregateDrainSteps(traceID types.TraceId) []aggregateDrainStep {
+	return []aggregateDrainStep{
+		{
+			name: "first",
+			perCPU: []rawSyscallAggregate{
+				{Count: 2, Errors: 1, TotalDuration: 30, MinDuration: 10, MaxDuration: 20, Histogram: [8]uint64{1, 0, 1}},
+				{Count: 3, TotalDuration: 90, MinDuration: 5, MaxDuration: 50, Histogram: [8]uint64{0, 2, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 5, Errors: 1, TotalLatencyNs: 120, MinLatencyNs: 5, MaxLatencyNs: 50,
+				LatencyHistogramNs: [8]uint64{1, 2, 2},
+			},
 		},
-		rawSyscallAggregate{
-			Count:         4,
-			TotalDuration: 110,
-			MinDuration:   5,
-			MaxDuration:   70,
-			Histogram:     [8]uint64{0, 2, 1, 1},
+		{
+			// The second CPU's slot gained one timed invocation (histogram 3 -> 4),
+			// so it gained one count as well: a slot's count is never below its
+			// histogram total.
+			name: "second",
+			perCPU: []rawSyscallAggregate{
+				{Count: 4, Errors: 2, TotalDuration: 80, MinDuration: 4, MaxDuration: 40, Histogram: [8]uint64{2, 1, 1}},
+				{Count: 4, TotalDuration: 110, MinDuration: 5, MaxDuration: 70, Histogram: [8]uint64{0, 2, 1, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 3, Errors: 1, TotalLatencyNs: 70, MinLatencyNs: 4, MaxLatencyNs: 70,
+				LatencyHistogramNs: [8]uint64{1, 1, 0, 1},
+			},
 		},
-	)
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("second Drain error: %v", err)
-	}
-	// The second CPU's slot gained one timed invocation (histogram 3 -> 4),
-	// so it gained one count as well: a slot's count is never below its
-	// histogram total.
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          3,
-		Errors:         1,
-		TotalLatencyNs: 70,
-		MinLatencyNs:   4,
-		MaxLatencyNs:   70,
-		LatencyHistogramNs: [8]uint64{
-			1, 1, 0, 1,
+		{
+			// Unchanged cumulative extrema fall back to the delta's bucket bounds
+			// (bucket 0: 0..999), clamped to the merged cumulative range 4..70.
+			name: "third",
+			perCPU: []rawSyscallAggregate{
+				{Count: 5, Errors: 2, TotalDuration: 100, MinDuration: 4, MaxDuration: 40, Histogram: [8]uint64{3, 1, 1}},
+				{Count: 4, TotalDuration: 110, MinDuration: 5, MaxDuration: 70, Histogram: [8]uint64{0, 2, 1, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 1, Errors: 0, TotalLatencyNs: 20, MinLatencyNs: 4, MaxLatencyNs: 70,
+				LatencyHistogramNs: [8]uint64{1},
+			},
 		},
-	})
-
-	fakeMap.values[traceID] = encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         5,
-			Errors:        2,
-			TotalDuration: 100,
-			MinDuration:   4,
-			MaxDuration:   40,
-			Histogram:     [8]uint64{3, 1, 1},
-		},
-		rawSyscallAggregate{
-			Count:         4,
-			TotalDuration: 110,
-			MinDuration:   5,
-			MaxDuration:   70,
-			Histogram:     [8]uint64{0, 2, 1, 1},
-		},
-	)
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("third Drain error: %v", err)
-	}
-	// Unchanged cumulative extrema fall back to the delta's bucket bounds
-	// (bucket 0: 0..999), clamped to the merged cumulative range 4..70.
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          1,
-		Errors:         0,
-		TotalLatencyNs: 20,
-		MinLatencyNs:   4,
-		MaxLatencyNs:   70,
-		LatencyHistogramNs: [8]uint64{
-			1,
-		},
-	})
-
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("fourth Drain error: %v", err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("fourth Drain rows = %+v, want none for zero delta", rows)
+		// An unchanged map yields a zero delta and therefore no row.
+		{name: "fourth"},
 	}
 }
 
