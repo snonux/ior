@@ -159,6 +159,9 @@ func (m *Model) helpOverlay() string {
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
+// selectionStatusLine renders the bottom status bar: live/paused mode, the
+// selected frame's position, path, depth, total and share, the optional
+// height metric, and the active search filter.
 func (m *Model) selectionStatusLine() string {
 	width := m.width
 	if width <= 0 {
@@ -168,12 +171,12 @@ func (m *Model) selectionStatusLine() string {
 	if m.paused {
 		mode = "PAUSED"
 	}
-	heightLabel := ""
-	if m.heightMetricActive() {
-		heightLabel = " | height:" + m.heightFieldLabel()
-	}
 	frames := m.anim.currentFrames()
 	if len(frames) == 0 {
+		heightLabel := ""
+		if m.heightMetricActive() {
+			heightLabel = " | height:" + m.heightFieldLabel()
+		}
 		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter%s", mode, heightLabel)
 		return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 	}
@@ -182,41 +185,56 @@ func (m *Model) selectionStatusLine() string {
 		selIdx = 0
 	}
 	frame := frames[selIdx]
-	if m.heightMetricActive() {
-		maxHeightTotal := uint64(0)
-		for i := range frames {
-			if frames[i].HeightTotal > maxHeightTotal {
-				maxHeightTotal = frames[i].HeightTotal
-			}
-		}
-		heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
-		heightLabel = fmt.Sprintf(" | height(%s)=%d (%.1f%% of max)", m.heightFieldLabel(), frame.HeightTotal, heightShare)
-	}
-	systemShare := frame.Percent
-	if m.globalTotal > 0 {
-		systemShare = percentOfTotal(frame.Total, m.globalTotal)
-	}
-	metric := m.countFieldLabel()
-	shareLabel := fmt.Sprintf("%.2f%% of total %s", systemShare, metric)
-	query, matches := m.search.query(), m.search.matches()
-	if strings.TrimSpace(query) != "" && len(matches) > 0 {
-		filterTotal, _ := filterCoverageTotals(frames, matches, m.globalTotal)
-		if filterTotal > 0 {
-			selectedFilterTotal := filterCoverageTotalForPath(frames, matches, frame.Path)
-			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
-			shareLabel = fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
-		}
-	}
+	query := m.search.query()
 	// Use a Builder to avoid a separate allocation for the optional filter suffix.
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
-		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
+		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total,
+		m.selectionShareLabel(frames, frame, query), m.selectionHeightLabel(frames, frame)))
 	if query != "" {
 		// Sanitised like the toolbar copy of the query (task io2).
 		b.WriteString(" | filter:")
 		b.WriteString(common.Sanitize(query))
 	}
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
+}
+
+// selectionHeightLabel returns the " | height(...)" suffix for the selected
+// frame, as a share of the tallest visible frame, or "" when no height
+// metric is active.
+func (m *Model) selectionHeightLabel(frames []tuiFrame, frame tuiFrame) string {
+	if !m.heightMetricActive() {
+		return ""
+	}
+	maxHeightTotal := uint64(0)
+	for i := range frames {
+		if frames[i].HeightTotal > maxHeightTotal {
+			maxHeightTotal = frames[i].HeightTotal
+		}
+	}
+	heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
+	return fmt.Sprintf(" | height(%s)=%d (%.1f%% of max)", m.heightFieldLabel(), frame.HeightTotal, heightShare)
+}
+
+// selectionShareLabel returns the selected frame's share: of the filtered
+// total while a search query has matches with a non-zero coverage, otherwise
+// of the global total (falling back to the frame's layout percent when the
+// global total is unknown).
+func (m *Model) selectionShareLabel(frames []tuiFrame, frame tuiFrame, query string) string {
+	metric := m.countFieldLabel()
+	if matches := m.search.matches(); strings.TrimSpace(query) != "" && len(matches) > 0 {
+		filterTotal, _ := filterCoverageTotals(frames, matches, m.globalTotal)
+		if filterTotal > 0 {
+			selectedFilterTotal := filterCoverageTotalForPath(frames, matches, frame.Path)
+			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
+			return fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
+		}
+	}
+	systemShare := frame.Percent
+	if m.globalTotal > 0 {
+		systemShare = percentOfTotal(frame.Total, m.globalTotal)
+	}
+	return fmt.Sprintf("%.2f%% of total %s", systemShare, metric)
 }
 
 func (m *Model) currentFieldPresetLabel() string {
