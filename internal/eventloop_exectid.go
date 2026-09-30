@@ -76,11 +76,16 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // same state change as the lost record would have made is applied and the
 // pair is consumed under the leader tid.
 //
-// Residual ambiguity: two threads of one process parked in execve at once
-// (one of them loses the race and is killed by de_thread) with the winner's
-// own enter lost too could adopt the loser's enter. That needs two lost
-// records in one exec and yields a row with the loser's filename; it is
-// accepted over losing every non-leader exec whose record was dropped.
+// Concurrent callers: several threads of one process can sit in execve at
+// once; one wins, and de_thread kills the others, whose exit records evict
+// their enters (and index hints) before the winner's exit arrives. The index
+// keeps every caller per pid, so one loser's eviction no longer hides the
+// winner's hint. Residual ambiguity: a wrong adoption needs the winner's exec
+// record AND a loser's exit record to be lost, with the lookup (which prefers
+// the most recently parked caller) landing on that loser. The row then
+// carries the loser's tid and filename and the winner's enter stays parked
+// until LRU trimming; two lost records in one exec are accepted for that
+// over losing every non-leader exec whose record was dropped.
 func (e *eventLoop) adoptLostExecCaller(exitEv event.Event) (*event.Pair, bool) {
 	ret, ok := exitEv.(*types.RetEvent)
 	if !ok || ret.Ret != 0 || ret.Tid != ret.Pid {
