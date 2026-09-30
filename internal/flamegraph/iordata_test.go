@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -666,6 +667,62 @@ func TestUnknownTraceIDPlaceholderSurvivesRoundTrip(t *testing.T) {
 	}
 	if _, ok := counterAt(restored, "/f", unknown, "c", 1, 1, 0); !ok {
 		t.Fatalf("record for %s lost: %v", unknown, restored.records)
+	}
+}
+
+// TestUnknownTraceIDPlaceholderRejectedWhenReaderKnowsTheID: the writer's
+// "unknown_trace_id_<n>" placeholder may only keep n if this build renders n as
+// the same placeholder. Here n is a real tracepoint for the reader, so keeping
+// it would show enter_openat where the writer meant "unknown": rejected.
+func TestUnknownTraceIDPlaceholderRejectedWhenReaderKnowsTheID(t *testing.T) {
+	known := types.SYS_ENTER_OPENAT
+	stored := map[recordKey]Counter{{Path: "/f", TraceID: 1}: {Count: 1}}
+	path := writeZstdGob(t, recordingMagic[:], recordingHeader{
+		Version:     recordingFormatVersion,
+		Tracepoints: map[traceIdType]string{1: fmt.Sprintf("%s%d", unknownTracePrefix, uint32(known))},
+	}, stored)
+	iod, err := newIorDataFromFile(path)
+	if err == nil {
+		t.Fatalf("loaded %v, want the mislabel-prone placeholder rejected", iod.records)
+	}
+	if !strings.Contains(err.Error(), "unnamed tracepoint") || !strings.Contains(err.Error(), known.String()) {
+		t.Fatalf("error = %v, want one naming the unnamed tracepoint and the ID's meaning here", err)
+	}
+}
+
+// TestUnknownTraceIDPlaceholderRejectsNonCanonicalNumber: "unknown_trace_id_07"
+// would render as "unknown_trace_id_7", so it is not the same label and must
+// not be accepted as a placeholder.
+func TestUnknownTraceIDPlaceholderRejectsNonCanonicalNumber(t *testing.T) {
+	stored := map[recordKey]Counter{{Path: "/f", TraceID: 1}: {Count: 1}}
+	path := writeZstdGob(t, recordingMagic[:], recordingHeader{
+		Version: recordingFormatVersion, Tracepoints: map[traceIdType]string{1: unknownTracePrefix + "0004000000"},
+	}, stored)
+	if _, err := newIorDataFromFile(path); err == nil {
+		t.Fatal("non-canonical placeholder loaded, want an error")
+	}
+}
+
+// TestLoadFromFileSumsRecordsThatTranslateToOneKey: two writer IDs naming the
+// same tracepoint collapse onto one key here; their counts must be added, not
+// overwritten.
+func TestLoadFromFileSumsRecordsThatTranslateToOneKey(t *testing.T) {
+	stored := map[recordKey]Counter{
+		{Path: "/f", TraceID: 1, Comm: "c", Pid: 1, Tid: 1}: {Count: 3, Bytes: 10},
+		{Path: "/f", TraceID: 2, Comm: "c", Pid: 1, Tid: 1}: {Count: 4, Bytes: 5},
+	}
+	name := types.SYS_ENTER_OPENAT.String()
+	path := writeZstdGob(t, recordingMagic[:], recordingHeader{
+		Version: recordingFormatVersion, Tracepoints: map[traceIdType]string{1: name, 2: name},
+	}, stored)
+	iod, err := newIorDataFromFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, ok := counterAt(iod, "/f", types.SYS_ENTER_OPENAT, "c", 1, 1, 0)
+	if !ok || got.Count != 7 || got.Bytes != 15 || len(iod.records) != 1 {
+		t.Fatalf("record = %+v, %v (%d records); want one record with count 7, bytes 15",
+			got, ok, len(iod.records))
 	}
 }
 

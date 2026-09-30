@@ -115,6 +115,14 @@ func decodeRecords(r io.Reader) (map[recordKey]Counter, error) {
 // It only trusts the legacy verdict when the whole stream really decodes as
 // the pre-header layout, so garbage or truncated input keeps a plain decode
 // error instead of a misleading "written by an older ior".
+//
+// Cost: a genuine legacy stream is decoded in full into a throwaway map, so
+// this path uses memory proportional to that recording (once, then garbage).
+// That is accepted deliberately. gob cannot check a stream's type without
+// reading the value (the whole message is buffered before the destination
+// type is compared), and Decode(nil) would skip the allocation but also skip
+// the type check, which would let any unrelated gob stream be called "legacy".
+// The path only runs for a file that is being rejected anyway.
 func classifyHeaderless(r io.Reader) error {
 	var legacy map[recordKey]Counter
 	if err := gob.NewDecoder(r).Decode(&legacy); err != nil {
@@ -124,22 +132,34 @@ func classifyHeaderless(r io.Reader) error {
 }
 
 // translateRecords rewrites the trace IDs of stored (the writer's numbering)
-// into this build's numbering through the header's tracepoint table. Records
-// that end up under the same key are summed, which cannot happen for a table
-// with unique names but keeps the function total.
+// into this build's numbering through the header's tracepoint table.
+//
+// Memory: the common case is a recording written by a build with the same ID
+// table, where every ID maps to itself; stored is then returned untouched, so
+// loading costs one map. Only a recording from a differently numbered build
+// (the situation the header exists for) builds a second map, transiently
+// doubling the peak while stored and the result coexist.
 func translateRecords(stored map[recordKey]Counter, table map[traceIdType]string) (map[recordKey]Counter, error) {
-	out := make(map[recordKey]Counter, len(stored))
-	resolved := make(map[traceIdType]traceIdType, len(table))
-	for key, cnt := range stored {
-		id, ok := resolved[key.TraceID]
-		if !ok {
-			var err error
-			if id, err = resolveTracepoint(key.TraceID, table); err != nil {
-				return nil, err
-			}
-			resolved[key.TraceID] = id
+	remap, err := buildRemap(stored, table)
+	if err != nil {
+		return nil, err
+	}
+	identity := true
+	for from, to := range remap {
+		if from != to {
+			identity = false
+			break
 		}
-		key.TraceID = id
+	}
+	if identity {
+		return stored, nil
+	}
+	out := make(map[recordKey]Counter, len(stored))
+	for key, cnt := range stored {
+		key.TraceID = remap[key.TraceID]
+		// Distinct writer IDs may resolve to one ID here (a header naming two
+		// IDs with the same tracepoint); their counts are summed rather than
+		// letting one overwrite the other.
 		if prev, dup := out[key]; dup {
 			cnt = prev.add(cnt)
 		}
@@ -148,11 +168,32 @@ func translateRecords(stored map[recordKey]Counter, table map[traceIdType]string
 	return out, nil
 }
 
+// buildRemap resolves every trace ID that occurs in stored to this build's ID.
+func buildRemap(stored map[recordKey]Counter, table map[traceIdType]string) (map[traceIdType]traceIdType, error) {
+	remap := make(map[traceIdType]traceIdType, len(table))
+	for key := range stored {
+		if _, done := remap[key.TraceID]; done {
+			continue
+		}
+		id, err := resolveTracepoint(key.TraceID, table)
+		if err != nil {
+			return nil, err
+		}
+		remap[key.TraceID] = id
+	}
+	return remap, nil
+}
+
 // resolveTracepoint maps one stored ID to this build's ID via its tracepoint
 // name. A name this build does not know (a syscall newer than this binary) is
-// an error: guessing an ID would reintroduce the silent mislabelling. The
-// exception is the writer's own "unknown_trace_id_<n>" placeholder, which
-// renders identically before and after, so its embedded number is kept.
+// an error: guessing an ID would reintroduce the silent mislabelling.
+//
+// The one carve-out is the writer's own "unknown_trace_id_<n>" placeholder for
+// an ID its table lacked. Its embedded number is kept only if this build also
+// renders n as that same placeholder, i.e. n is unknown to the reader too, so
+// the label is unchanged. If n is a real tracepoint here, keeping it would
+// show a different syscall than the writer meant (the mislabel this format
+// exists to prevent), so the file is rejected instead.
 func resolveTracepoint(stored traceIdType, table map[traceIdType]string) (traceIdType, error) {
 	name, ok := table[stored]
 	if !ok {
@@ -163,7 +204,12 @@ func resolveTracepoint(stored traceIdType, table map[traceIdType]string) (traceI
 	}
 	if n, ok := strings.CutPrefix(name, unknownTracePrefix); ok {
 		if v, err := strconv.ParseUint(n, 10, 32); err == nil {
-			return traceIdType(v), nil
+			if id := traceIdType(v); id.String() == name {
+				return id, nil
+			}
+			return 0, fmt.Errorf("recording has an unnamed tracepoint (%q) whose ID is a known tracepoint (%s) "+
+				"in this ior build, so it cannot be labelled reliably; use the ior version that wrote it",
+				name, traceIdType(v).String())
 		}
 	}
 	return 0, fmt.Errorf("recording contains tracepoint %q, which this ior build does not know; "+

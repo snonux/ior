@@ -54,9 +54,9 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 //
 //	ior collapsed trace.ior.zst | flamegraph.pl > trace.svg
 //
-// The .ior.zst artifact is a zstd-compressed gob record map, not collapsed
-// text; this function is the documented bridge to external FlameGraph
-// tooling. Frames mirror the in-TUI flamegraph exactly (same record fields
+// The .ior.zst artifact is a zstd-compressed stream (magic, gob header with the
+// tracepoint-name table, gob records), not collapsed text; this function is
+// the documented bridge to external FlameGraph tooling. Frames mirror the in-TUI flamegraph exactly (same record fields
 // and the same per-field splitting), records mapping to identical frame
 // paths are summed into one sample, and lines are sorted so the output is
 // deterministic. Records with a zero sample weight or no derived frames are

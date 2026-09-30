@@ -15,8 +15,9 @@ import (
 
 // RunCollapsedConverter implements the `ior collapsed` subcommand: it reads
 // an .ior.zst recording and writes flamegraph.pl-ready collapsed stacks to
-// w (stdout in production). The recording format is a zstd-compressed gob
-// record map, not collapsed text, so this derivation is the documented
+// w (stdout in production). The recording format is a zstd-compressed stream
+// (magic, gob header with the tracepoint-name table, gob records), not
+// collapsed text, so this derivation is the documented
 // bridge for offline FlameGraph rendering:
 //
 //	ior collapsed trace.ior.zst | flamegraph.pl > trace.svg
