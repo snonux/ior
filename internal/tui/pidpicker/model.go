@@ -211,29 +211,62 @@ func (m Model) emitSelection() tea.Cmd {
 }
 
 // applyFilter returns m with filtered rebuilt from processes for the current
-// query and the selection clamped to it. Like every Model method it takes and
-// returns a value, so it only ever changes the copy the caller keeps.
+// query. Like every Model method it takes and returns a value, so it only ever
+// changes the copy the caller keeps.
+//
+// The selection follows the process, not the row number. selectedIndex is a row
+// position (0 is the "All" row), but both a rescan (ctrl+r / r) and a changed
+// query reorder, drop and insert rows, so keeping the number would leave the
+// highlight (and the pid Enter emits) on whichever process now happens to sit
+// there: a different pid than the one the user picked. relocateSelection looks
+// the previously selected pid up in the rebuilt list instead.
 func (m Model) applyFilter() Model {
+	selectedPid, hadSelection := m.selectedProcessPid()
 	query := strings.TrimSpace(strings.ToLower(m.input.Value()))
 	if query == "" {
 		m.filtered = cloneProcesses(m.processes)
-		if m.selectedIndex > len(m.filtered) {
-			m.selectedIndex = len(m.filtered)
+	} else {
+		filtered := make([]ProcessInfo, 0, len(m.processes))
+		for _, process := range m.processes {
+			if matchesQuery(process, query) {
+				filtered = append(filtered, process)
+			}
+		}
+		m.filtered = filtered
+	}
+	return m.relocateSelection(selectedPid, hadSelection)
+}
+
+// selectedProcessPid returns the Pid (the tid in TID mode; ProcessInfo.Pid is
+// the thread id there) of the process row currently highlighted in filtered.
+// ok is false when the "All" row is selected or the index does not point at a
+// process row (e.g. before the first scan), so there is no identity to track.
+func (m Model) selectedProcessPid() (pid int, ok bool) {
+	idx := m.selectedIndex - 1
+	if idx < 0 || idx >= len(m.filtered) {
+		return 0, false
+	}
+	return m.filtered[idx].Pid, true
+}
+
+// relocateSelection points selectedIndex at the row of pid in the rebuilt
+// filtered list. If the process is gone (it exited, or the new query no longer
+// matches it) the selection falls back to the "All" row, which is highlighted
+// and so visibly no longer the process the user chose; silently landing on a
+// neighbouring process would let Enter trace something else. When there was no
+// process selected (hadSelection false) the index is only clamped into range.
+func (m Model) relocateSelection(pid int, hadSelection bool) Model {
+	if hadSelection {
+		m.selectedIndex = 0
+		for i, process := range m.filtered {
+			if process.Pid == pid {
+				m.selectedIndex = i + 1
+				break
+			}
 		}
 		return m
 	}
-
-	filtered := make([]ProcessInfo, 0, len(m.processes))
-	for _, process := range m.processes {
-		if matchesQuery(process, query) {
-			filtered = append(filtered, process)
-		}
-	}
-
-	m.filtered = filtered
-	if m.selectedIndex > len(m.filtered) {
-		m.selectedIndex = len(m.filtered)
-	}
+	m.selectedIndex = clamp(m.selectedIndex, 0, len(m.filtered))
 	return m
 }
 
