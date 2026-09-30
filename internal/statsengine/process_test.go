@@ -376,3 +376,38 @@ func assertProcessLifetimes(t *testing.T, got, want []ProcessSnapshot) {
 		}
 	}
 }
+
+// TestProcessAccumulatorCompactionKeepsLifetimeCounter is the regression test
+// for the ro2 review: compaction that drops a live row (PID 10 lifetime 1)
+// while keeping a retired one of the same PID (lifetime 0) must not reset the
+// PID's lifetime counter, or the next pair opens a second {10, lifetime 0}
+// row with a colliding identity.
+func TestProcessAccumulatorCompactionKeepsLifetimeCounter(t *testing.T) {
+	acc := newProcessAccumulatorWithLimits(2, 3)
+	for i := 0; i < 10; i++ {
+		acc.Add(newProcessPair(10, "old", 10, 1))
+	}
+	acc.RetireProcess(10)
+	for i := 0; i < 5; i++ {
+		acc.Add(newProcessPair(20, "other", 10, 1))
+	}
+	acc.Add(newProcessPair(10, "new", 10, 1))  // live PID 10 lifetime 1
+	acc.Add(newProcessPair(30, "cold", 10, 1)) // 4 rows: compacts to 10#0 and 20
+	if acc.byPID[10] != nil {
+		t.Fatalf("expected compaction to drop the live PID 10 row, got %+v", acc.byPID[10])
+	}
+	acc.Add(newProcessPair(10, "newer", 10, 1))
+
+	snap := acc.Snapshot(time.Second)
+	seen := make(map[[2]uint32]bool)
+	for _, row := range snap {
+		id := [2]uint32{row.PID, row.Lifetime}
+		if seen[id] {
+			t.Fatalf("duplicate row identity pid %d lifetime %d: %+v", row.PID, row.Lifetime, snap)
+		}
+		seen[id] = true
+	}
+	if got := acc.byPID[10]; got == nil || got.lifetime != 2 || got.label() != "newer" {
+		t.Fatalf("expected the next PID 10 process as lifetime 2, got %+v", got)
+	}
+}

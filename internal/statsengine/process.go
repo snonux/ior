@@ -235,10 +235,18 @@ func (a *processAccumulator) compactIfNeeded() {
 }
 
 // keepOnly rebuilds the live and retired rows from the compaction survivors.
-// A row is live exactly when byPID still points at it. nextLifetime is pruned
-// to the PIDs with a surviving retired row: once every earlier row of a PID is
-// gone, restarting its ordinals at 0 cannot collide with a listed row.
+// A row is live exactly when byPID still points at it.
+//
+// nextLifetime is rebuilt for the PIDs that keep a retired row but lose (or
+// had no) live row, as one past the highest ordinal the PID has used - taken
+// over all rows before compaction, dropped ones included. Only the retired
+// rows would not do: compaction can drop a live X#1 while keeping X#0, and
+// the next pair for X must then open X#2, not a second X#0 (or X#1, which
+// could be shown again next to a listed X#0 as if it were the same row).
+// PIDs with no surviving row are forgotten: restarting their ordinals at 0
+// cannot collide with a listed row.
 func (a *processAccumulator) keepOnly(survivors []*processStats) {
+	next := a.nextLifetimes()
 	kept := make(map[uint32]*processStats, len(survivors))
 	var retired []*processStats
 	for _, stats := range survivors {
@@ -250,13 +258,32 @@ func (a *processAccumulator) keepOnly(survivors []*processStats) {
 	}
 	nextLifetime := make(map[uint32]uint32)
 	for _, stats := range retired {
-		if next, ok := a.nextLifetime[stats.pid]; ok {
-			nextLifetime[stats.pid] = next
+		if kept[stats.pid] == nil {
+			nextLifetime[stats.pid] = next[stats.pid]
 		}
 	}
 	a.byPID = kept
 	a.retired = retired
 	a.nextLifetime = nextLifetime
+}
+
+// nextLifetimes returns, per PID, one past the highest lifetime ordinal any
+// current row of it (live or retired) or its pending nextLifetime uses.
+func (a *processAccumulator) nextLifetimes() map[uint32]uint32 {
+	next := make(map[uint32]uint32, len(a.byPID)+len(a.retired))
+	for pid, n := range a.nextLifetime {
+		next[pid] = n
+	}
+	bump := func(stats *processStats) {
+		next[stats.pid] = max(next[stats.pid], stats.lifetime+1)
+	}
+	for _, stats := range a.byPID {
+		bump(stats)
+	}
+	for _, stats := range a.retired {
+		bump(stats)
+	}
+	return next
 }
 
 func betterProcessRank(a, b *processStats) bool {

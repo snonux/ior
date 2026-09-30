@@ -635,3 +635,65 @@ func TestProcessKeyTellsRecycledPIDLifetimesApart(t *testing.T) {
 		t.Fatalf("findProcessOffset matched a lifetime that has no row")
 	}
 }
+
+// TestRecycledPIDLifetimesAreDistinctOnScreen checks that two lifetimes of
+// one PID with the same comm (task ro2 review) are told apart everywhere the
+// dashboard shows or selects processes: the table PID cell, the treemap and
+// bubble labels and keys, and the overview's top-process summary.
+func TestRecycledPIDLifetimesAreDistinctOnScreen(t *testing.T) {
+	procs := []statsengine.ProcessSnapshot{
+		{PID: 2000, Lifetime: 1, Comm: "sh", Syscalls: 9},
+		{PID: 2000, Lifetime: 0, Comm: "sh", Syscalls: 5},
+	}
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, procs,
+		statsengine.NewHistogramSnapshot(0, nil), statsengine.NewHistogramSnapshot(0, nil))
+
+	rows := processRows(procs)
+	if rows[0][0] != "2000#1" || rows[1][0] != "2000" {
+		t.Fatalf("table PID cells = %q, %q; want 2000#1, 2000", rows[0][0], rows[1][0])
+	}
+	items := buildProcessesTreemapItems(&snap, bubbleMetricCount)
+	if len(items) != 2 || items[0].Key == items[1].Key || items[0].Name == items[1].Name {
+		t.Fatalf("treemap items must differ in key and label: %+v", items)
+	}
+	bubbles := processBubbleData(&snap)
+	if len(bubbles) != 2 || bubbles[0].ID != "2000#1" || bubbles[1].ID != "2000" {
+		t.Fatalf("bubble IDs = %+v, want 2000#1 and 2000", bubbles)
+	}
+	if bubbles[0].Label != "2000#1:sh" || bubbles[1].Label != "2000:sh" {
+		t.Fatalf("bubble labels = %q, %q", bubbles[0].Label, bubbles[1].Label)
+	}
+	if got := summarizeTopProcesses(&snap); got != "sh/2000#1(9), sh/2000(5)" {
+		t.Fatalf("overview top processes = %q", got)
+	}
+}
+
+// TestBubbleSelectionStaysOnRecycledPIDLifetime checks that the bubble chart
+// keeps the selected lifetime of a recycled PID across a refresh that
+// reorders the bubbles, even when both lifetimes share their comm (the old
+// "pid/comm" bubble ID made them collide).
+func TestBubbleSelectionStaysOnRecycledPIDLifetime(t *testing.T) {
+	snapWith := func(oldCount, newCount uint64) statsengine.Snapshot {
+		return statsengine.NewSnapshot(nil, nil, nil, nil, nil,
+			[]statsengine.ProcessSnapshot{
+				{PID: 2000, Lifetime: 0, Comm: "sh", Syscalls: oldCount},
+				{PID: 2000, Lifetime: 1, Comm: "sh", Syscalls: newCount},
+			},
+			statsengine.NewHistogramSnapshot(0, nil), statsengine.NewHistogramSnapshot(0, nil))
+	}
+	chart := newBubbleChart()
+	chart.SetViewport(80, 24)
+	first := snapWith(9, 5)
+	chart.SetData(processBubbleData(&first))
+	idx := chart.selectIndexByID("2000#1")
+	if chart.nodes[idx].ID != "2000#1" {
+		t.Fatalf("lifetime 1 bubble missing: %+v", chart.nodes)
+	}
+	chart.selected = idx
+
+	second := snapWith(5, 9) // lifetime 1 now outranks lifetime 0
+	chart.SetData(processBubbleData(&second))
+	if got := chart.nodes[chart.selected].ID; got != "2000#1" {
+		t.Fatalf("selection moved to %q after refresh, want 2000#1", got)
+	}
+}

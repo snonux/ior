@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"slices"
-	"strconv"
 
 	"ior/internal/statsengine"
 )
@@ -108,18 +107,14 @@ func treemapItemKeys(items []syscallTreemapItem) []string {
 	return keysOf(items, func(item syscallTreemapItem) string { return item.Key })
 }
 
-// processKey is a process row's selection identity: its PID, suffixed with
-// the row's lifetime ordinal when the kernel recycled the PID during the
-// session (statsengine.ProcessSnapshot.Lifetime), so the rows of two
+// processKey is a process row's selection identity: its displayed ID
+// (statsengine.ProcessID), the PID suffixed with the row's lifetime ordinal
+// when the kernel recycled the PID during the session, so the rows of two
 // processes that shared a PID stay separately selectable. The first lifetime
-// keeps the bare PID. The treemap items and the table rows share it, so a
-// selection can move between the two when the viz mode changes.
+// keeps the bare PID. The treemap items, bubbles and table rows share it, so
+// a selection can move between them when the viz mode changes.
 func processKey(pid, lifetime uint32) string {
-	key := strconv.FormatUint(uint64(pid), 10)
-	if lifetime == 0 {
-		return key
-	}
-	return key + "#" + strconv.FormatUint(uint64(lifetime), 10)
+	return statsengine.ProcessID(pid, lifetime)
 }
 
 // processRowKey is processKey for a snapshot row.

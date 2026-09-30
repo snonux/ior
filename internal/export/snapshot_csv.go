@@ -88,11 +88,14 @@ func writeSnapshotDetailRows(w *csv.Writer, snap *statsengine.Snapshot) error {
 			return err
 		}
 	}
+	// A process row's id is ProcessSnapshot.ID: the bare PID, or "PID#n"
+	// for the n-th later process the kernel handed a recycled PID, so the
+	// rows of distinct processes never share an id.
 	for _, p := range snap.Processes() {
-		if err := w.Write([]string{"process", fmt.Sprint(p.PID), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)}); err != nil {
+		if err := w.Write([]string{"process", p.ID(), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)}); err != nil {
 			return err
 		}
-		if err := w.Write([]string{"process_latency_ns", fmt.Sprint(p.PID), fmt.Sprintf("%.2f", p.AvgLatencyNs), "", ""}); err != nil {
+		if err := w.Write([]string{"process_latency_ns", p.ID(), fmt.Sprintf("%.2f", p.AvgLatencyNs), "", ""}); err != nil {
 			return err
 		}
 	}

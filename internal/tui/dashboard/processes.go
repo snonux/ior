@@ -48,7 +48,9 @@ func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, 
 
 func processColumns() []common.TableColumn {
 	return []common.TableColumn{
-		{Title: "PID", Width: 8},
+		// 10 cells fit a 7-digit PID (pid_max tops out at 4194304) plus a
+		// "#n" lifetime suffix for a recycled PID's later rows.
+		{Title: "PID", Width: 10},
 		{Title: "Comm", Width: 18},
 		{Title: "Syscalls", Width: 10},
 		{Title: "Rate/s", Width: 8},
@@ -154,7 +156,7 @@ func processRows(processes []statsengine.ProcessSnapshot) [][]string {
 	rows := make([][]string, 0, len(processes))
 	for _, p := range processes {
 		rows = append(rows, []string{
-			strconv.FormatUint(uint64(p.PID), 10),
+			p.ID(), // "PID#lifetime" for a recycled PID's later rows
 			truncateText(p.Comm, 18),
 			strconv.FormatUint(p.Syscalls, 10),
 			fmt.Sprintf("%.1f", p.RatePerSec),
