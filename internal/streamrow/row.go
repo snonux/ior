@@ -12,14 +12,22 @@ import (
 // Row is the shared syscall stream row model used by live TUI views,
 // snapshot export, and future recording outputs.
 type Row struct {
-	Seq        uint64
-	TimeNs     uint64
-	Syscall    string
-	Family     string
-	Comm       string
-	PID        uint32
-	TID        uint32
-	FileName   string
+	Seq     uint64
+	TimeNs  uint64
+	Syscall string
+	Family  string
+	Comm    string
+	PID     uint32
+	TID     uint32
+	// FileName is the display text of the file column: the pair's path, or the
+	// event.NoFileName placeholder when the pair carries no file. NoFile says
+	// which of the two it is, because a real file literally named "N:file"
+	// renders identically to the placeholder and the text cannot tell them apart.
+	FileName string
+	// NoFile is true when the source pair had no file at all (pair.File == nil).
+	// FileValue and the stream tab's Enter-to-filter read it, so the global
+	// filter judges the row exactly as it judges the live pair (task zp2).
+	NoFile     bool
 	DurationNs uint64
 	GapNs      uint64
 	Bytes      uint64
@@ -79,11 +87,16 @@ func (r *Row) CommValue() string {
 // parquet exports keep rendering "N:file"), but the live pair checkpoint sees
 // the same pair's file as "" (globalfilter pairCandidate.FileValue). Returning
 // the placeholder here let a file filter such as "file" or ^N:file$ keep the
-// buffered rows while rejecting every new live pair (task op2). As documented
-// on event.NoFileName, a real file literally named "N:file" is treated like
-// the placeholder.
+// buffered rows while rejecting every new live pair (task op2).
+//
+// The decision is the explicit NoFile flag, not a comparison of FileName with
+// the placeholder text: comparing made a real file literally named "N:file"
+// (e.g. a relative open) read as "" here while the live pair reported its real
+// name, so "N:file", ^N:file$ and "file" admitted the live pair and then hid
+// the buffered row on the next refresh and in the CSV export, and ^$ did the
+// reverse (task zp2). Only a genuinely fileless row is blank.
 func (r *Row) FileValue() string {
-	if r.FileName == event.NoFileName {
+	if r.NoFile {
 		return ""
 	}
 	return r.FileName
@@ -172,6 +185,7 @@ func New(seq uint64, pair *event.Pair) Row {
 		PID:               pair.EnterEv.GetPid(),
 		TID:               pair.EnterEv.GetTid(),
 		FileName:          pair.FileName(),
+		NoFile:            pair.File == nil,
 		DurationNs:        pair.Duration,
 		GapNs:             pair.DurationToPrev,
 		Bytes:             pair.Bytes,

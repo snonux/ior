@@ -31,6 +31,11 @@ import (
 // built from explicit byte offsets rather than from the generated Go types, so
 // the builders compile and mean the same thing on both sides of the change.
 //
+// The golden rows are %+v dumps of streamrow.Row, so a new Row field shows up
+// in every line. The NoFile field (task zp2) was added to the golden by hand:
+// true exactly on the fileless "N:file" rows, false elsewhere; no other byte of
+// the pre-split capture changed.
+//
 // Both wire generations are checked against the one golden: payloadWireSplit
 // is what the current BPF object emits, payloadWireWide is what an older
 // object (an IOR_BPF_OBJECT override) still emits and must keep decoding to

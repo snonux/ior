@@ -191,3 +191,52 @@ func TestFilelessRenameRowStillMatchesOldName(t *testing.T) {
 		}
 	}
 }
+
+// TestRealFileNamedPlaceholderAgreesWithLivePair is the task zp2 regression,
+// the inverse of op2: a pair whose file is really named "N:file" (a relative
+// open of a file with that name) renders the same cell text as a fileless
+// pair, but it does carry a file. Its row must report that name to the filter
+// exactly as the live pair checkpoint does, in both directions: "N:file",
+// ^N:file$ and "file" select it on both paths, and ^$ (the fileless-only
+// pattern) selects it on neither. Mapping the placeholder text to "" made the
+// live pair pass and the buffered row vanish on the next refresh and export.
+func TestRealFileNamedPlaceholderAgreesWithLivePair(t *testing.T) {
+	pair := filelessClosePair()
+	pair.File = file.NewFd(3, event.NoFileName, 0)
+	row := New(1, pair)
+	if row.NoFile {
+		t.Fatal("a pair that carries a file must not produce a NoFile row")
+	}
+	if got := row.FileValue(); got != event.NoFileName {
+		t.Fatalf("FileValue = %q, want the real name %q", got, event.NoFileName)
+	}
+	for pattern, want := range map[string]bool{
+		"N:file":                                true,
+		"file":                                  true,
+		globalfilter.ExactPattern("N:file"):     true,
+		"^$":                                    false,
+		globalfilter.ExactPattern("/tmp/other"): false,
+	} {
+		filter := globalfilter.Filter{File: &globalfilter.StringFilter{Pattern: pattern}}
+		live, buffered := filter.MatchPair(pair), filter.Matches(&row)
+		if live != want || buffered != want {
+			t.Errorf("pattern %q: live=%v buffered=%v, want both %v", pattern, live, buffered, want)
+		}
+	}
+}
+
+// TestNoFileFlagMatchesPairFile pins where the flag comes from: exactly the
+// pairs without a file. The display text alone (FileName) is identical for
+// both kinds of row here, so only the flag can tell them apart.
+func TestNoFileFlagMatchesPairFile(t *testing.T) {
+	fileless := New(1, filelessClosePair())
+	withPlaceholderName := filelessClosePair()
+	withPlaceholderName.File = file.NewFd(3, event.NoFileName, 0)
+	real := New(2, withPlaceholderName)
+	if fileless.FileName != real.FileName {
+		t.Fatalf("test premise: display names differ (%q vs %q)", fileless.FileName, real.FileName)
+	}
+	if !fileless.NoFile || real.NoFile {
+		t.Fatalf("NoFile fileless=%v real=%v, want true/false", fileless.NoFile, real.NoFile)
+	}
+}

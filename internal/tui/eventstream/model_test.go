@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/messages"
@@ -663,7 +664,7 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 		{"blank comm", StreamEvent{Seq: 1, PID: 5, Comm: "   "}, streamColComm},
 		{"empty syscall", StreamEvent{Seq: 1, PID: 5}, streamColSyscall},
 		{"empty file", StreamEvent{Seq: 1, PID: 5}, streamColFile},
-		{"no-file placeholder", StreamEvent{Seq: 1, PID: 5, FileName: event.NoFileName}, streamColFile},
+		{"no-file placeholder", StreamEvent{Seq: 1, PID: 5, FileName: event.NoFileName, NoFile: true}, streamColFile},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
@@ -702,8 +703,79 @@ func TestPausedEnterOnFilelessPairRowPushesNoFilter(t *testing.T) {
 
 	withFile := row
 	withFile.FileName = "/tmp/a"
+	withFile.NoFile = false
 	if handled, cmd := pressEnterOnCell(t, withFile, streamColFile); !handled || cmd == nil {
 		t.Fatalf("enter on a real file cell must still push a filter")
+	}
+}
+
+// TestRealFileNamedPlaceholderSurvivesFilterAndExport is the task zp2
+// regression at the stream level: a row for a file really named "N:file"
+// shows the same cell text as a fileless row, but filters on that name must
+// keep it on the Stream refresh (as they keep the live pair) and in the CSV
+// export, Enter on its cell must push the exact filter, and ^$ must not
+// select it. The fileless row beside it is the control for the other side.
+func TestRealFileNamedPlaceholderSurvivesFilterAndExport(t *testing.T) {
+	closePair := func(f *file.FdFile) *event.Pair {
+		enter := &types.FdEvent{TraceId: types.SYS_ENTER_CLOSE, Time: 10, Pid: 5, Tid: 5, Fd: 3}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_CLOSE, Time: 20, Pid: 5, Tid: 5}
+		if f != nil {
+			pair.File = f
+		}
+		return pair
+	}
+	realPair := closePair(file.NewFd(3, event.NoFileName, 0))
+	filelessPair := closePair(nil)
+	realRow, filelessRow := NewStreamEvent(1, realPair), NewStreamEvent(2, filelessPair)
+
+	rb := NewRingBuffer()
+	rb.Push(realRow)
+	rb.Push(filelessRow)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	for pattern, wantReal := range map[string]bool{"N:file": true, "file": true, globalfilter.ExactPattern(event.NoFileName): true, "^$": false} {
+		f := Filter{File: &StringFilter{Pattern: pattern}}
+		m.SetFilter(f)
+		var gotReal bool
+		for _, ev := range m.filtered {
+			gotReal = gotReal || ev.Seq == realRow.Seq
+		}
+		if gotReal != wantReal || f.MatchPair(realPair) != wantReal {
+			t.Errorf("pattern %q: buffered keeps real row=%v, live pair=%v, want both %v", pattern, gotReal, f.MatchPair(realPair), wantReal)
+		}
+	}
+
+	// The CSV export applies the same filter to the same buffered rows.
+	path, err := exportSnapshotToCSV(rb, Filter{File: &StringFilter{Pattern: "^N:file$"}}, t.TempDir(), "zp2")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 2 {
+		t.Fatalf("export must hold the header plus the one real-file row, got %q", data)
+	}
+
+	// Enter on the real file's cell constrains on its name; the fileless
+	// row's cell (same text) pushes nothing.
+	handled, cmd := pressEnterOnCell(t, realRow, streamColFile)
+	if !handled || cmd == nil {
+		t.Fatalf("enter on a real file named %q must push a filter, handled=%v", event.NoFileName, handled)
+	}
+	req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+	if !ok || req.Filter.File == nil || req.Filter.File.Pattern != globalfilter.ExactPattern(event.NoFileName) {
+		t.Fatalf("expected ^N:file$ file filter, got %+v ok=%v", req.Filter.File, ok)
+	}
+	if !req.Filter.MatchPair(realPair) || req.Filter.MatchPair(filelessPair) {
+		t.Fatalf("pushed filter must select the real file's pair and not the fileless one")
+	}
+	if handled, cmd := pressEnterOnCell(t, filelessRow, streamColFile); handled || cmd != nil {
+		t.Fatalf("enter on the fileless row's identical-looking cell must push nothing")
 	}
 }
 

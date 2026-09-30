@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
@@ -906,11 +905,13 @@ func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 // setStringCellFilter sets next's Comm, Syscall or File filter to exactly the
 // selected string cell's value and reports the dimension it set; ok is false
 // for a non-string column or a blank cell (a blank value constrains nothing).
-// A File cell showing event.NoFileName counts as blank: the placeholder is
-// display text for "no file", while the global filter sees such a row's or
-// live pair's file as "" (streamrow Row.FileValue, globalfilter
-// pairCandidate.FileValue), so ^N:file$ would match nothing at all and blank
-// the stream instead of selecting the fileless rows.
+// A File cell of a fileless row (ev.NoFile, rendered as event.NoFileName)
+// counts as blank: the placeholder is display text for "no file", while the
+// global filter sees such a row's or live pair's file as "" (streamrow
+// Row.FileValue, globalfilter pairCandidate.FileValue), so ^N:file$ would match
+// nothing at all and blank the stream instead of selecting the fileless rows.
+// The flag, not the text, decides: a real file literally named "N:file" shows
+// the same cell text but its filter ^N:file$ matches it, so Enter works there.
 //
 // The pattern is globalfilter.ExactPattern (^value$), matching the dashboard
 // row filters: Enter on "read" must not also admit readv/pread64, on
@@ -930,7 +931,7 @@ func setStringCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dime
 		value, target, dim = ev.Syscall, &next.Syscall, presenter.DimSyscall
 	case streamColFile:
 		value, target, dim = ev.FileName, &next.File, presenter.DimFile
-		if value == event.NoFileName {
+		if ev.NoFile {
 			return dim, false
 		}
 	default:

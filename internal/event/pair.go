@@ -15,11 +15,12 @@ import (
 // output, FileName, the stream tab's File cell) when it carries no file. It
 // is display text only: the global filter's file dimension sees such a pair,
 // and the stream row built from it, as the empty value (globalfilter
-// pairCandidate.FileValue, streamrow Row.FileValue), so consumers that
-// turn a displayed file name back into a filter or a ranking key must treat
-// NoFileName like a blank value. A real file literally named "N:file" is
-// indistinguishable from the placeholder once rendered and is treated the
-// same way by those consumers.
+// pairCandidate.FileValue, streamrow Row.FileValue, which keys off the row's
+// explicit NoFile flag rather than this text). A real file literally named
+// "N:file" therefore still filters by its real name on both paths. Only
+// consumers that see just the rendered text or a bare path (the Files tab
+// ranking, rankablePath) cannot tell the two apart and treat the text as a
+// blank value.
 const NoFileName = "N:file"
 
 // Pair represents a matched syscall enter/exit pair together with derived metadata.
