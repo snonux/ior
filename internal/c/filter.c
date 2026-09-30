@@ -88,8 +88,10 @@ static __always_inline __u32 ior_histogram_bucket_index(__u64 duration_ns) {
 // must never seed min_duration_ns; and on a PERCPU_HASH the slots of the other
 // CPUs start zeroed. Either way "count == 1" no longer identifies the first
 // timed sample, the histogram does: every timed update bumps exactly one
-// bucket. max_duration_ns is non-zero for nearly every timed row, so the hot
-// path costs one compare and the bucket scan only runs for fresh rows.
+// bucket. max_duration_ns is non-zero for every settled timed row, because
+// ior_on_syscall_exit clamps durations to at least 1ns, so the hot path costs
+// one compare; the bucket scan only runs for fresh or untimed-only rows (and
+// guards a row whose max store has not landed yet).
 static __always_inline int ior_aggregate_has_timed_samples(const struct syscall_aggregate *agg) {
     if (agg->max_duration_ns)
         return 1;
