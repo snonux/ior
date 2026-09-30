@@ -6,17 +6,22 @@ import (
 
 	"ior/internal/probemanager"
 	common "ior/internal/tui/common"
+	"ior/internal/types"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
-// Manager defines the probe operations used by the modal.
+// Manager defines the probe operations used by the modal. AttachFamily and
+// DetachFamily back the Families view; the modal runs them off the Update
+// goroutine (familyBatchCmd) because a whole family takes seconds.
 type Manager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
 	ActiveCount() (int, int)
+	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
 // ProbeToggledMsg reports completion of an async toggle operation.
@@ -28,19 +33,32 @@ type ProbeToggledMsg struct {
 // Model is the probe toggle modal state. It is value-flow: every method has a
 // value receiver and every mutator returns the updated Model (see the TUI
 // Model receiver policy in AGENTS.md).
+//
+// It has two views, switched with tab: Syscalls lists single probes (toggle,
+// search, all-on/all-off) and Families lists the syscall families with their
+// attached/total counts and attaches or detaches a whole family at once.
 type Model struct {
 	visible bool
 	probes  []probemanager.ProbeState
+	view    view
 
-	cursor int
-	offset int
+	// cursor/offset are the Syscalls view's selection and scroll offset,
+	// famCursor/famOffset the Families view's.
+	cursor    int
+	offset    int
+	famCursor int
+	famOffset int
 
 	search    string
 	searching bool
 	textInput textinput.Model
 
 	lastErr string
-	manager Manager
+	// lastInfo is the outcome line of the last family batch; batch is the
+	// batch still running, if any.
+	lastInfo string
+	batch    familyBatch
+	manager  Manager
 	// height and width are the terminal size the modal is laid out for, as
 	// reported by SetSize. The row budget (visibleRows) depends on both:
 	// height bounds the box and width decides how many lines the wrapped help
@@ -61,9 +79,10 @@ const (
 	minModalWidth = 24
 )
 
-// probesHelp is the footer key help. It is wider than the modal content area,
-// so it wraps; the chrome measurement in chromeHeight accounts for that.
-const probesHelp = "j/k move • space|enter toggle • a all-on • n all-off • / search • esc close"
+// probesHelp is the Syscalls view footer key help. It is wider than the modal
+// content area, so it wraps; the chrome measurement in layout accounts for
+// that.
+const probesHelp = "j/k move • space|enter toggle • a all-on • n all-off • / search • tab families • esc close"
 
 // NewModel constructs a probes modal listing manager's probe states.
 func NewModel(manager Manager) Model {
@@ -87,6 +106,7 @@ func (m Model) Open() Model {
 	m.visible = true
 	m.searching = false
 	m.lastErr = ""
+	m.lastInfo = ""
 	m.textInput.Blur()
 	m = m.reload()
 	m = m.clampCursor()
@@ -119,9 +139,17 @@ func (m Model) SetSize(width, height int) Model {
 }
 
 // Update dispatches Bubble Tea messages to the appropriate handler.
+// Family batch messages are handled even while the modal is hidden, so a
+// batch keeps being followed to its end after the user closed the modal.
 // ProbeToggledMsg refreshes the probe list; key presses are forwarded to
 // the search or navigation handlers.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case FamilyBatchProgressMsg:
+		return m.handleBatchProgress(msg)
+	case FamilyToggledMsg:
+		return m.handleFamilyToggled(msg)
+	}
 	if !m.visible {
 		return m, nil
 	}
@@ -149,17 +177,43 @@ func (m Model) handleProbeToggled(msg ProbeToggledMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleKeyPress processes navigation and toggle keys while not in search mode.
+// handleKeyPress processes the keys shared by both views (close, move,
+// switch view) and hands the rest to the active view's handler.
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		return m.Close(), nil
 	case "j", "down":
-		m.cursor++
-		return m.clampCursor(), nil
+		return m.moveCursor(1), nil
 	case "k", "up":
-		m.cursor--
-		return m.clampCursor(), nil
+		return m.moveCursor(-1), nil
+	case "tab":
+		return m.switchView(), nil
+	}
+	if m.view == viewFamilies {
+		switch msg.String() {
+		case " ", "space", "enter":
+			return m.toggleSelectedFamily()
+		}
+		return m, nil
+	}
+	return m.handleSyscallKey(msg)
+}
+
+// moveCursor moves the active view's selection by delta rows.
+func (m Model) moveCursor(delta int) Model {
+	if m.view == viewFamilies {
+		m.famCursor += delta
+	} else {
+		m.cursor += delta
+	}
+	return m.clampCursor()
+}
+
+// handleSyscallKey processes the Syscalls view keys: search, toggle one
+// probe, and all-on/all-off.
+func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
 	case "/", "f":
 		m.searching = true
 		m.textInput.SetValue(m.search)
@@ -213,33 +267,35 @@ func (m Model) reload() Model {
 	return m
 }
 
-// clampCursor returns m with the cursor and scroll offset kept inside the
-// filtered probe list. Besides keeping the cursor inside the window, the
-// offset is pulled back when the row budget grows (terminal resized taller,
-// search line or error dropped) so a list scrolled to its end still fills
-// the window instead of leaving blank rows below the last probe.
+// clampCursor returns m with the active view's cursor and scroll offset kept
+// inside its list: the filtered probes (Syscalls) or the families (Families).
 func (m Model) clampCursor() Model {
-	items := m.filtered()
-	if len(items) == 0 {
-		m.cursor = 0
-		m.offset = 0
+	rows := m.visibleRows()
+	if m.view == viewFamilies {
+		m.famCursor, m.famOffset = clampWindow(m.famCursor, m.famOffset, len(types.AllSyscallFamilies()), rows)
 		return m
 	}
-	if m.cursor >= len(items) {
-		m.cursor = len(items) - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	rows := m.visibleRows()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	if rows > 0 && m.cursor >= m.offset+rows {
-		m.offset = m.cursor - rows + 1
-	}
-	m.offset = min(m.offset, max(len(items)-rows, 0))
+	m.cursor, m.offset = clampWindow(m.cursor, m.offset, len(m.filtered()), rows)
 	return m
+}
+
+// clampWindow keeps cursor inside a list of n items and the offset such that
+// the rows-high window starting there shows the cursor. Besides that, the
+// offset is pulled back when the row budget grows (terminal resized taller,
+// search line or error dropped) so a list scrolled to its end still fills the
+// window instead of leaving blank rows below the last item.
+func clampWindow(cursor, offset, n, rows int) (int, int) {
+	if n == 0 {
+		return 0, 0
+	}
+	cursor = max(min(cursor, n-1), 0)
+	if cursor < offset {
+		offset = cursor
+	}
+	if rows > 0 && cursor >= offset+rows {
+		offset = cursor - rows + 1
+	}
+	return cursor, min(offset, max(n-rows, 0))
 }
 
 func (m Model) filtered() []probemanager.ProbeState {
@@ -355,7 +411,14 @@ func (m Model) headerLines() []string {
 	if m.manager != nil {
 		active, total = m.manager.ActiveCount()
 	}
-	lines := []string{fmt.Sprintf("Probes (%d/%d active)", active, total)}
+	title := "Syscalls"
+	if m.view == viewFamilies {
+		title = "Families"
+	}
+	lines := []string{fmt.Sprintf("Probes (%d/%d active) - %s", active, total, title)}
+	if m.view == viewFamilies {
+		return append(lines, "")
+	}
 	if m.searching {
 		lines = append(lines, m.textInput.View())
 	} else if m.search != "" {
@@ -364,24 +427,39 @@ func (m Model) headerLines() []string {
 	return append(lines, "")
 }
 
-// footerLines returns the modal lines below the probe rows: the last toggle
-// error (when any) and the key help. Both may wrap inside the modal.
+// footerLines returns the modal lines below the probe rows: the running
+// family batch's progress or the last batch's outcome, the last toggle error
+// (when any) and the active view's key help. All may wrap inside the modal.
 func (m Model) footerLines() []string {
 	var lines []string
+	if line := m.batchLine(); line != "" {
+		lines = append(lines, "", line)
+	} else if m.lastInfo != "" {
+		lines = append(lines, "", common.Sanitize(m.lastInfo))
+	}
 	if m.lastErr != "" {
 		lines = append(lines, "", "Error: "+common.Sanitize(m.lastErr))
 	}
-	return append(lines, "", probesHelp)
+	help := probesHelp
+	if m.view == viewFamilies {
+		help = familiesHelp
+	}
+	return append(lines, "", help)
 }
 
 // buildProbeLines assembles the text lines that make up the modal content
 // from a precomputed layout and filtered item list: header, the l.rows-high
-// window of probe rows starting at the scroll offset, and the footer. Rows
+// window of rows starting at the scroll offset - probes, or in the Families
+// view the families (items is then unused) - and the footer. Rows
 // are cut to the content width so each takes exactly one line, as the row
 // budget assumes.
 func (m Model) buildProbeLines(l probeLayout, items []probemanager.ProbeState) []string {
 	lines := make([]string, 0, len(l.header)+l.rows+len(l.footer))
 	lines = append(lines, l.header...)
+	if m.view == viewFamilies {
+		lines = append(lines, m.familyRows(l)...)
+		return append(lines, l.footer...)
+	}
 
 	start := min(m.offset, len(items))
 	end := min(start+l.rows, len(items))

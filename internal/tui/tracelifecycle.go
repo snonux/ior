@@ -29,6 +29,12 @@ type traceLifecycle struct {
 	// endSession retires the running session's bindings view (nil without
 	// bindings or when no session runs), see traceSessionBindings.
 	endSession func()
+	// attachSyscalls is the probe set every following session attaches (see
+	// runtime.TraceRequest.AttachSyscalls): nil until the user changes the
+	// attached probes at runtime, so the startup -trace-* selection applies
+	// until then. It outlives sessions, which is what carries a runtime
+	// probe change across a restart.
+	attachSyscalls []string
 }
 
 // tracingShutdownProgressMsg carries one progress update from the active
@@ -65,8 +71,9 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 // probes attached and feeding the same stream buffer as the new one. Callers
 // that already called stop() pay nothing extra, because stop() is idempotent.
 //
-// The session's bindings, filter and shutdown reporter reach the starter
-// explicitly in a TraceRequest; the context only carries cancellation.
+// The session's bindings, filter, shutdown reporter and runtime probe
+// selection (setAttachSyscalls) reach the starter explicitly in a
+// TraceRequest; the context only carries cancellation.
 //
 // The cancelled session is not waited for, so it may still be loading,
 // attaching or detaching while the new one starts. That is why each session
@@ -89,7 +96,14 @@ func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter
 		sessionBindings = view
 	}
 	req := newTraceRequest(sessionBindings, filter, t.shutdownReporter)
+	req.AttachSyscalls = t.attachSyscalls
 	return tagSessionResult(t.session, startTraceCmd(ctx, t.startTrace, req))
+}
+
+// setAttachSyscalls records the probe set the next sessions attach. The slice
+// is owned by the lifecycle from here on; callers pass a fresh one.
+func (t *traceLifecycle) setAttachSyscalls(syscalls []string) {
+	t.attachSyscalls = syscalls
 }
 
 // newTraceRequest assembles the explicit inputs of one trace session. The

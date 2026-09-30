@@ -1,27 +1,37 @@
 package probes
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"ior/internal/probemanager"
+	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
 )
 
 type fakeManager struct {
-	states  []probemanager.ProbeState
-	toggles []string
+	// mu guards states: family batches mutate them from their own goroutine.
+	mu         sync.Mutex
+	states     []probemanager.ProbeState
+	toggles    []string
+	failAttach map[string]bool
 }
 
 func (f *fakeManager) States() []probemanager.ProbeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]probemanager.ProbeState, len(f.states))
 	copy(out, f.states)
 	return out
 }
 
 func (f *fakeManager) Toggle(syscall string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.toggles = append(f.toggles, syscall)
 	for i := range f.states {
 		if f.states[i].Syscall == syscall {
@@ -31,7 +41,44 @@ func (f *fakeManager) Toggle(syscall string) error {
 	return nil
 }
 
+// AttachFamily activates the family's inactive probes one by one, reporting
+// progress after each like the real manager. failAttach names probes whose
+// attach fails.
+func (f *fakeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, true, progress), nil
+}
+
+// DetachFamily deactivates the family's active probes.
+func (f *fakeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, false, progress), nil
+}
+
+func (f *fakeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var idx []int
+	for i := range f.states {
+		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+			idx = append(idx, i)
+		}
+	}
+	result := probemanager.BatchResult{Total: len(idx)}
+	progress(0, result.Total)
+	for n, i := range idx {
+		if active && f.failAttach[f.states[i].Syscall] {
+			result.Errors = append(result.Errors, probemanager.SyscallError{Syscall: f.states[i].Syscall, Err: errors.New("no tracepoint")})
+		} else {
+			f.states[i].Active = active
+			result.Changed++
+		}
+		progress(n+1, result.Total)
+	}
+	return result
+}
+
 func (f *fakeManager) ActiveCount() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	active := 0
 	for _, s := range f.states {
 		if s.Active {

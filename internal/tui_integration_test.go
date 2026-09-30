@@ -50,6 +50,7 @@ import (
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
 	"ior/internal/tui"
+	"ior/internal/types"
 )
 
 const (
@@ -139,6 +140,12 @@ func tuiNewFakeProbeManager() tuiFakeProbeManager {
 
 func (f tuiFakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f tuiFakeProbeManager) Toggle(string) error               { return nil }
+func (f tuiFakeProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
+func (f tuiFakeProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
 
 // ActiveCount reports the number of active probes and the total.
 func (f tuiFakeProbeManager) ActiveCount() (int, int) {
@@ -222,6 +229,34 @@ func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
 		}
 	}
 	return nil
+}
+
+// AttachFamily activates every inactive probe of family, reporting one
+// progress step per probe like the real manager.
+func (f *tuiStatefulProbeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, true, progress), nil
+}
+
+// DetachFamily deactivates every active probe of family.
+func (f *tuiStatefulProbeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, false, progress), nil
+}
+
+func (f *tuiStatefulProbeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result probemanager.BatchResult
+	for i := range f.states {
+		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+			f.states[i].Active = active
+			result.Total++
+			result.Changed++
+		}
+	}
+	if progress != nil {
+		progress(result.Total, result.Total)
+	}
+	return result
 }
 
 func (f *tuiStatefulProbeManager) ActiveCount() (int, int) {
@@ -1305,6 +1340,34 @@ func TestTUIIntegration_ProbesModal_NavSearchToggleClose(t *testing.T) {
 	s.waitForAbsent("write", "openat")
 
 	// Esc closes the modal; the dashboard (Overview) returns.
+	s.press(tea.KeyEsc)
+	s.waitForAbsent("Probes (", "Trends:")
+}
+
+// TestTUIIntegration_ProbesModal_FamiliesViewTogglesFamily drives the
+// Families view end to end: tab switches the modal to it, the FS row shows
+// the seeded 2 of 3 FS probes attached, and space detaches the whole family
+// through the asynchronous batch, whose result updates the counts and the
+// outcome line.
+func TestTUIIntegration_ProbesModal_FamiliesViewTogglesFamily(t *testing.T) {
+	s := tuiNewStatefulProbesModel(t)
+	s.waitFor("view:root")
+	s.typeStr("2")
+	s.waitFor("Trends:")
+
+	s.typeStr("o")
+	s.waitFor("Probes (2/3 active) - Syscalls")
+	s.press(tea.KeyTab)
+	s.waitFor("Probes (2/3 active) - Families", "> [ ] Network")
+
+	// FS is the ninth family in display order.
+	for range 8 {
+		s.press('j')
+	}
+	s.waitFor("> [~] FS            2/3")
+	s.press(' ')
+	s.waitFor("FS: detached 2 of 2 probes", "> [ ] FS            0/3", "Probes (0/3 active)")
+
 	s.press(tea.KeyEsc)
 	s.waitForAbsent("Probes (", "Trends:")
 }

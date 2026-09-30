@@ -38,6 +38,12 @@ type fakeProbeManager struct {
 func (f fakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f fakeProbeManager) Toggle(string) error               { return nil }
 func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
+func (f fakeProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
+func (f fakeProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
 
 type testStreamSink interface {
 	eventstream.Source

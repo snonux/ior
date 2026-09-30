@@ -14,6 +14,7 @@ import (
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
+	"ior/internal/types"
 )
 
 // TraceStarter starts tracing and returns when startup succeeds or fails.
@@ -47,6 +48,13 @@ type TraceRequest struct {
 	// that keeps tracing in the background claims it and owns its completion.
 	// Nil means nobody waits for the session's teardown.
 	ShutdownReporter *TraceShutdownReporter
+	// AttachSyscalls is the syscall probe set the session attaches, as bare
+	// syscall names. Nil keeps the starter's configured tracepoint selection
+	// (the -trace-* / -tps flags); non-nil - even empty - replaces it, so
+	// exactly these syscalls are attached. The TUI sets it once the user has
+	// changed the attached probes at runtime (probes modal), so a trace
+	// restart keeps that set rather than reverting to the startup flags.
+	AttachSyscalls []string
 }
 
 // TraceShutdownPhase identifies the currently observable phase of a trace
@@ -274,11 +282,16 @@ type EventIngester = statsengine.Accumulator
 type LiveTrieSource = flamegraph.LiveTrieSource
 
 // ProbeManager exposes runtime probe controls to the TUI probes modal.
-// *probemanager.Manager implements this interface.
+// *probemanager.Manager implements this interface. AttachFamily and
+// DetachFamily are the batch operations behind the modal's Families view:
+// they report per-syscall failures in the result and progress through the
+// callback, and may take seconds, so callers run them off the UI goroutine.
 type ProbeManager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
 	ActiveCount() (int, int)
+	AttachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
 // RuntimePublisher is the write side of the TUI runtime contract.
