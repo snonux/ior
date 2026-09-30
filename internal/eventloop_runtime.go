@@ -337,9 +337,16 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 // the syscall), then the exit record. That control record evicts the process's
 // FD_CLOEXEC descriptors (fdTracker.dropOnExec), and fexecve's descriptor is
 // typically opened O_CLOEXEC - so by the time the exit arrives, the dirfd the
-// kernel resolved against is gone from the table, and a procfs fallback would
-// read the new program's descriptor table instead. At enter time the table
-// still describes the descriptors the kernel is about to use.
+// kernel resolved against is gone from the table. At enter time the table
+// still holds it, because the eviction is applied in ring-buffer order.
+//
+// That guarantee covers only descriptors the fd table tracks (opened, duped or
+// otherwise registered by a traced syscall). For an untracked dirfd the
+// resolver falls back to /proc/<pid>/fd, and that read is no earlier at enter
+// time than at exit: user space consumes the enter record after the kernel has
+// usually finished the exec, so an untracked O_CLOEXEC dirfd is already closed
+// (or its number reused by the new program) and still resolves to the fd
+// number with an empty name.
 func (e *eventLoop) storeEnter(enterEv event.Event) {
 	execEv, ok := enterEv.(*types.ExecEvent)
 	if !ok {
