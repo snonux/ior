@@ -172,9 +172,14 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_BPF_EVENT, rawDecoder[types.BpfEvent](types.NewBpfEvent), nil),
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
 			typedRuntimePairControl((*eventLoop).handleProcessExecEvent)),
-		// sched:sched_process_exit reports the tgid of an exiting task so the
-		// fdTracker can evict that process's (pid, fd) entries instead of
-		// holding them until LRU eviction (internal/eventloop_processexit.go).
+		// sched:sched_process_exit fires for every exiting task. Every exit
+		// drops that thread's cached comm, pending pairs and parked
+		// name_to_handle_at path; the fdTracker
+		// evicts the process's (pid, fd) entries only when the record marks
+		// the exit that ends the thread group (group_dead), or when the flag
+		// is unknown because the record uses the legacy pre-group_dead layout
+		// - instead of holding them until LRU eviction
+		// (internal/eventloop_processexit.go).
 		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
 		// The open-name fixup carries only the pending enter's identity and the

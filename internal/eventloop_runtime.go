@@ -258,6 +258,9 @@ func (e *eventLoop) initRawHandlers() {
 	}
 }
 
+// rawRuntimeEventHandler builds the raw handler for one registered event
+// kind: it decodes the record, applies control records to event-loop state,
+// and hands syscall enter/exit events on to pairing.
 func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHandler {
 	return func(raw []byte, ch chan<- *event.Pair) {
 		ev, ok := e.decodeRuntimeEvent(rawEvent, raw)
