@@ -328,8 +328,8 @@ func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
 		enterKindText string
 		retText       string
 	}{
-		{"recvfrom", "struct fd_event", "READ_CLASSIFIED"},
-		{"recvmsg", "struct fd_event", "READ_CLASSIFIED"},
+		{"recvfrom", "struct fd_size_event", "READ_CLASSIFIED"},
+		{"recvmsg", "struct fd_size_event", "READ_CLASSIFIED"},
 		{"sendto", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendmsg", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendfile64", "struct fd_event", "TRANSFER_CLASSIFIED"},

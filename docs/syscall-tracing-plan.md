@@ -47,8 +47,8 @@ later sessions attach nothing, and only restarting `ior` returns to the startup 
 a family; when that family has no attached probe, the status line says how to attach it.
 
 The selector kind describes a syscall's role. It is separate from the BPF record type. For
-example, fd xattr calls still select as `fd` even though their requested size now travels in
-a dedicated `fd_size_event`; `memfd_create` still selects as `eventfd`, and `move_mount`
+example, fd xattr calls and `recvfrom`/`recvmsg` still select as `fd` even though their requested
+size (and, for the receives, flags) now travel in a dedicated `fd_size_event`; `memfd_create` still selects as `eventfd`, and `move_mount`
 as `two-fd`. This wire split reduced ordinary ring-buffer records without changing selector
 behavior.
 
@@ -146,6 +146,16 @@ syscalls is a separate metric.
 A `getxattr*` or `listxattr*` call with a zero output-buffer size asks for the required
 capacity. Its positive return is kept in the row, but its throughput byte count is zero.
 `syslog` is also non-bytes because the meaning of its return depends on the action.
+
+`recvfrom` and `recvmsg` capture their `flags` and buffer capacity in an `fd_size_event`, because
+two flags change what the return value is worth. `MSG_PEEK` copies without consuming, so a peeking
+call counts zero bytes; the later plain receive of the same data is the one that counts. Netlink
+clients (`ip addr`, libnl, systemd) peek every datagram with `recvmsg(fd, {iov_len=0},
+MSG_PEEK|MSG_TRUNC)` and then read it again, which used to count each reply twice. `MSG_TRUNC`
+makes the return the datagram's real length even when it did not fit, so the count is capped at the
+buffer capacity: `recvfrom`'s `size`, or for `recvmsg` the sum of up to eight iovec lengths.
+When that capacity is unknown (an older BPF object, or a `recvmsg` with more than eight iovecs or an
+unreadable `msghdr`) the raw return is kept. `recvmmsg` is unclassified and unaffected.
 
 For a transfer with two descriptors, the file row names one endpoint: the destination fd
 (`out_fd` for `sendfile64`, `fd_out` for `copy_file_range` and `splice`, `fdout` for `tee`).

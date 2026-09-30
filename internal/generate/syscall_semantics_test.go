@@ -346,9 +346,9 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"readlinkat":             {kind: "pathname", args: map[string]int{"dirfd": 0, "pathname": 1}, ret: "READ_CLASSIFIED", family: "FS"},
 	"readv":                  {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "FS"},
 	"reboot":                 {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},
-	"recvfrom":               {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "Network"},
+	"recvfrom":               {kind: "fd", args: map[string]int{"fd": 0, "flags": 3, "size": 2}, ret: "READ_CLASSIFIED", family: "Network"},
 	"recvmmsg":               {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "Network"},
-	"recvmsg":                {kind: "fd", args: map[string]int{"fd": 0}, ret: "READ_CLASSIFIED", family: "Network"},
+	"recvmsg":                {kind: "fd", args: map[string]int{"fd": 0, "flags": 2}, ret: "READ_CLASSIFIED", family: "Network"},
 	"remap_file_pages":       {kind: "mem", args: map[string]int{"addr": 0, "flags": 4, "length": 1, "length2": 3}, ret: "UNCLASSIFIED", family: "Memory"},
 	"removexattr":            {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"removexattrat":          {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 2, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
@@ -2063,6 +2063,7 @@ func validateHandlerEventStruct(name, kind, body string) error {
 	// generator's kind table.
 	want := map[string]string{
 		"fgetxattr": "fd_size_event", "flistxattr": "fd_size_event",
+		"recvfrom": "fd_size_event", "recvmsg": "fd_size_event",
 		"move_mount":   "two_fd_names_event",
 		"memfd_create": "eventfd_name_event", "fsopen": "eventfd_name_event",
 	}[name]

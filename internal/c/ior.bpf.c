@@ -15,6 +15,9 @@
  */
 #include "filter.c"
 
+// Receive-side capture helpers used by the generated recvmsg handler.
+#include "recv.c"
+
 // Hand-written non-syscall tracepoints (sched:sched_process_exec, sched:sched_process_exit).
 #include "exec.c"
 

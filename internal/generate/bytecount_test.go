@@ -2,8 +2,11 @@ package generate
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestGenerateXattrRequestedSizeCapture(t *testing.T) {
@@ -59,6 +62,132 @@ func TestGenerateNonXattrSizeMetadataIsInvalid(t *testing.T) {
 	writeRequestedSizeCapture(&b, &Format{Name: "sys_enter_read"})
 	if got, want := b.String(), "    ev->size_valid = 0;\n    ev->size = 0;\n"; got != want {
 		t.Fatalf("non-xattr size metadata = %q, want %q", got, want)
+	}
+}
+
+// receiveFixture is a recvfrom/recvmsg enter tracepoint classified the way the
+// generator's override table classifies it.
+func receiveFixture(name string) GeneratedTracepoint {
+	return GeneratedTracepoint{
+		Format:         &Format{Name: "sys_enter_" + name, ExternalFields: []Field{{Name: "__syscall_nr"}, {Name: "fd"}}},
+		Classification: ClassificationResult{Kind: KindFdSize},
+	}
+}
+
+func TestReceiveSyscallsUseTheSizeCarryingFdRecord(t *testing.T) {
+	for _, name := range []string{"recvfrom", "recvmsg"} {
+		if got, ok := nameOnlyKindsTable["sys_enter_"+name]; !ok || got != KindFdSize {
+			t.Errorf("sys_enter_%s kind = %v (listed %v), want KindFdSize", name, got, ok)
+		}
+	}
+}
+
+// TestGenerateRecvfromCapturesFlagsAndBufferSize pins the two scalars that
+// decide how many bytes a recvfrom moved: flags (args[3]) and the buffer size
+// (args[2]), the latter marked valid so a zero-length receive is recognizable.
+func TestGenerateRecvfromCapturesFlagsAndBufferSize(t *testing.T) {
+	got := generateExtraFdSize(receiveFixture("recvfrom").Format)
+	for _, want := range []string{
+		"ev->fd = (__s32)ctx->args[0];",
+		"ev->flags = (__u32)ctx->args[3];",
+		"ev->size = (__u64)ctx->args[2];",
+		"ev->size_valid = 1;",
+		"ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("recvfrom capture missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateRecvmsgCapturesFlagsAndGuardsIovecRead pins that recvmsg reads
+// its flags from args[2], and reads the msghdr (args[1]) only when MSG_TRUNC is
+// set: the extra user-memory reads are not paid on ordinary receives, and the
+// flags must be stored before the guard tests them.
+func TestGenerateRecvmsgCapturesFlagsAndGuardsIovecRead(t *testing.T) {
+	got := generateExtraFdSize(receiveFixture("recvmsg").Format)
+	flags := strings.Index(got, "ev->flags = (__u32)ctx->args[2];")
+	guard := strings.Index(got, "if (ev->flags & IOR_MSG_TRUNC)")
+	call := strings.Index(got, "ior_recvmsg_capacity((void *)ctx->args[1], &ev->size, &ev->size_valid);")
+	if flags < 0 || guard < 0 || call < 0 || flags > guard || guard > call {
+		t.Fatalf("recvmsg capture must store flags, then guard the iovec read on MSG_TRUNC (flags=%d guard=%d call=%d):\n%s",
+			flags, guard, call, got)
+	}
+	if !strings.Contains(got, "ev->size_valid = 0;\n    ev->size = 0;\n") {
+		t.Errorf("recvmsg capacity must default to unknown:\n%s", got)
+	}
+	if strings.Contains(got, "ev->size_valid = 1;") {
+		t.Errorf("recvmsg marks its capacity valid without reading the iovec:\n%s", got)
+	}
+}
+
+// TestGenerateNonReceiveFdSizeWritesZeroFlags pins that the xattr users of
+// fd_size_event initialize the flags word: the ring-buffer reservation is not
+// zeroed, so an unwritten word would submit kernel memory.
+func TestGenerateNonReceiveFdSizeWritesZeroFlags(t *testing.T) {
+	got := generateExtraFdSize(&Format{Name: "sys_enter_fgetxattr"})
+	if !strings.Contains(got, "ev->flags = 0;\n") {
+		t.Errorf("fgetxattr does not initialize flags:\n%s", got)
+	}
+	if strings.Contains(got, "IOR_MSG_TRUNC") || strings.Contains(got, "ior_recvmsg_capacity") {
+		t.Errorf("fgetxattr picked up recvmsg capture:\n%s", got)
+	}
+}
+
+// TestRecvHelperMatchesTheSocketABI compares the constants and struct layout
+// of internal/c/recv.c with the values the kernel ABI defines, and requires it
+// to be included before the generated handlers that call it. A wrong
+// MSG_TRUNC value would silently skip the iovec read; a wrong msghdr layout
+// would read the wrong field as the iovec pointer.
+func TestRecvHelperMatchesTheSocketABI(t *testing.T) {
+	recvC, err := readCSource("recv.c")
+	if err != nil {
+		t.Fatalf("read recv.c: %v", err)
+	}
+	if want := fmt.Sprintf("#define IOR_MSG_TRUNC %#x", unix.MSG_TRUNC); !strings.Contains(recvC, want) {
+		t.Errorf("recv.c must contain %q", want)
+	}
+	// struct msghdr: name ptr (0), namelen int + pad (8), iov ptr (16),
+	// iovlen (24). The C struct is checked field by field in declaration order
+	// because its members are all naturally aligned 8/4-byte scalars.
+	fields := regexp.MustCompile(`(?s)struct ior_user_msghdr \{(.*?)\};`).FindStringSubmatch(recvC)
+	if fields == nil {
+		t.Fatal("recv.c lacks struct ior_user_msghdr")
+	}
+	got := strings.Fields(strings.ReplaceAll(fields[1], ";", " ;"))
+	want := strings.Fields("__u64 msg_name ; __s32 msg_namelen ; __u32 pad ; __u64 msg_iov ; __u64 msg_iovlen ;")
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("struct ior_user_msghdr = %v, want %v", got, want)
+	}
+
+	bpfC, err := readCSource("ior.bpf.c")
+	if err != nil {
+		t.Fatalf("read ior.bpf.c: %v", err)
+	}
+	helper, generated := strings.Index(bpfC, `#include "recv.c"`), strings.Index(bpfC, `#include "generated_tracepoints.c"`)
+	if helper < 0 || generated < 0 || helper > generated {
+		t.Errorf("ior.bpf.c must include recv.c (%d) before generated_tracepoints.c (%d)", helper, generated)
+	}
+}
+
+// TestGeneratedReceiveHandlersMatchCommittedArtifact pins the complete enter
+// handlers of both receive syscalls against the committed C, so a caller that
+// stopped wiring writeReceiveFlagsCapture into generateExtraFdSize fails here
+// even though the helper's own tests stay green.
+func TestGeneratedReceiveHandlersMatchCommittedArtifact(t *testing.T) {
+	artifact, err := readGeneratedTracepointsC()
+	if err != nil {
+		t.Fatalf("read generated tracepoints C: %v", err)
+	}
+	for _, name := range []string{"recvfrom", "recvmsg"} {
+		t.Run(name, func(t *testing.T) {
+			tp := receiveFixture(name)
+			got := handlerBody(t, artifact, tp.Format.Name)
+			want := strings.TrimSuffix(generateBPFHandler(tp), "\n")
+			if got != want {
+				t.Fatalf("committed %s handler differs from the complete generator output", tp.Format.Name)
+			}
+		})
 	}
 }
 

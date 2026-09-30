@@ -339,11 +339,13 @@ func generateExtraFd(f *Format) string {
 	return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdArgumentIndex(f))
 }
 
-// generateExtraFdSize returns the fd capture plus the requested-size metadata
-// of the fd-based xattr reads (fd_size_event).
+// generateExtraFdSize returns the fd capture plus the flags and requested-size
+// metadata of the fd_size_event syscalls: the fd-based xattr reads and
+// recvfrom/recvmsg.
 func generateExtraFdSize(f *Format) string {
 	var b strings.Builder
 	b.WriteString(generateExtraFd(f))
+	writeReceiveFlagsCapture(&b, f)
 	writeRequestedSizeCapture(&b, f)
 	b.WriteString("    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
@@ -375,9 +377,35 @@ var fdArgumentOverrides = map[string]int{
 	"sys_enter_vmsplice":        0,
 }
 
-// requestedSizeArgument records output-buffer capacity only for xattr read
-// syscalls. A zero capacity makes these calls size probes: their positive
-// return is required capacity, not bytes copied.
+// receiveFlagsArgument names the argument slot of the flags word of the
+// receive syscalls whose return value depends on it: MSG_PEEK leaves the data
+// queued (nothing consumed) and MSG_TRUNC makes the return the datagram's real
+// length instead of the bytes copied. Indexes are fixed rather than looked up
+// by field name so the capture stays correct for a Format that lists only some
+// of the fields.
+var receiveFlagsArgument = map[string]int{
+	"sys_enter_recvfrom": 3, // recvfrom(fd, ubuf, size, flags, addr, addr_len)
+	"sys_enter_recvmsg":  2, // recvmsg(fd, msg, flags)
+}
+
+// writeReceiveFlagsCapture emits the flags word of an fd_size_event. Only the
+// receive syscalls have one; every other user writes an explicit 0, because
+// the ring buffer reservation is not zeroed and a stale word would otherwise
+// leak into a record whose flags userspace must ignore.
+func writeReceiveFlagsCapture(b *strings.Builder, f *Format) {
+	if idx, ok := receiveFlagsArgument[f.Name]; ok {
+		fmt.Fprintf(b, "    ev->flags = (__u32)ctx->args[%d];\n", idx)
+		return
+	}
+	b.WriteString("    ev->flags = 0;\n")
+}
+
+// requestedSizeArgument records output-buffer capacity for the xattr read
+// syscalls and recvfrom. A zero capacity makes the xattr calls size probes:
+// their positive return is required capacity, not bytes copied. For recvfrom
+// the capacity bounds the bytes copied even under MSG_TRUNC, where the return
+// is the datagram's real length. recvmsg has no scalar capacity; its iovec
+// total is read by writeRequestedSizeCapture.
 var requestedSizeArgument = map[string]int{
 	"sys_enter_fgetxattr":   3,
 	"sys_enter_flistxattr":  2,
@@ -387,6 +415,7 @@ var requestedSizeArgument = map[string]int{
 	"sys_enter_listxattr":   2,
 	"sys_enter_listxattrat": 4,
 	"sys_enter_llistxattr":  2,
+	"sys_enter_recvfrom":    2,
 }
 
 func writeRequestedSizeCapture(b *strings.Builder, f *Format) {
@@ -402,10 +431,25 @@ func writeRequestedSizeCapture(b *strings.Builder, f *Format) {
 		b.WriteString("    }\n")
 		return
 	}
+	if f.Name == "sys_enter_recvmsg" {
+		writeRecvmsgCapacityCapture(b)
+		return
+	}
 	if idx, ok := requestedSizeArgument[f.Name]; ok {
 		fmt.Fprintf(b, "    ev->size = (__u64)ctx->args[%d];\n", idx)
 		b.WriteString("    ev->size_valid = 1;\n")
 	}
+}
+
+// writeRecvmsgCapacityCapture emits the receive-buffer capacity of a recvmsg:
+// the sum of its iovec lengths, read from the user msghdr. It is only needed
+// when MSG_TRUNC is set (bytes copied is then min(ret, capacity)), so the two
+// user-memory reads are skipped for ordinary receives. size_valid stays 0 when
+// the capacity could not be established (unreadable msghdr, more iovecs than
+// the helper unrolls), which userspace treats as "unknown".
+func writeRecvmsgCapacityCapture(b *strings.Builder) {
+	b.WriteString("    if (ev->flags & IOR_MSG_TRUNC)\n")
+	b.WriteString("        ior_recvmsg_capacity((void *)ctx->args[1], &ev->size, &ev->size_valid);\n")
 }
 
 // generateExtraOpen returns the filename/comm/flags capture lines for open-family events.

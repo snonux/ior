@@ -1603,6 +1603,60 @@ func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 	}
 }
 
+// TestFdSizeEventCarriesRecvFlagsInThePaddingWord pins where recvfrom/recvmsg
+// flags travel: the four bytes after fd, which were alignment padding, so the
+// record stays 48 bytes. It also pins that no other decoder reads that word as
+// flags - the compact 44-byte form has no room for it, and the wide legacy
+// fd_event of an older BPF object has padding there that may hold anything.
+func TestFdSizeEventCarriesRecvFlagsInThePaddingWord(t *testing.T) {
+	const flags = 0x22 // MSG_PEEK|MSG_TRUNC
+	raw := make([]byte, fdSizeEventSize)
+	fillCommonHeader(raw, ENTER_FD_SIZE_EVENT, SYS_ENTER_RECVMSG)
+	binary.LittleEndian.PutUint32(raw[24:28], 7)
+	binary.LittleEndian.PutUint32(raw[28:32], flags)
+	binary.LittleEndian.PutUint64(raw[32:40], 0)
+	binary.LittleEndian.PutUint32(raw[40:44], 1)
+	binary.LittleEndian.PutUint32(raw[44:48], FD_SIZE_EVENT_SCHEMA_VERSION)
+
+	ev := NewFdSizeEventFast(raw)
+	if ev == nil || ev.Flags != flags || ev.Fd != 7 || ev.Size != 0 || ev.SizeValid != 1 {
+		t.Fatalf("fd size decode = %#v, want flags %#x", ev, flags)
+	}
+	encoded, err := ev.Bytes()
+	ev.Recycle()
+	if err != nil || !bytes.Equal(encoded, raw) {
+		t.Fatalf("fd size round trip = %x, %v; want %x", encoded, err, raw)
+	}
+
+	t.Run("compact form has no flags", func(t *testing.T) {
+		compact := make([]byte, fdSizeEventCompactSize)
+		copy(compact, raw[:28])
+		binary.LittleEndian.PutUint64(compact[28:36], 64)
+		binary.LittleEndian.PutUint32(compact[36:40], 1)
+		binary.LittleEndian.PutUint32(compact[40:44], FD_SIZE_EVENT_SCHEMA_VERSION)
+		ev := NewFdSizeEventFast(compact)
+		if ev == nil || ev.Flags != 0 || ev.Size != 64 {
+			t.Fatalf("compact decode = %#v, want flags 0 size 64", ev)
+		}
+		ev.Recycle()
+	})
+
+	t.Run("legacy wide fd_event padding is not flags", func(t *testing.T) {
+		legacy := make([]byte, fdEventLegacyKernelSize)
+		fillCommonHeader(legacy, ENTER_FD_EVENT, SYS_ENTER_RECVFROM)
+		binary.LittleEndian.PutUint32(legacy[24:28], 7)
+		binary.LittleEndian.PutUint32(legacy[28:32], 0xdeadbeef) // kernel padding
+		binary.LittleEndian.PutUint64(legacy[32:40], 4096)
+		binary.LittleEndian.PutUint32(legacy[40:44], 1)
+		binary.LittleEndian.PutUint32(legacy[44:48], FD_EVENT_SCHEMA_VERSION)
+		ev := NewFdEventFast(legacy)
+		if ev == nil || ev.Flags != 0 || ev.Size != 4096 {
+			t.Fatalf("legacy wide decode = %#v, want flags 0 size 4096", ev)
+		}
+		ev.Recycle()
+	})
+}
+
 func TestSplitPayloadFastDecoders(t *testing.T) {
 	t.Run("fd size", func(t *testing.T) {
 		raw := make([]byte, fdSizeEventSize)

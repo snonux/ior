@@ -322,6 +322,7 @@ func writeGoStruct(b *strings.Builder, s CStruct) {
 
 var compatibilityFields = map[string][]CMember{
 	"FdEvent": {
+		{TypeName: "__u32", FieldName: "flags"},
 		{TypeName: "__u64", FieldName: "size"},
 		{TypeName: "__u32", FieldName: "size_valid"},
 		{TypeName: "__u32", FieldName: "schema_version"},
@@ -511,6 +512,7 @@ func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
 	b.WriteString("\tif size == 48 {\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[28:32], %s.Flags)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
@@ -525,6 +527,7 @@ func writeFdSizeSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("func NewFdSizeEvent(raw []byte) *FdSizeEvent { return NewFdSizeEventFast(raw) }\n\n")
 	writeEncodeHeader(b, "FdSizeEvent", selfRef, 48)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], %s.Flags)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)

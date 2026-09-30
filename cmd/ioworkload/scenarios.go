@@ -36,6 +36,7 @@ var scenarios = map[string]func() error{
 	"readwrite-fadvise64-ebadf":     readwriteFadvise64Ebadf,
 	"readwrite-cachestat":           readwriteCachestat,
 	"retbytes-phase-a":              retbytesPhaseA,
+	"recv-flags":                    recvFlagsScenario,
 	"socket-basic":                  socketBasic,
 	"socketpair-basic":              socketpairBasic,
 	"socket-accept-lifecycle":       socketAcceptLifecycle,

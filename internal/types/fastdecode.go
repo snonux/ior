@@ -241,6 +241,10 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	// The wide legacy layout's bytes 28..32 are alignment padding of an older
+	// BPF object, not flags; only fd_size_event (NewFdSizeEventFast) carries
+	// them.
+	f.Flags = 0
 	f.Size = 0
 	f.SizeValid = 0
 	f.SchemaVersion = 0
@@ -260,7 +264,10 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	return f
 }
 
-// NewFdSizeEventFast decodes the requested-size variant used by fd xattrs.
+// NewFdSizeEventFast decodes the requested-size variant used by the fd xattr
+// reads and by recvfrom/recvmsg. The 48-byte kernel layout carries the recv
+// flags in the four bytes after fd; the 44-byte compact form has no room for
+// them and decodes with Flags 0.
 func NewFdSizeEventFast(raw []byte) *FdSizeEvent {
 	if len(raw) != fdSizeEventSize && len(raw) != fdSizeEventCompactSize {
 		return nil
@@ -273,8 +280,10 @@ func NewFdSizeEventFast(raw []byte) *FdSizeEvent {
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	offset := 28
+	f.Flags = 0
 	if len(raw) == fdSizeEventSize {
 		offset = 32
+		f.Flags = binary.LittleEndian.Uint32(raw[28:32])
 	}
 	f.Size = binary.LittleEndian.Uint64(raw[offset : offset+8])
 	f.SizeValid = binary.LittleEndian.Uint32(raw[offset+8 : offset+12])

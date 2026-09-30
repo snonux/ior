@@ -118,9 +118,11 @@ const (
 	// is not captured.
 	KindTimerObj
 	// KindFdSize is KindFd plus the requested output-buffer size, for the
-	// fd-based xattr reads whose zero-size call is a size probe. It has its
-	// own fd_size_event so that every other fd syscall - read and write above
-	// all - keeps the lean fd_event. Its metadata name stays "fd".
+	// fd-based xattr reads whose zero-size call is a size probe, and plus the
+	// recv flags and buffer capacity of recvfrom/recvmsg, whose MSG_PEEK and
+	// MSG_TRUNC change what the return value means. It has its own
+	// fd_size_event so that every other fd syscall - read and write above all -
+	// keeps the lean fd_event. Its metadata name stays "fd".
 	KindFdSize
 	// KindTwoFdNames is KindTwoFd plus the two pathnames move_mount passes
 	// alongside its descriptors. It has its own two_fd_names_event so that
@@ -310,6 +312,12 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// positive return is not a byte count.
 	"sys_enter_fgetxattr":  KindFdSize,
 	"sys_enter_flistxattr": KindFdSize,
+	// recvfrom/recvmsg capture their receive flags and buffer capacity (see
+	// receiveFlagsArgument): MSG_PEEK copies without consuming and MSG_TRUNC
+	// makes the return the datagram's real length rather than the bytes copied,
+	// so the bare return value is not a byte count for either.
+	"sys_enter_recvfrom": KindFdSize,
+	"sys_enter_recvmsg":  KindFdSize,
 
 	"sys_enter_epoll_create":  KindEventfd,
 	"sys_exit_epoll_create":   KindEventfd,

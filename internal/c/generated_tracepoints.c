@@ -1350,7 +1350,7 @@ int handle_sys_exit_sendto(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_recvfrom is a struct fd_event (kind=fd)
+/// sys_enter_recvfrom is a struct fd_size_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_recvfrom")
 int handle_sys_enter_recvfrom(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -1361,18 +1361,24 @@ int handle_sys_enter_recvfrom(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_RECVFROM, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fd_size_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_size_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FD_SIZE_EVENT;
     ev->trace_id = SYS_ENTER_RECVFROM;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->flags = (__u32)ctx->args[3];
+    ev->size_valid = 0;
+    ev->size = 0;
+    ev->size = (__u64)ctx->args[2];
+    ev->size_valid = 1;
+    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1692,7 +1698,7 @@ int handle_sys_exit_sendmmsg(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_recvmsg is a struct fd_event (kind=fd)
+/// sys_enter_recvmsg is a struct fd_size_event (kind=fd)
 SEC("tracepoint/syscalls/sys_enter_recvmsg")
 int handle_sys_enter_recvmsg(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -1703,18 +1709,24 @@ int handle_sys_enter_recvmsg(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_RECVMSG, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fd_size_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_size_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FD_SIZE_EVENT;
     ev->trace_id = SYS_ENTER_RECVMSG;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->flags = (__u32)ctx->args[2];
+    ev->size_valid = 0;
+    ev->size = 0;
+    if (ev->flags & IOR_MSG_TRUNC)
+        ior_recvmsg_capacity((void *)ctx->args[1], &ev->size, &ev->size_valid);
+    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7526,6 +7538,7 @@ int handle_sys_enter_fgetxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->flags = 0;
     ev->size_valid = 0;
     ev->size = 0;
     ev->size = (__u64)ctx->args[3];
@@ -7810,6 +7823,7 @@ int handle_sys_enter_flistxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->flags = 0;
     ev->size_valid = 0;
     ev->size = 0;
     ev->size = (__u64)ctx->args[2];

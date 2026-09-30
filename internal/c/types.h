@@ -200,9 +200,19 @@ struct fd_event {
     __s32 fd;
 };
 
-// fd_size_event is fd_event plus the requested output-buffer size, captured
-// only for the fd-based xattr reads (fgetxattr, flistxattr) whose zero-size
-// call is a size probe.
+// fd_size_event is fd_event plus the capacity of the caller's output buffer,
+// captured for the syscalls whose return value is not by itself a count of
+// bytes copied:
+//   - the fd-based xattr reads (fgetxattr, flistxattr), whose zero-size call
+//     is a size probe returning the required capacity;
+//   - recvfrom and recvmsg, where MSG_TRUNC makes the return the datagram's
+//     real length rather than the bytes copied into the buffer, and MSG_PEEK
+//     copies without consuming.
+// flags occupies what was the alignment padding after fd, so the record stays
+// 48 bytes. It carries the recv flags argument for recvfrom/recvmsg and is 0
+// for every other user; older BPF objects left those four bytes as padding, and
+// userspace only interprets flags for the recv syscalls, which older objects
+// never sent in this record (they used the size-less fd_event).
 struct fd_size_event {
     __u32 event_type;
     __u32 trace_id;
@@ -210,6 +220,7 @@ struct fd_size_event {
     __u32 pid;
     __u32 tid;
     __s32 fd;
+    __u32 flags;
     __u64 size;
     __u32 size_valid;
     __u32 schema_version;

@@ -206,7 +206,7 @@ func decodeFdSizeEvent(raw []byte) runtimeDecodedEvent {
 		return nil
 	}
 	out := &types.FdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
-		Pid: ev.Pid, Tid: ev.Tid, Fd: ev.Fd, Size: ev.Size,
+		Pid: ev.Pid, Tid: ev.Tid, Fd: ev.Fd, Flags: ev.Flags, Size: ev.Size,
 		SizeValid: ev.SizeValid, SchemaVersion: ev.SchemaVersion}
 	ev.Recycle()
 	return out

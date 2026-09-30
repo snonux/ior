@@ -1490,9 +1490,14 @@ func (e *eventLoop) dropMalformedRawEvent(evType types.EventType, raw []byte) {
 }
 
 // bytesFromRet extracts the number of bytes transferred from a paired return.
-// A zero-capacity xattr read is a size probe: its positive return describes the
-// required capacity, but no bytes were copied. Older payloads carry no explicit
-// requested-size validity and therefore retain their historical byte count.
+// Two families of syscalls return something other than the bytes moved, so the
+// captured enter payload corrects the raw return value:
+//
+//   - A zero-capacity xattr read is a size probe: its positive return describes
+//     the required capacity, but no bytes were copied. Older payloads carry no
+//     explicit requested-size validity and therefore retain their historical
+//     byte count.
+//   - recvfrom/recvmsg honour MSG_PEEK and MSG_TRUNC (see receivedBytes).
 func bytesFromRet(ep *event.Pair) uint64 {
 	if ep == nil {
 		return 0
@@ -1503,12 +1508,46 @@ func bytesFromRet(ep *event.Pair) uint64 {
 	}
 	switch retEv.RetType {
 	case types.READ_CLASSIFIED, types.WRITE_CLASSIFIED, types.TRANSFER_CLASSIFIED:
-		return uint64(retEv.Ret)
+		return receivedBytes(ep.EnterEv, uint64(retEv.Ret))
 	default:
 		return 0
 	}
 }
 
+// receivedBytes corrects the return value of a successful recvfrom/recvmsg
+// for the flags captured at sys_enter; every other syscall passes ret through.
+//
+//   - MSG_PEEK copies data without consuming it, so nothing was received yet:
+//     the next non-peek call returns the same bytes and is the one to count.
+//     Netlink clients (iproute2, libnl, systemd's sd-netlink) peek every
+//     datagram once to size the buffer, then read it again, which counted each
+//     reply twice.
+//   - MSG_TRUNC makes the return the datagram's real length even when it did
+//     not fit, so at most the buffer capacity was copied. The capacity comes
+//     from the enter event (recvfrom's size, or the sum of recvmsg's iovec
+//     lengths). When it is unknown - an older BPF object, or a recvmsg whose
+//     iovec could not be read - the raw return is kept, the historical count.
+//
+// MSG_PEEK wins over MSG_TRUNC: the combination is the standard "how big is
+// the next datagram" probe and copies nothing that is consumed.
+func receivedBytes(enterEv event.Event, ret uint64) uint64 {
+	fdEv, ok := enterEv.(*types.FdEvent)
+	if !ok || (fdEv.TraceId != types.SYS_ENTER_RECVFROM && fdEv.TraceId != types.SYS_ENTER_RECVMSG) {
+		return ret
+	}
+	if fdEv.Flags&unix.MSG_PEEK != 0 {
+		return 0
+	}
+	if fdEv.Flags&unix.MSG_TRUNC != 0 && fdEv.SizeValid != 0 && ret > fdEv.Size {
+		return fdEv.Size
+	}
+	return ret
+}
+
+// isZeroSizeProbe reports a call whose captured buffer capacity is zero, so it
+// cannot have copied anything: the xattr size probe, and for recvfrom/recvmsg
+// a zero-length buffer (the MSG_PEEK|MSG_TRUNC size probe; receivedBytes
+// handles the non-zero-capacity cases).
 func isZeroSizeProbe(enterEv event.Event) bool {
 	switch ev := enterEv.(type) {
 	case *types.FdEvent:
