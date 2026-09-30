@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -31,10 +32,14 @@ import (
 // built from explicit byte offsets rather than from the generated Go types, so
 // the builders compile and mean the same thing on both sides of the change.
 //
-// The golden rows are %+v dumps of streamrow.Row, so a new Row field shows up
-// in every line. The NoFile field (task zp2) was added to the golden by hand:
-// true exactly on the fileless "N:file" rows, false elsewhere; no other byte of
-// the pre-split capture changed.
+// The golden rows list the streamrow.Row fields through rowNonZeroFields, which
+// leaves out zero-valued fields. A %+v dump of the whole struct made every
+// additive Row field (NoFile in task zp2, IsWarning in task rq2) rewrite every
+// golden line, and the test failed at HEAD after rq2 for that reason alone.
+// With zero fields omitted, a new field that stays zero in this scenario needs
+// no golden change, while one that becomes non-zero (a real change of a row)
+// still fails the comparison. The pre-split capture's values are unchanged: the
+// golden is the original %+v capture with its zero-valued fields dropped.
 //
 // Both wire generations are checked against the one golden: payloadWireSplit
 // is what the current BPF object emits, payloadWireWide is what an older
@@ -335,6 +340,21 @@ func payloadSplitFilters() map[string]globalfilter.Filter {
 	}
 }
 
+// rowNonZeroFields renders a row like %+v does ({Name:value Name:value}, in
+// declaration order) but skips zero-valued fields, so the golden does not
+// depend on the set of Row fields that happen to be zero in this scenario.
+func rowNonZeroFields(row streamrow.Row) string {
+	v := reflect.ValueOf(row)
+	parts := make([]string, 0, v.NumField())
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).IsZero() {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s:%v", v.Type().Field(i).Name, v.Field(i).Interface()))
+	}
+	return "{" + strings.Join(parts, " ") + "}"
+}
+
 // payloadSplitRows runs one scenario through a fresh event loop and renders
 // every emitted row (CSV row, the full stream row, file flags), every
 // warning, and the loop's counters.
@@ -348,7 +368,7 @@ func payloadSplitRows(t *testing.T, filter globalfilter.Filter, raws [][]byte) [
 		el.processRawEvent(raw, out)
 		select {
 		case ep := <-out:
-			lines = append(lines, fmt.Sprintf("%s | flags=%v | %+v", ep.String(), ep.Flags(), streamrow.New(0, ep)))
+			lines = append(lines, fmt.Sprintf("%s | flags=%v | %+v", ep.String(), ep.Flags(), rowNonZeroFields(streamrow.New(0, ep))))
 			ep.Recycle()
 		default:
 		}
