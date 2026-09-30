@@ -295,7 +295,7 @@ func TestThreadExitKeepsTheProcessFdEntries(t *testing.T) {
 }
 
 // TestTruncatedProcessExitRecordIsIgnored pins the negative path: a record
-// shorter than the group_dead layout (such as the old 24-byte one) fails to
+// that is neither the current 32-byte nor the legacy 24-byte layout fails to
 // decode instead of being read as a thread exit or, worse, a group-dead one,
 // so it changes no state and emits no row.
 func TestTruncatedProcessExitRecordIsIgnored(t *testing.T) {
@@ -304,17 +304,61 @@ func TestTruncatedProcessExitRecordIsIgnored(t *testing.T) {
 
 	raw := makeProcessExitEvent(t, defaulTime, crossPidA, crossTidA)
 	out := make(chan *event.Pair, 1)
+	el.processRawEvent(raw[:28], out)
+
+	assertNoRowEmitted(t, out, "truncated process exit record")
+	verifyFileDescriptor(t, el, crossPidA, crossFd, "/tmp/truncated.txt")
+	if el.numGroupDeadExits != 0 {
+		t.Fatalf("numGroupDeadExits = %d after a truncated record, want 0", el.numGroupDeadExits)
+	}
+}
+
+// TestLegacyProcessExitRecordEvictsTheProcessFdEntries pins IOR_BPF_OBJECT
+// compatibility end to end: an object built before group_dead emits a
+// 24-byte exit record, which must not be dropped as malformed (a warning per
+// task exit, and no fd eviction at all) but read conservatively as group-dead,
+// evicting the tgid's fd entries on every exit as that userspace did.
+func TestLegacyProcessExitRecordEvictsTheProcessFdEntries(t *testing.T) {
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	var warnings []string
+	el.warningCb = func(message string) { warnings = append(warnings, message) }
+	el.fdState().set(crossFd, crossPidA, file.NewFd(crossFd, "/tmp/legacy-exit.txt", syscall.O_RDONLY))
+	el.fdState().set(crossFd, crossPidB, file.NewFd(crossFd, "/tmp/legacy-B.txt", syscall.O_RDONLY))
+	el.fdState().setProcFdCache(9, crossPidA, file.NewFdWithPid(9, crossPidA))
+
+	// The legacy layout is the current one minus group_dead and reserved,
+	// so a group_dead-clear record cut to 24 bytes is byte-identical to it.
+	raw := makeThreadExitEvent(t, defaulTime, crossPidA, crossTidA)
+	out := make(chan *event.Pair, 1)
 	el.processRawEvent(raw[:24], out)
 
+	assertNoRowEmitted(t, out, "legacy process exit record")
+	if len(warnings) != 0 {
+		t.Fatalf("legacy exit record raised warnings %q, want none", warnings)
+	}
+	if _, ok := el.fdState().get(crossFd, crossPidA); ok {
+		t.Fatalf("pid %d fd %d still tracked after a legacy exit record", crossPidA, crossFd)
+	}
+	if _, ok := el.fdState().cachedProcFdFile(9, crossPidA); ok {
+		t.Fatalf("pid %d fd 9 still cached after a legacy exit record", crossPidA)
+	}
+	verifyFileDescriptor(t, el, crossPidB, crossFd, "/tmp/legacy-B.txt")
+	if el.numGroupDeadExits != 1 {
+		t.Fatalf("numGroupDeadExits = %d after a legacy exit record, want 1", el.numGroupDeadExits)
+	}
+}
+
+// assertNoRowEmitted fails when a control record produced a row on out.
+func assertNoRowEmitted(t *testing.T, out chan *event.Pair, what string) {
+	t.Helper()
 	select {
 	case ep := <-out:
 		if ep != nil {
 			ep.Recycle()
-			t.Fatal("truncated process exit record was emitted as a row")
+			t.Fatalf("%s was emitted as a row", what)
 		}
 	default:
 	}
-	verifyFileDescriptor(t, el, crossPidA, crossFd, "/tmp/truncated.txt")
 }
 
 // TestFdTableRetainsRecentlyUsedEntries pins the LRU cap the per-(pid, fd)

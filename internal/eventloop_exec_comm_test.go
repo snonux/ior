@@ -55,9 +55,9 @@ func makeProcessExecEventFrom(t *testing.T, time uint64, pid, tid, oldTid uint32
 
 // processExecEventWireSize pins the kernel payload size of struct
 // process_exec_event (internal/c/types.h): 4+4+8+4+4+16+4(old_tid)+
-// 4(exit_untraced) with no trailing padding. NewProcessExecEventFast takes its
-// fast path only at this exact length, so a drift here would silently move
-// every decode onto the slow binary.Read path.
+// 4(exit_untraced) with no trailing padding. NewProcessExecEventFast decodes
+// only this length and the legacy 40-byte one, so a drift here would turn
+// every exec record into a dropped malformed event.
 const processExecEventWireSize = 48
 
 // newEventLoopWithStaleComm builds an event loop whose comm cache reached the
@@ -136,6 +136,27 @@ func TestFirstPostExecSyscallCarriesPostExecComm(t *testing.T) {
 	defer ep.Recycle()
 	if ep.Comm != "cat" {
 		t.Fatalf("first post-exec syscall comm = %q, want \"cat\"", ep.Comm)
+	}
+}
+
+// TestLegacyProcessExecRecordRefreshesComm pins IOR_BPF_OBJECT compatibility
+// for the exec record: an object built before old_tid emits a 40-byte record,
+// which must still refresh the post-exec comm instead of being dropped as a
+// malformed event with a warning per exec.
+func TestLegacyProcessExecRecordRefreshesComm(t *testing.T) {
+	el := newEventLoopWithStaleComm(t, eventLoopConfig{}, "bash")
+	var warnings []string
+	el.warningCb = func(message string) { warnings = append(warnings, message) }
+
+	// The legacy layout is the current one minus old_tid and exit_untraced.
+	raw := makeProcessExecEvent(t, defaulTime-1, execCommPid, execCommTid, "cat")
+	el.processRawEvent(raw[:40], make(chan *event.Pair, 1))
+
+	if len(warnings) != 0 {
+		t.Fatalf("legacy exec record raised warnings %q, want none", warnings)
+	}
+	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+		t.Fatalf("cached comm after legacy exec record = %q (present=%v), want \"cat\"", got, ok)
 	}
 }
 

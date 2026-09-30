@@ -83,13 +83,17 @@ const (
 	// emitted by sched:sched_process_exec. 4+4+8+4+4+16+4(old_tid)+
 	// 4(exit_untraced) = 48 bytes; exit_untraced fills what used to be an
 	// explicit tail pad, so there is no trailing padding and kernel and
-	// binary.Write payloads share one size.
-	processExecEventSize = 48
+	// binary.Write payloads share one size. The legacy 40-byte record
+	// (4+4+8+4+4+16) predates old_tid and exit_untraced.
+	processExecEventSize       = 48
+	processExecEventLegacySize = 40
 	// process_exit_event is the sibling control record emitted by
 	// sched:sched_process_exit. 4+4+8+4+4+4(group_dead)+4(reserved) = 32
 	// bytes; the explicit reserved word leaves no trailing padding, so kernel
-	// and binary.Write payloads share one size.
-	processExitEventSize = 32
+	// and binary.Write payloads share one size. The legacy 24-byte record
+	// (4+4+8+4+4) predates group_dead.
+	processExitEventSize       = 32
+	processExitEventLegacySize = 24
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -911,15 +915,18 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 
 // NewProcessExecEventFast decodes the sched:sched_process_exec control record
 // carrying the post-exec task comm, the caller's pre-exec tid (OldTid) and
-// whether the execve's exit is untraced (ExitUntraced, -tid <non-leader>). A
-// payload shorter than the current layout (e.g. the pre-old_tid 40-byte
-// record) is rejected rather than decoded with OldTid defaulting to 0.
+// whether the execve's exit is untraced (ExitUntraced, -tid <non-leader>).
+//
+// The legacy 40-byte record of a pre-old_tid IOR_BPF_OBJECT override is
+// decoded with OldTid 0 and ExitUntraced 0, i.e. "tid kept, exit still
+// coming": rekeyExecCaller skips OldTid 0 and an old object never suppressed
+// the execve exit, so this is exactly what that userspace assumed (a
+// non-leader exec is then paired by adoptLostExecCaller instead). Any other
+// size fails closed with nil rather than decoding fields at wrong offsets.
 func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
-	if len(raw) < processExecEventSize {
+	legacy := len(raw) == processExecEventLegacySize
+	if !legacy && len(raw) != processExecEventSize {
 		return nil
-	}
-	if len(raw) != processExecEventSize {
-		return NewProcessExecEvent(raw)
 	}
 	p := poolOfProcessExecEvents.Get().(*ProcessExecEvent)
 	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -928,22 +935,32 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	copy(p.Comm[:], raw[24:40])
-	p.OldTid = binary.LittleEndian.Uint32(raw[40:44])
-	p.ExitUntraced = binary.LittleEndian.Uint32(raw[44:48])
+	p.OldTid = 0
+	p.ExitUntraced = 0
+	if !legacy {
+		p.OldTid = binary.LittleEndian.Uint32(raw[40:44])
+		p.ExitUntraced = binary.LittleEndian.Uint32(raw[44:48])
+	}
 	return p
 }
 
 // NewProcessExitEventFast decodes the sched:sched_process_exit control record
 // identifying the exited task and, via GroupDead, whether its whole process
-// (tgid) died so userspace may evict the process's fd-table entries. A
-// payload shorter than the current layout (e.g. the pre-group_dead 24-byte
-// record) is rejected rather than decoded with GroupDead defaulting to 0.
+// (tgid) died so userspace may evict the process's fd-table entries.
+//
+// The legacy 24-byte record of a pre-group_dead IOR_BPF_OBJECT override
+// cannot tell a thread exit from a process exit, so it is decoded with
+// GroupDead 1 (Reserved 0): every exit then evicts its tgid's fd entries, as
+// every exit did before group_dead existed. Reading it as a thread exit
+// instead would never evict a dead process's descriptors. The cost is the
+// old per-thread over-eviction (surviving threads fall back to
+// /proc/<pid>/fd) and a group-dead count and stats retirement per thread
+// exit. Any other size fails closed with nil rather than decoding fields at
+// wrong offsets.
 func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
-	if len(raw) < processExitEventSize {
+	legacy := len(raw) == processExitEventLegacySize
+	if !legacy && len(raw) != processExitEventSize {
 		return nil
-	}
-	if len(raw) != processExitEventSize {
-		return NewProcessExitEvent(raw)
 	}
 	p := poolOfProcessExitEvents.Get().(*ProcessExitEvent)
 	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -951,8 +968,12 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	p.Time = binary.LittleEndian.Uint64(raw[8:16])
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
-	p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
-	p.Reserved = binary.LittleEndian.Uint32(raw[28:32])
+	p.GroupDead = 1
+	p.Reserved = 0
+	if !legacy {
+		p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
+		p.Reserved = binary.LittleEndian.Uint32(raw[28:32])
+	}
 	return p
 }
 
