@@ -344,12 +344,12 @@ func ExactPattern(value string) string {
 //
 // It runs per candidate on every matching path (event loop, stream re-filter,
 // raw kernel-event filter), so it never allocates for the exact and
-// directory-children forms (plain string comparisons) nor for the common all-ASCII case, which matchFoldASCII
-// compares in place instead of lowering both strings: strings.ToLower
-// allocates whenever its input has an upper-case letter, which is every row
-// under a family filter ("FS", "Network", ...) and any pattern typed with
-// capitals. For ASCII, ASCII case folding is exactly what ToLower does, so
-// both paths select the same values.
+// directory-children forms (plain string comparisons) nor for the common
+// all-ASCII case, which matchFoldASCII compares in place instead of lowering
+// both strings: strings.ToLower allocates whenever its input has an
+// upper-case letter, which is every row under a family filter ("FS",
+// "Network", ...) and any pattern typed with capitals. For ASCII, ASCII case
+// folding is exactly what ToLower does, so both paths select the same values.
 func matchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
