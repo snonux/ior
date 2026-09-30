@@ -100,15 +100,14 @@ func (t carryTable) advance(now time.Time, newest map[uint32]carriedLifetime, li
 	out := make([]carryGeneration, 0, len(gens)+1)
 	out = append(out, carryGeneration{start: now, entries: newest})
 	out = append(out, gens...)
-	// Unreachable while start times are spaced >= carryBucket within the
-	// retention window; kept for a clock that jumps backwards. Coalescing keeps
-	// the older start, so nothing expires later than it would have.
-	for len(out) > carryMaxGenerations {
-		last := out[len(out)-1]
-		mergeCarried(last.entries, out[len(out)-2].entries, limit)
-		out = out[:len(out)-1]
-		out[len(out)-1] = last
-	}
+	// No further cap is needed: start times are strictly decreasing and, since
+	// a new generation is only opened when now is at least carryBucket past
+	// gens[0].start (a clock that jumps backwards merges into gens[0] above),
+	// consecutive starts are >= carryBucket apart. The expiry above left only
+	// starts within ProcessCarryRetention of now, so at most
+	// ProcessCarryRetention/carryBucket older generations remain, plus the new
+	// one: carryMaxGenerations. TestCarryRetentionCoversTwiceTheWishWithBucketMargin
+	// pins that arithmetic.
 	return carryTable{gens: out}
 }
 

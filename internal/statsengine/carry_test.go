@@ -233,16 +233,36 @@ func TestCarryNoWrongSuccessorWithinTheWishWindow(t *testing.T) {
 	}
 }
 
-// TestCarryMergeKeepsNewerAndEvictsOlderOverTheLimit pins mergeCarried.
+// TestCarryMergeKeepsNewerAndEvictsOlderOverTheLimit pins mergeCarried. The
+// limit equals the number of newer entries and older holds many more, so the
+// result is fully determined despite the random map iteration order: exactly
+// the newer entries survive (as given, winning over an older entry of the same
+// PID) and every older-only entry is evicted. A merge that also trimmed newer
+// entries would drop one of them on nearly every iteration, so the loop makes
+// that mutation fail reliably.
 func TestCarryMergeKeepsNewerAndEvictsOlderOverTheLimit(t *testing.T) {
-	older := map[uint32]carriedLifetime{1: {next: 1}, 2: {next: 1}, 3: {next: 1}, 4: {next: 1}}
-	newer := map[uint32]carriedLifetime{3: {next: 9}, 5: {next: 9}}
-	mergeCarried(older, newer, 4)
-	if len(older) != 4 {
-		t.Fatalf("%d entries after merge, want the limit 4", len(older))
-	}
-	if older[3].next != 9 || older[5].next != 9 {
-		t.Fatalf("newer entries not kept as given: %+v", older)
+	const newerCount, olderOnly = 8, 200
+	for iter := 0; iter < 200; iter++ {
+		older := make(map[uint32]carriedLifetime)
+		newer := make(map[uint32]carriedLifetime)
+		for pid := uint32(1); pid <= newerCount; pid++ {
+			newer[pid] = carriedLifetime{next: 9}
+			if pid%2 == 0 { // half of the newer PIDs also exist in older
+				older[pid] = carriedLifetime{next: 1}
+			}
+		}
+		for pid := uint32(1000); pid < 1000+olderOnly; pid++ {
+			older[pid] = carriedLifetime{next: 1}
+		}
+		mergeCarried(older, newer, newerCount)
+		if len(older) != newerCount {
+			t.Fatalf("iteration %d: %d entries after merge, want the limit %d", iter, len(older), newerCount)
+		}
+		for pid, want := range newer {
+			if got, ok := older[pid]; !ok || got != want {
+				t.Fatalf("iteration %d: newer entry %d = %+v (present %v), want %+v", iter, pid, got, ok, want)
+			}
+		}
 	}
 }
 
