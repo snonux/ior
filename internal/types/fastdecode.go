@@ -957,8 +957,10 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 // IsGroupDead reports whether the exited task was the last live thread of its
 // thread group, i.e. whether process Pid as a whole is gone. Per-thread exits
 // report false: their tgid still owns its descriptors. Kept as a method so
-// consumers beyond the event loop (e.g. a future PID-reuse signal to the stats
-// engine) read the flag without depending on its wire encoding.
+// consumers read the flag without depending on its wire encoding. The event
+// loop uses it to forward group-dead exits to statsengine.Engine.RetireProcess
+// (see retireStatsProcess in internal/eventloop_processexit.go), so a recycled
+// PID starts a fresh stats row.
 func (p *ProcessExitEvent) IsGroupDead() bool {
 	return p.GroupDead != 0
 }
