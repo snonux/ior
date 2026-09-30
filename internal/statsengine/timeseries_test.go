@@ -178,3 +178,22 @@ func TestRingTimeSeriesNilReceiver(t *testing.T) {
 	r.Add(1, time.Unix(1, 0))                           // must not panic
 	r.AddSpread(1, 1, time.Unix(0, 0), time.Unix(1, 0)) // must not panic
 }
+
+// A forward wall-clock jump makes the interval span years: only the slots in
+// the window are visited (the loop is bounded), each gets the batch mean,
+// and the share before the window is dropped.
+func TestRingTimeSeriesAddSpreadForwardClockJump(t *testing.T) {
+	to := time.Unix(2_000_000_000, 0)
+	from := to.Add(-5 * 365 * 24 * time.Hour)
+	r := newRingTimeSeriesWithConfig(time.Millisecond, 4)
+	r.AddSpread(3*1e9, 1e9, from, to)
+
+	if r.lastKey != r.slotKey(to)-1 {
+		t.Fatalf("lastKey = %d, want %d", r.lastKey, r.slotKey(to)-1)
+	}
+	for _, v := range r.ValuesAt(to.Add(-time.Nanosecond)) {
+		if math.Abs(v-3) > 1e-9 {
+			t.Fatalf("values = %v, want all 3", r.Values())
+		}
+	}
+}

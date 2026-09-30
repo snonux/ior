@@ -449,6 +449,15 @@ not sufficient.
     (`buildAggregateIngestTraceIDs`), so TUI/stats counts, error counts,
     latency totals and the latency histogram for sampled syscalls are the true
     full-population values with no double counting and no scaling estimate.
+  - **Gap statistics are between traced calls.** Aggregate rows carry no
+    inter-syscall gap, and a pair's `DurationToPrev` runs from the previous
+    *emitted* pair of its TID, so under sampling or aggregate-only rates it
+    spans the untraced calls. `Snapshot.GapMeanNs`, the gap histogram and the
+    gap sparkline all use the traced pairs that have a previous pair
+    (`event.Pair.FirstOnTID` excludes a thread's first); the Overview labels
+    the mean `Traced gap`. Dividing by all counted calls instead would be
+    diluted by threads that make only aggregate-only calls (parked futex
+    waiters).
   - The partition also holds without a per-tid enter state
     (`syscall_enter_state_map` full, clone/fork child exits, exec by a
     non-leader thread, syscalls in flight at attach): a failed enter-state

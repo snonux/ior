@@ -46,6 +46,13 @@ type syscallAggregateSink interface {
 	IngestSyscallAggregates([]statsengine.SyscallAggregate)
 }
 
+// aggregateDrainPeriodSetter is optionally implemented by an aggregate sink
+// that needs to know how often batches arrive: statsengine.Engine spreads
+// each batch over at most one drain period in its latency series.
+type aggregateDrainPeriodSetter interface {
+	SetAggregateDrainPeriod(time.Duration)
+}
+
 // ringbufDropSource reports the cumulative number of events the kernel dropped
 // because the event ring buffer was full. Implemented by ringbufDropCounter
 // over the BPF ringbuf_drop_map; stubbed in tests.
