@@ -131,11 +131,16 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 		return fmt.Errorf("start parquet recording: %w", err)
 	}
 
+	// Before the probes attach, like runTraceWithContext: see targetWatch.
+	watch := openHeadlessTargetWatch(cfg, true)
+	defer watch.Close()
+
 	infra, err := setup(cfg, logln)
 	if err != nil {
 		return err
 	}
 	defer infra.Close()
+	watch.attachTo(infra)
 
 	// A run that samples says so in the file footer from the start; the exact
 	// totals follow when the recording stops (finishHeadlessParquetRecording).

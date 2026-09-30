@@ -24,7 +24,10 @@ import (
 
 const (
 	// shutdownRunDuration is long enough that only the signal under test (or,
-	// for the closed-pipe test, the end of the run) can stop ior in time.
+	// for the closed-pipe test, the end of the run) can stop ior in time. It
+	// must stay well below ioworkload's hold timeout (120s, holdFileTimeout in
+	// cmd/ioworkload): a workload that gave up its hold first would end the
+	// run by exiting.
 	shutdownRunDuration = 60
 	// pipeRunDuration is the -duration of the closed-pipe runs: short, because
 	// the run must reach its natural end (and its stats writes) to hit the pipe.
@@ -343,6 +346,53 @@ func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
 			}
 			if !strings.Contains(stderr, "group-dead exits: 1") {
 				t.Fatalf("stderr statistics do not show the target's exit:\n%s", stderr)
+			}
+			if mode == "plain" {
+				if !strings.Contains(stdout, "testfile.txt") {
+					t.Fatalf("plain output lost the target's rows:\n%s", stdout)
+				}
+				return
+			}
+			requireRecording(t, h.OutputDir, mode)
+		})
+	}
+}
+
+// testDisableTargetExitRecordEnv is ior's test hook that turns the
+// group-dead-record trigger off (internal.disableTargetExitRecordEnv), leaving
+// the liveness watcher as the only thing that can end a run with its target.
+const testDisableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
+
+// TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord covers the
+// fallback of the vr2 fix: when the target's group-dead record is lost (ring
+// buffer drop) or never produced (death during the probe attach) the run must
+// still end. A lost record cannot be forced, so the record trigger is disabled
+// through the test hook (the record is still processed and counted, it just no
+// longer stops the trace); the run must then end on the watcher alone.
+func TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord(t *testing.T) {
+	for _, mode := range []string{"flamegraph", "parquet", "plain"} {
+		t.Run(mode, func(t *testing.T) {
+			enableParallelIfRequested(t)
+			h := newTestHarness(t)
+			newCmd := func(iorArgs []string) *exec.Cmd {
+				cmd := exec.Command(h.IorBinary, iorArgs...)
+				cmd.Env = append(os.Environ(), testDisableTargetExitRecordEnv+"=1")
+				return cmd
+			}
+			run := startSignalRunWith(t, h, modeArgs(mode, h.OutputDir), shutdownRunDuration, newCmd)
+			time.Sleep(shutdownDrainDelay)
+			select {
+			case err := <-run.done:
+				t.Fatalf("ior ended while its target was still alive (wait: %v)", err)
+			default:
+			}
+
+			run.releaseTarget(t)
+			// The watcher polls every 500ms; -duration is 60s.
+			run.requireCleanExit(t, iorShutdownGrace)
+			stdout, stderr := run.text()
+			if !strings.Contains(stderr, "exited, stopping the trace") {
+				t.Fatalf("stderr does not announce the target's exit:\n%s", stderr)
 			}
 			if mode == "plain" {
 				if !strings.Contains(stdout, "testfile.txt") {

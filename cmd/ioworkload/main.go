@@ -37,8 +37,12 @@ const (
 	// target alive past its I/O, since a headless ior ends as soon as that
 	// process exits (task vr2) and signal/shutdown tests need ior to outlive
 	// the scenario. Unset: the workload exits right after the scenario.
-	holdFileEnv     = "IOR_WORKLOAD_HOLD_FILE"
-	holdFileTimeout = 60 * time.Second
+	holdFileEnv = "IOR_WORKLOAD_HOLD_FILE"
+	// holdFileTimeout is only a safety net so a forgotten hold never leaks the
+	// process. It must stay clearly above the longest -duration a test expects
+	// the target to outlive (signal_shutdown_test.go uses 60s): on a stalled
+	// host a workload that gave up early would end the ior run under test.
+	holdFileTimeout = 120 * time.Second
 )
 
 // Pin the main goroutine to the main thread so scenario syscalls run with

@@ -780,22 +780,49 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 	// A headless -pid run ends with its target (strace -p semantics) instead of
 	// idling to -duration and later tracing a recycled pid; verbose is true for
 	// exactly the headless modes. The TUI keeps its session open (see
-	// eventLoop.endTraceOnTargetExit).
-	infra.el.stopOnTargetExit = verbose
+	// eventLoop.endTraceOnTargetExit). Two triggers: the group-dead record
+	// here, and the liveness watcher started below for the records that never
+	// arrive (dropped, or the target died during the probe attach).
+	infra.el.stopOnTargetExit = verbose && !targetExitRecordDisabled()
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has
 	// not yet exited.
 	watcherDone := startTraceShutdownWatcher(infra.ctx, verbose, infra.el, infra.profiling, logln)
 
+	stopTargetWatch := startTargetLivenessWatcher(infra, verbose)
 	startTime := time.Now()
 	infra.el.run(infra.ctx, infra.ch)
 	totalDuration := time.Since(startTime)
 	<-watcherDone
+	stopTargetWatch()
 	<-infra.profiling.done
 	return totalDuration
 }
 
 // finaliseTrace flushes the flamegraph recorder if one was created and logs
+// startTargetLivenessWatcher starts the fallback trigger for a headless -pid
+// run (watchTargetLiveness): it polls infra.targetGone, which
+// runTraceWithContext set up before the probes attached, so a target whose
+// group-dead record never reaches the loop (ring-buffer drop, death during the
+// attach) still ends the run. Nothing starts for the TUI or without a
+// liveness function. The returned func stops the watcher and waits for it, so
+// no goroutine outlives runTraceLoop; call it once the event loop returned.
+func startTargetLivenessWatcher(infra *traceInfra, verbose bool) (stop func()) {
+	if !verbose || infra.targetGone == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(infra.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		infra.el.watchTargetLiveness(ctx, targetWatchInterval, infra.targetGone)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 // the total run duration. It runs after runTraceLoop has returned, which is
 // what makes samples final: the recording's header carries them, so a run that
 // sampled says so and keeps the exact totals (a run that sampled nothing passes
@@ -866,11 +893,18 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	}
 
 	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
+	// Opened before the probes attach (about five seconds): a target that dies
+	// in that window leaves no exit record, and only a snapshot of the process
+	// taken now can tell a recycled pid from the original (targetWatch).
+	watch := openHeadlessTargetWatch(cfg, verbose)
+	defer watch.Close()
+
 	if err != nil {
 		return err
 	}
 	defer infra.Close()
 
+	watch.attachTo(infra)
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
 	// The event loop has returned, so the sampling totals are final.
 	return traceResult(infra.el, finaliseTrace(recorder, infra.el.samplingResult(), totalDuration, logln))
@@ -925,6 +959,11 @@ type traceInfra struct {
 	releasing   func()
 
 	cleanups []func()
+	// targetGone reports that the -pid target exited or its pid was recycled
+	// (targetWatch.gone); nil when there is nothing to watch (no -pid, the
+	// TUI). Set by runTraceWithContext, whose watch predates the probe attach.
+	targetGone func() bool
+
 }
 
 // onClose registers a cleanup for Close to run. Call it only after the step
