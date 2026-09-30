@@ -172,6 +172,41 @@ func TestNormalizeKeyEventBlurThenReleaseDroppedWhenEventTypesReported(t *testin
 	}
 }
 
+// Shifted symbols are released with the base key's Code (CSI 49;2:3u is '1'),
+// not the Code the press reported ('!'), so the press's entry in the held set is
+// never removed. On an event-type terminal this must stay invisible: the press
+// is delivered once, the release is dropped (unpaired releases are not
+// keystrokes there), and nothing is duplicated.
+func TestNormalizeKeyEventShiftedSymbolReleaseWithDifferentCodeIsDropped(t *testing.T) {
+	m := newEventTypeTestModel()
+	press := tea.KeyPressMsg{Code: '!', Text: "!"}
+	release := tea.KeyReleaseMsg{Code: '1', Text: "!"}
+	got := deliveredKeys(m, press, release)
+	if len(got) != 1 || got[0] != "!" {
+		t.Fatalf("expected '!' delivered once and its release dropped, got %v", got)
+	}
+	// Documents the limitation: the press's entry is left behind stale.
+	if _, stale := m.kb.pressed['!']; !stale {
+		t.Fatalf("expected the documented stale '!' entry in the held set")
+	}
+}
+
+// A stale entry must not swallow legitimate later input: the plain key that
+// shares the release Code, the same symbol typed again, and further paired
+// keystrokes are all delivered exactly once on an event-type terminal.
+func TestNormalizeKeyEventStaleHeldEntryDoesNotAffectLaterKeys(t *testing.T) {
+	m := newEventTypeTestModel()
+	bang := tea.KeyPressMsg{Code: '!', Text: "!"}
+	bangRelease := tea.KeyReleaseMsg{Code: '1', Text: "!"}
+	got := deliveredKeys(m, bang, bangRelease,
+		letterPress('1'), letterRelease('1'),
+		bang, bangRelease,
+		letterPress('a'), letterRelease('a'))
+	if strings.Join(got, "") != "!1!a" {
+		t.Fatalf("expected !1!a with each key once, got %v", got)
+	}
+}
+
 func TestNormalizeKeyEventHeldSetIsBounded(t *testing.T) {
 	m := newKeyTestModel()
 	for r := rune('A'); r < 'A'+3*maxTrackedPressedKeys; r++ {

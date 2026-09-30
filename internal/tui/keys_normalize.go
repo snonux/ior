@@ -85,9 +85,20 @@ func (m *Model) terminalReportsEventTypes() bool {
 }
 
 // physicalKey identifies the key independent of modifier and text state. A
-// release carries neither the text nor necessarily the modifiers of its press
-// (shift can be let go before the letter), so only the base key code pairs
-// the two reliably.
+// release can differ from its press in the modifiers (shift can be let go
+// before the letter), and for shifted symbols and non-ASCII or composed text it
+// even reports a different Code (press '!' Code '!', release of Shift+1 Code
+// '1'). Only for ASCII letters, digits and named keys (Enter, Space, arrows,
+// ...) do the press and release Codes match, so pairing is by Code alone and is
+// reliable only for those keys.
+//
+// Known limitation: a press whose release reports a different Code leaves a
+// stale entry in the held set. It is harmless: on a terminal that reports event
+// types every release is dropped anyway (paired or not), so the stale entry
+// changes nothing; it can only mis-drop a later release-only keystroke with
+// that same Code, which needs presses to have been seen, i.e. not a
+// release-only terminal. The set is cleared on blur and capped at
+// maxTrackedPressedKeys, so stale entries never accumulate.
 func physicalKey(msg tea.KeyPressMsg) rune {
 	return msg.Code
 }
