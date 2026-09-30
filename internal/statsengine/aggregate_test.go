@@ -325,3 +325,34 @@ func TestSetAggregateDrainPeriodNilEngine(t *testing.T) {
 	var engine *Engine
 	engine.SetAggregateDrainPeriod(time.Second) // must not panic
 }
+
+// A forward wall-clock step between two drains must not stretch the next
+// batch over the whole series window: the span stays capped at one drain
+// period, so a batch after a 1h step fills at most aggregateSpan/slotSize
+// (here 2) slots. fakeClock readings carry no monotonic part, so this pins
+// the wall-clock cap; aggregateSpanStart strips time.Now's monotonic
+// readings to get the same behaviour for real clocks.
+func TestAggregateSpanCappedAfterForwardWallClockStep(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	engine := newEngineWithClock(DefaultTopN, clock.Now)
+	clock.Advance(time.Second)
+	engine.IngestSyscallAggregates([]SyscallAggregate{{TraceID: types.SYS_ENTER_FUTEX, Count: 2, TotalLatencyNs: 20}})
+	clock.Advance(time.Hour)
+	engine.IngestSyscallAggregates([]SyscallAggregate{{TraceID: types.SYS_ENTER_FUTEX, Count: 2, TotalLatencyNs: 20}})
+	clock.Advance(-time.Millisecond)
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot error: %v", err)
+	}
+	maxSlots := int(defaultAggregateDrainPeriod / timeSeriesSlotWidthDefault)
+	filled := 0
+	for _, v := range snap.LatencySeriesNs() {
+		if v != 0 {
+			filled++
+		}
+	}
+	if filled == 0 || filled > maxSlots {
+		t.Fatalf("filled slots = %d, want 1..%d", filled, maxSlots)
+	}
+}
