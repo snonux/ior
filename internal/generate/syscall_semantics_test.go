@@ -207,7 +207,7 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"io_uring_enter":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_uring_register":       {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_uring_setup":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
-	"ioctl":                   {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"ioctl":                   {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"ioperm":                  {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"iopl":                    {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
 	"ioprio_get":              {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Process"},

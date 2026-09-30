@@ -1138,14 +1138,74 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 // procfs cache they promote the entry into the fd table, so behind the
 // checkpoint a dropped row left that promotion, and the new flags with it,
 // unrecorded.
+//
+// ioctl shares the fcntl_event layout (fd, cmd, arg), so its pairs arrive here
+// too. They are routed by trace ID to applyIoctlFdState: an ioctl request
+// number is not an fcntl command, and one that happens to equal F_SETFD or
+// F_DUPFD must not be interpreted as one.
 func (e *eventLoop) handleFcntlExit(ep *event.Pair, fcntlEv *types.FcntlEvent) bool {
 	ep.Comm = e.comm(fcntlEv.GetTid())
 	fd := int32(fcntlEv.Fd)
 	ep.File = e.fdState().resolve(fd, fcntlEv.Pid)
-	if !e.applyFcntlFdState(ep, fcntlEv, fd) {
+	apply := e.applyFcntlFdState
+	if ep.Is(types.SYS_ENTER_IOCTL) {
+		apply = e.applyIoctlFdState
+	}
+	if !apply(ep, fcntlEv, fd) {
 		return false
 	}
 	return e.finishPair(ep)
+}
+
+// ioctlFioclex and ioctlFionclex are FIOCLEX and FIONCLEX from
+// <asm-generic/ioctls.h> (x86_64 and arm64 use the generic values;
+// golang.org/x/sys/unix does not export them). The kernel handles both in
+// do_vfs_ioctl before any driver sees the request, so they behave identically
+// for every descriptor type.
+const (
+	ioctlFionclex = 0x5450
+	ioctlFioclex  = 0x5451
+)
+
+// applyIoctlFdState performs the fd-table side effect of the only ioctl
+// requests that change tracked descriptor state: FIOCLEX sets and FIONCLEX
+// clears close-on-exec, exactly like fcntl F_SETFD. Without this, an fd marked
+// via FIOCLEX kept its name across execve (fdTracker.dropOnExec keeps entries
+// whose close-on-exec is known clear) and one cleared via FIONCLEX was dropped.
+// Every other request, and any failed call, leaves the fd table untouched. It
+// reports whether ep is still alive, like applyFcntlFdState.
+func (e *eventLoop) applyIoctlFdState(ep *event.Pair, ioctlEv *types.FcntlEvent, fd int32) bool {
+	var cloexec int32
+	switch ioctlEv.Cmd {
+	case ioctlFioclex:
+		cloexec = syscall.O_CLOEXEC
+	case ioctlFionclex:
+		cloexec = 0
+	default:
+		return true
+	}
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed ioctl exit event")
+		return false
+	}
+	if retEvent.Ret != 0 {
+		// A negative errno changed nothing; any other value is not a return
+		// FIOCLEX/FIONCLEX can produce, so do not trust the event either.
+		return true
+	}
+	fdFile, ok := ep.File.(*file.FdFile)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed ioctl file event")
+		return false
+	}
+	// Same translation as F_SETFD: the descriptor flag lives in the model's
+	// O_CLOEXEC bit; promote a procfs-resolved entry into the fd table so the
+	// exec-time drop and later rows see the new state.
+	fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
+	ep.File = fdFile
+	e.fdState().set(fd, ioctlEv.Pid, fdFile)
+	return true
 }
 
 // applyFcntlFdState performs the fd-table side effects of one fcntl command.
