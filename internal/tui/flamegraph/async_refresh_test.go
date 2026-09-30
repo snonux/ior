@@ -375,10 +375,13 @@ func TestViewCacheKeyTracksFieldOrder(t *testing.T) {
 	}
 }
 
-// TestViewTracksFieldOrderAfterSetLiveTrie is the regression test for keying
-// the cache on fieldIndex: switching to a trie with an unknown field order
-// prepends that order to fieldPresets and keeps fieldIndex at 0, and with
-// lastVersion 0 and no snapshot on both sides nothing else in the key moves.
+// TestViewTracksFieldOrderAfterSetLiveTrie guards the custom-preset case of a
+// session swap: switching to a trie with an unknown field order prepends that
+// order to fieldPresets and keeps fieldIndex at 0, and with lastVersion 0 and
+// no snapshot on both sides the only key component that moves is the refresh
+// generation (SetLiveTrie calls invalidateRefresh). The test therefore pins
+// the generation, not fieldIndex; fieldIndex in the key is pinned only by
+// TestViewCacheKeyTracksFieldOrder.
 func TestViewTracksFieldOrderAfterSetLiveTrie(t *testing.T) {
 	m := NewModel(coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count"))
 	m.width = 240
