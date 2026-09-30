@@ -210,8 +210,9 @@ func TestViewCacheShowsSearchFooterWhenPromptOpens(t *testing.T) {
 // nothing. A per-View strings.Join of the order label (the pre-fix behaviour)
 // adds an allocation and fails this test. It does not catch an unconditional
 // textinput.Value() read: Value() of an empty input does not allocate, so
-// that cost only shows with typed text and is covered by the
-// searchInput-only-while-open test's behaviour, not by a count here.
+// that cost only shows with typed text. No test pins that optimisation
+// (TestViewCacheShowsSearchInputOnlyWhileOpen checks the rendered output,
+// which is identical either way), so reverting it would go unnoticed.
 func TestViewCacheHitDoesNotAllocate(t *testing.T) {
 	trie := newNamedSessionTrie("steady")
 	m := NewModel(trie)
