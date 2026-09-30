@@ -103,6 +103,13 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 // harmless. A failed read (NULL signal) reports 0 rather than guessing - the
 // fd entries then linger until LRU trimming, the same outcome as a record lost
 // to ring-buffer backpressure.
+//
+// Verification status: the field path is exercised end to end by the
+// integration scenario thread-exit-keeps-fd (integrationtests) on the 7.2
+// development host, whose tracepoint has group_dead. The signal->live
+// fallback compiles to valid CO-RE relocations but has not been run on a
+// kernel lacking the field; its correctness rests on the do_exit() ordering
+// argued above.
 static __always_inline __u32
 ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
     struct task_struct *task;
@@ -118,12 +125,45 @@ ior_exit_group_dead(struct trace_event_raw_sched_process_exit *ctx) {
     return BPF_CORE_READ(signal, live.counter) == 0 ? 1 : 0;
 }
 
+// ior_process_exit_in_scope decides whether an exit record is emitted and
+// fills *group_dead for the records that are. It is filter() with one
+// exception: a group-dead exit bypasses the TID_FILTER dimension, while still
+// honouring PID_FILTER and the exclusion of ior itself.
+//
+// Why the exception: under -tid, filter() only admits the traced thread, but
+// the thread that ends the group - the only record userspace evicts the
+// process's fd entries on - is usually another one. Without the bypass a
+// -tid run would never evict its process's descriptors at all, a regression
+// against the old evict-on-every-exit behaviour that did fire for the traced
+// thread. The price, only under -tid without -pid, is one record per process
+// death system-wide; userspace eviction of a pid it never tracked is O(1),
+// and dropping the dying thread's tid-keyed state is correct for any tid.
+// group_dead is only read once the pid dimension has passed, so -pid runs pay
+// no extra cost for the exits of unrelated processes.
+static __always_inline int
+ior_process_exit_in_scope(struct trace_event_raw_sched_process_exit *ctx,
+                          __u32 *pid, __u32 *tid, __u32 *group_dead) {
+    if (!filter(pid, tid)) {
+        *group_dead = ior_exit_group_dead(ctx);
+        return 1;
+    }
+    // Rejected by the pid dimension (or ior itself): no bypass. filter() only
+    // consults TID_FILTER after both pid checks passed, so with no TID_FILTER
+    // the rejection was necessarily a pid one.
+    if (*pid == IOR_PID_FILTER || -1 == TID_FILTER)
+        return 0;
+    if (-1 != PID_FILTER && *pid != PID_FILTER)
+        return 0;
+    *group_dead = ior_exit_group_dead(ctx);
+    return *group_dead;
+}
+
 SEC("tracepoint/sched/sched_process_exit")
 int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
-    __u32 pid, tid;
+    __u32 pid, tid, group_dead;
     struct process_exit_event *ev;
 
-    if (filter(&pid, &tid))
+    if (!ior_process_exit_in_scope(ctx, &pid, &tid, &group_dead))
         return 0;
 
     ev = bpf_ringbuf_reserve(&event_map, sizeof(struct process_exit_event), 0);
@@ -138,7 +178,7 @@ int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
-    ev->group_dead = ior_exit_group_dead(ctx);
+    ev->group_dead = group_dead;
     // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
     ev->reserved = 0;
 

@@ -424,9 +424,10 @@ func (r *commResolver) refreshStaleComm(tid uint32) {
 // The record fires per *task*, and the comm cache is keyed per task, so
 // evicting exactly ev.Tid is precise rather than degraded: a thread exiting
 // inside a still-living multithreaded process drops that thread's name only,
-// which is the very name that has just become meaningless. (The sibling
-// fdTracker eviction cannot be that precise, because its key is the tgid - see
-// handleProcessExitEvent.)
+// which is the very name that has just become meaningless. This runs on every
+// exit record; the sibling fdTracker eviction does not, because its key is the
+// tgid: it runs only on the record flagged group_dead (the last thread of the
+// process exited) - see handleProcessExitEvent.
 //
 // A lookup already in flight for the tid is retired via evictedLookups rather
 // than by touching the entry, because the entry is about to stop existing; see

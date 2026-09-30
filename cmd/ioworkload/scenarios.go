@@ -43,6 +43,7 @@ var scenarios = map[string]func() error{
 	"socket-introspection":          socketIntrospection,
 	"pipe-basic":                    pipeBasic,
 	"pipe2-basic":                   pipe2Basic,
+	"thread-exit-keeps-fd":          threadExitKeepsFd,
 	"eventfd-basic":                 eventfdBasic,
 	"eventfd2-basic":                eventfd2Basic,
 	"fd-from-air-eventfd-users":     fdFromAirEventfdUsers,
