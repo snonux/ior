@@ -35,9 +35,23 @@ type animTickMsg struct {
 // Without them every keystroke after '/' hit the cache and the typed text stayed
 // invisible until Enter.
 //
-// fieldOrder is the toolbar's o:order(...) label itself rather than fieldIndex:
-// SetLiveTrie can prepend an unknown field order to fieldPresets and keep the
-// index at 0, so the index alone would miss that the label changed.
+// generation is Model.refreshGeneration. SetLiveTrie restarts the snapshot
+// version at 0, so a new session's trie can reach the same version, frame count
+// and status message as the previous session's cached render while showing
+// different frame names; without the generation that render would be served
+// stale whenever no View ran between the swap and the first refresh (the
+// dashboard attaches a trie and loads it inside one Update). Every state change
+// that invalidates in-flight refreshes (SetLiveTrie, baseline/order/metric
+// resets) advances it.
+//
+// fieldIndex selects the toolbar's o:order(...) label. SetLiveTrie may prepend
+// an unknown field order to fieldPresets and keep the index at 0, so the index
+// alone is ambiguous across sessions; generation disambiguates it, and it is
+// the only place fieldPresets changes. Keying on the index instead of the
+// joined label keeps the cache-hit path free of a strings.Join per View.
+//
+// searchInput and searchCursor are only read while the search prompt is open
+// (see currentViewCacheKey): the footer renders them only then.
 // hasSnapshot decides whether an empty frame list renders the "snapshot has no
 // visible frames" panel; clearSnapshotState drops the snapshot without touching
 // lastVersion, so neither is implied by the other key fields.
@@ -56,7 +70,8 @@ type flameViewCacheKey struct {
 	zoomPath      string
 	countField    string
 	heightField   string
-	fieldOrder    string
+	fieldIndex    int
+	generation    uint64
 	hasSnapshot   bool
 	searchActive  bool
 	showHelp      bool
@@ -590,8 +605,18 @@ func (m *Model) renderViewContent() string {
 // output. If any of these differ between successive View() invocations, the
 // cache misses and the content is rebuilt. Any rendered input left out of the
 // key is served stale from the cache, which is why the live search input value
-// and cursor are included alongside the committed query.
+// and cursor are included alongside the committed query, and why the refresh
+// generation separates one live-trie session from the next.
 func (m *Model) currentViewCacheKey() flameViewCacheKey {
+	// The input value and cursor only reach the screen through the search
+	// footer, so they are read only while the prompt is open. Closing the
+	// prompt clears the input and flips searchActive, which changes the key;
+	// reading textinput.Value() on every idle View allocated for nothing.
+	var searchInput string
+	var searchCursor int
+	if m.search.isActive() {
+		searchInput, searchCursor = m.search.inputValue(), m.search.inputCursor()
+	}
 	return flameViewCacheKey{
 		version:       m.lastVersion,
 		selectedIdx:   m.sel.selected(),
@@ -601,13 +626,14 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 		matchCount:    len(m.search.matches()),
 		visibleCount:  len(m.search.visibleSet()),
 		searchQuery:   m.search.query(),
-		searchInput:   m.search.inputValue(),
-		searchCursor:  m.search.inputCursor(),
+		searchInput:   searchInput,
+		searchCursor:  searchCursor,
 		statusMessage: m.statusMessage,
 		zoomPath:      m.zoom.path(),
 		countField:    m.countField,
 		heightField:   m.heightField,
-		fieldOrder:    m.currentFieldPresetLabel(),
+		fieldIndex:    m.fieldIndex,
+		generation:    m.refreshGeneration,
 		hasSnapshot:   m.snapshot != nil,
 		searchActive:  m.search.isActive(),
 		showHelp:      m.showHelp,
