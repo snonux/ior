@@ -204,9 +204,12 @@ func TestTraceInfraSetupsRejectAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 func TestSharedTraceInfraSetupValidatesFilterBeforeBPFSetup(t *testing.T) {
 	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
 	guardIndex, validationCall := exactValidationGuard(t, decl)
-	bpfSetupPos := firstCallPosition(decl, "setupBPFModule")
+	// setupTraceInfraBPF is where setupBPFModule runs (pinned by
+	// TestTraceSetupPassesSessionHooksExplicitly), so its call site is the
+	// point the kernel is first touched.
+	bpfSetupPos := firstCallPosition(decl, "setupTraceInfraBPF")
 	if !bpfSetupPos.IsValid() {
-		t.Fatal("shared trace setup no longer calls setupBPFModule")
+		t.Fatal("shared trace setup no longer calls setupTraceInfraBPF")
 	}
 	guardPos := decl.Body.List[guardIndex].Pos()
 	if guardPos >= bpfSetupPos {
@@ -274,8 +277,9 @@ func TestTraceInfraEntryPointsUseSharedSetup(t *testing.T) {
 // collaborators go once the starter has handed them to the trace run: the
 // run passes its hooks to setup, setup gives the probe publisher to BPF setup
 // (which registers the probe manager with it) and the shutdown reporter to
-// the infra's progress wiring. setupBPFModule cannot run unprivileged, so the
-// wiring is checked structurally; the behaviour on either side is pinned by
+// the infra's progress wiring (both inside its BPF half, setupTraceInfraBPF).
+// setupBPFModule cannot run unprivileged, so the wiring is checked
+// structurally; the behaviour on either side is pinned by
 // TestTuiTraceStarterHandsRequestBindingsDownToSetup and
 // TestNewTraceInfraReportsShutdownProgress.
 func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
@@ -283,7 +287,11 @@ func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
 	assertCallArguments(t, singleBareCall(t, run, "setupTraceInfra"),
 		[]string{"parentCtx", "cfg", "started", "hooks", "logln"})
 
-	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	shared, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	assertCallArguments(t, singleBareCall(t, shared, "setupTraceInfraBPF"),
+		[]string{"parentCtx", "cfg", "hooks", "logln", "warnSetup"})
+
+	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
 	bpfSetup := singleBareCall(t, setup, "setupBPFModule")
 	// The session context goes to BPF setup too, so a restart that cancels
 	// this session stops its load/attach instead of letting it publish late.

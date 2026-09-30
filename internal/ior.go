@@ -363,87 +363,125 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 }
 
 // tuiTraceStarterFromRunTrace returns a runtime.TraceStarter that drives a
-// full BPF trace session from within the TUI lifecycle. It derives the
-// session config from the request's filter, allocates per-restart state via
-// buildTUIRuntime, wires the event loop via makeTUIEventLoopConfigurer, and
-// hands the request's bindings and shutdown reporter explicitly down to setup
-// (traceSetupHooks). It starts the trace in a goroutine, signalling
-// the TUI once BPF probes are attached (via startedCh) or returning an error
-// if startup fails.
-//
-// A dedicated done channel is closed by a defer when the outer function
-// returns for any reason (ctx cancellation, successful start, or startup
-// error).  The trace goroutine selects on both errCh and done when delivering
-// its result, so it can always exit regardless of which exit arm the outer
-// caller took.  A result that arrives on the done arm has no caller left to
-// return it to, so it goes to reportLateTraceError instead of being dropped -
-// unless the context was cancelled, which means the caller asked for the stop.
+// full BPF trace session from within the TUI lifecycle; each start request is
+// handled by startTUITrace.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
 	startTrace traceRunFunc,
 ) runtime.TraceStarter {
 	return func(ctx context.Context, req runtime.TraceRequest) error {
-		shutdownReporter := req.ShutdownReporter
-		if shutdownReporter != nil && !shutdownReporter.Claim() {
-			return context.Canceled
+		return startTUITrace(ctx, req, baseCfg, startTrace)
+	}
+}
+
+// startTUITrace starts one TUI trace session. It claims the request's
+// shutdown reporter, derives the session config from the request's filter,
+// allocates per-restart state via buildTUIRuntime, wires the event loop via
+// makeTUIEventLoopConfigurer, and hands the request's bindings and shutdown
+// reporter explicitly down to setup (traceSetupHooks). The trace itself runs
+// in the background (tuiTraceLaunch.start); from then on that goroutine owns
+// completing the shutdown reporter, while every earlier return completes it
+// here.
+func startTUITrace(
+	ctx context.Context,
+	req runtime.TraceRequest,
+	baseCfg flags.Config,
+	startTrace traceRunFunc,
+) error {
+	shutdownReporter := req.ShutdownReporter
+	if shutdownReporter != nil && !shutdownReporter.Claim() {
+		return context.Canceled
+	}
+	bpf.SetLoggerCbs(bpf.Callbacks{Log: func(int, string) {}})
+	backgroundOwnsCompletion := false
+	defer func() {
+		if !backgroundOwnsCompletion {
+			shutdownReporter.Complete()
 		}
-		bpf.SetLoggerCbs(bpf.Callbacks{Log: func(int, string) {}})
-		backgroundOwnsCompletion := false
-		defer func() {
-			if !backgroundOwnsCompletion {
-				shutdownReporter.Complete()
-			}
-		}()
+	}()
 
-		cfg := traceConfigForRequest(baseCfg, req)
+	cfg := traceConfigForRequest(baseCfg, req)
+	rt, err := buildTUIRuntime(cfg, req.Bindings)
+	if err != nil {
+		return err
+	}
+	configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(cfg, rt, req.Bindings)
+	launch := tuiTraceLaunch{
+		cfg:                        cfg,
+		rt:                         rt,
+		configureEl:                configureEl,
+		unregisterLiveFilterSetter: unregisterLiveFilterSetter,
+		hooks:                      traceSetupHooks{probes: req.Bindings, shutdown: shutdownReporter},
+		startTrace:                 startTrace,
+	}
+	backgroundOwnsCompletion = true
+	return launch.start(ctx)
+}
 
-		rt, err := buildTUIRuntime(cfg, req.Bindings)
-		if err != nil {
-			return err
-		}
-		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(cfg, rt, req.Bindings)
-		hooks := traceSetupHooks{probes: req.Bindings, shutdown: shutdownReporter}
-		startedCh := make(chan struct{})
-		// errCh carries at most one result from the trace goroutine to the
-		// outer select below.  done is closed on return so the goroutine can
-		// always exit even when the outer caller already left via startedCh or
-		// ctx.Done() and nobody is draining errCh.
-		errCh := make(chan error)
-		done := make(chan struct{})
-		defer close(done)
+// tuiTraceLaunch bundles everything one background TUI trace run needs.
+type tuiTraceLaunch struct {
+	cfg                        flags.Config
+	rt                         *tuiRuntime
+	configureEl                func(*eventLoop)
+	unregisterLiveFilterSetter func()
+	hooks                      traceSetupHooks
+	startTrace                 traceRunFunc
+}
 
-		backgroundOwnsCompletion = true
-		go func() {
-			defer shutdownReporter.Complete()
-			err := startTrace(ctx, cfg, startedCh, configureEl, hooks)
-			unregisterLiveFilterSetter()
-			// Deliver the result only if the caller is still selecting.
-			// done is closed when the outer function returns, so the goroutine
-			// will always proceed through this select and never block.
-			select {
-			case errCh <- err:
-			case <-done:
-				reportLateTraceError(ctx, rt, err)
-			}
-		}()
+// start runs the trace in a goroutine and waits until the BPF probes are
+// attached (startedCh), startup fails, or ctx is cancelled.
+//
+// A dedicated done channel is closed by a defer when start returns for any
+// reason (ctx cancellation, successful start, or startup error). The trace
+// goroutine selects on both errCh and done when delivering its result, so it
+// can always exit regardless of which exit arm start took.
+func (l tuiTraceLaunch) start(ctx context.Context) error {
+	startedCh := make(chan struct{})
+	// errCh carries at most one result from the trace goroutine to the select
+	// below. done is closed on return so the goroutine can always exit even
+	// when start already left via startedCh or ctx.Done() and nobody is
+	// draining errCh.
+	errCh := make(chan error)
+	done := make(chan struct{})
+	defer close(done)
 
-		select {
-		case <-ctx.Done():
+	go l.run(ctx, startedCh, errCh, done)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-startedCh:
+		return nil
+	case err := <-errCh:
+		// A stop that races the failure leaves both this arm and
+		// ctx.Done() ready, and Go picks between them at random, so this
+		// one has to apply the same rule: the user asked for the trace to
+		// end. Returning the failure instead raises TracingErrorMsg
+		// against the *next* session, clearing its attach spinner and
+		// showing it an error the previous trace produced.
+		if ctx.Err() != nil {
 			return ctx.Err()
-		case <-startedCh:
-			return nil
-		case err := <-errCh:
-			// A stop that races the failure leaves both this arm and
-			// ctx.Done() ready, and Go picks between them at random, so this
-			// one has to apply the same rule: the user asked for the trace to
-			// end. Returning the failure instead raises TracingErrorMsg
-			// against the *next* session, clearing its attach spinner and
-			// showing it an error the previous trace produced.
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
 		}
+		return err
+	}
+}
+
+// run is the trace goroutine body. It completes the shutdown reporter when it
+// exits. A result that arrives after start has returned (the done arm) has no
+// caller left to return it to, so it goes to reportLateTraceError instead of
+// being dropped - unless the context was cancelled, which means the caller
+// asked for the stop.
+func (l tuiTraceLaunch) run(ctx context.Context, startedCh chan<- struct{}, errCh chan<- error, done <-chan struct{}) {
+	defer l.hooks.shutdown.Complete()
+	err := l.startTrace(ctx, l.cfg, startedCh, l.configureEl, l.hooks)
+	l.unregisterLiveFilterSetter()
+	// Deliver the result only if start is still selecting. done is closed
+	// when start returns, so the goroutine will always proceed through this
+	// select and never block.
+	select {
+	case errCh <- err:
+	case <-done:
+		reportLateTraceError(ctx, l.rt, err)
 	}
 }
 
@@ -858,6 +896,9 @@ func setupTraceInfra(
 // raw, and headless Parquet traces. The factory preserves the one intentional
 // mode difference: regular traces wire the syscall aggregate source, while
 // headless Parquet has no aggregate sink and leaves that source unwired.
+// The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
+// event-loop build and the start signal stay in this body because the
+// ior_setup_test.go structural tests pin their relative order here.
 func setupTraceInfraWithEventLoop(
 	parentCtx context.Context,
 	cfg flags.Config,
@@ -875,28 +916,15 @@ func setupTraceInfraWithEventLoop(
 		return nil, err
 	}
 
-	// Teardown errors must stay visible in every mode: the mode-dependent
-	// logln is a no-op in TUI mode, which previously silently discarded
-	// probe-detach failures (audit domain-10 F2).
-	logTeardown := newLogger(true)
 	// Non-fatal setup degradations are collected and replayed as event-loop
 	// warnings once output is wired (see setupWarnings).
 	warnings := &setupWarnings{}
 	warnSetup := warnings.add
 
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	infra, bpfModule, err := setupTraceInfraBPF(parentCtx, cfg, hooks, logln, warnSetup)
 	if err != nil {
 		return nil, err
 	}
-
-	infra := newTraceInfra(mgr, hooks.shutdown, logln)
-	// The BPF side is released as one unit in closeTraceInfra's canonical
-	// order (ring buffer, probes, bindings, module, signal handler), which is
-	// why it is one cleanup rather than one per resource. Registering it here
-	// is what detaches the probes on every later abort (audit domain-10 F3).
-	infra.onClose(func() {
-		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
-	})
 
 	if err := infra.setupRuntime(parentCtx, cfg, bpfModule, started, logln); err != nil {
 		infra.Close()
@@ -918,6 +946,38 @@ func setupTraceInfraWithEventLoop(
 	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
 	signalTraceStarted(started)
 	return infra, nil
+}
+
+// setupTraceInfraBPF loads the BPF module, attaches the probes (publishing the
+// probe manager to hooks.probes), and returns the new traceInfra that owns
+// their release, with its shutdown progress wired to hooks.shutdown. Status
+// output goes to logln and non-fatal degradations to warnSetup. On failure
+// nothing is left attached and no infra is returned.
+func setupTraceInfraBPF(
+	parentCtx context.Context,
+	cfg flags.Config,
+	hooks traceSetupHooks,
+	logln func(...any),
+	warnSetup func(...any),
+) (*traceInfra, *bpf.Module, error) {
+	// Teardown errors must stay visible in every mode: the mode-dependent
+	// logln is a no-op in TUI mode, which previously silently discarded
+	// probe-detach failures (audit domain-10 F2).
+	logTeardown := newLogger(true)
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	infra := newTraceInfra(mgr, hooks.shutdown, logln)
+	// The BPF side is released as one unit in closeTraceInfra's canonical
+	// order (ring buffer, probes, bindings, module, signal handler), which is
+	// why it is one cleanup rather than one per resource. Registering it here
+	// is what detaches the probes on every later abort (audit domain-10 F3).
+	infra.onClose(func() {
+		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
+	})
+	return infra, bpfModule, nil
 }
 
 // newTraceInfra returns the still-empty infrastructure of one run, with its

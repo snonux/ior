@@ -307,17 +307,21 @@ func TestAttachSyscallProbesWithNilLoggerFallsBackToStderr(t *testing.T) {
 // --- trace setup wiring ---
 
 // TestSetupTraceInfraWiresConsoleSinks pins how setupTraceInfraWithEventLoop
-// connects the sinks exercised above. The function cannot run unprivileged
-// (setupBPFModule fails on rlimit first), so, like the ordering tests in
-// ior_setup_test.go, this checks its structure: BPF setup receives the
-// mode-dependent logln as status, the setup-warning collector as warn and the
-// always-on logger as teardown; the event-loop factory receives the same
-// collector; and the loop is wired to logln and the collected warnings right
-// after it is stored, before the start signal.
+// (with its BPF half, setupTraceInfraBPF) connects the sinks exercised above.
+// The functions cannot run unprivileged (setupBPFModule fails on rlimit
+// first), so, like the ordering tests in ior_setup_test.go, this checks their
+// structure: BPF setup receives the mode-dependent logln as status, the
+// setup-warning collector as warn and the always-on logger as teardown; the
+// event-loop factory receives the same collector; and the loop is wired to
+// logln and the collected warnings right after it is stored, before the start
+// signal.
 func TestSetupTraceInfraWiresConsoleSinks(t *testing.T) {
 	decl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	bpfDecl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
+	assertCallArguments(t, singleBareCall(t, decl, "setupTraceInfraBPF"),
+		[]string{"parentCtx", "cfg", "hooks", "logln", "warnSetup"})
 
-	bpfCalls := callsNamed(decl, "setupBPFModule")
+	bpfCalls := callsNamed(bpfDecl, "setupBPFModule")
 	if len(bpfCalls) != 1 || len(bpfCalls[0].Args) != 4 {
 		t.Fatal("shared trace setup must call setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{...}) once")
 	}
