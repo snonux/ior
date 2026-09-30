@@ -108,7 +108,11 @@ sequences. When `-plain` or `ior collapsed` writes to a terminal, control charac
 (ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible or bidi format characters
 are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
 Backslashes are not doubled, so this display is for reading only. When stdout is piped or
-redirected, both commands write the exact traced bytes for machine consumers.
+redirected, both commands write the exact traced bytes for machine consumers, with one
+exception: `ior collapsed` always writes a line feed or carriage return inside a frame as
+`\x0a` or `\x0d`, because the collapsed format is one `frame;frame count` stack per line and
+a raw line break in a traced path would forge an extra weighted stack. A `;` in a traced
+name splits it into frames exactly as the TUI flamegraph does.
 
 That terminal check is `-escape=auto`, the default. It cannot see a terminal at the end
 of a pipe, so `ior -plain | grep`, `| tee` or `| less -R` (and `ior collapsed ... | less -R`)

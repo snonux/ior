@@ -26,8 +26,10 @@ const hexDigits = "0123456789abcdef"
 // a literal backslash is not doubled, so a name that already contains the
 // four characters `\x1b` prints the same as one containing ESC. That keeps
 // clean names byte-identical (and Escape idempotent); consumers that need
-// the exact bytes read ior's piped (non-terminal) output, which is never
-// escaped.
+// the exact bytes read ior's piped (non-terminal) output, which is not
+// escaped under the default -escape=auto (except that `ior collapsed`
+// always encodes line breaks inside a frame, which are structural in its
+// line-based format).
 //
 // Escaping only adds backslashes, letters and hex digits, none of which is a
 // CSV delimiter, quote or line break, so CSV-quoting an escaped field
