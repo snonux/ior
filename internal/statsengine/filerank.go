@@ -69,7 +69,10 @@ func (r *fileRanker) Add(pair *event.Pair) {
 	}
 
 	path := pair.File.Name()
-	if path == "" || path == "N:file" {
+	// A nameless file or one whose name is the no-file placeholder has no
+	// path the Files tab could filter on (see event.NoFileName), so it is
+	// not ranked.
+	if path == "" || path == event.NoFileName {
 		return
 	}
 

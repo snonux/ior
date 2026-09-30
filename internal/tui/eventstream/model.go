@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
@@ -886,6 +887,10 @@ func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 // setStringCellFilter sets next's Comm, Syscall or File filter to exactly the
 // selected string cell's value and reports the dimension it set; ok is false
 // for a non-string column or a blank cell (a blank value constrains nothing).
+// A File cell showing event.NoFileName counts as blank: the placeholder is
+// display text for "no file", while the global filter sees such a live pair's
+// file as "" (globalfilter pairCandidate.FileValue), so ^N:file$ would keep
+// the buffered placeholder rows yet reject every new event.
 //
 // The pattern is globalfilter.ExactPattern (^value$), matching the dashboard
 // row filters: Enter on "read" must not also admit readv/pread64, on
@@ -905,6 +910,9 @@ func setStringCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dime
 		value, target, dim = ev.Syscall, &next.Syscall, presenter.DimSyscall
 	case streamColFile:
 		value, target, dim = ev.FileName, &next.File, presenter.DimFile
+		if value == event.NoFileName {
+			return dim, false
+		}
 	default:
 		return dim, false
 	}
