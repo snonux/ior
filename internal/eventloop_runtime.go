@@ -423,15 +423,23 @@ func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
 // per-tid previous-exit timestamp but deliberately does not advance it - that
 // happens in finalizeTracepointPair, so the gap keeps being measured from the
 // previously *emitted* pair rather than from a filtered-out one.
+//
+// Both key the baseline by the EXIT's tid. For almost every pair that is the
+// enter's tid as well; the exception is an execve by a non-leader thread,
+// which returns under the leader's tid (de_thread). rekeyExecCaller moves the
+// baseline to that tid together with the parked enter, so the execve row still
+// measures its gap from the caller's previous syscall and the new program's
+// first syscall measures its gap from the execve's return, with nothing left
+// behind under the vanished pre-exec tid.
 func (e *eventLoop) applyDerivedPairValues(ep *event.Pair) {
 	applyRetBytes(ep)
 	applyAddressSpaceBytes(ep)
 	applyRequestedSleepNs(ep)
-	ep.CalculateDurations(e.pairs.prevTime(ep.EnterEv.GetTid()))
+	ep.CalculateDurations(e.pairs.prevTime(ep.ExitEv.GetTid()))
 }
 
 func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
-	e.pairs.setPrevTime(ep.EnterEv.GetTid(), ep.ExitEv.GetTime())
+	e.pairs.setPrevTime(ep.ExitEv.GetTid(), ep.ExitEv.GetTime())
 	e.freezePairForEmission(ep)
 }
 

@@ -80,9 +80,10 @@ const (
 	ptraceEventSize            = 48
 	perfOpenEventSize          = 56
 	// process_exec_event is not a syscall event; it is the control record
-	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
-	// trailing padding, so kernel and binary.Write payloads share one size.
-	processExecEventSize = 40
+	// emitted by sched:sched_process_exec. 4+4+8+4+4+16+4(old_tid)+
+	// 4(reserved) = 48 bytes; the explicit reserved word leaves no trailing
+	// padding, so kernel and binary.Write payloads share one size.
+	processExecEventSize = 48
 	// process_exit_event is the sibling control record emitted by
 	// sched:sched_process_exit. 4+4+8+4+4+4(group_dead)+4(reserved) = 32
 	// bytes; the explicit reserved word leaves no trailing padding, so kernel
@@ -908,7 +909,9 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 }
 
 // NewProcessExecEventFast decodes the sched:sched_process_exec control record
-// carrying the post-exec task comm.
+// carrying the post-exec task comm and the caller's pre-exec tid (OldTid). A
+// payload shorter than the current layout (e.g. the pre-old_tid 40-byte
+// record) is rejected rather than decoded with OldTid defaulting to 0.
 func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	if len(raw) < processExecEventSize {
 		return nil
@@ -923,6 +926,8 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	copy(p.Comm[:], raw[24:40])
+	p.OldTid = binary.LittleEndian.Uint32(raw[40:44])
+	p.Reserved = binary.LittleEndian.Uint32(raw[44:48])
 	return p
 }
 

@@ -22,17 +22,33 @@
  * single goroutine, so the update is always applied before any post-exec
  * syscall event of that task is turned into a row.
  *
- * Cost: one small (40-byte) record per successful execve, versus the
+ * Cost: one small (48-byte) record per successful execve, versus the
  * alternative of stamping bpf_get_current_comm() onto every single syscall
  * event, which would add 16 bytes to every ring-buffer record on a path where
  * ring-buffer pressure is already a tracked concern (ringbuf_drop_map).
+ *
+ * A non-leader exec also changes the task's tid (de_thread() hands it the
+ * leader's), and the execve it is still inside entered under the old one.
+ * The handler therefore moves the in-flight enter state to the new tid
+ * (ior_on_exec_tid_change in filter.c) and reports the old tid in the record,
+ * so userspace can re-key its parked execve enter the same way. The move runs
+ * for out-of-scope tasks too (except ior itself): under -tid the traced
+ * thread's exec lands on the filtered leader tid, and its entry must still be
+ * reclaimed. For every exec that keeps its tid the move returns after one
+ * compare.
  */
 SEC("tracepoint/sched/sched_process_exec")
 int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
-    __u32 pid, tid;
+    // Zero-initialised: filter() leaves tid unwritten on its early ior-self
+    // return.
+    __u32 pid = 0, tid = 0;
     struct process_exec_event *ev;
+    int in_scope = !filter(&pid, &tid);
 
-    if (filter(&pid, &tid))
+    if (pid == IOR_PID_FILTER)
+        return 0;
+    ior_on_exec_tid_change((__u32)ctx->old_pid, tid, in_scope);
+    if (!in_scope)
         return 0;
 
     ev = bpf_ringbuf_reserve(&event_map, sizeof(struct process_exec_event), 0);
@@ -51,6 +67,9 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     // the field needs no memset first; see "String fields in ring-buffer
     // records" in filter.c.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+    ev->old_tid = (__u32)ctx->old_pid;
+    // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
+    ev->reserved = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

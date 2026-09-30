@@ -17,7 +17,8 @@ import (
 // real accounting functions out of filter.c, compile them with the host C
 // compiler against simulated BPF maps, and drive them through the scenarios
 // that matter: sampling, full maps, failed replacements, clone-child and
-// mismatched exits, untimed counts and min/max seeding. Each scenario is also
+// mismatched exits, untimed counts, min/max seeding and the enter-state move
+// of a non-leader execve (ior_on_exec_tid_change). Each scenario is also
 // run against mutated sources, so the suite is shown to catch the
 // regressions it exists for.
 
@@ -35,13 +36,15 @@ var accountingFunctions = []string{
 	"ior_stateless_exit_emits",
 	"ior_on_syscall_enter",
 	"ior_on_syscall_exit",
+	"ior_on_exec_tid_change",
 }
 
 // accountingHarnessTemplate provides the BPF helpers the functions use as a
 // small in-process map simulation. Updates of a new key fail with -E2BIG once
 // the map holds cap entries (as a full BPF hash does); "fail 1" makes every
 // update of the enter-state map fail with -EBUSY, including replacements.
-// Every command prints exactly one line.
+// "exectid old new scope" runs the sched_process_exec move of a non-leader
+// exec (ior_on_exec_tid_change). Every command prints exactly one line.
 const accountingHarnessTemplate = `#include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -163,6 +166,9 @@ int main(void) {
             printf("emit=%%d\n", ior_on_syscall_enter(a, b, c));
         } else if (!strcmp(cmd, "exit") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
             printf("emit=%%d\n", ior_on_syscall_exit(a, b, ret, d));
+        } else if (!strcmp(cmd, "exectid") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
+            ior_on_exec_tid_change(a, b, c);
+            printf("ok\n");
         } else if (!strcmp(cmd, "agg") && scanf("%%llu", &a) == 1) {
             print_aggregate(a);
         } else if (!strcmp(cmd, "state") && scanf("%%llu", &a) == 1) {
@@ -270,6 +276,50 @@ var accountingScenarios = []accountingScenario{
 		{"enter 1 100 9000", accEmit0}, {"exit 1 100 0 8000", accEmit0},
 		{"agg 100", "count=2 errors=0 total=2 min=1 max=1 hist=2,0,0,0,0,0,0,0"},
 	}},
+	// A non-leader execve enters under the caller's tid (5) and returns
+	// under the leader's (1): sched_process_exec moves the entry, so the exit
+	// pairs with its own start time and sampling decision, overwriting
+	// whatever the dead leader left behind, and nothing stays under 5.
+	{name: "non-leader exec moves the enter state", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"enter 1 200 0", accEmit1},
+		{"enter 5 100 1000", accEmit0}, {"exectid 5 1 1", accOK},
+		{"state 5", "nostate"}, {"state 1", "state id=100 emit=0"},
+		{"exit 1 100 0 6000", accEmit0}, {"state 1", "nostate"},
+		{"agg 100", "count=1 errors=0 total=5000 min=5000 max=5000 hist=0,1,0,0,0,0,0,0"},
+		{"enter 6 200 1000", accEmit1}, {"exectid 6 1 1", accOK},
+		{"exit 1 200 0 6000", accEmit1}, {"agg 200", accAggNone},
+	}},
+	// An exec that keeps its tid, or one with no in-flight entry, moves
+	// nothing.
+	{name: "exec without a tid change moves nothing", steps: []accountingStep{
+		{"enter 5 200 1000", accEmit1}, {"exectid 5 5 1", accOK}, {"state 5", "state id=200 emit=1"},
+		{"exectid 7 1 1", accOK}, {"state 1", "nostate"}, {"state 7", "nostate"},
+	}},
+	// On a full map the old entry's slot is freed before the insert, so the
+	// move still lands.
+	{name: "exec move on a full map", steps: []accountingStep{
+		{"cap 2", accOK},
+		{"enter 9 200 1000", accEmit1}, {"enter 5 200 1000", accEmit1}, {"exectid 5 1 1", accOK},
+		{"state 1", "state id=200 emit=1"}, {"state 5", "nostate"},
+	}},
+	// The move cannot land: a failed insert falls back like a lost enter
+	// state (untimed count unless rate 1); an out-of-scope new tid (its exit
+	// is filtered) counts a not-emitted invocation here, and leaves an
+	// emitted one to userspace.
+	{name: "exec move fallbacks count once", steps: []accountingStep{
+		{"rate 100 0", accOK}, {"rate 300 4", accOK}, {"rand 0", accOK},
+		{"enter 5 100 1000", accEmit0}, {"exectid 5 1 0", accOK},
+		{"state 5", "nostate"}, {"state 1", "nostate"},
+		{"agg 100", "count=1 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
+		{"enter 5 300 1000", accEmit1}, {"exectid 5 1 0", accOK}, {"agg 300", accAggNone},
+		{"enter 5 100 1000", accEmit0},
+		{"fail 1", accOK}, {"exectid 5 1 1", accOK}, {"fail 0", accOK},
+		{"state 5", "nostate"}, {"state 1", "nostate"},
+		{"agg 100", "count=2 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
+		{"exit 1 100 0 6000", accEmit0},
+		{"agg 100", "count=2 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
+	}},
 	{name: "timed then untimed keeps min", steps: []accountingStep{
 		{"rate 100 0", accOK},
 		{"enter 1 100 1000", accEmit0}, {"exit 1 100 0 51000", accEmit0},
@@ -330,6 +380,26 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 		"zero duration not clamped": {
 			"duration = now > state->start_ns ? now - state->start_ns : 1;",
 			"duration = now > state->start_ns ? now - state->start_ns : 0;",
+		},
+		"exec move skipped": {
+			"    if (old_tid == new_tid)\n        return;",
+			"    if (1)\n        return;",
+		},
+		"exec move keeps the old entry": {
+			"    moved = *state;\n    bpf_map_delete_elem(&syscall_enter_state_map, &old_tid);",
+			"    moved = *state;",
+		},
+		"exec move inserts before deleting": {
+			"    bpf_map_delete_elem(&syscall_enter_state_map, &old_tid);\n\n    if (!in_scope) {",
+			"    if (in_scope && bpf_map_update_elem(&syscall_enter_state_map, &new_tid, &moved, BPF_ANY))\n        return;\n    bpf_map_delete_elem(&syscall_enter_state_map, &old_tid);\n    if (in_scope)\n        return;\n\n    if (!in_scope) {",
+		},
+		"out-of-scope exec move not counted": {
+			"        if (!moved.emit_event)\n            ior_count_untimed_syscall(moved.enter_trace_id);",
+			"        (void)moved;",
+		},
+		"failed exec move not counted": {
+			"        ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));",
+			"        (void)moved;",
 		},
 		"timed check looks at count": {
 			"    if (agg->max_duration_ns)\n        return 1;",

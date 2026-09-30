@@ -6,6 +6,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/types"
 )
 
 // fdTracker holds the traced processes' open file-descriptor tables and a
@@ -725,6 +726,38 @@ func (p *pairTracker) evictTid(tid uint32) {
 	}
 	delete(p.prevTimes, tid)
 	delete(p.prevTimeAges, tid)
+}
+
+// moveExecCaller carries a non-leader exec's per-tid state from the caller's
+// pre-exec tid (oldTid) to the leader tid it continues under (newTid); see
+// eventLoop.rekeyExecCaller for when that happens.
+//
+// Whatever newTid still holds belongs to the dead leader and is dropped first
+// (its own exit record normally evicted it already; this covers a lost one).
+// The enter parked under oldTid is then moved only when it is an exec enter,
+// i.e. the execve the task is still inside: its exit arrives under newTid and
+// must find it there. Any other enter under oldTid is left over from a lost
+// exit record, can never pair any more, and is recycled. The gap baseline
+// moves too, because applyDerivedPairValues and finalizeTracepointPair key it
+// by the exit's tid: the execve row keeps its gap to the caller's previous
+// syscall, and the new program's first syscall measures its gap from the
+// execve's return.
+func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) {
+	p.evictTid(newTid)
+	if pair, ok := p.consume(oldTid); ok && pair != nil {
+		if _, isExec := pair.EnterEv.(*types.ExecEvent); isExec {
+			p.age++
+			p.enters[newTid] = pair
+			p.enterAges[newTid] = p.age
+		} else {
+			pair.Recycle()
+		}
+	}
+	if prev, ok := p.prevTimes[oldTid]; ok {
+		delete(p.prevTimes, oldTid)
+		delete(p.prevTimeAges, oldTid)
+		p.setPrevTime(newTid, prev)
+	}
 }
 
 // pending returns the still-unmatched enter pair for tid without consuming it,
