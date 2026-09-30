@@ -119,6 +119,30 @@ func TestMatchPairErrorsOnlyUsesTheErrnoReturnWindow(t *testing.T) {
 	}
 }
 
+// TestMatchPairErrorsOnlyRejectsKernelRestartCodes covers task aq2: a call a
+// signal interrupted exits with -512/-513/-514/-516, which user space never
+// sees, so errors-only must not show it; a ret filter still matches the raw
+// value so the row can be found explicitly.
+func TestMatchPairErrorsOnlyRejectsKernelRestartCodes(t *testing.T) {
+	pair := samplePair()
+	retEvent := pair.ExitEv.(*types.RetEvent)
+	for _, ret := range []int64{-512, -513, -514, -516} {
+		retEvent.Ret = ret
+		if MatchPair(Filter{ErrorsOnly: true}, pair) {
+			t.Errorf("errors-only filter matched restart code %d", ret)
+		}
+		if !MatchPair(Filter{RetVal: &NumericFilter{Op: OpEq, Value: ret}}, pair) {
+			t.Errorf("ret == %d filter did not match the raw restart code", ret)
+		}
+	}
+	for _, ret := range []int64{-4, -511, -515} {
+		retEvent.Ret = ret
+		if !MatchPair(Filter{ErrorsOnly: true}, pair) {
+			t.Errorf("errors-only filter rejected real errno %d", ret)
+		}
+	}
+}
+
 // renamePair models what handleNameExit builds: File.Name() is the newname and
 // the source path only reaches the filter through Pair.Oldname.
 func renamePair() *event.Pair {

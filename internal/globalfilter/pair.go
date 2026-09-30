@@ -113,5 +113,5 @@ func (p pairCandidate) ReturnValue() int64 {
 }
 
 func (p pairCandidate) ErrorValue() bool {
-	return event.IsErrnoRet(p.ReturnValue())
+	return event.IsErrorRet(p.ReturnValue())
 }

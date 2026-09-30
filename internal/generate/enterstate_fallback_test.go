@@ -25,6 +25,7 @@ import (
 // accountingFunctions are the filter.c functions the harness compiles, in
 // dependency order.
 var accountingFunctions = []string{
+	"ior_is_restart_ret",
 	"ior_is_errno_ret",
 	"ior_histogram_bucket_index",
 	"ior_aggregate_has_timed_samples",
@@ -219,6 +220,24 @@ var accountingScenarios = []accountingScenario{
 		{"agg 300", "count=1 errors=0 total=5000 min=5000 max=5000 hist=0,1,0,0,0,0,0,0"},
 		{"state 1", "nostate"},
 	}},
+	// A signal-interrupted call exits with a kernel restart code that user
+	// space never sees (the call is restarted or becomes -EINTR). It is
+	// aggregated as a call, with its latency, but never as an error; a real
+	// errno such as -EINTR (-4) and the neighbours of the restart codes
+	// (-511, -515, -517) still are.
+	{name: "restart codes are not errors", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -512 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -513 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -514 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -516 6000", accEmit0},
+		{"agg 100", "count=4 errors=0 total=20000 min=5000 max=5000 hist=0,4,0,0,0,0,0,0"},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -4 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -511 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -515 6000", accEmit0},
+		{"enter 1 100 1000", accEmit0}, {"exit 1 100 -517 6000", accEmit0},
+		{"agg 100", "count=8 errors=4 total=40000 min=5000 max=5000 hist=0,8,0,0,0,0,0,0"},
+	}},
 	// A clone/fork child's first return has no enter state: never counted,
 	// and emitted only where a rate-1 enter would have been.
 	{name: "stateless exit follows the rate", steps: []accountingStep{
@@ -407,6 +426,10 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 			"        ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));",
 			"        (void)moved;",
 		},
+		"restart codes counted as errors": {
+			"    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);",
+			"    return ret >= -IOR_MAX_ERRNO && ret < 0;",
+		},
 		"timed check looks at count": {
 			"    if (agg->max_duration_ns)\n        return 1;",
 			"    if (agg->count)\n        return 1;",
@@ -529,7 +552,7 @@ func readAccountingSources(t *testing.T) (string, string) {
 	return filterC, mapsH
 }
 
-var cDefineRE = regexp.MustCompile(`(?m)^#define IOR_(HISTOGRAM_BUCKETS|MAX_ERRNO|E2BIG) .*$`)
+var cDefineRE = regexp.MustCompile(`(?m)^#define IOR_(HISTOGRAM_BUCKETS|MAX_ERRNO|E2BIG|ERESTARTSYS|ERESTARTNOINTR|ERESTARTNOHAND|ERESTART_RESTARTBLOCK) .*$`)
 
 // accountingHarnessSource assembles the harness from the defines and
 // functions of filter.c and the two state structs of maps.h.

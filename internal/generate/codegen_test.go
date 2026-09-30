@@ -3270,8 +3270,8 @@ func TestSyscallAggregateUsesTheKernelErrnoReturnWindow(t *testing.T) {
 			name: "an earlier sign check overrides the helper result",
 			mutate: func(source string) string {
 				return strings.Replace(source,
-					"return ret >= -IOR_MAX_ERRNO && ret < 0;",
-					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0;", 1)
+					"return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);",
+					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);", 1)
 			},
 		},
 		{
@@ -3313,7 +3313,7 @@ func syscallAggregateUsesErrnoWindow(source string) bool {
 	}
 
 	helper, ok := cFunctionBody(source, "static __always_inline int ior_is_errno_ret(__s64 ret)")
-	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0;" {
+	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);" {
 		return false
 	}
 

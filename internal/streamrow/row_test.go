@@ -98,6 +98,27 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	}
 }
 
+// TestNewDoesNotFlagRestartCodesAsErrors covers task aq2: the raw kernel
+// restart codes stay visible in RetVal but the row is not an error.
+func TestNewDoesNotFlagRestartCodesAsErrors(t *testing.T) {
+	for _, tt := range []struct {
+		ret     int64
+		isError bool
+	}{
+		{-512, false}, {-513, false}, {-514, false}, {-516, false},
+		{-4, true}, {-515, true}, {0, false},
+	} {
+		enter := &types.OpenEvent{TraceId: types.SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2, Ret: tt.ret, Pid: 1, Tid: 1}
+		pair.File = file.NewFd(3, "/tmp/x", 0)
+		got := New(1, pair)
+		if got.RetVal != tt.ret || got.IsError != tt.isError {
+			t.Errorf("ret %d: RetVal/IsError = %d/%v, want %d/%v", tt.ret, got.RetVal, got.IsError, tt.ret, tt.isError)
+		}
+	}
+}
+
 func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	got := NewWarning(7, "Dropped malformed event")
 	if got.Seq != 7 || got.TimeNs == 0 {

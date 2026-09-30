@@ -33,7 +33,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `nfds` | Int32 | Poll/select count or epoll `maxevents` |
 | `timeout_ns` | Int64 | Polling timeout; `-1` infinite, `-2` unknown |
 | `file`, `old_file` | String | Resolved path and source path for rename/link calls |
-| `is_error` | Bool | Whether the return is a negative errno |
+| `is_error` | Bool | Whether the return is a negative errno. The kernel-internal restart codes (-512, -513, -514, -516) that a signal-interrupted call leaves at sys_exit are not errors: `ret` keeps the raw value but `is_error` is false |
 | `filter_epoch` | UInt64 | Filter generation at capture time |
 | `epoll_op` | String | `epoll_ctl` ADD, MOD or DEL |
 | `epoll_target_fd` | Int32 | Target descriptor of `epoll_ctl` |

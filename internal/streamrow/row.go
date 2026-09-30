@@ -202,7 +202,7 @@ func New(seq uint64, pair *event.Pair) Row {
 	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok {
 		ret := retEv.GetRet()
 		row.RetVal = ret
-		row.IsError = event.IsErrnoRet(ret)
+		row.IsError = event.IsErrorRet(ret)
 	}
 
 	return row

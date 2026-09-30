@@ -9,8 +9,28 @@
 // carries no errno macros.
 #define IOR_E2BIG 7
 
+// Kernel-internal restart codes (include/linux/errno.h: ERESTARTSYS,
+// ERESTARTNOINTR, ERESTARTNOHAND, ERESTART_RESTARTBLOCK). A signal that
+// interrupts a blocked syscall makes it exit with one of these; the signal
+// path then re-executes the call (a new sys_enter follows) or turns the value
+// into -EINTR, so user space never sees them. vmlinux.h carries no errno
+// macros. -515 (ENOIOCTLCMD) is not a restart marker and is not listed.
+#define IOR_ERESTARTSYS 512
+#define IOR_ERESTARTNOINTR 513
+#define IOR_ERESTARTNOHAND 514
+#define IOR_ERESTART_RESTARTBLOCK 516
+
+static __always_inline int ior_is_restart_ret(__s64 ret) {
+    return ret == -IOR_ERESTARTSYS || ret == -IOR_ERESTARTNOINTR ||
+           ret == -IOR_ERESTARTNOHAND || ret == -IOR_ERESTART_RESTARTBLOCK;
+}
+
+// True for a failure the program can observe: an errno in the kernel window,
+// minus the restart codes above (an interruption, not an error). The
+// aggregate's errors field must agree with the userspace is_error/error-count
+// rule (event.IsErrorRet in internal/event/return.go).
 static __always_inline int ior_is_errno_ret(__s64 ret) {
-    return ret >= -IOR_MAX_ERRNO && ret < 0;
+    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);
 }
 
 // Return the current thread group's PID as seen in its active PID namespace.
@@ -505,9 +525,9 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 // not read anyway. They must still never reach output: the decoders copy
 // them into pooled Go structs, and everything that turns a string field into
 // text has to stop at the NUL. That includes the generated String() methods -
-// fmt's %v of an event - which the uncached-comm warning renders into a
-// searchable, exportable TUI stream row; they rendered whole arrays until the
-// task 79 review and now go through types.StringValue as well
+// fmt's %v of an event - which a log line or TUI row may render; they
+// rendered whole arrays until the task 79 review and now go through
+// types.StringValue as well
 // (writeStringMethod in internal/generate/typesgo.go). Only the test-only
 // Equals() still compares whole arrays. The generator tests pin the BPF shape
 // (internal/generate/stringterminator_test.go) and userspace tests pin that

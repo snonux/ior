@@ -141,7 +141,7 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 
 	// Any ret-carrying exit event counts here, including the kind-specific
 	// exits (accept/accept4, pipe/pipe2, socketpair, eventfd/pidfd).
-	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && event.IsErrnoRet(retEv.GetRet()) {
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && event.IsErrorRet(retEv.GetRet()) {
 		stats.errorCount++
 	}
 }
