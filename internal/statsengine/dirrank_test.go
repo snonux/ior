@@ -105,6 +105,52 @@ func TestDirRankerRemainderSumsTheDirectoriesBelowTheTopN(t *testing.T) {
 	}
 }
 
+// TestDirRankerRemainderOfExactlyOneFoldedDirectory pins the smallest
+// remainder: with three directories at topN=2 the third alone falls outside,
+// and it must still appear as a remainder row (Folded == 1) with its counters,
+// so the rows plus the remainder keep every access.
+func TestDirRankerRemainderOfExactlyOneFoldedDirectory(t *testing.T) {
+	r := newDirRankerWithConfig(2)
+	addN(r, "/a", 5)
+	addN(r, "/b", 4)
+	addN(r, "/c", 3)
+
+	rows, other := buildDirs(t, r, 2)
+	if len(rows) != 2 || rows[0].Dir != "/a" || rows[1].Dir != "/b" {
+		t.Fatalf("top rows = %+v, want /a then /b", rows)
+	}
+	if !other.IsRemainder() || other.Folded != 1 || other.Accesses != 3 || other.BytesRead != 30 || other.FileCount != 1 {
+		t.Fatalf("remainder = %+v, want the single folded /c with its 3 accesses", other)
+	}
+	if total := rows[0].Accesses + rows[1].Accesses + other.Accesses; total != 12 {
+		t.Fatalf("rows + remainder = %d accesses, want all 12", total)
+	}
+}
+
+// TestDirRankerTracksTheMaxLatencyOfADirectory pins the per-directory maximum:
+// it must be the largest duration seen, not the last one (30,10,20 ends on a
+// smaller value than its peak), both in the ranker and in an engine snapshot.
+func TestDirRankerTracksTheMaxLatencyOfADirectory(t *testing.T) {
+	r := newDirRankerWithConfig(2)
+	e := NewEngine(2)
+	for _, d := range []uint64{30, 10, 20} {
+		r.Add(newFilePair("/m/f", d, 1, types.READ_CLASSIFIED))
+		e.Ingest(newFilePair("/m/f", d, 1, types.READ_CLASSIFIED))
+	}
+
+	rows, _ := buildDirs(t, r, 2)
+	if len(rows) != 1 || rows[0].MaxLatencyNs != 30 || rows[0].TotalLatencyNs != 60 {
+		t.Fatalf("ranker row = %+v, want MaxLatencyNs 30 (peak, not last) and total 60", rows)
+	}
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirs := snap.Dirs(); len(dirs) != 1 || dirs[0].MaxLatencyNs != 30 {
+		t.Fatalf("engine snapshot dirs = %+v, want MaxLatencyNs 30", dirs)
+	}
+}
+
 // TestDirRankerCompactionKeepsTheTotalExact pins the cardinality guard: the
 // tracked set stays bounded, the hot directory survives, and the counters of
 // the dropped directories are folded into the remainder rather than lost.

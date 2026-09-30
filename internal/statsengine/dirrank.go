@@ -42,7 +42,13 @@ const (
 
 	// dirFileSketchSize is K of the per-directory distinct-file sketch (see
 	// fileSketch): exact up to K-1 files, about 1/sqrt(K-2) = 6% standard
-	// error beyond. It costs at most 8*K bytes per tracked directory.
+	// error beyond. The sketch's slice grows on demand (append-style
+	// doubling) instead of being preallocated with capacity K: most
+	// directories hold a handful of files, and preallocating would charge
+	// them all 8*K = 2KB. The price is that a directory with >= K/2 files can
+	// hold up to 2*K entries of capacity, so the bound is 16*K = 4KB per
+	// tracked directory, about 8MB at the default topN (32*64 = 2048
+	// directories) in the worst case where every directory is that large.
 	dirFileSketchSize = 256
 )
 
