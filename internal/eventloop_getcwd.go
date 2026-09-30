@@ -10,7 +10,7 @@ import (
 // (MAX_FILENAME_LENGTH - 1 bytes). It is appended to the captured prefix so
 // that the row never presents a shorter, different - but plausible looking -
 // directory as the caller's cwd.
-const getcwdTruncatedSuffix = "..."
+const getcwdTruncatedSuffix = types.TruncatedPathSuffix
 
 // capturedOutputPathEnters is the userspace half of outputPathSyscalls
 // (internal/generate/classify.go): the enter trace IDs whose exit handler

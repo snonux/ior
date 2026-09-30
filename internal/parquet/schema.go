@@ -9,6 +9,8 @@ import (
 
 	"ior/internal/flags"
 	"ior/internal/streamrow"
+	"ior/internal/textsafe"
+	"ior/internal/types"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 )
@@ -18,9 +20,11 @@ import (
 // The string columns (comm, file, old_file, ...) are annotated STRING/UTF8, and
 // strict readers (DuckDB, Arrow) reject a whole query that touches a column
 // holding an invalid UTF-8 byte. The traced values are not guaranteed valid:
-// the kernel cuts comm at 15 bytes regardless of rune boundaries, and any
-// local user can create file names with arbitrary bytes. RecordFromStream
-// therefore sanitizes them (see sanitizeUTF8 and trimPartialRune); a Record
+// the kernel cuts comm at 15 bytes regardless of rune boundaries, the BPF
+// side cuts a path at MAX_FILENAME_LENGTH-1 bytes just the same, and any
+// local user can create file names (or, via prctl(PR_SET_NAME), comm names)
+// with arbitrary bytes. RecordFromStream therefore sanitizes them (see
+// sanitizeUTF8, trimPartialRune and sanitizeComm/sanitizePath); a Record
 // built by hand is written as given.
 type Record struct {
 	Seq               uint64 `parquet:"seq"`
@@ -81,14 +85,16 @@ func NewFileMetadata(mode string) FileMetadata {
 
 // RecordFromStream converts one shared stream row into the persisted format.
 // Free-form traced text (comm, file, old_file) is made valid UTF-8 first so
-// the STRING columns stay readable by strict Parquet readers.
+// the STRING columns stay readable by strict Parquet readers. The rewrite
+// happens here, on the single row-to-Record path, so every recording (TUI,
+// plain, headless) gets it.
 func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 	return Record{
 		Seq:               row.Seq,
 		TimeNS:            row.TimeNs,
 		GapNS:             row.GapNs,
 		LatencyNS:         row.DurationNs,
-		Comm:              sanitizeUTF8(trimPartialRune(row.Comm)),
+		Comm:              sanitizeComm(row.Comm),
 		PID:               row.PID,
 		TID:               row.TID,
 		Syscall:           row.Syscall,
@@ -100,10 +106,10 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		RequestedSleepNS:  row.RequestedSleepNs,
 		Nfds:              row.Nfds,
 		TimeoutNS:         row.TimeoutNs,
-		File:              sanitizeUTF8(row.FileName),
+		File:              sanitizePath(row.FileName),
 		IsError:           row.IsError,
 		FilterEpoch:       filterEpoch,
-		OldFile:           sanitizeUTF8(row.OldName),
+		OldFile:           sanitizePath(row.OldName),
 		EpollOp:           row.EpollOp,
 		EpollTargetFD:     row.EpollTargetFD,
 		EpollEvents:       row.EpollEvents,
@@ -112,8 +118,9 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 
 // sanitizeUTF8 returns s unchanged when it is valid UTF-8 (the common case,
 // checked without allocating). Otherwise every invalid byte is rewritten as
-// the four characters \xHH (lower-case hex), the notation textsafe.Escape and
-// Go string literals use, so the operator can still see which byte was there.
+// the four characters \xHH (lower-case hex) by textsafe.Escape, the single
+// definition of that notation (also used by -plain and ior collapsed), so the
+// operator can still see which byte was there.
 // Valid runes, including valid control characters, are kept as they are.
 //
 // The mapping is deliberately not injective: a name that already contains the
@@ -130,9 +137,9 @@ func sanitizeUTF8(s string) string {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && size == 1 {
-			b.WriteString(`\x`)
-			b.WriteByte(hexDigits[s[i]>>4])
-			b.WriteByte(hexDigits[s[i]&0xF])
+			// Only this rare path allocates; Escape of one invalid byte is
+			// always exactly its \xHH form.
+			b.WriteString(textsafe.Escape(s[i : i+1]))
 		} else {
 			b.WriteString(s[i : i+size])
 		}
@@ -141,8 +148,39 @@ func sanitizeUTF8(s string) string {
 	return b.String()
 }
 
-// hexDigits renders the \xHH escapes in lower case, like strconv.Quote.
-const hexDigits = "0123456789abcdef"
+// sanitizeComm makes a comm value valid UTF-8. The kernel cuts comm at 15
+// bytes regardless of rune boundaries, so a partial trailing rune is dropped
+// first (it is the cut-off half of a character, not corrupt data) and any
+// other invalid byte, e.g. one set with prctl(PR_SET_NAME), is escaped.
+func sanitizeComm(comm string) string {
+	return sanitizeUTF8(trimPartialRune(comm))
+}
+
+// sanitizePath makes a file/old_file value valid UTF-8. A path the BPF side
+// captured in a full MAX_FILENAME_LENGTH buffer (bpf_probe_read_user_str
+// stores at most MAX_FILENAME_LENGTH-1 bytes plus the NUL) was cut by bytes
+// too, so a non-ASCII path can end in half a character; that partial rune is
+// dropped like comm's. A getcwd path longer than the buffer is reported as
+// the captured prefix plus "..." (types.TruncatedPathSuffix), so the cut rune sits
+// in front of that suffix and is trimmed there.
+//
+// Limitations: a path shorter than the limit is never trimmed, so an invalid
+// trailing byte in it (a real file name ending in a lone lead byte) becomes a
+// \xHH escape, as does every invalid byte elsewhere; and a real 255-byte path
+// that happens to end in a lone lead byte is trimmed although it was not cut.
+func sanitizePath(path string) string {
+	switch {
+	case len(path) == maxCapturedPath:
+		path = trimPartialRune(path)
+	case len(path) == maxCapturedPath+len(types.TruncatedPathSuffix) && strings.HasSuffix(path, types.TruncatedPathSuffix):
+		path = trimPartialRune(path[:maxCapturedPath]) + types.TruncatedPathSuffix
+	}
+	return sanitizeUTF8(path)
+}
+
+// maxCapturedPath is the longest path the BPF side captures: the
+// MAX_FILENAME_LENGTH buffer minus its NUL terminator.
+const maxCapturedPath = types.MAX_FILENAME_LENGTH - 1
 
 // trimPartialRune drops a trailing, incomplete-but-so-far-valid UTF-8
 // sequence from s. The kernel stores comm in a 16-byte buffer (15 characters

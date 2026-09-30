@@ -51,13 +51,26 @@ local user can create a file name with arbitrary bytes. So that recordings stay 
 sanitizes these three columns when it writes them:
 
 - A partial multi-byte character at the end of `comm` (the kernel's cut) is dropped, so
-  `ääääääääää` is stored as `äääääää`.
-- Any other invalid byte is stored as the four characters `\xHH` in lower-case hex, so a file
-  named `f`, byte 0xff, `inv` is stored as `f\xffinv`. Valid characters are never changed.
+  `ääääääääää` is stored as `äääääää`. The same is done for `file` and `old_file`, but only when
+  the path is exactly as long as the capture limit (255 bytes, or 255 bytes plus the `...` ior
+  appends to an over-long `getcwd` path), because that is the only case where ior can tell the
+  path was cut mid-character. A shorter path that ends in a stray lead byte is a real (odd) file
+  name and is escaped like any other invalid byte, as described next.
+- Any other invalid byte is stored as the four characters `\xHH` in lower-case hex (the notation
+  `-escape` uses), so a file named `f`, byte 0xff, `inv` is stored as `f\xffinv`. This includes a
+  `comm` such as `a`, byte 0xff, `b` set with `prctl(PR_SET_NAME)`. Valid characters are never
+  changed.
 
 The mapping is not reversible: a name that literally contains the characters `\xff` is stored
 the same as one containing the byte 0xff, and a backslash is not doubled. To find affected
 rows, search for the two characters `\x` in the column.
+
+This sanitizing always happens for Parquet output, whatever `-escape` says: `-escape` only
+controls terminal output (`-plain`, `ior collapsed`) and has no effect on recordings.
+Recordings made before this change may still hold raw invalid bytes in these columns, and
+DuckDB keeps rejecting queries that touch the affected column in those files; they are not
+rewritten. ClickHouse reads them fine, and `count(*)` or queries that skip the affected column
+work in DuckDB too.
 
 ## Queries
 

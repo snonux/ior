@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ior/internal/streamrow"
 )
@@ -251,6 +252,50 @@ func TestRecorderStopReportsTerminalErrorOnceOnRepeatedCalls(t *testing.T) {
 	}
 	if err := recorder.Stop(); err != nil {
 		t.Fatalf("second Stop() error = %v, want nil (already reported)", err)
+	}
+}
+
+// TestRecorderWritesValidUTF8ForInvalidTracedText feeds rows with invalid
+// bytes through the real Recorder and reads the finished file back. It pins
+// that the recorder persists RecordFromStream's sanitized values, not the raw
+// row text: DuckDB rejects every query touching a column with an invalid byte.
+func TestRecorderWritesValidUTF8ForInvalidTracedText(t *testing.T) {
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 8, BatchSize: 2, FlushInterval: time.Hour})
+	path := filepath.Join(t.TempDir(), "session")
+	if err := recorder.Start(path, StartOptions{Metadata: FileMetadata{Mode: "tui"}}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	row := testStreamRow(1, "rename", false)
+	row.Comm = "a\xffb"
+	row.FileName = "/tmp/f\xff\xfeinv"
+	row.OldName = "/tmp/old\xc3"
+	cut := testStreamRow(2, "read", false)
+	cut.Comm = "äääääää\xc3" // kernel cut mid-rune
+	for _, r := range []streamrow.Row{row, cut} {
+		if err := recorder.Record(r, 0); err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	got := readAllRecords(t, recorder.Status().Path)
+	if len(got) != 2 {
+		t.Fatalf("read %d rows, want 2", len(got))
+	}
+	for i, rec := range got {
+		for name, v := range map[string]string{"comm": rec.Comm, "file": rec.File, "old_file": rec.OldFile} {
+			if !utf8.ValidString(v) {
+				t.Errorf("row %d column %s = %q is not valid UTF-8", i, name, v)
+			}
+		}
+	}
+	if got[0].Comm != `a\xffb` || got[0].File != `/tmp/f\xff\xfeinv` || got[0].OldFile != `/tmp/old\xc3` {
+		t.Errorf("row 0 not sanitized as expected: %+v", got[0])
+	}
+	if got[1].Comm != "äääääää" {
+		t.Errorf("row 1 comm = %q, want the partial rune trimmed", got[1].Comm)
 	}
 }
 
