@@ -979,6 +979,7 @@ func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	// The new session's probe manager is published now, so this also gives a
 	// family scope that was set while it attached its "not traced" hint.
 	m.syncDashboardFilterState()
+	m.rebindProbeModal()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	m.dashboard = next.(*dashboardui.Model)
@@ -1559,8 +1560,19 @@ func (m *Model) restartTrace() tea.Cmd {
 // session's cancel func on the tracer, so it must only be called from Update
 // (never from Init, which stays side-effect free) on the *Model Bubble Tea
 // holds, so the cancel func survives to the next restart or quit.
+//
+// A probes modal left open across the session change follows it
+// (rebindProbeModal): it would otherwise keep the old session's probe manager
+// and session tag, so its toggles would hit a closed manager and their
+// outcome would be dropped as stale. Right after the restart the new session
+// has no manager yet, so the modal lists and toggles nothing until
+// handleTracingStarted binds it to the manager the session published. No key
+// path restarts while the modal is open today; this keeps it correct if one
+// ever does.
 func (m *Model) beginTraceCmd() tea.Cmd {
-	return m.tracer.beginCmd(m.runtime, m.filters.current())
+	cmd := m.tracer.beginCmd(m.runtime, m.filters.current())
+	m.rebindProbeModal()
+	return cmd
 }
 
 // filterFromConfig delegates to flags.BuildTraceFilter to resolve the active

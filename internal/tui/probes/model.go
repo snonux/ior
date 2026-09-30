@@ -78,10 +78,12 @@ type Model struct {
 
 	lastErr string
 	// lastInfo is the outcome line of the last family batch; batch is the
-	// batch still running, if any.
-	lastInfo string
-	batch    familyBatch
-	manager  Manager
+	// batch still running, if any. bulkRunning is set while the TUI's
+	// all-on/all-off walk runs in this modal's session (SetBulkRunning).
+	lastInfo    string
+	batch       familyBatch
+	bulkRunning bool
+	manager     Manager
 	// height and width are the terminal size the modal is laid out for, as
 	// reported by SetSize. The row budget (visibleRows) depends on both:
 	// height bounds the box and width decides how many lines the wrapped help
@@ -127,6 +129,32 @@ func (m Model) WithSession(session uint64) Model {
 	m.session = session
 	return m
 }
+
+// SetBulkRunning tells the modal whether an all-on/all-off walk is in flight
+// in its session. The TUI owns the walk (SetAllRequestMsg), so the modal
+// cannot know on its own; while it runs, space/enter/a/n are refused with
+// BulkBusyNotice, because a single toggle or second walk on the same manager
+// would race it. The TUI sets it when the walk starts, clears it with the
+// walk's result and re-applies it to every rebuilt modal.
+func (m Model) SetBulkRunning(running bool) Model {
+	m.bulkRunning = running
+	return m
+}
+
+// Rebind points the modal at manager and session, the ones of a trace session
+// that began while the modal was open, and reloads the probe list (empty for a
+// nil manager: the session has not published one yet). Cursor, search and
+// the notice lines are kept. Without it the modal would keep toggling the old
+// session's closed manager with results tagged by an ended session.
+func (m Model) Rebind(manager Manager, session uint64) Model {
+	m.manager = manager
+	m.session = session
+	return m.reload().clampCursor()
+}
+
+// Session returns the trace session whose probe manager the modal was built
+// with (WithSession).
+func (m Model) Session() uint64 { return m.session }
 
 // Visible reports whether the probes modal is shown.
 func (m Model) Visible() bool { return m.visible }
@@ -246,23 +274,32 @@ func (m Model) moveCursor(delta int) Model {
 }
 
 // batchBusyNotice is shown when a Syscalls view change is refused because a
-// family batch is running.
-const batchBusyNotice = "family batch running - wait for it to finish"
+// family batch is running; BulkBusyNotice when it is refused because an
+// all-on/all-off walk is (the TUI uses the latter for its own refusals too).
+const (
+	batchBusyNotice = "family batch running - wait for it to finish"
+	BulkBusyNotice  = "all-on/all-off running - wait for it to finish"
+)
 
 // handleSyscallKey processes the Syscalls view keys: search, toggle one
 // probe, and all-on/all-off. The latter only requests the change
 // (SetAllRequestMsg): the TUI owns the run, like a family batch, so it is
-// scoped to the trace session. While a family batch runs, the probe changes are
-// refused: the batch flips probes of its family one by one, and a toggle or
-// all-on/all-off racing it would undo part of it or be undone by it. The TUI
-// replays a running batch into every rebuilt modal (ShowBatchProgress), so
-// the guard holds across reopening the modal.
+// scoped to the trace session. While a family batch or an all-on/all-off walk
+// runs, the probe changes are refused: both flip probes one by one, and a
+// single toggle or another walk racing them would undo part of them or be
+// undone by them. The TUI replays a running batch or walk into every rebuilt
+// modal (ShowBatchProgress, SetBulkRunning), so the guard holds across
+// reopening the modal.
 func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case " ", "space", "enter", "a", "n":
 		if m.batch.active {
 			m.lastErr = batchBusyNotice
+			return m.clampCursor(), nil
+		}
+		if m.bulkRunning {
+			m.lastErr = BulkBusyNotice
 			return m.clampCursor(), nil
 		}
 	}

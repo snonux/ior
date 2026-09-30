@@ -53,7 +53,7 @@ type bulkRunState struct {
 
 // Refusal notices for probe changes that would race a running walk or batch.
 const (
-	bulkBusyNotice        = "all-on/all-off running - wait for it to finish"
+	bulkBusyNotice        = probes.BulkBusyNotice
 	batchRunningNotice    = "a family batch is already running"
 	errProbeManagerAbsent = "probe manager unavailable"
 )
@@ -84,8 +84,9 @@ func (m *Model) bulkRunning() bool {
 
 // newProbeModal builds the probes modal for the current probe manager. Its
 // Families cursor starts on the dashboard's scoped family, so the family
-// hint's "O, tab, space" acts on that family, and a family batch still in
-// flight is shown right away rather than only at its next progress update.
+// hint's "O, tab, space" acts on that family, and a family batch or an
+// all-on/all-off walk still in flight is shown (and its guard armed) right
+// away rather than only at its next progress update.
 func (m *Model) newProbeModal() probes.Model {
 	modal := probes.NewModel(m.runtime.currentProbeManager()).
 		WithSession(m.tracer.session).
@@ -94,7 +95,21 @@ func (m *Model) newProbeModal() probes.Model {
 	if m.familyBatchRunning() {
 		modal = modal.ShowBatchProgress(m.familyRun.last)
 	}
-	return modal
+	return modal.SetBulkRunning(m.bulkRunning())
+}
+
+// rebindProbeModal points an open probes modal at the current trace session
+// and its probe manager (none while the session is still attaching); a modal
+// that is not open is rebuilt by newProbeModal when it opens, so it is left
+// alone. The modal keeps its cursor and its notices (a family batch's
+// "trace restarted" outcome is shown in it), and the guard of a walk is
+// re-derived: a walk of an ended session no longer blocks anything.
+func (m *Model) rebindProbeModal() {
+	if !m.probeModal.Visible() {
+		return
+	}
+	m.probeModal = m.probeModal.Rebind(m.runtime.currentProbeManager(), m.tracer.session).
+		SetBulkRunning(m.bulkRunning())
 }
 
 // startFamilyBatch starts the family attach/detach the probes modal asked
@@ -238,7 +253,8 @@ func (m *Model) afterProbeChange() tea.Cmd {
 //     to a manager that is about to close, and its result is tagged with the
 //     session so a stale one is recognised (handleProbeToggledMsg).
 //   - One walk per session at a time, and none while a family batch runs; the
-//     refusal is shown in the modal.
+//     refusal is shown in the modal. The modal also refuses single toggles
+//     while the walk runs (SetBulkRunning), as they would race it.
 func (m *Model) startSetAll(req probes.SetAllRequestMsg) tea.Cmd {
 	switch {
 	case m.familyBatchRunning():
@@ -256,6 +272,7 @@ func (m *Model) startSetAll(req probes.SetAllRequestMsg) tea.Cmd {
 	intent := allSelection(manager.States(), req.Active)
 	m.tracer.setAttachSyscalls(slices.Clone(intent))
 	m.bulkRun = bulkRunState{active: true, session: m.tracer.session, intent: intent}
+	m.probeModal = m.probeModal.SetBulkRunning(true)
 	return probes.SetAllCmd(m.tracer.sessionContext(), manager, req.Active, m.tracer.session)
 }
 
@@ -283,12 +300,18 @@ func allSelection(states []probemanager.ProbeState, active bool) []string {
 // session's manager would record that session's state rather than the toggle,
 // so a single toggle's intent is applied to the recorded selection instead
 // (applyStaleToggle); an all-on/all-off walk recorded its intent at the key
-// press already. Either way the dashboard aggregates are reset; the
+// press already. The result of the running walk (and only of that one: a stale
+// result of an earlier session must not release the running walk's guard)
+// ends it and lifts the modal's refusal of single toggles. Either way the
+// dashboard aggregates are reset; the
 // post-reset tick goes through the dashboard's normal stats handling, so a
 // failed snapshot keeps the last good one.
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	if msg.Syscall == "" && m.bulkRun.active && msg.Session == m.bulkRun.session {
+		// Only the walk's own result ends it: a stale result of an earlier
+		// session must not release the guard of the walk running now.
 		m.bulkRun.active = false
+		m.probeModal = m.probeModal.SetBulkRunning(false)
 	}
 	if !m.tracer.isCurrent(msg.Session) {
 		m.applyStaleToggle(msg)

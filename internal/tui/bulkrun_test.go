@@ -322,3 +322,149 @@ func TestStaleBulkResultDoesNotReplayOverNewerChanges(t *testing.T) {
 		t.Fatalf("selection = %v, want it untouched", got)
 	}
 }
+
+// spaceKey is the key press that toggles the probe under the modal's cursor.
+var spaceKey = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+
+// TestSingleToggleRefusedWhileBulkWalkRuns is the review regression: the modal
+// refused single toggles only for its own family batch and never learned about
+// the model's a/n walk, so 'a' then space ran the toggle concurrently with the
+// walk on the same manager. The modal is told about the walk now and refuses
+// space/enter/a/n with a notice until the walk's own result arrives.
+func TestSingleToggleRefusedWhileBulkWalkRuns(t *testing.T) {
+	old := newGatedBulkManager()
+	m := newSessionModel(t, old.selectionProbeManager)
+	m.runtime.setProbeManager(old)
+	m, walk := pressBulkKey(t, m, 'a')
+	done := runAsync(walk)
+	<-old.entered
+
+	for _, key := range []tea.KeyPressMsg{spaceKey, {Code: tea.KeyEnter}, {Code: 'a', Text: "a"}, {Code: 'n', Text: "n"}} {
+		var cmd tea.Cmd
+		m, cmd = pressKey(m, key)
+		if cmd != nil {
+			t.Fatalf("key %q started a change while the walk was running", key.String())
+		}
+		if view := m.probeModal.View(100, 40); !strings.Contains(view, "all-on/all-off running") {
+			t.Fatalf("key %q: refusal not shown:\n%s", key.String(), view)
+		}
+	}
+	if len(old.entered) != 0 {
+		t.Fatalf("a refused key reached the manager: %d more probe calls", len(old.entered))
+	}
+
+	close(old.release)
+	next, _ := m.Update(receiveWithin(t, done))
+	m = next.(*Model)
+	if _, cmd := pressKey(m, spaceKey); cmd == nil {
+		t.Fatal("the single toggle is still refused after the walk finished")
+	}
+}
+
+// TestSingleToggleAllowedAfterWalkSessionEnded: a walk of an ended session
+// holds nothing up. The open modal follows the restart (rebindProbeModal), so
+// its guard is re-derived and single toggles work in the new session while
+// the old walk's result is still outstanding.
+func TestSingleToggleAllowedAfterWalkSessionEnded(t *testing.T) {
+	old := newGatedBulkManager()
+	m := newSessionModel(t, old.selectionProbeManager)
+	m.runtime.setProbeManager(old)
+	m, walk := pressBulkKey(t, m, 'a')
+	done := runAsync(walk)
+	<-old.entered
+
+	m.beginTraceCmd() // the walk's session ends, the modal stays open
+	m.runtime.setProbeManager(newSelectionManager())
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(*Model)
+	if _, cmd := pressKey(m, spaceKey); cmd == nil {
+		t.Fatal("the new session's single toggle was refused by the old session's walk")
+	}
+	close(old.release)
+	receiveWithin(t, done)
+}
+
+// TestSessionChangeRebindsAnOpenProbesModal is the review regression for the
+// latent stale modal: a modal left open across a session change kept the old
+// manager and session tag, so its toggles hit a closed manager and their
+// outcome was dropped as stale (before: shown). The modal follows the session
+// now: right after the restart it lists no probes (the new session has no
+// manager yet) and toggles nothing, once the new
+// session published its manager it toggles that one with results of the new
+// session, and a late result of the old session shows nowhere.
+func TestSessionChangeRebindsAnOpenProbesModal(t *testing.T) {
+	m := newSessionModel(t, newSelectionManager())
+	m.probeModal = m.newProbeModal().SetSize(100, 40).Open()
+	oldSession := m.tracer.session
+
+	m.beginTraceCmd() // restart with the modal open
+	if !m.probeModal.Visible() || m.probeModal.Session() != m.tracer.session {
+		t.Fatalf("modal visible=%v session=%d, want it open and on session %d",
+			m.probeModal.Visible(), m.probeModal.Session(), m.tracer.session)
+	}
+	m, cmd := pressKey(m, spaceKey) // the new session has no manager yet: nothing listed
+	if cmd != nil {
+		t.Fatal("the modal toggled a probe of the ended session's manager")
+	}
+
+	fresh := newSelectionManager()
+	m.runtime.setProbeManager(fresh)
+	next, _ := m.Update(TracingStartedMsg{})
+	m = next.(*Model)
+	next, _ = m.Update(probes.ProbeToggledMsg{Syscall: "read", Session: oldSession, Err: errors.New("probe manager is closed")})
+	m = next.(*Model)
+	if view := m.probeModal.View(100, 40); strings.Contains(view, "closed") {
+		t.Fatalf("the old session's late error shows in the modal:\n%s", view)
+	}
+
+	m, cmd = pressKey(m, spaceKey) // toggles the first probe, connect
+	toggled := runCmdFor[probes.ProbeToggledMsg](t, cmd)
+	if toggled.Session != m.tracer.session || toggled.Err != nil {
+		t.Fatalf("toggle result = %#v, want a clean result of session %d", toggled, m.tracer.session)
+	}
+	fresh.setActive("connect", true) // the test manager's Toggle is a no-op
+	next, _ = m.Update(toggled)
+	m = next.(*Model)
+	if !slices.Contains(m.tracer.attachSyscalls, "connect") {
+		t.Fatalf("the new session's toggle was not recorded: %v", m.tracer.attachSyscalls)
+	}
+}
+
+// TestStaleBulkResultDoesNotEndTheRunningWalk: the walk's session 2 is in
+// flight when the result of session 1's walk arrives. Clearing the flag on any
+// session's bulk result would unblock a/n and single toggles while session
+// 2's walk still runs.
+func TestStaleBulkResultDoesNotEndTheRunningWalk(t *testing.T) {
+	m := newSessionModel(t, newSelectionManager())
+	stale := probes.ProbeToggledMsg{Session: m.tracer.session}
+	m.beginTraceCmd() // session 2
+	m.runtime.setProbeManager(newGatedBulkManager())
+	m, _ = pressBulkKey(t, m, 'a') // session 2's walk, not run here
+
+	next, _ := m.Update(stale)
+	m = next.(*Model)
+	if !m.bulkRunning() {
+		t.Fatal("a stale session's bulk result ended the running walk")
+	}
+	if _, second := m.Update(probes.SetAllRequestMsg{Active: false}); second != nil {
+		t.Fatal("a second walk started after the stale result")
+	}
+	if _, cmd := pressKey(m, tea.KeyPressMsg{Code: 'n', Text: "n"}); cmd != nil {
+		t.Fatal("the modal let n through after the stale result")
+	}
+}
+
+// TestStaleBulkResultWithoutSelectionRecordsNothing: the nil-selection variant
+// of TestStaleBulkResultDoesNotReplayOverNewerChanges. Nil is the one state
+// where a stale single toggle records its intent as is (there is no set to
+// apply a delta to); a bulk result (no Syscall) must still record nothing.
+func TestStaleBulkResultWithoutSelectionRecordsNothing(t *testing.T) {
+	m, _ := newLiveSwapModel(t) // no session running: every result is stale
+	if m.tracer.attachSyscalls != nil {
+		t.Fatal("precondition: the startup selection is nil")
+	}
+	next, _ := m.Update(probes.ProbeToggledMsg{Intent: []string{}})
+	if got := next.(*Model).tracer.attachSyscalls; got != nil {
+		t.Fatalf("selection = %#v, want it untouched (nil)", got)
+	}
+}
