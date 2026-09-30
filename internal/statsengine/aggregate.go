@@ -1,6 +1,16 @@
 package statsengine
 
-import "ior/internal/types"
+import (
+	"time"
+
+	"ior/internal/types"
+)
+
+// aggregateDrainSpan is the longest interval one kernel aggregate batch is
+// spread over in the latency series. It matches the event loop's drain period
+// (defaultAggregateDrainEvery in package internal, which this package cannot
+// import).
+const aggregateDrainSpan = time.Second
 
 // SyscallAggregate is the kernel-side aggregate for one sys_enter trace ID.
 type SyscallAggregate struct {
@@ -30,10 +40,10 @@ func (row SyscallAggregate) timedCount() uint64 {
 // IngestSyscallAggregates folds kernel aggregate rows into the engine.
 //
 // Aggregate rows carry no inter-syscall gap (the kernel sums only counts and
-// latencies), so they add to totalSyscalls but neither to totalGap nor to
-// gapSamples, the gap mean's denominator; the gap histogram and series stay
-// per-event-pair only too. Otherwise, under -sample or aggregate-only
-// tracing, the unsampled calls would shrink the gap mean toward zero.
+// latencies), so they add to totalSyscalls but not to totalGap or the gap
+// histogram and series. They still belong in the gap mean's denominator:
+// a traced pair's gap spans the untraced calls of its thread (see
+// perCallGapMean).
 func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 	if e == nil || len(rows) == 0 {
 		return
@@ -62,9 +72,25 @@ func (e *Engine) IngestSyscallAggregates(rows []SyscallAggregate) {
 		batchLatency += row.TotalLatencyNs
 		batchCount += row.timedCount()
 	}
-	// Weight the batch by its timed invocations so a drain of N calls counts
-	// as N samples in its slot's mean, exactly like N per-event pairs would,
-	// rather than as one sample. A batch without timed invocations adds
-	// nothing (AddWeighted ignores a zero count).
-	e.latencySeries.AddWeighted(float64(batchLatency), batchCount, now)
+	// Weight the batch by its timed invocations and spread it over the time
+	// it accrued in, so it counts like the per-event pairs it stands for
+	// (see AddSpread). A batch without timed invocations adds nothing.
+	e.latencySeries.AddSpread(float64(batchLatency), batchCount, e.aggregateSpanStart(now), now)
+	e.lastAggregateAt = now
+}
+
+// aggregateSpanStart returns when the batch ingested at now began to accrue:
+// the previous batch's ingestion, but no earlier than one drain period
+// before now and no earlier than the engine's start. The period cap matters
+// because the drainer forwards no empty batches, so after an idle stretch
+// the previous batch can be much older than what the kernel map covers.
+func (e *Engine) aggregateSpanStart(now time.Time) time.Time {
+	from := now.Add(-aggregateDrainSpan)
+	if e.lastAggregateAt.After(from) {
+		from = e.lastAggregateAt
+	}
+	if e.startedAt.After(from) {
+		from = e.startedAt
+	}
+	return from
 }

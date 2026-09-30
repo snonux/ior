@@ -56,10 +56,12 @@ type Engine struct {
 	totalWriteBytes        uint64
 	totalLatency           uint64
 	totalGap               uint64
-	// gapSamples counts the per-event pairs that contributed to totalGap.
-	// It differs from totalSyscalls because kernel aggregate rows add calls
-	// without gap data (see IngestSyscallAggregates).
-	gapSamples uint64
+	totalGapless           uint64 // pairs without a previous pair on their TID
+
+	// lastAggregateAt is when the previous kernel aggregate batch was
+	// ingested; the next batch is spread over the time since then (see
+	// aggregateSpanStart). Zero until the first batch.
+	lastAggregateAt time.Time
 
 	syscalls         *syscallAccumulator
 	files            *fileRanker
@@ -84,7 +86,7 @@ type snapshotInputs struct {
 	totalWriteBytes        uint64
 	totalLatency           uint64
 	totalGap               uint64
-	gapSamples             uint64 // per-event pairs behind totalGap
+	totalGapless           uint64 // pairs without a previous pair on their TID
 
 	latencySeries    []float64
 	gapSeries        []float64
@@ -142,7 +144,8 @@ func (e *Engine) Reset() {
 	e.totalWriteBytes = 0
 	e.totalLatency = 0
 	e.totalGap = 0
-	e.gapSamples = 0
+	e.totalGapless = 0
+	e.lastAggregateAt = time.Time{}
 	e.syscalls = newSyscallAccumulator()
 	e.files = newFileRankerWithConfig(e.topN)
 	e.processes = newProcessAccumulatorWithConfig(e.topN)
@@ -167,18 +170,30 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	e.totalBytes += pair.Bytes
 	e.totalAddressSpaceBytes += pair.AddressSpaceBytes
 	e.totalLatency += pair.Duration
-	e.totalGap += pair.DurationToPrev
-	e.gapSamples++
 
 	e.updateErrorAndByteClasses(pair)
+	e.ingestGap(pair, now)
 	e.syscalls.Add(pair)
 	e.files.Add(pair)
 	e.processes.Add(pair)
 	e.latencyHist.Increment(pair.Duration)
-	e.gapHist.Increment(pair.DurationToPrev)
 	e.latencySeries.Add(float64(pair.Duration), now)
-	e.gapSeries.Add(float64(pair.DurationToPrev), now)
 	e.throughputSeries.Add(float64(pair.Bytes), now)
+}
+
+// ingestGap records pair's inter-syscall gap. A TID's first pair has no
+// previous pair, so its DurationToPrev of 0 is no measurement: it is counted
+// in totalGapless and kept out of the gap total, histogram and series, where
+// it would pull the distribution toward zero (one such pair per thread, so
+// many short-lived threads would dominate).
+func (e *Engine) ingestGap(pair *event.Pair, now time.Time) {
+	if pair.FirstOnTID {
+		e.totalGapless++
+		return
+	}
+	e.totalGap += pair.DurationToPrev
+	e.gapHist.Increment(pair.DurationToPrev)
+	e.gapSeries.Add(float64(pair.DurationToPrev), now)
 }
 
 func (e *Engine) updateErrorAndByteClasses(pair *event.Pair) {
@@ -238,7 +253,7 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		totalWriteBytes:        e.totalWriteBytes,
 		totalLatency:           e.totalLatency,
 		totalGap:               e.totalGap,
-		gapSamples:             e.gapSamples,
+		totalGapless:           e.totalGapless,
 		latencySeries:          e.latencySeries.ValuesAt(now),
 		gapSeries:              e.gapSeries.ValuesAt(now),
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
@@ -314,9 +329,7 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.ReadBytesPerSec = safeRate(in.totalReadBytes, rateDiv)
 	snap.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
 	snap.LatencyMeanNs = safeMean(in.totalLatency, timedCount(in.totalSyscalls, in.totalUntimed))
-	// Only per-event pairs carry a gap, so divide by them rather than by all
-	// syscalls: aggregate rows would otherwise dilute the mean.
-	snap.GapMeanNs = safeMean(in.totalGap, in.gapSamples)
+	snap.GapMeanNs = perCallGapMean(in)
 	snap.LatencyTrend = detectTrend(in.latencySeries)
 	snap.GapTrend = detectTrend(in.gapSeries)
 	snap.ThroughputTrend = detectTrend(in.throughputSeries)
@@ -365,6 +378,22 @@ func (e *Engine) Snapshot() (*Snapshot, error) {
 	populateSnapshotFields(&snap, in, elapsed)
 
 	return &snap, nil
+}
+
+// perCallGapMean approximates the mean gap per syscall. A pair's
+// DurationToPrev runs from the previous EMITTED pair of its TID, so when the
+// tracer emits only 1 in N calls (-sample) or counts the rest in kernel
+// aggregate rows, each traced gap spans the N-1 untraced calls in between
+// (their latencies and gaps). Those untraced calls reach totalSyscalls via
+// the aggregate rows but carry no gap of their own. Dividing the traced gaps
+// by every counted call therefore spreads each spanned interval back over
+// the calls it covers: with per-call gap G and latency L the result is about
+// G + L*(N-1)/N, i.e. the per-call gap plus the untraced calls' latency
+// share, instead of the ~N*(G+L) a per-pair mean would report. Without
+// sampling (N = 1) it is the exact per-pair mean. A TID's first pair has no
+// gap and is left out of both sides (see ingestGap).
+func perCallGapMean(in snapshotInputs) float64 {
+	return safeMean(in.totalGap, timedCount(in.totalSyscalls, in.totalGapless))
 }
 
 func safeMean(total uint64, count uint64) float64 {

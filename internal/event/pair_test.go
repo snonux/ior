@@ -32,6 +32,9 @@ func TestPairCalculateDurationsFirstEvent(t *testing.T) {
 	if pair.DurationToPrev != 0 {
 		t.Fatalf("DurationToPrev = %d, want 0 for first event", pair.DurationToPrev)
 	}
+	if !pair.FirstOnTID {
+		t.Fatal("FirstOnTID = false, want true without a previous pair")
+	}
 }
 
 func TestPairCalculateDurationsWithPreviousExit(t *testing.T) {
@@ -56,6 +59,9 @@ func TestPairCalculateDurationsWithPreviousExit(t *testing.T) {
 	}
 	if pair.DurationToPrev != 500 {
 		t.Fatalf("DurationToPrev = %d, want 500", pair.DurationToPrev)
+	}
+	if pair.FirstOnTID {
+		t.Fatal("FirstOnTID = true, want false with a previous pair")
 	}
 }
 
@@ -86,6 +92,25 @@ func TestPairCalculateDurationsNegativeDelta(t *testing.T) {
 	}
 	if pair.DurationToPrev != 0 {
 		t.Fatalf("DurationToPrev = %d, want 0 when enter < prevPairTime (underflow guard)", pair.DurationToPrev)
+	}
+	// A clamped gap still had a previous pair: it is a measured 0, not "first".
+	if pair.FirstOnTID {
+		t.Fatal("FirstOnTID = true, want false for a clamped gap")
+	}
+}
+
+// Recycling a pair must clear FirstOnTID so a pooled pair does not carry it
+// into its next use.
+func TestPairRecycleClearsFirstOnTID(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	pair.ExitEv = &types.RetEvent{Time: 1100, Tid: 2}
+	pair.CalculateDurations(0)
+	pair.Recycle()
+
+	next := NewPair(&types.OpenEvent{Time: 2000, Tid: 3})
+	defer next.Recycle()
+	if next.FirstOnTID {
+		t.Fatal("pooled pair kept FirstOnTID")
 	}
 }
 

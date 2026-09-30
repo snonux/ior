@@ -17,7 +17,10 @@ import (
 // mirroring the README:
 //   - Duration is the syscall runtime on the same thread: exit(current) - enter(current).
 //   - DurationToPrev is the inter-syscall gap on the same thread: enter(current) - exit(previous).
-//   - DurationToPrev is tracked per TID; the first observed Pair for a TID has DurationToPrev == 0.
+//   - DurationToPrev is tracked per TID; the first observed Pair for a TID has DurationToPrev == 0
+//     and FirstOnTID set, so aggregations can tell "no previous pair" from a measured 0ns gap.
+//   - The previous pair is the previous EMITTED pair of the TID: calls the tracer did not emit
+//     (sampled out, filtered, or only counted in kernel-side aggregates) fall inside the gap.
 //   - The inter-syscall gap is attributed to the current Pair (the one whose enter closes the gap).
 //   - There is no separate "idle" pseudo-event bucket; aggregated views should use DurationToPrev
 //     when they want to emphasize inter-syscall time.
@@ -27,7 +30,11 @@ type Pair struct {
 	Comm            string
 	Duration        uint64
 	DurationToPrev  uint64
-	Bytes           uint64 // Number of bytes transferred (read/write/transfer syscalls only)
+	// FirstOnTID reports that no previous pair was known for the TID when the
+	// durations were calculated, so DurationToPrev is 0 by definition rather
+	// than a measured gap. Consumers that average or bucket gaps skip it.
+	FirstOnTID bool
+	Bytes      uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 	// AddressSpaceBytes tracks memory-region extent for memory syscalls
 	// (e.g. munmap/mremap) and is intentionally separate from I/O bytes.
 	AddressSpaceBytes uint64
@@ -102,7 +109,9 @@ func NewPair(enterEv Event) *Pair {
 
 // CalculateDurations derives the pair's latency (exit minus enter time) and
 // its inter-syscall gap (enter minus prevPairTime, the same TID's previous
-// exit), clamping both to zero on non-monotonic BPF timestamps.
+// exit), clamping both to zero on non-monotonic BPF timestamps. A zero
+// prevPairTime means the TID has no previous pair: the gap stays 0 and
+// FirstOnTID is set.
 func (e *Pair) CalculateDurations(prevPairTime uint64) {
 	exitTime := e.ExitEv.GetTime()
 	enterTime := e.EnterEv.GetTime()
@@ -117,6 +126,7 @@ func (e *Pair) CalculateDurations(prevPairTime uint64) {
 		e.Duration = 0
 	}
 
+	e.FirstOnTID = prevPairTime == 0
 	if prevPairTime > 0 {
 		// DurationToPrev is the inter-syscall gap on the same TID:
 		// enter(current) - exit(previous).
