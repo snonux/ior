@@ -77,6 +77,7 @@ func TestNonLeaderExecPairsUnderLeaderTid(t *testing.T) {
 	el := newNonLeaderExecLoop(t)
 	completeCallerAccess(t, el, 1000, 1100)
 	el.pendingHandleState().set(nleExecCaller, "/some/handle/path")
+	el.pendingHandleState().set(nleExecPid, "/dead/leader/handle/path")
 	el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), make(chan *event.Pair, 1))
 	mismatches := el.numTracepointMismatches
 
@@ -111,7 +112,8 @@ func TestNonLeaderExecPairsUnderLeaderTid(t *testing.T) {
 }
 
 // assertNoCallerState checks that nothing is keyed by the pre-exec tid any
-// more and that no enter stays parked for either tid.
+// more, that no enter or name_to_handle_at pathname stays parked for either
+// tid, and that the exec caller index holds no hint.
 func assertNoCallerState(t *testing.T, el *eventLoop) {
 	t.Helper()
 	for _, tid := range []uint32{nleExecCaller, nleExecPid} {
@@ -125,19 +127,28 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 	if _, ok := el.cachedComm(nleExecCaller); ok {
 		t.Error("comm left cached under the pre-exec tid")
 	}
-	if _, ok := el.pendingHandleState().consume(nleExecCaller); ok {
-		t.Error("pending handle path left under the pre-exec tid")
+	for _, tid := range []uint32{nleExecCaller, nleExecPid} {
+		if _, ok := el.pendingHandleState().consume(tid); ok {
+			t.Errorf("pending handle path left under tid %d", tid)
+		}
+	}
+	if len(el.pairs.execCallers) != 0 {
+		t.Errorf("exec caller index not empty: %v", el.pairs.execCallers)
 	}
 }
 
 // TestNonLeaderExecDropsStaleEnters covers the lost-record cases: a non-exec
 // enter parked under the caller's tid (its exit record was lost) must not be
-// moved onto the leader tid, and a leader enter whose exit record was lost
-// must not be consumed by the execve exit. Neither may produce a row or a
-// mismatch.
+// moved onto the leader tid, and a leader enter or handle pathname whose exit
+// record was lost must not be consumed after the exec. Neither may produce a
+// row or a mismatch.
 func TestNonLeaderExecDropsStaleEnters(t *testing.T) {
 	el := newNonLeaderExecLoop(t)
 	el.setCachedCommFromKernel(nleExecPid, "caller")
+	// The dead leader's parked name_to_handle_at pathname: with its exit
+	// record lost, only the exec record can drop it before the new
+	// program's first open_by_handle_at would consume it.
+	el.pendingHandleState().set(nleExecPid, "/dead/leader/handle/path")
 	out := make(chan *event.Pair, 1)
 	_, staleCaller := makeEnterPathEvent(t, 900, nleExecPid, nleExecCaller, "/etc/hosts", types.SYS_ENTER_ACCESS)
 	el.processRawEvent(staleCaller, out)
@@ -192,5 +203,123 @@ func TestPairTrackerMoveExecCallerWithoutState(t *testing.T) {
 	p.moveExecCaller(nleExecCaller, nleExecPid)
 	if len(p.enters) != 0 || len(p.prevTimes) != 0 || len(p.prevTimeAges) != 0 {
 		t.Fatalf("tracker not empty after move: enters=%v prevTimes=%v", p.enters, p.prevTimes)
+	}
+}
+
+// feedExecveExit drives one execve exit with ret under tid and returns the
+// completed row, or nil.
+func feedExecveExit(t *testing.T, el *eventLoop, time uint64, tid uint32, ret int64) *event.Pair {
+	t.Helper()
+	out := make(chan *event.Pair, 1)
+	_, exitRaw := makeExitRetEvent(t, time, nleExecPid, tid, types.SYS_EXIT_EXECVE, ret)
+	el.processRawEvent(exitRaw, out)
+	select {
+	case ep := <-out:
+		return ep
+	default:
+		return nil
+	}
+}
+
+// TestNonLeaderExecWithLostExecRecordStillPairs covers the lost
+// sched_process_exec record: BPF already moved its enter state, so the exit
+// arrives under the leader tid, but userspace never re-keyed the caller's
+// enter. The successful execve exit under tid == pid must adopt it.
+func TestNonLeaderExecWithLostExecRecordStillPairs(t *testing.T) {
+	el := newNonLeaderExecLoop(t)
+	completeCallerAccess(t, el, 1000, 1100)
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), out)
+	el.processRawEvent(makeThreadExitEvent(t, 1997, nleExecPid, nleExecPid), out)
+
+	ep := feedExecveExit(t, el, 2000, nleExecPid, 0)
+	if ep == nil {
+		t.Fatal("lost exec record: the execve exit did not adopt the caller's enter")
+	}
+	defer ep.Recycle()
+	if got := ep.EnterEv.GetTid(); got != nleExecCaller {
+		t.Errorf("row tid = %d, want %d", got, nleExecCaller)
+	}
+	if ep.Duration != 500 || ep.DurationToPrev != 400 {
+		t.Errorf("row duration/gap = %d/%d, want 500/400", ep.Duration, ep.DurationToPrev)
+	}
+	assertNoCallerState(t, el)
+}
+
+// TestLostExecRecordFallbackIsNarrow pins what the fallback must not adopt:
+// a failed execve exit (a failed exec keeps its tid), an exit under a
+// non-leader tid, a non-exec exit, and a hint whose enter was already
+// consumed by the caller's own exit.
+func TestLostExecRecordFallbackIsNarrow(t *testing.T) {
+	cases := []struct {
+		name  string
+		drive func(t *testing.T, el *eventLoop) *event.Pair
+	}{
+		{"failed execve exit", func(t *testing.T, el *eventLoop) *event.Pair {
+			return feedExecveExit(t, el, 2000, nleExecPid, -2)
+		}},
+		{"exit under another non-leader tid", func(t *testing.T, el *eventLoop) *event.Pair {
+			return feedExecveExit(t, el, 2000, nleExecCaller+1, 0)
+		}},
+		{"non-exec exit under the leader", func(t *testing.T, el *eventLoop) *event.Pair {
+			out := make(chan *event.Pair, 1)
+			_, exitRaw := makeExitRetEvent(t, 2000, nleExecPid, nleExecPid, types.SYS_EXIT_ACCESS, 0)
+			el.processRawEvent(exitRaw, out)
+			select {
+			case ep := <-out:
+				return ep
+			default:
+				return nil
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			el := newNonLeaderExecLoop(t)
+			el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), make(chan *event.Pair, 1))
+			if ep := tc.drive(t, el); ep != nil {
+				ep.Recycle()
+				t.Fatal("unrelated exit adopted the caller's exec enter")
+			}
+			verifyEnterEventPending(t, el, nleExecCaller)
+		})
+	}
+
+	t.Run("stale hint", func(t *testing.T) {
+		el := newNonLeaderExecLoop(t)
+		el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), make(chan *event.Pair, 1))
+		// The caller's own failed execve consumes its enter.
+		if ep := feedExecveExit(t, el, 1600, nleExecCaller, -2); ep != nil {
+			ep.Recycle()
+		} else {
+			t.Fatal("caller's failed execve produced no row")
+		}
+		// A later enter under the caller's tid that is not an exec must
+		// not be taken for a parked exec enter.
+		_, accessRaw := makeEnterPathEvent(t, 1700, nleExecPid, nleExecCaller, "/etc/hosts", types.SYS_ENTER_ACCESS)
+		el.processRawEvent(accessRaw, make(chan *event.Pair, 1))
+		if ep := feedExecveExit(t, el, 2000, nleExecPid, 0); ep != nil {
+			ep.Recycle()
+			t.Fatal("exit adopted an enter through a stale hint")
+		}
+		verifyEnterEventPending(t, el, nleExecCaller)
+	})
+}
+
+// TestExecCallerIndexStaysBounded pins that hints of enters trimmed from the
+// pending-enter LRU do not accumulate: the index is pruned back to the live
+// exec enters once it outgrows the limit.
+func TestExecCallerIndexStaysBounded(t *testing.T) {
+	p := newPairTracker()
+	p.maxSize = 4
+	for pid := uint32(1); pid <= 64; pid++ {
+		enter := &types.ExecEvent{EventType: types.ENTER_EXEC_EVENT, TraceId: types.SYS_ENTER_EXECVE,
+			Pid: pid * 10, Tid: pid*10 + 1}
+		p.set(enter)
+	}
+	// Pruning runs before the enter LRU trims the newest overflow, so one
+	// hint beyond the limit may be momentarily stale.
+	if got := len(p.execCallers); got > p.limit()+1 {
+		t.Fatalf("exec caller index holds %d hints, want at most %d", got, p.limit()+1)
 	}
 }

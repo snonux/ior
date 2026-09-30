@@ -62,6 +62,7 @@ var scenarios = map[string]func() error{
 	"posix-timer-lifecycle":         posixTimerLifecycle,
 	"interval-timer-noop":           intervalTimerNoop,
 	"process-exec-lifecycle":        processExecLifecycle,
+	"exec-non-leader-thread":        execNonLeaderThread,
 	"process-kcmp-file":             processKcmpFile,
 	"process-kcmp-vm":               processKcmpVM,
 	"family-mixed":                  familyMixed,

@@ -226,10 +226,13 @@ static __always_inline int ior_should_emit_trace(__u32 enter_trace_id) {
 //   2. The exit has no entry of its own: the child side of clone/clone3/
 //      fork/vfork (its first return runs in a task that never entered the
 //      syscall), a syscall already in flight when the tracepoints were
-//      attached, or case 1 above. (An execve by a non-leader thread returns
-//      under the leader's tid, see de_thread, but its entry is moved there
-//      by ior_on_exec_tid_change before the exit runs, so it pairs normally.) A stale entry left by a
-//      different syscall (enter_trace_id mismatch) is the same situation.
+//      attached, or case 1 above. A stale entry left by a different syscall
+//      (enter_trace_id mismatch) is the same situation. An execve by a
+//      non-leader thread returns under the leader's tid (de_thread), but
+//      ior_on_exec_tid_change moves its entry there before the exit runs,
+//      so it normally pairs; its exit stays stateless only when there was
+//      nothing to move - -tid <leader> filtered the caller's enter - or
+//      when the move's insert failed.
 //      ior_stateless_exit_emits emits such an exit only when the syscall's
 //      rate is 1, i.e. exactly when a rate-1 enter would have been emitted,
 //      and never counts it: its enter was either never seen (nothing to

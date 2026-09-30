@@ -364,6 +364,11 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
 	ep, ok := e.pairs.consume(exitEv.GetTid())
 	if !ok {
+		// A non-leader execve whose exec record was lost: see
+		// adoptLostExecCaller.
+		ep, ok = e.adoptLostExecCaller(exitEv)
+	}
+	if !ok {
 		exitEv.Recycle()
 		return
 	}
