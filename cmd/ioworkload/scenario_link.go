@@ -148,12 +148,8 @@ func linkReadlinkat() error {
 	defer cleanup()
 
 	origPath := filepath.Join(dir, "readlinkat-original.txt")
-	fd, err := syscall.Open(origPath, syscall.O_RDWR|syscall.O_CREAT, 0o644)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
-	}
-	if err := syscall.Close(fd); err != nil {
-		return fmt.Errorf("close: %w", err)
+	if err := createEmptyFile(origPath); err != nil {
+		return err
 	}
 
 	// Create symlink using raw SYS_SYMLINK so we don't mix tracepoints.
@@ -169,26 +165,44 @@ func linkReadlinkat() error {
 	}
 	defer syscall.Close(dirFD)
 
-	linkName := "readlinkat-link.txt"
-	nameBytes, err := syscall.BytePtrFromString(linkName)
+	nameBytes, err := syscall.BytePtrFromString("readlinkat-link.txt")
 	if err != nil {
 		return fmt.Errorf("link name bytes: %w", err)
 	}
-	buf := make([]byte, 256)
-	_, _, errno := syscall.Syscall6(
+	_, err = rawReadlinkat(dirFD, nameBytes, make([]byte, 256))
+	return err
+}
+
+// createEmptyFile creates path (O_RDWR|O_CREAT, 0644) with open(2) and
+// closes it again.
+func createEmptyFile(path string) error {
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT, 0o644)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
+}
+
+// rawReadlinkat issues one raw readlinkat(dirFD, name, buf, len(buf)) and
+// returns the number of target bytes the kernel copied into buf.
+func rawReadlinkat(dirFD int, name *byte, buf []byte) (uintptr, error) {
+	n, _, errno := syscall.Syscall6(
 		syscall.SYS_READLINKAT,
 		uintptr(dirFD),
-		uintptr(unsafe.Pointer(nameBytes)),
+		uintptr(unsafe.Pointer(name)),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
 		0, 0,
 	)
-	runtime.KeepAlive(nameBytes)
+	runtime.KeepAlive(name)
 	runtime.KeepAlive(buf)
 	if errno != 0 {
-		return fmt.Errorf("readlinkat: %w", errno)
+		return 0, fmt.Errorf("readlinkat: %w", errno)
 	}
-	return nil
+	return n, nil
 }
 
 // linkEnoent attempts to hard link a nonexistent source via raw SYS_LINK.

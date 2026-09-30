@@ -207,18 +207,9 @@ func retbytesReadlinkat() error {
 	// re-resolves the same symlink, so ctx->ret stays equal to the target length.
 	buf := make([]byte, 256)
 	for i := 0; i < 40; i++ {
-		n, _, errno := syscall.Syscall6(
-			syscall.SYS_READLINKAT,
-			uintptr(dirFD),
-			uintptr(unsafe.Pointer(linkName)),
-			uintptr(unsafe.Pointer(&buf[0])),
-			uintptr(len(buf)),
-			0, 0,
-		)
-		runtime.KeepAlive(linkName)
-		runtime.KeepAlive(buf)
-		if errno != 0 {
-			return fmt.Errorf("readlinkat: %w", errno)
+		n, err := rawReadlinkat(dirFD, linkName, buf)
+		if err != nil {
+			return err
 		}
 		if n == 0 {
 			return fmt.Errorf("readlinkat returned 0 bytes for a non-empty link target")

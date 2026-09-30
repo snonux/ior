@@ -121,6 +121,9 @@ func socketAcceptLifecyclePlain() error {
 	return nil
 }
 
+// socketIntrospection builds a connected AF_UNIX stream pair (socket, bind,
+// listen, socket, connect, accept4) and then queries the accepted socket with
+// getsockname, getpeername, setsockopt and getsockopt, in that order.
 func socketIntrospection() error {
 	dir, cleanup, err := makeTempDir("socket-introspection")
 	if err != nil {
@@ -130,18 +133,11 @@ func socketIntrospection() error {
 
 	socketPath := filepath.Join(dir, "introspection.sock")
 
-	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	listenerFD, err := listenUnixStream(socketPath)
 	if err != nil {
-		return fmt.Errorf("listener socket: %w", err)
+		return err
 	}
 	defer syscall.Close(listenerFD)
-
-	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
-		return fmt.Errorf("bind: %w", err)
-	}
-	if err := syscall.Listen(listenerFD, 1); err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
 
 	clientFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
@@ -159,18 +155,41 @@ func socketIntrospection() error {
 	}
 	defer syscall.Close(acceptedFD)
 
-	if _, err := syscall.Getsockname(acceptedFD); err != nil {
+	return introspectSocket(acceptedFD)
+}
+
+// listenUnixStream creates an AF_UNIX stream socket bound to socketPath and
+// listening with a backlog of one. The socket is closed again on failure.
+func listenUnixStream(socketPath string) (int, error) {
+	listenerFD, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return -1, fmt.Errorf("listener socket: %w", err)
+	}
+	if err := syscall.Bind(listenerFD, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
+		syscall.Close(listenerFD)
+		return -1, fmt.Errorf("bind: %w", err)
+	}
+	if err := syscall.Listen(listenerFD, 1); err != nil {
+		syscall.Close(listenerFD)
+		return -1, fmt.Errorf("listen: %w", err)
+	}
+	return listenerFD, nil
+}
+
+// introspectSocket runs the socket query syscalls on fd: getsockname,
+// getpeername, then a SO_RCVBUF setsockopt/getsockopt round trip.
+func introspectSocket(fd int) error {
+	if _, err := syscall.Getsockname(fd); err != nil {
 		return fmt.Errorf("getsockname: %w", err)
 	}
-	if _, err := syscall.Getpeername(acceptedFD); err != nil {
+	if _, err := syscall.Getpeername(fd); err != nil {
 		return fmt.Errorf("getpeername: %w", err)
 	}
-	if err := syscall.SetsockoptInt(acceptedFD, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 32768); err != nil {
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 32768); err != nil {
 		return fmt.Errorf("setsockopt: %w", err)
 	}
-	if _, err := syscall.GetsockoptInt(acceptedFD, syscall.SOL_SOCKET, syscall.SO_RCVBUF); err != nil {
+	if _, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF); err != nil {
 		return fmt.Errorf("getsockopt: %w", err)
 	}
-
 	return nil
 }
