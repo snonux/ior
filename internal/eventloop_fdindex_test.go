@@ -153,14 +153,13 @@ func randomFdFile(rng *rand.Rand, fd int32) *file.FdFile {
 	}
 }
 
-// applyRandomFdOp performs one randomly chosen mutation on a small (pid, fd)
-// space, so collisions, re-registrations and every removal path - close,
-// close_range (bounded and open-ended), exit, exec, cache deletes and LRU
-// evictions under the tiny caps - are all exercised.
-func applyRandomFdOp(rng *rand.Rand, fdt *fdTracker) {
-	// More pids than maxIdlePidKeys, so the idle-list cap is exercised too.
-	pid := uint32(1 + rng.IntN(maxIdlePidKeys+8))
-	fd := int32(rng.IntN(8))
+// applyRandomFdOp performs one randomly chosen mutation on the (pid, fd)
+// space [1, pids] x [0, fds), so collisions, re-registrations and every
+// removal path - close, close_range (bounded and open-ended), exit, exec,
+// cache deletes and LRU evictions under the caps - are all exercised.
+func applyRandomFdOp(rng *rand.Rand, fdt *fdTracker, pids, fds int) {
+	pid := uint32(1 + rng.IntN(pids))
+	fd := int32(rng.IntN(fds))
 	switch rng.IntN(10) {
 	case 0, 1:
 		fdt.set(fd, pid, randomFdFile(rng, fd))
@@ -196,8 +195,77 @@ func TestFdIndexStaysConsistentUnderRandomOps(t *testing.T) {
 	fdt.maxFiles = 10
 	fdt.maxCacheSize = 6
 	for step := 0; step < 20000; step++ {
-		applyRandomFdOp(rng, fdt)
+		// More pids than maxIdlePidKeys, so the idle-list cap is exercised too.
+		applyRandomFdOp(rng, fdt, maxIdlePidKeys+8, 8)
 		assertFdIndexConsistent(t, fdt)
+	}
+}
+
+// TestFdIndexStaysConsistentWithSetRebuilds is the second phase of the
+// random-ops test: a few pids, descriptor numbers and caps well above
+// maxRecycledSetSize, and bursts of registrations, so sets grow past the
+// threshold and the shrinkKeySet rebuilds interleave with LRU eviction,
+// close_range, deletePid and dropOnExec. It also counts the rebuilds of live
+// fd-table and procfs-cache sets (a live entry whose peak drops), so a
+// broken rebuild path cannot pass by never running.
+func TestFdIndexStaysConsistentWithSetRebuilds(t *testing.T) {
+	const pids, fds = 3, 8 * maxRecycledSetSize
+	rng := rand.New(rand.NewPCG(8, 5))
+	fdt := newFDTracker(nil)
+	fdt.maxFiles = 2 * fds
+	fdt.maxCacheSize = fds
+	var fileRebuilds, cacheRebuilds int
+	for step := 0; step < 20000; step++ {
+		before := snapshotPeaks(fdt)
+		if rng.IntN(25) == 0 {
+			fillBurst(rng, fdt, pids, fds)
+		} else {
+			applyRandomFdOp(rng, fdt, pids, fds)
+		}
+		assertFdIndexConsistent(t, fdt)
+		for pid, keys := range fdt.pidIndex {
+			prev, ok := before[pid]
+			if !ok || prev.keys != keys {
+				continue
+			}
+			if keys.peakFiles < prev.files {
+				fileRebuilds++
+			}
+			if keys.peakCache < prev.cache {
+				cacheRebuilds++
+			}
+		}
+	}
+	if fileRebuilds == 0 || cacheRebuilds == 0 {
+		t.Fatalf("live set rebuilds: files %d, cache %d; want both > 0", fileRebuilds, cacheRebuilds)
+	}
+}
+
+type peakSnapshot struct {
+	keys         *pidFdKeys
+	files, cache int
+}
+
+func snapshotPeaks(fdt *fdTracker) map[uint32]peakSnapshot {
+	snap := make(map[uint32]peakSnapshot, len(fdt.pidIndex))
+	for pid, keys := range fdt.pidIndex {
+		snap[pid] = peakSnapshot{keys: keys, files: keys.peakFiles, cache: keys.peakCache}
+	}
+	return snap
+}
+
+// fillBurst registers many descriptors of one pid in one of the two maps,
+// pushing its set past maxRecycledSetSize.
+func fillBurst(rng *rand.Rand, fdt *fdTracker, pids, fds int) {
+	pid := uint32(1 + rng.IntN(pids))
+	cache := rng.IntN(2) == 0
+	for range 2 * maxRecycledSetSize {
+		fd := int32(rng.IntN(fds))
+		if cache {
+			fdt.setProcFdCache(fd, pid, randomFdFile(rng, fd))
+		} else {
+			fdt.set(fd, pid, randomFdFile(rng, fd))
+		}
 	}
 }
 
@@ -490,4 +558,53 @@ func BenchmarkCloseRangeAfterShrink(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		fdt.closeRange(100, -1, benchTargetPid)
 	}
+}
+
+// TestLiveOversizedCacheSetIsShrunk is the procfs-cache counterpart of
+// TestLiveOversizedSetIsShrunk: the cache set of a live pid is rebuilt
+// right-sized once drained, whether by deleteProcFdCacheRange (close_range)
+// or by dropOnExec ranging over it.
+func TestLiveOversizedCacheSetIsShrunk(t *testing.T) {
+	const peak = 8 * maxRecycledSetSize
+	fdt := newFDTracker(nil)
+	fdt.maxCacheSize = 2 * peak
+	fill := func(from int32) {
+		for fd := from; fd < peak; fd++ {
+			flags := int32(syscall.O_RDONLY)
+			if fd%2 == 1 {
+				flags |= syscall.O_CLOEXEC
+			}
+			fdt.setProcFdCache(fd, crossPidA, file.NewFd(fd, "/cached", flags))
+		}
+	}
+	fill(0)
+	bigSet := mapIdentity(fdt.pidIndex[crossPidA].cache)
+	fdt.deleteProcFdCacheRange(4, -1, crossPidA)
+	keys := fdt.pidIndex[crossPidA]
+	if keys == nil || len(keys.cache) != 4 {
+		t.Fatalf("index after cache range delete = %+v, want 4 cache keys", keys)
+	}
+	if mapIdentity(keys.cache) == bigSet || keys.peakCache > maxRecycledSetSize {
+		t.Fatalf("cache set not rebuilt after shrinking to 4 keys (peak %d)", keys.peakCache)
+	}
+	assertFdIndexConsistent(t, fdt)
+
+	// Grow again past the threshold, then let dropOnExec drain the
+	// O_CLOEXEC half and trigger the rebuild while it ranges over the set.
+	fill(4)
+	bigSet = mapIdentity(fdt.pidIndex[crossPidA].cache)
+	for fd := int32(4); fd < peak-2; fd++ {
+		fdt.procFdCache[fdKey(crossPidA, fd)].MergeFlags(syscall.O_CLOEXEC, syscall.O_CLOEXEC)
+	}
+	fdt.dropOnExec(crossPidA)
+	keys = fdt.pidIndex[crossPidA]
+	// Survivors: fds 0 and 2 (known clear from the first fill) and peak-2
+	// (even, never marked); peak-1 is odd and was opened O_CLOEXEC.
+	if keys == nil || len(keys.cache) != 3 {
+		t.Fatalf("index after exec = %+v, want 3 cache keys", keys)
+	}
+	if mapIdentity(keys.cache) == bigSet || keys.peakCache > maxRecycledSetSize {
+		t.Fatalf("cache set not rebuilt by dropOnExec (peak %d)", keys.peakCache)
+	}
+	assertFdIndexConsistent(t, fdt)
 }
