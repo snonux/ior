@@ -85,7 +85,14 @@ type Model struct {
 	// applied. It is empty whenever the displayed globalFilter is the one
 	// the user last asked for, and is rendered ahead of the filter summary
 	// in the chrome so a refusal is read before the filter that survived it.
-	filterNotice    string
+	filterNotice string
+	// familyHint says the dashboard is scoped to a syscall family with no
+	// attached probe. It is kept apart from filterNotice because the two are
+	// independent kinds of notice with independent lifetimes: the hint
+	// follows the family scope and the attach state, the notice follows
+	// filter requests. Sharing one field let a hint refresh (after any probe
+	// change) overwrite a refusal the user had not read yet.
+	familyHint      string
 	recordingStatus string
 	pidFilter       int
 	// The three table tabs' state (selected offset/col, live sort, viz mode,
@@ -1051,6 +1058,14 @@ func (m *Model) SetFilterNotice(notice string) {
 	m.filterNotice = notice
 }
 
+// SetFamilyHint sets (or, with an empty string, clears) the "family not
+// traced" hint. It never touches the filter notice, so a pending refusal
+// stays visible however often the hint is refreshed; both are rendered, the
+// notice first (see filterSummary).
+func (m *Model) SetFamilyHint(hint string) {
+	m.familyHint = hint
+}
+
 // SetRecordingStatus updates the visible recording state summary rendered in the dashboard chrome.
 func (m *Model) SetRecordingStatus(status string) {
 	m.recordingStatus = status
@@ -1126,10 +1141,15 @@ func (m *Model) filterSummary() string {
 	// (filter stack, recording status, auto-reset label) on every render tick.
 	var b strings.Builder
 	// The refusal goes first: it is the newest thing that happened to the
-	// filter, and appendStatusText trims this summary from the right.
-	if m.filterNotice != "" {
-		b.WriteString(m.filterNotice)
-		b.WriteString(" | ")
+	// filter, and appendStatusText trims this summary from the right. The
+	// family hint follows it, so on a narrow row the hint - whose attach state
+	// the probes modal's Families view also shows - is trimmed before the
+	// refusal, which they cannot get back anywhere else.
+	for _, notice := range []string{m.filterNotice, m.familyHint} {
+		if notice != "" {
+			b.WriteString(notice)
+			b.WriteString(" | ")
+		}
 	}
 	b.WriteString("filter: ")
 	b.WriteString(presenter.FilterSummary(m.globalFilter))

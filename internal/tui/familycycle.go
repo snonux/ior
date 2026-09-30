@@ -61,8 +61,9 @@ func scopedFamily(filter globalfilter.Filter) string {
 //
 // The view filter only scopes what is shown; it attaches nothing. So when the
 // new family has no attached probe, the status line says so and how to attach
-// it (refreshFamilyHint) instead of leaving an unexplained empty view. A
-// refused filter keeps its refusal notice instead.
+// it (refreshFamilyHint, run by replaceGlobalFilter's syncDashboardFilterState)
+// instead of leaving an unexplained empty view. A refused re-scope leaves the
+// scope - and so the hint - as it was, next to the refusal notice.
 func (m *Model) cycleFamilyScope(delta int) (tea.Model, tea.Cmd) {
 	scoped := m.filters.current().Clone()
 	nextRank := stepFamilyRank(currentFamilyRank(scoped), delta)
@@ -71,9 +72,5 @@ func (m *Model) cycleFamilyScope(delta int) (tea.Model, tea.Cmd) {
 	} else {
 		scoped.Family = nil
 	}
-	next, cmd := m.replaceGlobalFilter(scoped)
-	if m.filters.current().Equal(scoped) {
-		m.refreshFamilyHint()
-	}
-	return next, cmd
+	return m.replaceGlobalFilter(scoped)
 }

@@ -465,10 +465,6 @@ type Model struct {
 	// startFamilyBatch); it lives here, not in the probes modal, because the
 	// modal is rebuilt on every open.
 	familyRun familyRunState
-	// familyHintShown reports that the dashboard's filter notice currently
-	// holds a "family not traced" hint (see refreshFamilyHint), so it may be
-	// cleared again without erasing a filter-refusal notice.
-	familyHintShown bool
 
 	kb keyboardState
 }
@@ -860,10 +856,9 @@ func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 	m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 	m.dashboard.SetGlobalFilter(m.filters.current())
+	// The new session's probe manager is published now, so this also gives a
+	// family scope that was set while it attached its "not traced" hint.
 	m.syncDashboardFilterState()
-	// The new session's probe manager is published now; a family scope that
-	// was set while it attached gets its "not traced" hint here.
-	m.refreshFamilyHint()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	m.dashboard = next.(*dashboardui.Model)
@@ -1389,7 +1384,7 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	// showing. This changes the one showing - and restarts the trace - so the
 	// notice would be left explaining a filter the user is no longer looking
 	// at, in a session it never applied to.
-	m.setFilterNotice("")
+	m.dashboard.SetFilterNotice("")
 	m.syncDashboardFilterState()
 }
 
@@ -1403,13 +1398,16 @@ func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
 }
 
 // syncDashboardFilterState pushes all filter-related state (PID, global
-// filter, label stack, recording status) into the dashboard model so the
-// status bar stays consistent.
+// filter, label stack, recording status, family "not traced" hint) into the
+// dashboard model so the status bar stays consistent. Every change of the
+// filter on screen comes through here, which is what keeps the hint in step
+// with the family scope (undo, PID/TID pick, pushed filters alike).
 func (m *Model) syncDashboardFilterState() {
 	m.dashboard.SetPidFilter(m.proc.pid)
 	m.dashboard.SetGlobalFilter(m.filters.current())
 	m.dashboard.SetFilterStack(m.filters.labelStack())
 	m.dashboard.SetRecordingStatus(recorderStatus(m.runtime.Recorder()))
+	m.refreshFamilyHint()
 }
 
 // refuseUnusableFilter reports whether filter is one the trace pipeline cannot
@@ -1428,15 +1426,16 @@ func (m *Model) syncDashboardFilterState() {
 // the only writer - undoGlobalFilter and setProcessFilters clear it too,
 // because both change the filter on screen without going through here - but it
 // is the only one that ever sets a reason, and between the three the notice
-// cannot outlive the filter it describes. (refreshFamilyHint also writes the
-// notice, with a hint rather than a reason; see there.)
+// cannot outlive the filter it describes. (The family "not traced" hint is a
+// separate dashboard slot that refreshFamilyHint owns; it never touches this
+// notice.)
 func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
 	err := filter.ValidateTracepointFields()
 	if err == nil {
-		m.setFilterNotice("")
+		m.dashboard.SetFilterNotice("")
 		return false
 	}
-	m.setFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
+	m.dashboard.SetFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
 	return true
 }
 
@@ -1540,7 +1539,7 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	// the rest), so there is nothing to re-check here - but the filter on
 	// screen is about to change, so a refusal notice describing the previous
 	// one must not survive it.
-	m.setFilterNotice("")
+	m.dashboard.SetFilterNotice("")
 	m.setGlobalFilter(prev)
 	if m.router.current() != ScreenDashboard || before.Equal(prev) {
 		return m, nil
