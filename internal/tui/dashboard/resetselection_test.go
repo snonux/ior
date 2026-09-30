@@ -315,10 +315,11 @@ func TestWishExpiresAfterGrace(t *testing.T) {
 // TestRecycledPIDDoesNotMatchAStaleKey: a process row's key carries its
 // lifetime ordinal (processKey), so the wish for the recycled PID's second
 // lifetime "8#1" is not satisfied by another process' row for PID 8 (its
-// first lifetime, "8"). Caveat by design: statsengine.Engine.Reset starts
-// every ordinal at 0 again, so across a reset the wish for "8#1" is not
-// satisfied by the same process' fresh row either; it is dropped after the
-// grace and the selection clamps.
+// first lifetime, "8"). The engine keeps the ordinals stable across
+// Engine.Reset (see statsengine carryOver), so the same process comes back as
+// "8#1" and satisfies the wish - the two end-to-end tests in
+// resetidentity_test.go run that against the real engine; this one pins the
+// key matching on its own with hand-built snapshots.
 func TestRecycledPIDDoesNotMatchAStaleKey(t *testing.T) {
 	fakeStickyClock(t)
 	rows := append(pidsFrom(1, 7), statsengine.ProcessSnapshot{PID: 8, Lifetime: 1, Comm: "second", Syscalls: 1})
@@ -506,6 +507,15 @@ func TestStickyKeyStateMachine(t *testing.T) {
 	if k.key != "" {
 		t.Fatalf("a re-anchor onto another key left the wish %q", k.key)
 	}
+	// An empty selected (the capture that skipped the wish) ends it as well,
+	// as does a selected that is neither the wish nor listed.
+	for _, other := range []string{"", "gone"} {
+		k.remember("a")
+		reanchorSticky(0, &k, []string{"x", "y"}, other, find)
+		if k.key != "" {
+			t.Fatalf("a re-anchor for %q left the wish %q", other, k.key)
+		}
+	}
 	// nil storage is allowed.
 	if got := reanchorSticky(3, nil, []string(nil), "a", find); got != 3 {
 		t.Fatalf("nil wanted, empty list: offset %d, want 3", got)
@@ -536,5 +546,42 @@ func TestKeyedSelectionKeepsItsKeyThroughEmptyAndPartialLists(t *testing.T) {
 	sel.keep(func() { keys = []string{"x", "y", "b"} })
 	if offset != 2 || sel.selectedKey() != "b" {
 		t.Fatalf("refill: selected %q at %d, want b at 2", sel.selectedKey(), offset)
+	}
+}
+
+// TestFilesWishDoesNotOutliveTheTableView: the sorted Files table's wish (its
+// capture is the path) is dropped by a refresh that ran while the table was
+// not what the tab showed (the directory view), where the capture yields no
+// path. Switching back must not have the stale wish yank the selection off
+// the row the user is on.
+func TestFilesWishDoesNotOutliveTheTableView(t *testing.T) {
+	fakeStickyClock(t)
+	files := func(n int) *statsengine.Snapshot {
+		rows := make([]statsengine.FileSnapshot, 0, n)
+		for i := range n {
+			rows = append(rows, statsengine.FileSnapshot{Path: fmt.Sprintf("/d/f%02d", i), Accesses: 1})
+		}
+		return filesSnapshot(rows...)
+	}
+	m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
+	m.activeTab = TabFiles
+	m.width, m.height = 120, 28
+	m.filesTab.sort = tableSortState[fileSortKey]{active: true, key: fileSortKeyPath}
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: files(12)})
+	m = pressJ(t, m, 7)
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: filesSnapshot()}) // reset: wish for /d/f07
+	if m.filesTab.wanted.key == "" {
+		t.Fatalf("precondition: no wish pending after the empty snapshot")
+	}
+
+	m.filesDirGrouped = true // the user switched to the directory view ...
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: files(3)})
+	if m.filesTab.wanted.key != "" {
+		t.Fatalf("a refresh that skipped the table left the wish %q", m.filesTab.wanted.key)
+	}
+	m.filesDirGrouped = false // ... and back, with the row the wish named listed again
+	m = tickStats(t, m, messages.StatsTickMsg{Snap: files(12)})
+	if m.filesTab.offset == 7 {
+		t.Fatalf("the stale wish pulled the selection onto /d/f07 (offset %d)", m.filesTab.offset)
 	}
 }

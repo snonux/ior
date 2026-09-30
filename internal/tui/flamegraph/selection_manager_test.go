@@ -3,7 +3,20 @@ package flamegraph
 import (
 	"maps"
 	"testing"
+	"time"
+
+	common "ior/internal/tui/common"
 )
+
+// fakeWishClock replaces the wanted-path clock with one the test advances.
+func fakeWishClock(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Unix(2_000_000, 0)
+	old := wishClock
+	wishClock = func() time.Time { return now }
+	t.Cleanup(func() { wishClock = old })
+	return &now
+}
 
 func TestFrameFilterNilAdmitsEverything(t *testing.T) {
 	var none frameFilter
@@ -168,7 +181,7 @@ func TestRestoreByPathDropsTheWishWhenTheUserMoves(t *testing.T) {
 
 	// The user picks another frame of a layout that still lacks root/a/a1.
 	partial := []tuiFrame{full[0], full[3]}
-	s.selectedIdx = 1
+	s.selectFrame(partial, buildFrameAncestry(partial), 1)
 	s.restoreByPath(partial, s.selectedPath(partial))
 	s.restoreByPath(full, s.selectedPath(partial))
 	if got := s.selectedPath(full); got != "root"+pathSeparator+"b" {
@@ -201,5 +214,116 @@ func TestSelectionManagerResetForgetsTheWantedPath(t *testing.T) {
 	s.restoreByPath(full, s.selectedPath(full[:1]))
 	if got := s.selectedPath(full); got != "root" {
 		t.Fatalf("selected %q after reset, want root", got)
+	}
+}
+
+// wishedSelection returns a manager whose selection of root/a/a1 was lost to a
+// root-only layout (the reset), so it holds a pending wish.
+func wishedSelection(full []tuiFrame) SelectionManager {
+	s := newSelectionManager()
+	s.selectedIdx = 2
+	s.restoreByPath(full[:1], s.selectedPath(full))
+	return s
+}
+
+// TestUserWalkingAwayAndBackOntoTheLandedFrameCancelsTheWish is the case the
+// old path-equality inference got wrong: the user leaves the fallback (root)
+// frame and returns to it, so the selection sits on the landed path again, but
+// the user decided to be on root - the wish must not pull it away later.
+func TestUserWalkingAwayAndBackOntoTheLandedFrameCancelsTheWish(t *testing.T) {
+	fakeWishClock(t)
+	full := jumpMatchFrames()
+	ancestry := buildFrameAncestry(full)
+	s := wishedSelection(full)
+
+	s.selectFrame(full, ancestry, 3) // away ...
+	s.selectFrame(full, ancestry, 0) // ... and back onto root
+	s.restoreByPath(full, s.selectedPath(full))
+	if got := s.selectedPath(full); got != "root" {
+		t.Fatalf("selected %q, want the user's root, not the old wish", got)
+	}
+	if s.wantedPath != "" {
+		t.Fatalf("wish %q survived a user move", s.wantedPath)
+	}
+}
+
+// TestEveryUserMoveCancelsTheWish drives each user-facing mutator, including
+// ones that happen not to change the index (a clamped move on the fallback
+// frame): a decision by the user must never be undone by a stale wish.
+func TestEveryUserMoveCancelsTheWish(t *testing.T) {
+	fakeWishClock(t)
+	full := jumpMatchFrames()
+	ancestry := buildFrameAncestry(full)
+	moves := map[string]func(s *SelectionManager){
+		"selectFrame":  func(s *SelectionManager) { s.selectFrame(full, ancestry, 0) },
+		"jumpToMatch":  func(s *SelectionManager) { s.jumpToMatch(full, ancestry, nil, 1) },
+		"moveVertical": func(s *SelectionManager) { s.moveVertical(full[:1], 1, nil) },
+		"moveVerticalWithFallback": func(s *SelectionManager) {
+			s.moveVerticalWithFallback(full[:1], nil, 1, -1, 1)
+		},
+		"moveSibling":   func(s *SelectionManager) { s.moveSibling(full[:1], 1, nil) },
+		"jumpToTop":     func(s *SelectionManager) { s.jumpToTop(full[:1], nil) },
+		"jumpToRoot":    func(s *SelectionManager) { s.jumpToRoot(full[:1], "", nil) },
+		"moveTraversal": func(s *SelectionManager) { s.moveTraversal(full[:1], 1, nil) },
+		"reset":         func(s *SelectionManager) { s.reset() },
+	}
+	for name, move := range moves {
+		s := wishedSelection(full)
+		if s.wantedPath == "" {
+			t.Fatalf("%s: precondition: no wish pending", name)
+		}
+		move(&s)
+		if s.wantedPath != "" {
+			t.Errorf("%s left the wish %q pending", name, s.wantedPath)
+		}
+	}
+}
+
+// TestSystemAdjustmentsKeepTheWish: clamp / ensureNavigable / ensureVisible
+// run on every refresh, not on the user's say-so, so they must not end the
+// wish.
+func TestSystemAdjustmentsKeepTheWish(t *testing.T) {
+	fakeWishClock(t)
+	full := jumpMatchFrames()
+	s := wishedSelection(full)
+	s.clamp(full[:1])
+	s.ensureNavigable(full[:1], nil, nil)
+	s.ensureVisible(full[:1], 10, nil)
+	if s.wantedPath != full[2].Path {
+		t.Fatalf("wish = %q after system adjustments, want %q", s.wantedPath, full[2].Path)
+	}
+}
+
+// TestWantedPathExpiresAfterTheGrace: the flame wish has the same bound as
+// the dashboard tables'. The window starts with the first wish, repeating the
+// wish does not extend it, and after it the fallback frame is just where the
+// selection is.
+func TestWantedPathExpiresAfterTheGrace(t *testing.T) {
+	now := fakeWishClock(t)
+	full := jumpMatchFrames()
+	s := wishedSelection(full)
+
+	*now = now.Add(common.SelectionWishGrace / 2)
+	s.restoreByPath(full[:1], s.selectedPath(full[:1])) // repeats the wish
+	*now = now.Add(common.SelectionWishGrace/2 + time.Second)
+	s.restoreByPath(full[:1], s.selectedPath(full[:1]))
+	if s.wantedPath != "" {
+		t.Fatalf("wish %q outlived the grace", s.wantedPath)
+	}
+	s.restoreByPath(full, s.selectedPath(full[:1]))
+	if got := s.selectedPath(full); got != "root" {
+		t.Fatalf("selected %q after the wish expired, want root", got)
+	}
+}
+
+// TestWantedPathWithinGraceStillReturns pins the other side of the bound.
+func TestWantedPathWithinGraceStillReturns(t *testing.T) {
+	now := fakeWishClock(t)
+	full := jumpMatchFrames()
+	s := wishedSelection(full)
+	*now = now.Add(common.SelectionWishGrace - time.Second)
+	s.restoreByPath(full, s.selectedPath(full[:1]))
+	if got := s.selectedPath(full); got != full[2].Path {
+		t.Fatalf("selected %q within the grace, want %q", got, full[2].Path)
 	}
 }

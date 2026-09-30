@@ -9,6 +9,7 @@ import (
 	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
+	common "ior/internal/tui/common"
 	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
@@ -545,5 +546,73 @@ func TestSelectionSurvivesLiveTrieReset(t *testing.T) {
 	refresh()
 	if got := m.sel.selectedPath(m.anim.currentFrames()); got != want {
 		t.Fatalf("selected %q after the refill, want %q", got, want)
+	}
+}
+
+// resetScenario builds a live flame model whose deepest frame is selected,
+// then resets the trie and refreshes to the empty layout, so the model holds
+// a wish for that frame. refill puts the data back and refreshes.
+func resetScenario(t *testing.T) (m *Model, wanted string, refill func()) {
+	t.Helper()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m = NewModel(trie)
+	m.width, m.height = 120, 30
+	refresh := func() {
+		t.Helper()
+		cmd := m.RefreshFromLiveTrieCmd()
+		if cmd == nil {
+			t.Fatalf("expected a refresh command")
+		}
+		m.handleSnapshotReady(cmd().(flameSnapshotReadyMsg))
+		for i := 0; i < 200 && m.anim.isAnimating(); i++ {
+			m.tickAnimation()
+		}
+	}
+	refresh()
+	frames := m.anim.currentFrames()
+	deepest := 0
+	for idx, frame := range frames {
+		if frame.Depth > frames[deepest].Depth {
+			deepest = idx
+		}
+	}
+	m.sel.selectFrame(frames, m.anim.currentAncestry(), deepest)
+	wanted = frames[deepest].Path
+
+	trie.Reset()
+	refresh()
+	if m.sel.wantedPath != wanted {
+		t.Fatalf("precondition: wish %q, want %q", m.sel.wantedPath, wanted)
+	}
+	return m, wanted, func() { ingestTwoEventsForAsync(t, trie); refresh() }
+}
+
+// TestUserKeyDuringResetCancelsTheFlameWish: a key press on the root-only
+// layout of a reset is the user's decision, even though it changes nothing
+// visible, so the refill does not pull the selection away from root.
+func TestUserKeyDuringResetCancelsTheFlameWish(t *testing.T) {
+	fakeWishClock(t)
+	m, _, refill := resetScenario(t)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'k', Text: "k"})
+	if m.sel.wantedPath != "" {
+		t.Fatalf("the key press left the wish %q", m.sel.wantedPath)
+	}
+	m.lastKeyAt = time.Time{} // end the drive window so the refill refreshes
+	refill()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != "root" {
+		t.Fatalf("selected %q after the user pressed a key on root, want root", got)
+	}
+}
+
+// TestFlameWishExpiresAfterTheGraceAcrossRefreshes: the wish is bounded like
+// the dashboard tables' one, through the real refresh path.
+func TestFlameWishExpiresAfterTheGraceAcrossRefreshes(t *testing.T) {
+	now := fakeWishClock(t)
+	m, _, refill := resetScenario(t)
+	*now = now.Add(common.SelectionWishGrace + time.Second)
+	refill()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != "root" {
+		t.Fatalf("selected %q after the wish expired, want root", got)
 	}
 }

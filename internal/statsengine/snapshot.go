@@ -146,7 +146,9 @@ type ProcessSnapshot struct {
 	PID uint32
 	// Lifetime tells apart the rows of one PID: 0 for the first process seen
 	// with it in the session, counting up with each one that exited before
-	// (see Engine.RetireProcess). It is stable for the life of a row.
+	// (see Engine.RetireProcess). It is stable for the life of a row and for
+	// the life of the process: Engine.Reset clears the rows but a process that
+	// is still running reappears with the same Lifetime.
 	Lifetime uint32
 	Comm     string
 

@@ -876,6 +876,7 @@ func (m *Model) jumpToMatch(direction int) {
 // first match in direction jumpDir, or, when jumpDir is 0 (no matches or the
 // filter was cleared), onto the nearest navigable frame.
 func (m *Model) followSearchResult(jumpDir int) {
+	m.sel.cancelWish() // applying a query is a user decision about the selection
 	if jumpDir != 0 {
 		m.jumpToMatch(jumpDir)
 		return
@@ -883,7 +884,11 @@ func (m *Model) followSearchResult(jumpDir int) {
 	m.ensureSelectionNavigable()
 }
 
+// zoomIn, zoomUndo, zoomReset and a zoom click re-root the layout on the
+// user's say-so, so each cancels the selection wish first: a frame remembered
+// from before the zoom is no longer the one the user is looking at.
 func (m *Model) zoomIn() {
+	m.sel.cancelWish()
 	frames := m.anim.currentFrames()
 	if len(frames) == 0 || m.snapshot == nil {
 		m.statusMessage = "Zoom unavailable: no frame selected"
@@ -904,6 +909,7 @@ func (m *Model) zoomIn() {
 }
 
 func (m *Model) zoomUndo() {
+	m.sel.cancelWish()
 	if !m.zoom.undo(m.snapshot) {
 		m.statusMessage = "Zoom undo unavailable"
 		return
@@ -919,6 +925,7 @@ func (m *Model) zoomUndo() {
 // zoomReset resets the zoom to the full tree. Delegates the "already at root"
 // check to ZoomNavigator.alreadyAtRoot, and the state clear to ZoomNavigator.reset.
 func (m *Model) zoomReset() {
+	m.sel.cancelWish()
 	if m.zoom.alreadyAtRoot() {
 		m.statusMessage = "Zoom already at root"
 		return
@@ -1004,6 +1011,7 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 	if idx < 0 {
 		return false
 	}
+	m.sel.cancelWish() // a click is a user move whether or not it zooms
 	clickedPath := m.anim.currentFrames()[idx].Path
 	currentRoot := m.currentRootPath()
 	if clickedPath == currentRoot {

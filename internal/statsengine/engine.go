@@ -34,6 +34,7 @@ type Accumulator interface {
 	// Ingest records one event pair into the in-memory aggregates.
 	Ingest(pair *event.Pair)
 	// Reset clears all accumulated stats and restarts series baselines.
+	// Process rows go too, but not process identity (see Engine.Reset).
 	Reset()
 }
 
@@ -147,7 +148,12 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 	}
 }
 
-// Reset clears all accumulated stats and restarts series baselines.
+// Reset clears all accumulated stats and restarts series baselines. The
+// per-process rows are cleared too, but not the identity of the processes:
+// a process that was live keeps its lifetime ordinal when it reappears, so the
+// TUI, which selects a process by its ID ("8#1" for the second process to
+// hold PID 8), still finds the same process after the 30s auto-reset, and a
+// different process that later inherits the PID gets an ID of its own.
 func (e *Engine) Reset() {
 	if e == nil {
 		return
@@ -171,7 +177,8 @@ func (e *Engine) Reset() {
 	e.syscalls = newSyscallAccumulator()
 	e.files = newFileRankerWithConfig(e.topN)
 	e.dirs = newDirRankerWithConfig(e.topN)
-	e.processes = newProcessAccumulatorWithConfig(e.topN)
+	// The rows go, the process identities stay: see carryOver.
+	e.processes = e.processes.carryOver()
 	e.latencyHist = newHistogram()
 	e.gapHist = newHistogram()
 	e.latencySeries = newRingTimeSeries()
@@ -210,7 +217,7 @@ func (e *Engine) Ingest(pair *event.Pair) {
 // for pid opens a new row. It must be called in stream order with Ingest (the
 // event loop does both from its own goroutine), so the dying process's last
 // pairs land before the retirement and the successor's first ones after it.
-// Reset discards retired rows along with everything else.
+// Reset discards retired rows (their PIDs keep their ordinals, see Reset).
 func (e *Engine) RetireProcess(pid uint32) {
 	if e == nil {
 		return

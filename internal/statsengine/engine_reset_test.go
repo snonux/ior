@@ -1,6 +1,8 @@
 package statsengine
 
 import (
+	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -33,8 +35,9 @@ func TestEngineResetClearsAccumulatedStats(t *testing.T) {
 }
 
 // TestEngineResetClearsRetiredProcesses checks that Reset drops the rows of
-// exited processes and their lifetime numbering too: after a reset, a process
-// with a previously recycled PID starts again as lifetime 0, alone.
+// exited processes: after a reset only the rows of processes seen again exist.
+// Their identity survives (see TestEngineResetKeepsProcessIdentity), so the
+// still-running second process of PID 7 comes back as lifetime 1, alone.
 func TestEngineResetClearsRetiredProcesses(t *testing.T) {
 	e := NewEngine(8)
 	var nilEngine *Engine
@@ -48,14 +51,118 @@ func TestEngineResetClearsRetiredProcesses(t *testing.T) {
 	}
 
 	e.Reset()
+	if snap, err := e.Snapshot(); err != nil || len(snap.Processes()) != 0 {
+		t.Fatalf("expected no process rows right after reset, got %+v (err %v)", snap, err)
+	}
 	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 7, types.READ_CLASSIFIED, "after", 7, "/tmp/a", 7, 0, 1000, 50))
 	snap, err := e.Snapshot()
 	if err != nil {
 		t.Fatalf("unexpected snapshot error after reset: %v", err)
 	}
 	procs := snap.Processes()
-	if len(procs) != 1 || procs[0].Comm != "after" || procs[0].Lifetime != 0 || procs[0].Syscalls != 1 {
-		t.Fatalf("expected only a fresh lifetime-0 row after reset, got %+v", procs)
+	if len(procs) != 1 || procs[0].Comm != "after" || procs[0].Lifetime != 1 || procs[0].Syscalls != 1 {
+		t.Fatalf("expected only the running process' lifetime-1 row after reset, got %+v", procs)
+	}
+}
+
+// pidLifetimes returns the Lifetime of the row of every process in the
+// engine's snapshot, keyed by "pid/comm", so a test can tell rows of one PID
+// apart by their label.
+func pidLifetimes(t *testing.T, e *Engine) map[string]uint32 {
+	t.Helper()
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	got := map[string]uint32{}
+	for _, p := range snap.Processes() {
+		got[fmt.Sprintf("%d/%s", p.PID, p.Comm)] = p.Lifetime
+	}
+	return got
+}
+
+func ingestPID(e *Engine, pid uint32, comm string) {
+	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 7, types.READ_CLASSIFIED, comm, pid, "/tmp/a", 7, 0, 1000, 50))
+}
+
+// TestEngineResetKeepsProcessIdentity: the TUI selects a process by PID and
+// lifetime ordinal, so Reset must not renumber the processes that keep
+// running. A live second process of PID 8 reopens as 8#1, not as 8; a live
+// first process stays 8 - and the process that takes PID 8 after either exits
+// gets the next ordinal, never the one the selection was made on.
+func TestEngineResetKeepsProcessIdentity(t *testing.T) {
+	e := NewEngine(8)
+	ingestPID(e, 8, "first")
+	e.RetireProcess(8)
+	ingestPID(e, 8, "second") // live 8#1
+	ingestPID(e, 9, "nine")   // live 9#0
+	ingestPID(e, 10, "ten")
+	e.RetireProcess(10) // retired 10#0, no live row
+
+	e.Reset()
+	ingestPID(e, 8, "second")
+	ingestPID(e, 9, "nine")
+	ingestPID(e, 10, "successor") // a new process after the retired 10#0
+	want := map[string]uint32{"8/second": 1, "9/nine": 0, "10/successor": 1}
+	if got := pidLifetimes(t, e); !maps.Equal(got, want) {
+		t.Fatalf("lifetimes after reset = %v, want %v", got, want)
+	}
+}
+
+// TestEngineResetCarriedProcessThatExitsBeforeItsNextPair: process 8#1 is live
+// at the reset, exits before it issues another syscall (no row to retire),
+// and the next process with PID 8 must be 8#2 - not the 8#1 a selection
+// remembers for the dead one.
+func TestEngineResetCarriedProcessThatExitsBeforeItsNextPair(t *testing.T) {
+	e := NewEngine(8)
+	ingestPID(e, 8, "first")
+	e.RetireProcess(8)
+	ingestPID(e, 8, "second")
+
+	e.Reset()
+	e.RetireProcess(8) // exit of the carried process, no row yet
+	e.RetireProcess(8) // a duplicate exit record must not skip an ordinal
+	ingestPID(e, 8, "third")
+	if got, want := pidLifetimes(t, e), map[string]uint32{"8/third": 2}; !maps.Equal(got, want) {
+		t.Fatalf("lifetimes = %v, want %v", got, want)
+	}
+}
+
+// TestEngineResetIdentityAcrossSeveralResets: an idle process is not lost by
+// the second reset before it reappears, and a consumed ordinal does not
+// linger to renumber a later process.
+func TestEngineResetIdentityAcrossSeveralResets(t *testing.T) {
+	e := NewEngine(8)
+	ingestPID(e, 8, "first")
+	e.RetireProcess(8)
+	ingestPID(e, 8, "second")
+
+	e.Reset()
+	e.Reset() // 8#1 never spoke in between
+	ingestPID(e, 8, "second")
+	e.Reset() // the ordinal was consumed and is re-carried from the live row
+	e.RetireProcess(8)
+	ingestPID(e, 8, "third")
+	if got, want := pidLifetimes(t, e), map[string]uint32{"8/third": 2}; !maps.Equal(got, want) {
+		t.Fatalf("lifetimes = %v, want %v", got, want)
+	}
+}
+
+// TestProcessCarryOverIsBoundedByKnownPIDs pins the memory bound: carried
+// entries exist for PIDs the old accumulator knew and are consumed when the
+// PID reappears.
+func TestProcessCarryOverIsBoundedByKnownPIDs(t *testing.T) {
+	e := NewEngine(8)
+	for pid := uint32(1); pid <= 5; pid++ {
+		ingestPID(e, pid, "p")
+	}
+	e.Reset()
+	if n := len(e.processes.carried); n != 5 {
+		t.Fatalf("carried %d PIDs, want 5", n)
+	}
+	ingestPID(e, 3, "p")
+	if n := len(e.processes.carried); n != 4 {
+		t.Fatalf("carried %d PIDs after PID 3 reappeared, want 4", n)
 	}
 }
 

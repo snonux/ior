@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 )
 
 // keyedSelection is a selection offset into an ordered list of item
@@ -41,7 +42,7 @@ type keyedSelection struct {
 // hour does not re-select its old row when it is unfiltered, while the
 // window is still long enough (two default auto-reset intervals) for a
 // workload that is quiet after a reset to bring the selected item back.
-const stickyKeyGrace = time.Minute
+const stickyKeyGrace = common.SelectionWishGrace
 
 // stickyClock is the clock stickyKey expiry reads; tests replace it.
 var stickyClock = time.Now
@@ -159,9 +160,13 @@ func reanchorSticky[T any](current int, wanted *stickyKey, rows []T, selected st
 		return current
 	}
 	if wanted != nil {
-		// selected is the wish itself while one is pending (see capture); a
-		// different or empty selected means the wish is not what this
-		// re-anchor was about, so it does not linger.
+		// The wish ends when found, and also when this re-anchor was not about
+		// it: selected is the wish itself whenever the wish was pending at
+		// capture time (see capture), so a different or empty selected means
+		// the capture skipped it. That is reachable for the Files table, whose
+		// capture yields "" while it is not the shown sorted table (the user
+		// switched to a directory view); the wish must not linger to yank the
+		// selection when the table returns.
 		if _, found := find(rows, selected); found || wanted.key != selected {
 			wanted.forget()
 		}

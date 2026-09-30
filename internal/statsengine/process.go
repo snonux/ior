@@ -30,6 +30,25 @@ type processAccumulator struct {
 	// Ordinals keep the rows of one PID distinguishable (ProcessSnapshot.
 	// Lifetime), which the TUI uses as part of its selection key.
 	nextLifetime map[uint32]uint32
+	// carried holds the lifetime ordinal each PID of a previous accumulator
+	// (see carryOver) resumes with; an entry is consumed when a row of the
+	// PID opens. It is what keeps process identity stable across
+	// Engine.Reset. nextLifetime cannot do that: it is bounded by compaction
+	// and forgotten with the rows, and it cannot tell a process that is
+	// still running (its next pair reopens the same ordinal) from one that
+	// already exited (its successor takes the next one).
+	carried map[uint32]carriedLifetime
+}
+
+// carriedLifetime is one PID's ordinal across an accumulator swap.
+type carriedLifetime struct {
+	// next is the ordinal the PID's next row gets.
+	next uint32
+	// live is true while the process that held ordinal next is presumed to
+	// still run: the old accumulator had a live row for it and no group
+	// exit has been seen since. RetireProcess then spends the ordinal by
+	// advancing next.
+	live bool
 }
 
 type processStats struct {
@@ -81,7 +100,36 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 		maxSeen:      maxSeen,
 		byPID:        make(map[uint32]*processStats),
 		nextLifetime: make(map[uint32]uint32),
+		carried:      make(map[uint32]carriedLifetime),
 	}
+}
+
+// carryOver returns a fresh accumulator with a's configuration, whose rows
+// start empty but whose PIDs keep their lifetime ordinals: a process that was
+// live in a reopens with the ordinal it had (and so the same displayed ID,
+// "8#1" stays "8#1"), and a PID that only has retired rows continues after
+// them. Engine.Reset uses it so the TUI's selection, which is keyed by that ID,
+// still means the same process when the data refills, and a different process
+// that later inherits the PID gets a different ID instead of taking over the
+// selection. The carried table has at most one entry per PID the old
+// accumulator and its own carried entries knew, so it is bounded by the PIDs
+// of the system (pid_max), not by the traffic; entries are consumed as PIDs
+// reappear.
+func (a *processAccumulator) carryOver() *processAccumulator {
+	fresh := newProcessAccumulatorWithLimits(a.topN, a.maxSeen)
+	for pid, c := range a.carried {
+		fresh.carried[pid] = c
+	}
+	for pid, next := range a.nextLifetimes() {
+		if a.byPID[pid] != nil {
+			continue
+		}
+		fresh.carried[pid] = carriedLifetime{next: next}
+	}
+	for pid, stats := range a.byPID {
+		fresh.carried[pid] = carriedLifetime{next: stats.lifetime, live: true}
+	}
+	return fresh
 }
 
 // Add folds one syscall pair into the stats of its process (tgid).
@@ -135,6 +183,11 @@ func (a *processAccumulator) RetireProcess(pid uint32) {
 	}
 	stats := a.byPID[pid]
 	if stats == nil {
+		// A process carried over a reset that exits before its next pair has
+		// no row to retire, but its ordinal is spent all the same.
+		if c, ok := a.carried[pid]; ok && c.live {
+			a.carried[pid] = carriedLifetime{next: c.next + 1}
+		}
 		return
 	}
 	delete(a.byPID, pid)
@@ -157,9 +210,17 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 }
 
 // startLifetime opens and registers the live row of a new process with pid,
-// numbered after any retired predecessor with the same PID.
+// numbered after any retired predecessor with the same PID, or with the
+// ordinal carried over a reset (which wins: the carried entry exists only
+// until the first row of the PID opens, and there is no nextLifetime entry
+// for it before that).
 func (a *processAccumulator) startLifetime(pid uint32) *processStats {
-	stats := &processStats{pid: pid, lifetime: a.nextLifetime[pid]}
+	lifetime := a.nextLifetime[pid]
+	if c, ok := a.carried[pid]; ok {
+		lifetime = c.next
+		delete(a.carried, pid)
+	}
+	stats := &processStats{pid: pid, lifetime: lifetime}
 	delete(a.nextLifetime, pid)
 	a.byPID[pid] = stats
 	return stats
