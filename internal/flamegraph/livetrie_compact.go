@@ -13,9 +13,16 @@ const (
 	// liveTrieOtherFrame names the bucket that compaction folds the
 	// lowest-ranked sibling subtrees into. It is a leaf whose own value
 	// carries their totals, so every ancestor's total is unchanged by
-	// compaction. It is identified by trieNode.bucket, not by name, so a real
-	// frame with this name stays a separate node.
-	liveTrieOtherFrame = "[other]"
+	// compaction. Internally it is identified by trieNode.bucket, but
+	// snapshot consumers only see names: the TUI sorts siblings by name and
+	// zooms/selects by the name path. The name therefore must be one no frame
+	// can have, or a real comm/path component spelled "[other]" would share
+	// the bucket's name and path, swap places with it between refreshes and
+	// let zoom land on the wrong node. Every frame source splits on ';'
+	// (appendSplitFrames, appendPathFrames), so no frame ever contains one and the
+	// trailing ';' makes this name unique per parent. It is deliberately not
+	// a control character: those render as placeholders in the TUI.
+	liveTrieOtherFrame = "[other;]"
 )
 
 // compactMark is a node's scratch state during one compactLocked call.

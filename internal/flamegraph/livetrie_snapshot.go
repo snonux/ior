@@ -55,7 +55,10 @@ func (b *snapshotBuilder) build(node *trieNode, depth int) *SnapshotNode {
 		return snapshot
 	}
 	// Name order keeps the layout stable between refreshes regardless of the
-	// order in which frames were first seen.
+	// order in which frames were first seen. Sibling names are unique (the
+	// child map keys frames; the compaction bucket's name contains a ';' no
+	// frame can have), so the order is total and the unstable sort cannot
+	// reorder equal keys between refreshes.
 	slices.SortFunc(kept, func(left, right *trieNode) int {
 		return cmp.Compare(left.name, right.name)
 	})

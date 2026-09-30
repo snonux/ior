@@ -229,17 +229,17 @@ func TestLiveTrieCompactionWithZeroTotalsKeepsTheTopLevels(t *testing.T) {
 func TestLiveTrieBucketIsNotARealOtherFrame(t *testing.T) {
 	lt := NewLiveTrie([]string{"comm"}, "count", "")
 	lt.maxNodes = 40
-	lt.AddRecord(IterRecord{Comm: liveTrieOtherFrame, Cnt: Counter{Count: 1000}})
+	lt.AddRecord(IterRecord{Comm: "[other]", Cnt: Counter{Count: 1000}})
 	for i := 0; i < 100; i++ {
 		lt.AddRecord(IterRecord{Comm: fmt.Sprintf("noise%03d", i), Cnt: Counter{Count: 1}})
 	}
 	bucket := lt.root.bucket
-	real := lt.root.childMap[liveTrieOtherFrame]
+	real := lt.root.childMap["[other]"]
 	if bucket == nil || real == nil || bucket == real {
 		t.Fatalf("want a bucket separate from the real frame, got bucket=%p real=%p", bucket, real)
 	}
 	bucketTotal := bucket.total
-	lt.AddRecord(IterRecord{Comm: liveTrieOtherFrame, Cnt: Counter{Count: 5}})
+	lt.AddRecord(IterRecord{Comm: "[other]", Cnt: Counter{Count: 5}})
 	if real.total != 1005 || bucket.total != bucketTotal {
 		t.Fatalf("insert reached the bucket: real=%d bucket=%d (was %d)", real.total, bucket.total, bucketTotal)
 	}
@@ -336,7 +336,7 @@ func TestLiveTrieResetClearsNodeCount(t *testing.T) {
 	}
 }
 
-// withoutBuckets returns a copy of the snapshot without "[other]" nodes.
+// withoutBuckets returns a copy of the snapshot without compaction bucket nodes.
 func withoutBuckets(node *SnapshotNode) *SnapshotNode {
 	out := *node
 	out.Children = nil
@@ -366,5 +366,88 @@ func assertTotalsConsistent(t *testing.T, node *trieNode) {
 	}
 	for _, child := range node.children {
 		assertTotalsConsistent(t, child)
+	}
+}
+
+// TestLiveTrieBucketNameCannotBeARealFrame pins task 0q2. The TUI sorts
+// siblings by name and zooms by the name path, so a bucket that shared a name
+// with a real frame (a comm or path component spelled "[other]") was ordered
+// unpredictably against it and zoom could land on either. The bucket's name
+// contains a ';', which no frame can: every field value is split on it.
+func TestLiveTrieBucketNameCannotBeARealFrame(t *testing.T) {
+	for _, value := range []string{"[other]", liveTrieOtherFrame, "x;" + liveTrieOtherFrame + ";y"} {
+		for _, frame := range buildFrames(IterRecord{Comm: value, Path: value}, []string{"comm", "path"}) {
+			if frame == liveTrieOtherFrame {
+				t.Fatalf("value %q produced a frame equal to the bucket name %q", value, liveTrieOtherFrame)
+			}
+		}
+	}
+}
+
+// TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket reproduces the
+// reviewer's probe: a real "[other]" comm and a compaction bucket under the
+// root while ever more children become visible. Their relative order used to
+// flip with the visible count; now the names differ, so every snapshot lists
+// the same order and unique sibling names, and the real frame keeps its own
+// total.
+func TestLiveTrieRealOtherFrameKeepsItsPlaceNextToTheBucket(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm"}, "count", "")
+	lt.maxNodes = 40
+	lt.AddRecord(IterRecord{Comm: "[other]", Cnt: Counter{Count: 1000}})
+	for i := 0; i < 100; i++ {
+		lt.AddRecord(IterRecord{Comm: fmt.Sprintf("noise%03d", i), Cnt: Counter{Count: 1}})
+	}
+	if lt.root.bucket == nil {
+		t.Fatal("setup: expected a root compaction bucket")
+	}
+
+	var wantOrder []string
+	// Growing the visible set with steady frames changes how many children
+	// the sort sees, which is what flipped the old order.
+	for visible := 0; visible < 30; visible++ {
+		lt.AddRecord(IterRecord{Comm: fmt.Sprintf("steady%02d", visible), Cnt: Counter{Count: 400}})
+		snapshot, _ := lt.SnapshotTree()
+		assertUniqueSiblingNames(t, snapshot)
+
+		real := findSnapshotChild(snapshot, "[other]")
+		bucket := findSnapshotChild(snapshot, liveTrieOtherFrame)
+		if real == nil || bucket == nil || real.Total != 1000 {
+			t.Fatalf("visible=%d: real=%+v bucket=%+v, want both present and the real total 1000", visible, real, bucket)
+		}
+		order := realBeforeBucket(snapshot)
+		if wantOrder == nil {
+			wantOrder = []string{order}
+		} else if order != wantOrder[0] {
+			t.Fatalf("visible=%d: real/bucket order changed between refreshes (%s, was %s)", visible, order, wantOrder[0])
+		}
+	}
+}
+
+// realBeforeBucket names the relative order of the real "[other]" frame and
+// the bucket among node's children.
+func realBeforeBucket(node *SnapshotNode) string {
+	for _, child := range node.Children {
+		switch child.Name {
+		case "[other]":
+			return "real-first"
+		case liveTrieOtherFrame:
+			return "bucket-first"
+		}
+	}
+	return "neither"
+}
+
+// assertUniqueSiblingNames fails when any node has two children with the same
+// name: the TUI addresses nodes by their name path, so duplicates are
+// ambiguous.
+func assertUniqueSiblingNames(t *testing.T, node *SnapshotNode) {
+	t.Helper()
+	seen := make(map[string]bool, len(node.Children))
+	for _, child := range node.Children {
+		if seen[child.Name] {
+			t.Fatalf("node %q has two children named %q", node.Name, child.Name)
+		}
+		seen[child.Name] = true
+		assertUniqueSiblingNames(t, child)
 	}
 }

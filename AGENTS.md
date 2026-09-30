@@ -277,7 +277,7 @@ from 584 to about 300000 events/s.
 
 The trie is capped at `liveTrieMaxNodes` (2^18 nodes, ~210-290 B each, so
 ~55-75MB). Past it, `compactLocked` folds the lowest-ranked subtrees into a
-per-parent `[other]` bucket leaf, only as many as needed to get back to about
+per-parent `[other;]` bucket leaf (the `;` is deliberate: no frame contains one, so a real comm or path component spelled `[other]` can never share the bucket's name and path, which is all the TUI sorts and zooms by), only as many as needed to get back to about
 half the cap. The rank is a node's *rate*, not its all-time total: its total
 over the root events since its birth (`trieNode.birthRootTotal`) plus one
 compaction window, maxed with its children's ranks so a child never outranks
