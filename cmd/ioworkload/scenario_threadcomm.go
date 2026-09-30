@@ -29,7 +29,12 @@ const (
 	// threadCommRenameSettle is how long a renamed thread waits after its
 	// warm-up syscall before the measured ones, so the /proc read the warm-up
 	// queued has landed. Generous: the threads sleep concurrently, so it costs
-	// the scenario wall time once, not per thread.
+	// the scenario wall time once, not per thread. It is also the effective
+	// bound on how far ior's event loop may lag for the renamed-thread tests to
+	// hold: past it (measured with ior SIGSTOPped for 0.8-1.4s just after the
+	// threads were created) the warm-up and measured rows are already queued in
+	// the ring buffer and are handled back to back, faster than the async
+	// /proc/<tid>/comm read lands, so the measured rows keep "ioworkload".
 	threadCommRenameSettle = 500 * time.Millisecond
 	// threadCommLinger is how long every thread, and with it the process, stays
 	// alive after the last syscall of the scenario. ior resolves things it was
@@ -40,6 +45,8 @@ const (
 	// nothing, so the scenario must not vanish the instant its work is done.
 	// The harness has no way to know when ior has caught up, so this is a
 	// generous bound (only lag beyond it can lose a lookup), not a handshake.
+	// It protects lookups of tasks that would otherwise be gone; it does not
+	// widen the rename tolerance, which threadCommRenameSettle alone bounds.
 	threadCommLinger = time.Second
 )
 
@@ -100,7 +107,10 @@ func threadCommShortLived() error {
 // can tell them apart without a path: a path ior did not see opened is resolved
 // lazily from /proc/<pid>/fd, which only works while the process is alive.
 // Every thread stays alive for threadCommLinger after its work (see
-// runOnFreshThreads) so the /proc read finds it even when ior's event loop lags.
+// runOnFreshThreads) so the /proc read finds it even when ior's event loop
+// lags. The phases are only told apart reliably while that lag stays under
+// threadCommRenameSettle; a longer stall makes the measured rows keep the
+// inherited name.
 func threadCommRenamed() error {
 	dir, cleanup, err := makeTempDir("thread-comm-renamed")
 	if err != nil {
