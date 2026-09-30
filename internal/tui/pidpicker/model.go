@@ -285,7 +285,7 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 	viewWidth, _ := common.EffectiveViewport(m.width, m.height)
 	helpStyle := theme.HelpBarStyle.Width(viewWidth)
-	b.WriteString(helpStyle.Render(renderHelp(m.keys.PickerShortHelp())))
+	b.WriteString(helpStyle.Render(renderHelp(m.footerBindings())))
 	return tea.NewView(theme.ScreenStyle.Render(b.String()))
 }
 
@@ -343,6 +343,20 @@ func (m Model) visibleRows() int {
 		return 1
 	}
 	return rows
+}
+
+// footerBindings returns the footer key hints for the current focus state. The
+// footer must name the key that actually refreshes: while the filter input is
+// focused (the default) a plain r is text for the filter, so only ctrl+r
+// rescans; once Up/Down has blurred the input, r rescans as well
+// (keys.Refresh). Showing "r refresh" in the focused state would advertise a
+// key that types into the filter instead.
+func (m Model) footerBindings() []key.Binding {
+	refresh := m.keys.Refresh
+	if m.input.Focused() {
+		refresh = key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", refresh.Help().Desc))
+	}
+	return []key.Binding{m.keys.Enter, refresh, m.keys.Esc}
 }
 
 func renderHelp(bindings []key.Binding) string {

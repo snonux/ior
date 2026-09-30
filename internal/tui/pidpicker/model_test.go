@@ -163,3 +163,33 @@ func TestWindowSizeDoesNotCapInputWidthOnWideTerminals(t *testing.T) {
 		t.Fatalf("expected input width %d for 160-col terminal, got %d", want, got)
 	}
 }
+
+// The footer must name the key that really refreshes in the current focus
+// state: with the filter input focused (default) a plain r is filter text, so
+// only ctrl+r rescans; after Up/Down blurs the input, r rescans too.
+func TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState(t *testing.T) {
+	focused := NewWithKeys(DefaultKeyMap())
+	view := focused.View().Content
+	if !strings.Contains(view, "ctrl+r refresh") {
+		t.Fatalf("focused footer must advertise ctrl+r, got:\n%s", view)
+	}
+	if strings.Contains(strings.ReplaceAll(view, "ctrl+r refresh", ""), "r refresh") {
+		t.Fatalf("focused footer must not advertise a bare r, got:\n%s", view)
+	}
+
+	next, _ := focused.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	blurred := next.(Model)
+	view = blurred.View().Content
+	if strings.Contains(view, "ctrl+r") || !strings.Contains(view, "r refresh") {
+		t.Fatalf("blurred footer must advertise a bare r, got:\n%s", view)
+	}
+
+	// And the advertised key really works in each state.
+	_, cmd := blurred.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatalf("expected r to refresh while the input is blurred")
+	}
+	if _, ok := cmd().(processesLoadedMsg); !ok {
+		t.Fatalf("expected the rescan result message")
+	}
+}

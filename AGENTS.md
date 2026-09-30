@@ -668,13 +668,44 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `TestErrorScreenQuitOutranksTheHelpOverlay` and the reporting/cleanup tests in
   `internal/tui/errorscreen_test.go`.
 
-  The startup PID picker follows the same visible-screen rule: with no pending
-  dashboard return, `q`/`ctrl+c` quit with best-effort cleanup; during a
-  re-selection they remain Back, like `esc`
-  (`TestStartupPIDPickerQuitsOnQuitKeys`,
+  The startup PID picker follows the same visible-screen rule, with one
+  addition (the next paragraph): once its filter input is blurred (Up/Down) and
+  there is no pending dashboard return, `q` quits with best-effort cleanup;
+  during a re-selection `q` is Back, like `esc`. `ctrl+c` always quits and `esc`
+  always leaves the picker, even mid-typing
+  (`TestStartupPIDPickerQuitsOnQOnceTheInputIsBlurred`,
+  `TestStartupPIDPickerCtrlCStillQuitsWhileTyping`,
+  `TestStartupPIDPickerEscStillQuitsWhileTyping`,
+  `TestStartupPIDPickerQuitsOnQuitKeys`,
   `TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc`). The bounded
   "Attaching tracepoints..." overlay still swallows quit keys until
   `defaultStartupTimeout` resolves it; it is a wait rather than a dead end.
+
+  **A focused text input owns printable keys** (task xq2). In
+  `handleGlobalKeyPress`, after the error screen and the help overlay but before
+  picker-cancel, quit, `H` help and the dashboard shortcuts, a key whose
+  `msg.Key().Text != ""` is passed on untouched (`return m, nil, false`) when
+  `Model.textInputFocused` says the screen or modal receiving keys has a
+  focused input. Otherwise typing `mysql` in the startup picker quit ior at the
+  `q`, `Hypr` opened help, and a `q` in the filter modal's Comm field applied a
+  truncated filter. Keys without text (`ctrl+c`, `esc`, arrows, alt/ctrl
+  chords) never count as typing, so they keep their global meaning and are not
+  inserted as characters. A visible modal decides before the active screen, and
+  the attaching overlay reports no focus so `q` still leaves it. Each input
+  reports focus through a `TextInputFocused` predicate: the PID/TID picker
+  filter (focused by default, blurred by Up/Down, re-focused by the next
+  printable key), the trace-filter modal (only while a field is being edited,
+  not while navigating), the record modal path, the probes modal search line,
+  and on the dashboard (aggregated by `dashboard.Model.TextInputFocused` via
+  `tabDescriptor.TextInputFocused`) the flame `/` search and the stream search
+  and export-filename modals. A new text input must add its predicate there or
+  `q`/`H` will again be eaten as commands. Because plain `r` is filter text
+  while the picker input is focused, the picker footer and help show
+  `ctrl+r refresh` in that state and `r refresh` once the input is blurred.
+  Pinned by `internal/tui/textinput_keys_test.go` (one test per input, each
+  asserting both "no quit/help" and "the typed text reached the input",
+  the TID picker, modified-key negatives, ctrl+r and the attaching guard) and
+  `TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than
