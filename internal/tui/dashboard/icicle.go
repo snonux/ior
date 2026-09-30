@@ -79,19 +79,13 @@ func renderIcicleGrid(header string, tiles []icicleTile, width, height int, metr
 		chartHeight = 4
 	}
 	selected = clampOffset(selected, len(tiles))
-	grid := make([][]treemapCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]treemapCell, width)
-		for col := range grid[row] {
-			grid[row][col] = treemapCell{char: ' ', colorSlot: -1}
-		}
-	}
+	grid := newGridRows(width, chartHeight)
 	fillIcicleGrid(grid, tiles, selected)
 	palette := treemapPalette(isDark)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
 	for _, row := range grid {
-		lines = append(lines, renderTreemapRow(row, palette))
+		lines = append(lines, renderGridRow(row, palette))
 	}
 	lines = append(lines, padOrTrim(icicleStatusLine(tiles, selected, metric), width))
 	return strings.Join(lines, "\n")
@@ -254,7 +248,7 @@ func icicleTileWidth(idx, total int, value uint64, remainingWidth int, remaining
 	return tileWidth
 }
 
-func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
+func fillIcicleGrid(grid [][]gridCell, tiles []icicleTile, selected int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -272,7 +266,7 @@ func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
 			if col < 0 {
 				continue
 			}
-			grid[tile.depth][col] = treemapCell{
+			grid[tile.depth][col] = gridCell{
 				char:      '█',
 				colorSlot: tile.colorSlot,
 				bold:      isSelected,
@@ -282,30 +276,18 @@ func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
 	}
 }
 
-func drawIcicleLabel(grid [][]treemapCell, tile icicleTile, selected bool) {
+// drawIcicleLabel writes the node's "root/..." label at the left of its
+// tile, fitted into tile.w-1 display cells (one cell of fill stays visible
+// as the tile separator) and placed grapheme by grapheme (writeGridLabel) so
+// wide CJK/emoji path segments cannot spill into the neighbouring tile.
+func drawIcicleLabel(grid [][]gridCell, tile icicleTile, selected bool) {
 	height := len(grid)
 	if height == 0 || tile.depth < 0 || tile.depth >= height || tile.w <= 1 {
 		return
 	}
-	width := len(grid[0])
 	maxLabel := tile.w - 1
-	label := abbreviateTreemapLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
-	col := tile.x
-	for _, r := range label {
-		if col < 0 {
-			col++
-			continue
-		}
-		if col >= width {
-			break
-		}
-		grid[tile.depth][col] = treemapCell{
-			char:      r,
-			colorSlot: tile.colorSlot,
-			bold:      selected,
-		}
-		col++
-	}
+	label := abbreviateLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
+	writeGridLabel(grid[tile.depth], tile.x, label, tile.colorSlot, selected)
 }
 
 func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) string {

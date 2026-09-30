@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -40,12 +39,6 @@ type syscallTreemapTile struct {
 	y     int
 	w     int
 	h     int
-}
-
-type treemapCell struct {
-	char      rune
-	colorSlot int
-	bold      bool
 }
 
 // renderSyscallsTreemap renders the Syscalls treemap from the already
@@ -94,20 +87,14 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	}
 
 	tiles := layoutSyscallTreemap(items, 0, 0, width, chartHeight)
-	grid := make([][]treemapCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]treemapCell, width)
-		for col := 0; col < width; col++ {
-			grid[row][col] = treemapCell{char: ' ', colorSlot: -1}
-		}
-	}
+	grid := newGridRows(width, chartHeight)
 	fillTreemapGrid(grid, tiles, selected)
 	palette := treemapPalette(isDark)
 
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
 	for _, row := range grid {
-		lines = append(lines, renderTreemapRow(row, palette))
+		lines = append(lines, renderGridRow(row, palette))
 	}
 	lines = append(lines, padOrTrim(treemapStatusLine(items, selected, metric), width))
 	return strings.Join(lines, "\n")
@@ -329,7 +316,7 @@ func findTreemapSplitIndex(items []syscallTreemapItem, total uint64) int {
 	return len(items) / 2
 }
 
-func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected int) {
+func fillTreemapGrid(grid [][]gridCell, tiles []syscallTreemapTile, selected int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -342,7 +329,7 @@ func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected 
 		isSelected := tile.index == selected
 		for row := tile.y; row < minInt(height, tile.y+tile.h); row++ {
 			for col := tile.x; col < minInt(width, tile.x+tile.w); col++ {
-				grid[row][col] = treemapCell{
+				grid[row][col] = gridCell{
 					char:      '█',
 					colorSlot: idx,
 					bold:      isSelected,
@@ -353,7 +340,11 @@ func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected 
 	}
 }
 
-func drawTreemapLabel(grid [][]treemapCell, tile syscallTreemapTile, selected bool, colorSlot int) {
+// drawTreemapLabel writes the item's label on the tile's top row, fitted into
+// tile.w-1 display cells (one cell of fill stays visible as the tile
+// separator) and placed grapheme by grapheme (writeGridLabel) so wide
+// CJK/emoji labels cannot spill into the neighbouring tile.
+func drawTreemapLabel(grid [][]gridCell, tile syscallTreemapTile, selected bool, colorSlot int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -370,39 +361,8 @@ func drawTreemapLabel(grid [][]treemapCell, tile syscallTreemapTile, selected bo
 	if maxLabel < 1 {
 		return
 	}
-	label := abbreviateTreemapLabel(tile.item.Name, maxLabel)
-	col := tile.x
-	for _, r := range label {
-		if col >= width {
-			break
-		}
-		if col >= 0 {
-			grid[row][col] = treemapCell{
-				char:      r,
-				colorSlot: colorSlot,
-				bold:      selected,
-			}
-		}
-		col++
-	}
-}
-
-func abbreviateTreemapLabel(label string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = "?"
-	}
-	if utf8.RuneCountInString(label) <= maxRunes {
-		return label
-	}
-	if maxRunes == 1 {
-		return "…"
-	}
-	r := []rune(label)
-	return string(r[:maxRunes-1]) + "…"
+	label := abbreviateLabel(tile.item.Name, maxLabel)
+	writeGridLabel(grid[row], tile.x, label, colorSlot, selected)
 }
 
 func treemapStatusLine(items []syscallTreemapItem, selected int, metric bubbleMetric) string {
@@ -473,41 +433,4 @@ func treemapPalette(isDark bool) []color.Color {
 		lipgloss.Color("161"),
 		lipgloss.Color("25"),
 	}
-}
-
-func renderTreemapRow(cells []treemapCell, palette []color.Color) string {
-	if len(cells) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	styleCache := make(map[string]lipgloss.Style, 8)
-	selectedColor := lipgloss.Color("129")
-	for _, cell := range cells {
-		if cell.colorSlot < 0 {
-			if cell.bold {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Render(string(cell.char)))
-			} else {
-				b.WriteRune(cell.char)
-			}
-			continue
-		}
-		slot := cell.colorSlot
-		if len(palette) > 0 {
-			slot = slot % len(palette)
-		}
-		key := fmt.Sprintf("%d/%t", slot, cell.bold)
-		style, ok := styleCache[key]
-		if !ok {
-			style = lipgloss.NewStyle().Foreground(palette[slot])
-			if cell.bold {
-				style = style.Foreground(selectedColor)
-			}
-			if cell.bold {
-				style = style.Bold(true)
-			}
-			styleCache[key] = style
-		}
-		b.WriteString(style.Render(string(cell.char)))
-	}
-	return b.String()
 }
