@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -342,4 +344,79 @@ exit 0`)
 	if !strings.Contains(out, "Probing for tracepoints") {
 		t.Errorf("lines written before the timeout were lost: %q", out)
 	}
+}
+
+// TestWaitBothAbandonReapsIorAndReleasesGoroutines pins the abandon release in
+// waitBoth: when a holder child keeps the output pipe open, ior's Wait is held
+// back waiting for the scanners' EOF. After the timeout waitBoth returns and
+// must release that Wait (via abandon), otherwise ior stays a zombie and the
+// waiter, scanner and outputDone goroutines leak until the holder dies.
+func TestWaitBothAbandonReapsIorAndReleasesGoroutines(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "holder.pid")
+	// ior exits 0 at once but leaves a backgrounded sleep holding stdout and
+	// stderr. The sleep's PID is recorded so the test can kill exactly it.
+	iorBin := writeScript(t, dir, "ior", `sleep 30 &
+echo $! > `+pidFile)
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+
+	before := settledGoroutines()
+	h := TestHarness{IorBinary: iorBin, OutputDir: t.TempDir()}
+	ior, err := h.startIorArgsWithReady(nil)
+	if err != nil {
+		t.Fatalf("start fake ior: %v", err)
+	}
+	iorPID := ior.cmd.Process.Pid
+	workloadCmd := exec.Command("true")
+	if err := workloadCmd.Start(); err != nil {
+		t.Fatalf("start workload: %v", err)
+	}
+
+	_, iorErr := waitBoth(workloadCmd, ior.cmd, ior.outputDone, 0, 500*time.Millisecond)
+	if iorErr == nil || !strings.Contains(iorErr.Error(), "timed out") {
+		t.Fatalf("ior error = %v, want a timeout", iorErr)
+	}
+
+	// A zombie still answers signal 0; a reaped process yields ESRCH.
+	if !waitUntil(2*time.Second, func() bool { return syscall.Kill(iorPID, 0) == syscall.ESRCH }) {
+		t.Errorf("ior (pid %d) was not reaped after waitBoth returned", iorPID)
+	}
+	if !waitUntil(3*time.Second, func() bool { return runtime.NumGoroutine() <= before }) {
+		buf := make([]byte, 1<<16)
+		t.Errorf("goroutines leaked: %d before, %d after\n%s",
+			before, runtime.NumGoroutine(), buf[:runtime.Stack(buf, true)])
+	}
+}
+
+// settledGoroutines returns the goroutine count once it stopped changing, so
+// goroutines still winding down from earlier tests are not counted as leaks.
+func settledGoroutines() int {
+	n := runtime.NumGoroutine()
+	for stable := 0; stable < 5; {
+		time.Sleep(20 * time.Millisecond)
+		if m := runtime.NumGoroutine(); m == n {
+			stable++
+		} else {
+			n, stable = m, 0
+		}
+	}
+	return n
+}
+
+// waitUntil polls cond every 10ms until it holds or the deadline passes.
+func waitUntil(d time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }

@@ -321,18 +321,25 @@ func (h *TestHarness) startIorParquetForRun(pid int, parquetPath string, duratio
 }
 
 func (h *TestHarness) startIorArgs(args []string) (*exec.Cmd, error) {
-	cmd := exec.Command(h.IorBinary, args...)
-	cmd.Dir = h.OutputDir
+	cmd := h.iorCommand(args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if h.BpfObject != "" {
-		cmd.Env = append(os.Environ(), bpfObjectOverrideEnv+"="+h.BpfObject)
-	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start ior: %w", err)
 	}
 	return cmd, nil
+}
+
+// iorCommand builds the (unstarted) ior command: run in the output directory
+// and, when configured, with the BPF object override in its environment.
+func (h *TestHarness) iorCommand(args []string) *exec.Cmd {
+	cmd := exec.Command(h.IorBinary, args...)
+	cmd.Dir = h.OutputDir
+	if h.BpfObject != "" {
+		cmd.Env = append(os.Environ(), bpfObjectOverrideEnv+"="+h.BpfObject)
+	}
+	return cmd
 }
 
 // iorProcess is a started ior whose stdout/stderr are scanned line by line.
@@ -349,25 +356,38 @@ type iorProcess struct {
 }
 
 func (h *TestHarness) startIorArgsWithReady(args []string) (*iorProcess, error) {
-	cmd := exec.Command(h.IorBinary, args...)
-	cmd.Dir = h.OutputDir
-	if h.BpfObject != "" {
-		cmd.Env = append(os.Environ(), bpfObjectOverrideEnv+"="+h.BpfObject)
-	}
-
-	stdout, err := cmd.StdoutPipe()
+	cmd := h.iorCommand(args)
+	stdout, stderr, err := iorOutputPipes(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("ior stdout pipe: %w", err)
+		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("ior stderr pipe: %w", err)
-	}
-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start ior: %w", err)
 	}
 
+	ready, outputDone := h.scanIorStreams(stdout, stderr)
+	return &iorProcess{cmd: cmd, ready: ready, outputDone: outputDone}, nil
+}
+
+// iorOutputPipes attaches pipes to ior's stdout and stderr; they must be
+// created before cmd.Start.
+func iorOutputPipes(cmd *exec.Cmd) (stdout, stderr io.ReadCloser, err error) {
+	stdout, err = cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ior stdout pipe: %w", err)
+	}
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ior stderr pipe: %w", err)
+	}
+	return stdout, stderr, nil
+}
+
+// scanIorStreams forwards every line of ior's stdout/stderr to the test
+// process's own streams (and h.IorOutput when set) in one goroutine per
+// stream. ready receives nil once iorReadyLine was seen, or an error if the
+// output ended first; outputDone closes once both streams hit EOF.
+func (h *TestHarness) scanIorStreams(stdout, stderr io.Reader) (ready <-chan error, outputDone <-chan struct{}) {
 	readyCh := make(chan error, 1)
 	var once sync.Once
 	signalReady := func(err error) {
@@ -386,14 +406,13 @@ func (h *TestHarness) startIorArgsWithReady(args []string) (*iorProcess, error) 
 	wg.Add(2)
 	go scanIorOutput(stdout, outW, signalReady, &wg)
 	go scanIorOutput(stderr, errW, signalReady, &wg)
-	outputDone := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		signalReady(fmt.Errorf("ior exited before readiness line"))
-		close(outputDone)
+		close(done)
 	}()
-
-	return &iorProcess{cmd: cmd, ready: readyCh, outputDone: outputDone}, nil
+	return readyCh, done
 }
 
 func scanIorOutput(r io.Reader, w io.Writer, signalReady func(error), wg *sync.WaitGroup) {
@@ -462,29 +481,23 @@ func killAndWait(cmd *exec.Cmd) {
 // process inheriting its stdout/stderr have closed them. If that never
 // happens (ior hung, or left a child holding the pipe), the timeout below
 // kills ior, releases the held-back Wait and reports "ior timed out"; the
-// lines lost that way are irrelevant for a failed run. Pass nil when ior's
-// output is not scanned (plain exec.Cmd with Stdout/Stderr set).
+// lines lost that way are irrelevant for a failed run.
+//
+// Trade-off: a child of ior that keeps the output pipe open after ior itself
+// exited (even with status 0) therefore yields "ior timed out" after
+// duration + grace instead of ior's real exit status, because the scanners
+// never reach EOF while the pipe is held. Accepting that was deliberate:
+// reporting a hang is preferable to silently truncating ior's output.
+//
+// Pass nil when ior's output is not scanned (plain exec.Cmd with
+// Stdout/Stderr set).
 func waitBoth(workloadCmd, iorCmd *exec.Cmd, iorOutputDone <-chan struct{}, duration int, grace time.Duration) (workloadErr, iorErr error) {
-	workloadDone := make(chan error, 1)
-	iorDone := make(chan error, 1)
 	// abandon is closed on return so a Wait held back for the scanners is
 	// released even when the output pipe never reaches EOF; it also reaps
 	// ior after the timeout kill.
 	abandon := make(chan struct{})
 	defer close(abandon)
-
-	// Pass channels as parameters so subsequent nil assignments in this
-	// function do not affect the goroutines' send targets.
-	go func(ch chan error) { ch <- workloadCmd.Wait() }(workloadDone)
-	go func(ch chan error) {
-		if iorOutputDone != nil {
-			select {
-			case <-iorOutputDone:
-			case <-abandon:
-			}
-		}
-		ch <- iorCmd.Wait()
-	}(iorDone)
+	workloadDone, iorDone := startWaiters(workloadCmd, iorCmd, iorOutputDone, abandon)
 
 	timeout := time.NewTimer(time.Duration(duration)*time.Second + grace)
 	defer stopAndDrainTimer(timeout)
@@ -499,19 +512,41 @@ func waitBoth(workloadCmd, iorCmd *exec.Cmd, iorOutputDone <-chan struct{}, dura
 			iorDone = nil
 		case <-timeout.C:
 			if iorDone != nil {
-				_ = iorCmd.Process.Kill()
-				iorErr = fmt.Errorf("ior timed out")
-				iorDone = nil
+				iorErr = killTimedOut(iorCmd, "ior")
 			}
 			if workloadDone != nil {
-				_ = workloadCmd.Process.Kill()
-				workloadErr = fmt.Errorf("workload timed out")
-				workloadDone = nil
+				workloadErr = killTimedOut(workloadCmd, "workload")
 			}
 			return
 		}
 	}
 	return
+}
+
+// startWaiters reaps both commands in their own goroutines and returns the
+// channels (buffered, so a goroutine never blocks after waitBoth returned)
+// delivering each Wait result. See waitBoth for iorOutputDone and abandon.
+func startWaiters(workloadCmd, iorCmd *exec.Cmd, iorOutputDone <-chan struct{}, abandon <-chan struct{}) (workloadDone, iorDone <-chan error) {
+	wch := make(chan error, 1)
+	ich := make(chan error, 1)
+	go func() { wch <- workloadCmd.Wait() }()
+	go func() {
+		if iorOutputDone != nil {
+			select {
+			case <-iorOutputDone:
+			case <-abandon:
+			}
+		}
+		ich <- iorCmd.Wait()
+	}()
+	return wch, ich
+}
+
+// killTimedOut kills a command that outlived the waitBoth deadline and returns
+// the error to report for it. The command's own Wait goroutine reaps it.
+func killTimedOut(cmd *exec.Cmd, name string) error {
+	_ = cmd.Process.Kill()
+	return fmt.Errorf("%s timed out", name)
 }
 
 func stopAndDrainTimer(timer *time.Timer) {
