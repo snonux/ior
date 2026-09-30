@@ -480,8 +480,12 @@ func TestSessionStreamSourceKeepsAppendSnapshotFastPath(t *testing.T) {
 	for i := range streamrow.RingBufferCapacity {
 		sink.Push(streamrow.Row{Seq: uint64(i + 1)})
 	}
-	if got := appender.AppendSnapshot(nil); len(got) != sink.Len() || got[0].Seq != 1 {
-		t.Fatalf("AppendSnapshot returned %d rows (first %+v), want %d from seq 1", len(got), got[0], sink.Len())
+	got := appender.AppendSnapshot(nil)
+	if len(got) != sink.Len() {
+		t.Fatalf("AppendSnapshot returned %d rows, want %d", len(got), sink.Len())
+	}
+	if got[0].Seq != 1 {
+		t.Fatalf("AppendSnapshot first row seq = %d, want 1", got[0].Seq)
 	}
 
 	stream := eventstream.NewModel(source)
