@@ -283,6 +283,8 @@ func (e *eventLoop) configureOutputCallback() {
 	}
 }
 
+// stats blocks until the event loop has finished and then renders the
+// end-of-run statistics block.
 func (e *eventLoop) stats() string {
 	// Human-facing progress note; routed through the status sink (stderr in
 	// headless modes) so stdout stays machine-readable (the CSV header/rows
@@ -290,36 +292,9 @@ func (e *eventLoop) stats() string {
 	e.notifyStatus("Waiting for stats to be ready")
 	<-e.done
 	duration := time.Since(e.startTime)
+	rate := perSecondRate(duration.Seconds())
 
-	secs := duration.Seconds()
-	// Guard against division by zero when called immediately after start.
-	rate := func(n uint64) float64 {
-		if secs <= 0 {
-			return 0
-		}
-		return float64(n) / secs
-	}
-	// numTracepoints counts every non-empty ring-buffer record the loop pulled
-	// off the ring. It is incremented before dispatch, so it counts records
-	// *seen*, not records successfully turned into something: records that fail
-	// to decode (dropMalformedRawEvent) and records of an unhandled event type
-	// are included, and so are - since the sched_process_exec probe - control
-	// records (one per successful execve and one per task exit, since the
-	// sched probes) alongside the syscall enter/exit
-	// records. Both denominators below are deliberately left on that total: the
-	// kernel-side drop counter also counts control records it failed to reserve
-	// (internal/c/exec.c), so "drops as a share of events" only stays
-	// arithmetically honest if the events side counts them too. The mismatch
-	// share is diluted by the same records, which is acceptable - execve is
-	// rare next to syscall traffic, task exits less so on thread-churning
-	// workloads, and both figures describe the ring-buffer
-	// stream as a whole rather than the syscall pairs alone.
-	mismatchPct := 0.0
-	if e.numTracepoints > 0 {
-		mismatchPct = (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
-	}
-
-	stats := fmt.Sprintf(
+	return fmt.Sprintf(
 		"Statistics:\n"+
 			"\tduration: %v\n"+
 			"\ttracepoints: %v (%.2f/s) with %d mismatches (%.2f%%)\n"+
@@ -328,14 +303,49 @@ func (e *eventLoop) stats() string {
 			"\tgroup-dead exits: %d\n"+
 			"%s",
 		duration,
-		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, mismatchPct,
+		e.numTracepoints, rate(uint64(e.numTracepoints)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscalls, rate(uint64(e.numSyscalls)),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
 		e.ringbufDropStatLine(rate),
 	)
+}
 
-	return stats
+// perSecondRate returns a counter-to-rate converter for a run of secs seconds.
+// It guards against division by zero when stats are taken immediately after
+// start (secs <= 0 yields a rate of 0).
+func perSecondRate(secs float64) func(uint64) float64 {
+	return func(n uint64) float64 {
+		if secs <= 0 {
+			return 0
+		}
+		return float64(n) / secs
+	}
+}
+
+// mismatchPercent returns tracepoint mismatches as a share of numTracepoints.
+//
+// numTracepoints counts every non-empty ring-buffer record the loop pulled
+// off the ring. It is incremented before dispatch, so it counts records
+// *seen*, not records successfully turned into something: records that fail
+// to decode (dropMalformedRawEvent) and records of an unhandled event type
+// are included, and so are - since the sched_process_exec probe - control
+// records (one per successful execve and one per task exit, since the
+// sched probes) alongside the syscall enter/exit
+// records. Both denominators (this one and the drop share in
+// ringbufDropStatLine) are deliberately left on that total: the
+// kernel-side drop counter also counts control records it failed to reserve
+// (internal/c/exec.c), so "drops as a share of events" only stays
+// arithmetically honest if the events side counts them too. The mismatch
+// share is diluted by the same records, which is acceptable - execve is
+// rare next to syscall traffic, task exits less so on thread-churning
+// workloads, and both figures describe the ring-buffer
+// stream as a whole rather than the syscall pairs alone.
+func (e *eventLoop) mismatchPercent() float64 {
+	if e.numTracepoints == 0 {
+		return 0
+	}
+	return (float64(e.numTracepointMismatches) / float64(e.numTracepoints)) * 100
 }
 
 // ringbufDropStatLine renders the end-of-run "ring buffer drops" line.
