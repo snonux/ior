@@ -3,12 +3,17 @@ package internal
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/textsafe"
 	"ior/internal/types"
 )
 
@@ -64,7 +69,7 @@ func parsePlainRow(t *testing.T, out string) []string {
 // when stdout is a terminal, -plain must not write the traced ESC/BEL bytes.
 func TestPlainPrintCallbackEscapesOnTerminal(t *testing.T) {
 	out := newTTYBuffer(t)
-	plainPrintCallback(out)(hostilePlainPair())
+	plainPrintCallback(out, textsafe.EscapeAuto)(hostilePlainPair())
 
 	got := out.String()
 	if strings.ContainsAny(got, "\x1b\a") {
@@ -83,7 +88,7 @@ func TestPlainPrintCallbackEscapesOnTerminal(t *testing.T) {
 // behaviour: a non-terminal writer receives the exact traced bytes.
 func TestPlainPrintCallbackRawWhenPiped(t *testing.T) {
 	var out bytes.Buffer
-	plainPrintCallback(&out)(hostilePlainPair())
+	plainPrintCallback(&out, textsafe.EscapeAuto)(hostilePlainPair())
 
 	fields := parsePlainRow(t, out.String())
 	if fields[2] != osc8Payload {
@@ -91,5 +96,126 @@ func TestPlainPrintCallbackRawWhenPiped(t *testing.T) {
 	}
 	if want := "/tmp/" + osc8Payload + "%(3,O_RDONLY)"; fields[6] != want {
 		t.Errorf("file = %q, want raw %q", fields[6], want)
+	}
+}
+
+// TestPlainPrintCallbackEscapeOverrides checks the -escape overrides:
+// always escapes into a pipe (| less -R, | tee still end in a terminal),
+// never keeps the raw bytes even on a terminal.
+func TestPlainPrintCallbackEscapeOverrides(t *testing.T) {
+	var piped bytes.Buffer
+	plainPrintCallback(&piped, textsafe.EscapeAlways)(hostilePlainPair())
+	if got := parsePlainRow(t, piped.String())[2]; got != osc8Escaped {
+		t.Errorf("-escape=always into a pipe: comm = %q, want %q", got, osc8Escaped)
+	}
+
+	tty := newTTYBuffer(t)
+	plainPrintCallback(tty, textsafe.EscapeNever)(hostilePlainPair())
+	if got := parsePlainRow(t, tty.String())[2]; got != osc8Payload {
+		t.Errorf("-escape=never on a terminal: comm = %q, want raw %q", got, osc8Payload)
+	}
+}
+
+// openPTYPair opens a pseudo-terminal and returns its master and slave. The
+// slave is a real terminal file suitable for os.Stdout; what is written to
+// it can be read back from the master.
+func openPTYPair(t *testing.T) (master, slave *os.File) {
+	t.Helper()
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("no pseudo-terminal available: %v", err)
+	}
+	t.Cleanup(func() { _ = master.Close() })
+	if err := unix.IoctlSetPointerInt(int(master.Fd()), unix.TIOCSPTLCK, 0); err != nil {
+		t.Skipf("unlock pty: %v", err)
+	}
+	n, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		t.Skipf("pty number: %v", err)
+	}
+	slave, err = os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("open pty slave: %v", err)
+	}
+	t.Cleanup(func() { _ = slave.Close() })
+	return master, slave
+}
+
+// readLine reads from r until a line feed arrives or the timeout expires.
+func readLine(t *testing.T, r *os.File) string {
+	t.Helper()
+	done := make(chan string, 1)
+	go func() {
+		var got []byte
+		buf := make([]byte, 4096)
+		for !bytes.ContainsRune(got, '\n') {
+			n, err := r.Read(buf)
+			got = append(got, buf[:n]...)
+			if err != nil {
+				break
+			}
+		}
+		done <- string(got)
+	}()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out reading the pty")
+		return ""
+	}
+}
+
+// emitViaDefaultStdout builds an event loop with the production default
+// printCb (plainStdoutCallback), swaps os.Stdout for out only afterwards,
+// as a test or a late redirect would, and emits the hostile pair.
+func emitViaDefaultStdout(t *testing.T, mode textsafe.EscapeMode, out *os.File) {
+	t.Helper()
+	el := mustNewEventLoop(t, eventLoopConfig{plainMode: true, escapeMode: mode, commResolver: newHermeticCommResolver()})
+	t.Cleanup(el.commResolver.shutdown)
+	old := os.Stdout
+	os.Stdout = out
+	defer func() { os.Stdout = old }()
+	el.emit(hostilePlainPair())
+}
+
+// TestPlainStdoutCallbackFollowsStdout covers the production -plain path:
+// the default callback binds os.Stdout (and its terminal check) at the first
+// pair, so a terminal stdout gets escaped rows, a pipe gets raw rows, and
+// -escape overrides the check in both directions.
+func TestPlainStdoutCallbackFollowsStdout(t *testing.T) {
+	ttyCases := []struct {
+		mode textsafe.EscapeMode
+		want string
+	}{{textsafe.EscapeAuto, osc8Escaped}, {textsafe.EscapeNever, osc8Payload}}
+	for _, tc := range ttyCases {
+		t.Run("tty/"+tc.mode.String(), func(t *testing.T) {
+			master, slave := openPTYPair(t)
+			emitViaDefaultStdout(t, tc.mode, slave)
+			// The pty line discipline turns LF into CRLF; drop the CR.
+			row := strings.ReplaceAll(readLine(t, master), "\r", "")
+			if got := parsePlainRow(t, row)[2]; got != tc.want {
+				t.Errorf("comm = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	pipeCases := []struct {
+		mode textsafe.EscapeMode
+		want string
+	}{{textsafe.EscapeAuto, osc8Payload}, {textsafe.EscapeAlways, osc8Escaped}}
+	for _, tc := range pipeCases {
+		t.Run("pipe/"+tc.mode.String(), func(t *testing.T) {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("os.Pipe: %v", err)
+			}
+			defer func() { _ = r.Close() }()
+			emitViaDefaultStdout(t, tc.mode, w)
+			_ = w.Close()
+			if got := parsePlainRow(t, readLine(t, r))[2]; got != tc.want {
+				t.Errorf("comm = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

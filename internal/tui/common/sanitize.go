@@ -39,15 +39,16 @@ const (
 // invalid UTF-8 becomes ControlPlaceholder too, because a raw 0x9b byte is
 // interpreted as the C1 CSI introducer by 8-bit terminals.
 //
-// Invisible format runes (textsafe.IsInvisibleFormat) become ControlPlaceholder as
-// well: a file named "invoice\u202Efdp.exe" would otherwise render as
-// "invoiceexe.pdf" (Trojan-Source style bidi spoofing), and zero-width or
-// blank-rendering runes can hide text, smuggle data or make two different
-// paths look identical. Replacing them with a visible one-cell placeholder
-// both exposes the trick and keeps the measured width equal to the rendered
-// width. U+200D ZWJ is kept only where it glues two emoji together. Printable non-ASCII text (CJK, emoji incl. ZWJ
-// sequences, U+FE0E/U+FE0F and skin-tone modifiers, combining marks) is
-// kept unchanged.
+// Invisible format runes (textsafe.IsInvisibleFormat) become
+// ControlPlaceholder as well: a file named "invoice\u202Efdp.exe" would
+// otherwise render as "invoiceexe.pdf" (Trojan-Source style bidi spoofing),
+// and zero-width or blank-rendering runes can hide text, smuggle data or
+// make two different paths look identical. Replacing them with a visible
+// one-cell placeholder both exposes the trick and keeps the measured width
+// equal to the rendered width. U+200D ZWJ is kept only where it glues two
+// emoji together. Printable non-ASCII text (CJK, emoji incl. ZWJ sequences,
+// U+FE0E/U+FE0F and skin-tone modifiers, combining marks) is kept
+// unchanged.
 //
 // Sanitize runs per cell per frame, so a clean string is returned as is
 // without allocating; printable ASCII is checked byte-wise without decoding.

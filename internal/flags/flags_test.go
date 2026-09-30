@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ior/internal/collapse"
+	"ior/internal/textsafe"
 )
 
 // parseForTest builds a fresh FlagSet and parses the given args, returning
@@ -539,5 +540,31 @@ func TestParseTUIFastRefreshZeroFallsBackToBuiltinTick(t *testing.T) {
 	}
 	if cfg.TUIFastRefreshInterval != 0 {
 		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (built-in tick fallback)", cfg.TUIFastRefreshInterval)
+	}
+}
+
+// TestParseEscapeMode checks -escape defaults to auto, accepts each mode and
+// rejects an invalid value at parse time instead of silently falling back.
+func TestParseEscapeMode(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.EscapeMode != textsafe.EscapeAuto {
+		t.Fatalf("default EscapeMode = %q, want auto", cfg.EscapeMode)
+	}
+	for _, mode := range []textsafe.EscapeMode{textsafe.EscapeAuto, textsafe.EscapeAlways, textsafe.EscapeNever} {
+		cfg, err := parseForTest(t, "-plain", "-escape", string(mode))
+		if err != nil {
+			t.Fatalf("-escape %s returned error: %v", mode, err)
+		}
+		if cfg.EscapeMode != mode {
+			t.Fatalf("-escape %s parsed as %q", mode, cfg.EscapeMode)
+		}
+	}
+	for _, bad := range []string{"", "ALWAYS", "tty"} {
+		if _, err := parseForTest(t, "-plain", "-escape="+bad); err == nil {
+			t.Fatalf("-escape=%q succeeded, want an error", bad)
+		}
 	}
 }

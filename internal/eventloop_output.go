@@ -43,16 +43,17 @@ type outputFormatter struct {
 }
 
 // plainStdoutCallback is the eventLoop's default printCb: plainPrintCallback
-// bound to os.Stdout. The binding (and with it the terminal check) happens on
-// the first pair rather than when the loop is built, so the callback writes
-// to whatever os.Stdout is once events flow, as the fmt.Println it replaced
-// did (tests swap os.Stdout after constructing the loop). printCb is only
-// ever called from the event loop goroutine, so the lazy init needs no lock.
-func plainStdoutCallback() func(ep *event.Pair) {
+// bound to os.Stdout with the -escape mode. The binding (and with it the
+// terminal check) happens on the first pair rather than when the loop is
+// built, so the callback writes to whatever os.Stdout is once events flow,
+// as the fmt.Println it replaced did (tests swap os.Stdout after
+// constructing the loop). printCb is only ever called from the event loop
+// goroutine, so the lazy init needs no lock.
+func plainStdoutCallback(mode textsafe.EscapeMode) func(ep *event.Pair) {
 	var write func(ep *event.Pair)
 	return func(ep *event.Pair) {
 		if write == nil {
-			write = plainPrintCallback(os.Stdout)
+			write = plainPrintCallback(os.Stdout, mode)
 		}
 		write(ep)
 	}
@@ -60,13 +61,15 @@ func plainStdoutCallback() func(ep *event.Pair) {
 
 // plainPrintCallback returns the default pair sink, which -plain mode keeps:
 // each pair is written to w as one CSV row (event.Pair.CSVRow) and then
-// recycled. Whether w is a terminal is decided once, here: on a terminal the
-// attacker-controlled comm/name/file columns are escaped with
-// textsafe.Escape so a traced file name cannot inject escape sequences into
-// the operator's terminal; when stdout is piped or redirected the rows keep
-// the exact traced bytes for machine consumers.
-func plainPrintCallback(w io.Writer) func(ep *event.Pair) {
-	escape := textsafe.ForWriter(w)
+// recycled. The escaper is chosen once, here, by mode.Escaper: with the
+// default auto mode a terminal gets the attacker-controlled
+// comm/name/file columns escaped with textsafe.Escape, so a traced file name
+// cannot inject escape sequences into the operator's terminal, while piped
+// or redirected rows keep the exact traced bytes for machine consumers.
+// -escape=always covers pipes that still end in a terminal (| less -R,
+// | tee); -escape=never forces raw output.
+func plainPrintCallback(w io.Writer, mode textsafe.EscapeMode) func(ep *event.Pair) {
+	escape := mode.Escaper(w)
 	return func(ep *event.Pair) {
 		_, _ = fmt.Fprintln(w, ep.CSVRow(escape))
 		ep.Recycle()

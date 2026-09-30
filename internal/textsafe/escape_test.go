@@ -2,6 +2,7 @@ package textsafe
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -59,44 +60,93 @@ func TestEscapeCleanStringsDoNotAllocate(t *testing.T) {
 	}
 }
 
-// TestForWriterNonTerminal checks that writers without a terminal behind
-// them (buffers, pipes, regular files) keep traced text raw.
-func TestForWriterNonTerminal(t *testing.T) {
-	if ForWriter(&bytes.Buffer{}) != nil {
-		t.Fatal("ForWriter(bytes.Buffer) returned an escaper, want nil (raw)")
+// openPTY opens a pseudo-terminal master, which answers the terminal ioctl
+// like a real tty, skipping the test on hosts without /dev/ptmx.
+func openPTY(t *testing.T) *os.File {
+	t.Helper()
+	ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("no pseudo-terminal available: %v", err)
 	}
+	t.Cleanup(func() { _ = ptmx.Close() })
+	return ptmx
+}
+
+// TestIsTerminal checks buffers, pipes and regular files are non-terminals
+// and a pty is a terminal.
+func TestIsTerminal(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	defer func() { _ = r.Close(); _ = w.Close() }()
-	if IsTerminal(w) {
-		t.Fatal("IsTerminal(pipe) = true, want false")
-	}
 	f, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 	defer func() { _ = f.Close() }()
-	if ForWriter(f) != nil {
-		t.Fatal("ForWriter(regular file) returned an escaper, want nil (raw)")
+	for name, out := range map[string]io.Writer{"buffer": &bytes.Buffer{}, "pipe": w, "file": f} {
+		if IsTerminal(out) {
+			t.Errorf("IsTerminal(%s) = true, want false", name)
+		}
+	}
+	if !IsTerminal(openPTY(t)) {
+		t.Fatal("IsTerminal(pty) = false, want true")
 	}
 }
 
-// TestForWriterTerminal opens a pseudo-terminal master, which answers the
-// terminal ioctl like a real tty, and checks that it selects Escape.
-func TestForWriterTerminal(t *testing.T) {
-	ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
-	if err != nil {
-		t.Skipf("no pseudo-terminal available: %v", err)
+// TestEscapeModeEscaper checks every mode against a non-terminal and a
+// terminal writer: auto (and the unset zero value) follows the terminal,
+// always escapes even into a pipe, never stays raw even on a terminal.
+func TestEscapeModeEscaper(t *testing.T) {
+	pty := openPTY(t)
+	tests := []struct {
+		mode        EscapeMode
+		pipeEscapes bool
+		ttyEscapes  bool
+	}{
+		{EscapeAuto, false, true},
+		{"", false, true},
+		{EscapeAlways, true, true},
+		{EscapeNever, false, false},
 	}
-	defer func() { _ = ptmx.Close() }()
-	escape := ForWriter(ptmx)
-	if escape == nil {
-		t.Fatal("ForWriter(pty) = nil, want the Escape function")
+	for _, tt := range tests {
+		for _, c := range []struct {
+			name string
+			w    io.Writer
+			want bool
+		}{{"pipe", &bytes.Buffer{}, tt.pipeEscapes}, {"tty", pty, tt.ttyEscapes}} {
+			escape := tt.mode.Escaper(c.w)
+			if (escape != nil) != c.want {
+				t.Fatalf("EscapeMode(%q).Escaper(%s) escapes = %v, want %v", tt.mode, c.name, escape != nil, c.want)
+			}
+			if escape != nil && strings.ContainsRune(escape(osc8Payload), '\x1b') {
+				t.Fatalf("EscapeMode(%q) escaper left ESC in the payload", tt.mode)
+			}
+		}
 	}
-	if got := escape(osc8Payload); strings.ContainsRune(got, '\x1b') {
-		t.Fatalf("escaper for a pty left ESC in %q", got)
+}
+
+// TestParseEscapeMode checks the valid names, the flag.Value round trip and
+// that invalid values (wrong case, empty, unknown) are rejected.
+func TestParseEscapeMode(t *testing.T) {
+	for _, name := range []string{"auto", "always", "never"} {
+		var m EscapeMode
+		if err := m.Set(name); err != nil || m.String() != name {
+			t.Fatalf("Set(%q) = %v, String() = %q", name, err, m.String())
+		}
+	}
+	for _, bad := range []string{"", "Always", "yes", "tty"} {
+		if _, err := ParseEscapeMode(bad); err == nil {
+			t.Errorf("ParseEscapeMode(%q) succeeded, want error", bad)
+		}
+		m := EscapeAlways
+		if err := m.Set(bad); err == nil || m != EscapeAlways {
+			t.Errorf("Set(%q) = %v and changed the mode to %q, want error and no change", bad, err, m)
+		}
+	}
+	if got := EscapeMode("").String(); got != "auto" {
+		t.Fatalf("zero EscapeMode String() = %q, want auto", got)
 	}
 }
 
