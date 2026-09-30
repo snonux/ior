@@ -16,8 +16,9 @@ const fionread = 0x541B
 
 // ioctlBasic issues a benign, deterministic ioctl on a known fd so the
 // enter_ioctl tracepoint fires under our control rather than only implicitly
-// (via the Go runtime / terminal). ioctl is FamilyFS / KindFd (fd@arg0), so
-// the captured event resolves the fd to the temp file path.
+// (via the Go runtime / terminal). ioctl is FamilyFS / KindFcntl (fd@arg0,
+// cmd@arg1, arg@arg2; the cmd lets ior track FIOCLEX/FIONCLEX), so the
+// captured event resolves the fd to the temp file path.
 //
 // We open a regular temp file and call FIONREAD via unix.IoctlGetInt, which
 // reports the number of bytes available to read. On a regular file this is a

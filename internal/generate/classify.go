@@ -280,10 +280,14 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_io_uring_enter":    KindFd,
 	"sys_enter_io_uring_register": KindFd,
 	"sys_enter_fcntl":             KindFcntl,
-	"sys_enter_syslog":            KindNull,
-	"sys_enter_sync":              KindNull,
-	"sys_enter_msync":             KindMem,
-	"sys_enter_getcwd":            KindNull,
+	// ioctl(fd, cmd, arg) shares fcntl's argument layout. Capturing cmd lets
+	// userspace apply FIOCLEX/FIONCLEX, which set/clear close-on-exec exactly
+	// like fcntl F_SETFD; userspace routes it by trace ID, not by fcntl cmd.
+	"sys_enter_ioctl":  KindFcntl,
+	"sys_enter_syslog": KindNull,
+	"sys_enter_sync":   KindNull,
+	"sys_enter_msync":  KindMem,
+	"sys_enter_getcwd": KindNull,
 
 	"sys_enter_socket":     KindSocket,
 	"sys_enter_socketpair": KindSocketpair,

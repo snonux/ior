@@ -154,9 +154,10 @@ func (f *FdFile) Flags() Flags {
 // value and known says whether that value was ever observed. The state is
 // tracked apart from the status-flag word because it belongs to the
 // descriptor, not the open file description, and can be learned (F_GETFD,
-// F_SETFD, dup3, F_DUPFD_CLOEXEC, close_range CLOSE_RANGE_CLOEXEC) while the
-// status word is still unknown. Callers deciding whether the descriptor
-// survives execve(2) must treat !known as "may have been closed".
+// F_SETFD, ioctl FIOCLEX/FIONCLEX, dup3, F_DUPFD_CLOEXEC, close_range
+// CLOSE_RANGE_CLOEXEC) while the status word is still unknown. Callers
+// deciding whether the descriptor survives execve(2) must treat !known as
+// "may have been closed".
 func (f *FdFile) CloseOnExec() (set, known bool) {
 	return f.closeOnExec, f.closeOnExecKnown
 }

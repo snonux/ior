@@ -9516,7 +9516,7 @@ int handle_sys_exit_getdents64(struct syscall_trace_exit *ctx) {
     return 0;
 }
 
-/// sys_enter_ioctl is a struct fd_event (kind=fd)
+/// sys_enter_ioctl is a struct fcntl_event (kind=fcntl)
 SEC("tracepoint/syscalls/sys_enter_ioctl")
 int handle_sys_enter_ioctl(struct syscall_trace_enter *ctx) {
     __u32 pid, tid;
@@ -9527,18 +9527,20 @@ int handle_sys_enter_ioctl(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_IOCTL, now))
         return 0;
 
-    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
+    struct fcntl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fcntl_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
         return 0;
     }
 
-    ev->event_type = ENTER_FD_EVENT;
+    ev->event_type = ENTER_FCNTL_EVENT;
     ev->trace_id = SYS_ENTER_IOCTL;
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    ev->fd = (__s32)ctx->args[0];
+    ev->fd = ctx->args[0];
+    ev->cmd = ctx->args[1];
+    ev->arg = ctx->args[2];
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
