@@ -301,7 +301,12 @@ func TestHandleBpfExitRegistersOnlySuccessfulFdCommands(t *testing.T) {
 	}{
 		{name: "map create", cmd: bpfMapCreate, ret: 63, wantTracked: true, wantName: "bpf:map_create"},
 		{name: "enable stats", cmd: bpfEnableStats, ret: 62, wantTracked: true, wantName: "bpf:enable_stats"},
+		{name: "prog load with common attrs", cmd: bpfProgLoad | bpfCommonAttrs, ret: 65, wantTracked: true, wantName: "bpf:prog_load"},
+		{name: "map create with common attrs", cmd: bpfMapCreate | bpfCommonAttrs, ret: 66, wantTracked: true, wantName: "bpf:map_create"},
+		{name: "common attrs on non-fd command", cmd: 10 | bpfCommonAttrs, ret: 7},
+		{name: "common attrs alone is not a command", cmd: bpfCommonAttrs, ret: 7, wantTracked: true, wantName: "bpf:map_create"},
 		{name: "fd command error", cmd: bpfMapCreate, ret: -int64(syscall.EPERM)},
+		{name: "fd command error with common attrs", cmd: bpfProgLoad | bpfCommonAttrs, ret: -int64(syscall.EPERM)},
 		{name: "positive non-fd return", cmd: 10, ret: 7},
 		{name: "unknown command fails closed", cmd: 999, ret: 7},
 	}
@@ -323,6 +328,21 @@ func TestHandleBpfExitRegistersOnlySuccessfulFdCommands(t *testing.T) {
 				t.Fatalf("bpf identity pair=%v tracked=%v, want %q", ep.File, tracked, tt.wantName)
 			}
 		})
+	}
+}
+
+func TestBpfBaseCommandStripsCommonAttrsFlag(t *testing.T) {
+	for cmd, want := range map[uint32]uint32{
+		5:                    5,
+		5 | bpfCommonAttrs:   5,
+		bpfCommonAttrs:       0,
+		36 | bpfCommonAttrs:  36,
+		999:                  999,
+		999 | bpfCommonAttrs: 999,
+	} {
+		if got := bpfBaseCommand(cmd); got != want {
+			t.Errorf("bpfBaseCommand(%#x) = %d, want %d", cmd, got, want)
+		}
 	}
 }
 

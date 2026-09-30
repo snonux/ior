@@ -1097,7 +1097,22 @@ const (
 	bpfEnableStats       = uint32(32)
 	bpfIterCreate        = uint32(33)
 	bpfTokenCreate       = uint32(36)
+
+	// bpfCommonAttrs is BPF_COMMON_ATTRS (1 << 16) from uapi linux/bpf.h. Since
+	// the 7.0 generation kernels sys_bpf() accepts this flag OR-ed into cmd to
+	// say "the extra attr_common/size_common arguments are present"; libbpf sets
+	// it on BPF_PROG_LOAD (tools/lib/bpf/bpf.c). The kernel strips it before
+	// dispatching, so the real command lives in the low 16 bits only.
+	bpfCommonAttrs = uint32(1 << 16)
 )
+
+// bpfBaseCommand strips the BPF_COMMON_ATTRS flag so a flagged command such as
+// BPF_PROG_LOAD|BPF_COMMON_ATTRS (0x10005) is classified exactly like the plain
+// one, instead of falling through to the fail-closed "unknown command" path
+// that neither registers the returned fd nor names it.
+func bpfBaseCommand(cmd uint32) uint32 {
+	return cmd &^ bpfCommonAttrs
+}
 
 func (e *eventLoop) handleBpfExit(ep *event.Pair, bpfEv *types.BpfEvent) bool {
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
@@ -1105,9 +1120,10 @@ func (e *eventLoop) handleBpfExit(ep *event.Pair, bpfEv *types.BpfEvent) bool {
 		e.recyclePair(ep, "Dropped malformed bpf exit event")
 		return false
 	}
-	if fd, ok := fdFromRet(retEvent.Ret); ok && bpfCommandReturnsFD(bpfEv.Cmd) {
+	cmd := bpfBaseCommand(bpfEv.Cmd)
+	if fd, ok := fdFromRet(retEvent.Ret); ok && bpfCommandReturnsFD(cmd) {
 		resolved := file.NewFdWithPid(fd, bpfEv.Pid)
-		fdFile := file.NewFd(fd, "bpf:"+bpfCommandName(bpfEv.Cmd), int32(resolved.Flags()))
+		fdFile := file.NewFd(fd, "bpf:"+bpfCommandName(cmd), int32(resolved.Flags()))
 		e.fdState().set(fd, bpfEv.Pid, fdFile)
 		ep.File = fdFile
 	}
@@ -1115,6 +1131,7 @@ func (e *eventLoop) handleBpfExit(ep *event.Pair, bpfEv *types.BpfEvent) bool {
 	return e.finishPair(ep)
 }
 
+// bpfCommandReturnsFD expects a command already stripped by bpfBaseCommand.
 func bpfCommandReturnsFD(cmd uint32) bool {
 	switch cmd {
 	case bpfMapCreate, bpfProgLoad, bpfObjGet, bpfProgGetFdByID, bpfMapGetFdByID,
@@ -1126,6 +1143,7 @@ func bpfCommandReturnsFD(cmd uint32) bool {
 	}
 }
 
+// bpfCommandName expects a command already stripped by bpfBaseCommand.
 func bpfCommandName(cmd uint32) string {
 	switch cmd {
 	case bpfMapCreate:
