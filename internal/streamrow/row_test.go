@@ -133,6 +133,19 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	if got.RetVal != -1 || !got.IsError {
 		t.Fatalf("RetVal/IsError = %d/%v, want -1/true", got.RetVal, got.IsError)
 	}
+	if !got.IsWarning {
+		t.Fatalf("IsWarning = false, want true so data outputs can skip the row")
+	}
+}
+
+// TestNewNeverMarksASyscallRowAsWarning is the negative half: only NewWarning
+// sets IsWarning, so a traced syscall is never dropped from an export.
+func TestNewNeverMarksASyscallRowAsWarning(t *testing.T) {
+	pair := event.NewPair(&types.RetEvent{TraceId: types.SYS_ENTER_READ, Time: 1})
+	pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2}
+	if New(1, pair).IsWarning {
+		t.Fatalf("a syscall row must not be flagged IsWarning")
+	}
 }
 
 func TestNewCarriesReadyCountForEpollWait(t *testing.T) {

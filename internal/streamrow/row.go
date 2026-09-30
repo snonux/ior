@@ -57,6 +57,11 @@ type Row struct {
 	// renameat2) and link-family (link/linkat/symlink/symlinkat) syscalls;
 	// FileName carries the "new" path. Empty for every other syscall.
 	OldName string
+	// IsWarning marks a synthetic runtime-warning row (NewWarning), not a
+	// traced syscall. Its TimeNs is the wall clock and its PID/TID/FD/RetVal
+	// are placeholders, so data outputs (the stream CSV export) must skip it
+	// rather than mix it with the boot-clock syscall rows.
+	IsWarning bool
 }
 
 // The globalfilter.Candidate accessors below use pointer receivers on
@@ -237,7 +242,10 @@ func New(seq uint64, pair *event.Pair) Row {
 
 var _ globalfilter.Candidate = (*Row)(nil)
 
-// NewWarning creates a synthetic row for non-fatal runtime warnings.
+// NewWarning creates a synthetic row for non-fatal runtime warnings. It is
+// shown in the Stream tab only: TimeNs is wall-clock UnixNano, whereas every
+// syscall row carries the boot-clock BPF timestamp, so the row is flagged
+// IsWarning and left out of data files.
 func NewWarning(seq uint64, message string) Row {
 	now := uint64(time.Now().UnixNano())
 	return Row{
@@ -250,5 +258,8 @@ func NewWarning(seq uint64, message string) Row {
 		FD:       UnknownFD,
 		RetVal:   -1,
 		IsError:  true,
+		// IsWarning is what data outputs key on; the "warning" syscall name
+		// is only display text.
+		IsWarning: true,
 	}
 }

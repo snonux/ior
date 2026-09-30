@@ -231,7 +231,9 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read CSV: %v", err)
 	}
-	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
+	// Spelled out (not streamCSVHeader) so a reorder or rename fails here:
+	// the first 17 columns are a positional contract, the rest are appended.
+	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns", "address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events"}
 	if !reflect.DeepEqual(records[0], wantHeader) {
 		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
 	}
@@ -240,6 +242,77 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	}
 	if records[1][15] != "8" || records[1][16] != "-1" {
 		t.Fatalf("poll metadata = %q/%q, want 8/-1", records[1][15], records[1][16])
+	}
+}
+
+// TestWriteStreamCSVCarriesFullPerEventSchema is the task rq2 regression: the
+// export used to drop old_file, address_space_bytes and the epoll_* columns
+// that the Parquet recording and the README promise ("full per-event
+// schema"). Every cell is checked by header name against distinct values, so a
+// swapped or missing column fails.
+func TestWriteStreamCSVCarriesFullPerEventSchema(t *testing.T) {
+	rows := []StreamEvent{
+		{Seq: 1, Syscall: "renameat2", FileName: "/new,name", OldName: "/old \"name\"", FD: -1},
+		{Seq: 2, Syscall: "mmap", AddressSpaceBytes: 8192, FD: -1},
+		{Seq: 3, Syscall: "epoll_ctl", EpollOp: "ADD", EpollTargetFD: 9, EpollEvents: 0x85, FD: 4},
+		{Seq: 4, Syscall: "read", FileName: "/f", FD: 3},
+	}
+	var buf bytes.Buffer
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+	records, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV: %v", err)
+	}
+	col := map[string]int{}
+	for i, name := range records[0] {
+		col[name] = i
+	}
+	want := []map[string]string{
+		{"syscall": "renameat2", "file": "/new,name", "old_file": `/old "name"`, "address_space_bytes": "0", "epoll_op": "", "epoll_target_fd": "0", "epoll_events": "0"},
+		{"syscall": "mmap", "old_file": "", "address_space_bytes": "8192", "epoll_op": ""},
+		{"syscall": "epoll_ctl", "old_file": "", "address_space_bytes": "0", "epoll_op": "ADD", "epoll_target_fd": "9", "epoll_events": "133"},
+		{"syscall": "read", "file": "/f", "old_file": "", "epoll_op": "", "epoll_target_fd": "0"},
+	}
+	if len(records) != len(want)+1 {
+		t.Fatalf("got %d records, want header + %d rows", len(records), len(want))
+	}
+	for i, cells := range want {
+		for name, v := range cells {
+			if got := records[i+1][col[name]]; got != v {
+				t.Errorf("row %d column %s = %q, want %q", i+1, name, got, v)
+			}
+		}
+	}
+}
+
+// TestWriteStreamCSVSkipsWarningRows is the task rq2 regression for the
+// synthetic warning rows: they used to be exported as a "warning" syscall with
+// pid 0, ret -1 and a wall-clock time_ns among boot-clock event rows. A real
+// syscall row that merely has the same placeholder-looking values stays.
+func TestWriteStreamCSVSkipsWarningRows(t *testing.T) {
+	rows := []StreamEvent{
+		{Seq: 1, TimeNs: 500, Syscall: "read", FileName: "/f", FD: 3},
+		NewWarningEvent(2, "Trace stopped: boom"),
+		{Seq: 3, TimeNs: 900, Syscall: "warning", FD: -1},
+	}
+	var buf bytes.Buffer
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+	records, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want header + 2 syscall rows:\n%v", len(records), records)
+	}
+	if records[1][0] != "1" || records[2][0] != "3" {
+		t.Fatalf("seqs = %s,%s, want 1,3 (only the IsWarning row is skipped)", records[1][0], records[2][0])
+	}
+	if strings.Contains(buf.String(), "boom") {
+		t.Fatalf("warning text leaked into the export:\n%s", buf.String())
 	}
 }
 
@@ -348,6 +421,36 @@ func TestExportSnapshotMatchesRenameOnEitherName(t *testing.T) {
 	}
 	if strings.Contains(got, "openat") {
 		t.Fatalf("the export must not include rows the filter rejects, got:\n%s", got)
+	}
+}
+
+// TestExportSnapshotKeepsOldFileAndDropsWarnings drives the real snapshot path
+// (ring buffer -> filter -> CSV file) for task rq2: the rename's source path
+// reaches the old_file column, and a warning pushed into the ring, as the
+// runtime does, is not in the file even when the filter admits it.
+func TestExportSnapshotKeepsOldFileAndDropsWarnings(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, TimeNs: 10, Syscall: "renameat2", Comm: "mv", FileName: "/tmp/new.txt", OldName: "/tmp/old.txt", FD: -1})
+	rb.Push(NewWarningEvent(2, "Dropped malformed event"))
+
+	path, err := exportSnapshotToCSV(rb, Filter{}, t.TempDir(), "full.csv")
+	if err != nil {
+		t.Fatalf("exportSnapshotToCSV: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	records, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+	if err != nil {
+		t.Fatalf("parse export: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want header + the rename only: %v", len(records), records)
+	}
+	row := records[1]
+	if row[11] != "/tmp/new.txt" || row[18] != "/tmp/old.txt" {
+		t.Fatalf("file/old_file = %q/%q, want /tmp/new.txt//tmp/old.txt", row[11], row[18])
 	}
 }
 

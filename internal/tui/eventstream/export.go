@@ -143,7 +143,8 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	if source != nil {
 		snapshot := source.Snapshot()
 		// Same row selection as Model.applyFilter, so the export contains
-		// exactly the rows the Stream tab is showing.
+		// exactly the rows the Stream tab is showing; the only exception is
+		// the synthetic warning rows, which writeStreamCSV leaves out.
 		rows = filterRows(make([]StreamEvent, 0, len(snapshot)), snapshot, filter)
 	}
 
@@ -187,43 +188,75 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 	return absPath, nil
 }
 
-// writeStreamCSV writes the CSV header and all event rows to w and flushes it.
+// streamCSVHeader is the stream CSV export's column order. The first 17
+// columns are the original layout and must never move: later columns are only
+// ever appended, so a script indexing by position keeps working. The trailing
+// five (address_space_bytes, old_file, epoll_op, epoll_target_fd,
+// epoll_events) complete the export to the per-event schema of the Parquet
+// recording, under the same names (docs/parquet-querying.md); only `error`
+// (Parquet: is_error) keeps its historical name. streamCSVRecord must emit the
+// cells in exactly this order.
+var streamCSVHeader = []string{
+	"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall",
+	"fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns",
+	"nfds", "timeout_ns",
+	"address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events",
+}
+
+// writeStreamCSV writes the CSV header and the syscall rows to w and flushes
+// it. Synthetic warning rows (streamrow.Row.IsWarning) are skipped: they are
+// UI notes whose time_ns is wall-clock and whose pid/ret are placeholders, so
+// writing them would put a fake "warning" syscall with a time from another
+// clock into the data, unlike the Parquet recording, which never sees them.
 func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
-	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
-	if err := w.Write(header); err != nil {
+	if err := w.Write(streamCSVHeader); err != nil {
 		return err
 	}
 	for i := range rows {
-		ev := rows[i]
-		record := []string{
-			fmt.Sprintf("%d", ev.Seq),
-			fmt.Sprintf("%d", ev.TimeNs),
-			fmt.Sprintf("%d", ev.GapNs),
-			fmt.Sprintf("%d", ev.DurationNs),
-			ev.Comm,
-			fmt.Sprintf("%d", ev.PID),
-			fmt.Sprintf("%d", ev.TID),
-			ev.Syscall,
-			fmt.Sprintf("%d", ev.FD),
-			fmt.Sprintf("%d", ev.RetVal),
-			fmt.Sprintf("%d", ev.Bytes),
-			// FileValue, not FileName: the export is a data file, so a
-			// fileless row gets an empty file cell like the Parquet column
-			// instead of the "N:file" display placeholder (task pq2). The
-			// fd column keeps -1 (streamrow.UnknownFD) for "no descriptor".
-			ev.FileValue(),
-			fmt.Sprintf("%t", ev.IsError),
-			ev.Family,
-			fmt.Sprintf("%d", ev.RequestedSleepNs),
-			fmt.Sprintf("%d", ev.Nfds),
-			fmt.Sprintf("%d", ev.TimeoutNs),
+		if rows[i].IsWarning {
+			continue
 		}
-		if err := w.Write(record); err != nil {
+		if err := w.Write(streamCSVRecord(&rows[i])); err != nil {
 			return err
 		}
 	}
 	w.Flush()
 	return w.Error()
+}
+
+// streamCSVRecord renders one row in streamCSVHeader order.
+func streamCSVRecord(ev *StreamEvent) []string {
+	return []string{
+		fmt.Sprintf("%d", ev.Seq),
+		fmt.Sprintf("%d", ev.TimeNs),
+		fmt.Sprintf("%d", ev.GapNs),
+		fmt.Sprintf("%d", ev.DurationNs),
+		ev.Comm,
+		fmt.Sprintf("%d", ev.PID),
+		fmt.Sprintf("%d", ev.TID),
+		ev.Syscall,
+		fmt.Sprintf("%d", ev.FD),
+		fmt.Sprintf("%d", ev.RetVal),
+		fmt.Sprintf("%d", ev.Bytes),
+		// FileValue, not FileName: the export is a data file, so a
+		// fileless row gets an empty file cell like the Parquet column
+		// instead of the "N:file" display placeholder (task pq2). The
+		// fd column keeps -1 (streamrow.UnknownFD) for "no descriptor".
+		ev.FileValue(),
+		fmt.Sprintf("%t", ev.IsError),
+		ev.Family,
+		fmt.Sprintf("%d", ev.RequestedSleepNs),
+		fmt.Sprintf("%d", ev.Nfds),
+		fmt.Sprintf("%d", ev.TimeoutNs),
+		fmt.Sprintf("%d", ev.AddressSpaceBytes),
+		// Rename/link source path; empty for every other syscall. The
+		// file column holds the destination.
+		ev.OldName,
+		// Empty/zero for everything but epoll_ctl.
+		ev.EpollOp,
+		fmt.Sprintf("%d", ev.EpollTargetFD),
+		fmt.Sprintf("%d", ev.EpollEvents),
+	}
 }
 
 // ensureCSVFilename validates and normalises a user-supplied export filename.

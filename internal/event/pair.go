@@ -171,8 +171,8 @@ func (e *Pair) Is(id types.TraceId) bool {
 // EventStreamHeader is the CSV header line printed once by -plain mode.
 // Each row rendered by Pair.String() carries exactly these columns, in this
 // order. This is the reduced plain-mode schema; the full per-event schema
-// (timestamp, bytes, requested_sleep_ns, ...) is available via the TUI stream
-// CSV export and the headless Parquet output.
+// (timestamp, bytes, old_file, address_space_bytes, epoll_*, ...) is available
+// via the TUI stream CSV export and the headless Parquet output.
 const EventStreamHeader = "durationToPrevNs,durationNs,comm,pid.tid,name,ret,file"
 
 // quoteCSVField quotes field for RFC 4180 CSV output, byte-identical to

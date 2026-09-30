@@ -257,7 +257,7 @@ count, `requested_sleep_ns`, `nfds`, or `timeout_ns` column, and pid/tid share o
 dot-separated column. Fields that may contain commas (process names, file paths) are
 CSV-quoted, so parse the rows with any CSV reader rather than a naive comma split. For the
 full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`,
-`requested_sleep_ns`, `nfds`, `timeout_ns`, ...) use the TUI stream CSV export (`e` in
+`requested_sleep_ns`, `nfds`, `timeout_ns`, `address_space_bytes`, `old_file`, `epoll_*`) use the TUI stream CSV export (`e` in
 the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
 
 ## Regenerating the demo

@@ -54,6 +54,22 @@ under that name. To count descriptor-carrying rows use `fd >= 0`. Recordings mad
 this change hold `N:file` and `fd = -1` in those rows; filter them with
 `file NOT IN ('', 'N:file')`.
 
+### Stream CSV export columns
+
+The TUI stream CSV export (`e`, and `x`/`X`/`E` on the Stream tab) carries the same per-event
+fields as the recording, in this order:
+`seq, time_ns, gap_ns, latency_ns, comm, pid, tid, syscall, fd, ret, bytes, file, error, family,
+requested_sleep_ns, nfds, timeout_ns, address_space_bytes, old_file, epoll_op, epoll_target_fd,
+epoll_events`. The names match the Parquet columns above, except that `error` is the Parquet
+`is_error`; `filter_epoch` exists only in recordings. New columns are only ever appended, so a
+script that indexes by position keeps working. `old_file` (rename/link source, `file` being the
+destination), `address_space_bytes` and the `epoll_*` columns follow the same zero/empty rules
+as in the recording. The synthetic warning lines the Stream tab shows (`Trace stopped: ...`,
+recorder failures) are UI notes with a wall-clock time and placeholder pid/ret, so they are not
+exported; like a recording, the CSV holds only traced syscalls with their boot-clock `time_ns`.
+Unlike the recording, the CSV writes `comm`, `file` and `old_file` as traced, without the UTF-8
+repair.
+
 ### Restart codes and `is_error`
 
 When a signal interrupts a blocked syscall, the kernel leaves an internal restart code in the
