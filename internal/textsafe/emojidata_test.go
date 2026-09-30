@@ -85,8 +85,9 @@ func parseCodePoints(t *testing.T, field string) string {
 // TestEmojiBasesMatchEmojiData is the table-sync check: isEmojiBase must
 // accept exactly the code points that emoji-data.txt lists as
 // Extended_Pictographic, Emoji_Modifier_Base or Emoji_Modifier. When a newer
-// Unicode version adds emoji, regenerate emojiBases from the file (merge the
-// ranges of those three properties).
+// Unicode version adds emoji, regenerate emojiBases with
+// `go generate ./internal/textsafe` (gen_emoji.go merges the ranges of those
+// three properties).
 func TestEmojiBasesMatchEmojiData(t *testing.T) {
 	f := openUnicodeFile(t, emojiDataEnv, emojiDataPaths)
 	want := map[rune]bool{}
@@ -111,7 +112,7 @@ func TestEmojiBasesMatchEmojiData(t *testing.T) {
 	}
 	for r := rune(0); r <= 0x10FFFF; r++ {
 		if got := isEmojiBase(r); got != want[r] {
-			t.Fatalf("isEmojiBase(%U) = %v, emoji-data.txt says %v; regenerate emojiBases", r, got, want[r])
+			t.Fatalf("isEmojiBase(%U) = %v, emoji-data.txt says %v; run `go generate ./internal/textsafe` to regenerate emojiBases", r, got, want[r])
 		}
 	}
 }

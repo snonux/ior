@@ -23,6 +23,12 @@ import (
 	"unicode/utf8"
 )
 
+// emojitable.go is generated from the Unicode emoji data file; see gen_emoji.go
+// and the Unicode refresh notes in AGENTS.md. The path is the one Fedora and
+// Debian (unicode-ucd / unicode-data) install; pass another file with -in.
+//
+//go:generate go run gen_emoji.go -in /usr/share/unicode/ucd/emoji/emoji-data.txt
+
 // Class is the terminal-safety class of one rune (or invalid byte).
 type Class uint8
 
@@ -87,7 +93,11 @@ const (
 //     variation selectors U+180B..180D/180F are replaced, so some Japanese
 //     and Mongolian names lose the glyph variant they select. They are a
 //     known channel for invisible data smuggling and change no visible text
-//     unless a font supports the variant.
+//     unless a font supports the variant;
+//   - a bare digit, '#' or '*' followed by VS15/VS16 without the U+20E3 that
+//     makes a keycap loses its selector (only a keycap base vouches for it),
+//     which is accepted: the selector is invisible, so keeping it would again
+//     let a name look identical to another one.
 func ClassAt(s string, i int) (Class, int) {
 	c := s[i]
 	if c >= 0x20 && c < 0x7f {
