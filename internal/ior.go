@@ -56,6 +56,9 @@ func Run(cfg flags.Config, tui TUIRunners) error {
 	if err != nil {
 		return err
 	}
+	// Before the first write of any kind: the banner itself already hits a
+	// closed stdout when the launcher exited right away (`ior ... | head -1`).
+	guardBrokenPipe(cfg)
 	printStartupBanner(cfg)
 	return newModeRegistry(deps).dispatch(cfg)
 }
@@ -633,7 +636,7 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 	}
 
 	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(signalCh, shutdownSignals(cfg)...)
 	stopSignals := func() {
 		signal.Stop(signalCh)
 	}
@@ -646,6 +649,46 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 		}
 	}()
 	return ctx, cancel, stopSignals
+}
+
+// shutdownSignals lists the signals that end a trace gracefully, so the
+// recorder is finalised and the output published instead of the process
+// dying with the recording unwritten. SIGINT/SIGTERM apply everywhere. SIGHUP
+// (the controlling terminal or SSH session went away, e.g. a dropped
+// connection or a closed terminal window) is added for the headless modes
+// only: there it used to kill the process before -flamegraph/-parquet wrote
+// anything. In TUI mode the terminal is gone with the hangup and the TUI
+// framework owns terminal teardown, so SIGHUP keeps its default action there.
+func shutdownSignals(cfg flags.Config) []os.Signal {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if shouldAutoStopByDuration(cfg) {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	return sigs
+}
+
+// guardBrokenPipe makes a write to a closed stdout/stderr return EPIPE instead
+// of terminating the process, for the file-output headless modes
+// (-flamegraph, -parquet). Go's default is to die from SIGPIPE on a broken
+// fd 1 or 2, which happens as soon as the reader of `ior ... | head` or
+// `ior ... 2>&1 | grep -m1 ...` exits - long before the recording is written,
+// and again on the very last "Shutdown complete." line, which would turn a
+// finished run into a death by signal. Every status write to those fds
+// discards its error, so ignoring the signal loses nothing and lets the
+// recording finish.
+//
+// It is installed once from Run and never undone: the process ends with Run,
+// and the teardown logging after the trace (which outlives any per-trace
+// signal registration) needs the guard too. -plain is deliberately excluded:
+// its product IS the stream on stdout, and dying on a closed reader is the
+// right Unix behaviour there. Notify without a reader is enough: the runtime
+// drops what a full channel cannot take, and the mere registration is what
+// switches off the die-on-SIGPIPE default.
+func guardBrokenPipe(cfg flags.Config) {
+	if cfg.PlainMode || !(cfg.FlamegraphOutput || isHeadlessParquetMode(cfg)) {
+		return
+	}
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 }
 
 func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configure func(*eventLoop)) {

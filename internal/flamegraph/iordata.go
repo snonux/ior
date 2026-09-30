@@ -118,16 +118,20 @@ func (iod *iorData) serializeToFile(flamegraphName string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Writing", filename)
-
 	published, err := atomicfile.WriteFile(filename, serializedExt, func(w io.Writer) error {
 		return iod.encodeCompressed(w, filename)
 	})
 	if err != nil {
 		return err
 	}
+	// Status goes to stderr (stdout is reserved for machine-readable data) and
+	// only after the file is published, so it never announces a file that was
+	// not written. A failed status write (closed pipe) is deliberately
+	// ignored: the recording is already safely on disk.
 	if published != filename {
-		fmt.Println(filename, "already exists; wrote", published, "instead")
+		_, _ = fmt.Fprintln(os.Stderr, filename, "already exists; wrote", published, "instead")
+	} else {
+		_, _ = fmt.Fprintln(os.Stderr, "Wrote", published)
 	}
 	return nil
 }
