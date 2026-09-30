@@ -44,14 +44,21 @@ type animTickMsg struct {
 // that invalidates in-flight refreshes (SetLiveTrie, baseline/order/metric
 // resets) advances it.
 //
-// fieldIndex selects the toolbar's o:order(...) label. SetLiveTrie may prepend
-// an unknown field order to fieldPresets and keep the index at 0, so the index
-// alone is ambiguous across sessions; generation disambiguates it, and it is
-// the only place fieldPresets changes. Keying on the index instead of the
-// joined label keeps the cache-hit path free of a strings.Join per View.
+// fieldIndex selects the toolbar's o:order(...) label. The index alone is
+// ambiguous across sessions: SetLiveTrie may prepend an unknown field order to
+// fieldPresets and keep the index at 0. The generation is what disambiguates
+// that case. fieldIndex itself is belt-and-braces: every path that changes it
+// (cycleFieldOrder via clearSnapshotState, SetLiveTrie) also advances the
+// generation, so no scenario changes the order label through the index alone
+// today; it stays in the key so a future path that moves the index without
+// clearing the snapshot cannot serve a stale toolbar (only a test that moves
+// the index directly, TestViewCacheKeyTracksFieldOrder, pins it). Keying on the index
+// instead of the joined label keeps the cache-hit path free of a
+// strings.Join per View.
 //
 // searchInput and searchCursor are only read while the search prompt is open
 // (see currentViewCacheKey): the footer renders them only then.
+//
 // hasSnapshot decides whether an empty frame list renders the "snapshot has no
 // visible frames" panel; clearSnapshotState drops the snapshot without touching
 // lastVersion, so neither is implied by the other key fields.
@@ -610,8 +617,10 @@ func (m *Model) renderViewContent() string {
 func (m *Model) currentViewCacheKey() flameViewCacheKey {
 	// The input value and cursor only reach the screen through the search
 	// footer, so they are read only while the prompt is open. Closing the
-	// prompt clears the input and flips searchActive, which changes the key;
-	// reading textinput.Value() on every idle View allocated for nothing.
+	// prompt always flips searchActive, which changes the key (Esc also clears
+	// the input via SearchController.clear; Enter commits and keeps the input
+	// text, so there the searchActive flip alone invalidates the cache).
+	// Reading textinput.Value() on every idle View allocated for nothing.
 	var searchInput string
 	var searchCursor int
 	if m.search.isActive() {

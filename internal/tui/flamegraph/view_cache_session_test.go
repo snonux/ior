@@ -100,10 +100,15 @@ func TestViewCacheStillHitsWithinOneSession(t *testing.T) {
 	}
 }
 
-// TestViewCacheTracksOrderLabelAcrossSessionSwap guards the key's replacement of
-// the joined o:order(...) label by fieldIndex+generation: a session whose trie
-// uses an unknown field order gets a custom preset prepended at index 0, the
-// same index the previous session used, yet the toolbar label must change.
+// TestViewCacheTracksOrderLabelAcrossSessionSwap pins the refresh generation
+// against a stale o:order(...) toolbar label. A session whose trie uses an
+// unknown field order gets a custom preset prepended at index 0 - the same
+// fieldIndex the previous session used. Both sessions ingest the same three
+// records into a six-frame tree, so version, frame count and status message
+// also match: only the generation tells the two renders apart. (fieldIndex is
+// belt-and-braces in the key: every real path that moves it also advances the
+// generation, so it is pinned only by TestViewCacheKeyTracksFieldOrder, which
+// moves the index directly.)
 func TestViewCacheTracksOrderLabelAcrossSessionSwap(t *testing.T) {
 	first := newNamedSessionTrie("same")
 	m := NewModel(first)
@@ -113,14 +118,26 @@ func TestViewCacheTracksOrderLabelAcrossSessionSwap(t *testing.T) {
 		t.Fatalf("expected the first session's order in the toolbar:\n%s", view)
 	}
 
-	custom := coreflamegraph.NewLiveTrie([]string{"path", "comm"}, "count", "")
-	custom.AddRecord(coreflamegraph.IterRecord{
-		Path: "/srv/one", TraceID: types.SYS_ENTER_READ, Comm: "same", Pid: 42, Tid: 42,
-		Cnt: coreflamegraph.Counter{Count: 10},
-	})
+	custom := coreflamegraph.NewLiveTrie([]string{"pid", "comm", "path"}, "count", "")
+	for _, path := range []string{"/srv/one", "/srv/two", "/srv/three"} {
+		custom.AddRecord(coreflamegraph.IterRecord{
+			Path: path, TraceID: types.SYS_ENTER_READ, Comm: "same", Pid: 42, Tid: 42,
+			Cnt: coreflamegraph.Counter{Count: 10, Duration: 1000, Bytes: 4096},
+		})
+	}
+	if first.Version() != custom.Version() {
+		t.Fatalf("test setup: tries must share a version, got %d vs %d", first.Version(), custom.Version())
+	}
+	frames := len(m.anim.currentFrames())
 	loadSession(t, m, custom)
+	if got := len(m.anim.currentFrames()); got != frames {
+		t.Fatalf("test setup: frame counts must match to collide, %d vs %d", frames, got)
+	}
+	if m.fieldIndex != 0 {
+		t.Fatalf("test setup: custom preset must land at the old index 0, got %d", m.fieldIndex)
+	}
 	view := m.View().Content
-	if !strings.Contains(view, "path/comm") || strings.Contains(view, "comm/tracepoint/path") {
+	if !strings.Contains(view, "pid/comm/path") || strings.Contains(view, "comm/tracepoint/path") {
 		t.Fatalf("toolbar kept the previous session's order label:\n%s", view)
 	}
 }
@@ -148,5 +165,60 @@ func TestViewCacheShowsSearchInputOnlyWhileOpen(t *testing.T) {
 	m = deliver(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if view := m.View().Content; strings.Contains(view, "zqx") {
 		t.Fatalf("cancelled prompt still renders its input:\n%s", view)
+	}
+}
+
+// TestViewCacheShowsSearchFooterWhenPromptOpens pins searchActive in the cache
+// key. Opening the prompt changes nothing else the key reads (the input is
+// still empty, the query unchanged), so without searchActive the cached
+// pre-prompt frame would be served and the "0/0 matches" footer would stay
+// invisible until the first keystroke. Closing the prompt by Enter (commit,
+// input text kept) and by Esc (input cleared) must drop the footer again.
+func TestViewCacheShowsSearchFooterWhenPromptOpens(t *testing.T) {
+	const footer = "0/0 matches"
+	for _, tc := range []struct {
+		name  string
+		close tea.KeyPressMsg
+	}{
+		{"enter", tea.KeyPressMsg{Code: tea.KeyEnter}},
+		{"escape", tea.KeyPressMsg{Code: tea.KeyEscape}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trie := newNamedSessionTrie("steady")
+			m := NewModel(trie)
+			m.width, m.height = 120, 30
+			loadSession(t, m, trie)
+			if view := m.View().Content; strings.Contains(view, footer) {
+				t.Fatalf("footer present before the prompt opened:\n%s", view)
+			}
+
+			m = deliver(t, m, runeKey('/'))
+			if view := m.View().Content; !strings.Contains(view, footer) {
+				t.Fatalf("opening the prompt served the cached pre-prompt frame:\n%s", view)
+			}
+			m = deliver(t, m, tc.close)
+			if view := m.View().Content; strings.Contains(view, footer) {
+				t.Fatalf("closing the prompt with %s left the footer visible:\n%s", tc.name, view)
+			}
+		})
+	}
+}
+
+// TestViewCacheHitDoesNotAllocate checks the cache-hit path with the search
+// prompt closed stays allocation-free: building the key is a plain struct of
+// scalars and already-held strings, and the compare plus tea.NewView allocate
+// nothing. A per-View strings.Join of the order label (the pre-fix behaviour)
+// adds an allocation and fails this test. It does not catch an unconditional
+// textinput.Value() read: Value() of an empty input does not allocate, so
+// that cost only shows with typed text and is covered by the
+// searchInput-only-while-open test's behaviour, not by a count here.
+func TestViewCacheHitDoesNotAllocate(t *testing.T) {
+	trie := newNamedSessionTrie("steady")
+	m := NewModel(trie)
+	m.width, m.height = 120, 30
+	loadSession(t, m, trie)
+	_ = m.View() // populate the cache
+	if allocs := testing.AllocsPerRun(100, func() { _ = m.View() }); allocs != 0 {
+		t.Fatalf("cache-hit View allocated %.0f times per call, want 0", allocs)
 	}
 }
