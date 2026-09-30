@@ -61,9 +61,18 @@ func (f *NumericFilter) EqValue() (int64, bool) {
 // trimmed only outside the anchors, and only one anchor is taken from each
 // end, so "^x $" is exactly "x " and "^^x" is the prefix "^x". Filters built
 // from a concrete value rather than typed use ExactPattern/DirPattern.
+//
+// Case: substring, prefix (^x) and suffix (x$) matching ignore case; the
+// fully anchored exact form (^x$) does not. Anchoring both ends says "exactly
+// this value", and a value differing in case is a different file or comm
+// (Linux paths and comms are case-sensitive), so /tmp/A must not satisfy
+// ^/tmp/a$. The rule lives in the pattern text itself, not in a separate
+// flag, so a pattern round-trips unchanged through the filter modal and a
+// user typing ^foo$ gets the same semantics as a row filter.
 type StringFilter struct {
-	// Pattern is the substring (or anchored prefix/suffix) matched against the
-	// candidate string value; matching is case-insensitive.
+	// Pattern is the substring (or anchored prefix/suffix/exact) matched
+	// against the candidate string value; only the exact form ^...$ is
+	// case-sensitive.
 	Pattern string
 }
 
@@ -306,10 +315,10 @@ func trimAnchors(pattern string) (trimmed string, anchoredStart, anchoredEnd boo
 	return pattern, anchoredStart, anchoredEnd
 }
 
-// ExactPattern returns the StringFilter pattern that matches value exactly
-// (still case-insensitively, like every string filter) and nothing else. It
-// is how filters built from a concrete value - a selected table row - say
-// "this one", as opposed to a typed pattern, which is a substring search.
+// ExactPattern returns the StringFilter pattern that matches value exactly -
+// byte for byte, case included - and nothing else. It is how filters built
+// from a concrete value - a selected table row - say "this one", as opposed
+// to a typed pattern, which is a substring search.
 //
 // Wrapping in ^...$ is enough for any value, because trimAnchors removes
 // exactly one anchor from each end and matchString trims blanks only outside
@@ -324,12 +333,15 @@ func ExactPattern(value string) string {
 }
 
 // DirPattern returns the StringFilter pattern that matches every path below
-// dir - the whole subtree, case-insensitively - as the prefix "^dir/". The
-// separator is part of the prefix so "/tmp" does not also select "/tmpfoo",
-// and the root is "^/" rather than "^//". Only the root is special: any
-// other dir gets the separator appended even when it already ends in one,
-// because a literal dir "a/" (from "a//b") must select "a//..." and not every
-// "a/..." as well. The pattern always ends with "/", so it never ends in a $
+// dir - the whole subtree - as the prefix "^dir/". Like every one-sided
+// anchor it matches case-insensitively (only ^exact$ is case-sensitive), so a
+// "/tmp/A" row also admits "/tmp/a/x"; the dashboard dir-row matcher is due
+// to be reworked separately (task ip2), and this function keeps the generic
+// prefix semantics until then. The separator is part of the prefix so "/tmp"
+// does not also select "/tmpfoo", and the root is "^/" rather than "^//".
+// Only the root is special: any other dir gets the separator appended even
+// when it already ends in one, because a literal dir "a/" (from "a//b") must
+// select "a//..." and not every "a/..." as well. The pattern always ends with "/", so it never ends in a $
 // anchor, whatever dir holds.
 func DirPattern(dir string) string {
 	if dir == "/" {
@@ -339,12 +351,14 @@ func DirPattern(dir string) string {
 }
 
 // matchString reports whether value satisfies the string filter: a
-// case-insensitive substring match, or prefix/suffix/exact under the ^ and $
-// anchors. A nil or blank filter matches everything.
+// case-insensitive substring match, a case-insensitive prefix/suffix under
+// one of the ^ and $ anchors, or a case-sensitive exact match under both (see
+// StringFilter). A nil or blank filter matches everything.
 //
 // It runs per candidate on every matching path (event loop, stream re-filter,
-// raw kernel-event filter), so the common all-ASCII case is compared in place
-// by matchFoldASCII instead of lowering both strings: strings.ToLower
+// raw kernel-event filter), so it never allocates for the exact form (a plain
+// string comparison) nor for the common all-ASCII case, which matchFoldASCII
+// compares in place instead of lowering both strings: strings.ToLower
 // allocates whenever its input has an upper-case letter, which is every row
 // under a family filter ("FS", "Network", ...) and any pattern typed with
 // capitals. For ASCII, ASCII case folding is exactly what ToLower does, so
@@ -358,14 +372,15 @@ func matchString(sf *StringFilter, value string) bool {
 		return true
 	}
 	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
+	if anchoredStart && anchoredEnd {
+		return value == pattern
+	}
 	if isASCII(pattern) && isASCII(value) {
 		return matchFoldASCII(pattern, value, anchoredStart, anchoredEnd)
 	}
 	value = strings.ToLower(value)
 	pattern = strings.ToLower(pattern)
 	switch {
-	case anchoredStart && anchoredEnd:
-		return value == pattern
 	case anchoredStart:
 		return strings.HasPrefix(value, pattern)
 	case anchoredEnd:

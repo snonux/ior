@@ -94,18 +94,7 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 	if !hasStringPattern(filter) {
 		return nil
 	}
-	// The question is not how long the pattern is, it is whether any value the
-	// kernel can deliver could match it. matchString lowercases both sides, so
-	// a pattern is usable when *either* its raw or its lowered form fits the
-	// field - whichever it is becomes a witness value that matches.
-	//
-	// Measuring one form only has been wrong in both directions: the raw form
-	// rejects six U+212A (18 bytes) that lower to six, and the lowered form
-	// rejects seven U+023A (15 bytes) that grow to 21. strings.ToLower is not
-	// length-preserving either way, so neither form alone is the answer.
-	raw, _, _ := trimAnchors(strings.TrimSpace(filter.Pattern))
-	lowered, _, _ := trimAnchors(strings.ToLower(strings.TrimSpace(filter.Pattern)))
-	shortest := min(len(raw), len(lowered))
+	shortest := shortestWitnessLen(filter.Pattern)
 
 	// maxLen is the field's buffer size and the kernel NUL-terminates what it
 	// writes there (bpf_get_current_comm, bpf_probe_read_user_str), so the
@@ -118,4 +107,30 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 		return fmt.Errorf("%s filter max size is %d (got %d)", name, usable, shortest)
 	}
 	return nil
+}
+
+// shortestWitnessLen returns the byte length of the shortest value that can
+// match pattern, the figure validateTraceStringFilter checks against a kernel
+// field. The question is not how long the pattern is, it is whether any value
+// the kernel can deliver could match it.
+//
+// A case-insensitive pattern (substring, ^prefix, suffix$) is compared with
+// both sides lowered, so it is usable when *either* its raw or its lowered
+// form fits the field - whichever it is becomes a witness value that matches.
+// Measuring one form only has been wrong in both directions: the raw form
+// rejects six U+212A (18 bytes) that lower to six, and the lowered form
+// rejects seven U+023A (15 bytes) that grow to 21. strings.ToLower is not
+// length-preserving either way, so neither form alone is the answer.
+//
+// The exact form ^...$ is case-sensitive (see StringFilter), so its only
+// witness is the raw text itself: the lowered form no longer matches anything
+// the raw form does not, and must not make an over-long exact pattern pass.
+func shortestWitnessLen(pattern string) int {
+	pattern = strings.TrimSpace(pattern)
+	raw, anchoredStart, anchoredEnd := trimAnchors(pattern)
+	if anchoredStart && anchoredEnd {
+		return len(raw)
+	}
+	lowered, _, _ := trimAnchors(strings.ToLower(pattern))
+	return min(len(raw), len(lowered))
 }

@@ -212,14 +212,19 @@ func TestFilterStringAnchorsSupportExactPrefixAndSuffix(t *testing.T) {
 // every value, including those the matcher would otherwise reinterpret:
 // blank-padded values (the matcher trims blanks outside the anchors only),
 // values with a literal edge ^ or $ (one anchor is taken per end only), and
-// the empty value. Case still folds, as for every string filter.
+// the empty value. Exact means case too: a value differing only in case is a
+// different file or comm, so "/TMP/A" is a miss for "/tmp/a" (non-ASCII
+// values included, which would otherwise take the lowering fallback).
 func TestExactPatternMatchesOnlyTheValue(t *testing.T) {
 	for _, tt := range []struct {
 		value string
 		match []string
 		miss  []string
 	}{
-		{"/tmp/a", []string{"/tmp/a", "/TMP/A"}, []string{"/tmp/ab", "/var/tmp/a", "/tmp/a "}},
+		{"/tmp/a", []string{"/tmp/a"}, []string{"/TMP/A", "/tmp/A", "/tmp/ab", "/var/tmp/a", "/tmp/a "}},
+		{"/tmp/A", []string{"/tmp/A"}, []string{"/tmp/a", "/TMP/a"}},
+		{"Ärger", []string{"Ärger"}, []string{"ärger", "ÄRGER"}},
+		{"\u212A", []string{"\u212A"}, []string{"k", "K"}},
 		{"/tmp/a ", []string{"/tmp/a "}, []string{"/tmp/a", "/tmp/ab", "/tmp/a  "}},
 		{"  sh  ", []string{"  sh  "}, []string{"sh", " sh ", "bash"}},
 		{"x$", []string{"x$"}, []string{"x", "ax$", "x$y"}},
@@ -245,7 +250,9 @@ func TestExactPatternMatchesOnlyTheValue(t *testing.T) {
 
 // TestDirPatternMatchesTheSubtree checks that DirPattern selects every path
 // below the directory and no sibling that merely shares its name as a prefix
-// or contains it elsewhere; the root must not become "^//".
+// or contains it elsewhere; the root must not become "^//". A one-sided
+// prefix still folds case (only ^exact$ is case-sensitive), so "/TMP/a" is
+// inside "/tmp" - task ip2 owns any change to the dir-row matcher itself.
 func TestDirPatternMatchesTheSubtree(t *testing.T) {
 	for _, tt := range []struct {
 		dir   string
@@ -275,6 +282,37 @@ func TestDirPatternMatchesTheSubtree(t *testing.T) {
 			if matchString(sf, v) {
 				t.Errorf("DirPattern(%q) should not match %q", tt.dir, v)
 			}
+		}
+	}
+}
+
+// TestStringFilterCaseSensitivityByAnchorMode pins the case rule of
+// matchString for typed patterns: substring, ^prefix and suffix$ ignore case,
+// while the fully anchored ^exact$ - what ExactPattern produces and what a
+// user types for "exactly this" - does not. Blanks outside the anchors are
+// trimmed before the rule applies, and a lone anchor stays a match-all.
+func TestStringFilterCaseSensitivityByAnchorMode(t *testing.T) {
+	for _, tt := range []struct {
+		pattern, value string
+		want           bool
+	}{
+		{"TMP", "/tmp/a", true},
+		{"^/TMP", "/tmp/a", true},
+		{"/A$", "/tmp/a", true},
+		{"^/tmp/a$", "/tmp/a", true},
+		{"^/tmp/a$", "/tmp/A", false},
+		{"^/TMP/A$", "/tmp/a", false},
+		{"  ^Bash$  ", "Bash", true},
+		{"  ^Bash$  ", "bash", false},
+		{"^Ärger$", "ärger", false},
+		{"^ärger", "ÄRGER-x", true},
+		{"^", "Anything", true},
+		{"$", "Anything", true},
+		{"^$", "", true},
+		{"^$", "A", false},
+	} {
+		if got := matchString(&StringFilter{Pattern: tt.pattern}, tt.value); got != tt.want {
+			t.Errorf("matchString(%q, %q) = %v, want %v", tt.pattern, tt.value, got, tt.want)
 		}
 	}
 }

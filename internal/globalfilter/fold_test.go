@@ -5,21 +5,25 @@ import (
 	"testing"
 )
 
-// referenceMatchString is the lowering implementation matchString used before
-// the ASCII fast path; the fast path must select exactly the same values.
+// referenceMatchString is the straightforward implementation of matchString's
+// semantics without the ASCII fast path: the exact form ^...$ compares the raw
+// strings (case-sensitive), every other mode compares the strings.ToLower
+// forms. The fast path must select exactly the same values.
 func referenceMatchString(sf *StringFilter, value string) bool {
 	if sf == nil {
 		return true
 	}
-	pattern := strings.ToLower(strings.TrimSpace(sf.Pattern))
+	pattern := strings.TrimSpace(sf.Pattern)
 	if pattern == "" {
 		return true
 	}
-	value = strings.ToLower(value)
 	pattern, anchoredStart, anchoredEnd := trimAnchors(pattern)
-	switch {
-	case anchoredStart && anchoredEnd:
+	if anchoredStart && anchoredEnd {
 		return value == pattern
+	}
+	value = strings.ToLower(value)
+	pattern = strings.ToLower(pattern)
+	switch {
 	case anchoredStart:
 		return strings.HasPrefix(value, pattern)
 	case anchoredEnd:
@@ -58,13 +62,25 @@ func TestMatchStringASCIIFoldAgreesWithLowering(t *testing.T) {
 
 // TestMatchStringASCIIDoesNotAllocate pins the allocation-free ASCII path:
 // upper-case values (every row under a family filter) and upper-case patterns
-// used to cost one strings.ToLower allocation each per candidate.
+// used to cost one strings.ToLower allocation each per candidate. It also pins
+// the exact form (^...$), which never lowers anything.
 func TestMatchStringASCIIDoesNotAllocate(t *testing.T) {
 	var sink bool
-	for _, pattern := range []string{"Network", "^fs$", "^/var", "LOG$"} {
+	for _, pattern := range []string{"Network", "^fs$", "^FS$", "^/var", "LOG$"} {
 		sf := &StringFilter{Pattern: pattern}
 		allocs := testing.AllocsPerRun(100, func() {
 			sink = matchString(sf, "Network") || matchString(sf, "/Var/Log/Access.LOG")
+		})
+		if allocs != 0 {
+			t.Errorf("matchString(%q) allocated %.0f times, want 0", pattern, allocs)
+		}
+	}
+	// The exact form is a plain comparison, so it stays allocation-free even
+	// for non-ASCII input, which the other modes send through strings.ToLower.
+	for _, pattern := range []string{"^Ärger$", "^/TMP/Ä$"} {
+		sf := &StringFilter{Pattern: pattern}
+		allocs := testing.AllocsPerRun(100, func() {
+			sink = matchString(sf, "ÄRGER") || matchString(sf, "/tmp/ä")
 		})
 		if allocs != 0 {
 			t.Errorf("matchString(%q) allocated %.0f times, want 0", pattern, allocs)

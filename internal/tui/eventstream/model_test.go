@@ -597,11 +597,11 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 }
 
 // TestPausedEnterStringCellFilterIsExact checks what the pushed Comm, Syscall
-// and File filters select, not just their labels: exactly the cell's value
-// (case-insensitively), never a superstring of it, with edge blanks and a
-// literal edge ^/$ kept literal. A bare substring pattern (the old behaviour)
-// admitted readv for "read" and /tmp/ab for "/tmp/a", trimmed "/tmp/a " to
-// "/tmp/a", and read "x$" as "ends with x".
+// and File filters select, not just their labels: exactly the cell's value,
+// case included (^value$ is case-sensitive), never a superstring of it, with
+// edge blanks and a literal edge ^/$ kept literal. A bare substring pattern
+// (the old behaviour) admitted readv for "read" and /tmp/ab for "/tmp/a",
+// trimmed "/tmp/a " to "/tmp/a", and read "x$" as "ends with x".
 func TestPausedEnterStringCellFilterIsExact(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -612,15 +612,15 @@ func TestPausedEnterStringCellFilterIsExact(t *testing.T) {
 		reject []string
 	}{
 		{"syscall", streamColSyscall, func(v string) StreamEvent { return StreamEvent{Seq: 1, Syscall: v} },
-			"read", []string{"read", "READ"}, []string{"readv", "pread64", "rea", ""}},
+			"read", []string{"read"}, []string{"READ", "readv", "pread64", "rea", ""}},
 		{"file", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
-			"/tmp/a", []string{"/tmp/a"}, []string{"/tmp/ab", "/var/tmp/a", "/tmp/a ", "/tmp"}},
+			"/tmp/a", []string{"/tmp/a"}, []string{"/TMP/A", "/tmp/ab", "/var/tmp/a", "/tmp/a ", "/tmp"}},
 		{"file with edge blank", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
 			"/tmp/a ", []string{"/tmp/a "}, []string{"/tmp/a", "/tmp/ab", "/tmp/a  "}},
 		{"file with literal anchors", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
 			"^/tmp/x$", []string{"^/tmp/x$"}, []string{"/tmp/x", "^/tmp/x", "/tmp/x$", "^/tmp/x$y"}},
 		{"comm", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
-			"sh", []string{"sh", "SH"}, []string{"bash", "sshd", "sh "}},
+			"sh", []string{"sh"}, []string{"SH", "bash", "sshd", "sh "}},
 		{"comm with edge blanks", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
 			"  sh  ", []string{"  sh  "}, []string{"sh", " sh ", "  sh  x"}},
 		{"comm with literal dollar", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
