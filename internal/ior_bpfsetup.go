@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -111,7 +112,7 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 		return nil, nil, noRelease, err
 	}
 
-	bpfModule, stage, err := loadConfiguredBPFModule(cfg, log.warn)
+	bpfModule, stage, err := loadSessionBPFModule(cfg, log.warn)
 	if err != nil {
 		if bpfModule != nil {
 			bpfModule.Close()
@@ -125,13 +126,31 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 		return nil, nil, noRelease, setupBPFModuleError("load", err)
 	}
 
-	attacher := libbpfTracepointModule{module: bpfModule}
-	mgr, releaseSchedProbes, err := attachRequiredTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, probes == nil, log)
+	mgr, release, err := attachSessionProbes(ctx, libbpfTracepointModule{module: bpfModule}, cfg, probes, log)
 	if err != nil {
 		bpfModule.Close()
 		return nil, nil, noRelease, setupBPFModuleError("attach probes", err)
 	}
-	return bpfModule, mgr, publishProbeManager(probes, mgr, releaseSchedProbes), nil
+	return bpfModule, mgr, release, nil
+}
+
+// loadSessionBPFModule is the BPF load stage of setupBPFModule. It is a
+// variable only so tests can exercise the stages around the load (the target
+// check before it, the attach stage after it) without root and a kernel.
+var loadSessionBPFModule = loadConfiguredBPFModule
+
+// attachSessionProbes is the attach stage of setupBPFModule: it attaches the
+// session's probes through attacher and publishes the manager. The session is
+// headless exactly when probes is nil (see probeManagerPublisher), which is
+// what decides whether zero attached syscall probes is an error or a warning
+// (attachRequiredTraceProbes).
+func attachSessionProbes(ctx context.Context, attacher probemanager.Attacher, cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*probemanager.Manager, func(), error) {
+	headless := probes == nil
+	mgr, releaseSchedProbes, err := attachRequiredTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, headless, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mgr, publishProbeManager(probes, mgr, releaseSchedProbes), nil
 }
 
 // loadConfiguredBPFModule opens the embedded BPF object, sizes its maps, sets
@@ -206,24 +225,36 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 }
 
 // attachRequiredTraceProbes is attachTraceProbes plus the guard against a
-// session that attached no syscall probe at all. Such a session - a -tps or
-// -trace-* selection matching nothing, or every attach failing on the running
-// kernel - used to run its whole -duration, print "Detaching 0 active BPF probe
-// pairs" and exit 0 with an empty trace.
-//
-// What to do about it depends on whether anybody can still attach probes
-// later. A headless run (headless == true) cannot, so zero probes is an error:
-// the probes and the sched probes are released again and the caller aborts
-// setup. In the TUI the probes modal can attach probes at runtime, and a user
-// who switched every probe off before a restart legitimately ends up here, so
-// it is only a warning row.
+// session that attached no syscall probe at all (see requireAttachedProbes).
 func attachRequiredTraceProbes(ctx context.Context, attacher probemanager.Attacher, shouldAttach func(string) bool, tpNames []string, headless bool, log bpfSetupLog) (*probemanager.Manager, func(), error) {
 	log = log.withDefaults()
 	mgr, releaseSchedProbes, err := attachTraceProbes(ctx, attacher, shouldAttach, tpNames, log)
 	if err != nil {
 		return nil, nil, err
 	}
-	noProbes := noProbesError(mgr.States())
+	return requireAttachedProbes(mgr, releaseSchedProbes, headless, log)
+}
+
+// requireAttachedProbes guards against a session that attached no syscall
+// probe at all. Such a session - a -tps or -trace-* selection matching
+// nothing, or every attach failing on the running kernel - used to run its
+// whole -duration, print "Detaching 0 active BPF probe pairs" and exit 0 with
+// an empty trace.
+//
+// What to do about it depends on whether anybody can still attach probes
+// later. A headless run (headless == true) cannot, so zero probes is an error:
+// the probe manager is closed and the sched probes are released again, and the
+// caller aborts setup. In the TUI the probes modal can attach probes at
+// runtime, and a user who switched every probe off before a restart
+// legitimately ends up here, so it is only a warning row.
+//
+// Closing the manager on the error path detaches nothing today (a pair that
+// fails to attach cleans up its own enter link, so a manager without an active
+// probe holds no links) but marks it closed, so nothing can attach through a
+// manager the caller no longer owns. It is kept so the error path stays
+// correct should the manager ever retain links of inactive probes.
+func requireAttachedProbes(mgr *probemanager.Manager, releaseSchedProbes func(), headless bool, log bpfSetupLog) (*probemanager.Manager, func(), error) {
+	noProbes := noProbesError(mgr.States(), headless)
 	if noProbes == nil {
 		return mgr, releaseSchedProbes, nil
 	}
@@ -242,8 +273,12 @@ func attachRequiredTraceProbes(ctx context.Context, attacher probemanager.Attach
 // nil when at least one is. It separates the two causes because they call for
 // different fixes: probes that were selected but failed to attach carry an
 // Error (the kernel lacks the tracepoints), while a selection that matched
-// nothing leaves every probe merely registered and inactive.
-func noProbesError(states []probemanager.ProbeState) error {
+// nothing leaves every probe merely registered and inactive. For the second
+// cause the text depends on the mode: headless, the startup flags are the only
+// selection there is and the message names them; in the TUI the user may have
+// emptied the selection in the probes modal, so the flags would be a false
+// lead and the message points at the modal instead.
+func noProbesError(states []probemanager.ProbeState, headless bool) error {
 	failed := 0
 	for _, state := range states {
 		if state.Active {
@@ -255,6 +290,9 @@ func noProbesError(states []probemanager.ProbeState) error {
 	}
 	if failed > 0 {
 		return fmt.Errorf("no syscall probe attached: all %d selected tracepoint pairs failed to attach (see the skipped-tracepoint messages)", failed)
+	}
+	if !headless {
+		return errors.New("no syscall probe attached: no probes are enabled - enable some in the probes modal (o/O)")
 	}
 	return fmt.Errorf("no syscall probe attached: the -trace-*/-tps/-tpsExclude selection matches none of the %d traceable syscalls", len(states))
 }

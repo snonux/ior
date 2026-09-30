@@ -29,6 +29,15 @@ const procRoot = "/proc"
 // check is inherently a snapshot - the target can still exit right after -
 // but that later case is the event loop's job (eventLoop.endTraceOnTargetExit).
 //
+// Namespaces: the check stats /proc/<pid> in ior's own mount and PID
+// namespace, while the BPF filters compare host-namespace TGIDs/TIDs. Run
+// inside a PID-namespaced container, ior therefore rejects a host pid (the
+// process really does not exist from the container's view, and the number
+// would not mean the same process to the filter either); run ior in the host
+// PID namespace and pass host pids. Under a hidepid=2 /proc an unprivileged
+// ior cannot see other users' pids and is rejected the same way; ior needs
+// root to load BPF anyway (run it as `sudo ./ior`), and root sees every pid.
+//
 // root is the procfs mount (procRoot in production).
 func checkTraceTarget(root string, cfg flags.Config) error {
 	pid, tid := cfg.PidFilter, cfg.TidFilter

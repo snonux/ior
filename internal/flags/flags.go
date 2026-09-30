@@ -1,11 +1,13 @@
 package flags
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -270,7 +272,7 @@ func registerTraceSelectionFlags(fs *flag.FlagSet, validFamilies []string) (tpsA
 	validKinds := tracepoints.KnownKinds()
 	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
 
-	tpsAttach = fs.String("tps", "", "Comma separated list of regexes for tracepoints to load (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
+	tpsAttach = fs.String("tps", "", "Comma separated list of regexes for tracepoints to load; they match tracepoint names such as sys_enter_openat, so use -tps openat, not '^openat$' (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
 	tpsExclude = fs.String("tpsExclude", "", "Comma separated list of regexes for tracepoints to exclude (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
 	fs.StringVar(&dimensionCfg.TraceFamilies, "trace-families", "",
 		"Comma separated syscall families to attach; default attaches the FS family only (valid: "+strings.Join(validFamilies, ",")+")")
@@ -452,14 +454,47 @@ func validateConfig(cfg Config) error {
 // tracepoints this build can trace. A selector that has no restrictions at
 // all (the zero value of a hand-built Config) attaches everything and passes.
 // The message names the flags because the selector itself is a compiled form
-// the user never typed.
+// the user never typed. -tps/-tpsExclude regexes match tracepoint names
+// (sys_enter_openat), so an anchored syscall name such as "^openat$" matches
+// nothing; when it would match the name without its sys_enter_/sys_exit_
+// prefix the message says so, because that is the likely typo.
 func validateTracepointSelection(sel tracepoints.Selector, tpNames []string) error {
 	for _, name := range tpNames {
 		if sel.ShouldAttach(name) {
 			return nil
 		}
 	}
-	return fmt.Errorf("the -tps/-tpsExclude/-trace-* selection matches none of the %d traceable syscall tracepoints, so the trace would stay empty", len(tpNames))
+	msg := fmt.Sprintf("the -tps/-tpsExclude/-trace-* selection matches none of the %d traceable syscall tracepoints, so the trace would stay empty", len(tpNames))
+	if matchesBareSyscallName(sel, tpNames) {
+		msg += "; -tps patterns match tracepoint names such as sys_enter_openat, not bare syscall names, so try -tps openat (without ^ and $ anchors)"
+	}
+	return errors.New(msg)
+}
+
+// matchesBareSyscallName reports whether the -tps/-tpsExclude regexes of sel
+// would select at least one tracepoint if they were matched against the
+// syscall name without its sys_enter_/sys_exit_ prefix. Only the regex lists
+// are consulted: the -trace-* family/dimension allowlist is keyed by bare
+// names already, so it cannot cause this particular mistake.
+func matchesBareSyscallName(sel tracepoints.Selector, tpNames []string) bool {
+	if len(sel.Attach) == 0 {
+		return false
+	}
+	bareMatches := func(res []*regexp.Regexp, bare string) bool {
+		for _, re := range res {
+			if re.MatchString(bare) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range tpNames {
+		bare, ok := tracepoints.SyscallNameFromTracepoint(name)
+		if ok && bareMatches(sel.Attach, bare) && !bareMatches(sel.Exclude, bare) {
+			return true
+		}
+	}
+	return false
 }
 
 // fallbackPidMax is used when /proc/sys/kernel/pid_max cannot be read (for

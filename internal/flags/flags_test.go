@@ -700,3 +700,24 @@ func TestParseRejectsSelectionThatMatchesNoTracepoint(t *testing.T) {
 		}
 	}
 }
+
+// TestParseHintsAtBareSyscallNamePattern pins the message for the likely typo:
+// -tps matches tracepoint names (sys_enter_openat), so "^openat$" selects
+// nothing although the syscall exists. The error must point at -tps openat,
+// and a pattern that matches neither form must not get the hint.
+func TestParseHintsAtBareSyscallNamePattern(t *testing.T) {
+	_, err := parseForTest(t, "-tps", "^openat$")
+	if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
+		!strings.Contains(err.Error(), "sys_enter_openat") || !strings.Contains(err.Error(), "-tps openat") {
+		t.Fatalf("error = %v, want the empty-selection diagnostic with the bare-name hint", err)
+	}
+	_, err = parseForTest(t, "-tps", "nonexistent_zzz")
+	if err == nil || strings.Contains(err.Error(), "bare syscall") {
+		t.Fatalf("error = %v, want no bare-name hint for a pattern matching nothing", err)
+	}
+	// An exclude that removes the only bare-name match must not hint either.
+	_, err = parseForTest(t, "-tps", "^openat$", "-tpsExclude", "openat")
+	if err == nil || strings.Contains(err.Error(), "bare syscall") {
+		t.Fatalf("error = %v, want no hint when the exclude list removes the bare match", err)
+	}
+}
