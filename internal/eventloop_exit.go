@@ -542,12 +542,28 @@ func dirfdPathNeedsResolution(dirfd int32, pathname string) bool {
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	ep.File = e.fdState().resolve(fd, fdEv.Pid)
+	e.dropProcfsCacheOnEBADF(ep, fd, fdEv.Pid)
 	e.applyFdCloseState(ep, fd, fdEv.Pid)
 	ep.Comm = e.comm(fdEv.GetTid())
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
 		return false
 	}
 	return e.finishPair(ep)
+}
+
+// dropProcfsCacheOnEBADF evicts the procfs-resolved entry for (pid, fd) when
+// the kernel answered the syscall with EBADF: the number was not an open
+// descriptor at that moment, so whatever procfs told us earlier is stale (the
+// descriptor was closed or never existed by a route ior did not see). The next
+// use re-reads procfs, which is self-healing. Only the procfs cache is
+// touched, not the fd table: its entries come from traced syscalls, and with
+// several threads per process an EBADF exit can be processed after a later
+// traced open of the same number, so dropping the table entry could erase a
+// correct name; a stale procfs entry, in contrast, is just re-read on demand.
+func (e *eventLoop) dropProcfsCacheOnEBADF(ep *event.Pair, fd int32, pid uint32) {
+	if retEv, ok := ep.ExitEv.(*types.RetEvent); ok && retEv.Ret == -int64(syscall.EBADF) {
+		e.fdState().deleteProcFdCache(fd, pid)
+	}
 }
 
 // applyFdCloseState updates fd-tracking state for the close syscall. On Linux,

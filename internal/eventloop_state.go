@@ -518,9 +518,19 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		return cached
 	}
-	// Cache first procfs resolution to avoid repeated /proc lookups for hot unknown FDs.
 	discovered := file.NewFdWithPid(fd, pid)
-	t.setProcFdCache(fd, pid, discovered)
+	// Cache a successful resolution to avoid repeated /proc lookups for hot
+	// unknown FDs. A failed one (readlink error: empty name, unknown flags) is
+	// returned for this row but never cached: the number was not open at that
+	// instant - typically an EBADF close loop - and a stored failure would
+	// leave every later descriptor that lands on it (opened by an untraced
+	// syscall such as pipe(2)) nameless with O_NONE for as long as the entry
+	// lives, although procfs answers correctly by then. Re-reading costs one
+	// failing readlink(2) per event on a number that is not open, which is
+	// cheap next to a permanently wrong row.
+	if discovered.Name() != "" {
+		t.setProcFdCache(fd, pid, discovered)
+	}
 	return discovered
 }
 

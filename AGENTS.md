@@ -1229,6 +1229,13 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   fields); every other shorter size is rejected rather than decoded at the
   wrong offsets. Dropping the legacy sizes instead flooded the TUI with a
   malformed-event warning per task exec/exit.
+- **Procfs cache hygiene (task ir2)**: `fdTracker.resolve` caches only a *successful*
+  procfs lookup (non-empty name). A failed readlink is returned for that row but
+  never stored, so a number that later names a descriptor created by an untraced
+  syscall (pipe/socketpair) is re-read instead of staying nameless with O_NONE;
+  and any fd syscall that exits with EBADF evicts that number's procfs-cache
+  entry (`dropProcfsCacheOnEBADF`), but not the fd-table entry, which traced
+  syscalls own and a reordered exit must not erase.
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
