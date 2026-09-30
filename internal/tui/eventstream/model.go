@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
@@ -583,31 +582,6 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 	return base, start
 }
 
-// appendStreamFooter appends the status line (and optional status message) to
-// the rendered table string using a Builder to minimise allocations.
-func (m *Model) appendStreamFooter(base string, start int) string {
-	status := fmt.Sprintf("Row %d/%d", rowNumber(start, len(m.filtered)), len(m.filtered))
-	if m.paused && m.selectedIdx >= 0 {
-		status = fmt.Sprintf("Row %d/%d | Sel %d/%d Col %d/%d | Enter push-filter | T fd-trace | Esc/F undo",
-			rowNumber(start, len(m.filtered)), len(m.filtered),
-			rowNumber(m.selectedIdx, len(m.filtered)), len(m.filtered),
-			m.selectedCol+1, streamColumnCount)
-	}
-	// Use a Builder to avoid a redundant allocation for the optional status-message
-	// line appended conditionally on every render call.
-	var b strings.Builder
-	b.WriteString(base)
-	b.WriteString("\n")
-	b.WriteString(status)
-	if m.statusMessage != "" {
-		// The message can echo export paths, error text and search terms,
-		// so it is sanitised like every other foreign string.
-		b.WriteString("\n")
-		b.WriteString(common.Sanitize(m.statusMessage))
-	}
-	return b.String()
-}
-
 // Refresh pulls a fresh snapshot from the source and re-applies the filter,
 // unless the stream is paused. Driven by the high-frequency stream tick.
 func (m *Model) Refresh() {
@@ -810,8 +784,7 @@ func (m *Model) viewFDTrace(width int) string {
 	}
 	visible := m.fdTraceView.events[start:end]
 	base := RenderFDTraceTable(width, m.fdTraceView.pid, m.fdTraceView.fd, len(m.fdTraceView.events), visible)
-	status := fmt.Sprintf("FD Trace Row %d/%d | esc:back j/k:scroll", rowNumber(start, len(m.fdTraceView.events)), len(m.fdTraceView.events))
-	return base + "\n" + status
+	return base + "\n" + fdTraceFooterLine(width, rowNumber(start, len(m.fdTraceView.events)), len(m.fdTraceView.events))
 }
 
 func (m *Model) maxFDTraceOffset() int {
