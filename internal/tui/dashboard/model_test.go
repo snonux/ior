@@ -796,7 +796,7 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/*" {
 		t.Fatalf("expected visible sorted grouped row to filter /tmp, got %+v", req.Filter.File)
 	}
 }

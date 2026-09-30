@@ -56,8 +56,9 @@ func processesModel(col int, rows ...statsengine.ProcessSnapshot) *Model {
 // action label to the presenter's canonical token for the dimension the tab
 // sets, across each dimension and values with spaces, filter-syntax
 // characters and padding. Syscall and file values become exact (^value$)
-// patterns and a directory row a subtree prefix (^dir/), so the label shows
-// the anchors; a process's Comm cell stays a trimmed substring.
+// patterns and a directory row a directory-children pattern (^dir/*), so
+// the label shows the anchors; a process's Comm cell stays a trimmed
+// substring.
 func TestEnterFilterActionLabelMatchesPresenter(t *testing.T) {
 	familySyscalls := syscallsModel(statsengine.SyscallSnapshot{TraceID: types.SYS_ENTER_READ, Name: "read", Count: 1})
 	familySyscalls.syscallsTab.col = syscallFamilyColumn
@@ -72,7 +73,7 @@ func TestEnterFilterActionLabelMatchesPresenter(t *testing.T) {
 		{"syscall", syscallsModel(statsengine.SyscallSnapshot{Name: "openat", Count: 1}), presenter.DimSyscall, "syscall~^openat$"},
 		{"family", familySyscalls, presenter.DimFamily, wantFamily},
 		{"file path", filesModel(false, statsengine.FileSnapshot{Path: "/tmp/a b~c=d"}), presenter.DimFile, "file~^/tmp/a b~c=d$"},
-		{"file dir", filesModel(true, statsengine.FileSnapshot{Path: "/var/log/x"}), presenter.DimFile, "file~^/var/log/"},
+		{"file dir", filesModel(true, statsengine.FileSnapshot{Path: "/var/log/x"}), presenter.DimFile, "file~^/var/log/*"},
 		{"pid", processesModel(0, statsengine.ProcessSnapshot{PID: 4242, Comm: "sh"}), presenter.DimPID, "pid=4242"},
 		{"comm", processesModel(1, statsengine.ProcessSnapshot{PID: 7, Comm: "kworker/0:1"}), presenter.DimComm, "comm~kworker/0:1"},
 		// The Comm cell stays a trimmed substring pattern (see rowfilter.go).
@@ -128,7 +129,9 @@ func TestEnterFilterRequestRejectsEmptyValues(t *testing.T) {
 // case runs the emitted filter against real stream rows: the row itself must
 // match, every near-miss must not - including case variants of exact rows,
 // since ^value$ is case-sensitive (/TMP/A is a different file from /tmp/a).
-// The dir rows are one-sided prefixes and still fold case. The comm case pins
+// The dir rows select exactly their direct files, case-sensitively too
+// (task ip2): no subdirectory file, and the root row only top-level entries.
+// The comm case pins
 // the deliberate exception: thread comms extending the process's comm still
 // match.
 func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
@@ -156,12 +159,12 @@ func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
 		{"literal caret", filesModel(false, statsengine.FileSnapshot{Path: "^x"}),
 			[]*streamrow.Row{file("^x")},
 			[]*streamrow.Row{file("x"), file("a^x")}},
-		{"dir subtree", filesModel(true, statsengine.FileSnapshot{Path: "/tmp/a"}),
-			[]*streamrow.Row{file("/tmp/a"), file("/tmp/b"), file("/tmp/sub/c")},
-			[]*streamrow.Row{file("/tmp"), file("/tmpfoo/a"), file("/var/tmp/a")}},
+		{"dir children", filesModel(true, statsengine.FileSnapshot{Path: "/tmp/a"}),
+			[]*streamrow.Row{file("/tmp/a"), file("/tmp/b")},
+			[]*streamrow.Row{file("/tmp"), file("/tmp/sub/c"), file("/TMP/a"), file("/tmpfoo/a"), file("/var/tmp/a")}},
 		{"root dir", filesModel(true, statsengine.FileSnapshot{Path: "/a"}),
-			[]*streamrow.Row{file("/a"), file("/etc/passwd")},
-			[]*streamrow.Row{file("relative"), file("socket:[1]")}},
+			[]*streamrow.Row{file("/a"), file("/etc")},
+			[]*streamrow.Row{file("/etc/passwd"), file("relative"), file("socket:[1]")}},
 		{"syscall", syscallsModel(statsengine.SyscallSnapshot{Name: "read", Count: 1}),
 			[]*streamrow.Row{{Syscall: "read"}},
 			[]*streamrow.Row{{Syscall: "READ"}, {Syscall: "readv"}, {Syscall: "pread64"}}},
@@ -213,19 +216,19 @@ func TestEnterFamilyFilterStaysBare(t *testing.T) {
 	}
 }
 
-// TestEnterDirRowFilterSelectsEveryFileItCounts is the regression test for
-// grouping by filepath.Dir, which Cleans: "./src/main.go" was counted under
-// "src", whose filter ^src/ does not match it (likewise "//usr/lib/x" under
-// "/usr/lib", "a/../b/c" under "b"). Every dir row's filter must select
-// every file the row aggregates. Rows are subtrees, so a row's filter may
-// also select files of a row nested below it ("/tmp" covers "/tmp/sub"),
-// but never a file of a row outside its subtree: "a/" (from "a//b") must
-// not also select "a/x".
-func TestEnterDirRowFilterSelectsEveryFileItCounts(t *testing.T) {
+// TestEnterDirRowFilterSelectsExactlyTheFilesItCounts: a dir row's filter
+// must select every file the row aggregates and no other file. That covers
+// the old filepath.Dir grouping ("./src/main.go" counted under "src", whose
+// filter did not select it; likewise "//usr/lib/x", "a/../b/c") and the old
+// subtree prefix ^dir/ (task ip2): the "/tmp" row counted only /tmp's direct
+// files but also selected "/tmp/sub/c", and the "/" row selected every
+// absolute path. It also covers case: the "/tmp/A" row must not select
+// "/tmp/a/x", and "a/" (from "a//b") must not select "a/x".
+func TestEnterDirRowFilterSelectsExactlyTheFilesItCounts(t *testing.T) {
 	paths := []string{
 		"./src/main.go", "./src/util.go", "//usr/lib/x", "a/../b/c",
-		"/tmp/a ", "/tmp/b", "/tmp/sub/c", "/etc", "rel/x", "a//b", "a/x",
-		"   /z",
+		"/tmp/a ", "/tmp/b", "/tmp/sub/c", "/etc", "/etc/passwd", "/", "//x",
+		"rel/x", "a//b", "a/x", "   /z", "/tmp/A/x", "/tmp/a/x",
 	}
 	files := make([]statsengine.FileSnapshot, len(paths))
 	for i, p := range paths {
@@ -233,45 +236,38 @@ func TestEnterDirRowFilterSelectsEveryFileItCounts(t *testing.T) {
 	}
 	m := filesModel(true, files...)
 	dirs := m.sortedDirRows()
+	sawRoot := false
 	for i, dir := range dirs {
 		m.filesDirTab.offset = i
 		req, ok := enterFilterRequest(t, m)
 		if !ok {
 			t.Fatalf("dir row %q: expected a filter request", dir.Dir)
 		}
+		sawRoot = sawRoot || dir.Dir == "/"
 		counted := 0
 		for _, p := range paths {
 			selected := req.Filter.Matches(&streamrow.Row{FileName: p})
-			if literalDir(p) != dir.Dir {
-				if selected && !isBelow(literalDir(p), dir.Dir) {
-					t.Errorf("dir row %q filter %s selects %q of row %q", dir.Dir, req.Action, p, literalDir(p))
-				}
-				continue
+			counts := literalDir(p) == dir.Dir
+			if counts {
+				counted++
 			}
-			counted++
-			if !selected {
-				t.Errorf("dir row %q filter %s does not select its file %q", dir.Dir, req.Action, p)
+			if selected != counts {
+				t.Errorf("dir row %q filter %s: selects %q = %v, row counts it = %v", dir.Dir, req.Action, p, selected, counts)
 			}
 		}
 		if uint64(counted) != dir.FileCount {
 			t.Fatalf("dir row %q counts %d files, test found %d", dir.Dir, dir.FileCount, counted)
 		}
 	}
+	if !sawRoot {
+		t.Fatalf("expected a %q row among %+v", "/", dirs)
+	}
 	// Siblings sharing a name prefix stay apart: ./src must not select ./srcx.
 	m = filesModel(true, statsengine.FileSnapshot{Path: "./src/a", Accesses: 1})
 	req, ok := enterFilterRequest(t, m)
 	if !ok || req.Filter.Matches(&streamrow.Row{FileName: "./srcx/a"}) || req.Filter.Matches(&streamrow.Row{FileName: "src/a"}) {
-		t.Fatalf("expected ^./src/ to select only ./src/..., got %+v (ok=%v)", req.Filter.File, ok)
+		t.Fatalf("expected ^./src/* to select only ./src/..., got %+v (ok=%v)", req.Filter.File, ok)
 	}
-}
-
-// isBelow reports whether directory text sub lies inside dir's subtree,
-// literally: "/" contains every absolute dir, any other dir d contains d/...
-func isBelow(sub, dir string) bool {
-	if dir == "/" {
-		return strings.HasPrefix(sub, "/")
-	}
-	return strings.HasPrefix(sub, dir+"/")
 }
 
 // TestLiteralDir pins the grouping key: the literal text before the last
@@ -360,13 +356,13 @@ func TestEnterCommWithEdgeAnchorFallsBackToPID(t *testing.T) {
 }
 
 // TestEnterOnBlankDirRowFilters: an all-blank literal dir ("   " from
-// "   /z") is a real directory and gets an exact subtree filter, not a
-// silent no-op.
+// "   /z") is a real directory and gets an exact directory-children filter,
+// not a silent no-op.
 func TestEnterOnBlankDirRowFilters(t *testing.T) {
 	m := filesModel(true, statsengine.FileSnapshot{Path: "   /z", Accesses: 1})
 	req, ok := enterFilterRequest(t, m)
-	if !ok || req.Filter.File == nil || req.Filter.File.Pattern != "^   /" {
-		t.Fatalf("expected ^   / filter, got %+v (ok=%v)", req.Filter.File, ok)
+	if !ok || req.Filter.File == nil || req.Filter.File.Pattern != "^   /*" {
+		t.Fatalf("expected ^   /* filter, got %+v (ok=%v)", req.Filter.File, ok)
 	}
 	if !req.Filter.Matches(&streamrow.Row{FileName: "   /z"}) || req.Filter.Matches(&streamrow.Row{FileName: "/z"}) {
 		t.Fatalf("blank dir filter %q selects the wrong files", req.Filter.File.Pattern)

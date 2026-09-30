@@ -380,7 +380,7 @@ func TestModelOpenEscKeepsNonCanonicalPatterns(t *testing.T) {
 
 // TestModelRoundTripsExactRowPatterns covers the patterns dashboard row
 // filters (task yo2) and the Stream tab's Enter-on-cell filter (task 2p2)
-// emit: ^value$ / ^dir/ with the value's blanks and literal edge ^/$ inside
+// emit: ^value$ / ^dir/* (task ip2) with the value's blanks and literal edge ^/$ inside
 // the anchors. Opening one and leaving must hand it back unchanged, and
 // typing the displayed text into a fresh modal must rebuild the very same
 // filter - the anchors put the blanks out of reach of the modal's TrimSpace,
@@ -390,6 +390,9 @@ func TestModelRoundTripsExactRowPatterns(t *testing.T) {
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("/tmp/a ")}},
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern(" /tmp/x$")}},
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("/var/log")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("/")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("   ")}},
+		{File: &globalfilter.StringFilter{Pattern: globalfilter.DirPattern("/Tmp/a ")}},
 		{Comm: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("  sh  ")}},
 		{Syscall: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("read")}},
 		{File: &globalfilter.StringFilter{Pattern: globalfilter.ExactPattern("^/tmp/a b$")}},

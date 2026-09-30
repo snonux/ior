@@ -75,9 +75,10 @@ func TestMatchStringASCIIDoesNotAllocate(t *testing.T) {
 			t.Errorf("matchString(%q) allocated %.0f times, want 0", pattern, allocs)
 		}
 	}
-	// The exact form is a plain comparison, so it stays allocation-free even
-	// for non-ASCII input, which the other modes send through strings.ToLower.
-	for _, pattern := range []string{"^Ärger$", "^/TMP/Ä$"} {
+	// The exact and directory-children forms are plain comparisons, so they
+	// stay allocation-free even for non-ASCII input, which the other modes
+	// send through strings.ToLower.
+	for _, pattern := range []string{"^Ärger$", "^/TMP/Ä$", "^/tmp/*", "^/TMP/Ä/*"} {
 		sf := &StringFilter{Pattern: pattern}
 		allocs := testing.AllocsPerRun(100, func() {
 			sink = matchString(sf, "ÄRGER") || matchString(sf, "/tmp/ä")

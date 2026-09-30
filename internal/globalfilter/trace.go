@@ -125,11 +125,19 @@ func validateTraceStringFilter(name string, filter *StringFilter, maxLen int) er
 // The exact form ^...$ is case-sensitive (see StringFilter), so its only
 // witness is the raw text itself: the lowered form no longer matches anything
 // the raw form does not, and must not make an over-long exact pattern pass.
+// The directory-children form ^dir/* is case-sensitive too and is no literal
+// text at all: its shortest witness is "dir/" (dirChildrenWitnessLen), the
+// same case split matchString makes.
 func shortestWitnessLen(pattern string) int {
 	pattern = strings.TrimSpace(pattern)
 	raw, anchoredStart, anchoredEnd := trimAnchors(pattern)
 	if anchoredStart && anchoredEnd {
 		return len(raw)
+	}
+	if anchoredStart {
+		if dir, ok := dirChildrenDir(raw); ok {
+			return dirChildrenWitnessLen(dir)
+		}
 	}
 	lowered, _, _ := trimAnchors(strings.ToLower(pattern))
 	return min(len(raw), len(lowered))

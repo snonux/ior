@@ -107,7 +107,11 @@ selected column; `s` sorts by the selected column using its default direction; `
 ### 4 · Files
 
 Press `4` for per-path counters. `d` toggles **directory grouping**, which rolls paths up to
-their parent directory.
+their parent directory. A directory row counts only the files directly in that directory
+(subdirectories get rows of their own), and `Enter` on it filters on exactly those files with
+the pattern `^dir/*` (case-sensitive; like a shell glob, `*` does not cross a `/`), so the `/`
+row selects only top-level entries such as `/etc`, not all of `/etc/passwd`'s tree. You can
+type the same `^dir/*` form in the filter modal (`f`).
 
 ![Files tab toggling directory grouping](./assets/04-files-tab.gif)
 

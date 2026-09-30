@@ -248,25 +248,29 @@ func TestExactPatternMatchesOnlyTheValue(t *testing.T) {
 	}
 }
 
-// TestDirPatternMatchesTheSubtree checks that DirPattern selects every path
-// below the directory and no sibling that merely shares its name as a prefix
-// or contains it elsewhere; the root must not become "^//". A one-sided
-// prefix still folds case (only ^exact$ is case-sensitive), so "/TMP/a" is
-// inside "/tmp" - task ip2 owns any change to the dir-row matcher itself.
-func TestDirPatternMatchesTheSubtree(t *testing.T) {
+// TestDirPatternMatchesDirectChildrenOnly checks that DirPattern selects the
+// paths directly in the directory - LiteralDir(path) == dir - and nothing
+// else: no file of a subdirectory (the dashboard counts those under their
+// own rows), no sibling sharing the dir's name as a prefix, and for the root
+// only top-level entries (task ip2; the old prefix ^dir/ selected the whole
+// subtree, so the "/" row filtered nothing).
+func TestDirPatternMatchesDirectChildrenOnly(t *testing.T) {
 	for _, tt := range []struct {
 		dir   string
 		want  string
 		match []string
 		miss  []string
 	}{
-		{"/tmp", "^/tmp/", []string{"/tmp/a", "/tmp/sub/b", "/TMP/a"}, []string{"/tmp", "/tmpfoo/a", "/var/tmp/a"}},
-		{"/", "^/", []string{"/a", "/etc/passwd"}, []string{"a", "socket:[1]"}},
-		{"/tmp/a ", "^/tmp/a /", []string{"/tmp/a /x"}, []string{"/tmp/a/x"}},
-		{"/a$", "^/a$/", []string{"/a$/x"}, []string{"/a/x"}},
+		{"/tmp", "^/tmp/*", []string{"/tmp/a", "/tmp/", "/tmp/*"}, []string{"/tmp", "/tmp/sub/b", "/tmpfoo/a", "/var/tmp/a", "/TMP/a"}},
+		{"/", "^/*", []string{"/a", "/etc", "/", "//x"}, []string{"/etc/passwd", "a", "socket:[1]", "a/b", ""}},
+		{"/tmp/a ", "^/tmp/a /*", []string{"/tmp/a /x"}, []string{"/tmp/a/x", "/tmp/a /x/y"}},
+		{"/a$", "^/a$/*", []string{"/a$/x"}, []string{"/a/x"}},
 		// The literal dir of "a//b" is "a/": it must not also select "a/x".
-		{"a/", "^a//", []string{"a//b"}, []string{"a/x", "a/b"}},
-		{"   ", "^   /", []string{"   /z"}, []string{"/z", " /z"}},
+		{"a/", "^a//*", []string{"a//b"}, []string{"a/x", "a/b", "a//b/c"}},
+		{"   ", "^   /*", []string{"   /z"}, []string{"/z", " /z"}},
+		{"./src", "^./src/*", []string{"./src/main.go"}, []string{"src/main.go", "./srcx/a", "./src/x/y"}},
+		// A dir that itself ends in "*" is still just text before the suffix.
+		{"/a/*", "^/a/*/*", []string{"/a/*/x"}, []string{"/a/x", "/a/*"}},
 	} {
 		got := DirPattern(tt.dir)
 		if got != tt.want {
@@ -282,6 +286,52 @@ func TestDirPatternMatchesTheSubtree(t *testing.T) {
 			if matchString(sf, v) {
 				t.Errorf("DirPattern(%q) should not match %q", tt.dir, v)
 			}
+		}
+	}
+}
+
+// TestDirChildrenPatternIsCaseSensitive pins the case rule of the typed
+// ^dir/* form, which must equal the row filter's: case-sensitive like
+// ^exact$, since both are derived from exact values. The neighbouring forms
+// keep their own semantics: ^dir/*$ is the exact path "dir/*", and a prefix
+// not ending in "/*" still folds case. "^//*" also names the root.
+func TestDirChildrenPatternIsCaseSensitive(t *testing.T) {
+	for _, tt := range []struct {
+		pattern, value string
+		want           bool
+	}{
+		{"^/tmp/A/*", "/tmp/A/x", true},
+		{"^/tmp/A/*", "/tmp/a/x", false},
+		{"^/tmp/a/*", "/tmp/A/x", false},
+		{"^/tmp/Ä/*", "/tmp/ä/x", false},
+		{"  ^/tmp/*  ", "/tmp/x", true},
+		{"^//*", "/x", true},
+		{"^//*", "/x/y", false},
+		{"^/tmp/*$", "/tmp/*", true},
+		{"^/tmp/*$", "/tmp/x", false},
+		{"^/TMP/", "/tmp/sub/x", true},
+		{"/tmp/*", "/tmp/x", false},
+		{"/tmp/*", "/x/tmp/*", true},
+	} {
+		if got := matchString(&StringFilter{Pattern: tt.pattern}, tt.value); got != tt.want {
+			t.Errorf("matchString(%q, %q) = %v, want %v", tt.pattern, tt.value, got, tt.want)
+		}
+	}
+}
+
+// TestLiteralDirMatchesDirPattern cross-checks the definition: for every
+// path with a separator, the pattern built from its LiteralDir selects it,
+// and a path without a separator has no dir at all.
+func TestLiteralDirMatchesDirPattern(t *testing.T) {
+	for _, p := range []string{"/tmp/a", "/a", "/", "//x", "a//b", "./a", "a/../b/c", "   /z", "a/"} {
+		dir, ok := LiteralDir(p)
+		if !ok || !matchString(&StringFilter{Pattern: DirPattern(dir)}, p) {
+			t.Errorf("LiteralDir(%q) = %q, %v: its DirPattern does not select it", p, dir, ok)
+		}
+	}
+	for _, p := range []string{"", "a.log", "socket:[1]"} {
+		if dir, ok := LiteralDir(p); ok {
+			t.Errorf("LiteralDir(%q) = %q, want no dir", p, dir)
 		}
 	}
 }
