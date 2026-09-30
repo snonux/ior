@@ -97,9 +97,11 @@ type eventLoop struct {
 	// aggregateDrainer is the running aggregate drainer, published by
 	// startAggregateDrainLoop and cleared by its stop function, so SetFilter
 	// (called from the TUI goroutine) can flush the aggregate map before a
-	// live filter swap. nil while no drain loop runs. A SetFilter racing the
-	// stop may still hold the old pointer; the drainer retires itself under
-	// its lock during the final drain, so that late swap drains nothing.
+	// live filter swap. nil while no drain loop runs. It is cleared only
+	// after the final drain, so a SetFilter racing the stop still flushes
+	// under the outgoing filter; one that holds the pointer past the clear
+	// finds the drainer retired (under its lock, during the final drain) and
+	// drains nothing.
 	aggregateDrainer atomic.Pointer[aggregateDrainer]
 	// dropSrc reads the kernel-side ring-buffer drop counter. nil disables
 	// drop monitoring (tests and any path without a BPF module).
