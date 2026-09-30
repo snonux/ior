@@ -61,7 +61,7 @@ import (
 // such an enter parks forever and any exit that does consume it is
 // necessarily counted as a mismatch. Usually the recycled tid's own enter
 // supersedes it first and nothing is counted; the mismatch needs that enter to
-// be missing, which is the ring-buffer loss and -comm enter-gate case below.
+// be missing, which is the ring-buffer loss case below.
 // Routing eviction drops into the same counter would have cancelled that
 // improvement rather than measured anything. Note this concerns runs tracing
 // the Process family: exit_group is not in the default FS-only allowlist.

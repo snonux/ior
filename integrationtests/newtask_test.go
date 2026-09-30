@@ -142,7 +142,7 @@ func TestRenamedThreadsKeepTheirNewName(t *testing.T) {
 // rows of the renamed threads (0 of them survived before the fix). Only the
 // measured pread64 rows are counted: the warm-up pwrite64 is judged against the
 // still-provisional inherited name, exactly like before any name was known, so
-// the gate may drop it. Same timing caveat as the test above.
+// the exit-side comm filter may drop it. Same timing caveat as the test above.
 func TestRenamedThreadsSurviveTheRenamedCommFilter(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
