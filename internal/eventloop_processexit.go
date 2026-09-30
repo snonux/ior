@@ -153,18 +153,6 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	e.retireStatsProcess(ev.Pid)
 }
 
-// groupDeadDedupWindowNs is how close (in kernel boot-clock nanoseconds) two
-// group-dead records of one pid must be to count as the same process death.
-// The duplicates come from threads of one exit_group racing through do_exit()
-// within microseconds of each other; 100ms leaves ample slack for ring-buffer
-// reordering across CPUs while staying far below the time a pid takes to be
-// recycled and die again.
-const groupDeadDedupWindowNs = 100_000_000
-
-// groupDeadDedupPruneAt bounds recentGroupDead: once it holds this many pids
-// the entries outside the window are dropped.
-const groupDeadDedupPruneAt = 256
-
 // isDuplicateGroupDead reports whether ev repeats the group-dead record of a
 // process death already handled, and remembers ev otherwise.
 //
@@ -179,31 +167,10 @@ const groupDeadDedupPruneAt = 256
 // so the repeats must not be counted or replayed.
 //
 // A time window rather than a permanent "seen" set: pids are recycled, and a
-// later process legitimately dying under the same pid must count again.
+// later process legitimately dying under the same pid must count again. The
+// window bookkeeping, with O(1) amortised expiry, lives in groupDeadDedup.
 func (e *eventLoop) isDuplicateGroupDead(ev *types.ProcessExitEvent) bool {
-	if last, ok := e.recentGroupDead[ev.Pid]; ok && absDiffNs(last, ev.Time) <= groupDeadDedupWindowNs {
-		return true
-	}
-	if e.recentGroupDead == nil {
-		e.recentGroupDead = make(map[uint32]uint64)
-	}
-	if len(e.recentGroupDead) >= groupDeadDedupPruneAt {
-		for pid, t := range e.recentGroupDead {
-			if absDiffNs(t, ev.Time) > groupDeadDedupWindowNs {
-				delete(e.recentGroupDead, pid)
-			}
-		}
-	}
-	e.recentGroupDead[ev.Pid] = ev.Time
-	return false
-}
-
-// absDiffNs returns |a-b| for unsigned nanosecond timestamps.
-func absDiffNs(a, b uint64) uint64 {
-	if a > b {
-		return a - b
-	}
-	return b - a
+	return e.recentGroupDead.seen(ev.Pid, ev.Time)
 }
 
 // retireStatsProcess tells the stats engine that process pid has exited, when

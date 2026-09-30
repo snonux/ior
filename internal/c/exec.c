@@ -173,16 +173,16 @@ struct trace_event_raw_sched_process_exit___ior {
 // branch as dead code, and libbpf's poisoned relocation for ctx->group_dead is
 // never executed.
 //
-// The relocation goes through the local flavor type declared below rather
+// The relocation goes through the local flavor type declared above rather
 // than through vmlinux.h's struct trace_event_raw_sched_process_exit. That
 // vmlinux.h is dumped from the BUILD host's kernel (Magefile.go), and kernels
-// predating the group_dead change (RHEL/Rocky 8 and 9) define sched_process_exit
-// from the shared sched_process_template, so their vmlinux.h has no such
-// struct at all and naming it here made the object fail to compile there.
-// libbpf matches the flavor to the target kernel's type by name (the ___ior
-// suffix is ignored) at load time, so the runtime behaviour is unchanged. On a
-// kernel whose BTF lacks the type entirely, libbpf resolves the
-// field-exists relocation to 0 rather than failing the load.
+// predating the group_dead change (RHEL/Rocky 8 and 9) define
+// sched_process_exit from the shared sched_process_template, so their
+// vmlinux.h has no such struct at all and naming it here made the object fail
+// to compile there. libbpf matches the flavor to the target kernel's type by
+// name (the ___ior suffix is ignored) at load time, so the runtime behaviour
+// is unchanged. On a kernel whose BTF lacks the type entirely, libbpf resolves
+// the field-exists relocation to 0 rather than failing the load.
 //
 // Older kernels fall back to reading task->signal->live directly. do_exit()
 // decrements live before it fires the tracepoint and nothing can increment it
@@ -191,10 +191,10 @@ struct trace_event_raw_sched_process_exit___ior {
 // reads its own decrement, so at least one exit record of a group carries
 // group_dead = 1. Two threads exiting concurrently can both observe 0 and
 // both report it (the earlier thread fires its tracepoint after the later
-// one's decrement); userspace eviction is idempotent and the group-dead
-// counter drops the duplicate (see applyProcessDeath). A failed read (NULL signal) reports 0 rather than guessing - the
-// fd entries then linger until LRU trimming, the same outcome as a record lost
-// to ring-buffer backpressure.
+// one's decrement). Userspace eviction is idempotent and the group-dead
+// counter drops the duplicate (see isDuplicateGroupDead). A failed read (NULL
+// signal) reports 0 rather than guessing: the fd entries then linger until LRU
+// trimming, the same outcome as a record lost to ring-buffer backpressure.
 //
 // Verification status: the field path is exercised end to end by the
 // integration scenario thread-exit-keeps-fd (integrationtests) on the 7.2

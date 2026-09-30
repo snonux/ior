@@ -126,11 +126,12 @@ type eventLoop struct {
 	// (handleProcessExitEvent). Written only by the event-loop goroutine;
 	// stats() reads it after <-e.done like the counters above.
 	numGroupDeadExits uint
-	// recentGroupDead maps a pid to the boot-clock time of its last counted
-	// group-dead record, so the repeated records old kernels can produce for
-	// one process death are counted once (isDuplicateGroupDead). Lazily
-	// allocated, bounded by pruning, event-loop goroutine only.
-	recentGroupDead map[uint32]uint64
+	// recentGroupDead remembers the pids of recently counted group-dead
+	// records, so the repeated records old kernels can produce for one
+	// process death are counted once (isDuplicateGroupDead). Zero value
+	// usable, expires entries incrementally so it is bounded by the deaths of
+	// one dedup window, event-loop goroutine only.
+	recentGroupDead groupDeadDedup
 	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
