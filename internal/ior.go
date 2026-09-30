@@ -663,8 +663,10 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 // (the controlling terminal or SSH session went away, e.g. a dropped
 // connection or a closed terminal window) is added for the headless modes
 // only: there it used to kill the process before -flamegraph/-parquet wrote
-// anything. In TUI mode the terminal is gone with the hangup and the TUI
-// framework owns terminal teardown, so SIGHUP keeps its default action there.
+// anything. In TUI mode this handler is not what ends the program: the TUI
+// owns terminal teardown and routes SIGTERM/SIGINT/SIGHUP through its own quit
+// path (tui.signalQuitFilter, tui.forwardHangup, task rr2) so an active 'R'
+// recording is finalised, which is why SIGHUP is not added here.
 //
 // SIGHUP is claimed only when the process did not start with it ignored.
 // signal.Notify installs a handler even over an inherited SIG_IGN, which would

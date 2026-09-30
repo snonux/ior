@@ -306,8 +306,22 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // nothing - wiring tea.NewProgram directly into those entry points leaves
 // every test green while a quit from the error screen exits 0 with no reason,
 // which is the state the fix exists to end.
+//
+// The program is built with signalQuitFilter so SIGTERM/SIGINT reach the
+// model's quit path (recording finalised) instead of ending Run behind its
+// back, and forwardHangup adds SIGHUP, which Bubble Tea does not handle at all.
 var runTeaProgram = func(model *Model) (tea.Model, error) {
-	return tea.NewProgram(model).Run()
+	program := newProgram(model)
+	defer forwardHangup(program.Send)()
+	return program.Run()
+}
+
+// newProgram builds the Bubble Tea program for model with the signal filter
+// installed. It is the one constructor for production and tests, so a test
+// that drives the real event loop (with its own input and output) exercises
+// exactly the wiring the binary uses. Extra options come after the filter.
+func newProgram(model *Model, opts ...tea.ProgramOption) *tea.Program {
+	return tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFilter(signalQuitFilter)}, opts...)...)
 }
 
 // runProgram runs one Bubble Tea program and reports the error the model was
@@ -321,12 +335,15 @@ var runTeaProgram = func(model *Model) (tea.Model, error) {
 // Every exported entry point must go through here rather than calling
 // tea.NewProgram itself, which is what TestExportedEntryPointsReportTheError
 // pins - testing runProgram alone leaves the entry points free to bypass it.
+//
+// After the program returns, an active recording is finalised as a safety net
+// (finaliseRecording), so no exit path leaves an orphan ior-recording-*.tmp.
 func runProgram(model *Model) error {
 	final, err := runTeaProgramQuietly(model)
-	if err != nil {
-		return err
+	if err == nil {
+		err = finalModelError(final)
 	}
-	return finalModelError(final)
+	return finaliseRecording(model, err)
 }
 
 // runTeaProgramQuietly runs the program with the standard logger discarded.
@@ -730,6 +747,8 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m.applyWindowSize(tea.WindowSizeMsg(msg))
+	case signalQuitMsg:
+		return m.handleSignalQuit()
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
 		return m, nil, true
