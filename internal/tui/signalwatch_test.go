@@ -299,6 +299,27 @@ type fakeProgram struct {
 
 func newFakeProgram() *fakeProgram { return &fakeProgram{sent: make(chan tea.Msg, 4)} }
 
+// awaitSent waits, bounded, for the watcher to have called Send.
+func awaitSent(t *testing.T, f *fakeProgram) {
+	t.Helper()
+	select {
+	case <-f.sent:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the watcher never sent the quit request")
+	}
+}
+
+// awaitSignal waits, bounded, for a notification from a test hook, so a lost
+// notification fails the test instead of hanging the whole package.
+func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
 func (f *fakeProgram) Send(msg tea.Msg) {
 	f.sent <- msg
 	if f.sendGate != nil {
@@ -315,7 +336,7 @@ func TestForcedExitWaitsForTheLoopToTakeTheQuitRequestBeforeKill(t *testing.T) {
 	shortSignalTiming(t)
 	repeatSignalWindow = 50 * time.Millisecond
 	forceExitGrace = time.Minute
-	killSyncWait = 600 * time.Millisecond
+	killSyncWait = 3 * time.Second // far above the 200ms "not yet" check below, even on a loaded machine
 	holdSignals(t)
 
 	fake := newFakeProgram()
@@ -324,7 +345,7 @@ func TestForcedExitWaitsForTheLoopToTakeTheQuitRequestBeforeKill(t *testing.T) {
 	t.Cleanup(w.stop)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-fake.sent // the quit request is being sent, but the loop has not taken it
+	awaitSent(t, fake) // the quit request is being sent, but the loop has not taken it
 	time.Sleep(2 * repeatSignalWindow)
 	sendSignal(t, syscall.SIGTERM)
 
@@ -352,7 +373,7 @@ func TestForcedExitKillsAfterTheSyncWaitWhenTheLoopNeverTakesTheRequest(t *testi
 	t.Cleanup(w.stop)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-fake.sent
+	awaitSent(t, fake)
 	time.Sleep(2 * repeatSignalWindow)
 	start := time.Now()
 	sendSignal(t, syscall.SIGTERM)
@@ -373,7 +394,7 @@ func TestLateSecondSignalAfterACleanRunChangesNothing(t *testing.T) {
 	t.Cleanup(w.stop)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-fake.sent
+	awaitSent(t, fake)
 	time.Sleep(2 * repeatSignalWindow)
 	if w.finish() { // Run returned (cleanly), before the second signal is looked at
 		t.Fatal("finish() reported a forced exit although none happened")
@@ -393,10 +414,15 @@ func TestLateSecondSignalAfterACleanRunChangesNothing(t *testing.T) {
 func TestStopWaitsForAForcedExitInProgressAndDisarmsHardExit(t *testing.T) {
 	exits := shortSignalTiming(t)
 	repeatSignalWindow = 50 * time.Millisecond
-	forceExitGrace = 600 * time.Millisecond // longer than the slow publish below
+	forceExitGrace = time.Second // well above the slow publish below, also on a loaded machine
 	holdSignals(t)
 	fake := newFakeProgram()
-	publishing := make(chan struct{})
+	// Buffered: the relay goroutine can reach the hook before the test goroutine
+	// waits on the channel, and an unbuffered non-blocking send would then be
+	// dropped and leave the test waiting forever. The buffer keeps the
+	// notification until the test looks for it; the send never blocks because a
+	// forced exit runs the hook at most once (a second one would just be dropped).
+	publishing := make(chan struct{}, 1)
 	hooks := watcherHooks{
 		execActive: func() bool { return false },
 		publishRecording: func() error {
@@ -412,10 +438,10 @@ func TestStopWaitsForAForcedExitInProgressAndDisarmsHardExit(t *testing.T) {
 	t.Cleanup(w.stop)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-fake.sent
+	awaitSent(t, fake)
 	time.Sleep(2 * repeatSignalWindow)
 	sendSignal(t, syscall.SIGTERM)
-	<-publishing // the forced exit has started
+	awaitSignal(t, publishing, "the forced exit to start publishing")
 	w.stop()
 	if fake.killed.Load() != 1 {
 		t.Fatal("stop returned before the forced exit in progress finished")

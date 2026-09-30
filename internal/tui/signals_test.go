@@ -232,7 +232,9 @@ func shortSignalTiming(t *testing.T) *atomic.Int32 {
 	t.Helper()
 	window, grace, exit := repeatSignalWindow, forceExitGrace, hardExit
 	var exits atomic.Int32
-	repeatSignalWindow, forceExitGrace = 100*time.Millisecond, 200*time.Millisecond
+	// The grace stays well above what a forced exit needs to unwind Run, so a
+	// loaded machine does not make the hardExit backstop fire first.
+	repeatSignalWindow, forceExitGrace = 100*time.Millisecond, 500*time.Millisecond
 	hardExit = func() { exits.Add(1) }
 	t.Cleanup(func() { repeatSignalWindow, forceExitGrace, hardExit = window, grace, exit })
 	return &exits
@@ -296,7 +298,7 @@ func TestRepeatSignalInsideTheWindowDoesNotAbort(t *testing.T) {
 	done := startWatchedProgram(t, m)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-began
+	awaitSignal(t, began, "the shutdown to begin")
 	sendSignal(t, syscall.SIGINT)
 	select {
 	case err := <-done:
@@ -333,7 +335,7 @@ func TestForcedExitFallsBackToHardExitWhenUpdateIsWedged(t *testing.T) {
 	done := startWatchedProgram(t, w)
 
 	sendSignal(t, syscall.SIGTERM)
-	<-w.entered
+	awaitSignal(t, w.entered, "Update to take the quit request")
 	time.Sleep(2 * repeatSignalWindow)
 	sendSignal(t, syscall.SIGTERM)
 
@@ -427,7 +429,9 @@ func TestTerminationSignalsHonourInheritedSIGHUPIgnore(t *testing.T) {
 
 func TestRelayTerminationSignalsQuitsThenForcesOnceAfterTheWindow(t *testing.T) {
 	window := repeatSignalWindow
-	repeatSignalWindow = 50 * time.Millisecond
+	// Generous: the two values below are queued together and the relay must
+	// look at both within the window even if it is descheduled in between.
+	repeatSignalWindow = 400 * time.Millisecond
 	t.Cleanup(func() { repeatSignalWindow = window })
 
 	ch := make(chan os.Signal, 8)
@@ -438,10 +442,11 @@ func TestRelayTerminationSignalsQuitsThenForcesOnceAfterTheWindow(t *testing.T) 
 	ch <- syscall.SIGTERM
 	ch <- syscall.SIGHUP // inside the window: same request
 	waitFor(t, func() bool { return quits.Load() == 1 })
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	if forces.Load() != 0 || quits.Load() != 1 {
 		t.Fatalf("inside the window: quits=%d forces=%d, want 1/0", quits.Load(), forces.Load())
 	}
+	time.Sleep(repeatSignalWindow) // now the window since the first signal is over
 	ch <- syscall.SIGTERM
 	ch <- syscall.SIGTERM // a third one changes nothing
 	waitFor(t, func() bool { return forces.Load() == 1 })
