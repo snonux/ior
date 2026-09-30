@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"ior/internal/event"
@@ -774,15 +775,40 @@ func socketCreationFlags(rawFlags int32) int32 {
 	return flags
 }
 
+// acceptedSocketDescriptorName names the descriptor accept returned.
+//
+// Only the synthetic class name that socket()/socketpair() produce
+// ("socket:<family>:<type>:<protocol>") is inherited: an accepted socket really
+// has the listener's family/type/protocol, so the class is accurate and the
+// name stays stable. A procfs identity ("socket:[<inode>]", what readlink on
+// /proc/<pid>/fd gives for a listener ior did not see created) must NOT be
+// copied: the inode belongs to the listening socket, and every accepted
+// connection is a different socket with its own inode, so copying it made each
+// connection's reads/writes/close look like traffic on the listener. For that
+// case (and an unknown listener) the generic "socket:accepted" is used rather
+// than a per-connection procfs lookup, which would cost a readlink for every
+// accept and can lose the race against a fast close.
 func acceptedSocketDescriptorName(listening file.File) string {
 	if listening == nil {
-		return "socket:accepted"
+		return acceptedSocketGenericName
 	}
 	name := listening.Name()
-	if name == "" {
-		return "socket:accepted"
+	if !isSyntheticSocketName(name) {
+		return acceptedSocketGenericName
 	}
 	return name
+}
+
+// acceptedSocketGenericName is the class name of an accepted connection whose
+// listener gives no inheritable class.
+const acceptedSocketGenericName = "socket:accepted"
+
+// isSyntheticSocketName reports whether name is an ior-made socket class name
+// ("socket:<family>:<type>:<protocol>" or the generic accepted name) rather
+// than a procfs identity such as "socket:[75019555]" or a non-socket name.
+func isSyntheticSocketName(name string) bool {
+	rest, ok := strings.CutPrefix(name, "socket:")
+	return ok && rest != "" && !strings.HasPrefix(rest, "[")
 }
 
 func (e *eventLoop) handlePipeExit(ep *event.Pair, pipeEv *types.PipeEvent) bool {
