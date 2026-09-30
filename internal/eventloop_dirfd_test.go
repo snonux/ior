@@ -885,6 +885,13 @@ func runRawExec(t *testing.T, el *eventLoop, enter *types.ExecEvent, exit *types
 	if err != nil {
 		t.Fatalf("encode exec enter: %v", err)
 	}
+	return runRawExecRecords(t, el, enterRaw, exit, between)
+}
+
+// runRawExecRecords is runRawExec for an already encoded (possibly truncated)
+// enter record.
+func runRawExecRecords(t *testing.T, el *eventLoop, enterRaw []byte, exit *types.RetEvent, between func()) *event.Pair {
+	t.Helper()
 	exitRaw, err := exit.Bytes()
 	if err != nil {
 		t.Fatalf("encode exec exit: %v", err)
@@ -1006,22 +1013,13 @@ func TestRawExecRecordLayoutsCarryFilenameStatus(t *testing.T) {
 			}
 			// The legacy layout is the v1 prefix: dropping the status and
 			// schema words also drops the FAILED status set above.
-			enterRaw = enterRaw[:tc.size]
-			exitRaw, err := exit.Bytes()
-			if err != nil {
-				t.Fatalf("encode exec exit: %v", err)
-			}
-			out := make(chan *event.Pair, 1)
-			el.processRawEvent(enterRaw, out)
-			el.processRawEvent(exitRaw, out)
-			select {
-			case ep := <-out:
-				defer ep.Recycle()
-				if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
-					t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
-				}
-			default:
+			ep := runRawExecRecords(t, el, enterRaw[:tc.size], exit, nil)
+			if ep == nil {
 				t.Fatal("exec pair was not emitted")
+			}
+			defer ep.Recycle()
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
 			}
 		})
 	}

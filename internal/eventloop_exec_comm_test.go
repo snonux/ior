@@ -23,6 +23,16 @@ const (
 	execCommTid = 4242
 )
 
+// execSurvivalCase is one fd-table entry of
+// TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive: entry builds the
+// tracked file and keep says whether it must survive the exec.
+type execSurvivalCase struct {
+	name  string
+	fd    int32
+	entry func() file.File
+	keep  bool
+}
+
 // makeProcessExecEvent builds the exec record of a task that kept its tid
 // across the exec (old_tid == tid), which is every exec except one by a
 // non-leader thread (see makeProcessExecEventFrom).
@@ -1047,12 +1057,44 @@ func TestProcessExecEventDropsCloseOnExecDescriptors(t *testing.T) {
 // dropped conservatively, and another pid that must stay untouched.
 func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 	const otherPid = execCommPid + 1
-	cases := []struct {
-		name  string
-		fd    int32
-		entry func() file.File
-		keep  bool
-	}{
+	cases := execSurvivalCases()
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	fds := el.fdState()
+	seedExecSurvivalState(fds, cases, otherPid)
+
+	// An empty comm makes the record useless as a label, but the exec still
+	// happened, so the eviction must not hide behind the comm early return.
+	el.processRawEvent(makeProcessExecEvent(t, defaulTime, execCommPid, execCommTid, ""),
+		make(chan *event.Pair, 1))
+
+	for _, tc := range cases {
+		_, tracked := fds.files[fdKey(execCommPid, tc.fd)]
+		if tracked != tc.keep {
+			t.Errorf("%s: fd %d tracked after exec = %v, want %v", tc.name, tc.fd, tracked, tc.keep)
+		}
+	}
+	verifyFdNotTracked(t, el, execCommPid, 17)
+	if _, ok := fds.fileAges[fdKey(execCommPid, 10)]; ok {
+		t.Error("evicted fd 10 left its LRU age behind")
+	}
+	assertExecProcFdCache(t, fds, otherPid)
+	verifyFileDescriptor(t, el, otherPid, 10, "/other")
+	// A surviving descriptor must keep its pid registered so a later exit
+	// still evicts it (the per-pid index must never miss).
+	assertFdIndexConsistent(t, fds)
+	fds.deletePid(execCommPid)
+	verifyFdNotTracked(t, el, execCommPid, 11)
+	if _, ok := fds.procFdCache[fdKey(execCommPid, 22)]; ok {
+		t.Error("surviving procfs cache entry was not evicted by the later exit")
+	}
+	assertFdIndexConsistent(t, fds)
+}
+
+// execSurvivalCases covers every way the tracker learns the close-on-exec
+// state of an entry (open flags, F_SETFD-style MergeFlags in both
+// directions) plus the unknown cases that must be dropped conservatively.
+func execSurvivalCases() []execSurvivalCase {
+	return []execSurvivalCase{
 		{"opened O_CLOEXEC", 10, func() file.File { return file.NewFd(10, "/a", syscall.O_RDONLY|syscall.O_CLOEXEC) }, false},
 		{"opened without O_CLOEXEC", 11, func() file.File { return file.NewFd(11, "/b", syscall.O_RDWR) }, true},
 		{"F_SETFD set FD_CLOEXEC later", 12, func() file.File {
@@ -1073,9 +1115,11 @@ func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 		{"flags entirely unknown", 15, func() file.File { return file.NewFd(15, "/f", -1) }, false},
 		{"not an FdFile", 16, func() file.File { return file.NewPathname([]byte("/g")) }, false},
 	}
+}
 
-	el := newFilteredEventLoop(t, globalfilter.Filter{})
-	fds := el.fdState()
+// seedExecSurvivalState registers cases for execCommPid, a close_range'd
+// descriptor (fd 17), another pid's entries, and procfs cache entries.
+func seedExecSurvivalState(fds *fdTracker, cases []execSurvivalCase, otherPid uint32) {
 	for _, tc := range cases {
 		fds.set(tc.fd, execCommPid, tc.entry())
 	}
@@ -1089,22 +1133,13 @@ func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 	fds.setProcFdCache(21, execCommPid, file.NewFd(21, "", -1))
 	fds.setProcFdCache(22, execCommPid, file.NewFd(22, "/cached-kept", syscall.O_RDONLY))
 	fds.setProcFdCache(20, otherPid, file.NewFd(20, "/cached-other", syscall.O_RDONLY|syscall.O_CLOEXEC))
+}
 
-	// An empty comm makes the record useless as a label, but the exec still
-	// happened, so the eviction must not hide behind the comm early return.
-	el.processRawEvent(makeProcessExecEvent(t, defaulTime, execCommPid, execCommTid, ""),
-		make(chan *event.Pair, 1))
-
-	for _, tc := range cases {
-		_, tracked := fds.files[fdKey(execCommPid, tc.fd)]
-		if tracked != tc.keep {
-			t.Errorf("%s: fd %d tracked after exec = %v, want %v", tc.name, tc.fd, tracked, tc.keep)
-		}
-	}
-	verifyFdNotTracked(t, el, execCommPid, 17)
-	if _, ok := fds.fileAges[fdKey(execCommPid, 10)]; ok {
-		t.Error("evicted fd 10 left its LRU age behind")
-	}
+// assertExecProcFdCache checks the procfs cache after execCommPid's exec: the
+// known-set (20) and unknown (21) entries are gone, the known-clear one (22)
+// and otherPid's entry survive.
+func assertExecProcFdCache(t *testing.T, fds *fdTracker, otherPid uint32) {
+	t.Helper()
 	for _, fd := range []int32{20, 21} {
 		if _, ok := fds.procFdCache[fdKey(execCommPid, fd)]; ok {
 			t.Errorf("exec'ing pid's procfs cache entry for fd %d survived the exec", fd)
@@ -1113,19 +1148,9 @@ func TestProcessExecEventKeepsOnlyDescriptorsKnownToSurvive(t *testing.T) {
 	if cached, ok := fds.procFdCache[fdKey(execCommPid, 22)]; !ok || cached.Name() != "/cached-kept" {
 		t.Error("known-clear procfs cache entry was dropped by the exec")
 	}
-	verifyFileDescriptor(t, el, otherPid, 10, "/other")
 	if _, ok := fds.procFdCache[fdKey(otherPid, 20)]; !ok {
 		t.Error("another pid's procfs cache entry was dropped by this pid's exec")
 	}
-	// A surviving descriptor must keep its pid registered so a later exit
-	// still evicts it (the per-pid index must never miss).
-	assertFdIndexConsistent(t, fds)
-	fds.deletePid(execCommPid)
-	verifyFdNotTracked(t, el, execCommPid, 11)
-	if _, ok := fds.procFdCache[fdKey(execCommPid, 22)]; ok {
-		t.Error("surviving procfs cache entry was not evicted by the later exit")
-	}
-	assertFdIndexConsistent(t, fds)
 }
 
 // TestProcessExecEventKeepsDup2dStdoutName drives the common shell pattern
