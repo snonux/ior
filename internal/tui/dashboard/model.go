@@ -106,11 +106,13 @@ type Model struct {
 	// tabletab.go for what the component is for.
 	syscallsTab            tableTabState[syscallSortKey]
 	syscallsTreemapOffset  int
+	syscallsTreemapWanted  stickyKey
 	filesTab               tableTabState[fileSortKey]
 	filesDirGrouped        bool
 	filesDirTab            tableTabState[fileDirSortKey]
 	processesTab           tableTabState[processSortKey]
 	processesTreemapOffset int
+	processesTreemapWanted stickyKey
 	streamModel            eventstream.Model
 	flamegraphModel        *flamegraphtui.Model
 	showHelp               bool
@@ -338,8 +340,10 @@ func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // reanchorFilesOffset keeps the plain Files table selection stable across a
 // snapshot refresh (handleStatsTick): it finds the previously selected path
 // in the freshly ordered rows and falls back to clamping the current offset.
+// Like every keyed selection it survives an empty snapshot (the auto-reset):
+// the path is remembered in filesTab.wanted and found again when rows return.
 func (m *Model) reanchorFilesOffset(selectedPath string) {
-	m.filesTab.offset = reanchorOffset(m.filesTab.offset, m.sortedFileRows(), selectedPath, findFileOffset)
+	m.filesTab.offset = reanchorSticky(m.filesTab.offset, &m.filesTab.wanted, m.sortedFileRows(), selectedPath, findFileOffset)
 }
 
 // selectedSyscallSnapshot returns the row Enter and the stats-tick
@@ -857,13 +861,13 @@ func (m *Model) keepFilesDirSelection(change func()) {
 // filesDirSelection is the dir-grouped selection over the items of the
 // active viz mode (filesDirSelectionKeys).
 func (m *Model) filesDirSelection() keyedSelection {
-	return keyedSelection{offset: &m.filesDirTab.offset, keys: m.filesDirSelectionKeys}
+	return keyedSelection{offset: &m.filesDirTab.offset, keys: m.filesDirSelectionKeys, wanted: &m.filesDirTab.wanted}
 }
 
 // syscallsTableSelection is the Syscalls table selection over the visible,
 // sorted rows, keyed by syscall name.
 func (m *Model) syscallsTableSelection() keyedSelection {
-	return keyedSelection{offset: &m.syscallsTab.offset, keys: func() []string {
+	return keyedSelection{offset: &m.syscallsTab.offset, wanted: &m.syscallsTab.wanted, keys: func() []string {
 		return keysOf(m.sortedSyscallRows(), func(row statsengine.SyscallSnapshot) string { return row.Name })
 	}}
 }
@@ -873,7 +877,7 @@ func (m *Model) syscallsTableSelection() keyedSelection {
 // value on every refresh and on every metric change, so a positional
 // selection would land on whatever syscall moved into its slot.
 func (m *Model) syscallsTreemapSelection() keyedSelection {
-	return keyedSelection{offset: &m.syscallsTreemapOffset, keys: m.syscallsTreemapKeys}
+	return keyedSelection{offset: &m.syscallsTreemapOffset, keys: m.syscallsTreemapKeys, wanted: &m.syscallsTreemapWanted}
 }
 
 // syscallsTreemapKeys returns the syscall names of the treemap items in
@@ -896,7 +900,7 @@ func (m *Model) keepSyscallsSelection(change func()) {
 // table rows, keyed by PID (processKey). Bubbles mode shares it: the bubble
 // chart keeps its own selection, the offset still indexes the table rows.
 func (m *Model) processesTableSelection() keyedSelection {
-	return keyedSelection{offset: &m.processesTab.offset, keys: func() []string {
+	return keyedSelection{offset: &m.processesTab.offset, wanted: &m.processesTab.wanted, keys: func() []string {
 		return keysOf(m.sortedProcessTableRows(), processRowKey)
 	}}
 }
@@ -906,7 +910,7 @@ func (m *Model) processesTableSelection() keyedSelection {
 // keys are built the way renderProcessesTreemap builds its items, so offset
 // i here is tile i on screen.
 func (m *Model) processesTreemapSelection() keyedSelection {
-	return keyedSelection{offset: &m.processesTreemapOffset, keys: func() []string {
+	return keyedSelection{offset: &m.processesTreemapOffset, wanted: &m.processesTreemapWanted, keys: func() []string {
 		return treemapItemKeys(buildProcessesTreemapItems(m.latest, m.processesTab.bubble.Metric()))
 	}}
 }
@@ -924,10 +928,11 @@ func (m *Model) keepProcessesSelection(change func()) {
 // from the stats snapshot. Without a snapshot (before the first tick, or
 // after PrepareForTraceRestart until the new session's first tick) the key
 // lists are empty for lack of data, not because the items are gone, so
-// re-anchoring would reset every offset to 0. The change is then applied
+// re-anchoring would find nothing to follow. The change is then applied
 // as is and the offsets are left for the first tick to clamp, as a
 // positional selection is. A snapshot with no rows is data and still
-// re-anchors (resetting to 0).
+// re-anchors, but an empty list never resets an offset to 0: the selected
+// key is remembered (stickyKey) and looked for again when rows return.
 func (m *Model) keepSnapshotSelections(change func(), sels ...keyedSelection) {
 	if m.latest == nil {
 		change()

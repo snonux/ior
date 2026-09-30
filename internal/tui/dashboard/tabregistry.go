@@ -492,6 +492,10 @@ func captureFilesSelection(m *Model) func() {
 	selectedFile := ""
 	if !m.filesDirGrouped && m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
 		selectedFile = m.selectedFilePath()
+		if selectedFile == "" {
+			// Empty file list: follow the path remembered from before it emptied.
+			selectedFile = m.filesTab.wanted.take(m.filesTab.offset)
+		}
 	}
 	reanchorDir := m.filesDirSelection().capture(m.filesDirGrouped && m.filesDirAnchorsByKey())
 	return func() {

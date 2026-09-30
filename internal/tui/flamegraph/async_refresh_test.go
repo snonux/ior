@@ -495,3 +495,55 @@ func BenchmarkRecomputeFilterState(b *testing.B) {
 		})
 	}
 }
+
+// TestSelectionSurvivesLiveTrieReset drives the auto-reset the way the
+// dashboard does: the live trie is reset under a running flame model (whose
+// own state is left alone), the model refreshes to the empty trie and then to
+// the refilled one. The selected frame must be selected again, not root.
+func TestSelectionSurvivesLiveTrieReset(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m := NewModel(trie)
+	m.width, m.height = 120, 30
+
+	refresh := func() {
+		t.Helper()
+		cmd := m.RefreshFromLiveTrieCmd()
+		if cmd == nil {
+			t.Fatalf("expected a refresh command")
+		}
+		m.handleSnapshotReady(cmd().(flameSnapshotReadyMsg))
+		// Settle the animation so currentFrames are the target frames.
+		for i := 0; i < 200 && m.anim.isAnimating(); i++ {
+			m.tickAnimation()
+		}
+	}
+	refresh()
+
+	frames := m.anim.currentFrames()
+	deepest := 0
+	for idx, frame := range frames {
+		if frame.Depth > frames[deepest].Depth {
+			deepest = idx
+		}
+	}
+	if frames[deepest].Depth < 2 {
+		t.Fatalf("precondition: want a frame below the top level, got depth %d", frames[deepest].Depth)
+	}
+	m.sel.selectFrame(frames, m.anim.currentAncestry(), deepest)
+	want := frames[deepest].Path
+
+	trie.Reset()
+	refresh()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got == want {
+		t.Fatalf("precondition: %q still exists after the reset", want)
+	}
+	// An idle refresh or two of the empty trie must not forget the wish.
+	m.rebuildFrames(false)
+
+	ingestTwoEventsForAsync(t, trie)
+	refresh()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != want {
+		t.Fatalf("selected %q after the refill, want %q", got, want)
+	}
+}

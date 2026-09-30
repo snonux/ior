@@ -14,6 +14,16 @@ import (
 type SelectionManager struct {
 	selectedIdx int
 	subtreeSet  map[int]bool
+	// wantedPath is the path the user selected but restoreByPath could only
+	// approximate (typically because a baseline reset emptied the trie and
+	// only the root frame is left). It is sticky: while the selection still
+	// sits where the approximation put it, the next restore looks for
+	// wantedPath again, so the selection returns once the frame does.
+	wantedPath string
+	// landedPath is the path of the frame the approximation selected, "" when
+	// no frame existed at all. A selection whose path differs from it was
+	// moved by the user, which abandons wantedPath.
+	landedPath string
 }
 
 // frameFilter reports whether frame idx may be selected. A nil frameFilter
@@ -81,6 +91,7 @@ func (s *SelectionManager) jumpToMatch(frames []tuiFrame, ancestry frameAncestry
 // place, as done when the snapshot state is discarded.
 func (s *SelectionManager) reset() {
 	s.selectedIdx = 0
+	s.wantedPath, s.landedPath = "", ""
 	s.subtreeSet = resetBoolSet(s.subtreeSet)
 }
 
@@ -176,24 +187,51 @@ func (s *SelectionManager) ensureVisible(frames []tuiFrame, height int, navigabl
 	}
 }
 
-// restoreByPath tries to set selectedIdx to the frame with the given path.
-// Falls back to a boundary-prefix match if the exact path is gone.
+// restoreByPath tries to set selectedIdx to the frame with the given path,
+// the path the selection had before the frames were replaced. If the exact
+// path is gone it falls back to a boundary-prefix match (an ancestor or
+// descendant), but remembers the path as wanted: the frames vanish for a
+// moment on every baseline reset (the auto-reset), and without that memory the
+// fallback - the root frame - would itself become the remembered path and the
+// selection would never come back when the data refills. See resolveWanted
+// for when the memory is honoured or dropped.
 func (s *SelectionManager) restoreByPath(frames []tuiFrame, path string) {
-	if path == "" || len(frames) == 0 {
+	path = s.resolveWanted(path)
+	if path == "" {
+		return
+	}
+	if len(frames) == 0 {
+		// Nothing to select yet: keep looking for the path once frames exist.
+		s.wantedPath, s.landedPath = path, ""
 		return
 	}
 	for idx, frame := range frames {
 		if frame.Path == path {
 			s.selectedIdx = idx
+			s.wantedPath, s.landedPath = "", ""
 			return
 		}
 	}
 	for idx, frame := range frames {
 		if hasPathBoundaryPrefix(path, frame.Path) || hasPathBoundaryPrefix(frame.Path, path) {
 			s.selectedIdx = idx
+			s.wantedPath, s.landedPath = path, frame.Path
 			return
 		}
 	}
+}
+
+// resolveWanted picks the path restoreByPath should look for: the remembered
+// wantedPath when the selection (prevPath) still sits on the frame the last
+// approximation chose, otherwise prevPath itself. A selection that moved since
+// - the user navigated, searched or zoomed - abandons the memory, so a frame
+// the user walked away from never pulls the selection back.
+func (s *SelectionManager) resolveWanted(prevPath string) string {
+	if s.wantedPath != "" && prevPath == s.landedPath {
+		return s.wantedPath
+	}
+	s.wantedPath, s.landedPath = "", ""
+	return prevPath
 }
 
 // moveVertical moves the selection one depth level up or down within the frame set.

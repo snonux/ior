@@ -124,3 +124,82 @@ func TestSelectionManagerResetClearsInPlace(t *testing.T) {
 		t.Fatal("reset replaced the subtree map instead of clearing it in place")
 	}
 }
+
+// TestRestoreByPathSurvivesTheEmptyLayoutOfAReset: a baseline reset leaves a
+// layout with only the root frame. The selection lands on root, but the path
+// the user had selected stays wanted, so it comes back with the data instead of
+// the root becoming the remembered path.
+func TestRestoreByPathSurvivesTheEmptyLayoutOfAReset(t *testing.T) {
+	full := jumpMatchFrames()
+	rootOnly := full[:1]
+	wanted := full[2].Path // root/a/a1
+
+	s := newSelectionManager()
+	s.selectedIdx = 2
+
+	// Reset: only root is left. The selection falls back to it ...
+	s.restoreByPath(rootOnly, s.selectedPath(full))
+	if got := s.selectedPath(rootOnly); got != "root" {
+		t.Fatalf("after the reset selected %q, want the root fallback", got)
+	}
+	// ... stays there over further empty layouts ...
+	s.restoreByPath(rootOnly, s.selectedPath(rootOnly))
+	// ... and returns to the wanted frame once it exists again.
+	s.restoreByPath(full, s.selectedPath(rootOnly))
+	if got := s.selectedPath(full); got != wanted {
+		t.Fatalf("after the refill selected %q, want %q", got, wanted)
+	}
+	// Found exactly: nothing stays wanted, so later moves are not undone.
+	s.selectedIdx = 3
+	s.restoreByPath(full, s.selectedPath(full))
+	if got := s.selectedPath(full); got != full[3].Path {
+		t.Fatalf("selection moved to %q after being found", got)
+	}
+}
+
+// TestRestoreByPathDropsTheWishWhenTheUserMoves: once the user moves off the
+// fallback frame, the remembered path no longer applies.
+func TestRestoreByPathDropsTheWishWhenTheUserMoves(t *testing.T) {
+	full := jumpMatchFrames()
+	rootOnly := full[:1]
+	s := newSelectionManager()
+	s.selectedIdx = 2
+	s.restoreByPath(rootOnly, s.selectedPath(full))
+
+	// The user picks another frame of a layout that still lacks root/a/a1.
+	partial := []tuiFrame{full[0], full[3]}
+	s.selectedIdx = 1
+	s.restoreByPath(partial, s.selectedPath(partial))
+	s.restoreByPath(full, s.selectedPath(partial))
+	if got := s.selectedPath(full); got != "root"+pathSeparator+"b" {
+		t.Fatalf("selected %q, want the user's root/b, not the abandoned root/a/a1", got)
+	}
+}
+
+// TestRestoreByPathWithNoFramesRemembersThePath: a layout with no frame at all
+// (nothing to fall back to) must not forget the selection either.
+func TestRestoreByPathWithNoFramesRemembersThePath(t *testing.T) {
+	full := jumpMatchFrames()
+	s := newSelectionManager()
+	s.selectedIdx = 2
+	s.restoreByPath(nil, s.selectedPath(full))
+	s.restoreByPath(nil, "")
+	s.restoreByPath(full, "")
+	if got := s.selectedPath(full); got != full[2].Path {
+		t.Fatalf("selected %q, want %q", got, full[2].Path)
+	}
+}
+
+// TestSelectionManagerResetForgetsTheWantedPath: a deliberate reset (the
+// flame tab's own r key) returns to the first frame for good.
+func TestSelectionManagerResetForgetsTheWantedPath(t *testing.T) {
+	full := jumpMatchFrames()
+	s := newSelectionManager()
+	s.selectedIdx = 2
+	s.restoreByPath(full[:1], s.selectedPath(full))
+	s.reset()
+	s.restoreByPath(full, s.selectedPath(full[:1]))
+	if got := s.selectedPath(full); got != "root" {
+		t.Fatalf("selected %q after reset, want root", got)
+	}
+}

@@ -148,16 +148,17 @@ func TestSyscallsTreemapSelectionFallsBackWhenSyscallDisappears(t *testing.T) {
 	assertRenderedSelection(t, m, "sel:2/2 write")
 }
 
-func TestSyscallsTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
+func TestSyscallsTreemapSelectionSurvivesEmptySnapshot(t *testing.T) {
 	m := newVizModel(t, TabSyscalls, tabVizModeTreemap, sysRanking(9, 5, 1))
 	m = pressJ(t, m, 2)
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: syscallsSnapshot()})
-	assertSyscallsTreemapSelection(t, m, 0, "")
+	assertSyscallsTreemapSelection(t, m, 2, "")
 	assertRenderedSelection(t, m, "treemap: no data")
 
+	// The syscall selected before the reset is selected again when it returns.
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: sysRanking(9, 5, 1)})
-	assertSyscallsTreemapSelection(t, m, 0, "read")
+	assertSyscallsTreemapSelection(t, m, 2, "close")
 }
 
 func TestSyscallsTreemapSelectionSurvivesMetricToggle(t *testing.T) {
@@ -219,21 +220,22 @@ func TestProcessesTreemapSelectionFallsBackWhenPIDDisappears(t *testing.T) {
 	assertRenderedSelection(t, m, "sel:2/2 200:beta")
 }
 
-func TestProcessesTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
+func TestProcessesTreemapSelectionSurvivesEmptySnapshot(t *testing.T) {
 	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
 	m = pressJ(t, m, 2)
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: processesSnapshot()})
-	if key := m.processesTreemapSelection().selectedKey(); m.processesTreemapOffset != 0 || key != "" {
-		t.Fatalf("expected no selection at 0, got %q at %d", key, m.processesTreemapOffset)
+	if key := m.processesTreemapSelection().selectedKey(); key != "" {
+		t.Fatalf("expected no selection on an empty list, got %q", key)
 	}
 	if _, ok := m.selectedProcessSnapshot(); ok {
 		t.Fatalf("expected no Enter target on an empty snapshot")
 	}
 	assertRenderedSelection(t, m, "treemap: no data")
 
+	// PID 300 was selected before the reset and is selected again after it.
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: procRanking(9, 5, 1)})
-	assertProcessesTreemapSelection(t, m, 0, 100)
+	assertProcessesTreemapSelection(t, m, 2, 300)
 }
 
 func TestProcessesTreemapSelectionKeptOnFailedStatsTick(t *testing.T) {
@@ -606,8 +608,8 @@ func TestKeyedSelection(t *testing.T) {
 		t.Fatalf("keep with vanished key: offset %d, want 0", offset)
 	}
 	sel.keep(func() { keys = nil })
-	if offset != 0 || sel.selectedKey() != "" {
-		t.Fatalf("keep with empty list: offset %d, key %q", offset, sel.selectedKey())
+	if sel.selectedKey() != "" {
+		t.Fatalf("keep with empty list: key %q", sel.selectedKey())
 	}
 	if got := processKey(4294967295, 0); got != "4294967295" {
 		t.Fatalf("processKey = %q", got)

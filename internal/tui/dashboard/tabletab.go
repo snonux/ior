@@ -20,6 +20,9 @@ type tableTabState[SortKey comparable] struct {
 	// offset is the selected row index; it is always used through
 	// selectedIndex/selected, which clamp it against the live row count.
 	offset int
+	// wanted remembers the selected row's key across a snapshot with no
+	// rows (see stickyKey), so a reset does not lose the selection.
+	wanted stickyKey
 	// col is the selected table column index.
 	col int
 	// sort is the live sort state applied by the tab's sorted*Rows helper.
