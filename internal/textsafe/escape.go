@@ -119,11 +119,12 @@ func ParseEscapeMode(s string) (EscapeMode, error) {
 	return "", fmt.Errorf("invalid escape mode %q (valid: auto, always, never)", s)
 }
 
-// String returns the mode name; the zero value reads as "auto".
+// String returns the mode name. The zero value deliberately stays "" (the
+// Escaper still treats it as auto): package flag decides whether to print
+// "(default X)" by comparing the default's String() with the String() of the
+// type's zero value, so a zero value that read "auto" made the default "auto"
+// look like a zero default and hid "(default auto)" from -help.
 func (m EscapeMode) String() string {
-	if m == "" {
-		return string(EscapeAuto)
-	}
 	return string(m)
 }
 

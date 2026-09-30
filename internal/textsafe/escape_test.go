@@ -145,8 +145,14 @@ func TestParseEscapeMode(t *testing.T) {
 			t.Errorf("Set(%q) = %v and changed the mode to %q, want error and no change", bad, err, m)
 		}
 	}
-	if got := EscapeMode("").String(); got != "auto" {
-		t.Fatalf("zero EscapeMode String() = %q, want auto", got)
+	// The zero value must stay "" (not "auto"): package flag compares the
+	// default's String() with the zero value's String() to decide whether to
+	// print "(default ...)", so "auto" here hides the default from -help.
+	if got := EscapeMode("").String(); got != "" {
+		t.Fatalf("zero EscapeMode String() = %q, want empty", got)
+	}
+	if got := EscapeAuto.String(); got != "auto" {
+		t.Fatalf("EscapeAuto String() = %q, want auto", got)
 	}
 }
 

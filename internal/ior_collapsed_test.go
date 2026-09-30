@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ior/internal/flamegraph"
@@ -161,5 +162,23 @@ func TestRunCollapsedConverterEscapeFlag(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("invalid -escape still wrote output: %q", out.String())
+	}
+}
+
+// TestRunCollapsedConverterHelpShowsEscapeDefault pins the -escape entry of
+// `ior collapsed -h`: the default must be printed (the flag package hides it
+// when the default's String() equals the zero value's) and the placeholder
+// reads "mode".
+func TestRunCollapsedConverterHelpShowsEscapeDefault(t *testing.T) {
+	var out bytes.Buffer
+	if err := RunCollapsedConverter([]string{"-h"}, &out); err != nil {
+		t.Fatalf("RunCollapsedConverter(-h) error = %v", err)
+	}
+	help := out.String()
+	if !strings.Contains(help, "-escape mode") {
+		t.Errorf("collapsed help lacks '-escape mode':\n%s", help)
+	}
+	if !strings.Contains(help, "(default auto)") {
+		t.Errorf("collapsed help lacks '(default auto)':\n%s", help)
 	}
 }

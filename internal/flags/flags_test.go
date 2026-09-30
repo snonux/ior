@@ -609,3 +609,38 @@ func TestParseEscapeMode(t *testing.T) {
 		}
 	}
 }
+
+// TestEscapeHelpShowsDefaultAndPlaceholder pins the -escape help line. The
+// flag package hides "(default auto)" when the default's String() equals the
+// zero value's String(), which EscapeMode used to do by reading "" as "auto";
+// the backquoted `mode` in the usage names the placeholder instead of "value".
+func TestEscapeHelpShowsDefaultAndPlaceholder(t *testing.T) {
+	fs := flag.NewFlagSet("ior-test", flag.ContinueOnError)
+	var out strings.Builder
+	fs.SetOutput(&out)
+	cfg := NewFlags()
+	registerFlags(fs, &cfg)
+	fs.PrintDefaults()
+
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "  -escape ") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no -escape entry in help:\n%s", out.String())
+	}
+	if !strings.HasPrefix(line, "  -escape mode") {
+		t.Errorf("-escape help line = %q, want placeholder 'mode'", line)
+	}
+	// The usage text follows on the next line; the default suffix ends it.
+	idx := strings.Index(out.String(), line)
+	rest := out.String()[idx:]
+	if end := strings.Index(rest[len(line)+1:], "\n  -"); end >= 0 {
+		rest = rest[:len(line)+1+end]
+	}
+	if !strings.Contains(rest, "(default auto)") {
+		t.Errorf("-escape help lacks '(default auto)':\n%s", rest)
+	}
+}

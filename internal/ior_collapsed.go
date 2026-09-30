@@ -38,7 +38,7 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		"counter metric used as the sample weight (one of: "+strings.Join(collapse.ValidCountFields(), ",")+")")
 	escapeMode := textsafe.EscapeAuto
 	fs.Var(&escapeMode, "escape",
-		"when to escape control and invisible characters in frames: auto (only when stdout is a terminal; a pipe such as | less -R gets raw bytes), always, or never")
+		"when to escape control and invisible characters in frames (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R gets raw bytes), always, or never")
 
 	if err := fs.Parse(args); err != nil {
 		// -h/-help: print the converter usage and exit cleanly instead of
