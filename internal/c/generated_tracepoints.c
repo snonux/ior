@@ -10884,9 +10884,18 @@ int handle_sys_enter_execve(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0]) < 0)
+    if (ctx->args[0] == 0) {
         ev->filename[0] = 0;
+        ev->filename_status = PATH_READ_NULL;
+    } else {
+        ev->filename_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void*)ctx->args[0]) < 0) {
+            ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
+        }
+    }
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+    ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;
     ev->dirfd = -1;
     ev->flags = 0;
 
@@ -10945,9 +10954,18 @@ int handle_sys_enter_execveat(struct syscall_trace_enter *ctx) {
     ev->pid = pid;
     ev->tid = tid;
     ev->time = now;
-    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)
+    if (ctx->args[1] == 0) {
         ev->filename[0] = 0;
+        ev->filename_status = PATH_READ_NULL;
+    } else {
+        ev->filename_status = PATH_READ_OK;
+        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void*)ctx->args[1]) < 0) {
+            ev->filename_status = PATH_READ_FAILED;
+            ev->filename[0] = 0;
+        }
+    }
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+    ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;
     ev->dirfd = (__s32)ctx->args[0];
     ev->flags = (__s32)ctx->args[4];
 

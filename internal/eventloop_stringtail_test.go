@@ -93,7 +93,7 @@ func execStringTailCase(name, filename string) stringTailCase {
 	return stringTailCase{name: name, build: func(t *testing.T, fill stringFill) [][]byte {
 		enter := &types.ExecEvent{
 			EventType: types.ENTER_EXEC_EVENT, TraceId: types.SYS_ENTER_EXECVE, Time: defaulTime,
-			Pid: execCommPid, Tid: execCommTid, Dirfd: -1,
+			Pid: execCommPid, Tid: execCommTid, Dirfd: -1, SchemaVersion: types.EXEC_EVENT_SCHEMA_VERSION,
 		}
 		fill(enter.Filename[:], filename)
 		copy(enter.Comm[:], "ioworkload")

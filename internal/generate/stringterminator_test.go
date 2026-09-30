@@ -314,7 +314,7 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 	const (
 		unlinkNull   = "        ev->pathname[0] = 0;\n        ev->pathname_status = PATH_READ_NULL;\n"
 		unlinkFailed = "            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;\n"
-		execFailed   = "(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n"
+		execFailed   = "            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n"
 	)
 	cases := []struct {
 		name, handler, old, replacement string
@@ -339,9 +339,10 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 			commCaptureLine + "    __builtin_memset(&(ev->comm), 0, sizeof(ev->comm));\n"},
 		{"open comm captured conditionally", "sys_enter_openat", commCaptureLine,
 			"    if (flags)\n        bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n"},
-		{"exec failed read unterminated", "sys_enter_execve", execFailed, "(void *)ctx->args[0]) < 0)\n        ;\n"},
-		{"exec terminator erases every read", "sys_enter_execve", execFailed,
-			"(void *)ctx->args[0]) < 0)\n        ;\n    ev->filename[0] = 0;\n"},
+		{"exec failed read unterminated", "sys_enter_execve", execFailed, "            ev->filename_status = PATH_READ_FAILED;\n"},
+		{"exec terminator erases every read", "sys_enter_execve",
+			"            ev->filename[0] = 0;\n        }\n    }\n",
+			"        }\n    }\n    ev->filename[0] = 0;\n"},
 		{"named eventfd unterminated", "sys_enter_memfd_create", "            ev->filename[0] = 0;\n", ""},
 		{"two-fd names unterminated", "sys_enter_move_mount", "            ev->newname[0] = 0;\n", ""},
 		{"notification path unterminated", "sys_enter_inotify_add_watch",

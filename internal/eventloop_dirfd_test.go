@@ -733,16 +733,21 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 }
 
 // newExecPair builds an exec enter/exit pair as BPF reports it: plain execve
-// carries dirfd -1 and no flags, execveat its real dirfd and flags word.
+// carries dirfd -1 and no flags, execveat its real dirfd and flags word. The
+// filename counts as read successfully (PATH_READ_OK, which is also the zero
+// value test tables leave in their status column); callers override
+// FilenameStatus for the NULL and failed-read cases.
 func newExecPair(traceID types.TraceId, pid uint32, dirfd, flags int32, name string, ret int64) (*types.ExecEvent, *types.RetEvent) {
 	enter := &types.ExecEvent{
-		EventType: types.ENTER_EXEC_EVENT,
-		TraceId:   traceID,
-		Time:      1,
-		Pid:       pid,
-		Tid:       pid,
-		Dirfd:     dirfd,
-		Flags:     flags,
+		EventType:      types.ENTER_EXEC_EVENT,
+		TraceId:        traceID,
+		Time:           1,
+		Pid:            pid,
+		Tid:            pid,
+		Dirfd:          dirfd,
+		Flags:          flags,
+		FilenameStatus: types.PATH_READ_OK,
+		SchemaVersion:  types.EXEC_EVENT_SCHEMA_VERSION,
 	}
 	copy(enter.Filename[:], name)
 	copy(enter.Comm[:], "launcher")
@@ -776,6 +781,7 @@ func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
 		dirfd    int32
 		flags    int32
 		filename string
+		status   uint32
 		ret      int64
 		wantName string
 		wantFD   int32
@@ -784,6 +790,12 @@ func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
 		{name: "failed execveat keeps resolved path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", ret: failed, wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
 		{name: "fexecve AT_EMPTY_PATH names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
 		{name: "failed fexecve reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, ret: failed, wantName: "", wantFD: -1},
+		// Task 9p2: an empty name only means "the descriptor itself" when BPF
+		// actually read "". An unreadable or NULL name leaves the same empty
+		// buffer but is missing data, so it must not borrow the fd's identity.
+		{name: "AT_EMPTY_PATH with unreadable name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_FAILED, wantName: "", wantFD: -1},
+		{name: "AT_EMPTY_PATH with NULL name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: "", wantFD: -1},
+		{name: "unknown filename status fails closed", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: 99, wantName: "", wantFD: -1},
 		{name: "empty name without AT_EMPTY_PATH", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, wantName: "", wantFD: -1},
 		{name: "absolute name ignores dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "/usr/bin/true", wantName: "/usr/bin/true", wantFD: -1},
 		{name: "execveat AT_FDCWD stays relative", traceID: types.SYS_ENTER_EXECVEAT, dirfd: unix.AT_FDCWD, filename: "ls", wantName: "ls", wantFD: -1},
@@ -795,6 +807,7 @@ func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			enter, exit := newExecPair(tc.traceID, pid, tc.dirfd, tc.flags, tc.filename, tc.ret)
+			enter.FilenameStatus = tc.status
 			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
 			if ok := el.handleExecExit(ep, enter); !ok {
 				t.Fatal("handleExecExit returned false")
@@ -902,6 +915,7 @@ func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
 		name     string
 		filename string
 		atFlags  int32
+		status   uint32
 		ret      int64
 		between  func(el *eventLoop)
 		wantName string
@@ -909,6 +923,9 @@ func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
 	}{
 		{name: "successful fexecve", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
 		{name: "failed fexecve reports no path", atFlags: unix.AT_EMPTY_PATH, ret: -int64(syscall.EACCES), wantName: "", wantFD: -1},
+		// The enter-time snapshot must not attribute an unreadable name to the
+		// descriptor either, even though the exec itself succeeded.
+		{name: "unreadable name with AT_EMPTY_PATH reports no path", atFlags: unix.AT_EMPTY_PATH, status: types.PATH_READ_FAILED, wantName: "", wantFD: -1},
 		{name: "failed execveat keeps relative resolution", filename: "ls", ret: -int64(syscall.ENOENT), wantName: filepath.Join(prog, "ls"), wantFD: progfd},
 		{name: "fd replaced after enter", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd,
 			between: func(el *eventLoop) {
@@ -928,6 +945,7 @@ func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
 			el := mustNewEventLoop(t, eventLoopConfig{})
 			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, flags))
 			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, tc.atFlags, tc.filename, tc.ret)
+			enter.FilenameStatus = tc.status
 			var between func()
 			if tc.between != nil {
 				between = func() { tc.between(el) }
