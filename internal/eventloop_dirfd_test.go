@@ -24,6 +24,34 @@ func cutPathname() (cut, trimmed string) {
 	return trimmed + "\xc3", trimmed
 }
 
+// completeRuneNames returns 255-byte pathnames (the BPF capture limit) that
+// end in a COMPLETE 2-, 3- and 4-byte rune. They are exactly as long as a
+// byte-cut name, so only a real UTF-8 check keeps them apart from one: they
+// must never be trimmed.
+func completeRuneNames() map[string]string {
+	pad := func(tail string) string {
+		return strings.Repeat("a", maxCapturedPathname-len(tail)) + tail
+	}
+	return map[string]string{
+		"2-byte": pad("ä"),
+		"3-byte": pad("日"),
+		"4-byte": pad("😀"),
+	}
+}
+
+func TestTrimCutPathnameKeepsCompleteRunes(t *testing.T) {
+	for name, pathname := range completeRuneNames() {
+		t.Run(name, func(t *testing.T) {
+			if len(pathname) != maxCapturedPathname {
+				t.Fatalf("test setup: len = %d, want %d", len(pathname), maxCapturedPathname)
+			}
+			if got := trimCutPathname(pathname); got != pathname {
+				t.Fatalf("complete trailing rune was trimmed: got %q", got[len(got)-4:])
+			}
+		})
+	}
+}
+
 func TestResolveDirfdPath(t *testing.T) {
 	const (
 		pid   = uint32(2100)
@@ -34,6 +62,7 @@ func TestResolveDirfdPath(t *testing.T) {
 	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
 
 	cut, trimmed := cutPathname()
+	full := completeRuneNames()
 	// One byte shorter than the limit nothing was cut, so a trailing lone
 	// lead byte is the file's real name and is left alone.
 	notCut := trimmed[1:] + "\xc3"
@@ -44,6 +73,10 @@ func TestResolveDirfdPath(t *testing.T) {
 		wantName string
 		wantFD   int32
 	}{
+		// A 255-byte name whose last rune is complete is not a cut name.
+		{name: "255 bytes ending in complete 2-byte rune is kept", dirfd: dirfd, pathname: full["2-byte"], wantName: filepath.Join(dir, full["2-byte"]), wantFD: dirfd},
+		{name: "255 bytes ending in complete 3-byte rune is kept", dirfd: dirfd, pathname: full["3-byte"], wantName: filepath.Join(dir, full["3-byte"]), wantFD: dirfd},
+		{name: "255 bytes ending in complete 4-byte rune is kept", dirfd: dirfd, pathname: full["4-byte"], wantName: filepath.Join(dir, full["4-byte"]), wantFD: dirfd},
 		// The kernel-side cut rune is dropped before the join, so it never
 		// ends up as residue at the end of a path longer than the limit.
 		{name: "cut relative name is trimmed before the join", dirfd: dirfd, pathname: cut, wantName: filepath.Join(dir, trimmed), wantFD: dirfd},

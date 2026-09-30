@@ -11,6 +11,7 @@ func TestTrimPartialRune(t *testing.T) {
 		{"empty", "", ""},
 		{"ascii", "kworker/0:1", "kworker/0:1"},
 		{"complete two-byte rune", "ä", "ä"},
+		{"complete three-byte rune", "a日", "a日"},
 		{"kernel cut of 10 umlauts", "äääääää\xc3", "äääääää"},
 		{"three-byte rune cut after one byte", "ab\xe6", "ab"},
 		{"three-byte rune cut after two bytes", "ab\xe6\x97", "ab"},

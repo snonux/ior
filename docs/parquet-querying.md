@@ -51,13 +51,13 @@ local user can create a file name with arbitrary bytes. So that recordings stay 
 sanitizes these three columns when it writes them:
 
 - A partial multi-byte character at the end of `comm` (the kernel's cut) is dropped, so
-  `ääääääääää` is stored as `äääääää`. The same is done for `file` and `old_file`, but only for a
-  captured path that is exactly as long as the capture limit (255 bytes; this includes a relative
-  path resolved against its directory descriptor, which is trimmed before it is joined to the
-  directory, so the joined `file` value may be longer than 255 bytes), or for the 255 bytes plus
-  the `...` ior appends to an over-long `getcwd` path, because those are the only cases where ior
-  can tell the path was cut mid-character. A shorter path that ends in a stray lead byte is a real (odd) file
-  name and is escaped like any other invalid byte, as described next.
+  `ääääääääää` is stored as `äääääää`. The same is done for `file` and `old_file`, but only for
+  a captured path that is exactly as long as the capture limit (255 bytes), or for the 255
+  bytes plus the `...` ior appends to an over-long `getcwd` path. Only in those cases can ior
+  tell that the path was cut mid-character. A relative path resolved against its directory
+  descriptor is trimmed before it is joined to the directory, so the joined `file` value may
+  be longer than 255 bytes. A shorter path that ends in a stray lead byte is a real (odd)
+  file name and is escaped like any other invalid byte, as described next.
 - Any other invalid byte is stored as the four characters `\xHH` in lower-case hex (the notation
   `-escape` uses), so a file named `f`, byte 0xff, `inv` is stored as `f\xffinv`. This includes a
   `comm` such as `a`, byte 0xff, `b` set with `prctl(PR_SET_NAME)`. Valid characters are never

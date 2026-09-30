@@ -402,8 +402,14 @@ func trimCutPathname(pathname string) string {
 // resolved exactly once: an empty path represents that descriptor itself,
 // while a relative path is joined to the descriptor's resolved directory.
 // A pathname cut mid-character by the capture limit is repaired first
-// (trimCutPathname) so the garbage half-rune never appears in any output,
-// nor in the middle of a joined path.
+// (trimCutPathname) so the garbage half-rune neither appears in the resolved
+// name nor ends up in the middle of a joined path. That holds only for names
+// that pass through here. Names that bypass it keep the raw 255-byte cut and
+// may show a stray lead byte (for example "\xc3") in TUI/plain output:
+// inotify_add_watch targets (handleFdPathExit, non-fanotify branch), eventfd
+// identity names, events that do not need a target path, and non-OK path
+// statuses. Parquet output stays valid regardless, because its sanitizePath
+// trims the cut itself.
 func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
 	pathname = trimCutPathname(pathname)
 	if !dirfdPathNeedsResolution(dirfd, pathname) {
