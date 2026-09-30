@@ -715,7 +715,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// screen. While the shutdown or attaching screen, the error view or the
 	// help overlay covers the screens, a modal or input hidden behind must not
 	// receive it (the keys they would have got are swallowed the same way).
-	if _, isPaste := msg.(tea.PasteMsg); isPaste && m.pasteHasNoTarget() {
+	if _, isPaste := msg.(tea.PasteMsg); isPaste && m.textlessViewCovers() {
 		return m, nil
 	}
 
@@ -746,29 +746,35 @@ func (m *Model) canApplyFlameRefresh() bool {
 
 // overlayCoversScreen reports whether something drawn by View replaces or
 // sits on top of the active screen, so that the screen behind it is not what
-// the user is looking at: the shutdown and attaching screens, the full-screen
-// error view, the help overlay and the filter, record, probe and export
-// modals. It mirrors the precedence of View, and is the single place that
-// decides which input positional events (mouse) must not reach the hidden
-// screen and when an async result may not be applied to it.
+// the user is looking at: a view that takes no text (textlessViewCovers) or a
+// modal (modalVisible). It mirrors the precedence of View, and is the single
+// place that decides which input positional events (mouse) must not reach the
+// hidden screen and when an async result may not be applied to it. Paste
+// drops on textlessViewCovers alone, from the same helper, so a new overlay
+// is added to exactly one of the two groups and both gates see it
+// (TestOverlayPredicatesCoverEveryOverlayState).
 func (m *Model) overlayCoversScreen() bool {
-	return m.quitting ||
-		m.attaching ||
-		m.lastErr != nil ||
-		m.helpOverlayVisible ||
-		m.filterModal.Visible() ||
+	return m.textlessViewCovers() || m.modalVisible()
+}
+
+// textlessViewCovers reports whether the shutdown or attaching screen, the
+// full-screen error view or the help overlay is drawn. None of them has a text
+// input; they consume keys themselves (Update gives them precedence), so a
+// paste, which is a single message instead of keys, must be dropped rather
+// than reach a modal or input hiding underneath.
+func (m *Model) textlessViewCovers() bool {
+	return m.quitting || m.attaching || m.lastErr != nil || m.helpOverlayVisible
+}
+
+// modalVisible reports whether the filter, record, probe or export modal is
+// open. Modals own keys and pastes themselves, so a paste is not dropped for
+// them, but the positional events and async results still must not reach
+// the dashboard behind.
+func (m *Model) modalVisible() bool {
+	return m.filterModal.Visible() ||
 		m.recordModal.Visible() ||
 		m.probeModal.Visible() ||
 		m.exporter.Visible()
-}
-
-// pasteHasNoTarget reports whether a view that accepts no text covers the
-// screens: shutdown, attaching, the full-screen error view or the help overlay.
-// Those consume keys themselves (Update gives them precedence), so a paste,
-// which is a single message instead of keys, must be dropped rather than
-// reach the input hiding underneath.
-func (m *Model) pasteHasNoTarget() bool {
-	return m.quitting || m.attaching || m.lastErr != nil || m.helpOverlayVisible
 }
 
 // isMouseMsg reports whether msg is any pointer event: click, release,
@@ -1302,7 +1308,10 @@ func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 // forwarding the non-key messages it needs (ticks, spinner and async results).
 // Keys and pastes belong to the modal. Mouse events never get here: Update
 // drops them while any modal is visible (overlayCoversScreen), so a click
-// cannot act on the tab the modal covers.
+// cannot act on the tab the modal covers. A paste does get here (the modal
+// dispatch runs for every message) and is reachable with a focused dashboard
+// input behind the modal, so the guard is load-bearing, not just defence
+// (TestPasteWhileModalCoversFocusedDashboardInputIsNotForwarded).
 func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
 	_, isKey := msg.(tea.KeyPressMsg)
 	_, isPaste := msg.(tea.PasteMsg)

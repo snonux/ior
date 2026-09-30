@@ -220,3 +220,24 @@ func TestPasteOutsideSearchIsIgnored(t *testing.T) {
 			m.search.isActive(), m.search.searchInput.Value(), cmd != nil)
 	}
 }
+
+// After Enter the search is committed (isActive false) but the input itself
+// stays focused, so the paste gate must be isActive(), not the input's focus:
+// a paste after commit would otherwise silently edit the committed query text
+// (and the next '/' would show it). The query and the input value must not move.
+func TestPasteAfterCommittedSearchIsIgnored(t *testing.T) {
+	m := NewModel(nil)
+	m.anim.frames = jumpMatchFrames()
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.search.isActive() || m.search.query() != "b" {
+		t.Fatalf("precondition: committed search, active=%t query=%q", m.search.isActive(), m.search.query())
+	}
+	next, cmd := m.Update(tea.PasteMsg{Content: "xyz"})
+	m = next.(*Model)
+	if cmd != nil || m.search.searchInput.Value() != "b" || m.search.query() != "b" {
+		t.Fatalf("paste after commit changed the search: value=%q query=%q cmd=%v",
+			m.search.searchInput.Value(), m.search.query(), cmd != nil)
+	}
+}

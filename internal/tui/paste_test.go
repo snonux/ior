@@ -221,3 +221,65 @@ func TestPasteIsDroppedWhileAnOverlayCoversTheInput(t *testing.T) {
 		})
 	}
 }
+
+// updateDashboardForModal is reached for a paste whenever a modal is visible
+// over a dashboard whose own text input is focused (here the stream search:
+// the state a modal opened programmatically, or by a future shortcut, would
+// leave behind). The paste belongs to the modal alone; forwarding it would
+// fill the search input hidden underneath, unseen, and it would show up once
+// the modal closed. The modal is in navigation mode so it takes no text
+// itself, which leaves the hidden input as the only possible recipient.
+func TestPasteWhileModalCoversFocusedDashboardInputIsNotForwarded(t *testing.T) {
+	m := newTypingTestModel()
+	m = press(t, m, text("7"))
+	m = press(t, m, text("/"))
+	if !m.dashboard.TextInputFocused() {
+		t.Fatalf("expected the stream search modal to be focused")
+	}
+	m.filterModal = m.filterModal.Open(m.filters.current())
+	if !m.filterModal.Visible() || m.filterModal.TextInputFocused() {
+		t.Fatalf("expected a navigating filter modal over the dashboard")
+	}
+	m = paste(m, "leaked-into-search")
+	m.filterModal = m.filterModal.Close()
+	if view := m.View().Content; strings.Contains(view, "leaked-into-search") {
+		t.Fatalf("the paste reached the stream search behind the modal, view:\n%s", view)
+	}
+}
+
+// The paste gate (textlessViewCovers) and the mouse/async gate
+// (overlayCoversScreen) are built from the same two helpers; this table pins
+// every overlay state against both, so a new overlay cannot be wired into one
+// gate and forgotten in the other: a textless view covers the screen for both,
+// a modal covers it for the mouse gate only (the modal takes the paste itself).
+func TestOverlayPredicatesCoverEveryOverlayState(t *testing.T) {
+	cases := []struct {
+		state            string
+		covers, textless bool
+	}{
+		{"none", false, false},
+		{"attaching overlay", true, true},
+		{"help overlay", true, true},
+		{"error screen", true, true},
+		{"quitting screen", true, true},
+		{"filter modal", true, false},
+		{"record modal", true, false},
+		{"probe modal", true, false},
+		{"export modal", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state, func(t *testing.T) {
+			m := newTypingTestModel()
+			setTopLevelFlameRefreshHidden(m, tc.state, true)
+			if got := m.overlayCoversScreen(); got != tc.covers {
+				t.Fatalf("overlayCoversScreen = %t, want %t", got, tc.covers)
+			}
+			if got := m.textlessViewCovers(); got != tc.textless {
+				t.Fatalf("textlessViewCovers = %t, want %t", got, tc.textless)
+			}
+			if tc.covers != (m.textlessViewCovers() || m.modalVisible()) {
+				t.Fatalf("overlayCoversScreen is not textless-or-modal")
+			}
+		})
+	}
+}

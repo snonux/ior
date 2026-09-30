@@ -731,9 +731,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   a paste is dropped, never replayed as commands (`c`, `q`, `7`, `/` would
   otherwise clear filters, quit or switch tabs). `Model.Update` also drops it
   while the shutdown/attaching screen, the error view or the help overlay covers
-  the screens (`pasteHasNoTarget`), so a modal hidden underneath cannot be filled
+  the screens (`textlessViewCovers`, the non-modal half of `overlayCoversScreen`), so a modal hidden underneath cannot be filled
   unseen, and `updateDashboardForModal` does not hand a paste to the dashboard
-  behind a modal. A new text input must accept `tea.PasteMsg` as well as keys.
+  behind a modal (`TestPasteWhileModalCoversFocusedDashboardInputIsNotForwarded`;
+  `textlessViewCovers` and `modalVisible` are the two halves of
+  `overlayCoversScreen`, pinned by `TestOverlayPredicatesCoverEveryOverlayState`).
+  Known cosmetic limit: while a text input is being edited it shows a pasted
+  bidi override (U+202E) or zero-width character as is (bubbles `textinput`
+  does not strip them); after commit the label and header render sanitised.
+  A new text input must accept `tea.PasteMsg` as well as keys.
   Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
 - **The PID/TID picker selection follows the process, not the row number**
   (`pidpicker.Model.applyFilter` -> `relocateSelection`): a rescan or a typed
