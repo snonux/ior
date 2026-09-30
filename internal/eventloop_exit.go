@@ -8,6 +8,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/textsafe"
 	"ior/internal/types"
 
 	"golang.org/x/sys/unix"
@@ -379,11 +380,32 @@ func (e *eventLoop) attachPathExitFd(ep *event.Pair, pathEv *types.PathEvent,
 	return true
 }
 
+// maxCapturedPathname is the longest pathname the BPF side captures: the
+// MAX_FILENAME_LENGTH buffer minus its NUL terminator.
+const maxCapturedPathname = types.MAX_FILENAME_LENGTH - 1
+
+// trimCutPathname drops the half of a multi-byte character that the BPF
+// byte-wise capture cut off the end of a pathname which filled its buffer.
+// It must run on the captured name itself, before a dirfd join appends the
+// name to a directory: afterwards the joined string is longer than the limit
+// and the cut is no longer recognisable as one. A pathname shorter than the
+// limit was not cut, so its bytes (even an odd trailing one) are left alone.
+func trimCutPathname(pathname string) string {
+	if len(pathname) != maxCapturedPathname {
+		return pathname
+	}
+	return textsafe.TrimPartialRune(pathname)
+}
+
 // resolveDirfdPath resolves one pathname against its directory descriptor.
 // Absolute paths and AT_FDCWD retain their captured form. A concrete dirfd is
 // resolved exactly once: an empty path represents that descriptor itself,
 // while a relative path is joined to the descriptor's resolved directory.
+// A pathname cut mid-character by the capture limit is repaired first
+// (trimCutPathname) so the garbage half-rune never appears in any output,
+// nor in the middle of a joined path.
 func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
+	pathname = trimCutPathname(pathname)
 	if !dirfdPathNeedsResolution(dirfd, pathname) {
 		return file.NewPathname([]byte(pathname))
 	}

@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/binary"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -14,6 +15,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// cutPathname returns a pathname of exactly the BPF capture limit whose last
+// byte is the lead byte 0xc3 of a two-byte rune, i.e. what a byte-wise cut of
+// a non-ASCII name looks like. The returned trimmed form is the same name
+// without the half rune.
+func cutPathname() (cut, trimmed string) {
+	trimmed = strings.Repeat("a", types.MAX_FILENAME_LENGTH-2)
+	return trimmed + "\xc3", trimmed
+}
+
 func TestResolveDirfdPath(t *testing.T) {
 	const (
 		pid   = uint32(2100)
@@ -23,6 +33,10 @@ func TestResolveDirfdPath(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
 
+	cut, trimmed := cutPathname()
+	// One byte shorter than the limit nothing was cut, so a trailing lone
+	// lead byte is the file's real name and is left alone.
+	notCut := trimmed[1:] + "\xc3"
 	tests := []struct {
 		name     string
 		dirfd    int32
@@ -30,6 +44,12 @@ func TestResolveDirfdPath(t *testing.T) {
 		wantName string
 		wantFD   int32
 	}{
+		// The kernel-side cut rune is dropped before the join, so it never
+		// ends up as residue at the end of a path longer than the limit.
+		{name: "cut relative name is trimmed before the join", dirfd: dirfd, pathname: cut, wantName: filepath.Join(dir, trimmed), wantFD: dirfd},
+		{name: "cut absolute name is trimmed", dirfd: dirfd, pathname: "/" + cut[1:], wantName: "/" + trimmed[1:], wantFD: -1},
+		{name: "cut AT_FDCWD name is trimmed", dirfd: unix.AT_FDCWD, pathname: cut, wantName: trimmed, wantFD: -1},
+		{name: "short name ending in a lead byte is kept", dirfd: dirfd, pathname: notCut, wantName: filepath.Join(dir, notCut), wantFD: dirfd},
 		{name: "relative", dirfd: dirfd, pathname: "child/file", wantName: filepath.Join(dir, "child/file"), wantFD: dirfd},
 		{name: "empty", dirfd: dirfd, pathname: "", wantName: dir, wantFD: dirfd},
 		{name: "absolute", dirfd: dirfd, pathname: "/already/absolute", wantName: "/already/absolute", wantFD: -1},

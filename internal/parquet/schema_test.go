@@ -51,36 +51,6 @@ func TestSanitizeUTF8DoesNotAllocateForValidText(t *testing.T) {
 	}
 }
 
-func TestTrimPartialRune(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"empty", "", ""},
-		{"ascii", "kworker/0:1", "kworker/0:1"},
-		{"complete two-byte rune", "ä", "ä"},
-		{"kernel cut of 10 umlauts", "äääääää\xc3", "äääääää"},
-		{"three-byte rune cut after one byte", "ab\xe6", "ab"},
-		{"three-byte rune cut after two bytes", "ab\xe6\x97", "ab"},
-		{"four-byte rune cut after three bytes", "a\xf0\x9f\x98", "a"},
-		{"complete four-byte rune", "a😀", "a😀"},
-		{"only a partial rune", "\xc3", ""},
-		// Not the start of a longer valid sequence: left for sanitizeUTF8.
-		{"trailing invalid byte", "ab\xff", "ab\xff"},
-		{"stray continuation byte", "ab\x80", "ab\x80"},
-		{"invalid sequence already full", "a\xe6\x28", "a\xe6\x28"},
-		{"invalid byte before valid tail", "\xffab", "\xffab"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := trimPartialRune(tt.in); got != tt.want {
-				t.Fatalf("trimPartialRune(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestRecordFromStreamProducesValidUTF8(t *testing.T) {
 	// A comm can hold an invalid byte that is not a trailing cut (prctl
 	// PR_SET_NAME accepts arbitrary bytes): it must be escaped, not dropped.
@@ -228,6 +198,65 @@ func TestSanitizePathTrimsTruncatedGetcwdPath(t *testing.T) {
 	if got := sanitizePath("/tmp/\xc3..."); got != `/tmp/\xc3...` {
 		t.Fatalf("short path with dots = %q", got)
 	}
+	// Longer than the getcwd form (255+3 bytes) is not a captured prefix any
+	// more (e.g. a real name that merely ends in dots), so nothing is trimmed:
+	// the partial rune is escaped like any other invalid byte.
+	long := capturedPath(types.MAX_FILENAME_LENGTH+10, "") + "\xc3" + types.TruncatedPathSuffix
+	if got, want := sanitizePath(long), long[:len(long)-4]+`\xc3`+types.TruncatedPathSuffix; got != want {
+		t.Fatalf("over-long path ending in dots: got tail %q, want tail %q", got[len(got)-8:], want[len(want)-8:])
+	}
+}
+
+// TestTruncatedPathSuffixLiteral pins the value the docs and AGENTS.md
+// promise for an over-long getcwd path.
+func TestTruncatedPathSuffixLiteral(t *testing.T) {
+	if types.TruncatedPathSuffix != "..." {
+		t.Fatalf("types.TruncatedPathSuffix = %q, want %q", types.TruncatedPathSuffix, "...")
+	}
+}
+
+// TestRecordFromStreamTrimsCutPaths pins that RecordFromStream applies the
+// path repair (sanitizePath) to both file and old_file, in the plain limit
+// form and the getcwd "..." form: replacing either call with the plain
+// sanitizeUTF8 would leave a "\xc3" residue and fail here.
+func TestRecordFromStreamTrimsCutPaths(t *testing.T) {
+	cut := capturedPath(types.MAX_FILENAME_LENGTH-2, "") + "\xc3"
+	trimmed := cut[:len(cut)-1]
+	getcwdCut := cut + types.TruncatedPathSuffix
+	getcwdTrimmed := trimmed + types.TruncatedPathSuffix
+	if len(getcwdCut) != types.MAX_FILENAME_LENGTH+2 {
+		t.Fatalf("getcwd form length = %d, want %d", len(getcwdCut), types.MAX_FILENAME_LENGTH+2)
+	}
+	tests := []struct {
+		name              string
+		fileName, oldNam  string
+		wantFile, wantOld string
+	}{
+		{"file only", cut, "", trimmed, ""},
+		{"old_file only", "", cut, "", trimmed},
+		{"both", cut, cut, trimmed, trimmed},
+		{"getcwd file", getcwdCut, "", getcwdTrimmed, ""},
+		{"getcwd old_file", "", getcwdCut, "", getcwdTrimmed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := RecordFromStream(streamrow.Row{FileName: tt.fileName, OldName: tt.oldNam}, 0)
+			if rec.File != tt.wantFile {
+				t.Errorf("File tail = %q, want tail %q", tail(rec.File), tail(tt.wantFile))
+			}
+			if rec.OldFile != tt.wantOld {
+				t.Errorf("OldFile tail = %q, want tail %q", tail(rec.OldFile), tail(tt.wantOld))
+			}
+		})
+	}
+}
+
+// tail returns the last few bytes of s for compact failure messages.
+func tail(s string) string {
+	if len(s) > 8 {
+		return s[len(s)-8:]
+	}
+	return s
 }
 
 // TestSanitizeUTF8UsesTextsafeNotation pins that the \xHH form is exactly

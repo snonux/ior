@@ -24,7 +24,7 @@ import (
 // side cuts a path at MAX_FILENAME_LENGTH-1 bytes just the same, and any
 // local user can create file names (or, via prctl(PR_SET_NAME), comm names)
 // with arbitrary bytes. RecordFromStream therefore sanitizes them (see
-// sanitizeUTF8, trimPartialRune and sanitizeComm/sanitizePath); a Record
+// sanitizeUTF8, textsafe.TrimPartialRune and sanitizeComm/sanitizePath); a Record
 // built by hand is written as given.
 type Record struct {
 	Seq               uint64 `parquet:"seq"`
@@ -153,7 +153,7 @@ func sanitizeUTF8(s string) string {
 // first (it is the cut-off half of a character, not corrupt data) and any
 // other invalid byte, e.g. one set with prctl(PR_SET_NAME), is escaped.
 func sanitizeComm(comm string) string {
-	return sanitizeUTF8(trimPartialRune(comm))
+	return sanitizeUTF8(textsafe.TrimPartialRune(comm))
 }
 
 // sanitizePath makes a file/old_file value valid UTF-8. A path the BPF side
@@ -161,8 +161,15 @@ func sanitizeComm(comm string) string {
 // stores at most MAX_FILENAME_LENGTH-1 bytes plus the NUL) was cut by bytes
 // too, so a non-ASCII path can end in half a character; that partial rune is
 // dropped like comm's. A getcwd path longer than the buffer is reported as
-// the captured prefix plus "..." (types.TruncatedPathSuffix), so the cut rune sits
-// in front of that suffix and is trimmed there.
+// the captured prefix plus "..." (types.TruncatedPathSuffix), so the cut rune
+// sits in front of that suffix and is trimmed there.
+//
+// A name that went through dirfd resolution (openat, newfstatat, unlinkat,
+// renameat2, execveat, ...) was already trimmed by the event loop before it
+// was joined to the directory (eventloop_exit.go trimCutPathname), because
+// the joined string no longer has the recognisable capture length; this
+// function repairs what reaches it untrimmed (absolute/AT_FDCWD names never
+// change length, and the getcwd form is built after the capture).
 //
 // Limitations: a path shorter than the limit is never trimmed, so an invalid
 // trailing byte in it (a real file name ending in a lone lead byte) becomes a
@@ -171,9 +178,9 @@ func sanitizeComm(comm string) string {
 func sanitizePath(path string) string {
 	switch {
 	case len(path) == maxCapturedPath:
-		path = trimPartialRune(path)
+		path = textsafe.TrimPartialRune(path)
 	case len(path) == maxCapturedPath+len(types.TruncatedPathSuffix) && strings.HasSuffix(path, types.TruncatedPathSuffix):
-		path = trimPartialRune(path[:maxCapturedPath]) + types.TruncatedPathSuffix
+		path = textsafe.TrimPartialRune(path[:maxCapturedPath]) + types.TruncatedPathSuffix
 	}
 	return sanitizeUTF8(path)
 }
@@ -181,28 +188,6 @@ func sanitizePath(path string) string {
 // maxCapturedPath is the longest path the BPF side captures: the
 // MAX_FILENAME_LENGTH buffer minus its NUL terminator.
 const maxCapturedPath = types.MAX_FILENAME_LENGTH - 1
-
-// trimPartialRune drops a trailing, incomplete-but-so-far-valid UTF-8
-// sequence from s. The kernel stores comm in a 16-byte buffer (15 characters
-// plus NUL) and truncates by bytes, so a name such as "ääääääääää" ends in a
-// lone lead byte 0xc3. That byte is not corrupt data but the cut-off half of
-// a rune, so dropping it yields the longest valid prefix, which reads better
-// than a "\xc3" escape. A trailing byte that is genuinely invalid (not the
-// start of a longer valid sequence) is left for sanitizeUTF8 to escape.
-func trimPartialRune(s string) string {
-	// A UTF-8 sequence is at most 4 bytes, so its lead byte is among the
-	// last utf8.UTFMax-1 bytes when it is cut short.
-	for i := len(s) - 1; i >= 0 && i >= len(s)-(utf8.UTFMax-1); i-- {
-		if !utf8.RuneStart(s[i]) {
-			continue
-		}
-		if !utf8.FullRuneInString(s[i:]) {
-			return s[:i]
-		}
-		return s
-	}
-	return s
-}
 
 func writerMetadataOptions(meta FileMetadata) []parquetgo.WriterOption {
 	meta = normalizeMetadata(meta)
