@@ -42,6 +42,23 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 Fields that do not apply to a row use zero or an empty string. In particular, `file` is the
 new path for rename and link calls, and `old_file` is the source path.
 
+### Invalid UTF-8 in `comm`, `file` and `old_file`
+
+These columns are Parquet STRING (UTF-8) columns, and strict readers such as DuckDB reject
+every query that touches a column holding an invalid byte. Traced text is not always valid
+UTF-8: the kernel cuts `comm` at 15 bytes even in the middle of a multi-byte character, and any
+local user can create a file name with arbitrary bytes. So that recordings stay queryable, ior
+sanitizes these three columns when it writes them:
+
+- A partial multi-byte character at the end of `comm` (the kernel's cut) is dropped, so
+  `ääääääääää` is stored as `äääääää`.
+- Any other invalid byte is stored as the four characters `\xHH` in lower-case hex, so a file
+  named `f`, byte 0xff, `inv` is stored as `f\xffinv`. Valid characters are never changed.
+
+The mapping is not reversible: a name that literally contains the characters `\xff` is stored
+the same as one containing the byte 0xff, and a backslash is not doubled. To find affected
+rows, search for the two characters `\x` in the column.
+
 ## Queries
 
 Replace `recording.parquet` in these queries with the filename mounted at `/data`.

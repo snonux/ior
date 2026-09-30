@@ -3,7 +3,9 @@ package parquet
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"ior/internal/flags"
 	"ior/internal/streamrow"
@@ -12,6 +14,14 @@ import (
 )
 
 // Record is the persisted Parquet schema for one syscall stream row.
+//
+// The string columns (comm, file, old_file, ...) are annotated STRING/UTF8, and
+// strict readers (DuckDB, Arrow) reject a whole query that touches a column
+// holding an invalid UTF-8 byte. The traced values are not guaranteed valid:
+// the kernel cuts comm at 15 bytes regardless of rune boundaries, and any
+// local user can create file names with arbitrary bytes. RecordFromStream
+// therefore sanitizes them (see sanitizeUTF8 and trimPartialRune); a Record
+// built by hand is written as given.
 type Record struct {
 	Seq               uint64 `parquet:"seq"`
 	TimeNS            uint64 `parquet:"time_ns"`
@@ -70,13 +80,15 @@ func NewFileMetadata(mode string) FileMetadata {
 }
 
 // RecordFromStream converts one shared stream row into the persisted format.
+// Free-form traced text (comm, file, old_file) is made valid UTF-8 first so
+// the STRING columns stay readable by strict Parquet readers.
 func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 	return Record{
 		Seq:               row.Seq,
 		TimeNS:            row.TimeNs,
 		GapNS:             row.GapNs,
 		LatencyNS:         row.DurationNs,
-		Comm:              row.Comm,
+		Comm:              sanitizeUTF8(trimPartialRune(row.Comm)),
 		PID:               row.PID,
 		TID:               row.TID,
 		Syscall:           row.Syscall,
@@ -88,14 +100,70 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		RequestedSleepNS:  row.RequestedSleepNs,
 		Nfds:              row.Nfds,
 		TimeoutNS:         row.TimeoutNs,
-		File:              row.FileName,
+		File:              sanitizeUTF8(row.FileName),
 		IsError:           row.IsError,
 		FilterEpoch:       filterEpoch,
-		OldFile:           row.OldName,
+		OldFile:           sanitizeUTF8(row.OldName),
 		EpollOp:           row.EpollOp,
 		EpollTargetFD:     row.EpollTargetFD,
 		EpollEvents:       row.EpollEvents,
 	}
+}
+
+// sanitizeUTF8 returns s unchanged when it is valid UTF-8 (the common case,
+// checked without allocating). Otherwise every invalid byte is rewritten as
+// the four characters \xHH (lower-case hex), the notation textsafe.Escape and
+// Go string literals use, so the operator can still see which byte was there.
+// Valid runes, including valid control characters, are kept as they are.
+//
+// The mapping is deliberately not injective: a name that already contains the
+// characters `\xff` is stored identically to one containing the byte 0xff, and
+// a literal backslash is not doubled. Doubling every backslash would corrupt
+// ordinary Windows-style names for the sake of a vanishingly rare collision,
+// and an exact-bytes column would roughly double the size of the file.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 12)
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteString(`\x`)
+			b.WriteByte(hexDigits[s[i]>>4])
+			b.WriteByte(hexDigits[s[i]&0xF])
+		} else {
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// hexDigits renders the \xHH escapes in lower case, like strconv.Quote.
+const hexDigits = "0123456789abcdef"
+
+// trimPartialRune drops a trailing, incomplete-but-so-far-valid UTF-8
+// sequence from s. The kernel stores comm in a 16-byte buffer (15 characters
+// plus NUL) and truncates by bytes, so a name such as "ääääääääää" ends in a
+// lone lead byte 0xc3. That byte is not corrupt data but the cut-off half of
+// a rune, so dropping it yields the longest valid prefix, which reads better
+// than a "\xc3" escape. A trailing byte that is genuinely invalid (not the
+// start of a longer valid sequence) is left for sanitizeUTF8 to escape.
+func trimPartialRune(s string) string {
+	// A UTF-8 sequence is at most 4 bytes, so its lead byte is among the
+	// last utf8.UTFMax-1 bytes when it is cut short.
+	for i := len(s) - 1; i >= 0 && i >= len(s)-(utf8.UTFMax-1); i-- {
+		if !utf8.RuneStart(s[i]) {
+			continue
+		}
+		if !utf8.FullRuneInString(s[i:]) {
+			return s[:i]
+		}
+		return s
+	}
+	return s
 }
 
 func writerMetadataOptions(meta FileMetadata) []parquetgo.WriterOption {
