@@ -101,6 +101,13 @@ timestamps, byte counts and other per-event fields.
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
 
+Traced comm names and paths come from other users and may contain terminal escape
+sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
+(ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible or bidi format characters
+are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
+Backslashes are not doubled, so this display is for reading only. When stdout is piped or
+redirected, both commands write the exact traced bytes for machine consumers.
+
 ## Bytes Classification
 
 Throughput bytes come from positive return values of these syscalls only:

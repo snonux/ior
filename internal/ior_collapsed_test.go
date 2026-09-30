@@ -86,3 +86,37 @@ func TestRunCollapsedConverterArgErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestRunCollapsedConverterEscapesOnTerminal checks `ior collapsed` escapes
+// traced frames when its output is a terminal and keeps them raw otherwise.
+func TestRunCollapsedConverterEscapesOnTerminal(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	recorder := flamegraph.NewRecorder("tty")
+	// ';' is a frame separator, so use an SGR payload without one.
+	recorder.AddPair(testTracePair(1, "evil\x1b[8mhidden\x1b[0m\a"))
+	if err := recorder.Write(); err != nil {
+		t.Fatalf("recorder.Write() error = %v", err)
+	}
+	matches, err := filepath.Glob("*tty*.ior.zst")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected exactly one tty recording, got %v (err %v)", matches, err)
+	}
+	args := []string{"-fields", "comm", matches[0]}
+
+	tty := newTTYBuffer(t)
+	if err := RunCollapsedConverter(args, tty); err != nil {
+		t.Fatalf("RunCollapsedConverter(tty) error = %v", err)
+	}
+	if got, want := tty.String(), `evil\x1b[8mhidden\x1b[0m\x07 1`+"\n"; got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+
+	var piped bytes.Buffer
+	if err := RunCollapsedConverter(args, &piped); err != nil {
+		t.Fatalf("RunCollapsedConverter(piped) error = %v", err)
+	}
+	if got, want := piped.String(), "evil\x1b[8mhidden\x1b[0m\a 1\n"; got != want {
+		t.Fatalf("piped output = %q, want %q", got, want)
+	}
+}

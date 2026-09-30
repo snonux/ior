@@ -3,10 +3,11 @@ package common
 import (
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+
+	"ior/internal/textsafe"
 )
 
 // Attacker-controlled payloads used by the sanitiser tests: a spoofed OSC 8
@@ -32,7 +33,7 @@ const (
 	cleanEmoji = "\U0001F468\u200D\U0001F469\u200D\U0001F467 \U0001F44D\U0001F3FD \u2764\uFE0F \u2603\uFE0E \U0001F1E9\U0001F1EA" +
 		" \U0001F3F3\uFE0F\u200D\U0001F308 \U0001F468\U0001F3FD\u200D\U0001F4BB"
 	// englandFlag is black flag + tag letters "gbeng" + cancel tag. Tag runes
-	// are replaced (see isInvisibleFormat), so it degrades to 1 flag + 6 '?'.
+	// are replaced (see textsafe.IsInvisibleFormat), so it degrades to 1 flag + 6 '?'.
 	englandFlag = "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
 )
 
@@ -144,28 +145,11 @@ func TestSanitizeReplacesInvisibleFormat(t *testing.T) {
 				t.Fatalf("Sanitize is not idempotent: %q -> %q", got, again)
 			}
 			for _, r := range got {
-				if isInvisibleFormat(r) {
+				if textsafe.IsInvisibleFormat(r) {
 					t.Fatalf("%q still contains format rune %U", got, r)
 				}
 			}
 		})
-	}
-}
-
-// TestInvisibleFormatMatchesClasses checks isInvisibleFormat against the
-// Unicode tables for every code point: its cheap range pre-check must not
-// hide any member of Cf, Variation_Selector or
-// Other_Default_Ignorable_Code_Point, and only the documented exceptions
-// (ZWNJ, ZWJ, VS15, VS16) and the separators may differ from the classes.
-func TestInvisibleFormatMatchesClasses(t *testing.T) {
-	exceptions := map[rune]bool{0x200C: true, 0x200D: true, 0xFE0E: true, 0xFE0F: true}
-	extra := map[rune]bool{0x2028: true, 0x2029: true}
-	for r := rune(0); r <= unicode.MaxRune; r++ {
-		inClass := unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
-		want := (inClass && !exceptions[r]) || extra[r]
-		if got := isInvisibleFormat(r); got != want {
-			t.Fatalf("isInvisibleFormat(%U) = %v, want %v", r, got, want)
-		}
 	}
 }
 
@@ -281,7 +265,7 @@ func BenchmarkSanitizeCleanASCII(b *testing.B) {
 }
 
 // BenchmarkSanitizeCleanNonASCII measures the fast path for clean non-ASCII
-// text, where every rune now also passes the isInvisibleFormat check.
+// text, where every rune now also passes the textsafe.IsInvisibleFormat check.
 func BenchmarkSanitizeCleanNonASCII(b *testing.B) {
 	s := cleanNonASCII + cleanEmoji
 	b.ReportAllocs()

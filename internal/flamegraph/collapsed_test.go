@@ -10,6 +10,7 @@ import (
 	"ior/internal/collapse"
 	"ior/internal/event"
 	"ior/internal/file"
+	"ior/internal/textsafe"
 	"ior/internal/types"
 )
 
@@ -199,4 +200,34 @@ func firstLeafFramePath(root *SnapshotNode) []string {
 		frames = append(frames, current.Name)
 	}
 	return frames
+}
+
+// TestWriteCollapsedStacksEscapeOption checks the terminal escaper is applied
+// to the written frame path only (the ESC and BEL of a comm that hides text
+// with SGR become visible \x notation), and that without it the exact bytes
+// are written, as flamegraph.pl in a pipe needs. The payload avoids ';',
+// which the frame splitter treats as a separator.
+func TestWriteCollapsedStacksEscapeOption(t *testing.T) {
+	const hostileComm = "evil\x1b[8mhidden\x1b[0m\a"
+	recording := writeTestRecording(t, "escape",
+		collapsedTestPair(1, hostileComm, "/srv", types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 100),
+	)
+	opts := CollapsedOptions{Fields: []string{"comm"}}
+
+	var raw bytes.Buffer
+	if err := WriteCollapsedStacks(&raw, recording, opts); err != nil {
+		t.Fatalf("WriteCollapsedStacks(raw) error = %v", err)
+	}
+	if got, want := raw.String(), hostileComm+" 1\n"; got != want {
+		t.Fatalf("raw output = %q, want %q", got, want)
+	}
+
+	opts.Escape = textsafe.Escape
+	var escaped bytes.Buffer
+	if err := WriteCollapsedStacks(&escaped, recording, opts); err != nil {
+		t.Fatalf("WriteCollapsedStacks(escaped) error = %v", err)
+	}
+	if got, want := escaped.String(), `evil\x1b[8mhidden\x1b[0m\x07 1`+"\n"; got != want {
+		t.Fatalf("escaped output = %q, want %q", got, want)
+	}
 }

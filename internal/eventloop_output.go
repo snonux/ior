@@ -1,6 +1,13 @@
 package internal
 
-import "ior/internal/event"
+import (
+	"fmt"
+	"io"
+	"os"
+
+	"ior/internal/event"
+	"ior/internal/textsafe"
+)
 
 // outputFormatter bundles the pair-emission and warning-notification callbacks
 // used by the event loop. Extracting these two concerns into a dedicated type
@@ -33,6 +40,37 @@ type outputFormatter struct {
 	// (see setupWarnings). run replays them through notifyWarningOrLog before
 	// the first event, by which time every mode has installed its sinks.
 	pendingWarnings []string
+}
+
+// plainStdoutCallback is the eventLoop's default printCb: plainPrintCallback
+// bound to os.Stdout. The binding (and with it the terminal check) happens on
+// the first pair rather than when the loop is built, so the callback writes
+// to whatever os.Stdout is once events flow, as the fmt.Println it replaced
+// did (tests swap os.Stdout after constructing the loop). printCb is only
+// ever called from the event loop goroutine, so the lazy init needs no lock.
+func plainStdoutCallback() func(ep *event.Pair) {
+	var write func(ep *event.Pair)
+	return func(ep *event.Pair) {
+		if write == nil {
+			write = plainPrintCallback(os.Stdout)
+		}
+		write(ep)
+	}
+}
+
+// plainPrintCallback returns the default pair sink, which -plain mode keeps:
+// each pair is written to w as one CSV row (event.Pair.CSVRow) and then
+// recycled. Whether w is a terminal is decided once, here: on a terminal the
+// attacker-controlled comm/name/file columns are escaped with
+// textsafe.Escape so a traced file name cannot inject escape sequences into
+// the operator's terminal; when stdout is piped or redirected the rows keep
+// the exact traced bytes for machine consumers.
+func plainPrintCallback(w io.Writer) func(ep *event.Pair) {
+	escape := textsafe.ForWriter(w)
+	return func(ep *event.Pair) {
+		_, _ = fmt.Fprintln(w, ep.CSVRow(escape))
+		ep.Recycle()
+	}
 }
 
 // SetPrintCallback replaces the pair-emission callback. The callback owns

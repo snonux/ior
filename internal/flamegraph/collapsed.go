@@ -18,6 +18,13 @@ type CollapsedOptions struct {
 	// CountField is the counter metric used as the sample weight
 	// (any of collapse.ValidCountFields). Empty means "count".
 	CountField string
+	// Escape, when non-nil, rewrites each frame path just before it is
+	// written. `ior collapsed` sets it to textsafe.Escape when stdout is a
+	// terminal, because frames are traced comm names and paths that could
+	// otherwise inject escape sequences into the operator's terminal. nil
+	// writes the exact bytes, which is what flamegraph.pl in a pipe needs.
+	// Aggregation and sorting always use the raw paths.
+	Escape func(string) string
 }
 
 func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
@@ -37,7 +44,7 @@ func (o CollapsedOptions) normalize() (CollapsedOptions, error) {
 	if !collapse.IsValidCountField(countField) {
 		return CollapsedOptions{}, fmt.Errorf("invalid count field %q", countField)
 	}
-	return CollapsedOptions{Fields: fields, CountField: countField}, nil
+	return CollapsedOptions{Fields: fields, CountField: countField, Escape: o.Escape}, nil
 }
 
 // WriteCollapsedStacks reads an .ior.zst recording and writes collapsed-stack
@@ -79,6 +86,13 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 		totals[strings.Join(frames, ";")] += value
 	}
 
+	return writeCollapsedLines(w, totals, opts.Escape)
+}
+
+// writeCollapsedLines writes one "path weight" line per entry of totals,
+// sorted by raw path so the output is deterministic. escape (optional) is
+// applied to the path only when writing; see CollapsedOptions.Escape.
+func writeCollapsedLines(w io.Writer, totals map[string]uint64, escape func(string) string) error {
 	paths := make([]string, 0, len(totals))
 	for path := range totals {
 		paths = append(paths, path)
@@ -86,7 +100,11 @@ func WriteCollapsedStacks(w io.Writer, filename string, opts CollapsedOptions) e
 	slices.Sort(paths)
 
 	for _, path := range paths {
-		if _, err := fmt.Fprintf(w, "%s %d\n", path, totals[path]); err != nil {
+		shown := path
+		if escape != nil {
+			shown = escape(path)
+		}
+		if _, err := fmt.Fprintf(w, "%s %d\n", shown, totals[path]); err != nil {
 			return fmt.Errorf("write collapsed stacks: %w", err)
 		}
 	}

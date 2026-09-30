@@ -215,7 +215,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
 		"Comma separated syscall names to exclude from attachment")
 
-	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI)")
+	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); on a terminal, control and invisible characters in traced text are escaped (\\x1b, \\u202e), piped or redirected output stays raw")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name for .ior.zst trace output files")

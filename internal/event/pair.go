@@ -179,6 +179,16 @@ func quoteCSVField(field string) string {
 	return sb.String()
 }
 
+// csvTextField renders one free-text CSV column: escaped by escape (when
+// non-nil) and then quoted per RFC 4180. Both steps return a clean field
+// unchanged, so the common case stays allocation-free.
+func csvTextField(field string, escape func(string) string) string {
+	if escape != nil {
+		field = escape(field)
+	}
+	return quoteCSVField(field)
+}
+
 // csvFieldNeedsQuotes mirrors encoding/csv.Writer.fieldNeedsQuotes for the
 // default comma so quoteCSVField stays byte-identical to the stdlib writer:
 // empty fields are never quoted, the Postgres `\.` terminator always is, and
@@ -201,18 +211,33 @@ func csvFieldNeedsQuotes(field string) bool {
 	return unicode.IsSpace(r1)
 }
 
-// String renders the Pair as one CSV row matching EventStreamHeader: seven
+// String renders the Pair as one raw CSV row matching EventStreamHeader; it
+// is CSVRow(nil). Traced text is written byte for byte, which is right for
+// files and pipes but not for a terminal: see CSVRow.
+func (e *Pair) String() string {
+	return e.CSVRow(nil)
+}
+
+// CSVRow renders the Pair as one CSV row matching EventStreamHeader: seven
 // columns (durationToPrevNs,durationNs,comm,pid.tid,name,ret,file). Free-text
 // columns (comm, name, file) are quoted per RFC 4180 so embedded commas —
 // e.g. the fd/flags decoration inside the file column — stay inside their
 // field and the row stays machine-parseable with any CSV reader. The ret
 // column is empty when no return value was captured.
-func (e *Pair) String() string {
+//
+// escape, when non-nil, is applied to each free-text column before quoting.
+// -plain passes textsafe.Escape when stdout is a terminal, because comm and
+// file names are attacker-controlled and could otherwise carry ESC/BEL/C1
+// sequences (spoofed OSC 8 links, hidden SGR text, bidi overrides) into the
+// operator's terminal. Escaping first keeps the row valid CSV: the escape
+// notation adds no delimiter, quote or line break. A nil escape keeps the
+// exact bytes for machine consumers.
+func (e *Pair) CSVRow(escape func(string) string) string {
 	var sb strings.Builder
 
 	_, _ = fmt.Fprintf(&sb, "%08d,%08d,", e.DurationToPrev, e.Duration)
 
-	sb.WriteString(quoteCSVField(e.Comm))
+	sb.WriteString(csvTextField(e.Comm, escape))
 
 	sb.WriteString(",")
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetPid()), 10))
@@ -220,7 +245,7 @@ func (e *Pair) String() string {
 	sb.WriteString(strconv.FormatInt(int64(e.EnterEv.GetTid()), 10))
 
 	sb.WriteString(",")
-	sb.WriteString(quoteCSVField(e.EnterEv.GetTraceId().Name()))
+	sb.WriteString(csvTextField(e.EnterEv.GetTraceId().Name(), escape))
 
 	sb.WriteString(",")
 	// Every exit event carrying a ret field feeds this column, not just the
@@ -234,7 +259,7 @@ func (e *Pair) String() string {
 	if e.File == nil {
 		sb.WriteString("N:file")
 	} else {
-		sb.WriteString(quoteCSVField(e.File.String()))
+		sb.WriteString(csvTextField(e.File.String(), escape))
 	}
 
 	return sb.String()
