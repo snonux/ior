@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -675,21 +676,148 @@ func TestPublishNearNameMaxCollisionKeepsBothFiles(t *testing.T) {
 	}
 }
 
+// TestIsGeneratedName pins the name policy. Every rejected case is also
+// checked against time.Parse directly, so the test proves the rejection comes
+// from the parser (the real mechanism) and not from some other accident.
 func TestIsGeneratedName(t *testing.T) {
 	const layout = "ior-stream-20060102-150405.csv"
-	for name, want := range map[string]bool{
-		"ior-stream-20260930-135324.csv":           true,
-		"/some/dir/ior-stream-20260930-000000.csv": true,
-		"  ior-stream-20260930-135324.csv ":        true,
-		"ior-stream-20260930-90500.csv":            false, // one-digit hour parses leniently
-		"ior-stream-20260930-135324":               false, // extension missing
-		"ior-stream-20260930-135324-1.csv":         false,
-		"ior-stream-20260931-135324.csv":           false, // no such date
-		"mine.csv":                                 false,
-		"":                                         false,
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"ior-stream-20260930-135324.csv", true},
+		{"/some/dir/ior-stream-20260930-000000.csv", true},
+		{"  ior-stream-20260930-135324.csv ", true},
+		{"ior-stream-20260930-90500.csv", false},      // one-digit hour: read as hour 90
+		{"ior-stream-20260930-135324", false},         // extension missing
+		{"other-stream-20260930-135324.csv", false},   // wrong prefix
+		{"ior-stream-20260930-135324.csv.bak", false}, // trailing junk
+		{"ior-stream-20260930-135324-1.csv", false},   // collision-suffixed name
+		{"ior-stream-20260931-135324.csv", false},     // no such date
+		{"mine.csv", false},
+		{"", false},
 	} {
-		if got := IsGeneratedName(name, layout); got != want {
-			t.Errorf("IsGeneratedName(%q) = %v, want %v", name, got, want)
+		if got := IsGeneratedName(tc.name, layout); got != tc.want {
+			t.Errorf("IsGeneratedName(%q) = %v, want %v", tc.name, got, tc.want)
 		}
+		_, err := time.Parse(layout, filepath.Base(strings.TrimSpace(tc.name)))
+		if (err == nil) != tc.want {
+			t.Errorf("time.Parse(%q) error = %v; the case does not exercise the parser as expected", tc.name, err)
+		}
+	}
+}
+
+// chownCall is one recorded invocation of an injected chownFunc.
+type chownCall struct {
+	name     string
+	uid, gid int
+}
+
+// chownRecorder returns a chownFunc that appends its calls to calls and
+// returns err.
+func chownRecorder(calls *[]chownCall, err error) chownFunc {
+	return func(name string, uid, gid int) error {
+		*calls = append(*calls, chownCall{name, uid, gid})
+		return err
+	}
+}
+
+// publishReplaceWith writes a temp file next to final and publishes it with
+// the given chown function.
+func publishReplaceWith(t *testing.T, final string, chown chownFunc) error {
+	t.Helper()
+	tmp, err := CreateTemp(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(tmp, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return publishReplace(tmp.Name(), final, chown)
+}
+
+// TestPublishReplaceChownsToExistingOwner pins that the replacement is handed
+// to the uid/gid of the file it replaces. An unprivileged test cannot observe
+// a real change of owner, so the chown function is injected and its arguments
+// checked against the existing file's owner.
+func TestPublishReplaceChownsToExistingOwner(t *testing.T) {
+	final := filepath.Join(t.TempDir(), "chosen.csv")
+	writeFile(t, final, "old")
+	info, err := os.Stat(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := info.Sys().(*syscall.Stat_t)
+
+	var calls []chownCall
+	if err := publishReplaceWith(t, final, chownRecorder(&calls, nil)); err != nil {
+		t.Fatalf("publishReplace: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("chown called %d times, want once: %+v", len(calls), calls)
+	}
+	if c := calls[0]; c.uid != int(st.Uid) || c.gid != int(st.Gid) || filepath.Dir(c.name) != filepath.Dir(final) || c.name == final {
+		t.Errorf("chown(%q, %d, %d), want the temp file next to %q with owner %d:%d", c.name, c.uid, c.gid, final, st.Uid, st.Gid)
+	}
+	if readFile(t, final) != "new" {
+		t.Error("content not replaced")
+	}
+}
+
+// TestPublishReplaceIgnoresChownEPERM is the negative case: an unprivileged
+// writer replacing another user's file gets EPERM from chown, which must not
+// fail the publish or lose the recording, and the mode is still inherited.
+func TestPublishReplaceIgnoresChownEPERM(t *testing.T) {
+	final := filepath.Join(t.TempDir(), "chosen.csv")
+	writeFile(t, final, "old")
+	if err := os.Chmod(final, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []chownCall
+	if err := publishReplaceWith(t, final, chownRecorder(&calls, unix.EPERM)); err != nil {
+		t.Fatalf("publishReplace failed on chown EPERM: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Errorf("chown called %d times, want once", len(calls))
+	}
+	if readFile(t, final) != "new" {
+		t.Error("content not replaced after chown EPERM")
+	}
+	if got := modeOf(t, final); got != 0o600 {
+		t.Errorf("mode after chown EPERM = %v, want 0600 (mode inheritance must not depend on chown)", got)
+	}
+}
+
+// TestPublishReplaceSkipsChownWithoutRegularFile: nothing at final, or a
+// symlink at final, means there is no owner to inherit, so chown is not
+// called (a symlink must not donate its target's owner either).
+func TestPublishReplaceSkipsChownWithoutRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	writeFile(t, victim, "precious")
+	link := filepath.Join(dir, "link.csv")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, final := range map[string]string{
+		"nothing there": filepath.Join(dir, "fresh.csv"),
+		"symlink":       link,
+	} {
+		var calls []chownCall
+		if err := publishReplaceWith(t, final, chownRecorder(&calls, nil)); err != nil {
+			t.Fatalf("%s: publishReplace: %v", name, err)
+		}
+		if len(calls) != 0 {
+			t.Errorf("%s: chown called: %+v", name, calls)
+		}
+		if readFile(t, final) != "new" {
+			t.Errorf("%s: content not published", name)
+		}
+	}
+	if readFile(t, victim) != "precious" {
+		t.Error("symlink target was modified")
 	}
 }

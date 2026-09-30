@@ -166,17 +166,19 @@ func truncateStem(stem string, limit int) string {
 // IsGeneratedName reports whether the file name of path is exactly a name
 // ior generated from layout (a time.Format layout such as
 // "ior-stream-20060102-150405.csv", extension included), as opposed to one a
-// user typed. The rule is strict: name must equal the layout formatted with
-// the time it parses to. Go's parser alone is lenient (the "15" hour accepts
-// one digit, so "ior-stream-20260930-90500.csv" would parse as 09:05:00), which
-// would let a user's own file be treated as a generated, never-replaced name.
-// Callers pass the name as the user gave it, before any extension is appended,
-// so a generated name that lost its extension is a user-chosen name for every
-// exporter.
+// user typed. The whole base name must parse against layout: time.Parse
+// requires the literal prefix and extension to match and rejects trailing
+// text, and the fixed-width numeric fields (2006, 01, 02, 15, 04, 05, all
+// adjacent digits) reject a malformed value such as a one-digit hour
+// ("ior-stream-20260930-90500.csv" reads the hour as 90 and fails). That
+// strictness relies on layout using only such fixed-width digit fields; a
+// layout with variable-width elements (a bare "1", "2" or "_2") would make
+// time.Parse lenient and needs its own round-trip check. Callers pass the name
+// as the user gave it, before any extension is appended, so a generated name
+// that lost its extension is a user-chosen name for every exporter.
 func IsGeneratedName(path, layout string) bool {
-	name := filepath.Base(strings.TrimSpace(path))
-	t, err := time.Parse(layout, name)
-	return err == nil && t.Format(layout) == name
+	_, err := time.Parse(layout, filepath.Base(strings.TrimSpace(path)))
+	return err == nil
 }
 
 // PublishReplace moves the finished temp file tmp to final, atomically
@@ -194,7 +196,19 @@ func IsGeneratedName(path, layout string) bool {
 // the write. With nothing at final the new file keeps CreateTemp's
 // 0666&umask.
 func PublishReplace(tmp, final string) error {
-	if err := inheritMode(tmp, final); err != nil {
+	return publishReplace(tmp, final, os.Chown)
+}
+
+// chownFunc is the signature of os.Chown; it is a type so tests can observe
+// the call and simulate the EPERM an unprivileged writer gets.
+type chownFunc func(name string, uid, gid int) error
+
+// publishReplace is PublishReplace with chown injected, so tests can pin that
+// the existing owner is handed to the replacement (something an unprivileged
+// test process cannot observe on a real file, since it can only chown to
+// itself).
+func publishReplace(tmp, final string, chown chownFunc) error {
+	if err := inheritMode(tmp, final, chown); err != nil {
 		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
 	}
 	if err := os.Rename(tmp, final); err != nil {
@@ -206,7 +220,7 @@ func PublishReplace(tmp, final string) error {
 // inheritMode copies the permission bits and (best effort) owner of an
 // existing regular file at final onto tmp. Anything else at final - nothing,
 // a symlink, a directory - leaves tmp untouched.
-func inheritMode(tmp, final string) error {
+func inheritMode(tmp, final string, chown chownFunc) error {
 	info, err := os.Lstat(final)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil
@@ -214,9 +228,10 @@ func inheritMode(tmp, final string) error {
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		// Best effort: only root (or the owner, for a group they belong to)
 		// may hand a file to another owner, so a failure is expected and
-		// must not lose the recording. Done before chmod because chown may
-		// clear mode bits.
-		_ = os.Chown(tmp, int(st.Uid), int(st.Gid))
+		// must not lose the recording. The order relative to chmod does not
+		// matter: only the Perm() bits are copied, and chown's clearing of
+		// setuid/setgid concerns bits this code never sets.
+		_ = chown(tmp, int(st.Uid), int(st.Gid))
 	}
 	return os.Chmod(tmp, info.Mode().Perm())
 }

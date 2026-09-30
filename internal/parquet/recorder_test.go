@@ -341,6 +341,11 @@ func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
 	if got := recorder.Status().Path; got != path {
 		t.Fatalf("Status().Path while recording = %q, want the requested %q", got, path)
 	}
+	// RequestedPath is what the user asked for; it must survive the suffixed
+	// publish so the UI can say "requested X, saved as Y".
+	if got := recorder.Status().RequestedPath; got != path {
+		t.Fatalf("Status().RequestedPath while recording = %q, want %q", got, path)
+	}
 	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -349,6 +354,9 @@ func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
 	}
 
 	want := filepath.Join(dir, "session-1.parquet")
+	if got := recorder.Status().RequestedPath; got != path {
+		t.Fatalf("Status().RequestedPath after Stop = %q, want the unchanged request %q", got, path)
+	}
 	if got := recorder.Status().Path; got != want {
 		t.Fatalf("Status().Path after Stop = %q, want %q", got, want)
 	}
