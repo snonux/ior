@@ -193,3 +193,21 @@ func TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState(t *testing.T) {
 		t.Fatalf("expected the rescan result message")
 	}
 }
+
+// Task 4r2: a paste is typing. It goes into the filter input, and like a
+// printable key it re-focuses an input that Up/Down blurred.
+func TestPasteFocusesAndFillsTheFilterInput(t *testing.T) {
+	m := NewWithKeys(DefaultKeyMap())
+	m.processes = []ProcessInfo{{Pid: 100, Comm: "bash"}, {Pid: 200, Comm: "sshd"}}
+	m = m.applyFilter()
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = next.(Model)
+	if m.TextInputFocused() {
+		t.Fatalf("expected Down to blur the input")
+	}
+	next, _ = m.Update(tea.PasteMsg{Content: "ssh"})
+	m = next.(Model)
+	if !m.TextInputFocused() || m.input.Value() != "ssh" || len(m.filtered) != 1 {
+		t.Fatalf("paste not applied: focused=%v value=%q rows=%d", m.TextInputFocused(), m.input.Value(), len(m.filtered))
+	}
+}

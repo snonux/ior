@@ -711,6 +711,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A paste is typing, so it only means something to a text input that is on
+	// screen. While the shutdown or attaching screen, the error view or the
+	// help overlay covers the screens, a modal or input hidden behind must not
+	// receive it (the keys they would have got are swallowed the same way).
+	if _, isPaste := msg.(tea.PasteMsg); isPaste && m.pasteHasNoTarget() {
+		return m, nil
+	}
+
 	if handled, cmd := m.dashboard.HandleFlameRefreshCompletion(msg, m.canApplyFlameRefresh()); handled {
 		return m, cmd
 	}
@@ -752,6 +760,15 @@ func (m *Model) overlayCoversScreen() bool {
 		m.recordModal.Visible() ||
 		m.probeModal.Visible() ||
 		m.exporter.Visible()
+}
+
+// pasteHasNoTarget reports whether a view that accepts no text covers the
+// screens: shutdown, attaching, the full-screen error view or the help overlay.
+// Those consume keys themselves (Update gives them precedence), so a paste,
+// which is a single message instead of keys, must be dropped rather than
+// reach the input hiding underneath.
+func (m *Model) pasteHasNoTarget() bool {
+	return m.quitting || m.attaching || m.lastErr != nil || m.helpOverlayVisible
 }
 
 // isMouseMsg reports whether msg is any pointer event: click, release,
@@ -1283,11 +1300,13 @@ func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 
 // updateDashboardForModal keeps the dashboard behind a modal alive by
 // forwarding the non-key messages it needs (ticks, spinner and async results).
-// Keys belong to the modal. Mouse events never get here: Update drops them
-// while any modal is visible (overlayCoversScreen), so a click cannot act on
-// the tab the modal covers.
+// Keys and pastes belong to the modal. Mouse events never get here: Update
+// drops them while any modal is visible (overlayCoversScreen), so a click
+// cannot act on the tab the modal covers.
 func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
-	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.router.current() != ScreenDashboard {
+	_, isKey := msg.(tea.KeyPressMsg)
+	_, isPaste := msg.(tea.PasteMsg)
+	if isKey || isPaste || m.router.current() != ScreenDashboard {
 		return m, nil
 	}
 	next, cmd := m.dashboard.Update(msg)

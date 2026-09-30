@@ -1130,3 +1130,60 @@ func pressRequest[T tea.Msg](t *testing.T, m *Model, keyStr string) T {
 	}
 	return msg
 }
+
+// Task 4r2: HandleKey takes key names and cannot carry a bracketed paste, so
+// HandlePaste is the stream's entry point for one.
+func TestHandlePasteFillsTheSearchModalAndSubmitsIt(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 10)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	if !pressLocal(t, &m, "/") || !m.SearchModalVisible() {
+		t.Fatalf("expected / to open the search modal")
+	}
+	if !m.HandlePaste(tea.PasteMsg{Content: "rea[d]"}) {
+		t.Fatalf("expected the paste to be consumed by the search modal")
+	}
+	if !pressLocal(t, &m, "enter") {
+		t.Fatalf("expected enter to submit the pasted pattern")
+	}
+	if m.searchPattern != "rea[d]" || m.searchRegex == nil {
+		t.Fatalf("expected the pasted pattern to be searched, got %q", m.searchPattern)
+	}
+}
+
+func TestHandlePasteFillsTheExportModal(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 3)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	pressLocal(t, &m, "space")
+	if !pressLocal(t, &m, "X") || !m.ExportModalVisible() {
+		t.Fatalf("expected X to open the export modal while paused")
+	}
+	m.exportModal = m.exportModal.Open("") // drop the default filename so the assertion is exact
+	if !m.HandlePaste(tea.PasteMsg{Content: "out.csv"}) {
+		t.Fatalf("expected the paste to be consumed by the export modal")
+	}
+	if got := m.exportModal.textInput.Value(); got != "out.csv" {
+		t.Fatalf("export filename = %q, want out.csv", got)
+	}
+}
+
+// With no modal open every key is a stream command (space pauses, / opens
+// search, ...), so a paste is refused and must change nothing.
+func TestHandlePasteWithoutModalIsRefused(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 3)
+	m := NewModel(rb)
+	m.Refresh()
+	if m.HandlePaste(tea.PasteMsg{Content: " /X"}) {
+		t.Fatalf("a paste with no modal open must not be consumed")
+	}
+	if m.Paused() || m.SearchModalVisible() || m.ExportModalVisible() {
+		t.Fatalf("a paste ran stream commands: paused=%v search=%v export=%v",
+			m.Paused(), m.SearchModalVisible(), m.ExportModalVisible())
+	}
+}

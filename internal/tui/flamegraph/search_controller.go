@@ -140,10 +140,24 @@ func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (committed bool, qu
 	case "enter":
 		return true, sc.searchInput.Value(), false
 	}
+	sc.typeIntoInput(msg)
+	return false, "", false
+}
+
+// handlePaste inserts bracketed-paste text into the search input. Terminals
+// deliver a paste as one tea.PasteMsg rather than as key presses, so handleInput
+// never sees it. The text input flattens newlines and tabs to spaces. Only call
+// it while search mode is active; the query is applied on Enter like typed text.
+func (sc *SearchController) handlePaste(msg tea.PasteMsg) {
+	sc.typeIntoInput(msg)
+}
+
+// typeIntoInput feeds a key press or paste to the text input and drops the
+// command it returns (see handleInput for why).
+func (sc *SearchController) typeIntoInput(msg tea.Msg) {
 	var cmd tea.Cmd
 	sc.searchInput, cmd = sc.searchInput.Update(msg)
 	_ = cmd
-	return false, "", false
 }
 
 // recomputeFilterState rebuilds matchIndices and filterVisible from the current

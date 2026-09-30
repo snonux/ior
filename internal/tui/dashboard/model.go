@@ -214,6 +214,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
 	case messages.OpenEditorRequestedMsg:
 		return m.handleOpenEditorRequested(msg)
 	case streamEditorDoneMsg:
@@ -303,6 +305,19 @@ func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 // release their in-flight slot without starting an invisible animation.
 func (m *Model) HandleFlameRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd) {
 	return m.flamegraphModel.HandleRefreshCompletion(msg, apply && m.activeTab == TabFlame)
+}
+
+// handlePaste routes a bracketed paste to the active tab's text input. A paste
+// is a single message, not a run of key presses, so it never passes through
+// handleKey; without this route it would fall to handleActiveTabMsg and be
+// dropped. With no text input open it is ignored: the dashboard's keys are
+// commands, and pasted text must not trigger them.
+func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	d := lookupTab(m.activeTab)
+	if d.HandlePaste == nil || !m.TextInputFocused() {
+		return m, nil
+	}
+	return m, d.HandlePaste(m, msg)
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

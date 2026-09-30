@@ -184,6 +184,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m.updateSearch(msg)
 		}
 		return m.handleKeyPress(msg)
+	case tea.PasteMsg:
+		// Bracketed paste arrives as one message, not as key presses. It goes
+		// into the search line when that is open; the list keys are commands
+		// that pasted text must not trigger, so it is ignored otherwise.
+		if m.searching {
+			return m.typeIntoSearch(msg)
+		}
 	}
 	return m, nil
 }
@@ -288,12 +295,18 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m = m.clampCursor()
 		return m, nil
 	default:
-		var cmd tea.Cmd
-		m.textInput, cmd = m.textInput.Update(msg)
-		m.search = strings.TrimSpace(m.textInput.Value())
-		m = m.clampCursor()
-		return m, cmd
+		return m.typeIntoSearch(msg)
 	}
+}
+
+// typeIntoSearch feeds a typed key or a pasted text to the search input and
+// re-applies the live filter from its value.
+func (m Model) typeIntoSearch(msg tea.Msg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	m.search = strings.TrimSpace(m.textInput.Value())
+	m = m.clampCursor()
+	return m, cmd
 }
 
 // reload returns m with probes refreshed from the manager.

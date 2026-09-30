@@ -232,3 +232,30 @@ func TestNavigationKeepsCursorInsideScrolledWindow(t *testing.T) {
 		t.Fatalf("expected cursor and offset back at 0, got cursor=%d offset=%d", m.cursor, m.offset)
 	}
 }
+
+// Task 4r2: a terminal paste is one tea.PasteMsg; the search line must take it
+// and narrow the list the way typed text does.
+func TestSearchLineAcceptsBracketedPaste(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	m := NewModel(fm).Open()
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !m.TextInputFocused() {
+		t.Fatalf("expected / to open the search line")
+	}
+	m, _ = m.Update(tea.PasteMsg{Content: "wri"})
+	if m.search != "wri" || len(m.filtered()) != 1 || m.filtered()[0].Syscall != "write" {
+		t.Fatalf("expected the pasted text to filter to write, search=%q rows=%v", m.search, m.filtered())
+	}
+}
+
+// With the search line closed the list keys are commands (a all-on, n all-off,
+// q close), so a paste must not run them nor open the search line.
+func TestBracketedPasteWithoutSearchLineIsIgnored(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}}}
+	m := NewModel(fm).Open()
+	m, cmd := m.Update(tea.PasteMsg{Content: "an/q"})
+	if cmd != nil || m.TextInputFocused() || m.search != "" || !m.Visible() || len(fm.toggles)+len(fm.changes) != 0 {
+		t.Fatalf("paste acted as keys: cmd=%v focused=%v search=%q visible=%v toggles=%v changes=%v",
+			cmd != nil, m.TextInputFocused(), m.search, m.Visible(), fm.toggles, fm.changes)
+	}
+}

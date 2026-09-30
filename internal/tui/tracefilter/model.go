@@ -133,18 +133,37 @@ func (m Model) Close() Model {
 
 // Update processes a Bubble Tea message and returns the updated model.
 // Key handling is split between an active text-edit state and navigation state.
+// A bracketed paste (tea.PasteMsg, which bubbletea v2 requests by default and
+// the terminal delivers as one message instead of key presses) is inserted into
+// the field being edited; outside edit mode it is ignored, because the keys of
+// the navigation state are commands and pasted text must never run them.
 func (m Model) Update(msg tea.Msg) Model {
 	if !m.visible {
 		return m
 	}
-	keyMsg, ok := msg.(tea.KeyPressMsg)
-	if !ok {
+	switch msg := msg.(type) {
+	case tea.PasteMsg:
+		return m.updatePaste(msg)
+	case tea.KeyPressMsg:
+		if m.editing {
+			return m.updateEditing(msg)
+		}
+		return m.updateNavigating(msg)
+	}
+	return m
+}
+
+// updatePaste inserts pasted text into the field being edited. The text input
+// flattens newlines and tabs to spaces; Enter or Esc commits the value (and
+// trims it) as it does for typed text.
+func (m Model) updatePaste(msg tea.PasteMsg) Model {
+	if !m.editing {
 		return m
 	}
-	if m.editing {
-		return m.updateEditing(keyMsg)
-	}
-	return m.updateNavigating(keyMsg)
+	var cmd tea.Cmd
+	m.textInput, cmd = m.textInput.Update(msg)
+	_ = cmd // only ever a cursor-blink command, which nothing routes back
+	return m
 }
 
 // updateEditing handles key presses while the user is typing into the text

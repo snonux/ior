@@ -715,6 +715,26 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   asserting both "no quit/help" and "the typed text reached the input",
   the TID picker, modified-key negatives, ctrl+r and the attaching guard) and
   `TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState`.
+
+  **A bracketed paste reaches every text input** (task 4r2). bubbletea v2
+  enables bracketed paste by default, so a terminal paste is one `tea.PasteMsg`,
+  not a run of key presses, and every layer between `Model.Update` and the
+  `textinput` has to forward it or it vanishes without a trace (pasting
+  `/var/log/messages` into the filter File field applied nothing). The routes:
+  the filter modal's `Update` (only while a field is being edited), the probes
+  modal's `Update` (only while the search line is open), the flamegraph's
+  `Update` (only while `/` search is active), `dashboard.Model.handlePaste` ->
+  `tabDescriptor.HandlePaste` (gated by `TextInputFocused`) -> the flame model or
+  `eventstream.Model.HandlePaste` (the stream's keys are key *names*, so the
+  search/export modals get a separate entry point), and the PID/TID picker,
+  where a paste focuses a blurred input like a printable key. With no input open
+  a paste is dropped, never replayed as commands (`c`, `q`, `7`, `/` would
+  otherwise clear filters, quit or switch tabs). `Model.Update` also drops it
+  while the shutdown/attaching screen, the error view or the help overlay covers
+  the screens (`pasteHasNoTarget`), so a modal hidden underneath cannot be filled
+  unseen, and `updateDashboardForModal` does not hand a paste to the dashboard
+  behind a modal. A new text input must accept `tea.PasteMsg` as well as keys.
+  Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
 - **The PID/TID picker selection follows the process, not the row number**
   (`pidpicker.Model.applyFilter` -> `relocateSelection`): a rescan or a typed
   filter reorders rows, so the selected pid (tid in TID mode) is looked up again

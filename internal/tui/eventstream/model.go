@@ -230,6 +230,25 @@ func (m *Model) HandleKey(keyStr string) (bool, tea.Cmd) {
 	return m.handleStreamKey(keyStr)
 }
 
+// HandlePaste inserts bracketed-paste text into the search or export-filename
+// input while one of those modals is open, and reports whether it did. HandleKey
+// takes key names and cannot carry a paste, so pasted text has its own entry
+// point. Outside a modal every key is a stream command that pasted text must
+// not trigger, so the paste is ignored (false).
+func (m *Model) HandlePaste(msg tea.PasteMsg) bool {
+	switch {
+	case m.searchModal.Visible():
+		m.statusMessage = ""
+		m.searchModal, _, _ = m.searchModal.Update(msg)
+		return true
+	case m.exportModal.Visible():
+		m.statusMessage = ""
+		m.exportModal, _, _ = m.exportModal.Update(msg)
+		return true
+	}
+	return false
+}
+
 // handleSearchModalKey routes a key press while the search modal is open.
 func (m *Model) handleSearchModalKey(keyStr string) bool {
 	m.statusMessage = ""

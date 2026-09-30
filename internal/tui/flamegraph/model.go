@@ -298,6 +298,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSearchInput(msg)
 		}
 		return m.handleKeyNavigation(msg)
+	case tea.PasteMsg:
+		// A bracketed paste is text for the search input and nothing else:
+		// outside search mode the navigation keys are commands, which pasted
+		// text must not trigger, so it is dropped.
+		if m.search.isActive() {
+			m.lastKeyAt = time.Now()
+			m.search.handlePaste(msg)
+		}
+		return m, nil
 	}
 	return m, nil
 }

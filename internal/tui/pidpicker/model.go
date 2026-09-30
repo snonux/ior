@@ -150,6 +150,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
+	case tea.PasteMsg:
+		// Pasted text is typing: like a printable key it focuses a blurred
+		// input (blurred by Up/Down), which would otherwise drop it silently.
+		m.input.Focus()
 	}
 
 	var cmd tea.Cmd

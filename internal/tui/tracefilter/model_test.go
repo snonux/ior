@@ -569,3 +569,36 @@ func TestModelRoundTripEdits(t *testing.T) {
 		})
 	}
 }
+
+// Task 4r2: a terminal paste is one tea.PasteMsg, not key presses. The edit
+// state must insert it into the field and leave the commit to Enter/Esc.
+func TestModelEditingAcceptsBracketedPaste(t *testing.T) {
+	model := NewModel().Open(globalfilter.Filter{})
+	for range 2 { // Syscall -> Comm -> File
+		model = model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = model.Update(tea.PasteMsg{Content: "/var/log/messages"})
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	file := model.Filter().File
+	if file == nil || file.Pattern != "/var/log/messages" {
+		t.Fatalf("expected the pasted text to become the File filter, got %+v", file)
+	}
+}
+
+// Outside edit mode the navigation keys are commands, so a paste (whose text
+// is "cjq", i.e. clear, down, close) must change nothing at all.
+func TestModelNavigationIgnoresBracketedPaste(t *testing.T) {
+	initial := globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "keep"}}
+	model := NewModel().Open(initial)
+	model = model.Update(tea.PasteMsg{Content: "cjq"})
+	if !model.Visible() || model.TextInputFocused() || model.activeField != 0 {
+		t.Fatalf("paste acted as keys: visible=%v editing=%v field=%d",
+			model.Visible(), model.TextInputFocused(), model.activeField)
+	}
+	model = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if comm := model.Filter().Comm; comm == nil || comm.Pattern != "keep" {
+		t.Fatalf("paste cleared the filter, got %+v", comm)
+	}
+}

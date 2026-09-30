@@ -115,6 +115,10 @@ type tabDescriptor struct {
 	// its q/H handling entirely, so typing "sql" or "Hypr" is not a quit or a
 	// help toggle. Nil means the tab has no text input.
 	TextInputFocused func(m *Model) bool
+	// HandlePaste inserts bracketed-paste text into the tab's text input while
+	// that input is open (TextInputFocused), and returns any command that
+	// results. Nil means the tab has no text input that accepts a paste.
+	HandlePaste func(m *Model, msg tea.PasteMsg) tea.Cmd
 	// RefreshBubble feeds the tab's bubble chart from the latest snapshot and
 	// reports whether the chart is still animating. Nil means the tab has no
 	// bubble chart.
@@ -172,6 +176,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 				return m.flamegraphModel.ConsumesKey(msg)
 			},
 			TextInputFocused: func(m *Model) bool { return m.flamegraphModel.SearchActive() },
+			HandlePaste:      pasteIntoFlame,
 		},
 		TabOverview: {
 			Name:            "Overview",
@@ -270,9 +275,21 @@ func registeredTabs() map[Tab]tabDescriptor {
 			TextInputFocused: func(m *Model) bool {
 				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
 			},
+			HandlePaste: func(m *Model, msg tea.PasteMsg) tea.Cmd {
+				m.streamModel.HandlePaste(msg)
+				return nil
+			},
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.Seven },
 		},
 	}
+}
+
+// pasteIntoFlame hands a paste to the flamegraph, whose Update inserts it into
+// the search input while search mode is active.
+func pasteIntoFlame(m *Model, msg tea.PasteMsg) tea.Cmd {
+	next, cmd := m.flamegraphModel.Update(msg)
+	m.flamegraphModel = next.(*flamegraphtui.Model)
+	return cmd
 }
 
 // orderedTabs returns all registered tabs sorted by their Position field.
