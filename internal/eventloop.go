@@ -341,8 +341,8 @@ func perSecondRate(secs float64) func(uint64) float64 {
 // *seen*, not records successfully turned into something: records that fail
 // to decode (dropMalformedRawEvent) and records of an unhandled event type
 // are included, and so are - since the sched_process_exec probe - control
-// records (one per successful execve and one per task exit, since the
-// sched probes) alongside the syscall enter/exit
+// records (one per successful execve, one per task exit and one per created
+// task, since the sched and newtask probes) alongside the syscall enter/exit
 // records. Both denominators (this one and the drop share in
 // ringbufDropStatLine) are deliberately left on that total: the
 // kernel-side drop counter also counts control records it failed to reserve

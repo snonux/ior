@@ -801,6 +801,40 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     the epoch moved on. Both writes are mutex-protected, so this is a logical
     race the race detector cannot see.
 
+  **A new task is named by a record, not looked up (task fr2).** The exec
+  record renames an existing tid; nothing named a *new* one, so its comm came
+  from the same asynchronous procfs read and lost the race against short-lived
+  tasks: a thread that exited before the lookup ran has no `/proc/<tid>` and
+  every row it produced carried an empty comm, the first rows of a thread that
+  lives on did too, and under `-comm` the enter-side gate recycles a
+  non-open/exec enter of a tid with no cached comm, so those rows were dropped
+  silently (0 of 200 in the report). The hand-written `task:task_newtask`
+  handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
+  `attachTaskNewtaskProbe` next to the exec and exit probes, before the syscall
+  tracepoints, regardless of `-trace-*`) emits a 48-byte `TASK_NEWTASK_EVENT`
+  control record from the creator's context, before the child is first woken:
+  child tgid, child tid, the inherited comm and the raw `clone_flags`.
+  `handleTaskNewtaskEvent` (`internal/eventloop_newtask.go`) writes the comm
+  through `setCachedCommFromKernel`, so the cache is seeded in ring-buffer order
+  before the child's first pair, and - being authoritative - it also replaces
+  the stale entry of a recycled tid whose exit record was lost. The child's tgid
+  is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid) rather
+  than read from the task struct, and the record is scoped like `filter()` but
+  applied to the *child* (`ior_newtask_in_scope`): a thread of a `-pid` target is
+  in scope, its `fork()` child is not, ior's own threads are excluded. The name
+  is the parent's; a fork that execs is renamed by the exec record that follows,
+  and a thread that renames itself (`pthread_setname_np`) is not seen, exactly
+  as before. A lost record (`ringbuf_drop_map`), a failed attach or an older
+  `IOR_BPF_OBJECT` without the program degrade to the old procfs lookup.
+  `clone_flags` is carried but not consumed yet: it is the basis for fork
+  fd-table inheritance and shared-table (`CLONE_FILES`) tracking. Pinned by
+  `TestTaskNewtaskRecord*` (`internal/eventloop_newtask_test.go`, including the
+  negative fixtures without a record) and end to end by
+  `TestNewThreadsAreNamedWithoutAFilter` / `TestNewThreadsSurviveACommFilter`
+  (`integrationtests/newtask_test.go`, scenario `thread-comm-short-lived`, whose
+  threads must be created after ior attached - it skips goroutines that land on
+  pre-existing Go runtime threads, for which no record can exist).
+
   **Tid recycling is a separate failure mode with the same symptom.** The two
   paths above are residuals of the exec record; this one is not about `execve`
   at all. The cache is keyed by tid and the kernel recycles tid numbers, so an
@@ -938,7 +972,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     with `-comm` active
     `tracepointEntered` recycles a non-open/exec enter event for a tid whose
     comm is not cached yet — and comm resolution is asynchronous, so a brand-new
-    tid's first syscall is exactly the exposed one. The `NewFdWithPid` procfs
+    tid's first syscall used to be exactly the exposed one (the
+    `task:task_newtask` record now seeds new tids' comm before their first
+    syscall, leaving only a lost record or a recycled tid whose exit record was
+    lost). The `NewFdWithPid` procfs
     fallback covers both while the descriptor is still open.
   - *Filter input must be the reported value.* `pidfd_getfd` re-points `ep.File`
     at the transferred descriptor; while that happened after the checkpoint the

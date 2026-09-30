@@ -94,6 +94,11 @@ const (
 	// (4+4+8+4+4) predates group_dead.
 	processExitEventSize       = 32
 	processExitEventLegacySize = 24
+	// task_newtask_event is the control record emitted by task:task_newtask.
+	// 4+4+8+4+4+16(comm)+8(clone_flags) = 48 bytes with clone_flags naturally
+	// aligned at offset 40, so there is no padding and kernel and binary.Write
+	// payloads share one size. It has no legacy layout: it is new.
+	taskNewtaskEventSize = 48
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -943,6 +948,28 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 		p.OldTid = binary.LittleEndian.Uint32(raw[40:44])
 		p.ExitUntraced = binary.LittleEndian.Uint32(raw[44:48])
 	}
+	return p
+}
+
+// NewTaskNewtaskEventFast decodes the task:task_newtask control record: the
+// child's tgid (Pid) and tid, the comm it inherited and the raw clone flags.
+//
+// Accepted sizes: the current 48-byte layout and anything longer (its prefix is
+// decoded, so a newer object that appends fields stays readable). Every
+// shorter size fails closed with nil rather than decoding fields at wrong
+// offsets.
+func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
+	if len(raw) < taskNewtaskEventSize {
+		return nil
+	}
+	p := poolOfTaskNewtaskEvents.Get().(*TaskNewtaskEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	copy(p.Comm[:], raw[24:40])
+	p.CloneFlags = binary.LittleEndian.Uint64(raw[40:48])
 	return p
 }
 

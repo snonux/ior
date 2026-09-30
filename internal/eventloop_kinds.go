@@ -182,6 +182,11 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// (internal/eventloop_processexit.go).
 		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
+		// task:task_newtask fires for every created task (process or thread)
+		// and seeds its inherited comm before its first syscall
+		// (internal/eventloop_newtask.go).
+		controlRaw(types.TASK_NEWTASK_EVENT, rawDecoder[types.TaskNewtaskEvent](types.NewTaskNewtaskEventFast),
+			typedRuntimeControl((*eventLoop).handleTaskNewtaskEvent)),
 		// The open-name fixup carries only the pending enter's identity and the
 		// filename re-read at sys_exit once the kernel had faulted the page in.
 		// Its dedicated decoder keeps the compact control record separate from

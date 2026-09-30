@@ -1,8 +1,8 @@
 //+build ignore
 
 /**
- * exec.c holds the hand-written sched tracepoint handlers that are not
- * syscall tracepoints: sched_process_exec and sched_process_exit.
+ * exec.c holds the hand-written tracepoint handlers that are not syscall
+ * tracepoints: sched_process_exec, sched_process_exit and task_newtask.
  *
  * Why sched_process_exec exists: the comm shown for a syscall used to come from an
  * asynchronous /proc/<tid>/comm read (internal/eventloop_comm.go). A task that
@@ -281,6 +281,97 @@ int handle_sched_process_exit(void *ctx) {
     ev->group_dead = group_dead;
     // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
     ev->reserved = 0;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+// Why task_newtask exists: a task that has never issued a traced syscall has no
+// name in userspace's tid->comm cache, and the only way to learn it there was
+// an asynchronous /proc/<tid>/comm read. That read loses the race against every
+// short-lived task: a thread that has already exited by the time a lookup
+// worker gets to it has no /proc entry any more, so every row it produced
+// carried an empty comm, and the first rows of a thread that lives a few
+// milliseconds were empty too, until the lookup landed. Under -comm it was
+// worse than cosmetic: the enter-side gate recycles a non-open/exec enter whose
+// tid has no cached comm yet, so such rows were dropped, silently.
+//
+// task:task_newtask fires from copy_process() once the child has its pid and
+// its inherited comm, and before the child is first woken (wake_up_new_task),
+// so it precedes every syscall the child can make. Emitting the child's comm
+// into the same ring buffer as the syscall events gives userspace an ordered
+// "this new tid is called X" record, exactly like sched_process_exec does for
+// a rename: the ring buffer delivers records in reservation order and the event
+// loop has a single consumer goroutine, so the cache is seeded before the
+// child's first syscall becomes a row (handleTaskNewtaskEvent).
+//
+// The name is the parent's: a fork()ed process that then execve()s is renamed
+// by the sched_process_exec record; a bare thread keeps it until
+// prctl(PR_SET_NAME)/pthread_setname_np, which no tracepoint reports (a
+// pre-existing limitation of the comm cache, unchanged here).
+//
+// The record also carries the raw clone_flags, the input later consumers need
+// to tell a thread from a process and to model the fd table the child inherits
+// or shares (CLONE_FILES).
+//
+// Cost: one 48-byte record per created task, the same order as the per-exec and
+// per-exit records, on the same ring buffer.
+
+// IOR_CLONE_THREAD is CLONE_THREAD from include/uapi/linux/sched.h: the new
+// task joins the creator's thread group instead of founding its own.
+#define IOR_CLONE_THREAD 0x00010000ULL
+
+// ior_newtask_in_scope is filter() applied to the *child*. The handler runs in
+// the parent's context, so filter() itself would judge the parent, but what
+// decides whether the child's syscalls are traced is the child's own tgid and
+// tid: a fork() child of a -pid target has a different tgid and is out of scope,
+// a new thread of a -pid target is in scope. ior itself stays excluded - by the
+// child's tgid, so its own threads produce no records, while a subprocess it
+// spawns (a new tgid) is judged like any other process.
+static __always_inline int
+ior_newtask_in_scope(__u32 child_pid, __u32 child_tid) {
+    if (child_pid == IOR_PID_FILTER)
+        return 0;
+    if (-1 != PID_FILTER && child_pid != PID_FILTER)
+        return 0;
+    if (-1 != TID_FILTER && child_tid != TID_FILTER)
+        return 0;
+    return 1;
+}
+
+SEC("tracepoint/task/task_newtask")
+int handle_task_newtask(struct trace_event_raw_task_newtask *ctx) {
+    struct task_newtask_event *ev;
+    __u64 clone_flags = ctx->clone_flags;
+    __u32 child_tid = (__u32)ctx->pid;
+    // The child's tgid: the creator's for a new thread, its own tid for a new
+    // process. Derived rather than read from the child's task_struct so the
+    // handler does not depend on when copy_process() assigns p->tgid relative to
+    // the tracepoint.
+    __u32 child_pid = (clone_flags & IOR_CLONE_THREAD)
+        ? (__u32)(bpf_get_current_pid_tgid() >> 32)
+        : child_tid;
+
+    if (!ior_newtask_in_scope(child_pid, child_tid))
+        return 0;
+
+    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct task_newtask_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    ev->event_type = TASK_NEWTASK_EVENT;
+    // Not a syscall tracepoint: there is no enter/exit trace id to report.
+    ev->trace_id = 0;
+    ev->pid = child_pid;
+    ev->tid = child_tid;
+    ev->time = bpf_ktime_get_boot_ns();
+    // The tracepoint's own comm field is the child's name at creation. It is
+    // copied whole (16 bytes, NUL-padded by the kernel), so the field needs no
+    // memset first; see "String fields in ring-buffer records" in filter.c.
+    __builtin_memcpy(ev->comm, ctx->comm, sizeof(ev->comm));
+    ev->clone_flags = clone_flags;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

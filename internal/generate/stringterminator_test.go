@@ -41,7 +41,7 @@ var structsWithComm = map[string]bool{"open_event": true, "exec_event": true}
 // handWrittenStringStructs are the structs with a string field that only
 // hand-written BPF code fills; TestHandWrittenBPFStringCapturesNeedNoMemset
 // covers them.
-var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true}
+var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true}
 
 var handlerStructRE = regexp.MustCompile(`(?m)^/// \S+ is a struct (\w+)`)
 
@@ -253,10 +253,11 @@ func TestStringFieldListsMatchTypesH(t *testing.T) {
 	}
 }
 
-// TestHandWrittenBPFStringCapturesNeedNoMemset pins the same rule for the two
+// TestHandWrittenBPFStringCapturesNeedNoMemset pins the same rule for the
 // hand-written string captures: the open-name fixup record is submitted only
-// after a successful (hence terminated) read, and sched_process_exec's comm is
-// written in full by bpf_get_current_comm.
+// after a successful (hence terminated) read, sched_process_exec's comm is
+// written in full by bpf_get_current_comm, and task_newtask's comm is copied
+// whole from the tracepoint's own (kernel-terminated) comm field.
 func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	filterC, err := readCSource("filter.c")
 	if err != nil {
@@ -291,6 +292,18 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	}
 	if !strings.Contains(handler, commCaptureLine) {
 		t.Error("handle_sched_process_exec must capture comm unconditionally")
+	}
+
+	newtask := regexp.MustCompile(`(?s)int handle_task_newtask\(.*?\n\}\n`).FindString(execC)
+	if newtask == "" {
+		t.Fatal("handle_task_newtask not found in exec.c")
+	}
+	if strings.Contains(newtask, "__builtin_memset") {
+		t.Error("handle_task_newtask memsets comm")
+	}
+	const newtaskCommCopy = "    __builtin_memcpy(ev->comm, ctx->comm, sizeof(ev->comm));\n"
+	if !strings.Contains(newtask, newtaskCommCopy) {
+		t.Error("handle_task_newtask must copy the whole tracepoint comm unconditionally")
 	}
 }
 

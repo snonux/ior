@@ -463,6 +463,86 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exit decode mismatch")
 		}
 	})
+
+	// TaskNewtaskEvent is the control record of task:task_newtask that seeds
+	// a new task's comm; same table membership rationale as above.
+	t.Run("TaskNewtaskEvent", func(t *testing.T) {
+		ev := &TaskNewtaskEvent{EventType: TASK_NEWTASK_EVENT, Time: 1, Pid: 2, Tid: 3, CloneFlags: 0x10f00}
+		copy(ev.Comm[:], "worker")
+		raw := rawBytes(t, ev)
+
+		slow := NewTaskNewtaskEvent(raw)
+		fast := NewTaskNewtaskEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("task_newtask decode mismatch")
+		}
+	})
+}
+
+// TestNewTaskNewtaskEventFastKernelLayout pins the byte offsets of struct
+// task_newtask_event as the BPF handler writes them: comm at 24..40 and
+// clone_flags at 40..48. The wire size must equal what encoding/binary makes of
+// the generated Go struct, so a padding change on either side is caught here
+// rather than as a silently misread thread flag.
+func TestNewTaskNewtaskEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(TaskNewtaskEvent{}); got != taskNewtaskEventSize {
+		t.Fatalf("binary.Size(TaskNewtaskEvent) = %d, want %d", got, taskNewtaskEventSize)
+	}
+	raw := taskNewtaskRaw(taskNewtaskEventSize)
+	ev := NewTaskNewtaskEventFast(raw)
+	if ev == nil {
+		t.Fatal("kernel layout payload rejected")
+	}
+	defer ev.Recycle()
+	if ev.EventType != TASK_NEWTASK_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected task_newtask decode: %#v", ev)
+	}
+	if StringValue(ev.Comm[:]) != "child" || ev.CloneFlags != 0x0000000100011111 {
+		t.Fatalf("comm=%q flags=%#x, want child / 0x100011111", StringValue(ev.Comm[:]), ev.CloneFlags)
+	}
+}
+
+// TestNewTaskNewtaskEventFastRejectsShortRecords is the negative path: anything
+// below the 48-byte layout fails closed, and an oversized record still decodes
+// its prefix (forward compatibility with an object that appends fields).
+func TestNewTaskNewtaskEventFastRejectsShortRecords(t *testing.T) {
+	for _, n := range []int{0, 24, 40, taskNewtaskEventSize - 1} {
+		if ev := NewTaskNewtaskEventFast(taskNewtaskRaw(n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewTaskNewtaskEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
+	ev := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventSize + 8))
+	if ev == nil {
+		t.Fatal("oversized record rejected, want prefix decoded")
+	}
+	defer ev.Recycle()
+	if ev.Tid != 101 || ev.CloneFlags != 0x0000000100011111 {
+		t.Fatalf("unexpected oversized decode: %#v", ev)
+	}
+}
+
+// taskNewtaskRaw builds an n-byte task_newtask record for child tgid 100 / tid
+// 101, comm "child", whose fields are written only as far as n reaches; bytes
+// past the current layout are 0xff so an oversized decode cannot read them.
+func taskNewtaskRaw(n int) []byte {
+	raw := make([]byte, n)
+	if n >= 24 {
+		binary.LittleEndian.PutUint32(raw[0:4], uint32(TASK_NEWTASK_EVENT))
+		binary.LittleEndian.PutUint64(raw[8:16], 7)
+		binary.LittleEndian.PutUint32(raw[16:20], 100)
+		binary.LittleEndian.PutUint32(raw[20:24], 101)
+	}
+	if n >= taskNewtaskEventSize {
+		copy(raw[24:40], "child")
+		binary.LittleEndian.PutUint64(raw[40:48], 0x0000000100011111)
+		for i := taskNewtaskEventSize; i < n; i++ {
+			raw[i] = 0xff
+		}
+	}
+	return raw
 }
 
 // TestNewProcessExecEventFastKernelLayout pins the kernel byte offsets of

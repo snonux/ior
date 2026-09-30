@@ -154,8 +154,9 @@ func loadConfiguredBPFModule(cfg flags.Config) (*bpf.Module, string, error) {
 // a noticeable amount of time, during which syscall records already flow from
 // the ones attached first. Any task that execs in that window would otherwise
 // produce syscall rows with no preceding comm record, which is exactly the
-// stale/empty label the exec probe exists to prevent. The exit probe has no
-// ordering requirement but costs nothing to attach here.
+// stale/empty label the exec probe exists to prevent; the same goes for a task
+// created in that window and the newtask probe. The exit probe has no ordering
+// requirement but costs nothing to attach here.
 //
 // Cancellation: shouldAttach is wrapped so that once ctx is done every
 // remaining tracepoint is skipped instead of attached, which ends the long
@@ -168,9 +169,11 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 	log = log.withDefaults()
 	releaseExecProbe := attachProcessExecProbe(attacher, log)
 	releaseExitProbe := attachProcessExitProbe(attacher, log)
+	releaseNewtaskProbe := attachTaskNewtaskProbe(attacher, log)
 	releaseSchedProbes := func() {
 		releaseExecProbe()
 		releaseExitProbe()
+		releaseNewtaskProbe()
 	}
 
 	attachUnlessCancelled := func(name string) bool {
@@ -253,13 +256,18 @@ const processExecProgName = "handle_sched_process_exec"
 // exiting task's tgid, so the fdTracker can evict its per-(pid, fd) entries.
 const processExitProgName = "handle_sched_process_exit"
 
+// taskNewtaskProgName is the BPF program in internal/c/exec.c that reports a
+// newly created task's inherited comm, so a new tid is named before its first
+// syscall instead of after an asynchronous procfs lookup.
+const taskNewtaskProgName = "handle_task_newtask"
+
 // attachProcessExecProbe attaches sched:sched_process_exec, whose records keep
 // the pid->comm cache correct across execve (see internal/c/exec.c and
 // eventLoop.handleProcessExecEvent). It is not a syscall tracepoint, so it is
 // outside the probemanager's enter/exit pair model and is attached directly
 // here, for the whole run, independently of -trace-* selection.
 func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachSchedProbe(attacher, processExecProgName, "sched_process_exec", log)
+	return attachHandTracepoint(attacher, processExecProgName, "sched", "sched_process_exec", log)
 }
 
 // attachProcessExitProbe attaches sched:sched_process_exit, whose control
@@ -267,16 +275,26 @@ func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // eventLoop.handleProcessExitEvent). Same attach policy as the exec probe:
 // direct attach, whole run, independent of -trace-* selection.
 func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachSchedProbe(attacher, processExitProgName, "sched_process_exit", log)
+	return attachHandTracepoint(attacher, processExitProgName, "sched", "sched_process_exit", log)
 }
 
-// attachSchedProbe attaches one hand-written sched tracepoint program from
-// internal/c/exec.c.
+// attachTaskNewtaskProbe attaches task:task_newtask, whose records name every
+// new process and thread before its first syscall (see internal/c/exec.c and
+// eventLoop.handleTaskNewtaskEvent). Same attach policy as the exec and exit
+// probes: direct attach, whole run, independent of -trace-* selection. Without
+// it comms of new tids fall back to the racy procfs lookup.
+func attachTaskNewtaskProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachHandTracepoint(attacher, taskNewtaskProgName, "task", "task_newtask", log)
+}
+
+// attachHandTracepoint attaches one hand-written (non-syscall) tracepoint
+// program from internal/c/exec.c, subsystem/tracepointName being the tracepoint
+// it hooks (sched/sched_process_exec, task/task_newtask, ...).
 //
 // Failure is deliberately non-fatal and mirrors the per-syscall attach policy:
-// without the exec probe comms fall back to the asynchronous procfs resolver,
-// and without the exit probe the fd table falls back to LRU eviction - both
-// are exactly the pre-fix behaviour: degraded, not a broken trace.
+// without the exec or newtask probe comms fall back to the asynchronous procfs
+// resolver, and without the exit probe the fd table falls back to LRU eviction
+// - all exactly the pre-fix behaviour: degraded, not a broken trace.
 //
 // It takes the same probemanager.Attacher seam the syscall probes use rather
 // than a *bpf.Module, so both non-fatal failure paths and the detach path are
@@ -288,7 +306,7 @@ func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
 // goes to log.teardown, which stays visible in every mode.
-func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName string, log bpfSetupLog) func() {
+func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, tracepointName string, log bpfSetupLog) func() {
 	noop := func() {}
 	if attacher == nil {
 		return noop
@@ -299,7 +317,7 @@ func attachSchedProbe(attacher probemanager.Attacher, progName, tracepointName s
 		log.warn(fmt.Sprintf("skipping %s probe: get program %s: %v", tracepointName, progName, err))
 		return noop
 	}
-	link, err := prog.AttachTracepoint("sched", tracepointName)
+	link, err := prog.AttachTracepoint(subsystem, tracepointName)
 	if err != nil {
 		log.warn(fmt.Sprintf("skipping %s probe: %v", tracepointName, err))
 		return noop

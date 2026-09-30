@@ -53,8 +53,9 @@ func (a *recordingAttacher) attached() (total, live int) {
 }
 
 // schedProbeLinks is the number of links attachTraceProbes creates before the
-// syscall walk: the sched_process_exec and sched_process_exit probes.
-const schedProbeLinks = 2
+// syscall walk: the sched_process_exec, sched_process_exit and task_newtask
+// probes.
+const schedProbeLinks = 3
 
 // TestAttachTraceProbesStopsAndDetachesWhenCancelledDuringAttach is the
 // regression test for a restart during "Attaching tracepoints...": the old

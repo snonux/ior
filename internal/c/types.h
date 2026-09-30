@@ -68,6 +68,8 @@
 #define EXIT_TWO_FD_NAMES_EVENT 59
 #define ENTER_EVENTFD_NAME_EVENT 60
 #define EXIT_EVENTFD_NAME_EVENT 61
+// Control record of the hand-written task:task_newtask handler (exec.c).
+#define TASK_NEWTASK_EVENT 62
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -574,4 +576,34 @@ struct process_exit_event {
     __u32 tid;
     __u32 group_dead;
     __u32 reserved;
+};
+
+// task_newtask_event is not a syscall tracepoint event: it is emitted by the
+// hand-written task:task_newtask handler in exec.c when the kernel creates a
+// task (fork, vfork, clone or clone3; a new thread is a task too). Userspace
+// consumes it as a control event (no enter/exit pair, never rendered as a
+// row) that seeds the tid->comm cache with the name the child inherited from
+// its parent, before the child's first syscall.
+//
+// Why: a task's comm was otherwise resolved lazily and asynchronously from
+// /proc/<tid>/comm, which loses the race against short-lived tasks (the
+// thread has exited before the read, so its rows carry an empty comm) and,
+// under -comm, made the enter-side gate drop the first syscalls of every new
+// tid whose name was not cached yet.
+//
+// pid is the *child's* thread-group id and tid the child's task id: the
+// record is emitted from the parent's context, but describes the child.
+// clone_flags is the raw flag word of the creating clone (CLONE_THREAD tells
+// a new thread from a new process; CLONE_VM/CLONE_FILES tell which resources
+// are shared - the basis for fd-table inheritance and shared-table tracking).
+// The layout has no implicit padding (clone_flags starts at offset 40), so
+// the kernel record and a binary.Write payload share one size, 48 bytes.
+struct task_newtask_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    char comm[MAX_PROGNAME_LENGTH];
+    __u64 clone_flags;
 };

@@ -292,3 +292,67 @@ func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachTaskNewtaskProbeAttachesTheTaskTracepoint pins the newtask probe's
+// program and its *task* (not sched) subsystem: attaching it under the wrong
+// category would fail on every kernel and silently return to the racy procfs
+// comm lookup it replaces. The release closure stays idempotent.
+func TestAttachTaskNewtaskProbeAttachesTheTaskTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &fakeProbeProgram{link: link}
+	attacher := &fakeProbeAttacher{prog: prog}
+
+	release := attachTaskNewtaskProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+
+	if attacher.requested != taskNewtaskProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, taskNewtaskProgName)
+	}
+	if prog.category != "task" || prog.name != "task_newtask" {
+		t.Fatalf("attached %s:%s, want task:task_newtask", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroys != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	}
+}
+
+// TestAttachTaskNewtaskProbeFailuresAreNonFatal: a missing program or
+// tracepoint degrades to the asynchronous procfs comm lookup, is reported on
+// the warn sink (visible in every mode) and leaves a usable no-op release.
+func TestAttachTaskNewtaskProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + taskNewtaskProgName,
+		},
+		{
+			name: "tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &fakeProbeProgram{err: errors.New("no such tracepoint")},
+			},
+			wantLog: "no such tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec setupLogRecorders
+			release := attachTaskNewtaskProbe(tc.attacher, rec.log())
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			release()
+			release()
+			if !strings.Contains(logged, "skipping task_newtask probe") || !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("warn log = %q, want the skipped probe and %q", logged, tc.wantLog)
+			}
+		})
+	}
+}

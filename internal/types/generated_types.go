@@ -129,6 +129,7 @@ const ENTER_TWO_FD_NAMES_EVENT = 58
 const EXIT_TWO_FD_NAMES_EVENT = 59
 const ENTER_EVENTFD_NAME_EVENT = 60
 const EXIT_EVENTFD_NAME_EVENT = 61
+const TASK_NEWTASK_EVENT = 62
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -3315,4 +3316,73 @@ func (p *ProcessExitEvent) Bytes() ([]byte, error) {
 
 func (p *ProcessExitEvent) Recycle() {
 	poolOfProcessExitEvents.Put(p)
+}
+
+type TaskNewtaskEvent struct {
+	EventType  EventType
+	TraceId    TraceId
+	Time       uint64
+	Pid        uint32
+	Tid        uint32
+	Comm       [MAX_PROGNAME_LENGTH]byte
+	CloneFlags uint64
+}
+
+func (t TaskNewtaskEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v CloneFlags:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]), t.CloneFlags)
+}
+
+func (t TaskNewtaskEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*TaskNewtaskEvent)
+	if !ok {
+		return false
+	}
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm && t.CloneFlags == otherConcrete.CloneFlags
+}
+
+func (t *TaskNewtaskEvent) GetEventType() EventType {
+	return t.EventType
+}
+
+func (t *TaskNewtaskEvent) GetTraceId() TraceId {
+	return t.TraceId
+}
+
+func (t *TaskNewtaskEvent) GetPid() uint32 {
+	return t.Pid
+}
+
+func (t *TaskNewtaskEvent) GetTid() uint32 {
+	return t.Tid
+}
+
+func (t *TaskNewtaskEvent) GetTime() uint64 {
+	return t.Time
+}
+
+var poolOfTaskNewtaskEvents = sync.Pool{
+	New: func() any { return &TaskNewtaskEvent{} },
+}
+
+func NewTaskNewtaskEvent(raw []byte) *TaskNewtaskEvent {
+	t := poolOfTaskNewtaskEvents.Get().(*TaskNewtaskEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, t); err != nil {
+		*t = TaskNewtaskEvent{}
+		poolOfTaskNewtaskEvents.Put(t)
+		return nil
+	}
+	return t
+}
+
+func (t *TaskNewtaskEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, t)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (t *TaskNewtaskEvent) Recycle() {
+	poolOfTaskNewtaskEvents.Put(t)
 }
