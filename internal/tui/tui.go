@@ -1109,7 +1109,7 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 		return m.quitWithBestEffortCleanup()
 	}
 	if m.canHandleDashboardShortcut(msg) {
-		if err := m.stopRecording(); err != nil {
+		if err := m.stopRecordingAtQuit(); err != nil {
 			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
@@ -1181,7 +1181,7 @@ func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 // whatever the screen already shows, and leaves the program through
 // runProgram like the signal quit's does.
 func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
-	m.keepRecordingStopFailure(m.stopRecording())
+	m.keepRecordingStopFailure(m.stopRecordingAtQuit())
 	return m.beginShutdown()
 }
 
@@ -1746,6 +1746,13 @@ func (m *Model) startRecording(path string) error {
 // Tests and the quit/reselect paths call this method.
 func (m *Model) stopRecording() error {
 	return recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+}
+
+// stopRecordingAtQuit is stopRecording for the quit paths: it also reports a
+// failure of an already dead recording that nothing has shown yet (see
+// recorderFinalise).
+func (m *Model) stopRecordingAtQuit() error {
+	return recorderStopAtQuit(m.runtime.Recorder(), m.syncDashboardFilterState)
 }
 
 func (m *Model) applyTheme(isDark bool) {

@@ -58,7 +58,7 @@ func (m *Model) handleSignalQuit() (tea.Model, tea.Cmd, bool) {
 	if m.quitting {
 		return m, nil, true
 	}
-	m.keepRecordingStopFailure(m.stopRecording())
+	m.keepRecordingStopFailure(m.stopRecordingAtQuit())
 	return m.beginShutdown()
 }
 
@@ -87,7 +87,7 @@ func finaliseRecording(model *Model, runErr error) error {
 	if model == nil || model.runtime == nil {
 		return runErr
 	}
-	if err := model.stopRecording(); err != nil {
+	if err := model.stopRecordingAtQuit(); err != nil {
 		return errors.Join(runErr, fmt.Errorf("finalising Parquet recording: %w", err))
 	}
 	return runErr

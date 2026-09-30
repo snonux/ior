@@ -287,10 +287,22 @@ func (k sessionRecorder) RecordWarning(row streamrow.Row, filterEpoch uint64, de
 	r := k.view.bindings
 	r.emitIfCurrent(k.view.session, func() {
 		result := k.RecordingController.Record(row, filterEpoch)
+		// describe claims a failure (TakeFailure marks it reported), so only
+		// ask when the warning can be delivered; otherwise the failure stays
+		// available to the record modal and the quit path.
+		if !r.canPushWarningLocked() {
+			return
+		}
 		if message := describe(k.RecordingController, result); message != "" {
 			r.pushWarningLocked(message)
 		}
 	})
+}
+
+// canPushWarningLocked reports whether a warning row has somewhere to go: the
+// stream buffer and its sequencer both exist. The caller must hold r.mu.
+func (r *runtimeBindings) canPushWarningLocked() bool {
+	return r.streamBuffer != nil && r.streamSeq != nil
 }
 
 // pushWarningLocked appends a warning row to the stream buffer. The caller is
@@ -300,7 +312,7 @@ func (k sessionRecorder) RecordWarning(row streamrow.Row, filterEpoch uint64, de
 // sequence number comes from the same sequencer the trace core's warning
 // callback uses, so rows stay strictly ordered.
 func (r *runtimeBindings) pushWarningLocked(message string) {
-	if r.streamBuffer == nil || r.streamSeq == nil {
+	if !r.canPushWarningLocked() {
 		return
 	}
 	r.streamBuffer.Push(streamrow.NewWarning(r.streamSeq.Next(), message))

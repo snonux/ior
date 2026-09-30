@@ -13,7 +13,6 @@ import (
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
 	"ior/internal/globalfilter"
-	"ior/internal/parquet"
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
 	"ior/internal/statsengine"
@@ -273,55 +272,13 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
-// recorderWarningText turns one recorder.Record result into the stream
-// warning text it deserves, or "" when it is not news.
-//
-// The TUI owns a single recorder for its lifetime, but a recording only runs
-// while the user has started one, so most results are not news:
-//   - ErrRecorderNotActive: idle, cleanly stopped, or a Stop racing Record.
-//   - ErrRecorderQueueFull: a row shed during an overflow that was already
-//     announced; only the first shed row of a recording comes back as
-//     ErrRecorderStartedDropping, which is warned about.
-//   - any other error: a dead recording's LastError, which Record repeats on
-//     every call until the next Start - across trace sessions, too. The
-//     recorder itself decides whether it is news: TakeFailure returns it
-//     once, and not at all if Stop already handed it to the TUI (which shows
-//     it on the error screen).
-//
-// Keeping the "report once" state in the recorder rather than here means a
-// failure is reported by whichever trace session first sees it, and no
-// per-session guard can be burned by a stale or idle result. A failure no
-// event reaches before the user opens the record modal again is claimed and
-// shown there instead (Start would discard it); one no event and no modal
-// ever reaches is not reported in the stream at all.
-//
-// TakeFailure marks the failure reported, so the caller must deliver the text
-// this returns or the failure is lost: that is why the TUI's session view runs
-// this inside the same gate that pushes the warning (recordRow).
-func recorderWarningText(rec runtime.RowRecorder, err error) string {
-	switch {
-	case err == nil, errors.Is(err, parquet.ErrRecorderNotActive):
-	case errors.Is(err, parquet.ErrRecorderStartedDropping):
-		return "Parquet recorder queue full: rows are being dropped"
-	case errors.Is(err, parquet.ErrRecorderQueueFull):
-	default:
-		// Record may return the failure while the session is still being
-		// torn down, when TakeFailure yields nil; a later Record (in this or
-		// a later session) then reports it.
-		if failure := rec.TakeFailure(); failure != nil {
-			return fmt.Sprintf("Parquet recorder failed: %v", failure)
-		}
-	}
-	return ""
-}
-
 // warnRecorderResult reports one recorder.Record result as a stream warning
-// when it is news (see recorderWarningText). It is the fallback for a recorder
-// without a session gate; the gap between the claim inside recorderWarningText
-// and this delivery is harmless there because nothing can retire the session
-// in between (see runtime.WarningRecorder).
+// when it is news (see runtime.RecorderWarningText). It is the fallback for a
+// recorder without a session gate; the gap between the claim inside
+// runtime.RecorderWarningText and this delivery is harmless there because
+// nothing can retire the session in between (see runtime.WarningRecorder).
 func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
-	el.notifyWarning(recorderWarningText(rec, err))
+	el.notifyWarning(runtime.RecorderWarningText(rec, err))
 }
 
 // recordRow records one stream row and reports the result when it is news.
@@ -333,7 +290,7 @@ func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
 // three-step form.
 func recordRow(el *eventLoop, rec runtime.RowRecorder, row streamrow.Row, filterEpoch uint64) {
 	if gated, ok := rec.(runtime.WarningRecorder); ok {
-		gated.RecordWarning(row, filterEpoch, recorderWarningText)
+		gated.RecordWarning(row, filterEpoch, runtime.RecorderWarningText)
 		return
 	}
 	warnRecorderResult(el, rec, rec.Record(row, filterEpoch))

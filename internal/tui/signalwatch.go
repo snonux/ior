@@ -80,7 +80,7 @@ func (h watcherHooks) withDefaults() watcherHooks {
 
 // modelRecordingPublisher returns the publishRecording hook for model: it
 // stops the model's recorder straight through the runtime bindings, WITHOUT
-// the model's own stopRecording, which also syncs dashboard state and so may
+// the model's own stopRecordingAtQuit, which also syncs dashboard state and so may
 // only run on the event-loop goroutine. The recorder is safe for concurrent
 // use (Stop waits for a stop already in flight and returns nil then).
 func modelRecordingPublisher(model *Model) func() error {
@@ -88,11 +88,9 @@ func modelRecordingPublisher(model *Model) func() error {
 		if model == nil || model.runtime == nil {
 			return nil
 		}
-		recorder := model.runtime.Recorder()
-		if recorder == nil || !recorder.Status().Active {
-			return nil
-		}
-		return recorder.Stop()
+		// recorderFinalise also claims the failure of a recording that
+		// already died, so a signal quit cannot exit 0 over a lost recording.
+		return recorderFinalise(model.runtime.Recorder())
 	}
 }
 

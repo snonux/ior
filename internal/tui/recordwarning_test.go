@@ -7,25 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"ior/internal/parquet"
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
 
 	tea "charm.land/bubbletea/v2"
 )
-
-// describeFailure mirrors the core's recorderWarningText for the one result
-// these tests need: any error but "not active" is a dead recording whose
-// failure the recorder hands out once.
-func describeFailure(rec runtime.RowRecorder, result error) string {
-	if result == nil || errors.Is(result, parquet.ErrRecorderNotActive) {
-		return ""
-	}
-	if failure := rec.TakeFailure(); failure != nil {
-		return "Parquet recorder failed: " + failure.Error()
-	}
-	return ""
-}
 
 // warningRows returns the warning rows currently in the bindings' stream.
 func warningRows(r *runtimeBindings) []string {
@@ -51,7 +37,7 @@ func TestSessionRecorderWarnsWhileCurrent(t *testing.T) {
 	r, recorder := newFailedRecorderBindings(errors.New("disk full"))
 	view := r.beginSession()
 
-	view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, describeFailure)
+	view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
 
 	if got := warningRows(r); len(got) != 1 || !strings.Contains(got[0], "disk full") {
 		t.Fatalf("warning rows = %q, want one naming the failure", got)
@@ -99,11 +85,11 @@ func TestNextSessionReportsFailureLeftByRetiredSession(t *testing.T) {
 	r, _ := newFailedRecorderBindings(errors.New("disk full"))
 	old := r.beginSession()
 	old.end()
-	old.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, describeFailure)
+	old.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
 
 	next := r.beginSession().Recorder().(runtime.WarningRecorder)
-	next.RecordWarning(streamrow.Row{}, 0, describeFailure)
-	next.RecordWarning(streamrow.Row{}, 0, describeFailure)
+	next.RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
+	next.RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
 
 	if got := warningRows(r); len(got) != 1 {
 		t.Fatalf("warning rows = %q, want the failure reported exactly once", got)
@@ -126,7 +112,7 @@ func TestEndSessionWaitsForAnInFlightWarning(t *testing.T) {
 	go func() {
 		defer close(recorded)
 		rec.RecordWarning(streamrow.Row{}, 0, func(rec runtime.RowRecorder, result error) string {
-			message := describeFailure(rec, result) // the claim
+			message := runtime.RecorderWarningText(rec, result) // the claim
 			close(claimed)
 			<-release // the stop lands here
 			return message
@@ -158,9 +144,40 @@ func TestEndSessionWaitsForAnInFlightWarning(t *testing.T) {
 func TestSessionRecorderRecordWarningSilentWithoutNews(t *testing.T) {
 	r := newRuntimeBindings() // real idle parquet recorder: ErrRecorderNotActive
 	view := r.beginSession()
-	view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, describeFailure)
+	view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
 	if got := warningRows(r); len(got) != 0 {
 		t.Fatalf("idle recorder pushed warnings %q", got)
+	}
+}
+
+// TestSessionRecorderClaimsNothingWithoutAWarningSink is the delivery-side
+// twin of the retired-session case: with no stream buffer (or sequencer) to
+// take the row, describe must not run, because its TakeFailure would mark the
+// failure reported with nowhere to show it. The failure stays with the
+// recorder for the record modal and the quit path.
+func TestSessionRecorderClaimsNothingWithoutAWarningSink(t *testing.T) {
+	for name, strip := range map[string]func(*runtimeBindings){
+		"no stream buffer": func(r *runtimeBindings) { r.streamBuffer = nil },
+		"no sequencer":     func(r *runtimeBindings) { r.streamSeq = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, recorder := newFailedRecorderBindings(errors.New("disk full"))
+			strip(r)
+			view := r.beginSession()
+
+			view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, func(runtime.RowRecorder, error) string {
+				t.Error("describe ran although the warning cannot be delivered")
+				return ""
+			})
+			view.Recorder().(runtime.WarningRecorder).RecordWarning(streamrow.Row{}, 0, runtime.RecorderWarningText)
+
+			if recorder.takes != 0 {
+				t.Fatalf("failure claimed %d times with no sink to show it", recorder.takes)
+			}
+			if err := takePreviousRecordingFailure(r.Recorder()); err == nil || !strings.Contains(err.Error(), "disk full") {
+				t.Fatalf("modal claim = %v, want the failure left unclaimed", err)
+			}
+		})
 	}
 }
 

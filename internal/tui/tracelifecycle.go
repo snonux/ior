@@ -297,6 +297,37 @@ func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
 	return err
 }
 
+// recorderFinalise is the quit-time counterpart of recorderStop: it leaves no
+// recording failure unreported. An active recording is stopped and Stop's
+// failure returned. An inactive recorder may still hold a failure nobody has
+// reported: a recording that aborted on its own (disk full) on a target that
+// then went idle emits no further event, so no warning row was pushed, and
+// the user who never reopened the record modal never saw it either. The
+// quit is the last chance to show it, so claim it with TakeFailure, which is
+// exclusive: a failure already delivered through a warning row, the modal, or
+// an earlier Stop is marked taken and is not returned again, and a healthy or
+// never-used recorder yields nil. Safe to call from any goroutine (the
+// recorder is), so the signal watcher uses it too.
+func recorderFinalise(recorder runtime.RecordingController) error {
+	if recorder == nil {
+		return nil
+	}
+	if recorder.Status().Active {
+		return recorder.Stop()
+	}
+	return recorder.TakeFailure()
+}
+
+// recorderStopAtQuit is recorderFinalise followed by syncFn, for the quit
+// paths that run on the event-loop goroutine. The in-session stops (record
+// shortcut, re-select) keep using recorderStop: a dead recording's failure
+// belongs on the stream or the record modal there, not on a stop error.
+func recorderStopAtQuit(recorder runtime.RecordingController, syncFn func()) error {
+	err := recorderFinalise(recorder)
+	syncFn()
+	return err
+}
+
 // recorderActive returns true when the recorder is currently recording.
 func recorderActive(recorder runtime.RecordingController) bool {
 	if recorder == nil {
