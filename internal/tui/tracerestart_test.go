@@ -290,7 +290,15 @@ func TestFilterChangeRestartHandsStarterTheNewFilter(t *testing.T) {
 	second := starter.next(t)
 	requireLive(t, second, "restarted session")
 	secondReq := starter.nextRequest(t)
+	assertRestartRequest(t, m, firstReq, secondReq, initialPID)
+}
 
+// assertRestartRequest checks the TraceRequest of a filter-change restart: it
+// carries the new comm filter with the PID scope kept, leaves the previous
+// session's filter untouched, and has a new view of the same runtime bindings
+// plus its own shutdown reporter.
+func assertRestartRequest(t *testing.T, m *Model, firstReq, secondReq TraceRequest, initialPID int64) {
+	t.Helper()
 	if secondReq.Filter == nil || secondReq.Filter.Comm == nil || secondReq.Filter.Comm.Pattern != "nginx" {
 		t.Fatalf("restarted session filter = %+v, want the new comm filter", secondReq.Filter)
 	}

@@ -784,28 +784,7 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 
 	// The fixture is its own module so the linter does not try to load the
 	// real one, which needs the libbpfgo cgo environment to typecheck.
-	dir := t.TempDir()
-	write := func(name, content string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	// An old language version on purpose: the fixture needs nothing modern,
-	// and naming the repository's own would break this test on any machine
-	// whose golangci-lint was built with an older Go than go.mod requires.
-	write("go.mod", "module lintfixture\n\ngo 1.21\n")
-	write("fixture.go", lintFixture)
-	// A defect in a _test.go file too, so `run.tests: false` - which drops
-	// every test file in the repository, where most of what this gate has
-	// caught lives - fails here as well.
-	write("fixture_test.go", lintFixtureTest)
-
-	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
-	if err != nil {
-		t.Fatalf("read .golangci.yml: %v", err)
-	}
-	write(".golangci.yml", string(cfg))
+	dir := writeLintFixtureModule(t)
 
 	argv := gatecmd.LintRun()
 	cmd := exec.Command(bin, append(argv[1:], "--output.text.path", "stdout")...)
@@ -829,6 +808,36 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.what, want.marker, report)
 		}
 	}
+}
+
+// writeLintFixtureModule writes the lint fixture module (lintFixture,
+// lintFixtureTest and the repository's own .golangci.yml) into a temporary
+// directory and returns it.
+func writeLintFixtureModule(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// An old language version on purpose: the fixture needs nothing modern,
+	// and naming the repository's own would break this test on any machine
+	// whose golangci-lint was built with an older Go than go.mod requires.
+	write("go.mod", "module lintfixture\n\ngo 1.21\n")
+	write("fixture.go", lintFixture)
+	// A defect in a _test.go file too, so `run.tests: false` - which drops
+	// every test file in the repository, where most of what this gate has
+	// caught lives - fails here as well.
+	write("fixture_test.go", lintFixtureTest)
+
+	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".golangci.yml"))
+	if err != nil {
+		t.Fatalf("read .golangci.yml: %v", err)
+	}
+	write(".golangci.yml", string(cfg))
+	return dir
 }
 
 // TestMageLintFailsOnAPlantedDefect runs `mage lint` itself, in a copy of the
