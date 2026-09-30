@@ -2,13 +2,16 @@ package atomicfile
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -498,5 +501,195 @@ func TestReplaceFileReplacesSymlinkNotTarget(t *testing.T) {
 	}
 	if readFile(t, final) != "new" {
 		t.Error("final does not hold the new content")
+	}
+}
+
+// withUmask sets the process umask for one test and restores it afterwards.
+// The atomicfile tests do not run in parallel, so the process-wide change is
+// not observable by another test.
+func withUmask(t *testing.T, mask int) {
+	t.Helper()
+	old := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(old) })
+}
+
+func modeOf(t *testing.T, path string) fs.FileMode {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode()
+}
+
+func replaceWith(t *testing.T, final, content string) {
+	t.Helper()
+	if _, err := ReplaceFile(final, func(w io.Writer) error {
+		_, err := io.WriteString(w, content)
+		return err
+	}); err != nil {
+		t.Fatalf("ReplaceFile(%q): %v", final, err)
+	}
+}
+
+// TestReplaceFilePreservesExistingMode pins that replacing a file keeps its
+// permission bits (the old truncate-in-place write did): a 0600 file must not
+// become world-readable 0644, and a 0755 file must not lose its exec bits.
+func TestReplaceFilePreservesExistingMode(t *testing.T) {
+	withUmask(t, 0o022)
+	for _, mode := range []fs.FileMode{0o600, 0o640, 0o755} {
+		final := filepath.Join(t.TempDir(), "chosen.csv")
+		writeFile(t, final, "old")
+		if err := os.Chmod(final, mode); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, final, "new")
+		if got := modeOf(t, final); got != mode {
+			t.Errorf("mode after replace = %v, want %v", got, mode)
+		}
+		if readFile(t, final) != "new" {
+			t.Errorf("mode %v: content not replaced", mode)
+		}
+	}
+}
+
+// TestReplaceFileKeepsOwner checks the best-effort chown path: replacing our
+// own file leaves the owner and group as they were (chown to oneself always
+// succeeds, so this runs unprivileged), and the call never fails because a
+// chown was refused.
+func TestReplaceFileKeepsOwner(t *testing.T) {
+	final := filepath.Join(t.TempDir(), "chosen.csv")
+	writeFile(t, final, "old")
+	before, err := os.Stat(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceWith(t, final, "new")
+	after, err := os.Stat(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, a := before.Sys().(*syscall.Stat_t), after.Sys().(*syscall.Stat_t)
+	if a.Uid != b.Uid || a.Gid != b.Gid {
+		t.Errorf("owner after replace = %d:%d, want %d:%d", a.Uid, a.Gid, b.Uid, b.Gid)
+	}
+}
+
+// TestReplaceFileWithoutExistingUsesDefaultMode is the negative case: with
+// nothing to inherit from, the new file gets 0666 filtered by the umask.
+func TestReplaceFileWithoutExistingUsesDefaultMode(t *testing.T) {
+	withUmask(t, 0o027)
+	final := filepath.Join(t.TempDir(), "fresh.csv")
+	replaceWith(t, final, "new")
+	if got, want := modeOf(t, final), fs.FileMode(0o640); got != want {
+		t.Errorf("mode of a fresh file = %v, want %v (0666 &^ umask)", got, want)
+	}
+}
+
+// TestReplaceFileSymlinkDoesNotDonateMode: a symlink at the name is replaced
+// by a regular file with the default mode; the target's mode is neither
+// inherited nor changed.
+func TestReplaceFileSymlinkDoesNotDonateMode(t *testing.T) {
+	withUmask(t, 0o022)
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	writeFile(t, victim, "precious")
+	if err := os.Chmod(victim, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	final := filepath.Join(dir, "out.csv")
+	if err := os.Symlink(victim, final); err != nil {
+		t.Fatal(err)
+	}
+	replaceWith(t, final, "new")
+
+	if got := modeOf(t, final); got != 0o644 {
+		t.Errorf("replacement mode = %v (regular file, no inheritance from the link target), want -rw-r--r--", got)
+	}
+	if got := modeOf(t, victim); got != 0o600 {
+		t.Errorf("symlink target mode changed to %v", got)
+	}
+}
+
+// TestSuffixedTruncatesStemToNameMax: a "-N" suffix must never push the file
+// name past NAME_MAX; the stem gives way, on a rune boundary, and the
+// extension stays last.
+func TestSuffixedTruncatesStemToNameMax(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stem string
+		ext  string
+		n    int
+	}{
+		{"254-byte csv", strings.Repeat("a", 250), ".csv", 1},
+		{"255-byte csv", strings.Repeat("a", 251), ".csv", 12},
+		{"no extension", strings.Repeat("a", 255), "", 3},
+		// "é" is two bytes: cutting at byte 246 would land inside one.
+		{"multi-byte stem", strings.Repeat("é", 125), ".csv", 1},
+	} {
+		got := suffixed(tc.stem+tc.ext, tc.ext, tc.n)
+		if len(got) > nameMax {
+			t.Errorf("%s: suffixed name is %d bytes, want <= %d", tc.name, len(got), nameMax)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: suffixed name is not valid UTF-8", tc.name)
+		}
+		if want := fmt.Sprintf("-%d%s", tc.n, tc.ext); !strings.HasSuffix(got, want) {
+			t.Errorf("%s: suffixed name ends %q, want suffix %q", tc.name, got[len(got)-len(want):], want)
+		}
+	}
+	// A directory part is not counted against the limit and is kept.
+	if got := suffixed("/d/"+strings.Repeat("a", 251)+".csv", ".csv", 1); !strings.HasPrefix(got, "/d/a") || len(filepath.Base(got)) != nameMax {
+		t.Errorf("directory handling: got %q (base %d bytes)", got[:8], len(filepath.Base(got)))
+	}
+}
+
+// TestPublishNearNameMaxCollisionKeepsBothFiles is the data-loss regression:
+// publishing over an existing 254-byte name used to fail with ENAMETOOLONG on
+// the "-1" candidate and delete the temp file, losing the recording.
+func TestPublishNearNameMaxCollisionKeepsBothFiles(t *testing.T) {
+	dir := t.TempDir()
+	final := filepath.Join(dir, strings.Repeat("a", 250)+".csv")
+	write := func(content string) (string, error) {
+		return WriteFile(final, ".csv", func(w io.Writer) error {
+			_, err := io.WriteString(w, content)
+			return err
+		})
+	}
+	first, err := write("first")
+	if err != nil || first != final {
+		t.Fatalf("first write = %q, %v", first, err)
+	}
+	second, err := write("second")
+	if err != nil {
+		t.Fatalf("colliding write of a 254-byte name failed: %v", err)
+	}
+	if second == final || len(filepath.Base(second)) > nameMax {
+		t.Fatalf("second published as %q (%d bytes)", second, len(filepath.Base(second)))
+	}
+	if readFile(t, first) != "first" || readFile(t, second) != "second" {
+		t.Error("a recording was lost or clobbered")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("dir holds %d entries, want exactly the two recordings", len(entries))
+	}
+}
+
+func TestIsGeneratedName(t *testing.T) {
+	const layout = "ior-stream-20060102-150405.csv"
+	for name, want := range map[string]bool{
+		"ior-stream-20260930-135324.csv":           true,
+		"/some/dir/ior-stream-20260930-000000.csv": true,
+		"  ior-stream-20260930-135324.csv ":        true,
+		"ior-stream-20260930-90500.csv":            false, // one-digit hour parses leniently
+		"ior-stream-20260930-135324":               false, // extension missing
+		"ior-stream-20260930-135324-1.csv":         false,
+		"ior-stream-20260931-135324.csv":           false, // no such date
+		"mine.csv":                                 false,
+		"":                                         false,
+	} {
+		if got := IsGeneratedName(name, layout); got != want {
+			t.Errorf("IsGeneratedName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

@@ -18,7 +18,8 @@
 // "write exactly here, replacing what is there" through PublishReplace/
 // ReplaceFile: still atomic (readers see the old or the new file, never a
 // partial one), still written through an O_EXCL|O_NOFOLLOW temp file, but
-// deliberately overwriting. Callers that fall back to a "-N" name must tell
+// deliberately overwriting, and keeping the replaced file's permissions and
+// owner. Callers that fall back to a "-N" name must tell
 // the user which path was really written.
 //
 // Orphans: a temp file only disappears when its writer finishes or fails
@@ -40,6 +41,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -52,6 +55,9 @@ const (
 	// publishAttempts bounds how many "-N" suffixes Publish will try before
 	// giving up on finding a free name.
 	publishAttempts = 10000
+	// nameMax is the longest file name (one path component, in bytes) Linux
+	// filesystems accept; a "-N" suffix must not push a name past it.
+	nameMax = 255
 )
 
 // tempPrefix and tempSuffix frame the random part of a temp file name.
@@ -121,28 +127,98 @@ func publish(tmp, final, ext string, rename renameFunc) (string, error) {
 }
 
 // suffixed returns final for n == 0 and otherwise final with "-n" inserted
-// before ext.
+// before ext. When the suffixed file name would exceed NAME_MAX (255 bytes)
+// the stem is truncated - on a rune boundary, so a multi-byte name never ends
+// in a broken sequence - so that a near-limit name that collides still gets a
+// valid "-N" name instead of failing with ENAMETOOLONG and losing the data.
 func suffixed(final, ext string, n int) string {
 	if n == 0 {
 		return final
 	}
+	dir, base := filepath.Split(final)
+	stem, tail := base, ""
 	// The extension match is case-insensitive so "Trace.PARQUET" keeps its
 	// extension last too.
-	if cut := len(final) - len(ext); ext != "" && cut > 0 && strings.EqualFold(final[cut:], ext) {
-		return fmt.Sprintf("%s-%d%s", final[:cut], n, final[cut:])
+	if cut := len(base) - len(ext); ext != "" && cut > 0 && strings.EqualFold(base[cut:], ext) {
+		stem, tail = base[:cut], base[cut:]
 	}
-	return fmt.Sprintf("%s-%d", final, n)
+	tail = fmt.Sprintf("-%d%s", n, tail)
+	return dir + truncateStem(stem, nameMax-len(tail)) + tail
+}
+
+// truncateStem shortens stem to at most limit bytes without splitting a UTF-8
+// sequence. It returns stem unchanged when it already fits and never returns
+// an empty stem for a non-empty input unless limit leaves no room at all.
+func truncateStem(stem string, limit int) string {
+	if len(stem) <= limit {
+		return stem
+	}
+	if limit <= 0 {
+		return ""
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(stem[cut]) {
+		cut--
+	}
+	return stem[:cut]
+}
+
+// IsGeneratedName reports whether the file name of path is exactly a name
+// ior generated from layout (a time.Format layout such as
+// "ior-stream-20060102-150405.csv", extension included), as opposed to one a
+// user typed. The rule is strict: name must equal the layout formatted with
+// the time it parses to. Go's parser alone is lenient (the "15" hour accepts
+// one digit, so "ior-stream-20260930-90500.csv" would parse as 09:05:00), which
+// would let a user's own file be treated as a generated, never-replaced name.
+// Callers pass the name as the user gave it, before any extension is appended,
+// so a generated name that lost its extension is a user-chosen name for every
+// exporter.
+func IsGeneratedName(path, layout string) bool {
+	name := filepath.Base(strings.TrimSpace(path))
+	t, err := time.Parse(layout, name)
+	return err == nil && t.Format(layout) == name
 }
 
 // PublishReplace moves the finished temp file tmp to final, atomically
 // replacing whatever is there, for names the user chose explicitly (see the
-// package comment). It is a plain rename with error context; on error tmp is
-// left in place for the caller to remove.
+// package comment). On error tmp is left in place for the caller to remove.
+//
+// A rename replaces the inode, so without care replacing an existing file
+// would reset its permissions to 0666&umask and its owner to the writing user
+// (root under sudo), where the old truncate-in-place write kept both. When
+// final is an existing regular file its permission bits are therefore copied
+// onto tmp and, best effort, its owner and group (chown is refused for an
+// unprivileged writer; that is not an error). A symlink at final is not a
+// regular file: it is replaced by the new file and its target is left alone,
+// the safe direction, since following it would let a planted link redirect
+// the write. With nothing at final the new file keeps CreateTemp's
+// 0666&umask.
 func PublishReplace(tmp, final string) error {
+	if err := inheritMode(tmp, final); err != nil {
+		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
+	}
 	if err := os.Rename(tmp, final); err != nil {
 		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
 	}
 	return nil
+}
+
+// inheritMode copies the permission bits and (best effort) owner of an
+// existing regular file at final onto tmp. Anything else at final - nothing,
+// a symlink, a directory - leaves tmp untouched.
+func inheritMode(tmp, final string) error {
+	info, err := os.Lstat(final)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		// Best effort: only root (or the owner, for a group they belong to)
+		// may hand a file to another owner, so a failure is expected and
+		// must not lose the recording. Done before chmod because chown may
+		// clear mode bits.
+		_ = os.Chown(tmp, int(st.Uid), int(st.Gid))
+	}
+	return os.Chmod(tmp, info.Mode().Perm())
 }
 
 // renameFunc is the signature of a renameat2(RENAME_NOREPLACE) call; it is a

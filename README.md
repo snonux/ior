@@ -72,10 +72,10 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 `./ior -help` lists the valid values. [Syscall tracing](./docs/syscall-tracing-plan.md)
 explains classification and sampling.
 
-In the TUI you can change the traced set at runtime: press `o` for the probes modal, `tab`
-to switch to the Families view (attached/total probes per family), and `space` to attach
-the selected family, or detach it if any of its probes is attached. The Syscalls view
-toggles single probes. Runtime changes survive trace restarts (PID/TID reselect, filter
+In the TUI you can change the traced set at runtime: press `o` for the probes modal (on the Flame tab, the default, `o` cycles the frame order,
+so press `O` there; `O` works on every tab), `tab` to switch to the Families view
+(attached/total probes per family), and `space` to attach the selected family, or detach
+it if any of its probes is attached. The Syscalls view toggles single probes. Runtime changes survive trace restarts (PID/TID reselect, filter
 changes), and newly attached syscalls get the same sampling rates as at startup. The carried
 set is what you asked for: normally exactly what is attached, but a change that finishes
 after the trace restarted keeps its intended set, whose unattachable probes are retried and
@@ -105,9 +105,14 @@ complete. Names ior generates itself (`ior-stream-<timestamp>.csv`,
 `ior-recording-<timestamp>.parquet`, `ior-snapshot-<timestamp>.csv`, and the
 `<host>-<name>-<timestamp>.ior.zst` flamegraph record) are only accurate to the second and are
 never overwritten: if the name is taken, ior writes `<name>-1.<ext>` (then `-2`, ...) and
-prints or shows the path it really used. A file name you choose yourself (`-parquet
-trace.parquet`, or a name typed into a TUI export/recording prompt) is replaced if it
-exists. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
+prints or shows the path it really used (a very long name is shortened to fit the 255-byte
+file name limit). A file name you choose yourself (`-parquet trace.parquet`, or a name typed
+into a TUI export/recording prompt) is replaced if it exists, keeping that file's permissions
+(and, when ior may set it, owner); a symlink at that name is replaced, not written through.
+The TUI treats a name as generated only when it matches the generated pattern exactly
+(zero-padded date and time, right extension); a hand-typed near miss such as
+`ior-stream-20260930-90500.csv` or a missing `.csv`/`.parquet` counts as your own name and is
+replaced. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
 
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.

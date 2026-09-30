@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
+	"ior/internal/atomicfile"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
@@ -337,8 +337,8 @@ func formatRecorderStatus(status parquet.Status) string {
 }
 
 // defaultParquetRecordingLayout is the time.Format layout of the generated
-// recording name; isDefaultParquetRecordingName parses with the same layout,
-// so the two cannot drift apart.
+// recording name; isDefaultParquetRecordingName matches against the same
+// layout, so the two cannot drift apart.
 const defaultParquetRecordingLayout = "ior-recording-20060102-150405.parquet"
 
 func defaultParquetRecordingFilename() string {
@@ -348,10 +348,12 @@ func defaultParquetRecordingFilename() string {
 // isDefaultParquetRecordingName reports whether path's file name is a
 // generated default recording name (as opposed to one the user typed). Such a
 // name is only accurate to the second, so it is published without replacing an
-// existing file.
+// existing file. The match is strict (atomicfile.IsGeneratedName: exact
+// zero-padded layout including ".parquet") and is judged on the name as typed,
+// before the writer appends a missing ".parquet" - the same rule the stream
+// CSV export follows.
 func isDefaultParquetRecordingName(path string) bool {
-	_, err := time.Parse(defaultParquetRecordingLayout, filepath.Base(path))
-	return err == nil
+	return atomicfile.IsGeneratedName(path, defaultParquetRecordingLayout)
 }
 
 // tuiParquetMetadata delegates to the canonical parquet.NewFileMetadata.

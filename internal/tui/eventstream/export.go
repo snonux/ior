@@ -113,7 +113,7 @@ func consumeBackslash(s string, i int, out *strings.Builder) int {
 }
 
 // defaultStreamExportLayout is the time.Format layout of the generated export
-// name; isDefaultStreamExportName parses with the same layout so the two
+// name; isDefaultStreamExportName matches against the same layout so the two
 // cannot drift apart.
 const defaultStreamExportLayout = "ior-stream-20060102-150405.csv"
 
@@ -121,12 +121,16 @@ func defaultStreamExportFilename() string {
 	return time.Now().Format(defaultStreamExportLayout)
 }
 
-// isDefaultStreamExportName reports whether name is a generated default export
+// isDefaultStreamExportName reports whether name, exactly as the user gave it
+// (before ensureCSVFilename appends ".csv"), is a generated default export
 // name rather than one the user typed. Generated names are only accurate to
 // the second and are never replaced; a typed name is the user's to overwrite.
+// The match is strict (atomicfile.IsGeneratedName: exact zero-padded layout,
+// including the extension), and it is judged on the raw input so a name that
+// only becomes ".csv" after ensureCSVFilename counts as user-chosen, the same
+// rule the Parquet recording name follows.
 func isDefaultStreamExportName(name string) bool {
-	_, err := time.Parse(defaultStreamExportLayout, filepath.Base(name))
-	return err == nil
+	return atomicfile.IsGeneratedName(name, defaultStreamExportLayout)
 }
 
 func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
@@ -168,7 +172,7 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 
 	write := func(w io.Writer) error { return writeStreamCSV(csv.NewWriter(w), rows) }
 	var published string
-	if isDefaultStreamExportName(name) {
+	if isDefaultStreamExportName(filename) {
 		published, err = atomicfile.WriteFile(path, ".csv", write)
 	} else {
 		published, err = atomicfile.ReplaceFile(path, write)

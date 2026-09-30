@@ -386,10 +386,52 @@ func TestIsDefaultStreamExportName(t *testing.T) {
 	if !isDefaultStreamExportName(defaultStreamExportFilename()) {
 		t.Error("generated default name not recognised")
 	}
-	for _, name := range []string{"", "mine.csv", "ior-stream-x.csv", "ior-stream-20260930-135324-1.csv"} {
+	for _, name := range []string{
+		"", "mine.csv", "ior-stream-x.csv", "ior-stream-20260930-135324-1.csv",
+		// Lenient parsing would accept a one-digit hour (09:05:00) and other
+		// non-zero-padded fields; the exact layout must be required.
+		"ior-stream-20260930-90500.csv",
+		"ior-stream-20260930-9505.csv",
+		"ior-stream-2026930-135324.csv",
+		// A generated name without its extension is user-chosen, matching the
+		// Parquet exporter (ensureCSVFilename would append ".csv" and make
+		// it look generated if the check ran after it).
+		"ior-stream-20260930-135324",
+	} {
 		if isDefaultStreamExportName(name) {
 			t.Errorf("%q treated as generated; user-typed names must be replaced", name)
 		}
+	}
+}
+
+// TestExportRowsToCSVMissingExtensionIsUserChosen pins the consistency rule
+// end to end: a typed name equal to a generated one minus ".csv" replaces the
+// existing file instead of being suffixed, while the full generated name is
+// never replaced.
+func TestExportRowsToCSVMissingExtensionIsUserChosen(t *testing.T) {
+	dir := t.TempDir()
+	full := "ior-stream-20260930-135324.csv"
+	if err := os.WriteFile(filepath.Join(dir, full), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := exportRowsToCSV(nil, dir, "ior-stream-20260930-135324")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if path != filepath.Join(dir, full) {
+		t.Errorf("typed name published as %q, want it to replace %q", path, full)
+	}
+	if data, _ := os.ReadFile(path); strings.HasPrefix(string(data), "old") {
+		t.Error("typed name did not replace the existing file")
+	}
+
+	path, err = exportRowsToCSV(nil, dir, full)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if path == filepath.Join(dir, full) {
+		t.Error("generated name replaced an existing file")
 	}
 }
 

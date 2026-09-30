@@ -158,8 +158,8 @@ func (w *Writer) WriteRows(rows []Record) error {
 
 // Close finalizes the parquet footer and publishes the file atomically: an
 // auto-named writer never replaces an existing file (see FinalPath), an
-// explicitly named one replaces it. If publishing fails the
-// complete temp file is kept at TempPath so the recording can be rescued.
+// explicitly named one replaces it. If publishing fails, the complete temp
+// file is kept at TempPath so the recording can be rescued.
 func (w *Writer) Close() error {
 	if w == nil {
 		return nil
@@ -242,8 +242,11 @@ func normalizeWriterConfig(cfg WriterConfig) WriterConfig {
 }
 
 // normalizeOutputPath maps the user-supplied path to the final ".parquet"
-// path. A trailing ".tmp" on a ".parquet.tmp" name is dropped so a caller that
-// hands back a temp path still publishes to the real name.
+// path, appending ".parquet" when missing. A trailing ".tmp" on a
+// ".parquet.tmp" name is dropped, so a "<name>.parquet.tmp" path (the temp
+// naming older ior versions used, which a caller could still hand in) publishes
+// to "<name>.parquet". Current temp files are ior-<hex>.tmp and never pass
+// through here; the rule stays because it is harmless and a test pins it.
 func normalizeOutputPath(path string) (string, error) {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	if clean == "." || clean == "" {

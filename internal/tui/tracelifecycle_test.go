@@ -137,7 +137,10 @@ func TestIsDefaultParquetRecordingName(t *testing.T) {
 	if !isDefaultParquetRecordingName("/var/tmp/ior-recording-20260930-135324.parquet") {
 		t.Error("a generated name in another directory is still generated")
 	}
-	for _, name := range []string{"", "trace.parquet", "ior-recording-mine.parquet", "ior-recording-20260930-135324", "ior-recording-20260930-135324-1.parquet"} {
+	for _, name := range []string{"", "trace.parquet", "ior-recording-mine.parquet", "ior-recording-20260930-135324", "ior-recording-20260930-135324-1.parquet",
+		// Strict layout: one-digit hour (09:05:00) and unpadded fields are
+		// hand-typed near misses, not generated names.
+		"ior-recording-20260930-90500.parquet", "ior-recording-2026930-135324.parquet"} {
 		if isDefaultParquetRecordingName(name) {
 			t.Errorf("%q was treated as a generated name; user-typed names must be replaced, not suffixed", name)
 		}
