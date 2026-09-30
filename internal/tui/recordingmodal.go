@@ -29,6 +29,13 @@ func (m recordingModal) Visible() bool {
 	return m.visible
 }
 
+// TextInputFocused reports whether the modal's path input is receiving typed
+// text. The input is focused for as long as the modal is open (Open and
+// SetError focus it, Close blurs it), so this equals Visible.
+func (m recordingModal) TextInputFocused() bool {
+	return m.visible && m.textInput.Focused()
+}
+
 func (m recordingModal) SetDarkMode(isDark bool) recordingModal {
 	m.textInput.SetStyles(textinput.DefaultStyles(isDark))
 	return m

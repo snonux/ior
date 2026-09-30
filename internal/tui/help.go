@@ -81,7 +81,8 @@ func (m *Model) helpSections() []helpSection {
 		{
 			title: "PID/TID Picker",
 			lines: []string{
-				"enter select  r refresh  esc/q back",
+				"enter select  esc back  ctrl+r refresh  (typing filters the list)",
+				"with the filter unfocused (up/down): r refresh  q back  H help",
 			},
 		},
 	}

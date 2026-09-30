@@ -69,6 +69,13 @@ type Model struct {
 	isDark        bool
 }
 
+// TextInputFocused reports whether the process filter input is receiving
+// typed text. It starts focused, is blurred by the Up/Down selection keys and
+// is re-focused by the next printable key.
+func (m Model) TextInputFocused() bool {
+	return m.input.Focused()
+}
+
 // New creates a PID picker model with default shared key bindings.
 func New() Model {
 	return NewPIDWithKeys(DefaultKeyMap())

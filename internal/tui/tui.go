@@ -955,6 +955,42 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
+// textInputFocused reports whether the screen or modal that currently receives
+// keys has a focused text input. Modals sit on top of the screens, so a visible
+// modal decides; otherwise the active screen does. It is only consulted for
+// keys that reach handleGlobalKeyPress, which has already dealt with the error
+// screen and the help overlay.
+func (m *Model) textInputFocused() bool {
+	switch {
+	case m.attaching:
+		return false
+	case m.filterModal.Visible():
+		return m.filterModal.TextInputFocused()
+	case m.recordModal.Visible():
+		return m.recordModal.TextInputFocused()
+	case m.probeModal.Visible():
+		return m.probeModal.TextInputFocused()
+	case m.exporter.Visible():
+		// The export option menu is a list, not a text input.
+		return false
+	}
+	switch m.router.current() {
+	case ScreenPIDPicker:
+		return m.pidPicker.TextInputFocused()
+	case ScreenDashboard:
+		return m.dashboard.TextInputFocused()
+	}
+	return false
+}
+
+// isTypingIntoTextInput reports whether msg is printable text bound for a
+// focused text input. Keys without text (ctrl+c, Esc, arrows) are never
+// typing, so the global quit/cancel handling keeps working while an input has
+// focus.
+func (m *Model) isTypingIntoTextInput(msg tea.KeyPressMsg) bool {
+	return msg.Key().Text != "" && m.textInputFocused()
+}
+
 // handleGlobalKeyPress intercepts keys that apply regardless of the active
 // screen: help overlay toggle, quit, and dashboard-level shortcuts. Returns
 // (model, cmd, handled); when handled is false the caller falls through to
@@ -973,6 +1009,13 @@ func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, b
 	}
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
+	}
+	if m.isTypingIntoTextInput(msg) {
+		// A focused text input owns every printable key: q and H are letters
+		// of a process name, filename or search term there, not the quit and
+		// help shortcuts. ctrl+c and Esc carry no text, so they still take
+		// the paths below.
+		return m, nil, false
 	}
 	if m.shouldCancelPickerToDashboard(msg) {
 		next, cmd := m.cancelPickerToDashboard()

@@ -474,6 +474,12 @@ func (m *Model) userDriving() bool {
 	return driveWindowActive(m.lastKeyAt)
 }
 
+// SearchActive reports whether the flamegraph's search input is open and
+// receiving typed text.
+func (m *Model) SearchActive() bool {
+	return m.search.isActive()
+}
+
 // ConsumesKey reports whether the flamegraph should handle a key press before
 // dashboard- or app-level shortcuts.
 func (m *Model) ConsumesKey(msg tea.KeyPressMsg) bool {

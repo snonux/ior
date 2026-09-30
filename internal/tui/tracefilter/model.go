@@ -88,6 +88,13 @@ func (m Model) Visible() bool {
 	return m.visible
 }
 
+// TextInputFocused reports whether a field is being edited, i.e. the text
+// input is receiving typed text. Outside edit mode the keys are navigation
+// commands (j/k, c, Space, ...).
+func (m Model) TextInputFocused() bool {
+	return m.visible && m.editing
+}
+
 // Filter returns the filter built from the last applied modal edit. It
 // carries over any dimension the modal has no field for (Family, set outside
 // the modal) from the filter passed to Open.

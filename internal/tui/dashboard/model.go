@@ -1035,6 +1035,15 @@ func (m *Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 	return d.BlocksGlobalShortcut != nil && d.BlocksGlobalShortcut(m, msg)
 }
 
+// TextInputFocused reports whether the active tab has a text input open (the
+// flamegraph search, the stream search or export-filename modal). While one is
+// open, printable keys are text and the top-level model must not treat them as
+// shortcuts (q quits, H opens help).
+func (m *Model) TextInputFocused() bool {
+	d := lookupTab(m.activeTab)
+	return d.TextInputFocused != nil && d.TextInputFocused(m)
+}
+
 // SetStreamSource updates the live stream source used by the stream tab.
 func (m *Model) SetStreamSource(source eventstream.Source) {
 	m.streamModel.SetSource(source)

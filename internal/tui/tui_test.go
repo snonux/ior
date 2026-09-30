@@ -539,6 +539,11 @@ func TestStartupPIDPickerQuitsOnQuitKeys(t *testing.T) {
 			if m.router.current() != ScreenPIDPicker || hasReturn(m) {
 				t.Fatalf("expected startup PID picker with no pending return")
 			}
+			// The filter input starts focused and would take a typed q as
+			// text (see textinput_keys_test.go); Down moves the selection
+			// off it, which is when q is a command again.
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(*Model)
 			stopCalls := 0
 			m.tracer.traceStop = func() { stopCalls++ }
 
@@ -581,6 +586,10 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			if m.router.current() != ScreenPIDPicker || !hasReturn(m) {
 				t.Fatalf("expected reselect PID picker with a pending return")
 			}
+			// Down blurs the filter input, which would otherwise take a
+			// typed q as text (see textinput_keys_test.go).
+			next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(*Model)
 
 			next, cmd := m.Update(tt.press)
 			updated := next.(*Model)
@@ -687,7 +696,9 @@ func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
 	}
 }
 
-func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
+// While the flame search input is open a q is typed text (see
+// textinput_keys_test.go), so it is Esc - not q - that closes the search.
+func TestEscClosesFlameSearch(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.router.showDashboard()
 	m.attaching = false
@@ -700,16 +711,16 @@ func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 		t.Fatalf("expected flame search footer to open on /")
 	}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(*Model)
 	if cmd != nil {
-		t.Fatalf("expected q in flame search to close search, not quit")
+		t.Fatalf("expected esc in flame search to close search, not quit")
 	}
 	if m.quitting {
-		t.Fatalf("expected q in flame search not to set quitting state")
+		t.Fatalf("expected esc in flame search not to set quitting state")
 	}
 	if strings.Contains(m.View().Content, "0/0 matches") {
-		t.Fatalf("expected q to close flame search like esc")
+		t.Fatalf("expected esc to close flame search")
 	}
 }
 
@@ -1777,7 +1788,12 @@ func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	// The picker's filter input starts focused and would take an H as text
+	// (see textinput_keys_test.go); Down moves the selection off it, which is
+	// when H is the help shortcut again.
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
 	m = next.(*Model)
 	if !m.helpOverlayVisible {
 		t.Fatalf("expected help overlay to open on pid picker screen")

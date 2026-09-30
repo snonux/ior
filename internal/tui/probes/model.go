@@ -126,6 +126,10 @@ func (m Model) WithSession(session uint64) Model {
 // Visible reports whether the probes modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
+// TextInputFocused reports whether the modal's search line is open and
+// receiving typed text, as opposed to the list keys (j/k, space, a, n, ...).
+func (m Model) TextInputFocused() bool { return m.visible && m.searching }
+
 // Open shows the probes modal and reloads the probe list.
 func (m Model) Open() Model {
 	m.visible = true

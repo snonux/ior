@@ -109,6 +109,12 @@ type tabDescriptor struct {
 	// key press for itself (an open modal, a key its sub-model consumes), so
 	// the top-level model must not act on it. Nil means it never blocks.
 	BlocksGlobalShortcut func(m *Model, msg tea.KeyPressMsg) bool
+	// TextInputFocused reports whether the tab, while active, has a text input
+	// open that receives printable keys as text. Unlike BlocksGlobalShortcut,
+	// which only defers a key to the tab, this makes the top-level model skip
+	// its q/H handling entirely, so typing "sql" or "Hypr" is not a quit or a
+	// help toggle. Nil means the tab has no text input.
+	TextInputFocused func(m *Model) bool
 	// RefreshBubble feeds the tab's bubble chart from the latest snapshot and
 	// reports whether the chart is still animating. Nil means the tab has no
 	// bubble chart.
@@ -165,6 +171,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			BlocksGlobalShortcut: func(m *Model, msg tea.KeyPressMsg) bool {
 				return m.flamegraphModel.ConsumesKey(msg)
 			},
+			TextInputFocused: func(m *Model) bool { return m.flamegraphModel.SearchActive() },
 		},
 		TabOverview: {
 			Name:            "Overview",
@@ -257,6 +264,10 @@ func registeredTabs() map[Tab]tabDescriptor {
 			Render:          tabRenderStream,
 			HandleScroll:    tabScrollStream,
 			BlocksGlobalShortcut: func(m *Model, _ tea.KeyPressMsg) bool {
+				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+			},
+			// Both stream modals are a single text input, focused while open.
+			TextInputFocused: func(m *Model) bool {
 				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
 			},
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.Seven },
