@@ -5,6 +5,7 @@ import (
 	"ior/internal/parquet"
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
+	"ior/internal/tui/eventstream"
 )
 
 // traceSessionBindings is the view of the TUI runtime bindings that one trace
@@ -38,6 +39,8 @@ type traceSessionBindings struct {
 
 // sessionEventSink is the stream buffer as one session sees it: Push is
 // dropped once the session is no longer current, reads go straight through.
+// The trace core also publishes it as the TUI's stream source, so it forwards
+// the ring buffer's AppendSnapshot fast path as well (see AppendSnapshot).
 type sessionEventSink struct {
 	view traceSessionBindings
 }
@@ -122,6 +125,13 @@ func (r *runtimeBindings) emitIfCurrent(session uint64, emit func()) bool {
 	return true
 }
 
+// ringBuffer returns the TUI-owned stream ring buffer (nil if absent).
+func (r *runtimeBindings) ringBuffer() *eventstream.RingBuffer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.streamBuffer
+}
+
 // end retires this session (see runtimeBindings.endSession).
 func (s traceSessionBindings) end() {
 	s.bindings.endSession(s.session)
@@ -169,7 +179,10 @@ func (s traceSessionBindings) SetLiveFilterSetter(setter func(globalfilter.Filte
 }
 
 // StreamBuffer returns the TUI-owned stream buffer behind this session's gate,
-// or nil when the bindings have no buffer.
+// or nil when the bindings have no buffer. The core pushes rows into the
+// returned sink and also publishes it back as the stream source, so besides
+// the gated Push it offers every read the stream tab uses, including the
+// AppendSnapshot fast path.
 func (s traceSessionBindings) StreamBuffer() runtime.EventSink {
 	if s.bindings.StreamBuffer() == nil {
 		return nil
@@ -209,7 +222,7 @@ func (k sessionEventSink) Push(row streamrow.Row) {
 
 // Len returns the number of buffered stream rows.
 func (k sessionEventSink) Len() int {
-	if buffer := k.view.bindings.StreamBuffer(); buffer != nil {
+	if buffer := k.view.bindings.ringBuffer(); buffer != nil {
 		return buffer.Len()
 	}
 	return 0
@@ -217,10 +230,22 @@ func (k sessionEventSink) Len() int {
 
 // Snapshot returns the buffered stream rows.
 func (k sessionEventSink) Snapshot() []streamrow.Row {
-	if buffer := k.view.bindings.StreamBuffer(); buffer != nil {
+	if buffer := k.view.bindings.ringBuffer(); buffer != nil {
 		return buffer.Snapshot()
 	}
 	return nil
+}
+
+// AppendSnapshot appends the buffered stream rows to dst (ungated, like every
+// read). The trace core publishes this sink as the TUI's stream source, and
+// the stream tab refreshes several times a second: without this forward the
+// view would miss the ring buffer's allocation-free snapshot path and copy up
+// to the full ring into a fresh slice on every refresh.
+func (k sessionEventSink) AppendSnapshot(dst []streamrow.Row) []streamrow.Row {
+	if buffer := k.view.bindings.ringBuffer(); buffer != nil {
+		return buffer.AppendSnapshot(dst)
+	}
+	return dst
 }
 
 // Record records row while the session is current. A superseded session's

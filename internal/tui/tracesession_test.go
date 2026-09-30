@@ -12,6 +12,7 @@ import (
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
+	"ior/internal/tui/eventstream"
 )
 
 // sessionProbeManager is a distinguishable probe manager per session.
@@ -452,4 +453,41 @@ func TestBeginCmdWithoutBindingsSendsNone(t *testing.T) {
 		t.Fatalf("request bindings = %#v, want nil", req.Bindings)
 	}
 	lifecycle.stop()
+}
+
+// streamSnapshotAppender mirrors eventstream's unexported snapshotAppender:
+// the optional fast path the stream tab uses to refresh without allocating.
+type streamSnapshotAppender interface {
+	AppendSnapshot(dst []streamrow.Row) []streamrow.Row
+}
+
+// TestSessionStreamSourceKeepsAppendSnapshotFastPath is the regression test
+// for the session sink hiding the ring buffer's AppendSnapshot: the core
+// publishes the sink it got from StreamBuffer as the stream source, and the
+// stream tab then fell back to Snapshot and allocated a full copy of up to
+// 10k rows on every refresh.
+func TestSessionStreamSourceKeepsAppendSnapshotFastPath(t *testing.T) {
+	r := newRuntimeBindings()
+	view := r.beginSession()
+	sink := view.StreamBuffer()
+	view.SetEventStreamSource(sink) // what the core's wireRuntimeBindings does
+	source := r.eventStreamSource()
+
+	appender, ok := source.(streamSnapshotAppender)
+	if !ok {
+		t.Fatalf("published stream source %T has no AppendSnapshot", source)
+	}
+	for i := range streamrow.RingBufferCapacity {
+		sink.Push(streamrow.Row{Seq: uint64(i + 1)})
+	}
+	if got := appender.AppendSnapshot(nil); len(got) != sink.Len() || got[0].Seq != 1 {
+		t.Fatalf("AppendSnapshot returned %d rows (first %+v), want %d from seq 1", len(got), got[0], sink.Len())
+	}
+
+	stream := eventstream.NewModel(source)
+	stream.SetViewport(160, 40)
+	stream.Refresh()
+	if allocs := testing.AllocsPerRun(10, stream.Refresh); allocs > 2 {
+		t.Fatalf("stream refresh through the session source allocated %.0f times, want <= 2", allocs)
+	}
 }
