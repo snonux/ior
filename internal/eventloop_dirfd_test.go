@@ -858,3 +858,91 @@ func TestFexecveResolvesCloexecDescriptorBeforeExecRecord(t *testing.T) {
 		})
 	}
 }
+
+// runRawExec feeds an exec pair through processRawEvent in ring-buffer order,
+// running between after the enter record, and returns the emitted pair (nil
+// when none was emitted).
+func runRawExec(t *testing.T, el *eventLoop, enter *types.ExecEvent, exit *types.RetEvent, between func()) *event.Pair {
+	t.Helper()
+	enterRaw, err := enter.Bytes()
+	if err != nil {
+		t.Fatalf("encode exec enter: %v", err)
+	}
+	exitRaw, err := exit.Bytes()
+	if err != nil {
+		t.Fatalf("encode exec exit: %v", err)
+	}
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(enterRaw, out)
+	if between != nil {
+		between()
+	}
+	el.processRawEvent(exitRaw, out)
+	select {
+	case ep := <-out:
+		return ep
+	default:
+		return nil
+	}
+}
+
+// TestRawExecEnterSnapshotRespectsOutcomeAndIsolation drives the enter-time
+// snapshot path (storeEnter) end to end, where ep.File is already set when
+// handleExecExit runs: a failed fexecve must still withdraw the descriptor
+// attribution, and fd-table changes after the enter must not leak into the
+// row.
+func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
+	const (
+		pid    = uint32(0x7ffffff1)
+		progfd = int32(6)
+		flags  = int32(syscall.O_RDONLY)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	tests := []struct {
+		name     string
+		filename string
+		atFlags  int32
+		ret      int64
+		between  func(el *eventLoop)
+		wantName string
+		wantFD   int32
+	}{
+		{name: "successful fexecve", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
+		{name: "failed fexecve reports no path", atFlags: unix.AT_EMPTY_PATH, ret: -int64(syscall.EACCES), wantName: "", wantFD: -1},
+		{name: "failed execveat keeps relative resolution", filename: "ls", ret: -int64(syscall.ENOENT), wantName: filepath.Join(prog, "ls"), wantFD: progfd},
+		{name: "fd replaced after enter", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd,
+			between: func(el *eventLoop) {
+				el.fdState().set(progfd, pid, file.NewFd(progfd, "/replaced", syscall.O_WRONLY))
+			}},
+		{name: "tracked fd mutated in place after enter", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd,
+			between: func(el *eventLoop) {
+				tracked, ok := el.fdState().get(progfd, pid)
+				if !ok {
+					t.Fatal("descriptor not tracked")
+				}
+				tracked.(*file.FdFile).SetFlags(syscall.O_WRONLY)
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, flags))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, tc.atFlags, tc.filename, tc.ret)
+			var between func()
+			if tc.between != nil {
+				between = func() { tc.between(el) }
+			}
+			ep := runRawExec(t, el, enter, exit, between)
+			if ep == nil {
+				t.Fatal("exec pair was not emitted")
+			}
+			defer ep.Recycle()
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+			}
+			if tc.wantFD == progfd && int32(ep.File.Flags()) != flags {
+				t.Fatalf("flags = %#x, want enter-time %#x", int32(ep.File.Flags()), flags)
+			}
+		})
+	}
+}
