@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"fmt"
 	"image/color"
 	"strings"
 
@@ -130,49 +129,168 @@ func blankLike(c gridCell) gridCell {
 	return gridCell{char: ' ', colorSlot: c.colorSlot, bold: c.bold}
 }
 
-// renderGridRow renders one chart row. Coloured cells are styled with their
-// palette slot (the selected item in the highlight colour and bold);
-// continuation cells emit nothing, as their cluster already covers them.
+// selectedColor is the highlight colour of the selected item; the selected
+// item is also bold, whatever its palette slot.
+var selectedColor = lipgloss.Color("129")
+
+// gridStyleKind identifies the visual style of a coloured/bold cell. Cells
+// with the same kind render identically, so a run of them is styled once.
+// Values >= gridStyleSlot0 are palette slots (gridStyleSlot0 + slot).
+type gridStyleKind int
+
+const (
+	gridStylePlain    gridStyleKind = iota // no styling: emitted raw
+	gridStyleBoldOnly                      // bold, default colour
+	gridStyleSelected                      // bold in selectedColor
+	gridStyleSlot0                         // first palette slot
+)
+
+// gridStyle is one precomputed style. lipgloss.Style.Render measures and
+// re-splits its text on every call, which stayed the dominant cost even with
+// one call per run (about 60% of a 400x118 treemap frame). So the escape
+// sequences lipgloss wraps around text are captured once, by rendering a
+// probe, and wrapping a run is then a concatenation. Only when the probe does
+// not have the expected prefix + text + suffix shape does render fall back to
+// the Style itself.
+type gridStyle struct {
+	style          lipgloss.Style
+	prefix, suffix string
+	wrappable      bool
+}
+
+// gridStyleProbe is the marker text rendered to discover a style's escape
+// sequences; it cannot occur in the sequences themselves.
+const gridStyleProbe = "\x00"
+
+func newGridStyle(style lipgloss.Style) gridStyle {
+	gs := gridStyle{style: style}
+	probe := style.Render(gridStyleProbe)
+	if before, after, ok := strings.Cut(probe, gridStyleProbe); ok && !strings.Contains(after, gridStyleProbe) {
+		gs.prefix, gs.suffix, gs.wrappable = before, after, true
+	}
+	return gs
+}
+
+// render styles text (which never contains a newline or tab: grid cells hold
+// single graphemes).
+func (g gridStyle) render(text string) string {
+	if g.wrappable {
+		return g.prefix + text + g.suffix
+	}
+	return g.style.Render(text)
+}
+
+// gridStyles holds the styles of one frame, built once per palette so that
+// rendering a row never constructs a Style per cell (the old per-cell
+// Style.Render was the dominant cost of the treemap and bubbles views: 36ms
+// for a 200x48 frame).
+type gridStyles struct {
+	boldOnly gridStyle
+	selected gridStyle
+	slots    []gridStyle
+}
+
+// newGridStyles precomputes one style per palette slot plus the bold and
+// selected styles.
+func newGridStyles(palette []color.Color) gridStyles {
+	s := gridStyles{
+		boldOnly: newGridStyle(lipgloss.NewStyle().Bold(true)),
+		selected: newGridStyle(lipgloss.NewStyle().Foreground(selectedColor).Bold(true)),
+		slots:    make([]gridStyle, len(palette)),
+	}
+	for i, c := range palette {
+		s.slots[i] = newGridStyle(lipgloss.NewStyle().Foreground(c))
+	}
+	return s
+}
+
+// kindOf classifies cell. A selected (bold) coloured cell is styled the same
+// whatever its slot, so it maps to gridStyleSelected. An empty palette leaves
+// nothing to colour with, so coloured cells then count as uncoloured.
+func (s gridStyles) kindOf(cell gridCell) gridStyleKind {
+	switch {
+	case cell.colorSlot < 0 || len(s.slots) == 0:
+		if cell.bold {
+			return gridStyleBoldOnly
+		}
+		return gridStylePlain
+	case cell.bold:
+		return gridStyleSelected
+	default:
+		return gridStyleSlot0 + gridStyleKind(cell.colorSlot%len(s.slots))
+	}
+}
+
+// render styles text according to kind.
+func (s gridStyles) render(kind gridStyleKind, text string) string {
+	switch kind {
+	case gridStylePlain:
+		return text
+	case gridStyleBoldOnly:
+		return s.boldOnly.render(text)
+	case gridStyleSelected:
+		return s.selected.render(text)
+	default:
+		return s.slots[kind-gridStyleSlot0].render(text)
+	}
+}
+
+// renderGridRows renders every row of grid with one style set.
+func renderGridRows(grid [][]gridCell, palette []color.Color) []string {
+	styles := newGridStyles(palette)
+	lines := make([]string, len(grid))
+	for i, row := range grid {
+		lines[i] = renderGridRowWith(row, styles)
+	}
+	return lines
+}
+
+// renderGridRow renders one chart row (see renderGridRowWith).
 func renderGridRow(cells []gridCell, palette []color.Color) string {
-	if len(cells) == 0 {
-		return ""
+	return renderGridRowWith(cells, newGridStyles(palette))
+}
+
+// renderGridRowWith renders one chart row. Adjacent cells of the same style
+// are gathered into a run and styled with ONE Render call: charts paint wide
+// same-coloured blocks, so this turns thousands of per-cell escape sequences
+// and Style.Render calls into a handful per row, with identical visible text
+// and colours. Plain cells are written raw and end the current run.
+// Continuation cells emit nothing and do not break a run, as their cluster
+// already covers them and shares its style.
+func renderGridRowWith(cells []gridCell, styles gridStyles) string {
+	var out, run strings.Builder
+	out.Grow(len(cells) + 16)
+	runKind := gridStylePlain
+	flush := func() {
+		if run.Len() > 0 {
+			out.WriteString(styles.render(runKind, run.String()))
+			run.Reset()
+		}
 	}
-	var b strings.Builder
-	styleCache := make(map[string]lipgloss.Style, 8)
-	selectedColor := lipgloss.Color("129")
 	for _, cell := range cells {
-		// Fast path for the dominant plain cell (blank background, one-rune
-		// glyph): WriteRune avoids the per-cell string allocation of glyph().
-		if cell.colorSlot < 0 && !cell.bold && !cell.cont && cell.cluster == "" {
-			b.WriteRune(cell.char)
+		if cell.cont {
 			continue
 		}
-		glyph := cell.glyph()
-		if glyph == "" {
-			continue
+		kind := styles.kindOf(cell)
+		if kind != runKind {
+			flush()
+			runKind = kind
 		}
-		if cell.colorSlot < 0 {
-			if cell.bold {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Render(glyph))
+		if kind == gridStylePlain {
+			// Dominant case (blank background): no per-cell string alloc.
+			if cell.cluster != "" {
+				out.WriteString(cell.cluster)
 			} else {
-				b.WriteString(glyph)
+				out.WriteRune(cell.char)
 			}
 			continue
 		}
-		slot := cell.colorSlot
-		if len(palette) > 0 {
-			slot = slot % len(palette)
+		if cell.cluster != "" {
+			run.WriteString(cell.cluster)
+		} else {
+			run.WriteRune(cell.char)
 		}
-		key := fmt.Sprintf("%d/%t", slot, cell.bold)
-		style, ok := styleCache[key]
-		if !ok {
-			style = lipgloss.NewStyle().Foreground(palette[slot])
-			if cell.bold {
-				style = style.Foreground(selectedColor).Bold(true)
-			}
-			styleCache[key] = style
-		}
-		b.WriteString(style.Render(glyph))
 	}
-	return b.String()
+	flush()
+	return out.String()
 }

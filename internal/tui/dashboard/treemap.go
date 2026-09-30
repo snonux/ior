@@ -92,9 +92,7 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	for _, row := range grid {
-		lines = append(lines, renderGridRow(row, palette))
-	}
+	lines = append(lines, renderGridRows(grid, palette)...)
 	lines = append(lines, padOrTrim(treemapStatusLine(items, selected, metric), width))
 	return strings.Join(lines, "\n")
 }

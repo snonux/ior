@@ -30,6 +30,22 @@ const (
 	bubbleDamping         = 1.0
 	bubbleSpringEpsilon   = 0.01
 	bubbleMaxItems        = 28
+
+	// bubbleDriftSeconds is how long the ambient drift wobble keeps running
+	// after the chart last moved for a real reason (new data, a resize). The
+	// wobble is cosmetic; running it forever kept the 30fps tick chain, and
+	// with it a full re-render, alive on a chart that had nothing to show
+	// (34-78% CPU idle). It now fades out over bubbleDriftFadeSeconds, the
+	// springs settle, and the chain ends until the next data change.
+	bubbleDriftSeconds     = 6.0
+	bubbleDriftFadeSeconds = 2.0
+
+	// bubbleRetargetEpsilon is the smallest change of a bubble's anchor or
+	// target radius that counts as new data. Smaller changes keep the old
+	// anchor (see inheritPrevNodeState), so a stream of sub-cell wiggles from
+	// live counters neither restarts the animation nor is lost: it
+	// accumulates against the kept anchor until it crosses the threshold.
+	bubbleRetargetEpsilon = 0.02
 )
 
 type bubbleDatum struct {
@@ -84,6 +100,13 @@ type bubbleChart struct {
 	statusHint string
 	isDark     bool
 	driftTime  float64
+	// driftRemaining is the seconds of drift wobble left (see
+	// bubbleDriftSeconds). While it is positive the chart keeps animating;
+	// driftTime only advances during that time, so a resumed wobble
+	// continues where it stopped instead of jumping.
+	driftRemaining float64
+	// frame caches the last rendered view (see bubbleFrameCache).
+	frame bubbleFrameCache
 }
 
 func newBubbleChart() bubbleChart {
@@ -152,7 +175,10 @@ func (c *bubbleChart) SetDarkMode(isDark bool) {
 
 // SetData recomputes bubble targets from data and merges them with existing
 // animation state so that live updates animate smoothly. Returns true when
-// at least one node has motion and a Tick should be scheduled.
+// the chart is animating and a Tick should be scheduled: either the springs
+// have not settled or the drift wobble is still running. A data update that
+// moves no bubble (the common idle case) returns false once settled, so the
+// tick chain stays stopped.
 func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 	targets := buildBubbleTargets(data, c.Metric(), c.width, c.height)
 
@@ -166,14 +192,20 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 		existing[node.ID] = node
 	}
 
-	c.nodes = c.mergeTargetNodes(targets, existing)
+	var retargeted bool
+	c.nodes, retargeted = c.mergeTargetNodes(targets, existing)
 	if len(c.nodes) == 0 {
 		c.selected = 0
 		c.animating = false
+		c.driftRemaining = 0
 		return false
 	}
+	// A vanished bubble is a change too, though no remaining node shows it.
+	if retargeted || len(existing) != len(c.nodes) {
+		c.driftRemaining = bubbleDriftSeconds
+	}
 	c.selected = c.selectIndexByID(selectedID)
-	c.animating = c.hasMotion()
+	c.animating = c.driftRemaining > 0 || c.hasMotion()
 	if c.animating {
 		c.Tick(0)
 	}
@@ -181,8 +213,11 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 }
 
 // mergeTargetNodes converts target positions into live nodes, carrying over
-// spring velocities and drift state from existing nodes where available.
-func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string]bubbleNode) []bubbleNode {
+// spring velocities and drift state from existing nodes where available. It
+// also reports whether any bubble is new or was moved or resized by more than
+// bubbleRetargetEpsilon, i.e. whether the animation needs to (re)start.
+func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string]bubbleNode) ([]bubbleNode, bool) {
+	retargeted := false
 	next := make([]bubbleNode, 0, len(targets))
 	for _, target := range targets {
 		node := bubbleNode{
@@ -202,22 +237,35 @@ func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string
 			ySpring:      harmonica.NewSpring(harmonica.FPS(bubbleFPS), bubbleAngularVelocity, bubbleDamping),
 		}
 		if prev, ok := existing[target.ID]; ok {
-			c.inheritPrevNodeState(&node, prev, target)
+			if c.inheritPrevNodeState(&node, prev, target) {
+				retargeted = true
+			}
 		} else {
 			node.radius = target.targetRadius
 			node.x = target.targetX
 			node.y = target.targetY
 			c.initNodeDrift(&node)
+			retargeted = true
 		}
-		node.applyDrift(c.driftTime, c.width, c.height)
+		node.applyDrift(c.driftTime, c.driftEnvelope(), c.width, c.height)
 		next = append(next, node)
 	}
-	return next
+	return next, retargeted
 }
 
 // inheritPrevNodeState copies physics and drift state from a previous node
-// into node so that the transition animates rather than snapping.
-func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, target bubbleNode) {
+// into node so that the transition animates rather than snapping. When the
+// new target differs from the previous anchor and radius by no more than
+// bubbleRetargetEpsilon the previous anchor and radius are kept (hysteresis)
+// and false is returned; otherwise the new ones apply and it returns true.
+func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, target bubbleNode) bool {
+	retargeted := math.Abs(target.targetX-prev.anchorX) > bubbleRetargetEpsilon ||
+		math.Abs(target.targetY-prev.anchorY) > bubbleRetargetEpsilon ||
+		math.Abs(target.targetRadius-prev.targetRadius) > bubbleRetargetEpsilon
+	if !retargeted {
+		node.anchorX, node.anchorY = prev.anchorX, prev.anchorY
+		node.targetRadius = prev.targetRadius
+	}
 	node.radius = prev.radius
 	node.x = prev.x
 	node.y = prev.y
@@ -237,6 +285,7 @@ func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, ta
 	} else {
 		c.updateNodeDriftAmplitude(node)
 	}
+	return retargeted
 }
 
 func (c *bubbleChart) selectIndexByID(id string) int {
@@ -251,26 +300,28 @@ func (c *bubbleChart) selectIndexByID(id string) int {
 	return 0
 }
 
+// hasMotion reports whether any bubble is still away from its target or
+// still moving.
 func (c *bubbleChart) hasMotion() bool {
 	for _, node := range c.nodes {
-		if math.Abs(node.radius-node.targetRadius) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.x-node.targetX) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.y-node.targetY) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.velocityRadius) > bubbleSpringEpsilon ||
-			math.Abs(node.velocityX) > bubbleSpringEpsilon ||
-			math.Abs(node.velocityY) > bubbleSpringEpsilon {
+		if c.nodeAnimating(node) {
 			return true
 		}
 	}
 	return false
 }
 
+// driftEnvelope scales the drift amplitude: full while the wobble has more
+// than bubbleDriftFadeSeconds left, fading linearly to zero so the bubbles
+// glide back to their anchors instead of stopping mid-wobble.
+func (c *bubbleChart) driftEnvelope() float64 {
+	return clampFloat(c.driftRemaining/bubbleDriftFadeSeconds, 0, 1)
+}
+
+// Tick advances the animation by one frame (delta seconds, 0 for one frame at
+// bubbleFPS) and reports whether it is still animating. A false result means
+// the springs settled and the drift wobble ended: the caller should stop the
+// tick chain, because further ticks would change nothing.
 func (c *bubbleChart) Tick(delta float64) bool {
 	if len(c.nodes) == 0 {
 		c.animating = false
@@ -280,12 +331,18 @@ func (c *bubbleChart) Tick(delta float64) bool {
 	if delta <= 0 {
 		delta = baseDelta
 	}
-	c.driftTime += delta
+	// The wobble clock only runs while drift is left, so a chart at rest is
+	// bit-for-bit stable across the (skipped) ticks.
+	if c.driftRemaining > 0 {
+		c.driftTime += delta
+		c.driftRemaining = math.Max(0, c.driftRemaining-delta)
+	}
+	envelope := c.driftEnvelope()
 
-	active := false
+	active := c.driftRemaining > 0
 	for idx := range c.nodes {
 		node := &c.nodes[idx]
-		node.applyDrift(c.driftTime, c.width, c.height)
+		node.applyDrift(c.driftTime, envelope, c.width, c.height)
 		if delta != baseDelta {
 			node.radiusSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
 			node.xSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
@@ -298,8 +355,25 @@ func (c *bubbleChart) Tick(delta float64) bool {
 			active = true
 		}
 	}
+	if !active {
+		c.snapToTargets()
+	}
 	c.animating = active
 	return active
+}
+
+// snapToTargets puts every bubble exactly on its target with zero velocity.
+// Tick calls it when the chart settles: the springs stop within
+// bubbleSpringEpsilon of the target, and the chain is about to end, so the
+// resting picture would otherwise keep that sub-epsilon residue (and any
+// later Tick would still nudge it). Snapping makes the settled state exact
+// and stable; the jump is under a hundredth of a cell.
+func (c *bubbleChart) snapToTargets() {
+	for i := range c.nodes {
+		n := &c.nodes[i]
+		n.radius, n.x, n.y = n.targetRadius, n.targetX, n.targetY
+		n.velocityRadius, n.velocityX, n.velocityY = 0, 0, 0
+	}
 }
 
 func (c *bubbleChart) nodeAnimating(node bubbleNode) bool {
@@ -340,13 +414,15 @@ func (c *bubbleChart) updateNodeDriftAmplitude(node *bubbleNode) {
 	node.driftAmpY = baseAmp * 0.75 * (0.85 + float64((h>>24)%31)/100.0)
 }
 
-func (n *bubbleNode) applyDrift(t float64, width, height int) {
+// applyDrift moves the node's spring target around its anchor by the drift
+// wobble at time t, scaled by envelope (0 puts the target on the anchor).
+func (n *bubbleNode) applyDrift(t, envelope float64, width, height int) {
 	if n == nil {
 		return
 	}
 	phase := n.driftPhase + t*n.driftSpeed
-	n.targetX = n.anchorX + math.Sin(phase)*n.driftAmpX
-	n.targetY = n.anchorY + math.Cos(phase*0.91+0.37)*n.driftAmpY
+	n.targetX = n.anchorX + math.Sin(phase)*n.driftAmpX*envelope
+	n.targetY = n.anchorY + math.Cos(phase*0.91+0.37)*n.driftAmpY*envelope
 
 	if width <= 0 {
 		width = 80
@@ -390,6 +466,10 @@ func (c *bubbleChart) HasNodes() bool {
 	return len(c.nodes) > 0
 }
 
+// Render draws the chart as a width x height block. The painted view is
+// cached (bubbleFrameCache): every key press, focus event or unrelated
+// message makes Bubble Tea call View, and re-painting an unchanged chart
+// each time was a full frame of work for identical output.
 func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if width <= 0 {
 		width = c.width
@@ -416,16 +496,20 @@ func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if chartHeight < 4 {
 		chartHeight = 4
 	}
+	// statusLine clamps c.selected, so it runs before the cache key is read.
+	status := padOrTrim(c.statusLine(width), width)
+	if view, ok := c.frame.lookup(c, header, status, width, chartHeight); ok {
+		return view
+	}
 	grid := newGridRows(width, chartHeight)
 	c.renderBubblesToGrid(grid, width, chartHeight)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	palette := c.palette()
-	for _, row := range grid {
-		lines = append(lines, renderGridRow(row, palette))
-	}
-	lines = append(lines, padOrTrim(c.statusLine(width), width))
-	return strings.Join(lines, "\n")
+	lines = append(lines, renderGridRows(grid, c.palette())...)
+	lines = append(lines, status)
+	view := strings.Join(lines, "\n")
+	c.frame.store(view)
+	return view
 }
 
 func (c *bubbleChart) renderBubblesToGrid(grid [][]gridCell, width, height int) {

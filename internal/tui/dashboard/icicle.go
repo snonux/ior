@@ -89,9 +89,7 @@ func renderIcicleGrid(header string, tiles []icicleTile, width, height int, metr
 	palette := treemapPalette(isDark)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	for _, row := range grid {
-		lines = append(lines, renderGridRow(row, palette))
-	}
+	lines = append(lines, renderGridRows(grid, palette)...)
 	lines = append(lines, padOrTrim(icicleStatusLine(tiles, selected, metric), width))
 	return strings.Join(lines, "\n")
 }

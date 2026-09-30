@@ -227,12 +227,18 @@ func (m *Model) handleFlameTick(msg flameTickMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// handleBubbleTick advances the active bubble chart one frame and re-arms the
+// chain only while the chart is still animating. Once the springs have settled
+// and the drift wobble has faded (bubbleChart.Tick returns false) the chain
+// ends: an idle chart costs nothing, where re-arming for as long as there were
+// nodes kept a 30fps tick + full re-render alive forever. New data restarts
+// the chain (refreshBubbleData -> startBubble), as do tab entry, a resize and
+// focus regain.
 func (m *Model) handleBubbleTick(msg bubbleTickMsg) (tea.Model, tea.Cmd) {
 	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) || !m.ticks.bubble.isCurrent(msg.generation) {
 		return m, nil
 	}
-	_ = m.tickActiveBubbleChart()
-	if m.activeBubbleChartHasNodes() {
+	if m.tickActiveBubbleChart() {
 		return m, m.ticks.bubbleCmd()
 	}
 	return m, nil

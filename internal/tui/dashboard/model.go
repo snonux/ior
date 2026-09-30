@@ -1318,7 +1318,9 @@ func (m *Model) bubbleEnabledForTab(tab Tab) bool {
 }
 
 // tickActiveBubbleChart advances the animation frame for the active tab's
-// bubble chart. Returns false when bubbles are not active for the current tab.
+// bubble chart. Returns true while the chart is still animating; false when
+// it has settled or bubbles are not active for the current tab, which is the
+// signal for handleBubbleTick to let the tick chain die.
 func (m *Model) tickActiveBubbleChart() bool {
 	if !m.bubbleEnabledForTab(m.activeTab) {
 		return false
