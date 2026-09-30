@@ -352,9 +352,32 @@ func (r rawSyscallAggregate) deltaExtrema(prev rawSyscallAggregate, histogram [8
 	if r.MaxDuration > prev.MaxDuration {
 		maxLatency = r.MaxDuration
 	}
-	return minLatency, maxLatency
+	return r.clampToCumulativeExtrema(minLatency, maxLatency)
 }
 
+// clampToCumulativeExtrema narrows histogram-derived delta extrema to r's
+// cumulative [MinDuration, MaxDuration]: every invocation of the delta is
+// also part of r, so its latency lies in that range. Bucket bounds alone
+// would otherwise leak into the stats engine, which keeps the smallest
+// minimum and the largest maximum it ever saw: bucket 0's lower bound 0
+// would pin the reported minimum to 0 (a completed invocation records at
+// least 1ns, see normalizeTornSlot), and its upper bound 999 would raise the
+// maximum above any latency actually measured. r without timed invocations
+// (or with inconsistent extrema) has no range to clamp to, so the values
+// pass through unchanged.
+func (r rawSyscallAggregate) clampToCumulativeExtrema(minLatency, maxLatency uint64) (uint64, uint64) {
+	if r.timedCount() == 0 || r.MinDuration == 0 || r.MinDuration > r.MaxDuration {
+		return minLatency, maxLatency
+	}
+	clamp := func(v uint64) uint64 { return min(max(v, r.MinDuration), r.MaxDuration) }
+	return clamp(minLatency), clamp(maxLatency)
+}
+
+// latencyExtremaFromHistogram estimates extrema from the occupied buckets: the
+// lower bound of the lowest one and the (inclusive) upper bound of the highest
+// one. These are only bounds, not measured latencies; deltaExtrema clamps them
+// to the cumulative range before they are reported. ok is false for an empty
+// histogram.
 func latencyExtremaFromHistogram(histogram [8]uint64) (minLatency uint64, maxLatency uint64, ok bool) {
 	minIndex := -1
 	maxIndex := -1
