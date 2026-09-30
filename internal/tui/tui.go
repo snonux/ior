@@ -853,17 +853,6 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	return m, focusCmd
 }
 
-// handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
-// so the new probe set is reflected immediately, and records the new probe
-// set for the next trace restart (afterProbeChange). The post-reset tick goes
-// through the dashboard's normal stats handling, so a failed snapshot keeps
-// the last good one exactly as a failed refresh or baseline reset does.
-func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	m.probeModal, cmd = m.probeModal.Update(msg)
-	return m, tea.Batch(m.afterProbeChange(), cmd)
-}
-
 // handleTracingStarted wires live sources into the dashboard once the trace
 // starter confirms the trace is running.
 func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {

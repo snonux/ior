@@ -295,7 +295,7 @@ func TestTruncateText(t *testing.T) {
 // TestToggleCmdNilManager verifies that toggleCmd with a nil manager returns a
 // ProbeToggledMsg carrying an error.
 func TestToggleCmdNilManager(t *testing.T) {
-	cmd := toggleCmd(nil, "read")
+	cmd := toggleCmd(nil, "read", 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {
@@ -309,7 +309,7 @@ func TestToggleCmdNilManager(t *testing.T) {
 // TestBulkToggleCmdNilManager verifies that bulkToggleCmd with a nil manager
 // returns a ProbeToggledMsg carrying an error.
 func TestBulkToggleCmdNilManager(t *testing.T) {
-	cmd := bulkToggleCmd(nil, nil, false)
+	cmd := bulkToggleCmd(nil, nil, false, 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {

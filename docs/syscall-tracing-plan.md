@@ -34,9 +34,12 @@ membership is the same registry `-trace-families` uses. A family batch runs in t
 background with a progress line; a tracepoint the kernel lacks is reported and skipped,
 and the rest of the family still attaches. Once changed, the attached set is carried into
 every later trace session, so a PID/TID reselect or a filter change that restarts the
-trace keeps it instead of reverting to the flags. The carried set is exactly the attached
-one: after detaching everything, later sessions attach nothing, and only restarting `ior`
-returns to the startup selection. `[`/`]` only scope the dashboard view to
+trace keeps it instead of reverting to the flags. The carried set is normally read back
+from the probes that are actually attached. A change still running when the trace restarts
+or stops (or a family batch overlapping another toggle) carries its intended set instead;
+probes of it that cannot attach are retried at each session start and skipped with a log
+line until the next probe change reads the attached set back. After detaching everything,
+later sessions attach nothing, and only restarting `ior` returns to the startup selection. `[`/`]` only scope the dashboard view to
 a family; when that family has no attached probe, the status line says how to attach it.
 
 The selector kind describes a syscall's role. It is separate from the BPF record type. For

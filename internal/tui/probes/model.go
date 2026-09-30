@@ -24,9 +24,20 @@ type Manager interface {
 	DetachFamily(family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
-// ProbeToggledMsg reports completion of an async toggle operation.
+// ProbeToggledMsg reports completion of an async toggle operation (one
+// probe, or all-on/all-off when Syscall is empty).
+//
+// Session is the trace session the modal's manager belongs to (WithSession),
+// so the TUI can tell a result that arrives after a trace restart - whose
+// toggle hit a manager that is gone - from a current one. Intent is the
+// attached set the toggle was meant to produce, captured before it ran; the
+// TUI keeps it as the selection for later sessions when the result is stale
+// instead of reading back the new session's manager. It is nil when the
+// toggle could not run (no manager).
 type ProbeToggledMsg struct {
 	Syscall string
+	Session uint64
+	Intent  []string
 	Err     error
 }
 
@@ -52,6 +63,9 @@ type Model struct {
 	search    string
 	searching bool
 	textInput textinput.Model
+
+	// session tags toggle results with the trace session of manager.
+	session uint64
 
 	lastErr string
 	// lastInfo is the outcome line of the last family batch; batch is the
@@ -96,6 +110,13 @@ func NewModel(manager Manager) Model {
 		textInput: ti,
 		isDark:    true,
 	}
+}
+
+// WithSession records the trace session whose probe manager the modal was
+// built with; single and bulk toggle results carry it (ProbeToggledMsg).
+func (m Model) WithSession(session uint64) Model {
+	m.session = session
+	return m
 }
 
 // Visible reports whether the probes modal is shown.
@@ -220,11 +241,11 @@ func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if selected == "" {
 			return m, nil
 		}
-		return m, toggleCmd(m.manager, selected)
+		return m, toggleCmd(m.manager, selected, m.session)
 	case "a":
-		return m, bulkToggleCmd(m.manager, m.probes, false)
+		return m, bulkToggleCmd(m.manager, m.probes, false, m.session)
 	case "n":
-		return m, bulkToggleCmd(m.manager, m.probes, true)
+		return m, bulkToggleCmd(m.manager, m.probes, true, m.session)
 	}
 	return m, nil
 }
@@ -490,20 +511,30 @@ func (m Model) renderProbeRow(p probemanager.ProbeState, selected bool) string {
 	return lb.String()
 }
 
-func toggleCmd(manager Manager, syscall string) tea.Cmd {
+// toggleCmd toggles syscall through manager. The result carries the
+// modal's session and the intended attached set (see ProbeToggledMsg),
+// captured before the toggle: the manager's active set with syscall flipped.
+func toggleCmd(manager Manager, syscall string, session uint64) tea.Cmd {
 	return func() tea.Msg {
 		if manager == nil {
-			return ProbeToggledMsg{Syscall: syscall, Err: fmt.Errorf("probe manager unavailable")}
+			return ProbeToggledMsg{Syscall: syscall, Session: session, Err: fmt.Errorf("probe manager unavailable")}
 		}
-		return ProbeToggledMsg{Syscall: syscall, Err: manager.Toggle(syscall)}
+		intent := intendedActive(manager.States(), func(p probemanager.ProbeState) bool {
+			return p.Active != (p.Syscall == syscall)
+		})
+		return ProbeToggledMsg{Syscall: syscall, Session: session, Intent: intent, Err: manager.Toggle(syscall)}
 	}
 }
 
-func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActive bool) tea.Cmd {
+// bulkToggleCmd toggles every listed probe whose state is sourceActive, i.e.
+// switches all on (sourceActive false) or all off. Its intent is every
+// registered syscall, or none.
+func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActive bool, session uint64) tea.Cmd {
 	return func() tea.Msg {
 		if manager == nil {
-			return ProbeToggledMsg{Err: fmt.Errorf("probe manager unavailable")}
+			return ProbeToggledMsg{Session: session, Err: fmt.Errorf("probe manager unavailable")}
 		}
+		intent := intendedActive(manager.States(), func(probemanager.ProbeState) bool { return !sourceActive })
 		var firstErr error
 		for _, p := range probes {
 			if p.Active != sourceActive {
@@ -513,8 +544,20 @@ func bulkToggleCmd(manager Manager, probes []probemanager.ProbeState, sourceActi
 				firstErr = err
 			}
 		}
-		return ProbeToggledMsg{Err: firstErr}
+		return ProbeToggledMsg{Session: session, Intent: intent, Err: firstErr}
 	}
+}
+
+// intendedActive returns the syscalls of states that want selects, as a
+// non-nil slice (an empty intent means "attach nothing").
+func intendedActive(states []probemanager.ProbeState, want func(probemanager.ProbeState) bool) []string {
+	out := make([]string, 0, len(states))
+	for _, p := range states {
+		if want(p) {
+			out = append(out, p.Syscall)
+		}
+	}
+	return out
 }
 
 // truncateText shortens s to at most limit display cells, ending in "..." when
