@@ -16,12 +16,13 @@ func isASCII(s string) bool {
 	return true
 }
 
-// matchFoldASCII applies the anchor mode of matchString to an ASCII pattern
-// (anchors already stripped) and an ASCII value, ignoring case.
+// matchFoldASCII applies the case-insensitive anchor modes of matchString
+// (substring, prefix, suffix) to an ASCII pattern (anchors already stripped)
+// and an ASCII value, ignoring case. The exact mode (both anchors) never
+// reaches it: exact matching is case-sensitive and matchString compares it
+// directly.
 func matchFoldASCII(pattern, value string, anchoredStart, anchoredEnd bool) bool {
 	switch {
-	case anchoredStart && anchoredEnd:
-		return len(value) == len(pattern) && equalFoldASCII(value, pattern)
 	case anchoredStart:
 		return len(value) >= len(pattern) && equalFoldASCII(value[:len(pattern)], pattern)
 	case anchoredEnd:

@@ -125,10 +125,12 @@ func TestEnterFilterRequestRejectsEmptyValues(t *testing.T) {
 // filters that used the row's value as a bare substring pattern: the matcher
 // trims blanks and reads an edge ^/$ as an anchor, so Enter on "/tmp/a "
 // also selected "/tmp/ab", and Enter on "read" also selected readv. Each
-// case runs the emitted filter against real stream rows: the row itself (and
-// only case-variants of it) must match, every near-miss must not. The comm
-// case pins the deliberate exception: thread comms extending the process's
-// comm still match.
+// case runs the emitted filter against real stream rows: the row itself must
+// match, every near-miss must not - including case variants of exact rows,
+// since ^value$ is case-sensitive (/TMP/A is a different file from /tmp/a).
+// The dir rows are one-sided prefixes and still fold case. The comm case pins
+// the deliberate exception: thread comms extending the process's comm still
+// match.
 func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
 	file := func(name string) *streamrow.Row { return &streamrow.Row{FileName: name} }
 	for _, tt := range []struct {
@@ -138,14 +140,14 @@ func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
 		miss  []*streamrow.Row
 	}{
 		{"trailing blank path", filesModel(false, statsengine.FileSnapshot{Path: "/tmp/a "}),
-			[]*streamrow.Row{file("/tmp/a "), file("/TMP/A ")},
-			[]*streamrow.Row{file("/tmp/a"), file("/tmp/ab"), file("/tmp/a b"), file("x/tmp/a ")}},
+			[]*streamrow.Row{file("/tmp/a ")},
+			[]*streamrow.Row{file("/TMP/A "), file("/tmp/a"), file("/tmp/ab"), file("/tmp/a b"), file("x/tmp/a ")}},
 		{"leading blank path", filesModel(false, statsengine.FileSnapshot{Path: " /tmp/a"}),
 			[]*streamrow.Row{file(" /tmp/a")},
 			[]*streamrow.Row{file("/tmp/a"), file(" /tmp/ab")}},
 		{"plain path", filesModel(false, statsengine.FileSnapshot{Path: "/tmp/a"}),
 			[]*streamrow.Row{file("/tmp/a")},
-			[]*streamrow.Row{file("/tmp/abc"), file("/var/tmp/a")}},
+			[]*streamrow.Row{file("/tmp/A"), file("/tmp/abc"), file("/var/tmp/a")}},
 		// Literal edge anchors stay literal: bare, "x$" meant "ends with x"
 		// and "^x" meant "starts with x".
 		{"literal dollar", filesModel(false, statsengine.FileSnapshot{Path: "/tmp/x$"}),
@@ -162,7 +164,7 @@ func TestEnterRowFilterSelectsExactlyTheRow(t *testing.T) {
 			[]*streamrow.Row{file("relative"), file("socket:[1]")}},
 		{"syscall", syscallsModel(statsengine.SyscallSnapshot{Name: "read", Count: 1}),
 			[]*streamrow.Row{{Syscall: "read"}},
-			[]*streamrow.Row{{Syscall: "readv"}, {Syscall: "pread64"}}},
+			[]*streamrow.Row{{Syscall: "READ"}, {Syscall: "readv"}, {Syscall: "pread64"}}},
 		{"comm", processesModel(processCommColumn, statsengine.ProcessSnapshot{PID: 7, Comm: "chrome"}),
 			[]*streamrow.Row{{Comm: "chrome"}, {Comm: "Chrome_ChildIOT"}},
 			[]*streamrow.Row{{Comm: "firefox"}}},

@@ -256,7 +256,10 @@ func (m Model) bodyLines() []string {
 		lines = append(lines, fmt.Sprintf("  %-8s %s ([ / ] to change)", "Family:", family.Pattern))
 	}
 	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear (keeps family) • Esc apply+close")
-	return append(lines, "strings: substring by default, use ^prefix, suffix$, or ^exact$")
+	// The case rule is spelled out because it differs by anchor mode (see
+	// globalfilter.StringFilter): only the fully anchored ^exact$ - the form
+	// dashboard row filters round-trip through this modal - is case-sensitive.
+	return append(lines, "strings: substring by default, use ^prefix, suffix$ (any case), or ^exact$ (case-sensitive)")
 }
 
 func (m Model) clearAll() Model {

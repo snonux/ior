@@ -131,6 +131,14 @@ func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.
 	if err := kelvin.ValidateTracepointFields(); err != nil {
 		t.Errorf("a pattern whose lowered form is 6 bytes was rejected on its raw length: %v", err)
 	}
+
+	// The exact form is case-sensitive, so its lowered form is no witness: the
+	// same six Kelvin signs anchored as ^...$ match only their 18 raw bytes,
+	// which no 15-byte comm can hold.
+	exactKelvin := Filter{Comm: &StringFilter{Pattern: ExactPattern(strings.Repeat("\u212A", 6))}}
+	if err := exactKelvin.ValidateTracepointFields(); err == nil {
+		t.Error("an exact pattern whose raw form is 18 bytes was accepted for a 15-byte comm")
+	}
 }
 
 // TestEveryAcceptedPatternHasADeliverableWitness pins the property the length
@@ -147,8 +155,11 @@ func TestValidateTracepointFieldsMeasuresTheMatchedTextNotTheAnchors(t *testing.
 //
 // A pattern is accepted only if some value of at most the usable field width
 // matches it. The witness is the pattern's own text: whichever of the raw or
-// lowered form fits, matchString accepts it under every anchor mode, because
-// it lowercases both sides. That the two forms always agree on the anchor
+// lowered form fits, matchString accepts it under every case-insensitive
+// anchor mode, because it lowercases both sides there; for the case-sensitive
+// exact form ^...$ only the raw form can match, and trying the lowered one
+// too is harmless (matchString rejects it unless it equals the raw form).
+// That the two forms always agree on the anchor
 // flags is not assumed - checked exhaustively over every valid rune: ToLower
 // is idempotent and never creates or destroys a leading `^` or trailing `$`
 // (UTF-8 is self-synchronising, so no multi-byte rune can end in the byte
