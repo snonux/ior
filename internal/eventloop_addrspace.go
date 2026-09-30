@@ -112,6 +112,16 @@ const maxTrackedBreaks = 1 << 16
 // brkTracker remembers the last observed program break per process (tgid: the
 // break belongs to the address space, which threads share). The zero value is
 // ready to use. Only the event-loop goroutine touches it.
+//
+// Accepted approximation: the key is the tgid, not the mm. A CLONE_VM child
+// that is its own thread group (vfork, posix_spawn, clone(CLONE_VM) without
+// CLONE_THREAD) has a tgid of its own but shares the parent's address space
+// and therefore its break. The child's first brk thus only baselines to 0 (it
+// reports nothing for heap movement it caused), and the parent's baseline goes
+// stale while the child moves the shared break, so the parent's next brk
+// attributes that movement to itself. Exec clears the child's baseline, which
+// is the common vfork case (the child execs at once and gets a fresh mm).
+// Tracking the mm would need an identity the capture does not carry.
 type brkTracker struct {
 	breaks map[uint32]uint64
 }

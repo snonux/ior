@@ -23,7 +23,10 @@ type Row struct {
 	DurationNs uint64
 	GapNs      uint64
 	Bytes      uint64
-	// AddressSpaceBytes tracks memory-region extent for memory-management syscalls.
+	// AddressSpaceBytes is the page-rounded address-space extent of mmap, munmap
+	// and mremap (new mapping, released range, larger of old/new size) and of
+	// brk (how far the program break moved); msync, mprotect, madvise and mlock
+	// report 0. See event.Pair.AddressSpaceBytes.
 	AddressSpaceBytes uint64
 	// RequestedSleepNs stores requested sleep duration metadata for sleep syscalls.
 	RequestedSleepNs int64

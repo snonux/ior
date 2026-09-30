@@ -46,8 +46,13 @@ type Pair struct {
 	// than a measured gap. Consumers that average or bucket gaps skip it.
 	FirstOnTID bool
 	Bytes      uint64 // Number of bytes transferred (read/write/transfer syscalls only)
-	// AddressSpaceBytes tracks memory-region extent for memory syscalls
-	// (e.g. munmap/mremap) and is intentionally separate from I/O bytes.
+	// AddressSpaceBytes is the virtual address space a memory syscall added,
+	// removed or moved, in whole host pages: the page-rounded length of
+	// mmap/munmap, the larger of the old and new size for mremap, and how far
+	// the program break moved for brk (0 for a process's first brk seen and for
+	// brk(0) queries). msync/mprotect/madvise/mlock change no extent and report
+	// 0, as do failed calls. Intentionally separate from I/O bytes. See
+	// eventloop_addrspace.go.
 	AddressSpaceBytes uint64
 	// RequestedSleepNs tracks requested sleep duration for nanosleep-style
 	// syscalls. -1 means unknown (null/unreadable or kernel-invalid timespec,

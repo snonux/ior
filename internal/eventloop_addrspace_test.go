@@ -162,16 +162,26 @@ func TestApplyBrkGrowth(t *testing.T) {
 
 // TestBrkBaselineIsEvictedOnExecAndProcessDeath drives the real control-record
 // handlers: a stale baseline surviving an exec or a pid reuse would turn the
-// new address space's first brk into a bogus, huge delta.
+// new address space's first brk into a bogus, huge delta. The exit cases cover
+// the three group_dead states: known and set (whole process gone), unknown (a
+// legacy 24-byte record from a BPF object older than the flag, which evicts
+// the tgid's state on every exit as that userspace did) and known but clear
+// (a thread exits while its siblings live, so the shared break must survive).
 func TestBrkBaselineIsEvictedOnExecAndProcessDeath(t *testing.T) {
 	const pid, tid = uint32(4242), uint32(4242)
 	tests := []struct {
-		name string
-		rec  func(t *testing.T) []byte
+		name     string
+		rec      func(t *testing.T) []byte
+		wantKept bool
 	}{
-		{"exec", func(t *testing.T) []byte { return makeProcessExecEvent(t, defaulTime, pid, tid, "prog") }},
-		{"group-dead exit", func(t *testing.T) []byte { return makeProcessExitEvent(t, defaulTime, pid, tid) }},
-		{"thread exit keeps the baseline", func(t *testing.T) []byte { return makeThreadExitEvent(t, defaulTime, pid, tid+1) }},
+		{"exec", func(t *testing.T) []byte { return makeProcessExecEvent(t, defaulTime, pid, tid, "prog") }, false},
+		{"group-dead exit", func(t *testing.T) []byte { return makeProcessExitEvent(t, defaulTime, pid, tid) }, false},
+		{"legacy exit with unknown group_dead", func(t *testing.T) []byte {
+			// The legacy layout is the current one minus group_dead and
+			// reserved, so a record cut to 24 bytes is byte-identical to it.
+			return makeThreadExitEvent(t, defaulTime, pid, tid+1)[:24]
+		}, false},
+		{"thread exit keeps the baseline", func(t *testing.T) []byte { return makeThreadExitEvent(t, defaulTime, pid, tid+1) }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -180,46 +190,88 @@ func TestBrkBaselineIsEvictedOnExecAndProcessDeath(t *testing.T) {
 			out := make(chan *event.Pair, 1)
 			el.processRawEvent(tt.rec(t), out)
 
-			_, kept := el.brkState.breaks[pid]
-			wantKept := tt.name == "thread exit keeps the baseline"
-			if kept != wantKept {
-				t.Fatalf("baseline kept = %v, want %v", kept, wantKept)
+			if _, kept := el.brkState.breaks[pid]; kept != tt.wantKept {
+				t.Fatalf("baseline kept = %v, want %v", kept, tt.wantKept)
 			}
 		})
 	}
+}
+
+// brkCaller feeds brk enter/exit record pairs through the real event loop, one
+// call per (pid, tid) thread, and returns the resulting Pair.AddressSpaceBytes.
+type brkCaller struct {
+	t   *testing.T
+	el  *eventLoop
+	out chan *event.Pair
+	now uint64
+}
+
+func newBrkCaller(t *testing.T) *brkCaller {
+	return &brkCaller{
+		t: t, el: newFilteredEventLoop(t, globalfilter.Filter{}),
+		out: make(chan *event.Pair, 4), now: uint64(defaulTime),
+	}
+}
+
+func (c *brkCaller) call(pid, tid uint32, requested uint64, ret int64) uint64 {
+	c.t.Helper()
+	enter := types.MemEvent{
+		EventType: types.ENTER_MEM_EVENT, TraceId: types.SYS_ENTER_BRK,
+		Time: c.now, Pid: pid, Tid: tid, Addr: requested,
+	}
+	enterRaw, err := enter.Bytes()
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	_, exitRaw := makeExitRetEvent(c.t, c.now+50, pid, tid, types.SYS_EXIT_BRK, ret)
+	c.now += 100
+	c.el.processRawEvent(enterRaw, c.out)
+	c.el.processRawEvent(exitRaw, c.out)
+	ep := <-c.out
+	defer ep.Recycle()
+	return ep.AddressSpaceBytes
 }
 
 // TestBrkPairFlowsThroughTheEventLoop checks the whole path from raw enter and
 // exit records to Pair.AddressSpaceBytes, including that the derived value is
 // computed for every brk pair (the tracker sits in applyDerivedPairValues).
 func TestBrkPairFlowsThroughTheEventLoop(t *testing.T) {
-	el := newFilteredEventLoop(t, globalfilter.Filter{})
-	out := make(chan *event.Pair, 4)
+	c := newBrkCaller(t)
 	base := 500 * pg
-	now := uint64(defaulTime)
 
-	call := func(requested uint64, ret int64) uint64 {
-		enter := types.MemEvent{
-			EventType: types.ENTER_MEM_EVENT, TraceId: types.SYS_ENTER_BRK,
-			Time: now, Pid: defaultPid, Tid: defaultTid, Addr: requested,
-		}
-		enterRaw, err := enter.Bytes()
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, exitRaw := makeExitRetEvent(t, now+50, defaultPid, defaultTid, types.SYS_EXIT_BRK, ret)
-		now += 100
-		el.processRawEvent(enterRaw, out)
-		el.processRawEvent(exitRaw, out)
-		ep := <-out
-		defer ep.Recycle()
-		return ep.AddressSpaceBytes
-	}
-
-	if got := call(0, int64(base)); got != 0 {
+	if got := c.call(defaultPid, defaultTid, 0, int64(base)); got != 0 {
 		t.Fatalf("brk(0) = %d, want 0", got)
 	}
-	if got := call(base+4*pg, int64(base+4*pg)); got != 4*pg {
+	if got := c.call(defaultPid, defaultTid, base+4*pg, int64(base+4*pg)); got != 4*pg {
 		t.Fatalf("grow = %d, want %d", got, 4*pg)
+	}
+}
+
+// TestBrkBaselineIsKeyedByProcessNotThread pins the tgid keying: the program
+// break belongs to the address space, which all threads of a process share, so
+// a brk on a second thread must measure against the break the first thread
+// left, while another process has a baseline of its own. Keying by tid instead
+// would re-baseline every thread and report 0 for the second thread's growth.
+func TestBrkBaselineIsKeyedByProcessNotThread(t *testing.T) {
+	const pidA, tidA1, tidA2, pidB, tidB = uint32(7000), uint32(7000), uint32(7001), uint32(8000), uint32(8000)
+	c := newBrkCaller(t)
+	base := 500 * pg
+
+	if got := c.call(pidA, tidA1, 0, int64(base)); got != 0 {
+		t.Fatalf("thread 1 brk(0) = %d, want 0", got)
+	}
+	if got := c.call(pidA, tidA2, base+3*pg, int64(base+3*pg)); got != 3*pg {
+		t.Fatalf("thread 2 growth = %d, want %d (against thread 1's baseline)", got, 3*pg)
+	}
+	// A first brk of a different process only baselines, however far its
+	// break is from the other process's.
+	if got := c.call(pidB, tidB, 900*pg, int64(900*pg)); got != 0 {
+		t.Fatalf("other process first brk = %d, want 0", got)
+	}
+	if got := c.call(pidA, tidA1, base+5*pg, int64(base+5*pg)); got != 2*pg {
+		t.Fatalf("thread 1 growth after thread 2 = %d, want %d", got, 2*pg)
+	}
+	if got := c.call(pidB, tidB, 903*pg, int64(903*pg)); got != 3*pg {
+		t.Fatalf("other process growth = %d, want %d", got, 3*pg)
 	}
 }
