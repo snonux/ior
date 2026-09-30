@@ -264,6 +264,12 @@ func (m Model) applyFilter() Model {
 		// filtered is only ever read, so an empty query can share the scan
 		// result instead of copying every row on each keystroke.
 		m.filtered = shareProcesses(m.processes)
+		// A rescan with nothing typed must not leave the previous scan's
+		// search texts (and, through searchBase, its whole backing array)
+		// alive: drop a stale cache here, the next non-empty query rebuilds.
+		if !m.searchCurrent() {
+			m.search, m.searchBase = nil, nil
+		}
 	} else {
 		m = m.ensureSearch()
 		filtered := make([]ProcessInfo, 0, len(m.processes))
@@ -304,13 +310,31 @@ func (s searchText) matches(query string) bool {
 		strings.Contains(s.cmdline, query)
 }
 
+// searchCurrent reports whether m.search was built for the current m.processes.
+// Identity is the slice's length and first element address: the scan result is
+// replaced wholesale (never edited in place), and tests assign m.processes
+// directly. The length check matters because a longer or shorter slice over
+// the same backing array (an append into spare capacity, a reslice) keeps the
+// first element's address yet has a different set of rows.
+func (m Model) searchCurrent() bool {
+	return len(m.search) == len(m.processes) &&
+		(len(m.processes) == 0 || m.searchBase == &m.processes[0])
+}
+
 // ensureSearch (re)builds the lowercased search texts when m.processes is not
-// the slice they were built for. Identity is the slice's length and first
-// element address: the scan result is replaced wholesale (never edited in
-// place), and tests assign m.processes directly.
+// the slice they were built for (see searchCurrent).
+//
+// Cost: one searchText (three string headers, 48 B) per row plus a lowercased
+// copy of every comm and cmdline that contains an upper-case letter
+// (strings.ToLower does not copy already-lowercase text). The worst case is
+// roughly 50 MB at 50k rows with 1 KB command lines that all need lowercasing.
+// searchBase points into processes, so a cache left over from an earlier scan
+// would keep that scan's whole backing array alive: applyFilter therefore drops
+// the cache when a rescan arrives while the query is empty (the next non-empty
+// query rebuilds it lazily), and a rescan under an active query rebuilds it
+// right here, replacing the old one.
 func (m Model) ensureSearch() Model {
-	if len(m.search) == len(m.processes) &&
-		(len(m.processes) == 0 || m.searchBase == &m.processes[0]) {
+	if m.searchCurrent() {
 		return m
 	}
 	search := make([]searchText, len(m.processes))
