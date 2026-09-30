@@ -30,8 +30,9 @@ func newNamedSessionTrie(comm string) *coreflamegraph.LiveTrie {
 	return trie
 }
 
-// loadSession renders the model once against trie so the view cache holds that
-// session's frames, like the TUI does between two ticks.
+// loadSession swaps the model to trie and refreshes its snapshot, like the
+// dashboard does within one Update. It never calls View, so the view cache is
+// deliberately left as it was: the stale-session tests depend on that.
 func loadSession(t *testing.T, m *Model, trie *coreflamegraph.LiveTrie) {
 	t.Helper()
 	m.SetLiveTrie(trie)
@@ -104,7 +105,7 @@ func TestViewCacheStillHitsWithinOneSession(t *testing.T) {
 // against a stale o:order(...) toolbar label. A session whose trie uses an
 // unknown field order gets a custom preset prepended at index 0 - the same
 // fieldIndex the previous session used. Both sessions ingest the same three
-// records into a six-frame tree, so version, frame count and status message
+// records into a seven-frame tree, so version, frame count and status message
 // also match: only the generation tells the two renders apart. (fieldIndex is
 // belt-and-braces in the key: every real path that moves it also advances the
 // generation, so it is pinned only by TestViewCacheKeyTracksFieldOrder, which
