@@ -71,18 +71,21 @@ func DefaultKeyMap() KeyMap {
 		DirGroup:    keyBinding("dir group", "d"),
 		SelectPID:   keyBinding("select pid", "p"),
 		SelectTID:   keyBinding("select tid", "t"),
-		Probes:      keyBinding("probes", "o"),
-		Filter:      keyBinding("filter", "f"),
-		FilterUndo:  keyBinding("undo filter", "F"),
-		PrevFamily:  keyBinding("prev family", "["),
-		NextFamily:  keyBinding("next family", "]"),
-		Export:      keyBinding("stream export", "e"),
-		Record:      keyBinding("parquet rec", "R"),
-		Quit:        keyBinding("quit", "q", "ctrl+c"),
-		Enter:       keyBinding("select", "enter"),
-		Esc:         keyBinding("back", "esc"),
-		Refresh:     keyBinding("reset baseline", "r"),
-		AutoReset:   keyBinding("cycle auto-reset", "I"),
+		// "o" opens the probes modal, whose Families view attaches/detaches whole
+		// probe families at runtime; "[" / "]" only re-scope the displayed view
+		// to a family, hence "family view" (they do not attach anything).
+		Probes:     keyBinding("probes/families", "o"),
+		Filter:     keyBinding("filter", "f"),
+		FilterUndo: keyBinding("undo filter", "F"),
+		PrevFamily: keyBinding("prev family view", "["),
+		NextFamily: keyBinding("next family view", "]"),
+		Export:     keyBinding("stream export", "e"),
+		Record:     keyBinding("parquet rec", "R"),
+		Quit:       keyBinding("quit", "q", "ctrl+c"),
+		Enter:      keyBinding("select", "enter"),
+		Esc:        keyBinding("back", "esc"),
+		Refresh:    keyBinding("reset baseline", "r"),
+		AutoReset:  keyBinding("cycle auto-reset", "I"),
 	}
 }
 
