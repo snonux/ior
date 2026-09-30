@@ -642,36 +642,40 @@ func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
 }
 
 // TestTUIIntegration_Flame_ResetBaseline presses "r" on the flame tab and
-// asserts the baseline reset actually took effect. While TabFlame is active the
-// key is consumed by the flamegraph model itself (ConsumesKey ->
-// flamegraph.Model.resetBaseline), so this covers the flame-local reset: the
-// live trie is cleared and the cached snapshot state is dropped.
+// asserts the baseline reset actually took effect. The baseline is shared by
+// every tab (task 1r2): while TabFlame is active the dashboard intercepts the
+// key (flamegraph.Model.WantsBaselineReset) and runs resetBaselineCmd, which
+// clears the live trie AND the stats engine and bumps the stats generation;
+// the flame then drops its cached view state (ClearBaseline). So the reset is
+// observable on two tabs: the flame falls back to its empty state and the
+// Syscalls table loses its seeded rows.
 //
 // The static test-flames fixture is seeded exactly once, at starter time
 // (tuiTestFlamesStarter -> buildTestFlamesRuntime); nothing refills the trie
-// afterwards. So a working reset empties it for good and the tab falls back to
-// its empty state ("... has no visible frames" + "sel:none"), while the seeded
-// breadcrumb ("view:root") disappears.
+// or the engine afterwards. So a working reset empties both for good: the flame
+// shows "... has no visible frames" + "sel:none" (the seeded breadcrumb
+// "view:root" disappears) and the Syscalls tab renders "Syscalls: no data".
 //
 // Observing that state has to be forced: teatest's screen() replays only the
 // bytes produced so far and the cursed renderer flushes asynchronously, so a
 // stale pre-reset frame can otherwise satisfy the match (which is what made the
 // previous version of this test pass even with the reset broken). Following the
-// pattern of TestTUIIntegration_Global_ResetKeepsStreamRows (commit 1d95fd4),
-// round-trip through another tab after pressing "r": any frame rendered for the
-// later keypresses is provably after "r" was handled, because the message queue
-// is FIFO.
+// pattern of TestTUIIntegration_Global_ResetClearsCounts, round-trip through
+// another tab after pressing "r". The Syscalls tab was never visited before the
+// reset, so its "no data" placeholder can only be the post-reset state (the
+// stats snapshot is rebuilt off the UI goroutine, so the fence polls until that
+// snapshot has been delivered rather than assuming the keypress order alone).
 func TestTUIIntegration_Flame_ResetBaseline(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root", "Selected: root", "total(events):")
 
-	// "r" clears the live trie; the one-shot fixture is never re-seeded.
+	// "r" resets the shared baseline; the one-shot fixture is never re-seeded.
 	s.press('r')
-	// Hop to the Syscalls tab and back. Its seeded table (unaffected by the
-	// flame-local reset) proves the "3" keypress - queued after "r" - has been
-	// processed and has repainted the screen over the old flame frame.
+	// Hop to the Syscalls tab: the stats engine was reset too, so the seeded
+	// table is gone. This proves the reset reached beyond the flame model and
+	// that the "3" keypress - queued after "r" - repainted over the old frame.
 	s.typeStr("3")
-	s.waitFor("Syscall", "epoll_wait")
+	s.waitFor("Syscalls: no data")
 	// Back on the flame tab, the repaint is provably post-reset: the flame must
 	// now be empty.
 	s.typeStr("1")
@@ -1595,8 +1599,12 @@ func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	// The session was built with -pid 1; the status line shows it verbatim.
-	s.waitFor("Syscall", "filter: pid=1")
+	// The session was built with -pid 1; the status line shows it verbatim. The
+	// seeded "epoll_wait" row must be on screen before Enter is pressed: "Syscall"
+	// alone also matches the "3:Syscalls" tab label, and since the stats snapshot
+	// is built asynchronously (task 8r2) the tab can render its "no data"
+	// placeholder first, in which case Enter has no selected row and is ignored.
+	s.waitFor("Syscall", "filter: pid=1", "epoll_wait")
 
 	// Enter on the table's selected (top) row clones the active filter and adds a
 	// syscall predicate for that row's name, anchored so it cannot also select
