@@ -761,7 +761,24 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 // dispatchAppMsg handles application-level message types (export, probe, trace,
 // filter) that are not tea framework messages.
 // It is called after dispatchTypedMsg returns unhandled for non-framework types.
+// The work is split by area so each switch stays small: export and probe/PID
+// selection messages first, then trace-lifecycle and global-filter messages.
 func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if next, cmd, handled := m.dispatchExportMsg(msg); handled {
+		return next, cmd, true
+	}
+	if next, cmd, handled := m.dispatchSelectionMsg(msg); handled {
+		return next, cmd, true
+	}
+	if next, cmd, handled := m.dispatchTraceMsg(msg); handled {
+		return next, cmd, true
+	}
+	return m.dispatchFilterMsg(msg)
+}
+
+// dispatchExportMsg handles the CSV export request and its completion/failure
+// results.
+func (m *Model) dispatchExportMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tuiexport.RequestMsg:
 		// Capture the export inputs HERE, on the Update goroutine: the command
@@ -777,6 +794,14 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
 		return m, cmd, true
+	}
+	return m, nil, false
+}
+
+// dispatchSelectionMsg handles probe/family toggles, family batch progress and
+// the PID/TID picker results.
+func (m *Model) dispatchSelectionMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case probes.ProbeToggledMsg:
 		next, cmd := m.handleProbeToggledMsg(msg)
 		return next, cmd, true
@@ -793,6 +818,14 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case TidSelectedMsg:
 		next, cmd := m.handleTidSelected(msg)
 		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+// dispatchTraceMsg handles the trace-session lifecycle: initial start, the
+// session-tagged start/error results, and shutdown progress.
+func (m *Model) dispatchTraceMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case initialTraceStartMsg:
 		next, cmd := m.handleInitialTraceStart()
 		return next, cmd, true
@@ -819,6 +852,14 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, tea.Quit, true
 		}
 		return m, m.tracer.waitForShutdownCmd(), true
+	}
+	return m, nil, false
+}
+
+// dispatchFilterMsg handles global-filter apply/undo requests and the
+// open-in-editor request.
+func (m *Model) dispatchFilterMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case messages.GlobalFilterRequestedMsg:
 		next, cmd := m.applyGlobalFilter(msg.Filter, msg.Action)
 		return next, cmd, true
