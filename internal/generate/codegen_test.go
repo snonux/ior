@@ -1091,7 +1091,15 @@ func TestGenerateExecHandler(t *testing.T) {
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
 	requireContains(t, output, "struct exec_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_EXEC_EVENT;")
-	requireContains(t, output, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)\n        ev->filename[0] = 0;\n")
+	// Task 9p2: the filename carries the three-state read status, so an
+	// unreadable name is not mistaken for AT_EMPTY_PATH's "".
+	requireContains(t, output, "    if (ctx->args[1] == 0) {\n        ev->filename[0] = 0;\n        ev->filename_status = PATH_READ_NULL;\n    } else {\n"+
+		"        ev->filename_status = PATH_READ_OK;\n"+
+		"        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void*)ctx->args[1]) < 0) {\n"+
+		"            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n        }\n    }\n")
+	requireContains(t, output, "ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;")
+	// exec does not retry a failed read at sys_exit like the open kinds.
+	requireNotContains(t, output, "ior_stash_pending_filename")
 	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")

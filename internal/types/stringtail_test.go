@@ -53,7 +53,8 @@ func TestFastDecodersIgnoreBytesAfterTheTerminator(t *testing.T) {
 		}
 	})
 	t.Run("ExecEvent", func(t *testing.T) {
-		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVE, Dirfd: -1, Filename: withStaleTail("/bin/true")}
+		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVE, Dirfd: -1, Filename: withStaleTail("/bin/true"),
+			SchemaVersion: EXEC_EVENT_SCHEMA_VERSION}
 		copy(ev.Comm[:], "sh")
 		raw := rawBytes(t, ev)
 		fast, slow := NewExecEventFast(raw), NewExecEvent(raw)

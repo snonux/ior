@@ -58,7 +58,8 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("ExecEvent", func(t *testing.T) {
-		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4}
+		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4,
+			FilenameStatus: PATH_READ_FAILED, SchemaVersion: EXEC_EVENT_SCHEMA_VERSION}
 		copy(ev.Filename[:], "a")
 		copy(ev.Comm[:], "b")
 		raw := rawBytes(t, ev)
@@ -67,8 +68,8 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		fast := NewExecEventFast(raw)
 		defer slow.Recycle()
 		defer fast.Recycle()
-		if !slow.Equals(fast) {
-			t.Fatalf("exec decode mismatch")
+		if !slow.Equals(fast) || !ev.Equals(fast) {
+			t.Fatalf("exec decode mismatch: %v", fast)
 		}
 	})
 
@@ -1559,6 +1560,55 @@ func TestNewMmapEventFastKernelLayout(t *testing.T) {
 	defer fast.Recycle()
 	if !ev.Equals(fast) {
 		t.Fatalf("unexpected mmap decode: %#v", fast)
+	}
+}
+
+// TestExecEventFastSchemaCompatibility pins the exec_event v1 layout (task
+// 9p2): the filename read status and schema word follow comm, the released
+// 304-byte layout still decodes as a successful read, and every other size
+// or schema version fails closed instead of misreading the status.
+func TestExecEventFastSchemaCompatibility(t *testing.T) {
+	current := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3,
+		Dirfd: 7, Flags: 0x1000, FilenameStatus: PATH_READ_NULL, SchemaVersion: EXEC_EVENT_SCHEMA_VERSION}
+	copy(current.Filename[:], "prog")
+	copy(current.Comm[:], "sh")
+	raw := rawBytes(t, current)
+	if len(raw) != execEventSize {
+		t.Fatalf("exec_event v1 encodes to %d bytes, want %d", len(raw), execEventSize)
+	}
+
+	t.Run("current", func(t *testing.T) {
+		fast := NewExecEventFast(raw)
+		if fast == nil || !current.Equals(fast) {
+			t.Fatalf("decoded %v, want %v", fast, current)
+		}
+		fast.Recycle()
+	})
+	t.Run("legacy 304-byte layout reads as PATH_READ_OK", func(t *testing.T) {
+		fast := NewExecEventFast(raw[:execEventLegacySize])
+		if fast == nil {
+			t.Fatal("legacy exec_event rejected")
+		}
+		defer fast.Recycle()
+		want := *current
+		want.FilenameStatus, want.SchemaVersion = PATH_READ_OK, 0
+		if !want.Equals(fast) {
+			t.Fatalf("decoded %v, want %v", fast, want)
+		}
+	})
+	t.Run("unexpected schema version fails closed", func(t *testing.T) {
+		bad := append([]byte(nil), raw...)
+		binary.LittleEndian.PutUint32(bad[308:312], EXEC_EVENT_SCHEMA_VERSION+1)
+		if fast := NewExecEventFast(bad); fast != nil {
+			t.Fatalf("decoded unknown schema: %v", fast)
+		}
+	})
+	for _, size := range []int{execEventLegacySize + 4, execEventSize + 4, execEventSize + 8} {
+		t.Run(fmt.Sprintf("size %d fails closed", size), func(t *testing.T) {
+			if fast := NewExecEventFast(append(raw, make([]byte, 8)...)[:size]); fast != nil {
+				t.Fatalf("decoded %d-byte payload: %v", size, fast)
+			}
+		})
 	}
 }
 

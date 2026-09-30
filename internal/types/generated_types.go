@@ -152,6 +152,7 @@ const TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION = 2
 const TWO_FD_EVENT_SCHEMA_VERSION = 3
 const FD_PATH_EVENT_SCHEMA_VERSION = 1
 const POLL_EVENT_SCHEMA_VERSION = 1
+const EXEC_EVENT_SCHEMA_VERSION = 1
 const POLL_TIMEOUT_INFINITE_NS = -1
 const POLL_TIMEOUT_UNKNOWN_NS = -2
 const SYS_ENTER_SOCKET TraceId = 1899
@@ -1019,19 +1020,21 @@ func (o *OpenNameFixupEvent) Recycle() {
 }
 
 type ExecEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Dirfd     int32
-	Flags     int32
-	Filename  [MAX_FILENAME_LENGTH]byte
-	Comm      [MAX_PROGNAME_LENGTH]byte
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Dirfd          int32
+	Flags          int32
+	Filename       [MAX_FILENAME_LENGTH]byte
+	Comm           [MAX_PROGNAME_LENGTH]byte
+	FilenameStatus uint32
+	SchemaVersion  uint32
 }
 
 func (e ExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, StringValue(e.Filename[:]), StringValue(e.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v FilenameStatus:%v SchemaVersion:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, StringValue(e.Filename[:]), StringValue(e.Comm[:]), e.FilenameStatus, e.SchemaVersion)
 }
 
 func (e ExecEvent) Equals(other any) bool {
@@ -1039,7 +1042,7 @@ func (e ExecEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Dirfd == otherConcrete.Dirfd && e.Flags == otherConcrete.Flags && e.Filename == otherConcrete.Filename && e.Comm == otherConcrete.Comm
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Dirfd == otherConcrete.Dirfd && e.Flags == otherConcrete.Flags && e.Filename == otherConcrete.Filename && e.Comm == otherConcrete.Comm && e.FilenameStatus == otherConcrete.FilenameStatus && e.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (e *ExecEvent) GetEventType() EventType {

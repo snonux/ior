@@ -133,6 +133,12 @@
 // timeout was unreadable, invalid, unrepresentable in nanoseconds, or has no
 // capture recipe.
 #define POLL_EVENT_SCHEMA_VERSION 1
+// exec_event v1 appends the filename read status and a schema discriminator
+// to the legacy 304-byte layout (task 9p2), for 312 bytes with no padding.
+// Without the status an unreadable execveat name was indistinguishable from
+// the "" of an AT_EMPTY_PATH fexecve, so userspace had to guess. Legacy
+// 304-byte records still decode, with the status reported as PATH_READ_OK.
+#define EXEC_EVENT_SCHEMA_VERSION 1
 #define POLL_TIMEOUT_INFINITE_NS -1
 #define POLL_TIMEOUT_UNKNOWN_NS -2
 
@@ -168,6 +174,8 @@ struct exec_event {
     __s32 flags;
     char filename[MAX_FILENAME_LENGTH];
     char comm[MAX_PROGNAME_LENGTH];
+    __u32 filename_status;
+    __u32 schema_version;
 };
 
 struct null_event {

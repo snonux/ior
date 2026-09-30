@@ -690,8 +690,31 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "exec failed read leaves the filename unterminated",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "execve",
-					"(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n",
-					"(void *)ctx->args[0]) < 0)\n")
+					"            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n",
+					"            ev->filename_status = PATH_READ_FAILED;\n")
+			},
+		},
+		{
+			name: "exec failed read reported as a successful read",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "execveat",
+					"            ev->filename_status = PATH_READ_FAILED;\n",
+					"            ev->filename_status = PATH_READ_OK;\n")
+			},
+		},
+		{
+			name: "exec NULL filename reported as a successful read",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "execveat",
+					"        ev->filename_status = PATH_READ_NULL;\n",
+					"        ev->filename_status = PATH_READ_OK;\n")
+			},
+		},
+		{
+			name: "exec schema version missing",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "enter", "execveat",
+					"    ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;\n", "")
 			},
 		},
 		{
@@ -921,8 +944,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "unexpected exec filename fallback",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "execve",
-					"(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n",
-					"(void *)ctx->args[0]) < 0) {\n        ev->filename[0] = 0;\n        ior_stash_pending_filename(tid, ctx->args[0]);\n    }\n")
+					"            ev->filename[0] = 0;\n        }\n",
+					"            ev->filename[0] = 0;\n            ior_stash_pending_filename(tid, ctx->args[0]);\n        }\n")
 			},
 		},
 		{
@@ -1899,7 +1922,7 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 }
 
 // validateSchemaVersionWrite pins the ABI discriminator in every committed
-// fd/open/path/name/accept handler. This deliberately checks the rendered artifact, not
+// fd/open/path/name/accept/exec handler. This deliberately checks the rendered artifact, not
 // only generator snippets, because newer-kernel-only handlers may be preserved
 // manually when mage generate is run on an older host.
 func validateSchemaVersionWrite(name, body string) error {
@@ -1914,6 +1937,7 @@ func validateSchemaVersionWrite(name, body string) error {
 		"path_event":    "PATH_EVENT_SCHEMA_VERSION",
 		"name_event":    "NAME_EVENT_SCHEMA_VERSION",
 		"accept_event":  "ACCEPT_EVENT_SCHEMA_VERSION",
+		"exec_event":    "EXEC_EVENT_SCHEMA_VERSION",
 	}[match[1]]
 	if !ok {
 		return nil
@@ -2470,11 +2494,11 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 		if exactProbes := exactProbeRE.FindAllStringIndex(enterBody, -1); len(exactProbes) != 1 {
 			return fmt.Errorf("sys_enter_%s reads string field %s with its full reviewed size %d times, want 1", name, field, len(exactProbes))
 		}
-		if field == "pathname" || field == "oldname" || field == "newname" ||
-			(field == "filename" && requiresFilenameFallback(name)) {
-			if err := validatePathReadProtocol(name, enterBody, field, match[2]); err != nil {
-				return err
-			}
+		// Every captured string, exec's filename included (task 9p2), records
+		// the three-state read status: without it userspace cannot tell an
+		// empty name from an unreadable one.
+		if err := validatePathReadProtocol(name, enterBody, field, match[2]); err != nil {
+			return err
 		}
 		if field == "filename" {
 			if err := validateFilenameFallback(name, enterBody, match[2]); err != nil {
@@ -2501,18 +2525,9 @@ func validateStringCaptureWrites(name, enterBody string, stringMatches [][]strin
 		if memsets := allStorageMemsetRE.FindAllStringIndex(enterBody, -1); len(memsets) != 0 {
 			return fmt.Errorf("sys_enter_%s memsets string-captured storage of %s %d times, want 0", name, field, len(memsets))
 		}
-		wantTerminators := 1 // exec: the failed-read branch only
-		if field != "filename" || requiresFilenameFallback(name) {
-			wantTerminators = 2 // NULL branch and failed-read branch
-		}
+		const wantTerminators = 2 // NULL branch and failed-read branch
 		if len(terminators) != wantTerminators {
 			return fmt.Errorf("sys_enter_%s terminates string field %s %d times, want %d", name, field, len(terminators), wantTerminators)
-		}
-		if wantTerminators == 1 {
-			guardedRE := regexp.MustCompile(`(?m)^\s*if\s*\(bpf_probe_read_user_str\(\s*ev->` + regexp.QuoteMeta(field) + `,[^\n]*\)\s*<\s*0\)\s*\n\s*ev->` + regexp.QuoteMeta(field) + `\[0\]\s*=\s*0\s*;`)
-			if guarded := guardedRE.FindAllStringIndex(enterBody, -1); len(guarded) != 1 {
-				return fmt.Errorf("sys_enter_%s does not terminate %s as the guarded statement of its failed read", name, field)
-			}
 		}
 		lastWrite := probeEnd
 		if end := terminators[len(terminators)-1][1]; end > lastWrite {

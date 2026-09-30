@@ -431,12 +431,16 @@ func generateExtraExec(f *Format) string {
 		filenameIdx = 0
 	}
 	var b strings.Builder
-	// exec_event has no read status: a failed read (NULL included) leaves an
-	// empty filename, terminated here instead of by a full-buffer memset (see
-	// writeStringTerminator). comm is filled completely by the helper.
-	fmt.Fprintf(&b, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[%d]) < 0)\n", filenameIdx)
-	writeStringTerminator(&b, "        ", "filename")
+	// The filename carries the three-state read status like the open kinds
+	// (task 9p2): an empty name reads the same whether the caller passed ""
+	// (AT_EMPTY_PATH execveat, i.e. fexecve) or a pointer the nofault helper
+	// could not read, and only the former names the dirfd itself. Unlike
+	// open, a failed read is not retried at sys_exit: a successful exec
+	// replaces the address space the pointer belonged to.
+	writePathReadCapture(&b, "filename", "filename_status", filenameIdx)
+	// comm is filled completely by the helper.
 	b.WriteString("    bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n")
+	b.WriteString("    ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;\n")
 	if dirfdIdx > -1 {
 		fmt.Fprintf(&b, "    ev->dirfd = (__s32)ctx->args[%d];\n", dirfdIdx)
 	} else if f.Name == "sys_enter_execveat" {

@@ -21,7 +21,8 @@ const (
 	openEventLegacyKernelSize    = 304
 	openEventLegacyCompactSize   = 300
 	openNameFixupEventSize       = 268
-	execEventSize                = 304
+	execEventSize                = 312
+	execEventLegacySize          = 304
 	nullEventSize                = 24
 	fdEventSize                  = 32
 	fdEventCompactSize           = 28
@@ -155,16 +156,16 @@ func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
 	return o
 }
 
-// NewExecEventFast decodes one exec ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant above. Returns nil for a
-// short payload.
+// NewExecEventFast decodes one exec ring-buffer payload in a single pass.
+// exec_event v1 (312 bytes, no padding, so kernel and binary.Write sizes
+// agree) carries the filename read status; the released legacy 304-byte
+// layout predates it and is decoded with PATH_READ_OK and schema version 0,
+// the only status the old userspace could assume. Any other size, and a v1
+// record with an unexpected schema version, fails closed with nil.
 func NewExecEventFast(raw []byte) *ExecEvent {
-	if len(raw) < execEventSize {
+	legacy := len(raw) == execEventLegacySize
+	if !legacy && len(raw) != execEventSize {
 		return nil
-	}
-	if len(raw) != execEventSize {
-		return NewExecEvent(raw)
 	}
 	e := poolOfExecEvents.Get().(*ExecEvent)
 	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -176,6 +177,16 @@ func NewExecEventFast(raw []byte) *ExecEvent {
 	e.Flags = int32(binary.LittleEndian.Uint32(raw[28:32]))
 	copy(e.Filename[:], raw[32:288])
 	copy(e.Comm[:], raw[288:304])
+	e.FilenameStatus = PATH_READ_OK
+	e.SchemaVersion = 0
+	if !legacy {
+		e.FilenameStatus = binary.LittleEndian.Uint32(raw[304:308])
+		e.SchemaVersion = binary.LittleEndian.Uint32(raw[308:312])
+		if e.SchemaVersion != EXEC_EVENT_SCHEMA_VERSION {
+			e.Recycle()
+			return nil
+		}
+	}
 	return e
 }
 
