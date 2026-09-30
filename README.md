@@ -162,7 +162,9 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
 
 ## Bytes Classification
 
-Throughput bytes come from positive return values of these syscalls only:
+Throughput bytes come from positive return values of these syscalls only
+(exceptions: `recvfrom`/`recvmsg` count 0 bytes under `MSG_PEEK` and at most the buffer capacity
+under `MSG_TRUNC`, see [Syscall tracing](./docs/syscall-tracing-plan.md)):
 
 - `ReadClassified`: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`,
   `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`,

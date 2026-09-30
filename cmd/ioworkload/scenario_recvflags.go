@@ -15,11 +15,12 @@ const (
 	recvflagsTruncLen     = 300 // recvfrom MSG_TRUNC into a short buffer
 	recvflagsNetlinkLen   = 200 // recvmsg PEEK|TRUNC size probe, then a real recvmsg
 	recvflagsTruncMsgLen  = 400 // recvmsg MSG_TRUNC into two short iovecs
-	recvflagsManyIovLen   = 90  // recvmsg MSG_TRUNC with more iovecs than BPF sums
+	recvflagsManyIovLen   = 500 // recvmsg MSG_TRUNC, larger than all iovecs together
 	recvflagsShortBuf     = 10  // capacity of the short recvfrom buffer
 	recvflagsIovA         = 25  // the two iovec lengths of the short recvmsg
 	recvflagsIovB         = 15  //
 	recvflagsManyIovCount = 9   // one more than IOR_RECVMSG_MAX_IOV
+	recvflagsManyIovEach  = 10  // capacity of each of the many iovecs (90 in all)
 )
 
 // recvFlagsScenario makes recvfrom and recvmsg run with the flags whose
@@ -154,15 +155,19 @@ func recvflagsTruncatedRecvmsg(tx, rx int) error {
 }
 
 // recvflagsManyIovecs receives with more iovecs than the BPF handler sums, so
-// its capacity is reported as unknown. The datagram fits, so nothing is
-// truncated and the return value is the exact byte count either way.
+// its capacity is reported as unknown and the raw return is kept. The datagram
+// is deliberately larger than the iovecs' total capacity (500 > 9*10): a
+// datagram that fits would return the same count whether the capacity were
+// summed or unknown, and the test could not tell the fallback from a handler
+// that had silently raised its iovec limit (a sum would give 90, the fallback
+// gives 500).
 func recvflagsManyIovecs(tx, rx int) error {
 	if err := recvflagsSend(tx, recvflagsManyIovLen); err != nil {
 		return err
 	}
 	bufs := make([][]byte, recvflagsManyIovCount)
 	for i := range bufs {
-		bufs[i] = make([]byte, recvflagsManyIovLen/recvflagsManyIovCount)
+		bufs[i] = make([]byte, recvflagsManyIovEach)
 	}
 	n, err := recvflagsRecvmsg(rx, bufs, syscall.MSG_TRUNC)
 	return recvflagsExpect("recvmsg MSG_TRUNC many iovecs", n, err, recvflagsManyIovLen)

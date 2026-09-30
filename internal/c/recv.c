@@ -16,6 +16,10 @@
 // resolves conservatively (see bytesFromRet in internal/eventloop_exit.go).
 #define IOR_RECVMSG_MAX_IOV 8
 
+// The kernel's MAX_RW_COUNT (INT_MAX & PAGE_MASK for 4 KiB pages): the most a
+// single read-style syscall ever transfers, whatever the iovec lengths say.
+#define IOR_MAX_RW_COUNT 0x7ffff000UL
+
 // Only the leading fields of the userspace struct msghdr and struct iovec are
 // declared, as fixed-width integers. The 64-bit userspace ABI is stable, so
 // local definitions avoid depending on whatever vmlinux.h a build host ships.
@@ -36,9 +40,12 @@ struct ior_user_iovec {
 // number of bytes recvmsg can copy at most. It sets *size and *valid only on
 // full success; on any failure (NULL or unreadable msghdr/iovec, more than
 // IOR_RECVMSG_MAX_IOV entries) both are left untouched, so the caller's
-// initial size_valid = 0 keeps meaning "capacity unknown". The sum cannot
-// wrap in practice: the kernel rejects a total above MAX_RW_COUNT and the
-// syscall then fails before copying anything, so its return is never used.
+// initial size_valid = 0 keeps meaning "capacity unknown". The kernel does
+// not reject an oversized total, it clamps it to MAX_RW_COUNT, so the sum
+// here can only overestimate what was copied - harmless, as userspace counts
+// min(ret, capacity) and ret is the real length. Each length is clamped to
+// MAX_RW_COUNT before adding so that eight absurd user-supplied lengths
+// cannot wrap the u64 sum and turn an overestimate into a small capacity.
 static __always_inline void ior_recvmsg_capacity(void *msg_ptr, __u64 *size, __u32 *valid) {
     struct ior_user_msghdr msg = {};
     __u64 total = 0;
@@ -59,7 +66,7 @@ static __always_inline void ior_recvmsg_capacity(void *msg_ptr, __u64 *size, __u
         if (bpf_probe_read_user(&iov, sizeof(iov),
                                 (void *)(msg.msg_iov + i * sizeof(iov))) != 0)
             return;
-        total += iov.iov_len;
+        total += iov.iov_len > IOR_MAX_RW_COUNT ? IOR_MAX_RW_COUNT : iov.iov_len;
     }
     *size = total;
     *valid = 1;

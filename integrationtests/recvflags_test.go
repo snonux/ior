@@ -16,7 +16,11 @@ var recvflagsTraceArgs = []string{"-trace-syscalls", "sendmsg,recvfrom,recvmsg,c
 //   - the netlink size-then-read idiom (recvmsg PEEK|TRUNC into a zero-length
 //     iovec, then a plain recvmsg) counts the datagram once, not twice;
 //   - recvmsg MSG_TRUNC counts the summed iovec capacity (25+15), and falls
-//     back to the raw return when the iovec has more entries than BPF sums.
+//     back to the raw return when the iovec has more entries than BPF sums:
+//     nine 10-byte iovecs receiving a 500-byte datagram count 500, not the
+//     90 bytes copied. The datagram must exceed the iovecs' capacity, else
+//     the sum and the fallback agree and a raised IOR_RECVMSG_MAX_IOV would
+//     go unnoticed.
 func TestRecvfromRecvmsgFlagsAdjustByteCounts(t *testing.T) {
 	rows, _ := runParquetScenarioRows(t, "recv-flags", defaultDuration, recvflagsTraceArgs, nil)
 	AssertRowsPresent(t, rows, []ExpectedRow{
@@ -26,6 +30,6 @@ func TestRecvfromRecvmsgFlagsAdjustByteCounts(t *testing.T) {
 		{Syscall: "recvmsg", Comm: "ioworkload", RetVal: ptrTo(int64(200)), Bytes: ptrTo(uint64(0)), MinCount: 1},
 		{Syscall: "recvmsg", Comm: "ioworkload", RetVal: ptrTo(int64(200)), Bytes: ptrTo(uint64(200)), MinCount: 1},
 		{Syscall: "recvmsg", Comm: "ioworkload", RetVal: ptrTo(int64(400)), Bytes: ptrTo(uint64(40)), MinCount: 1},
-		{Syscall: "recvmsg", Comm: "ioworkload", RetVal: ptrTo(int64(90)), Bytes: ptrTo(uint64(90)), MinCount: 1},
+		{Syscall: "recvmsg", Comm: "ioworkload", RetVal: ptrTo(int64(500)), Bytes: ptrTo(uint64(500)), MinCount: 1},
 	})
 }
