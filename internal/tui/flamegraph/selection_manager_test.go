@@ -249,7 +249,10 @@ func TestUserWalkingAwayAndBackOntoTheLandedFrameCancelsTheWish(t *testing.T) {
 
 // TestEveryUserMoveCancelsTheWish drives each user-facing mutator, including
 // ones that happen not to change the index (a clamped move on the fallback
-// frame): a decision by the user must never be undone by a stale wish.
+// frame): a decision by the user must never be undone by a stale wish. The
+// single-frame layouts make moveSibling and moveVertical fall through to
+// moveTraversal, so the branches that move on their own are pinned separately
+// (wish_cancel_test.go: TestMoveSiblingBetweenRealSiblingsCancelsTheWish).
 func TestEveryUserMoveCancelsTheWish(t *testing.T) {
 	fakeWishClock(t)
 	full := jumpMatchFrames()

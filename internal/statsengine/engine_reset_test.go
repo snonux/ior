@@ -3,10 +3,12 @@ package statsengine
 import (
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"ior/internal/event"
 	"ior/internal/types"
 )
 
@@ -148,22 +150,140 @@ func TestEngineResetIdentityAcrossSeveralResets(t *testing.T) {
 	}
 }
 
-// TestProcessCarryOverIsBoundedByKnownPIDs pins the memory bound: carried
-// entries exist for PIDs the old accumulator knew and are consumed when the
-// PID reappears.
-func TestProcessCarryOverIsBoundedByKnownPIDs(t *testing.T) {
+// TestProcessCarryOverConsumesEntriesWhenPIDsReappear: a carried entry lives
+// only until the first row of its PID opens.
+func TestProcessCarryOverConsumesEntriesWhenPIDsReappear(t *testing.T) {
 	e := NewEngine(8)
 	for pid := uint32(1); pid <= 5; pid++ {
 		ingestPID(e, pid, "p")
 	}
 	e.Reset()
-	if n := len(e.processes.carried); n != 5 {
+	if n := e.processes.carriedLen(); n != 5 {
 		t.Fatalf("carried %d PIDs, want 5", n)
 	}
 	ingestPID(e, 3, "p")
-	if n := len(e.processes.carried); n != 4 {
+	if n := e.processes.carriedLen(); n != 4 {
 		t.Fatalf("carried %d PIDs after PID 3 reappeared, want 4", n)
 	}
+}
+
+// TestProcessCarryOverStaysBoundedAcrossManyResets is the memory-bound
+// regression: every reset sees a batch of PIDs that never come back (a box
+// churning short-lived processes), and the carried table must not accumulate
+// them all. The bound is carryGenerations*maxSeen, independent of the number
+// of resets and of pid_max.
+func TestProcessCarryOverStaysBoundedAcrossManyResets(t *testing.T) {
+	const topN, maxSeen, perReset, resets = 4, 16, 10, 1000
+	acc := newProcessAccumulatorWithLimits(topN, maxSeen)
+	bound := carryGenerations * maxSeen
+	pid := uint32(0)
+	for r := 0; r < resets; r++ {
+		for i := 0; i < perReset; i++ {
+			pid++
+			ingestAcc(acc, pid)
+		}
+		acc = acc.carryOver()
+		if n := acc.carriedLen(); n > bound {
+			t.Fatalf("reset %d: %d carried entries, bound %d", r, n, bound)
+		}
+	}
+	// Steady state: exactly the last carryGenerations resets' PIDs are kept.
+	if n, want := acc.carriedLen(), carryGenerations*perReset; n != want {
+		t.Fatalf("carried %d entries after %d resets, want %d", n, resets, want)
+	}
+}
+
+// TestProcessCarryOverAgesOutSilentPIDs pins the aging semantics: an entry
+// survives carryGenerations-1 further resets without its PID reappearing, and
+// is gone after carryGenerations; a PID that spoke in between is re-carried
+// from its live row and so restarts the clock.
+func TestProcessCarryOverAgesOutSilentPIDs(t *testing.T) {
+	acc := newProcessAccumulatorWithLimits(8, 64)
+	ingestAcc(acc, 8)
+	acc.RetireProcess(8)
+	ingestAcc(acc, 8) // live 8#1
+	ingestAcc(acc, 9) // live 9#0, kept talking below
+
+	acc = acc.carryOver()
+	for i := 1; i < carryGenerations; i++ {
+		ingestAcc(acc, 9) // 9 speaks, and is re-carried by the next reset
+		acc = acc.carryOver()
+	}
+	// PID 8 has now been silent through carryGenerations resets minus the
+	// first one that created its entry: still remembered.
+	if c, gen := acc.carriedEntry(8); gen == nil || c.next != 1 || !c.live {
+		t.Fatalf("PID 8 entry after %d resets = %+v (found %v), want live ordinal 1", carryGenerations, c, gen != nil)
+	}
+	acc = acc.carryOver() // one silent reset too many
+	if _, gen := acc.carriedEntry(8); gen != nil {
+		t.Fatalf("PID 8 entry survived %d resets without a row", carryGenerations+1)
+	}
+	ingestAcc(acc, 8)
+	if got := acc.byPID[8].lifetime; got != 0 {
+		t.Fatalf("aged-out PID 8 reopened as ordinal %d, want 0", got)
+	}
+	// PID 9 kept speaking, so it never aged out.
+	if c, gen := acc.carriedEntry(9); gen == nil || c.next != 0 || !c.live {
+		t.Fatalf("PID 9 entry = %+v (found %v), want live ordinal 0", c, gen != nil)
+	}
+}
+
+// TestProcessCarryOverMovesInsteadOfCopying: Engine.Reset holds the engine
+// lock, so carryOver must cost O(this accumulator's rows), not O(carried
+// entries). The check is structural rather than a timing: the older
+// generations must be the very same maps, not copies of them.
+func TestProcessCarryOverMovesInsteadOfCopying(t *testing.T) {
+	old := newProcessAccumulatorWithLimits(8, 64)
+	for i := 0; i < carryGenerations; i++ {
+		old.carried[i] = map[uint32]carriedLifetime{uint32(1000 + i): {next: uint32(i)}}
+	}
+	fresh := old.carryOver()
+	for i := 1; i < carryGenerations; i++ {
+		if reflect.ValueOf(fresh.carried[i]).Pointer() != reflect.ValueOf(old.carried[i-1]).Pointer() {
+			t.Fatalf("generation %d was copied, want the old generation %d map moved", i, i-1)
+		}
+	}
+	if _, gen := fresh.carriedEntry(uint32(1000 + carryGenerations - 1)); gen != nil {
+		t.Fatalf("the oldest generation should have dropped out")
+	}
+}
+
+// TestProcessCarryOverNewestEntryWinsAndConsumptionClearsAll: if two
+// generations ever hold the same PID, the newest is used and consuming it
+// removes the stale one too, so it cannot renumber a later process.
+func TestProcessCarryOverNewestEntryWinsAndConsumptionClearsAll(t *testing.T) {
+	acc := newProcessAccumulatorWithLimits(8, 64)
+	acc.carried[0] = map[uint32]carriedLifetime{8: {next: 3}}
+	acc.carried[2] = map[uint32]carriedLifetime{8: {next: 1, live: true}}
+	ingestAcc(acc, 8)
+	if got := acc.byPID[8].lifetime; got != 3 {
+		t.Fatalf("lifetime = %d, want the newest entry's 3", got)
+	}
+	if n := acc.carriedLen(); n != 0 {
+		t.Fatalf("%d carried entries left after consumption, want 0", n)
+	}
+}
+
+// BenchmarkEngineResetWithLargeCarriedTable shows Reset does not scale with
+// the carried table: it moves it. (Before the fix this was O(entries).)
+func BenchmarkEngineResetWithLargeCarriedTable(b *testing.B) {
+	e := NewEngine(8)
+	var gens [carryGenerations]map[uint32]carriedLifetime
+	for i := range gens {
+		gens[i] = make(map[uint32]carriedLifetime, 100000)
+		for pid := uint32(0); pid < 100000; pid++ {
+			gens[i][pid] = carriedLifetime{next: 1}
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		e.processes.carried = gens // restore the big table; a pointer-array copy
+		e.Reset()
+	}
+}
+
+func ingestAcc(a *processAccumulator, pid uint32) {
+	a.Add(&event.Pair{EnterEv: &types.RetEvent{TraceId: types.SYS_ENTER_READ, Pid: pid, Tid: pid}, Comm: "p"})
 }
 
 // TestEngineResetConcurrentWithIngestAndSnapshot is the regression guard for

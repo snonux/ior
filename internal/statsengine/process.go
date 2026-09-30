@@ -30,15 +30,41 @@ type processAccumulator struct {
 	// Ordinals keep the rows of one PID distinguishable (ProcessSnapshot.
 	// Lifetime), which the TUI uses as part of its selection key.
 	nextLifetime map[uint32]uint32
-	// carried holds the lifetime ordinal each PID of a previous accumulator
-	// (see carryOver) resumes with; an entry is consumed when a row of the
-	// PID opens. It is what keeps process identity stable across
-	// Engine.Reset. nextLifetime cannot do that: it is bounded by compaction
-	// and forgotten with the rows, and it cannot tell a process that is
-	// still running (its next pair reopens the same ordinal) from one that
-	// already exited (its successor takes the next one).
-	carried map[uint32]carriedLifetime
+	// carried holds the lifetime ordinals PIDs of previous accumulators
+	// resume with (see carryOver); an entry is consumed when a row of its PID
+	// opens. It is what keeps process identity stable across Engine.Reset.
+	// nextLifetime cannot do that: it is bounded by compaction and forgotten
+	// with the rows, and it cannot tell a process that is still running (its
+	// next pair reopens the same ordinal) from one that already exited (its
+	// successor takes the next one).
+	//
+	// The table is a ring of carryGenerations maps, newest first: carried[0]
+	// was filled by the latest carryOver and carried[i] by the one i resets
+	// earlier. A PID that stays silent for carryGenerations resets ages out
+	// with the map it lives in, so the table cannot grow without bound (see
+	// carryGenerations) and needs no per-entry bookkeeping or sweep.
+	carried [carryGenerations]map[uint32]carriedLifetime
 }
+
+// carryGenerations is how many Engine.Reset calls a carried lifetime ordinal
+// survives without its PID reappearing. Each generation holds at most one entry
+// per PID the accumulator tracked when it was reset, i.e. at most maxSeen
+// entries (live plus retired rows, which compaction bounds), so the carried
+// table holds at most carryGenerations*maxSeen entries in total - not one per
+// PID ever seen, which on a box churning short-lived processes only pid_max
+// (up to 4M) would bound, at hundreds of MB and a copy that stalls the event
+// loop while Reset holds the engine lock.
+//
+// The trade-off: a PID silent for this many resets restarts at ordinal 0. That
+// only loses selection stickiness - the TUI's wish for the old row is ignored
+// once it cannot match, and a different process inheriting the PID could be
+// mistaken for the old one only if the wish for that same PID and ordinal
+// outlived the entry. A wish lasts common.SelectionWishGrace (one minute), so
+// four generations cover it at the default 30s reset interval (two resets) with
+// margin; with much shorter reset intervals an idle PID's identity is lost
+// after correspondingly less wall time, which is still longer than a user
+// keeps a selection on a row that has stopped producing events.
+const carryGenerations = 4
 
 // carriedLifetime is one PID's ordinal across an accumulator swap.
 type carriedLifetime struct {
@@ -100,7 +126,6 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 		maxSeen:      maxSeen,
 		byPID:        make(map[uint32]*processStats),
 		nextLifetime: make(map[uint32]uint32),
-		carried:      make(map[uint32]carriedLifetime),
 	}
 }
 
@@ -111,25 +136,56 @@ func newProcessAccumulatorWithLimits(topN int, maxSeen int) *processAccumulator 
 // them. Engine.Reset uses it so the TUI's selection, which is keyed by that ID,
 // still means the same process when the data refills, and a different process
 // that later inherits the PID gets a different ID instead of taking over the
-// selection. The carried table has at most one entry per PID the old
-// accumulator and its own carried entries knew, so it is bounded by the PIDs
-// of the system (pid_max), not by the traffic; entries are consumed as PIDs
-// reappear.
+// selection.
+//
+// The carried maps of a are moved into the result one generation older, never
+// copied: a is discarded by the caller (Engine.Reset replaces it under the
+// engine lock, where a copy of a large table would stall Ingest), so a must
+// not be used afterwards. Only the entries for a's own rows are built, which
+// is bounded by maxSeen; the oldest generation falls off, see carryGenerations.
 func (a *processAccumulator) carryOver() *processAccumulator {
 	fresh := newProcessAccumulatorWithLimits(a.topN, a.maxSeen)
-	for pid, c := range a.carried {
-		fresh.carried[pid] = c
-	}
+	copy(fresh.carried[1:], a.carried[:carryGenerations-1])
+	newest := make(map[uint32]carriedLifetime, len(a.byPID)+len(a.retired))
 	for pid, next := range a.nextLifetimes() {
 		if a.byPID[pid] != nil {
 			continue
 		}
-		fresh.carried[pid] = carriedLifetime{next: next}
+		newest[pid] = carriedLifetime{next: next}
 	}
 	for pid, stats := range a.byPID {
-		fresh.carried[pid] = carriedLifetime{next: stats.lifetime, live: true}
+		newest[pid] = carriedLifetime{next: stats.lifetime, live: true}
 	}
+	fresh.carried[0] = newest
 	return fresh
+}
+
+// carriedEntry returns the newest carried entry of pid and the generation
+// map holding it, or nil if the PID has none.
+func (a *processAccumulator) carriedEntry(pid uint32) (carriedLifetime, map[uint32]carriedLifetime) {
+	for _, gen := range a.carried {
+		if c, ok := gen[pid]; ok {
+			return c, gen
+		}
+	}
+	return carriedLifetime{}, nil
+}
+
+// forgetCarried removes pid from every generation, so an older, stale entry
+// for the same PID cannot resurface once the newest one is consumed.
+func (a *processAccumulator) forgetCarried(pid uint32) {
+	for _, gen := range a.carried {
+		delete(gen, pid)
+	}
+}
+
+// carriedLen is the total number of carried entries over all generations.
+func (a *processAccumulator) carriedLen() int {
+	n := 0
+	for _, gen := range a.carried {
+		n += len(gen)
+	}
+	return n
 }
 
 // Add folds one syscall pair into the stats of its process (tgid).
@@ -185,8 +241,8 @@ func (a *processAccumulator) RetireProcess(pid uint32) {
 	if stats == nil {
 		// A process carried over a reset that exits before its next pair has
 		// no row to retire, but its ordinal is spent all the same.
-		if c, ok := a.carried[pid]; ok && c.live {
-			a.carried[pid] = carriedLifetime{next: c.next + 1}
+		if c, gen := a.carriedEntry(pid); gen != nil && c.live {
+			gen[pid] = carriedLifetime{next: c.next + 1}
 		}
 		return
 	}
@@ -216,9 +272,9 @@ func (a *processAccumulator) Snapshot(elapsed time.Duration) []ProcessSnapshot {
 // for it before that).
 func (a *processAccumulator) startLifetime(pid uint32) *processStats {
 	lifetime := a.nextLifetime[pid]
-	if c, ok := a.carried[pid]; ok {
+	if c, gen := a.carriedEntry(pid); gen != nil {
 		lifetime = c.next
-		delete(a.carried, pid)
+		a.forgetCarried(pid)
 	}
 	stats := &processStats{pid: pid, lifetime: lifetime}
 	delete(a.nextLifetime, pid)
