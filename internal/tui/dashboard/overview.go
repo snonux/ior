@@ -13,12 +13,14 @@ import (
 
 // renderOverview renders the Overview tab: a row of summary boxes, the trend
 // line, and three full-width panels (sparklines, top-N lists, histogram
-// summaries). height is currently unused; the layout grows with content.
+// summaries). The blocks are listed in priority order and fitted to height
+// (fitBlocks): on a short terminal the histogram summaries go first, then the
+// top-N lists, so the frame never outgrows the terminal and pushes the status
+// line off the bottom. height <= 0 means unbounded.
 // The theme is loaded once and passed to the helpers so the whole tab is
 // rendered from one consistent palette snapshot.
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	theme := common.Current()
-	_ = height
 	if snap == nil {
 		return theme.PanelStyle.Render("Overview: waiting for stats...")
 	}
@@ -33,16 +35,13 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 		renderErrorBox(snap, boxWidth),
 	)
 	panel := theme.PanelStyle.Width(panelWidth(width))
-	return strings.Join(
-		[]string{
-			row,
-			theme.HighlightStyle.Render(overviewTrendsLine(snap)),
-			panel.Render(overviewSparklineLines(snap, panelInnerWidth(width))),
-			panel.Render(overviewTopLines(snap)),
-			panel.Render(overviewHistogramLines(snap)),
-		},
-		"\n",
-	)
+	return fitBlocks([]string{
+		row,
+		theme.HighlightStyle.Render(overviewTrendsLine(snap)),
+		panel.Render(overviewSparklineLines(snap, panelInnerWidth(width))),
+		panel.Render(overviewTopLines(snap)),
+		panel.Render(overviewHistogramLines(snap)),
+	}, height)
 }
 
 // overviewTrendsLine summarises the latency/gap/throughput trend arrows.
