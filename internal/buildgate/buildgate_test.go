@@ -810,6 +810,7 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 	argv := gatecmd.LintRun()
 	cmd := exec.Command(bin, append(argv[1:], "--output.text.path", "stdout")...)
 	cmd.Dir = dir
+	cmd.Env = privateLintLockEnv(t, os.Environ())
 	out, runErr := cmd.CombinedOutput()
 	report := string(out)
 
@@ -904,7 +905,7 @@ func plantedDefect() {
 
 	cmd := exec.Command("mage", "lint")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LIBBPFGO="+mustAbs(t, libbpfgo))
+	cmd.Env = privateLintLockEnv(t, append(os.Environ(), "LIBBPFGO="+mustAbs(t, libbpfgo)))
 	out, runErr := cmd.CombinedOutput()
 	if runErr == nil {
 		t.Errorf("`mage lint` succeeded on a tree containing an unchecked error; the target does not fail on findings, whatever its argv says.\n%s", out)
@@ -912,6 +913,32 @@ func plantedDefect() {
 	if !strings.Contains(string(out), "planted_defect.go") {
 		t.Errorf("`mage lint` failed, but not because of the planted defect - it never reported planted_defect.go, so something else broke and this test proves nothing.\n%s", out)
 	}
+}
+
+// privateLintLockEnv returns env with TMPDIR pointed at a directory private
+// to this test, so the golangci-lint it runs takes its own instance lock.
+//
+// golangci-lint serializes itself on $TMPDIR/golangci-lint.lock and, by
+// default, gives up after five seconds with "parallel golangci-lint is
+// running". Any concurrent `mage lint` - another shell, another agent, a
+// parallel test binary - then made the two tests that run the real gate fail
+// for a reason unrelated to the gate: the marker checks saw only that one line.
+//
+// Moving the lock is chosen over the alternatives because it leaves the
+// command line alone. --allow-parallel-runners or --allow-serial-runners would
+// have to be appended to the argv these tests exist to prove, and
+// TestMageLintFailsOnAPlantedDefect runs `mage lint` itself, whose argv is
+// pinned to gatecmd.LintRun(); a retry loop keyed on the error text would
+// still lose to a long enough concurrent run. The lint results cache
+// (~/.cache/golangci-lint) is still shared: it is built on Go's build cache,
+// which is safe for concurrent processes - the lock guards against running
+// twice, not against the cache.
+//
+// os/exec keeps the last value of a duplicated variable, so appending is
+// enough to override an inherited TMPDIR.
+func privateLintLockEnv(t *testing.T, env []string) []string {
+	t.Helper()
+	return append(env, "TMPDIR="+t.TempDir())
 }
 
 // mustAbs resolves p to an absolute path, since the command runs elsewhere.
