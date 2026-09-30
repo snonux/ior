@@ -98,13 +98,20 @@ func (e *Engine) SetAggregateDrainPeriod(period time.Duration) {
 // before now and no earlier than the engine's start. The period cap matters
 // because the drainer forwards no empty batches, so after an idle stretch
 // the previous batch can be much older than what the kernel map covers.
+//
+// All three instants are compared on the wall clock (Round(0) strips the
+// monotonic readings time.Now attaches), matching AddSpread, which splits
+// by wall-clock time. Compared monotonically, a forward wall-clock step
+// between two drains would keep the previous batch's time as the start
+// while its wall-clock distance to now spans the step, spreading one batch
+// over the whole series window.
 func (e *Engine) aggregateSpanStart(now time.Time) time.Time {
-	from := now.Add(-e.aggregateSpan)
-	if e.lastAggregateAt.After(from) {
-		from = e.lastAggregateAt
+	from := now.Round(0).Add(-e.aggregateSpan)
+	if last := e.lastAggregateAt.Round(0); last.After(from) {
+		from = last
 	}
-	if e.startedAt.After(from) {
-		from = e.startedAt
+	if started := e.startedAt.Round(0); started.After(from) {
+		from = started
 	}
 	return from
 }
