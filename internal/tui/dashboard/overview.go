@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -214,7 +213,7 @@ func summaryBoxWidth(width int) int {
 }
 
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
-	w := panelInner - utf8.RuneCountInString(label) - 1 - sparklineSafetyMargin
+	w := panelInner - common.DisplayWidth(label) - 1 - sparklineSafetyMargin
 	if w < 8 {
 		w = 8
 	}
@@ -230,10 +229,12 @@ func renderOverviewSparklineAligned(label string, data []float64, panelInner int
 	return renderLabeledSparkline(paddedLabel, data, w)
 }
 
+// maxLabelWidth returns the widest label in terminal display cells (not
+// runes), so a wide CJK/emoji label still lines the sparklines up.
 func maxLabelWidth(labels ...string) int {
 	max := 0
 	for _, label := range labels {
-		w := utf8.RuneCountInString(label)
+		w := common.DisplayWidth(label)
 		if w > max {
 			max = w
 		}
@@ -241,12 +242,10 @@ func maxLabelWidth(labels ...string) int {
 	return max
 }
 
+// padLabelRight right-pads label with spaces to width display cells; a label
+// already that wide is returned unchanged.
 func padLabelRight(label string, width int) string {
-	pad := width - utf8.RuneCountInString(label)
-	if pad <= 0 {
-		return label
-	}
-	return label + strings.Repeat(" ", pad)
+	return common.PadRight(label, width)
 }
 
 func panelWidth(width int) int {

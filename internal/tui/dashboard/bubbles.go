@@ -8,7 +8,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -73,12 +72,6 @@ type bubbleNode struct {
 	driftSpeed float64
 	driftAmpX  float64
 	driftAmpY  float64
-}
-
-type bubbleCell struct {
-	char      rune
-	colorSlot int
-	bold      bool
 }
 
 type bubbleChart struct {
@@ -423,28 +416,19 @@ func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if chartHeight < 4 {
 		chartHeight = 4
 	}
-	grid := make([][]bubbleCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]bubbleCell, width)
-		for col := range grid[row] {
-			grid[row][col] = bubbleCell{
-				char:      ' ',
-				colorSlot: -1,
-			}
-		}
-	}
+	grid := newGridRows(width, chartHeight)
 	c.renderBubblesToGrid(grid, width, chartHeight)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
 	palette := c.palette()
 	for _, row := range grid {
-		lines = append(lines, renderBubbleRow(row, palette))
+		lines = append(lines, renderGridRow(row, palette))
 	}
 	lines = append(lines, padOrTrim(c.statusLine(width), width))
 	return strings.Join(lines, "\n")
 }
 
-func (c *bubbleChart) renderBubblesToGrid(grid [][]bubbleCell, width, height int) {
+func (c *bubbleChart) renderBubblesToGrid(grid [][]gridCell, width, height int) {
 	order := make([]int, 0, len(c.nodes))
 	for idx := range c.nodes {
 		order = append(order, idx)
@@ -472,7 +456,7 @@ func (c *bubbleChart) renderBubblesToGrid(grid [][]bubbleCell, width, height int
 	}
 }
 
-func drawBubble(grid [][]bubbleCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
+func drawBubble(grid [][]gridCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
 	if len(grid) == 0 || width == 0 || height == 0 {
 		return
 	}
@@ -495,55 +479,35 @@ func drawBubble(grid [][]bubbleCell, width, height int, node bubbleNode, selecte
 			dist := math.Sqrt(dx*dx + dy*dy)
 			switch {
 			case dist <= radius-0.65:
-				grid[y][x] = bubbleCell{char: fill, colorSlot: colorSlot, bold: selected}
+				grid[y][x] = gridCell{char: fill, colorSlot: colorSlot, bold: selected}
 			case dist <= radius:
-				grid[y][x] = bubbleCell{char: innerFill, colorSlot: colorSlot, bold: selected}
+				grid[y][x] = gridCell{char: innerFill, colorSlot: colorSlot, bold: selected}
 			}
 		}
 	}
 }
 
-func drawBubbleLabel(grid [][]bubbleCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
+// drawBubbleLabel centres the node's label on the bubble's middle row. The
+// label budget and the centring offset are measured in terminal cells, not
+// runes, and the label is placed grapheme by grapheme (writeGridLabel), so
+// wide CJK/emoji labels stay inside the bubble and the row keeps its width.
+// The selected bubble's label is bracketed within the same budget.
+func drawBubbleLabel(grid [][]gridCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
 	if len(grid) == 0 || width == 0 || height == 0 {
 		return
 	}
-	maxLabelRunes := maxInt(2, int(math.Round(node.radius*1.6)))
-	label := abbreviateLabel(node.Label, maxLabelRunes)
+	maxLabelCells := maxInt(2, int(math.Round(node.radius*1.6)))
+	label := abbreviateLabel(node.Label, maxLabelCells)
 	if selected {
-		label = "[" + abbreviateLabel(node.Label, maxInt(1, maxLabelRunes-2)) + "]"
+		label = "[" + abbreviateLabel(node.Label, maxInt(1, maxLabelCells-2)) + "]"
 	}
 	cx := int(math.Round(node.x))
 	cy := int(math.Round(node.y))
 	if cy < 0 || cy >= height {
 		return
 	}
-	labelRunes := []rune(label)
-	start := cx - len(labelRunes)/2
-	for idx, r := range labelRunes {
-		x := start + idx
-		if x < 0 || x >= width {
-			continue
-		}
-		grid[cy][x] = bubbleCell{char: r, colorSlot: colorSlot, bold: selected}
-	}
-}
-
-func abbreviateLabel(label string, maxRunes int) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return "?"
-	}
-	if maxRunes <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(label) <= maxRunes {
-		return label
-	}
-	if maxRunes == 1 {
-		return "…"
-	}
-	r := []rune(label)
-	return string(r[:maxRunes-1]) + "…"
+	start := cx - common.DisplayWidth(label)/2
+	writeGridLabel(grid[cy], start, label, colorSlot, selected)
 }
 
 func (c *bubbleChart) statusLine(width int) string {
@@ -618,43 +582,6 @@ func (c *bubbleChart) palette() []color.Color {
 		lipgloss.Color("161"),
 		lipgloss.Color("25"),
 	}
-}
-
-func renderBubbleRow(cells []bubbleCell, palette []color.Color) string {
-	if len(cells) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	styleCache := make(map[string]lipgloss.Style, 8)
-	selectedColor := lipgloss.Color("129")
-	for _, cell := range cells {
-		if cell.colorSlot < 0 {
-			if cell.bold {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Render(string(cell.char)))
-			} else {
-				b.WriteRune(cell.char)
-			}
-			continue
-		}
-		slot := cell.colorSlot
-		if len(palette) > 0 {
-			slot = slot % len(palette)
-		}
-		key := fmt.Sprintf("%d/%t", slot, cell.bold)
-		style, ok := styleCache[key]
-		if !ok {
-			style = lipgloss.NewStyle().Foreground(palette[slot])
-			if cell.bold {
-				style = style.Foreground(selectedColor)
-			}
-			if cell.bold {
-				style = style.Bold(true)
-			}
-			styleCache[key] = style
-		}
-		b.WriteString(style.Render(string(cell.char)))
-	}
-	return b.String()
 }
 
 // buildBubbleTargets computes initial target positions and radii for each
