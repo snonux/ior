@@ -3,6 +3,7 @@ package flamegraph
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	common "ior/internal/tui/common"
 
@@ -80,15 +81,23 @@ func (m *Model) WantsBaselineReset(msg tea.KeyPressMsg) bool {
 }
 
 // ClearBaseline drops the flame view state after the live trie was reset by
-// the `r` key (resetBaseline here, or the dashboard's resetBaselineCmd). It
-// deliberately drops the flame selection: clearSnapshotState resets the selection manager together with
-// the zoom, as it does for a field-order or metric change, because the user
-// asked for a fresh baseline. The automatic 30s reset and the `r` key on the
-// dashboard tables are different on purpose: they keep the selected item (the
-// tables via stickyKey, the flame via SelectionManager's wantedPath) so the
-// cursor does not jump to row 0 / root every time the data refills.
+// the `r` key (resetBaseline here, or the dashboard's resetBaselineCmd).
+// It deliberately drops the flame selection: clearSnapshotState resets the
+// selection manager together with the zoom, as it does for a field-order or
+// metric change, because the user asked for a fresh baseline. The automatic
+// 30s reset and the `r` key on the dashboard tables are different on
+// purpose: they keep the selected item (the tables via stickyKey, the flame
+// via SelectionManager's wantedPath) so the cursor does not jump to row 0 /
+// root every time the data refills.
+// It also stamps lastKeyAt: the dashboard consumes `r` without routing it
+// through Update (which stamps every key), yet it is a user keypress, so the
+// first snapshot after the reset must snap into place instead of animating
+// in from an empty view, exactly like the standalone resetBaseline path.
+// The stamp does not delay that snapshot: RefreshFromLiveTrieCmd only defers
+// to a driving user while a snapshot exists, and the state was just cleared.
 // It does not touch the live trie.
 func (m *Model) ClearBaseline() {
+	m.lastKeyAt = time.Now()
 	m.clearSnapshotState(true)
 	m.statusMessage = "Baseline reset"
 }

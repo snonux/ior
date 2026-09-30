@@ -2183,3 +2183,48 @@ func TestFlameSearchTypedRDoesNotResetBaseline(t *testing.T) {
 		t.Fatalf("typing r in the search cleared the flame snapshot")
 	}
 }
+
+// TestFlameResetKeyDropsInFlightResults drives `r` through the real dashboard
+// while a flame refresh and a stats tick are in flight. Both were built before
+// the reset, so neither may repaint pre-reset data: the flame result is
+// dropped by the flame's refresh generation (ClearBaseline) and the stats tick
+// by the stats generation (resetBaselineCmd). The flame model's own `r`
+// handling is not the production path any more, so this is the test that
+// covers the stale-result guards end to end.
+func TestFlameResetKeyDropsInFlightResults(t *testing.T) {
+	m, _, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+
+	// A refresh job that already snapshotted the pre-reset trie.
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 1)
+	refreshCmd := m.flamegraphModel.RefreshFromLiveTrieCmd()
+	if refreshCmd == nil {
+		t.Fatal("expected a flame refresh to dispatch")
+	}
+	staleFlame := refreshCmd()
+	staleTick := messages.StatsTickMsg{Generation: genBefore, Snap: &statsengine.Snapshot{TotalSyscalls: 99}}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+	if m.statsGen != genBefore+1 {
+		t.Fatalf("statsGen = %d, want %d", m.statsGen, genBefore+1)
+	}
+
+	next, _ = m.Update(staleFlame)
+	m = next.(*Model)
+	if m.flamegraphModel.HasSnapshot() {
+		t.Fatal("stale flame refresh result repainted the pre-reset flamegraph")
+	}
+	next, _ = m.Update(staleTick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != nil && got.TotalSyscalls == 99 {
+		t.Fatal("stale stats tick was applied after the reset")
+	}
+
+	// The post-reset tick of the new generation still lands.
+	next, _ = m.Update(cmd())
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got == nil || got.TotalSyscalls != 0 {
+		t.Fatalf("post-reset tick not applied: %+v", got)
+	}
+}
