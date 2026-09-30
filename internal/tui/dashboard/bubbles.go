@@ -37,6 +37,9 @@ const (
 	// with it a full re-render, alive on a chart that had nothing to show
 	// (34-78% CPU idle). It now fades out over bubbleDriftFadeSeconds, the
 	// springs settle, and the chain ends until the next data change.
+	// Every real change resets it to the full duration, so data that
+	// reshuffles the bubbles on each stats tick keeps the chain running:
+	// only quiet workloads settle (the cost per frame is what got cheaper).
 	bubbleDriftSeconds     = 6.0
 	bubbleDriftFadeSeconds = 2.0
 

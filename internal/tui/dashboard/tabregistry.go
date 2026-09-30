@@ -533,7 +533,8 @@ func handleFilesKey(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.DirGroup) {
 		return false, nil
 	}
-	return true, m.toggleFilesDirGrouping()
+	m.toggleFilesDirGrouping()
+	return true, nil
 }
 
 // tabScrollSyscalls handles navigation keys for the syscalls tab. When the

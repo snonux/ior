@@ -168,6 +168,7 @@ func TestBubbleRenderIsCachedAndInvalidatedByInputs(t *testing.T) {
 	if got := chart.Render("Syscalls", 120, 40); got != "CACHED" {
 		t.Fatalf("unchanged chart re-rendered: %.40q", got)
 	}
+	relabels := 0
 	mutations := map[string]func(){
 		"node moved":    func() { chart.nodes[0].x += 1 },
 		"node resized":  func() { chart.nodes[1].radius += 0.5 },
@@ -175,7 +176,14 @@ func TestBubbleRenderIsCachedAndInvalidatedByInputs(t *testing.T) {
 		"theme":         func() { chart.isDark = !chart.isDark },
 		"status hint":   func() { chart.statusHint = "hint" },
 		"selected data": func() { chart.nodes[chart.selected].Bytes++ },
-		"metric":        func() { chart.SetMetric(bubbleMetricBytes) },
+		// A non-selected bubble's label is painted inside its circle but is
+		// in neither the header nor the status line, so only the per-node
+		// label in the key can catch it.
+		"other node label": func() {
+			relabels++ // unique, so no map order can make it a no-op
+			chart.nodes[(chart.selected+1)%len(chart.nodes)].Label = fmt.Sprintf("renamed%d", relabels)
+		},
+		"metric": func() { chart.SetMetric(bubbleMetricBytes) },
 	}
 	for name, mutate := range mutations {
 		chart.frame.view = "CACHED"
@@ -189,7 +197,11 @@ func TestBubbleRenderIsCachedAndInvalidatedByInputs(t *testing.T) {
 		t.Error("width change: served a stale cached view")
 	}
 	chart.frame.view = "CACHED"
-	if got := chart.Render("Files", 100, 40); got == "CACHED" {
+	if got := chart.Render("Syscalls", 100, 30); got == "CACHED" {
+		t.Error("height change: served a stale cached view")
+	}
+	chart.frame.view = "CACHED"
+	if got := chart.Render("Files", 100, 30); got == "CACHED" {
 		t.Error("tab label change: served a stale cached view")
 	}
 	// The uncached render is deterministic: same inputs, same text.

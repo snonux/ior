@@ -232,8 +232,10 @@ func (m *Model) handleFlameTick(msg flameTickMsg) (tea.Model, tea.Cmd) {
 // and the drift wobble has faded (bubbleChart.Tick returns false) the chain
 // ends: an idle chart costs nothing, where re-arming for as long as there were
 // nodes kept a 30fps tick + full re-render alive forever. New data restarts
-// the chain (refreshBubbleData -> startBubble), as do tab entry, a resize and
-// focus regain.
+// the chain (refreshBubbleData -> startBubble), as do tab entry, a resize, the
+// v and b keys and focus regain (AGENTS.md lists the triggers). A workload
+// that changes the bubbles on every stats tick keeps the chain alive, since
+// each real change restarts the drift window.
 func (m *Model) handleBubbleTick(msg bubbleTickMsg) (tea.Model, tea.Cmd) {
 	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) || !m.ticks.bubble.isCurrent(msg.generation) {
 		return m, nil

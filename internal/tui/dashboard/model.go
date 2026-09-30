@@ -591,15 +591,17 @@ func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-func (m *Model) toggleFilesDirGrouping() tea.Cmd {
+// toggleFilesDirGrouping flips the Files tab's directory grouping. It needs no
+// bubble tick chain: the alternative views (bubbles, treemap, icicle) exist
+// only while grouped, and leaving grouped mode resets the tab to the table, so
+// a toggle never lands on a visible bubble chart. The chart is fed by the next
+// stats tick and by entering bubbles mode (cycleVisualizationMode), both of
+// which start the chain. (Test: TestDirGroupingToggleNeverNeedsABubbleChain.)
+func (m *Model) toggleFilesDirGrouping() {
 	m.filesDirGrouped = !m.filesDirGrouped
 	if !m.filesDirGrouped && m.filesTab.mode != tabVizModeTable {
 		m.filesTab.mode = tabVizModeTable
 	}
-	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m.ticks.startBubble()
-	}
-	return nil
 }
 
 func (m *Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
