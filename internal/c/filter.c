@@ -387,7 +387,11 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 //     counted there, so it is counted here, untimed. An emitted enter is
 //     userspace's: the exec record, still emitted for the traced caller and
 //     flagged exit_untraced (ior_exec_record_scope in exec.c), makes
-//     userspace complete it, so it is counted exactly once either way.
+//     userspace complete it, so it is counted exactly once - unless that
+//     record's ring-buffer reserve fails: the entry is already gone here, no
+//     exit arrives and there is no exit for adoptLostExecCaller to adopt
+//     from, so the invocation is lost (the drop is counted in
+//     ringbuf_drop_map; the parked enter ages out of userspace's LRU).
 static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid, int in_scope) {
     struct syscall_enter_state moved;
     struct syscall_enter_state *state;

@@ -45,6 +45,10 @@
  * gone and that the execve it parked under the caller's tid has succeeded.
  * The execve's own exit returns under the filtered leader tid and never
  * arrives, so userspace completes the parked enter from this record instead.
+ * If this record is lost to ring-buffer backpressure, nothing completes it:
+ * unlike the in-scope case there is no exit for userspace to adopt the enter
+ * from, so that execve row (and, at a sampling rate N, its count) is lost,
+ * visible only as a ringbuf_drop_map drop.
  *
  * -tid tracing of that thread ends at such an exec. TID_FILTER is a
  * load-time constant, and following the task onto the leader tid would need

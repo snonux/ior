@@ -745,11 +745,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   tracepoint, so it lives outside `probemanager` and is attached directly by
   `attachProcessExecProbe` — **before** the syscall tracepoints, and regardless
   of `-trace-*` selection. Control records never become rows themselves (the
-  exec record may complete an untraced-exit execve pair, see *Non-leader exec*);
-  they refresh the cache (`handleProcessExecEvent`), and because the ring buffer preserves
-  reservation order and the event loop has a single consumer goroutine, the
-  refresh lands before the new program's first syscall pair — **for every record
-  that is actually delivered**. Two residual paths are handled explicitly:
+  exec record may complete an untraced-exit execve pair, see *Non-leader
+  exec*); they refresh the cache (`handleProcessExecEvent`), and because the
+  ring buffer preserves reservation order and the event loop has a single
+  consumer goroutine, the refresh lands before the new program's first syscall
+  pair — **for every record that is actually delivered**. Two residual paths are handled explicitly:
   - *Lost record.* Under backpressure `bpf_ringbuf_reserve()` fails and the
     control record is never emitted (counted in `ringbuf_drop_map`). With
     `-comm X` active the usual self-healing path is closed too, because
@@ -783,7 +783,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     0, duration ending at `sched_process_exec`). **`-tid` tracing of that
     thread ends at the exec**: `TID_FILTER` is a load-time constant and
     following the renumbered task would cost a map lookup in `filter()` for
-    every rejected event. Integration test:
+    every rejected event. Residual gap: if that flagged record is lost to
+    ring-buffer backpressure, the BPF enter state is already gone and no exit
+    ever arrives, so `adoptLostExecCaller` has nothing to adopt from and the
+    execve row (at rate `N` also its count) is lost; only `ringbuf_drop_map`
+    shows it, and the parked enter ages out of the LRU. Integration test:
     `TestNonLeaderExecUnderTidFilterIsCompleted` (scenario
     `exec-non-leader-thread-tid`, which parks the exec thread in a prestart
     hook so its tid is known before ior starts).

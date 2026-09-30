@@ -267,8 +267,9 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 		if rawEvent.direction == rawControlEvent {
 			// Control records never become rows themselves; they update
 			// event-loop state, and the exec record may complete one pending
-			// execve pair whose exit is untraced (completeUntracedExec). Because the BPF ring buffer preserves reservation order
-			// and this goroutine is the single consumer, a control record that
+			// execve pair whose exit is untraced (completeUntracedExec).
+			// Because the BPF ring buffer preserves reservation order and
+			// this goroutine is the single consumer, a control record that
 			// reaches userspace is applied before any later event of the same
 			// task is turned into a pair. The caveat is backpressure: a record
 			// the kernel could not reserve never arrives at all, so the

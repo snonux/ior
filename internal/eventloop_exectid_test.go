@@ -478,7 +478,11 @@ func assertUntracedExecRow(t *testing.T, ep *event.Pair, wantExitID types.TraceI
 // TestUntracedExecRecordWithoutExecEnterEmitsNothing pins the negative
 // paths: a flagged exec record with no parked enter (execve not traced), or
 // with only a stale non-exec enter under the caller (its exit was lost), must
-// not fabricate a row, and must still evict FD_CLOEXEC descriptors.
+// not fabricate a row, and must still evict FD_CLOEXEC descriptors. The
+// stale enter never reaches completeUntracedExec: rekeyExecCaller's
+// moveExecCaller moves only exec enters and recycles anything else, so the
+// completion finds no pending enter under the leader tid. execExitTraceID's
+// own non-exec guard is covered by TestExecExitTraceID.
 func TestUntracedExecRecordWithoutExecEnterEmitsNothing(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -524,4 +528,29 @@ func TestUnflaggedNonLeaderExecRecordWaitsForExit(t *testing.T) {
 	default:
 	}
 	verifyEnterEventPending(t, el, nleExecPid)
+}
+
+// TestExecExitTraceID pins the exit trace id a flagged exec record completes
+// with, and that no other syscall's enter is completed at all.
+func TestExecExitTraceID(t *testing.T) {
+	cases := []struct {
+		name   string
+		enter  types.TraceId
+		want   types.TraceId
+		wantOK bool
+	}{
+		{"execve", types.SYS_ENTER_EXECVE, types.SYS_EXIT_EXECVE, true},
+		{"execveat", types.SYS_ENTER_EXECVEAT, types.SYS_EXIT_EXECVEAT, true},
+		{"access", types.SYS_ENTER_ACCESS, 0, false},
+		{"exit id of execve", types.SYS_EXIT_EXECVE, 0, false},
+		{"zero", 0, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := execExitTraceID(tc.enter)
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("execExitTraceID(%v) = %v, %v; want %v, %v", tc.enter, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
 }
