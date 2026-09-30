@@ -44,6 +44,8 @@ func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, root
 	return frames
 }
 
+// collectTerminalLayout appends the frame for node and, recursively, for its
+// descendants, laid out in the column band [col, col+span) at row depth.
 func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, height, depth, col int, path string, span int, normalizeRootChildren bool) {
 	if node == nil || depth >= height {
 		return
@@ -53,8 +55,30 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		return
 	}
 
+	*out = append(*out, newTerminalFrame(node, total, rootTotal, depth, col, span, path))
+	if len(node.Children) == 0 {
+		return
+	}
+
+	layoutTotal, layoutSpan := childLayoutBounds(node, total, span, normalizeRootChildren && depth == 0)
+	childWidths := allocateChildWidths(node.Children, layoutTotal, layoutSpan)
+	cursor := col
+	for idx, child := range node.Children {
+		childWidth := childWidths[idx]
+		if childWidth < 1 {
+			continue
+		}
+		childName := frameName(child.Name, depth+1)
+		childPath := strings.Join([]string{path, childName}, pathSeparator)
+		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth, false)
+		cursor += childWidth
+	}
+}
+
+// newTerminalFrame builds the display frame of one snapshot node.
+func newTerminalFrame(node *snapshotNode, total, rootTotal uint64, depth, col, span int, path string) tuiFrame {
 	name := frameName(node.Name, depth)
-	*out = append(*out, tuiFrame{
+	return tuiFrame{
 		// Sanitised display label (traced names are attacker-controlled, and
 		// an unterminated ESC[ would swallow padOrTrim's padding); Path keeps
 		// the raw names because it is the lookup key.
@@ -68,39 +92,28 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		Fill:        terminalFrameColor(name),
 		Depth:       depth,
 		Path:        path,
-	})
-
-	if len(node.Children) == 0 {
-		return
 	}
+}
 
+// childLayoutBounds returns the total and column span that node's children
+// are sized against. normalizeRoot is set for the root of a zoomed view,
+// whose children fill the whole width.
+func childLayoutBounds(node *snapshotNode, total uint64, span int, normalizeRoot bool) (layoutTotal uint64, layoutSpan int) {
 	childrenTotal := childSnapshotTotal(node.Children)
-	layoutTotal := total
-	layoutSpan := span
-	if normalizeRootChildren && depth == 0 {
+	if normalizeRoot {
 		if childrenTotal > 0 {
-			layoutTotal = childrenTotal
+			return childrenTotal, span
 		}
-	} else if representedTotal := node.Value + childrenTotal; representedTotal > 0 && representedTotal < total {
+		return total, span
+	}
+	if representedTotal := node.Value + childrenTotal; representedTotal > 0 && representedTotal < total {
 		// Snapshot totals retain the contribution of pruned descendants. Size
 		// the remaining children against their represented total so pruning
 		// does not leave a hole in the original child band. A node's own value
 		// determines that band's span and therefore keeps its proportional gap.
-		layoutTotal = childrenTotal
-		layoutSpan = proportionalChildSpan(span, total-node.Value, total)
+		return childrenTotal, proportionalChildSpan(span, total-node.Value, total)
 	}
-	childWidths := allocateChildWidths(node.Children, layoutTotal, layoutSpan)
-	cursor := col
-	for idx, child := range node.Children {
-		childWidth := childWidths[idx]
-		if childWidth < 1 {
-			continue
-		}
-		childName := frameName(child.Name, depth+1)
-		childPath := strings.Join([]string{path, childName}, pathSeparator)
-		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth, false)
-		cursor += childWidth
-	}
+	return total, span
 }
 
 func proportionalChildSpan(span int, childTotal, parentTotal uint64) int {

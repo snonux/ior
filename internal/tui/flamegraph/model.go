@@ -1052,6 +1052,8 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 		return frames
 	}
 
+	// Shift the zoomed layout down below the lineage rows; the zoom root
+	// itself is dropped because the lineage re-adds it as its last row.
 	rowShift := len(parts) - 1
 	out := make([]tuiFrame, 0, len(frames)+len(parts))
 	for _, frame := range frames {
@@ -1066,33 +1068,38 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 	rootTotal := snapshotTotal(snapshot)
 	for depth := range parts {
 		path := strings.Join(parts[:depth+1], pathSeparator)
-		node := findNodeByPath(snapshot, path)
-		total := uint64(0)
-		heightTotal := uint64(0)
-		if node != nil {
-			total = snapshotTotal(node)
-			heightTotal = snapshotHeightTotal(node)
-		}
-		percent := 0.0
-		if rootTotal > 0 {
-			percent = 100 * float64(total) / float64(rootTotal)
-		}
-		name := parts[depth]
-		out = append(out, tuiFrame{
-			// Name is display-only and sanitised (traced comm/path frame names
-			// are attacker-controlled); Path stays raw because it is the
-			// lookup key for zoom, selection and filters.
-			Name:        common.Sanitize(name),
-			Col:         0,
-			Row:         depth,
-			Width:       width,
-			Total:       total,
-			HeightTotal: heightTotal,
-			Percent:     percent,
-			Fill:        terminalFrameColor(name),
-			Depth:       depth,
-			Path:        path,
-		})
+		out = append(out, lineageFrame(snapshot, parts[depth], path, depth, width, rootTotal))
 	}
 	return out
+}
+
+// lineageFrame builds the full-width frame of one zoom-path ancestor at row
+// depth. An ancestor no longer present in snapshot gets zero totals.
+func lineageFrame(snapshot *snapshotNode, name, path string, depth, width int, rootTotal uint64) tuiFrame {
+	node := findNodeByPath(snapshot, path)
+	total := uint64(0)
+	heightTotal := uint64(0)
+	if node != nil {
+		total = snapshotTotal(node)
+		heightTotal = snapshotHeightTotal(node)
+	}
+	percent := 0.0
+	if rootTotal > 0 {
+		percent = 100 * float64(total) / float64(rootTotal)
+	}
+	return tuiFrame{
+		// Name is display-only and sanitised (traced comm/path frame names
+		// are attacker-controlled); Path stays raw because it is the
+		// lookup key for zoom, selection and filters.
+		Name:        common.Sanitize(name),
+		Col:         0,
+		Row:         depth,
+		Width:       width,
+		Total:       total,
+		HeightTotal: heightTotal,
+		Percent:     percent,
+		Fill:        terminalFrameColor(name),
+		Depth:       depth,
+		Path:        path,
+	}
 }
