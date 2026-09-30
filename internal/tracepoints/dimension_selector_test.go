@@ -2,6 +2,7 @@ package tracepoints
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -469,28 +470,46 @@ func TestDimensionSelectorConfigHasAnySelectorIgnoresBlankValues(t *testing.T) {
 
 // TestBuildAllowedSyscallsExcludesByFamilyAndKind pins the family and kind
 // arms of the exclusion pass (the syscall arm is covered by
-// TestParseSelectorWithDimensionsExclusionsOverridePositives): a -no-trace-*
-// family or kind removes every matching syscall a positive selector added,
-// and nothing else.
+// TestParseSelectorWithDimensionsExclusionsOverridePositives). It first
+// builds the unexcluded set and requires it to hold both Time-family and
+// open-kind syscalls, so the exclusion check cannot pass vacuously; the
+// excluded result must then be exactly that set minus those syscalls.
 func TestBuildAllowedSyscallsExcludesByFamilyAndKind(t *testing.T) {
-	allow, err := buildAllowedSyscalls(DimensionSelectorConfig{
+	base, err := buildAllowedSyscalls(DimensionSelectorConfig{TraceFamilies: "FS,Time"})
+	if err != nil {
+		t.Fatalf("buildAllowedSyscalls without exclusions: %v", err)
+	}
+	want := make(map[string]struct{}, len(base))
+	var timeCount, openCount int
+	for syscall := range base {
+		isTime := syscallFamilies[syscall] == "Time"
+		isOpen := syscallKinds[syscall] == "open"
+		if isTime {
+			timeCount++
+		}
+		if isOpen {
+			openCount++
+		}
+		if !isTime && !isOpen {
+			want[syscall] = struct{}{}
+		}
+	}
+	if timeCount == 0 || openCount == 0 || len(want) == 0 {
+		t.Fatalf("unexcluded set has %d Time, %d open-kind and %d other syscalls; need at least one of each",
+			timeCount, openCount, len(want))
+	}
+
+	got, err := buildAllowedSyscalls(DimensionSelectorConfig{
 		TraceFamilies:   "FS,Time",
 		NoTraceFamilies: "Time",
 		NoTraceKinds:    "open",
 	})
 	if err != nil {
-		t.Fatalf("buildAllowedSyscalls: %v", err)
+		t.Fatalf("buildAllowedSyscalls with exclusions: %v", err)
 	}
-	for syscall := range allow {
-		if syscallFamilies[syscall] == "Time" {
-			t.Errorf("%s (family Time) survived -no-trace-families Time", syscall)
-		}
-		if syscallKinds[syscall] == "open" {
-			t.Errorf("%s (kind open) survived -no-trace-kinds open", syscall)
-		}
-	}
-	if _, ok := allow["read"]; !ok {
-		t.Error("read (FS, kind fd) was excluded, want it kept")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("excluded set has %d syscalls, want %d (the unexcluded set minus Time-family and open-kind)",
+			len(got), len(want))
 	}
 }
 
