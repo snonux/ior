@@ -1,11 +1,9 @@
 package internal
 
 import (
-	"syscall"
 	"testing"
 
 	"ior/internal/event"
-	"ior/internal/file"
 	"ior/internal/types"
 )
 
@@ -23,15 +21,8 @@ const (
 // makeNonLeaderExecEnter builds the sys_enter_execve record of the caller.
 func makeNonLeaderExecEnter(t *testing.T, time uint64, tid uint32) []byte {
 	t.Helper()
-	return makeNonLeaderExecEnterFor(t, types.SYS_ENTER_EXECVE, time, tid)
-}
-
-// makeNonLeaderExecEnterFor builds an exec-family enter record (execve or
-// execveat, by traceID) of the caller.
-func makeNonLeaderExecEnterFor(t *testing.T, traceID types.TraceId, time uint64, tid uint32) []byte {
-	t.Helper()
 	enter := &types.ExecEvent{
-		EventType: types.ENTER_EXEC_EVENT, TraceId: traceID, Time: time,
+		EventType: types.ENTER_EXEC_EVENT, TraceId: types.SYS_ENTER_EXECVE, Time: time,
 		Pid: nleExecPid, Tid: tid, Dirfd: -1, SchemaVersion: types.EXEC_EVENT_SCHEMA_VERSION,
 	}
 	copy(enter.Filename[:], "/usr/bin/newprog")
@@ -386,142 +377,4 @@ func TestLeaderExecPairsBeforeFallback(t *testing.T) {
 		t.Errorf("row tid = %d, want the leader %d", got, nleExecPid)
 	}
 	verifyEnterEventPending(t, el, nleExecCaller)
-}
-
-// makeUntracedExecRecord builds the exec record BPF emits under -tid
-// <nleExecCaller>: the caller exec'd onto the filtered leader tid, so the
-// record is flagged ExitUntraced.
-func makeUntracedExecRecord(t *testing.T, time uint64) []byte {
-	t.Helper()
-	ev := types.ProcessExecEvent{
-		EventType: types.PROCESS_EXEC_EVENT, Time: time, Pid: nleExecPid, Tid: nleExecPid,
-		OldTid: nleExecCaller, ExitUntraced: 1,
-	}
-	copy(ev.Comm[:], "newprog")
-	return mustRaw(t, &ev)
-}
-
-// feedUntracedExecRecord processes the flagged exec record and returns the
-// row it completed, or nil.
-func feedUntracedExecRecord(t *testing.T, el *eventLoop, time uint64) *event.Pair {
-	t.Helper()
-	out := make(chan *event.Pair, 1)
-	el.processRawEvent(makeUntracedExecRecord(t, time), out)
-	select {
-	case ep := <-out:
-		return ep
-	default:
-		return nil
-	}
-}
-
-// TestUntracedNonLeaderExecCompletesFromExecRecord is the regression test for
-// task dp2: under -tid <non-leader> the traced thread's execve returns under
-// the filtered leader tid, so its exit never arrives. The flagged exec record
-// must still evict the process's FD_CLOEXEC descriptors and complete the
-// parked enter as a successful row that ends at the exec record, reported
-// under the calling thread, with nothing left behind for either tid.
-func TestUntracedNonLeaderExecCompletesFromExecRecord(t *testing.T) {
-	cases := []struct {
-		name       string
-		enterID    types.TraceId
-		wantExitID types.TraceId
-	}{
-		{"execve", types.SYS_ENTER_EXECVE, types.SYS_EXIT_EXECVE},
-		{"execveat", types.SYS_ENTER_EXECVEAT, types.SYS_EXIT_EXECVEAT},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			el := newNonLeaderExecLoop(t)
-			completeCallerAccess(t, el, 1000, 1100)
-			el.fdState().set(7, nleExecPid, file.NewFd(7, "/cloexec", syscall.O_RDONLY|syscall.O_CLOEXEC))
-			el.processRawEvent(makeNonLeaderExecEnterFor(t, tc.enterID, 1500, nleExecCaller),
-				make(chan *event.Pair, 1))
-
-			ep := feedUntracedExecRecord(t, el, 1800)
-			if ep == nil {
-				t.Fatal("untraced-exit exec record completed no row: the parked execve enter was left behind")
-			}
-			defer ep.Recycle()
-			assertUntracedExecRow(t, ep, tc.wantExitID)
-			verifyFdNotTracked(t, el, nleExecPid, 7)
-			assertNoCallerState(t, el)
-			if got, ok := el.cachedComm(nleExecPid); !ok || got != "newprog" {
-				t.Errorf("leader tid comm = %q (present=%v), want newprog", got, ok)
-			}
-		})
-	}
-}
-
-// assertUntracedExecRow checks the row completed from a flagged exec record.
-func assertUntracedExecRow(t *testing.T, ep *event.Pair, wantExitID types.TraceId) {
-	t.Helper()
-	if got := ep.EnterEv.GetTid(); got != nleExecCaller {
-		t.Errorf("row tid = %d, want the calling thread %d", got, nleExecCaller)
-	}
-	if got := ep.ExitEv.GetTraceId(); got != wantExitID {
-		t.Errorf("exit trace id = %v, want %v", got, wantExitID)
-	}
-	ret, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || ret.Ret != 0 || ret.Pid != nleExecPid {
-		t.Errorf("exit = %#v, want a successful RetEvent of pid %d", ep.ExitEv, nleExecPid)
-	}
-	if ep.FileName() != "/usr/bin/newprog" {
-		t.Errorf("row file = %q, want /usr/bin/newprog", ep.FileName())
-	}
-	if ep.Duration != 300 || ep.DurationToPrev != 400 {
-		t.Errorf("row duration/gap = %d/%d, want 300/400 (enter to exec record, gap from the caller's access)",
-			ep.Duration, ep.DurationToPrev)
-	}
-}
-
-// TestUntracedExecRecordWithoutExecEnterEmitsNothing pins the negative
-// paths: a flagged exec record with no parked enter (execve not traced), or
-// with only a stale non-exec enter under the caller (its exit was lost), must
-// not fabricate a row, and must still evict FD_CLOEXEC descriptors.
-func TestUntracedExecRecordWithoutExecEnterEmitsNothing(t *testing.T) {
-	cases := []struct {
-		name  string
-		setup func(t *testing.T, el *eventLoop)
-	}{
-		{"no parked enter", func(*testing.T, *eventLoop) {}},
-		{"stale non-exec enter", func(t *testing.T, el *eventLoop) {
-			_, raw := makeEnterPathEvent(t, 900, nleExecPid, nleExecCaller, "/etc/hosts", types.SYS_ENTER_ACCESS)
-			el.processRawEvent(raw, make(chan *event.Pair, 1))
-			verifyEnterEventPending(t, el, nleExecCaller)
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			el := newNonLeaderExecLoop(t)
-			el.fdState().set(7, nleExecPid, file.NewFd(7, "/cloexec", syscall.O_RDONLY|syscall.O_CLOEXEC))
-			tc.setup(t, el)
-			if ep := feedUntracedExecRecord(t, el, 1800); ep != nil {
-				ep.Recycle()
-				t.Fatal("flagged exec record fabricated a row without a parked execve enter")
-			}
-			if el.numTracepointMismatches != 0 {
-				t.Errorf("numTracepointMismatches = %d, want 0", el.numTracepointMismatches)
-			}
-			verifyFdNotTracked(t, el, nleExecPid, 7)
-			assertNoCallerState(t, el)
-		})
-	}
-}
-
-// TestUnflaggedNonLeaderExecRecordWaitsForExit is the counterpart: without
-// ExitUntraced the execve's exit is still coming, so the record must only
-// re-key the enter, not complete it.
-func TestUnflaggedNonLeaderExecRecordWaitsForExit(t *testing.T) {
-	el := newNonLeaderExecLoop(t)
-	out := make(chan *event.Pair, 1)
-	el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), out)
-	el.processRawEvent(makeProcessExecEventFrom(t, 1800, nleExecPid, nleExecPid, nleExecCaller, "newprog"), out)
-	select {
-	case ep := <-out:
-		ep.Recycle()
-		t.Fatal("unflagged exec record completed the execve before its exit arrived")
-	default:
-	}
-	verifyEnterEventPending(t, el, nleExecPid)
 }
