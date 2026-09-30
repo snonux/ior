@@ -703,6 +703,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	msg = normalizedMsg
 
+	// Mouse input is positional: it only means something to what is drawn
+	// under the pointer. While an overlay, modal or full-screen view covers
+	// the dashboard, a click would otherwise land on the tab hidden behind it
+	// (zooming the Flame tab, say) and only show up once the overlay closed.
+	if isMouseMsg(msg) && m.overlayCoversScreen() {
+		return m, nil
+	}
+
 	if handled, cmd := m.dashboard.HandleFlameRefreshCompletion(msg, m.canApplyFlameRefresh()); handled {
 		return m, cmd
 	}
@@ -725,15 +733,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Hidden completions are still consumed by their persistent dashboard owner,
 // but are discarded after releasing the matching in-flight slot.
 func (m *Model) canApplyFlameRefresh() bool {
-	return m.router.current() == ScreenDashboard &&
-		!m.quitting &&
-		!m.attaching &&
-		m.lastErr == nil &&
-		!m.helpOverlayVisible &&
-		!m.filterModal.Visible() &&
-		!m.recordModal.Visible() &&
-		!m.probeModal.Visible() &&
-		!m.exporter.Visible()
+	return m.router.current() == ScreenDashboard && !m.overlayCoversScreen()
+}
+
+// overlayCoversScreen reports whether something drawn by View replaces or
+// sits on top of the active screen, so that the screen behind it is not what
+// the user is looking at: the shutdown and attaching screens, the full-screen
+// error view, the help overlay and the filter, record, probe and export
+// modals. It mirrors the precedence of View, and is the single place that
+// decides which input positional events (mouse) must not reach the hidden
+// screen and when an async result may not be applied to it.
+func (m *Model) overlayCoversScreen() bool {
+	return m.quitting ||
+		m.attaching ||
+		m.lastErr != nil ||
+		m.helpOverlayVisible ||
+		m.filterModal.Visible() ||
+		m.recordModal.Visible() ||
+		m.probeModal.Visible() ||
+		m.exporter.Visible()
+}
+
+// isMouseMsg reports whether msg is any pointer event: click, release,
+// motion or wheel.
+func isMouseMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg, tea.MouseWheelMsg:
+		return true
+	}
+	return false
 }
 
 // dispatchTypedMsg handles all typed message cases that require no modal check.
@@ -1253,6 +1281,11 @@ func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateDashboardForModal keeps the dashboard behind a modal alive by
+// forwarding the non-key messages it needs (ticks, spinner and async results).
+// Keys belong to the modal. Mouse events never get here: Update drops them
+// while any modal is visible (overlayCoversScreen), so a click cannot act on
+// the tab the modal covers.
 func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
 	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.router.current() != ScreenDashboard {
 		return m, nil
