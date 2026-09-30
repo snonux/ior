@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"os"
 	"strings"
@@ -92,34 +93,64 @@ func (iod *iorData) merge(other iorData) *iorData {
 	return iod
 }
 
-func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
+// serializeToFile writes the records to
+// <hostname>-<flamegraphName>-<timestamp>.ior.zst in the working directory
+// (flamegraphName defaults to "default"). The data goes to a .tmp sibling
+// first and is renamed into place only once fully flushed, so a reader never
+// sees a partial file; on any failure the temp file is removed.
+func (iod *iorData) serializeToFile(flamegraphName string) error {
+	filename, err := serializedFilename(flamegraphName, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Println("Writing", filename)
+	tmpFilename := fmt.Sprintf("%s.tmp", filename)
+
+	if err := iod.writeTempFile(tmpFilename); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		// Don't leave the complete but unpublished temp file behind.
+		_ = os.Remove(tmpFilename)
+		return fmt.Errorf("rename %s to %s: %w", tmpFilename, filename, err)
+	}
+	return nil
+}
+
+// serializedFilename builds the output name
+// <hostname>-<flamegraphName>-<now>.ior.zst, substituting "default" for an
+// empty flamegraphName.
+func serializedFilename(flamegraphName string, now time.Time) (string, error) {
 	hostname, err := hostnameFn()
 	if err != nil {
-		return fmt.Errorf("get hostname: %w", err)
+		return "", fmt.Errorf("get hostname: %w", err)
 	}
 	if flamegraphName == "" {
 		flamegraphName = "default"
 	}
+	return fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flamegraphName,
+		now.Format("2006-01-02_15:04:05")), nil
+}
 
-	filename := fmt.Sprintf("%s-%s-%s.ior.zst", hostname, flamegraphName,
-		time.Now().Format("2006-01-02_15:04:05"))
-	fmt.Println("Writing", filename)
-	tmpFilename := fmt.Sprintf("%s.tmp", filename)
-
-	file, err := os.Create(tmpFilename)
+// writeTempFile creates tmpFilename and writes the zstd-compressed gob
+// encoding of the records to it, closing the file before returning so its
+// content is flushed and ready to rename. On error the file is closed (if
+// still open) and removed.
+func (iod *iorData) writeTempFile(tmpFilename string) (retErr error) {
+	out, err := os.Create(tmpFilename)
 	if err != nil {
 		return fmt.Errorf("create temp file %s: %w", tmpFilename, err)
 	}
 	fileClosed := false
 	defer func() {
-		// Close file on error paths; on success it is already closed before rename.
+		// Close file on error paths; on success it is already closed.
 		// Capture the close error and join it with retErr so filesystem issues
 		// (e.g. full disk detected only on close) are not silently discarded.
 		if retErr == nil {
 			return
 		}
 		if !fileClosed {
-			if closeErr := file.Close(); closeErr != nil {
+			if closeErr := out.Close(); closeErr != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("close temp file %s: %w", tmpFilename, closeErr))
 			}
 		}
@@ -127,25 +158,29 @@ func (iod *iorData) serializeToFile(flamegraphName string) (retErr error) {
 		_ = os.Remove(tmpFilename)
 	}()
 
-	encoder := zstd.NewWriter(file)
+	if err := iod.encodeCompressed(out, tmpFilename); err != nil {
+		return err
+	}
+	// The encoder is closed, so the final zstd frame is in the file; closing
+	// the file flushes OS buffers. Both must complete before rename.
+	fileClosed = true
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close temp file %s: %w", tmpFilename, err)
+	}
+	return nil
+}
 
-	gobEncoder := gob.NewEncoder(encoder)
-	if err := gobEncoder.Encode(iod.records); err != nil {
+// encodeCompressed gob-encodes the records through a zstd writer into w and
+// closes that writer, which flushes the final zstd frame and releases the
+// native zstd context. name only labels errors.
+func (iod *iorData) encodeCompressed(w io.Writer, name string) error {
+	encoder := zstd.NewWriter(w)
+	if err := gob.NewEncoder(encoder).Encode(iod.records); err != nil {
 		_ = encoder.Close() // release the native zstd context
 		return fmt.Errorf("encode ior records: %w", err)
 	}
-	// Close encoder before file to flush the final zstd frame, then close
-	// the file to flush OS buffers. Both must complete before rename.
 	if err := encoder.Close(); err != nil {
-		return fmt.Errorf("close zstd writer for %s: %w", tmpFilename, err)
-	}
-	fileClosed = true
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close temp file %s: %w", tmpFilename, err)
-	}
-
-	if err := os.Rename(tmpFilename, filename); err != nil {
-		return fmt.Errorf("rename %s to %s: %w", tmpFilename, filename, err)
+		return fmt.Errorf("close zstd writer for %s: %w", name, err)
 	}
 	return nil
 }
