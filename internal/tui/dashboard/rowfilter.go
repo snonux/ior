@@ -42,7 +42,9 @@ import (
 //     approximation either way ("Web Content" threads are missed by both):
 //     the PID column is the exact per-process filter. A comm starting with
 //     ^ or ending with $ cannot be a literal substring pattern, so that row
-//     falls back to the PID filter (commSubstringUsable).
+//     falls back to the PID filter (commSubstringUsable). The Stream tab's
+//     Comm cell, by contrast, is exact (eventstream setStringCellFilter):
+//     a Stream row is one event, so its comm is that event's own thread comm.
 //
 // Typed patterns (filter modal, -comm/-path flags) stay substring searches.
 
