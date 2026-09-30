@@ -204,7 +204,7 @@ func TestCommFilterAgreesWithReportedCommAcrossExec(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Pre-exec the tid looked like the filtered command, which is how
-			// non-matching tasks used to slip past the comm gate.
+			// non-matching tasks used to slip past the comm filter.
 			el := newEventLoopWithStaleComm(t, eventLoopConfig{
 				filter: globalfilter.Filter{
 					Comm: &globalfilter.StringFilter{Pattern: "cat"},
@@ -580,7 +580,7 @@ func TestExecRecordWinsOverAnInFlightProcfsLookup(t *testing.T) {
 // filter active, handleOpenExit never sees the non-matching program's opens -
 // so the drop counter has to trigger re-resolution. Until the re-read lands the
 // old label is still served, which is deliberate: blanking it would drop the
-// tid's events at the enter-side comm gate.
+// tid's rows at the exit-side comm check.
 func TestRingbufDropsHealAStaleCommCache(t *testing.T) {
 	var procComm atomic.Value
 	procComm.Store("bash")
@@ -635,7 +635,7 @@ func TestRingbufDropsHealAStaleCommCache(t *testing.T) {
 // TestMarkAllStaleKeepsServingTheCurrentValue pins the deliberate choice of
 // stale-marking over eviction: a flagged entry still answers with its current
 // value, so rows keep a (possibly outdated) label instead of losing it and
-// being dropped at the comm gate.
+// being dropped at the exit-side comm check.
 func TestMarkAllStaleKeepsServingTheCurrentValue(t *testing.T) {
 	resolved := make(chan struct{})
 	resolver := newCommResolver(nil)
@@ -803,8 +803,9 @@ func feedOpenByHandleAtPair(t *testing.T, el *eventLoop, pathname string, fd int
 // all (rawRuntimeEvents registers it with a nil filter) and its exit handler
 // used to attach the resolved comm and return true, so under `-comm cat` a row
 // labelled "bash" was emitted - the exact contradiction this whole fix exists
-// to remove. The enter-side gate in tracepointEntered does not help: it only
-// requires that *some* comm is cached for the tid, not that it matches.
+// to remove. Nothing before the exit checkpoint helps: tracepointEntered no
+// longer looks at the comm at all, and a raw filter cannot answer it because the
+// kind's payload carries none.
 func TestOpenByHandleAtRowsCannotContradictTheCommFilter(t *testing.T) {
 	const pathname = "/tmp/handle.txt"
 

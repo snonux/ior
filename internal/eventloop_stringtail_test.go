@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"strings"
 	"syscall"
 	"testing"
 
@@ -261,70 +260,9 @@ func TestStringTailGarbageIsVisibleWithoutTheTerminator(t *testing.T) {
 	}
 }
 
-// stringTailWarnings feeds the enter record of tc into an event loop whose
-// comm filter is active while the tid's comm is not cached yet - the path on
-// which tracepointEntered drops the enter and warns with the whole event
-// rendered by its generated String(). It returns every warning raised.
-func stringTailWarnings(t *testing.T, tc stringTailCase, fill stringFill) []string {
-	t.Helper()
-	// The hermetic resolver resolves every tid to "", which is never cached,
-	// so the comm stays uncached whatever the asynchronous lookup does.
-	el := mustNewEventLoop(t, eventLoopConfig{
-		filter:       globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: "ioworkload"}},
-		commResolver: newHermeticCommResolver(),
-	})
-	t.Cleanup(el.commResolver.shutdown)
-	var warnings []string
-	el.SetWarningCallback(func(message string) { warnings = append(warnings, message) })
-	out := make(chan *event.Pair, 1)
-	el.processRawEvent(tc.build(t, fill)[0], out)
-	select {
-	case ep := <-out:
-		ep.Recycle()
-		t.Fatal("an enter record alone produced a row")
-	default:
-	}
-	return warnings
-}
-
-// The "No comm name for ..." warning renders the dropped enter event with %v,
-// i.e. with the generated String(). In the TUI a warning becomes a stream row
-// that can be searched, filtered and exported, so the stale bytes after a
-// string's terminator - possibly paths of processes the comm filter excludes -
-// must not appear in it (task 79 review).
-func TestUncachedCommWarningOmitsBytesAfterTheTerminator(t *testing.T) {
-	for _, tc := range stringTailCases() {
-		if strings.HasPrefix(tc.name, "open ") || strings.HasPrefix(tc.name, "exec ") {
-			continue // open and exec carry their own comm and never take this path
-		}
-		t.Run(tc.name, func(t *testing.T) {
-			clean := stringTailWarnings(t, tc, cleanTail)
-			garbage := stringTailWarnings(t, tc, garbageTail)
-			if len(clean) != 1 || !strings.HasPrefix(clean[0], "No comm name for ") {
-				t.Fatalf("want exactly one uncached-comm warning, got %q", clean)
-			}
-			if len(garbage) != 1 || garbage[0] != clean[0] {
-				t.Fatalf("garbage after the terminator changed the warning\n  zeroed tail:  %q\n  garbage tail: %q", clean, garbage)
-			}
-			if strings.IndexByte(garbage[0], 0) >= 0 || strings.IndexByte(garbage[0], 0xff) >= 0 || strings.Contains(garbage[0], "shadow") {
-				t.Fatalf("warning carries bytes after a terminator: %q", garbage[0])
-			}
-		})
-	}
-}
-
-// TestUncachedCommWarningShowsAMissingTerminator keeps the warning test honest:
-// without the terminator the garbage is part of the string and must show up.
-func TestUncachedCommWarningShowsAMissingTerminator(t *testing.T) {
-	unterminated := func(dst []byte, s string) {
-		garbageTail(dst, s)
-		if len(s) < len(dst) {
-			dst[len(s)] = '!'
-		}
-	}
-	tc := pathStringTailCase("path captured", "/tmp/ior-string-tail.txt", types.PATH_READ_OK, 0)
-	warnings := stringTailWarnings(t, tc, unterminated)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "shadow") {
-		t.Fatalf("an unterminated garbage tail did not reach the warning: %q", warnings)
-	}
-}
+// The enter-side "No comm name for <event>" warning, which rendered the whole
+// dropped enter with its generated String() and so needed its own stale-bytes
+// tests (task 79 review), no longer exists: an enter of a tid with no cached
+// comm is parked like any other and filtered at the exit checkpoint (task dr2).
+// No remaining warning renders an event, so nothing here can leak bytes past a
+// terminator into the TUI's warning rows.

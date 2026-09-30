@@ -770,7 +770,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `applyPendingCommRefresh`). A stale entry keeps serving its current value
     and triggers one asynchronous procfs re-read on next use — that read happens
     after the exec, so it heals the label. Evicting instead would blank the comm
-    column and, under `-comm`, drop the tid's events at the enter-side gate.
+    column and, under `-comm`, drop the tid's rows at the exit-side comm check.
   - *Non-leader exec.* An `execve` by a thread other than the leader enters
     under the caller's tid but returns under the leader's (`de_thread`). The
     record carries the pre-exec tid (`old_tid`); the BPF handler moves the
@@ -813,9 +813,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   from the same asynchronous procfs read and lost the race against short-lived
   tasks: a thread that exited before the lookup ran has no `/proc/<tid>` and
   every row it produced carried an empty comm, the first rows of a thread that
-  lives on did too, and under `-comm` the enter-side gate recycles a
-  non-open/exec enter of a tid with no cached comm, so those rows were dropped
-  silently (0 of 200 in the report). The hand-written `task:task_newtask`
+  lives on did too, and under `-comm` a tid with no cached comm has an
+  empty comm at the exit-side filter, which matches no pattern, so those rows
+  were dropped silently (0 of 200 in the report). The hand-written `task:task_newtask`
   handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
   `attachTaskNewtaskProbe` next to the exec and exit probes, before the syscall
   tracepoints, regardless of `-trace-*`) emits a 48-byte `TASK_NEWTASK_EVENT`
@@ -886,8 +886,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   record). Eviction, not `markAllStale`, is right here because
   there is nothing left to serve - the value is not merely at risk of being
   outdated, its owner is gone; the recycled tid then behaves exactly like a
-  never-before-seen one (async lookup, and under `-comm` its first
-  non-open/exec syscall dropped at the enter-side gate).
+  never-before-seen one (async lookup, and under `-comm` its rows dropped
+  at the exit-side comm check until the name is known).
 
   Retiring an in-flight lookup needs its own counter here: the entry's exec
   epoch cannot do it, because eviction *deletes* the entry, so a result landing
@@ -917,9 +917,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   gap between the two tasks. The trace-ID guard in `tracepointExited` cannot
   see it, because a recycled tid running the same syscall produces matching
   IDs. (Reaching it needs the new owner's own enter to be missing, which is
-  routine: ring-buffer loss, or - under `-comm` - the enter-side gate dropping
-  a brand-new tid's first non-open/exec syscall, which the comm eviction above
-  guarantees is the recycled tid's state.) `prevTimes` is the milder half: it
+  routine: ring-buffer loss. Before task dr2 the `-comm` enter-side gate
+  also dropped a brand-new tid's first non-open/exec syscall, which the comm
+  eviction above guaranteed was the recycled tid's state; that gate is gone.) `prevTimes` is the milder half: it
   gave the new owner's first pair a `DurationToPrev` measured from the dead
   task's last syscall, which `-gap` filters on. The parked enter is *dropped*
   rather than emitted as a synthetic row - the syscall never returned, so it
@@ -998,21 +998,25 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     (`TestFailedDupDoesNotRegisterAnFd`) and so does the `pidfd_getfd` branch
     (`TestFailedPidfdGetfdDoesNotRegisterAnFd`).
 
-    Scope caveat: this rule is about the *pair-filter checkpoint*. Two earlier
-    gates still drop events before any exit handler runs, so it does not make
+    Scope caveat: this rule is about the *pair-filter checkpoint*. One earlier
+    gate still drops events before any exit handler runs, so it does not make
     the fd table unconditionally correct under a filter. `matchRawOpenEvent`
-    drops non-matching opens at enter, so under `-path X` an open of a different
-    file never registers its fd at all (the one exception is an open whose
-    payload filename is *empty* — see "Recovering a faulted open filename"
-    below, where the path dimension is deferred to the exit checkpoint); and
-    with `-comm` active
-    `tracepointEntered` recycles a non-open/exec enter event for a tid whose
-    comm is not cached yet — and comm resolution is asynchronous, so a brand-new
-    tid's first syscall used to be exactly the exposed one (the
-    `task:task_newtask` record now seeds new tids' comm before their first
-    syscall, leaving only a lost record or a recycled tid whose exit record was
-    lost). The `NewFdWithPid` procfs
-    fallback covers both while the descriptor is still open.
+    drops non-matching opens at enter, so under `-path X` (or `-comm X`) an
+    open of a different file (or program) never registers its fd at all (the
+    one exception is an open whose payload filename is *empty* — see
+    "Recovering a faulted open filename" below, where the path dimension is
+    deferred to the exit checkpoint). The `NewFdWithPid` procfs fallback covers
+    it while the descriptor is still open. There used to be a second gate: with
+    `-comm` active `tracepointEntered` recycled a non-open/exec enter for a tid
+    whose comm was not cached yet, and comm resolution is asynchronous, so a
+    brand-new thread's close/dup2/dup3/close_range/fcntl never reached the
+    table and rows the run *did* want kept a closed file's name (task dr2).
+    `tracepointEntered` now parks every enter; an uncached tid has an empty comm
+    at the checkpoint, which matches no `-comm` pattern, so its own row is
+    dropped there after the state work ran
+    (`TestUncachedThreadFdChangesReachTheFdTableUnderCommFilter`). The
+    `task:task_newtask` record still matters: it names the tid before its first
+    syscall so that thread's *own* rows can match `-comm`.
   - *Filter input must be the reported value.* `pidfd_getfd` re-points `ep.File`
     at the transferred descriptor; while that happened after the checkpoint the
     pair was judged on the **source pidfd**, so `-path <transferred file>`

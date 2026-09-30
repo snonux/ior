@@ -76,11 +76,11 @@ func countCollapsed(t *testing.T, result TestResult, syscall, wantComm string) i
 	return total
 }
 
-// TestNewThreadsSurviveACommFilter is the sharper half: with -comm the enter
-// gate drops a non-open syscall whose tid has no cached comm yet, so a new
+// TestNewThreadsSurviveACommFilter is the sharper half: with -comm a syscall of
+// a tid that has no cached comm yet is judged with an empty comm, so a new
 // thread's rows disappeared without any warning (0 of 200 in the original
 // report). The newtask record seeds the cache before the thread's first
-// syscall, so every one of them must now pass the gate. -parquet refuses
+// syscall, so every one of them must now pass the comm filter. -parquet refuses
 // content filters, hence the collapsed output; a surviving record always has
 // the filter's comm, and their counts must add up to every pread issued.
 func TestNewThreadsSurviveACommFilter(t *testing.T) {

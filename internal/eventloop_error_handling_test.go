@@ -181,12 +181,19 @@ func TestHandleTracepointExitUnknownTypeDropsMalformedEvent(t *testing.T) {
 	}
 }
 
-func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
+// TestTracepointEnteredMissingCommWithCommFilterStoresTheEnter: a tid with no
+// cached comm under -comm must neither warn nor lose its enter. Dropping it
+// used to keep the syscall's exit handler from running, so an fd-table change
+// by such a thread never happened (task dr2); the comm filter is applied to the
+// finished pair instead.
+func TestTracepointEnteredMissingCommWithCommFilterStoresTheEnter(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{
 		filter: globalfilter.Filter{
 			Comm: &globalfilter.StringFilter{Pattern: "system"},
 		},
+		commResolver: newHermeticCommResolver(),
 	})
+	t.Cleanup(el.commResolver.shutdown)
 	warnings := make(chan string, 1)
 	el.warningCb = func(message string) { warnings <- message }
 
@@ -202,14 +209,11 @@ func TestTracepointEnteredMissingCommWithCommFilterNotifies(t *testing.T) {
 
 	select {
 	case msg := <-warnings:
-		if msg == "" {
-			t.Fatalf("expected non-empty warning message")
-		}
+		t.Fatalf("unexpected warning %q for a routine uncached tid", msg)
 	default:
-		t.Fatalf("expected warning notification")
 	}
 
-	if _, ok := el.pairs.enters[defaultTid]; ok {
-		t.Fatalf("expected no enter event to be stored for tid %d", defaultTid)
+	if _, ok := el.pairs.enters[defaultTid]; !ok {
+		t.Fatalf("expected the enter event to be stored for tid %d", defaultTid)
 	}
 }

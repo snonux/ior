@@ -41,8 +41,8 @@ const resolveCommTimeout = time.Second
 // managed to emit, because bpf_ringbuf_reserve() failed under backpressure
 // (internal/c/exec.c counts that in ringbuf_drop_map). Such an entry keeps
 // serving its current value - dropping it outright would blank the comm column
-// and, with an active -comm filter, discard the tid's events at the enter-side
-// comm gate - but it triggers one asynchronous procfs re-read on next use.
+// and, with an active -comm filter, drop the tid's rows at the exit-side comm
+// check (finishPair) - but it triggers one asynchronous procfs re-read on next use.
 // That read happens after the exec, so it returns the new name and heals the
 // label. The same flag marks a provisional entry - the name a new task
 // inherited from its creator (setCachedProvisional) - whose one re-read picks up
@@ -264,7 +264,7 @@ func (r *commResolver) sampleLookupState(tid uint32) lookupState {
 // setCommLocked clears the stale flag - without the re-flag here such a tid
 // would keep a pre-exec label for the rest of its life if the drop burst was a
 // one-off. The value is still stored (it is the best label available and
-// blanking it would drop the tid's rows at the enter-side comm gate); it is
+// blanking it would drop the tid's rows at the exit-side comm check); it is
 // simply marked for one more re-read on next use.
 func (r *commResolver) storeLookupResult(tid uint32, comm string, state lookupState) {
 	r.mu.Lock()
@@ -438,8 +438,9 @@ func (r *commResolver) refreshStaleComm(tid uint32) {
 // to a lost exec record - is right here because there is nothing left to serve:
 // the value does not merely risk being outdated, its owner is gone. The next
 // use of the tid queues a fresh lookup (comm) and, under an active -comm
-// filter, the recycled tid's first non-open syscall is dropped at the
-// enter-side gate exactly as a never-before-seen tid's would be.
+// filter, the recycled tid's rows until that lookup lands are dropped at the
+// exit-side comm check exactly as a never-before-seen tid's would be (its
+// fd-table changes still apply: see tracepointEntered).
 func (r *commResolver) evictTid(tid uint32) {
 	if tid == 0 {
 		return

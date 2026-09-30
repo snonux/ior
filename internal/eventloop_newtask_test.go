@@ -108,10 +108,10 @@ func TestNewTaskWithoutARecordHasNoComm(t *testing.T) {
 	}
 }
 
-// TestTaskNewtaskRecordKeepsRowsUnderACommFilter: under -comm the enter gate
-// drops a non-open syscall of a tid whose comm is not cached. The record makes
-// the tid known, so a matching new task's rows survive; a new task whose
-// inherited name does not match is still filtered (the gate is not bypassed).
+// TestTaskNewtaskRecordKeepsRowsUnderACommFilter: under -comm the exit-side
+// comm check drops the row of a tid whose comm is not cached (its comm is "").
+// The record makes the tid known, so a matching new task's rows survive; a new
+// task whose inherited name does not match is still filtered.
 func TestTaskNewtaskRecordKeepsRowsUnderACommFilter(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

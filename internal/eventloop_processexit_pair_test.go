@@ -87,11 +87,11 @@ func rowFile(ep *event.Pair) string {
 // sees perfectly matching IDs.
 //
 // The new task's own enter is missing here on purpose, which is what makes the
-// dead enter reachable: it is dropped either by ring-buffer backpressure or -
-// far more routinely - by the enter-side comm gate in tracepointEntered, which
-// under -comm drops a non-open/exec enter for a tid whose comm is not cached
-// yet. A brand-new tid is exactly that case, and evicting the comm on exit (the
-// sibling fix) guarantees a recycled tid starts uncached.
+// dead enter reachable: it is dropped by ring-buffer backpressure (before
+// task dr2 the enter-side comm gate in tracepointEntered dropped it under -comm
+// as well, for every brand-new tid; that gate is gone, so loss is now the only
+// route to a missing enter). Evicting the comm on exit (the sibling fix)
+// guarantees a recycled tid starts uncached.
 func TestRecycledTidDoesNotPairWithTheDeadTasksEnter(t *testing.T) {
 	el := newPairEvictionEventLoop(t)
 	out := make(chan *event.Pair, 2)

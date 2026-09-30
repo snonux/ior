@@ -344,31 +344,28 @@ func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (ru
 	return decoded, true
 }
 
+// tracepointEntered parks a syscall enter until its exit arrives.
+//
+// There is deliberately no comm-based gate here. The comm filter is applied to
+// the pair at the exit checkpoint (finishPair -> MatchPair), where the tid's
+// cached comm is attached; a tid whose comm is unknown yields "", which matches
+// no -comm pattern, so its row is dropped there just like a cached
+// non-matching one. An earlier version recycled the enter of every non-open,
+// non-exec syscall of a tid with no cached comm (task dr2): the exit handler
+// then never ran, so a close/dup2/dup3/close_range/fcntl of such a thread never
+// reached the fd table. The table is per process and shared by all its
+// threads, so the rows a run does want kept reporting a closed file's name.
+// handleFdExit and its siblings apply their state change before the filter for
+// exactly this reason; dropping the enter earlier contradicted that rule. Every
+// fresh thread is uncached until the task_newtask record or a procfs read names
+// it, and a lost record leaves it so, which made this routine rather than rare.
+//
+// Open kinds still shed non-matching enters earlier, in the raw filter
+// (matchRawOpenEvent), because their payload carries the comm.
 func (e *eventLoop) tracepointEntered(enterEv event.Event) {
-	tid := enterEv.GetTid()
 	// Schedule comm lookup as early as possible to reduce races for short-lived processes.
-	e.queueCommLookup(tid)
-	if !e.Filter().UsesCommFilter() {
-		e.storeEnter(enterEv)
-		return
-	}
-
-	switch enterEv.(type) {
-	case *types.OpenEvent:
-		e.storeEnter(enterEv)
-	case *types.ExecEvent:
-		e.storeEnter(enterEv)
-	default:
-		// Only, when we have a comm name
-		if _, ok := e.cachedComm(tid); ok {
-			e.storeEnter(enterEv)
-		} else {
-			e.notifyWarning(fmt.Sprintf("No comm name for %v process probably already vanished?", enterEv))
-			// The event is dropped (no cached comm to match a comm filter
-			// against): return it to its pool per the EventLifecycle contract.
-			enterEv.Recycle()
-		}
-	}
+	e.queueCommLookup(enterEv.GetTid())
+	e.storeEnter(enterEv)
 }
 
 // storeEnter parks enterEv until its exit record arrives.
