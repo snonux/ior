@@ -295,66 +295,88 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 	return e.finishPairForTid(ep, nameEv.GetTid())
 }
 
+// handlePathExit finishes a pathname-only syscall pair. name_to_handle_at is
+// never emitted itself (see recordNameToHandleAt); fspick and creat create a
+// descriptor on success and register it in the fd table; every other path
+// syscall simply carries its resolved pathname.
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
 	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
-		retEv, ok := ep.ExitEv.(*types.RetEvent)
-		if !ok || event.IsErrnoRet(retEv.Ret) {
-			ep.Recycle()
-			return false
-		}
-		pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
-		e.pendingHandleState().set(pathEv.GetTid(), pathname.Name())
-		ep.Recycle()
-		return false
+		return e.recordNameToHandleAt(ep, pathEv)
 	}
 
 	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, retEventSucceeded(ep)))
-	if ep.Is(types.SYS_ENTER_FSPICK) {
-		retEvent, ok := ep.ExitEv.(*types.RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed fspick exit event")
+	switch {
+	case ep.Is(types.SYS_ENTER_FSPICK):
+		if !e.attachPathExitFd(ep, pathEv, pathname, "fspick", fspickFdFlags(pathEv.Flags)) {
 			return false
 		}
-		if fd, ok := fdFromRet(retEvent.Ret); ok {
-			// fspick returns a read/write filesystem-context descriptor. Its
-			// userspace flags word controls only close-on-exec; preserve the
-			// kernel-selected access mode as well as that optional bit.
-			flags := int32(syscall.O_RDWR)
-			if pathEv.Flags&unix.FSPICK_CLOEXEC != 0 {
-				flags |= syscall.O_CLOEXEC
-			}
-			fdFile := file.NewFd(fd, pathname.Name(), flags)
-			e.fdState().set(fd, pathEv.Pid, fdFile)
-			ep.File = fdFile
-		} else {
-			ep.File = pathname
-		}
-	} else if ep.Is(types.SYS_ENTER_CREAT) {
-		retEvent, ok := ep.ExitEv.(*types.RetEvent)
-		if !ok {
-			e.recyclePair(ep, "Dropped malformed creat exit event")
+	case ep.Is(types.SYS_ENTER_CREAT):
+		// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
+		// mode): on success it returns a new fd, so register the fd->path
+		// mapping just like handleOpenExit does for open/openat/openat2.
+		if !e.attachPathExitFd(ep, pathEv, pathname, "creat",
+			syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC) {
 			return false
 		}
-		if fd, ok := fdFromRet(retEvent.Ret); ok {
-			// creat(pathname, mode) == open(pathname, O_CREAT|O_WRONLY|O_TRUNC,
-			// mode): on success it returns a new fd, so register the fd->path
-			// mapping just like handleOpenExit does for open/openat/openat2.
-			fdFile := file.NewFd(fd, pathname.Name(),
-				syscall.O_CREAT|syscall.O_WRONLY|syscall.O_TRUNC)
-			e.fdState().set(fd, pathEv.Pid, fdFile)
-			ep.File = fdFile
-		} else {
-			// Failed creat (-1): keep the path so error scenarios stay
-			// observable, mirroring handleOpenExit's failed-open branch.
-			ep.File = pathname
-		}
-	} else {
+	default:
 		ep.File = pathname
 	}
 	// Absolute and AT_FDCWD paths carry the value matchRawPathEvent already
 	// matched. Concrete dirfd-relative paths defer the path dimension until
 	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPairForTid(ep, pathEv.GetTid())
+}
+
+// recordNameToHandleAt stashes the resolved pathname of a successful
+// name_to_handle_at per thread so a later open_by_handle_at can name the file
+// it opens. The pair itself is always recycled (never emitted); it always
+// returns false so the caller drops it.
+func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent) bool {
+	retEv, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok || event.IsErrnoRet(retEv.Ret) {
+		ep.Recycle()
+		return false
+	}
+	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
+	e.pendingHandleState().set(pathEv.GetTid(), pathname.Name())
+	ep.Recycle()
+	return false
+}
+
+// fspickFdFlags returns the tracked flags of an fspick descriptor. fspick
+// returns a read/write filesystem-context descriptor; its userspace flags word
+// controls only close-on-exec, so preserve the kernel-selected access mode as
+// well as that optional bit.
+func fspickFdFlags(fspickFlags uint32) int32 {
+	flags := int32(syscall.O_RDWR)
+	if fspickFlags&unix.FSPICK_CLOEXEC != 0 {
+		flags |= syscall.O_CLOEXEC
+	}
+	return flags
+}
+
+// attachPathExitFd sets ep.File for a path syscall that returns a new
+// descriptor on success (fspick, creat). A successful return registers the
+// fd->path mapping with fdFlags; a failed one keeps the plain path so error
+// scenarios stay observable, mirroring handleOpenExit's failed-open branch.
+// It reports whether ep is still alive; a malformed exit event is recycled
+// (the log message names syscallName) and false is returned.
+func (e *eventLoop) attachPathExitFd(ep *event.Pair, pathEv *types.PathEvent,
+	pathname file.File, syscallName string, fdFlags int32) bool {
+	retEvent, ok := ep.ExitEv.(*types.RetEvent)
+	if !ok {
+		e.recyclePair(ep, "Dropped malformed "+syscallName+" exit event")
+		return false
+	}
+	fd, ok := fdFromRet(retEvent.Ret)
+	if !ok {
+		ep.File = pathname
+		return true
+	}
+	fdFile := file.NewFd(fd, pathname.Name(), fdFlags)
+	e.fdState().set(fd, pathEv.Pid, fdFile)
+	ep.File = fdFile
+	return true
 }
 
 // resolveDirfdPath resolves one pathname against its directory descriptor.
@@ -1223,7 +1245,8 @@ func (e *eventLoop) applyIoctlFdState(ep *event.Pair, ioctlEv *types.FcntlEvent,
 
 // applyFcntlFdState performs the fd-table side effects of one fcntl command.
 // It reports whether ep is still alive; a false return means the pair was
-// malformed and has already been recycled.
+// malformed and has already been recycled. The per-command semantics (see
+// fcntl(2)) live in the applyFcntl* helpers below.
 func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent, fd int32) bool {
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
@@ -1241,61 +1264,11 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		return false
 	}
 
-	// See fcntl(2) for implementation details
 	switch fcntlEv.Cmd {
-	case syscall.F_GETFL:
-		// Unlike F_SETFL's partial update, a successful F_GETFL return is the
-		// kernel's complete authoritative status-flag word. FD_CLOEXEC is a
-		// separate descriptor flag that F_GETFL cannot report, so preserve its
-		// O_CLOEXEC representation while replacing every other bit. Promote a
-		// procfs-resolved entry into the fd table so later rows inherit it. Linux
-		// returns the status word as an int; reject a malformed raw event that
-		// cannot be represented by FdFile's int32 word.
-		if retEvent.Ret > math.MaxInt32 {
-			e.recyclePair(ep, "Dropped malformed fcntl F_GETFL return value")
-			return false
-		}
-		fdFile.SetStatusFlags(int32(retEvent.Ret))
-		ep.File = fdFile
-		e.fdState().set(fd, fcntlEv.Pid, fdFile)
-	case syscall.F_SETFL:
-		// F_SETFL changes the settable status flags only; the access mode and
-		// the creation flags stay exactly as open(2) set them. Merge, do not
-		// replace: callers do F_GETFL then OR, so arg carries the access mode
-		// too, and masking it out of the stored word made an O_RDWR descriptor
-		// report O_RDONLY on the fcntl row and on every later row for that fd.
-		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
-		fdFile.MergeFlags(int32(canChange), int32(fcntlEv.Arg))
-		ep.File = fdFile
-		e.fdState().set(fd, fcntlEv.Pid, fdFile)
-	case syscall.F_GETFD:
-		// FD_CLOEXEC is a descriptor flag, not part of the F_GETFL status-flag
-		// word. The file model carries it as O_CLOEXEC so every row can render
-		// the descriptor's complete tracked state. Translate the authoritative
-		// F_GETFD result into that representation without disturbing status or
-		// creation flags.
-		cloexec := int32(0)
-		if retEvent.Ret&syscall.FD_CLOEXEC != 0 {
-			cloexec = syscall.O_CLOEXEC
-		}
-		fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
-		ep.File = fdFile
-		e.fdState().set(fd, fcntlEv.Pid, fdFile)
-	case syscall.F_SETFD:
-		// F_SETFD currently controls only FD_CLOEXEC. As above, translate the
-		// descriptor flag into the O_CLOEXEC bit used by the combined model and
-		// leave the open-file-description flags untouched.
-		if retEvent.Ret != 0 {
-			e.recyclePair(ep, "Dropped malformed fcntl F_SETFD return value")
-			return false
-		}
-		cloexec := int32(0)
-		if fcntlEv.Arg&syscall.FD_CLOEXEC != 0 {
-			cloexec = syscall.O_CLOEXEC
-		}
-		fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
-		ep.File = fdFile
-		e.fdState().set(fd, fcntlEv.Pid, fdFile)
+	case syscall.F_GETFL, syscall.F_SETFL:
+		return e.applyFcntlStatusFlags(ep, fcntlEv, fdFile, fd, retEvent.Ret)
+	case syscall.F_GETFD, syscall.F_SETFD:
+		return e.applyFcntlDescriptorFlags(ep, fcntlEv, fdFile, fd, retEvent.Ret)
 	case syscall.F_DUPFD:
 		if newFd, ok := fdFromRet(retEvent.Ret); ok {
 			e.registerDup(fdFile, fcntlEv.Pid, newFd, 0)
@@ -1306,6 +1279,72 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 		}
 	}
 	return true
+}
+
+// applyFcntlStatusFlags handles F_GETFL and F_SETFL, which read or change the
+// open-file-description status-flag word. It reports whether ep is still
+// alive; a malformed F_GETFL return value recycles the pair.
+func (e *eventLoop) applyFcntlStatusFlags(ep *event.Pair, fcntlEv *types.FcntlEvent,
+	fdFile *file.FdFile, fd int32, ret int64) bool {
+	if fcntlEv.Cmd == syscall.F_GETFL {
+		// Unlike F_SETFL's partial update, a successful F_GETFL return is the
+		// kernel's complete authoritative status-flag word. FD_CLOEXEC is a
+		// separate descriptor flag that F_GETFL cannot report, so preserve its
+		// O_CLOEXEC representation while replacing every other bit. Linux
+		// returns the status word as an int; reject a malformed raw event that
+		// cannot be represented by FdFile's int32 word.
+		if ret > math.MaxInt32 {
+			e.recyclePair(ep, "Dropped malformed fcntl F_GETFL return value")
+			return false
+		}
+		fdFile.SetStatusFlags(int32(ret))
+	} else {
+		// F_SETFL changes the settable status flags only; the access mode and
+		// the creation flags stay exactly as open(2) set them. Merge, do not
+		// replace: callers do F_GETFL then OR, so arg carries the access mode
+		// too, and masking it out of the stored word made an O_RDWR descriptor
+		// report O_RDONLY on the fcntl row and on every later row for that fd.
+		const canChange = syscall.O_APPEND | syscall.O_ASYNC | syscall.O_DIRECT | syscall.O_NOATIME | syscall.O_NONBLOCK
+		fdFile.MergeFlags(int32(canChange), int32(fcntlEv.Arg))
+	}
+	e.storeFcntlFdFile(ep, fdFile, fd, fcntlEv.Pid)
+	return true
+}
+
+// applyFcntlDescriptorFlags handles F_GETFD and F_SETFD. FD_CLOEXEC is a
+// descriptor flag, not part of the F_GETFL status-flag word; the file model
+// carries it as O_CLOEXEC so every row can render the descriptor's complete
+// tracked state. Both commands translate FD_CLOEXEC into that bit without
+// disturbing status or creation flags. It reports whether ep is still alive;
+// a malformed F_SETFD return value recycles the pair.
+func (e *eventLoop) applyFcntlDescriptorFlags(ep *event.Pair, fcntlEv *types.FcntlEvent,
+	fdFile *file.FdFile, fd int32, ret int64) bool {
+	// F_GETFD's return value is the authoritative descriptor-flag word;
+	// F_SETFD (which currently controls only FD_CLOEXEC) takes it from arg
+	// and must return 0 on success.
+	fdFlags := uint64(ret)
+	if fcntlEv.Cmd == syscall.F_SETFD {
+		if ret != 0 {
+			e.recyclePair(ep, "Dropped malformed fcntl F_SETFD return value")
+			return false
+		}
+		fdFlags = fcntlEv.Arg
+	}
+	cloexec := int32(0)
+	if fdFlags&syscall.FD_CLOEXEC != 0 {
+		cloexec = syscall.O_CLOEXEC
+	}
+	fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
+	e.storeFcntlFdFile(ep, fdFile, fd, fcntlEv.Pid)
+	return true
+}
+
+// storeFcntlFdFile publishes an updated descriptor on the pair and promotes it
+// into the fd table (a procfs-resolved entry becomes tracked), so the exec-time
+// close-on-exec drop and later rows for that fd inherit the new state.
+func (e *eventLoop) storeFcntlFdFile(ep *event.Pair, fdFile *file.FdFile, fd int32, pid uint32) {
+	ep.File = fdFile
+	e.fdState().set(fd, pid, fdFile)
 }
 
 func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFlags int32) {
