@@ -686,7 +686,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
   total is always printed in the end-of-run `Statistics:` block as
   `ring buffer drops: N (N/s, N% of events)`. The same block also reports
-  `group-dead exits: N` (whole-process `sched_process_exit` records, see the
+  `group-dead exits: N` (whole-process `sched_process_exit` records, counted
+  once per process death: repeats of a pid within 100ms are suppressed, see the
   fd-table notes below); the thread-exit integration tests assert both lines
   through the harness's `OutputCapture`, the drop line being `0`.
 
@@ -1007,7 +1008,19 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `ior_exit_group_dead` in `exec.c` from the tracepoint's own `group_dead`
   field when the kernel has it (CO-RE `bpf_core_field_exists`), else from
   `task->signal->live == 0` (runtime-verified only on kernels with the
-  field). The cleanup is split by key: every record drops the exited task's
+  field). The field is read through a local CO-RE flavor type,
+  `struct trace_event_raw_sched_process_exit___ior` (libbpf ignores the `___ior`
+  suffix and matches the kernel's type by name), and the `exec.c` exit handlers
+  take `void *ctx`: the build host's `vmlinux.h` may lack
+  `struct trace_event_raw_sched_process_exit` altogether (RHEL/Rocky 8 and 9
+  kernels define the tracepoint from a shared template), so naming the kernel
+  type would fail the compile there (`internal/buildgate` compiles the object
+  against a `vmlinux.h` with that struct stripped). The `signal->live`
+  fallback can report `group_dead` on several threads of one `exit_group`, so
+  userspace de-duplicates per pid (`groupDeadDedup` in
+  `internal/eventloop_groupdead_dedup.go`: a repeat of the same pid within a
+  100ms window of boot-clock time is dropped, a FIFO queue expires entries from
+  the front, so a recycled pid dying later still counts). The cleanup is split by key: every record drops the exited task's
   tid-keyed state — cached comm, pair state (parked enter plus gap baseline)
   and unconsumed `name_to_handle_at` pathname (see "Comm resolution across
   `execve`") — while the tgid's entries in both fd maps are dropped only on
@@ -1019,8 +1032,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   bypasses `-tid` in BPF, because the thread that ends the group is usually
   not the traced one; the bypass is scoped to the traced thread's process via
   the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
-  Every group-dead record that reaches userspace is counted
-  (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
+  Every group-dead record that reaches userspace and is not a per-pid
+  duplicate is counted (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
   `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`
   parses that exact line to prove the bypass forwards the group-dead exit of an
   untraced thread under `-tid <worker>` (it reads 0 with the bypass disabled),
