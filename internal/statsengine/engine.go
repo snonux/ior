@@ -18,8 +18,9 @@ const (
 	trendWindowSlots = 20
 
 	// DefaultTopN is the default maximum number of top entries tracked per
-	// category (files, directories, processes). It is exported so callers can use it as the
-	// standard capacity when constructing a new Engine via NewEngine.
+	// category (files, directories, processes). It is exported so callers
+	// can use it as the standard capacity when constructing a new Engine
+	// via NewEngine.
 	DefaultTopN = 64
 )
 

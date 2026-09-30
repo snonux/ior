@@ -8,8 +8,9 @@ import "strings"
 // round-trips through the filter modal and can be typed there like any other
 // pattern.
 //
-// The form is defined by LiteralDir, the same function the dashboard groups
-// its directory rows with: "^dir/*" matches a value exactly when
+// The form is defined by LiteralDir, the function statsengine.DirOf builds
+// the dashboard's directory rows on (the engine's dirRanker groups every
+// file by DirOf): "^dir/*" matches a value exactly when
 // LiteralDir(value) == dir. The row filter therefore selects precisely the
 // files the row counts, by construction rather than by a parallel rule that
 // could drift. Like the shell glob it resembles, "*" never crosses a "/", so

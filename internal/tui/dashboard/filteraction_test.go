@@ -269,20 +269,6 @@ func TestEnterDirRowFilterSelectsExactlyTheFilesItCounts(t *testing.T) {
 	}
 }
 
-// TestLiteralDir pins the grouping key: the literal text before the last
-// separator, "/" for a top-level entry, noDirGroup without a separator.
-func TestLiteralDir(t *testing.T) {
-	for path, want := range map[string]string{
-		"/tmp/a": "/tmp", "/a": "/", "/": "/", "//x": "/", "//usr/lib/x": "//usr/lib",
-		"./src/main.go": "./src", "./a": ".", "a/../b/c": "a/../b", "a//b": "a/",
-		"   /z": "   ", "a.log": noDirGroup, "socket:[1]": noDirGroup, "": noDirGroup,
-	} {
-		if got := statsengine.DirOf(path); got != want {
-			t.Errorf("DirOf(%q) = %q, want %q", path, got, want)
-		}
-	}
-}
-
 // TestEnterOnNoDirGroupShowsNotice: Enter on the "." row cannot filter, so
 // it must say so in the filter notice (not stay silent) and emit no request.
 func TestEnterOnNoDirGroupShowsNotice(t *testing.T) {

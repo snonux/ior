@@ -30,7 +30,8 @@ func rootPathLabelFromFSPath(path string) string {
 // treemap and bubbles views: the literal directory text itself ("/", "/etc",
 // "./src", "root/etc"), sanitised like every traced path. Unlike
 // rootPathLabelFromFSPath it neither Cleans nor adds a "root" prefix. The
-// rows are keyed by the literal text (literalDir), so "./src", "src" and
+// rows are keyed by the literal text (statsengine.DirOf, via
+// globalfilter.LiteralDir), so "./src", "src" and
 // "//usr" are distinct rows; Cleaning would merge them, and a "root" prefix
 // on absolute dirs only would make "/etc" collide with a relative "root/etc"
 // dir. Display-only: the item key stays the raw Dir.

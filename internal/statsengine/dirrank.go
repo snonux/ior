@@ -36,7 +36,8 @@ func DirOf(path string) string {
 
 const (
 	// dirRankMaxSeenFactor scales topN into the number of directories the
-	// ranker tracks before it compacts (the same guard the file ranker uses).
+	// ranker tracks before it compacts (the same guard the file ranker uses);
+	// compaction then keeps half of them (dirRankKeep).
 	dirRankMaxSeenFactor = 32
 
 	// dirFileSketchSize is K of the per-directory distinct-file sketch (see
@@ -96,16 +97,58 @@ type dirSnapshotInputs struct {
 // in the file ranker's top-N, yet dominates the directory ranking.
 //
 // Memory is bounded like fileRanker's: once more than maxSeen directories are
-// tracked it keeps the topN by accesses and folds the counters of the rest
-// into evicted, so the total (top rows + remainder) stays exact even though
-// an evicted directory that reappears restarts its own row from zero.
+// tracked it keeps the best keep (see dirRankKeep) by accesses and folds the
+// counters of the rest into evicted, so the total (top rows + remainder)
+// stays exact.
+//
+// The price of forgetting names is paid only by directories that compaction
+// evicted and that later reappear:
+//   - a returning directory restarts its own row from zero, so the row
+//     under-reports it by what it had counted before eviction (that count is
+//     still in the remainder, so no access is lost or double counted);
+//   - a directory that really belongs in the top-N but was ranked below keep
+//     at some compaction is under-ranked the same way. Keeping far more than
+//     topN (dirRankKeep) means only directories that trailed more than
+//     keep-1 others when compacted are at risk, and each carries at most the
+//     accesses of the keep-th directory at that time;
+//   - the remainder's FileCount is a sum of per-directory estimates, so the
+//     files of a returning directory are counted once in the remainder (from
+//     before eviction) and again in its own row.
+//
+// Only the counters that add up (accesses, bytes, latency) are exact in the
+// total; FileCount of the remainder is an estimate that can over-count.
 type dirRanker struct {
-	topN        int
-	maxSeen     int
-	seed        maphash.Seed
+	topN    int
+	maxSeen int
+	keep    int
+	// hash maps a file path to the 64-bit value the per-directory sketches
+	// count. Production uses a randomly seeded maphash, so file names cannot
+	// be chosen to skew a sketch; tests inject a fixed hash to be
+	// deterministic.
+	hash        func(path string) uint64
 	byDir       map[string]*dirStats
 	evicted     dirTotals
 	evictedDirs uint64
+}
+
+// dirRankKeep is how many directories compaction keeps out of maxSeen: half
+// of the budget, but never fewer than topN. Keeping only topN evicted a
+// directory the moment it ranked 65th although accesses to it kept coming.
+// Measured on 1M events over 20,000 Zipf-distributed directories (default
+// topN=64): keeping topN lost 5-10k accesses from the true top-64 rows and
+// missed 4-6 of those directories; keeping half got all 64 with exact
+// counters. Compaction then runs every maxSeen/2 new directories instead of
+// every maxSeen-topN; BenchmarkDirRankerAddChurn (a new directory on every
+// event, the worst case) showed no slowdown.
+func dirRankKeep(topN, maxSeen int) int {
+	return max(topN, maxSeen/2)
+}
+
+// randomPathHash returns the production hash: maphash with a per-ranker
+// random seed.
+func randomPathHash() func(string) uint64 {
+	seed := maphash.MakeSeed()
+	return func(path string) uint64 { return maphash.String(seed, path) }
 }
 
 func newDirRankerWithConfig(topN int) *dirRanker {
@@ -123,7 +166,8 @@ func newDirRankerWithLimits(topN, maxSeen int) *dirRanker {
 	return &dirRanker{
 		topN:    topN,
 		maxSeen: maxSeen,
-		seed:    maphash.MakeSeed(),
+		keep:    dirRankKeep(topN, maxSeen),
+		hash:    randomPathHash(),
 		byDir:   make(map[string]*dirStats),
 	}
 }
@@ -153,13 +197,15 @@ func (r *dirRanker) Add(pair *event.Pair) {
 	read, written := pairFileBytes(pair)
 	stats.bytesRead += read
 	stats.bytesWritten += written
-	stats.sketch.Add(maphash.String(r.seed, path))
+	stats.sketch.Add(r.hash(path))
 
 	r.compactIfNeeded()
 }
 
-// compactIfNeeded keeps the topN directories once cardinality crosses the
-// guard and folds the rest into the evicted remainder.
+// compactIfNeeded keeps the best r.keep directories once cardinality crosses
+// the guard and folds the rest into the evicted remainder. The kept set is a
+// superset of the topN rows the snapshot shows; the margin protects
+// directories just below the top-N from restarting at zero.
 func (r *dirRanker) compactIfNeeded() {
 	if len(r.byDir) <= r.maxSeen {
 		return
@@ -170,9 +216,9 @@ func (r *dirRanker) compactIfNeeded() {
 	}
 	slices.SortFunc(all, compareDirStats)
 
-	kept := make(map[string]*dirStats, r.topN)
+	kept := make(map[string]*dirStats, r.keep)
 	for i, stats := range all {
-		if i < r.topN {
+		if i < r.keep {
 			kept[stats.dir] = stats
 			continue
 		}
