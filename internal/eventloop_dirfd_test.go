@@ -791,10 +791,14 @@ func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
 		{name: "fexecve AT_EMPTY_PATH names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
 		{name: "failed fexecve reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, ret: failed, wantName: "", wantFD: -1},
 		// Task 9p2: an empty name only means "the descriptor itself" when BPF
-		// actually read "". An unreadable or NULL name leaves the same empty
-		// buffer but is missing data, so it must not borrow the fd's identity.
+		// actually observed "" or NULL. An unreadable name leaves the same
+		// empty buffer but is missing data, so it must not borrow the fd's
+		// identity. A successful NULL AT_EMPTY_PATH execveat can only have
+		// run the descriptor; a failed one reports no path.
 		{name: "AT_EMPTY_PATH with unreadable name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_FAILED, wantName: "", wantFD: -1},
-		{name: "AT_EMPTY_PATH with NULL name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: "", wantFD: -1},
+		{name: "AT_EMPTY_PATH with NULL name names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: prog, wantFD: progfd},
+		{name: "failed AT_EMPTY_PATH with NULL name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, ret: failed, wantName: "", wantFD: -1},
+		{name: "execve NULL name reports no path", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: "", wantFD: -1},
 		{name: "unknown filename status fails closed", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: 99, wantName: "", wantFD: -1},
 		{name: "empty name without AT_EMPTY_PATH", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, wantName: "", wantFD: -1},
 		{name: "absolute name ignores dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "/usr/bin/true", wantName: "/usr/bin/true", wantFD: -1},
@@ -960,6 +964,64 @@ func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
 			}
 			if tc.wantFD == progfd && int32(ep.File.Flags()) != flags {
 				t.Fatalf("flags = %#x, want enter-time %#x", int32(ep.File.Flags()), flags)
+			}
+		})
+	}
+}
+
+// TestRawExecRecordLayoutsCarryFilenameStatus feeds exec enter records of both
+// released wire layouts through processRawEvent (task 9p2). A 312-byte v1
+// record whose AT_EMPTY_PATH name BPF could not read must not name the
+// descriptor, while a legacy 304-byte record from an older BPF object has no
+// status and keeps the pre-9p2 behaviour: its "" names the descriptor.
+func TestRawExecRecordLayoutsCarryFilenameStatus(t *testing.T) {
+	const (
+		pid    = uint32(0x7ffffff2)
+		progfd = int32(7)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	tests := []struct {
+		name     string
+		status   uint32
+		size     int
+		wantName string
+		wantFD   int32
+	}{
+		{name: "v1 read failed", status: types.PATH_READ_FAILED, size: 312, wantName: "", wantFD: -1},
+		{name: "v1 read ok", status: types.PATH_READ_OK, size: 312, wantName: prog, wantFD: progfd},
+		{name: "legacy layout", status: types.PATH_READ_FAILED, size: 304, wantName: prog, wantFD: progfd},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, unix.AT_EMPTY_PATH, "", 0)
+			enter.FilenameStatus = tc.status
+			enterRaw, err := enter.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec enter: %v", err)
+			}
+			if len(enterRaw) != 312 {
+				t.Fatalf("exec_event v1 encodes to %d bytes, want 312", len(enterRaw))
+			}
+			// The legacy layout is the v1 prefix: dropping the status and
+			// schema words also drops the FAILED status set above.
+			enterRaw = enterRaw[:tc.size]
+			exitRaw, err := exit.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec exit: %v", err)
+			}
+			out := make(chan *event.Pair, 1)
+			el.processRawEvent(enterRaw, out)
+			el.processRawEvent(exitRaw, out)
+			select {
+			case ep := <-out:
+				defer ep.Recycle()
+				if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+					t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+				}
+			default:
+				t.Fatal("exec pair was not emitted")
 			}
 		})
 	}

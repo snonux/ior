@@ -1596,13 +1596,17 @@ func TestExecEventFastSchemaCompatibility(t *testing.T) {
 			t.Fatalf("decoded %v, want %v", fast, want)
 		}
 	})
-	t.Run("unexpected schema version fails closed", func(t *testing.T) {
-		bad := append([]byte(nil), raw...)
-		binary.LittleEndian.PutUint32(bad[308:312], EXEC_EVENT_SCHEMA_VERSION+1)
-		if fast := NewExecEventFast(bad); fast != nil {
-			t.Fatalf("decoded unknown schema: %v", fast)
-		}
-	})
+	for _, version := range []uint32{0, EXEC_EVENT_SCHEMA_VERSION + 1} {
+		// Version 0 is what a 312-byte record with an unwritten schema word
+		// would carry; only the legacy 304-byte layout implies it.
+		t.Run(fmt.Sprintf("schema version %d fails closed", version), func(t *testing.T) {
+			bad := append([]byte(nil), raw...)
+			binary.LittleEndian.PutUint32(bad[308:312], version)
+			if fast := NewExecEventFast(bad); fast != nil {
+				t.Fatalf("decoded unknown schema: %v", fast)
+			}
+		})
+	}
 	for _, size := range []int{execEventLegacySize + 4, execEventSize + 4, execEventSize + 8} {
 		t.Run(fmt.Sprintf("size %d fails closed", size), func(t *testing.T) {
 			if fast := NewExecEventFast(append(raw, make([]byte, 8)...)[:size]); fast != nil {
