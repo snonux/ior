@@ -200,8 +200,9 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 		// Default printCb prints each pair to stdout as a CSV row (escaped
 		// as -escape selects) then recycles it. The rows are buffered, so
 		// the sink is also the loop's flusher; callers (e.g. TUI,
-		// headless-parquet) replace this via configureEventLoopOutput, which
-		// drops the flusher along with the callback.
+		// headless-parquet) replace this through SetPrintCallback, which drops
+		// the flusher along with the callback; configureEventLoopOutput only
+		// wraps it (WrapPrintCallback), which keeps the flusher.
 		outputFormatter: outputFormatter{
 			printCb: plainSink.Print,
 			flusher: plainSink,
