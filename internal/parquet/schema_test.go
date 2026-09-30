@@ -6,6 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"ior/internal/event"
 	"ior/internal/streamrow"
 	"ior/internal/textsafe"
 	"ior/internal/types"
@@ -271,5 +272,51 @@ func TestSanitizeUTF8UsesTextsafeNotation(t *testing.T) {
 		if got, want := sanitizeUTF8(in), textsafe.Escape(in); got != want {
 			t.Fatalf("byte 0x%02x: sanitizeUTF8 = %q, textsafe.Escape = %q", b, got, want)
 		}
+	}
+}
+
+// TestFilelessRowPersistsEmptyFileAndNegativeFD is the task pq2 regression: the
+// "N:file" placeholder is display text, so a row without a file must reach the
+// Parquet file with an empty `file` (docs/parquet-querying.md: "file != empty"
+// selects rows that have a file) and the UnknownFD (-1) descriptor, while a
+// row whose file is really named "N:file" keeps that name (task zp2's
+// distinction, carried into the data file). Checked through a written file, not
+// just RecordFromStream, so the column the query engines see is what is pinned.
+func TestFilelessRowPersistsEmptyFileAndNegativeFD(t *testing.T) {
+	fileless := streamrow.Row{Seq: 1, Syscall: "sync", FileName: event.NoFileName, NoFile: true, FD: streamrow.UnknownFD}
+	realNamed := streamrow.Row{Seq: 2, Syscall: "openat", FileName: event.NoFileName, FD: 3}
+	normal := streamrow.Row{Seq: 3, Syscall: "read", FileName: "/tmp/f", FD: 3}
+	warning := streamrow.NewWarning(4, "something odd")
+
+	var rows []Record
+	for _, r := range []streamrow.Row{fileless, realNamed, normal, warning} {
+		rows = append(rows, RecordFromStream(r, 0))
+	}
+	got := writeAndReadBack(t, rows)
+	if len(got) != 4 {
+		t.Fatalf("read %d rows, want 4", len(got))
+	}
+	if got[0].File != "" || got[0].FD != -1 {
+		t.Errorf("fileless row persisted file=%q fd=%d, want empty file and fd -1", got[0].File, got[0].FD)
+	}
+	if got[1].File != event.NoFileName {
+		t.Errorf("real file named %q persisted as %q, want its real name", event.NoFileName, got[1].File)
+	}
+	if got[2].File != "/tmp/f" {
+		t.Errorf("ordinary row file = %q, want /tmp/f", got[2].File)
+	}
+	if got[3].File != "something odd" {
+		t.Errorf("warning row file = %q, want its message kept", got[3].File)
+	}
+	// A fileless row must not be counted as having a file: the documented
+	// `WHERE file != ''` predicate.
+	withFile := 0
+	for _, rec := range got {
+		if rec.File != "" {
+			withFile++
+		}
+	}
+	if withFile != 3 {
+		t.Errorf("rows with a file = %d, want 3 (placeholder row counted as a file?)", withFile)
 	}
 }

@@ -46,8 +46,9 @@ func testProcessKcmpAttribution(t *testing.T, scenario string, wantFile bool) {
 		if wantFile && (row.File != targetPath || row.FD != targetFD) {
 			t.Errorf("KCMP_FILE file=%q fd=%d, want %q fd=%d", row.File, row.FD, targetPath, targetFD)
 		}
-		// Pair.FileName persists nil File as the established N:file marker.
-		if !wantFile && (row.File != "N:file" || row.FD != -1) {
+		// A row without a file persists an empty file and fd -1; the N:file
+		// placeholder is display text only (task pq2).
+		if !wantFile && (row.File != "" || row.FD != -1) {
 			t.Errorf("KCMP_VM must have no file or fd: %+v", row)
 		}
 		if row.IsError {

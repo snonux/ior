@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"ior/internal/event"
 )
 
 func TestResolveEditorCommandPrefersEditor(t *testing.T) {
@@ -238,6 +240,33 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	}
 	if records[1][15] != "8" || records[1][16] != "-1" {
 		t.Fatalf("poll metadata = %q/%q, want 8/-1", records[1][15], records[1][16])
+	}
+}
+
+// TestWriteStreamCSVLeavesFilelessFileEmpty is the task pq2 regression for the
+// stream CSV export: a row without a file exports an empty file cell and its
+// fd -1, not the "N:file" display placeholder, while a file really named
+// "N:file" keeps that name (the flag, not the text, tells them apart).
+func TestWriteStreamCSVLeavesFilelessFileEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	rows := []StreamEvent{
+		{Seq: 1, Syscall: "sync", FileName: event.NoFileName, NoFile: true, FD: -1},
+		{Seq: 2, Syscall: "openat", FileName: event.NoFileName, FD: 3},
+		{Seq: 3, Syscall: "read", FileName: "/tmp/f", FD: 3},
+	}
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+	records, err := csv.NewReader(bytes.NewReader(buf.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV: %v", err)
+	}
+	const fdCol, fileCol = 8, 11
+	for i, want := range []struct{ fd, file string }{{"-1", ""}, {"3", event.NoFileName}, {"3", "/tmp/f"}} {
+		got := records[i+1]
+		if got[fdCol] != want.fd || got[fileCol] != want.file {
+			t.Errorf("row %d fd/file = %q/%q, want %q/%q", i+1, got[fdCol], got[fileCol], want.fd, want.file)
+		}
 	}
 }
 

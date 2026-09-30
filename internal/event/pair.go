@@ -11,16 +11,19 @@ import (
 	"ior/internal/types"
 )
 
-// NoFileName is the placeholder a pair renders in its file column (CSV
+// NoFileName is the placeholder a pair renders in its file column (-plain
 // output, FileName, the stream tab's File cell) when it carries no file. It
-// is display text only: the global filter's file dimension sees such a pair,
-// and the stream row built from it, as the empty value (globalfilter
+// is display text only. Data files never store it: the stream CSV export and
+// the Parquet recorder write an empty file for such a row (streamrow
+// Row.FileValue, task pq2), so a non-empty file selects the rows that have a file.
+// The global filter's file dimension likewise sees such a pair, and the
+// stream row built from it, as the empty value (globalfilter
 // pairCandidate.FileValue, streamrow Row.FileValue, which keys off the row's
 // explicit NoFile flag rather than this text). A real file literally named
-// "N:file" therefore still filters by its real name on both paths. Only
-// consumers that see just the rendered text or a bare path (the Files tab
-// ranking, rankablePath) cannot tell the two apart and treat the text as a
-// blank value.
+// "N:file" therefore still filters and persists by its real name on both
+// paths. Only consumers that see just the rendered text or a bare path (the
+// Files tab ranking, rankablePath) cannot tell the two apart and treat the
+// text as a blank value.
 const NoFileName = "N:file"
 
 // Pair represents a matched syscall enter/exit pair together with derived metadata.

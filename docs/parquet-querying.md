@@ -25,7 +25,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `latency_ns` | UInt64 | Syscall duration |
 | `comm`, `syscall`, `family` | String | Process name, syscall name and family |
 | `pid`, `tid` | UInt32 | Process and thread IDs |
-| `fd` | Int32 | File descriptor, when applicable |
+| `fd` | Int32 | File descriptor; `-1` when the syscall has none (not `0`, which is a real descriptor) |
 | `ret` | Int64 | Return value as seen at `sys_exit`; negative values are errno results, except the kernel-internal restart codes -512, -513, -514 and -516, which are interruptions rather than errors (see the `is_error` rule below) |
 | `bytes` | UInt64 | Classified payload bytes |
 | `address_space_bytes` | UInt64 | Virtual address space added, removed or moved by `mmap`, `munmap`, `mremap` (the larger of old and new size) and `brk` (how far the program break moved since the process's previous `brk`; the first `brk` seen for a process and `brk(0)` queries report 0), rounded up to whole host pages. `msync`, `mprotect`, `madvise` and `mlock*` do not change the address space and report 0. `brk` is tracked per process, not per address space: a `vfork`/`CLONE_VM` child shares its parent's heap, so its first `brk` reports 0 and the parent's next `brk` may absorb heap movement the child caused (exec resets the baseline) |
@@ -39,8 +39,18 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `epoll_target_fd` | Int32 | Target descriptor of `epoll_ctl` |
 | `epoll_events` | UInt32 | Requested epoll event mask |
 
-Fields that do not apply to a row use zero or an empty string. In particular, `file` is the
+Fields that do not apply to a row use zero or an empty string, except `fd` (`-1`) and
+`timeout_ns` (`-1`/`-2`), where zero is a real value. In particular, `file` is the
 new path for rename and link calls, and `old_file` is the source path.
+
+A row whose syscall has no file (for example `sync`) has an empty `file` and
+`fd = -1`. The terminal views and `-plain` show such rows with the placeholder `N:file`, but the
+placeholder is display text only and is never written to a recording (or to the stream CSV
+export of the `e` key, which uses the same empty `file` and `fd = -1`). `WHERE file != ''`
+therefore selects exactly the rows that have a file, and a file really named `N:file` is stored
+under that name. To count descriptor-carrying rows use `fd >= 0`. Recordings made before
+this change hold `N:file` and `fd = -1` in those rows; filter them with
+`file NOT IN ('', 'N:file')`.
 
 ### Restart codes and `is_error`
 

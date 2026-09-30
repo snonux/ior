@@ -26,6 +26,13 @@ import (
 // with arbitrary bytes. RecordFromStream therefore sanitizes them (see
 // sanitizeUTF8, textsafe.TrimPartialRune and sanitizeComm/sanitizePath); a Record
 // built by hand is written as given.
+//
+// No-file and no-descriptor conventions (task pq2): File is empty when the
+// syscall has no file. The "N:file" placeholder of the terminal views is
+// display text and is never persisted, so `file != ”` selects exactly the rows
+// with a file and a real file literally named "N:file" keeps that name. FD is
+// -1 (streamrow.UnknownFD) when the syscall has no descriptor, not 0: 0 is a
+// real descriptor (stdin), so a zero would make "none" indistinguishable from it.
 type Record struct {
 	Seq               uint64 `parquet:"seq"`
 	TimeNS            uint64 `parquet:"time_ns"`
@@ -106,13 +113,15 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		RequestedSleepNS:  row.RequestedSleepNs,
 		Nfds:              row.Nfds,
 		TimeoutNS:         row.TimeoutNs,
-		File:              sanitizePath(row.FileName),
-		IsError:           row.IsError,
-		FilterEpoch:       filterEpoch,
-		OldFile:           sanitizePath(row.OldName),
-		EpollOp:           row.EpollOp,
-		EpollTargetFD:     row.EpollTargetFD,
-		EpollEvents:       row.EpollEvents,
+		// FileValue, not FileName: a fileless row's FileName is the "N:file"
+		// display placeholder, which must not be persisted (task pq2).
+		File:          sanitizePath(row.FileValue()),
+		IsError:       row.IsError,
+		FilterEpoch:   filterEpoch,
+		OldFile:       sanitizePath(row.OldName),
+		EpollOp:       row.EpollOp,
+		EpollTargetFD: row.EpollTargetFD,
+		EpollEvents:   row.EpollEvents,
 	}
 }
 

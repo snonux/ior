@@ -207,7 +207,11 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
 			fmt.Sprintf("%d", ev.FD),
 			fmt.Sprintf("%d", ev.RetVal),
 			fmt.Sprintf("%d", ev.Bytes),
-			ev.FileName,
+			// FileValue, not FileName: the export is a data file, so a
+			// fileless row gets an empty file cell like the Parquet column
+			// instead of the "N:file" display placeholder (task pq2). The
+			// fd column keeps -1 (streamrow.UnknownFD) for "no descriptor".
+			ev.FileValue(),
 			fmt.Sprintf("%t", ev.IsError),
 			ev.Family,
 			fmt.Sprintf("%d", ev.RequestedSleepNs),
