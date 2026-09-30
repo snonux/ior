@@ -14,7 +14,10 @@ import (
 	bpf "github.com/aquasecurity/libbpfgo"
 )
 
-func setBPFGlobals(cfg flags.Config, bpfModule *bpf.Module) error {
+// setBPFGlobals writes the user-visible filters into the opened (not yet
+// loaded) BPF object. warn receives non-fatal degradations (see
+// setTidFilterTgid); it must not be nil.
+func setBPFGlobals(cfg flags.Config, bpfModule *bpf.Module, warn func(args ...any)) error {
 	// Ignore `ior` process itself from the filter.
 	if err := bpfModule.InitGlobalVariable("IOR_PID_FILTER", uint32(os.Getpid())); err != nil {
 		return fmt.Errorf("unable set IOR_PID_FILTER: %w", err)
@@ -25,9 +28,39 @@ func setBPFGlobals(cfg flags.Config, bpfModule *bpf.Module) error {
 	if err := bpfModule.InitGlobalVariable("TID_FILTER", uint32(cfg.TidFilter)); err != nil {
 		return fmt.Errorf("unable to set up TID_FILTER global variable: %w", err)
 	}
-	tgid := tidFilterTgid(cfg, procTgid)
-	if err := bpfModule.InitGlobalVariable("TID_FILTER_TGID", tgid); err != nil {
+	return setTidFilterTgid(cfg, bpfModule, warn)
+}
+
+// errSymbolNotFound is the text libbpfgo's InitGlobalVariable returns for a
+// global the object does not define. libbpfgo exposes no sentinel for it (it
+// is a bare errors.New), so the message is matched;
+// TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid runs the real library
+// against a real object lacking the symbol, so a libbpfgo upgrade that
+// rewords it fails that test instead of silently turning this back into a
+// fatal setup error.
+const errSymbolNotFound = "symbol not found"
+
+// setTidFilterTgid sets the TID_FILTER_TGID global, which only exists in
+// objects built from 34b016d on. An IOR_BPF_OBJECT override older than that
+// (the only kind that emits the legacy 24-byte exit record, see
+// types.NewProcessExitEventFast) has no scoped group-dead bypass to
+// configure, and the unset value noTgid is what every run without -tid
+// writes anyway - so a missing symbol is skipped, not fatal. Only -tid makes
+// the bypass matter: then warn that the old object cannot forward the
+// group-dead exit of an untraced thread, which degrades to fd entries ageing
+// out through the LRU cap (see tidFilterTgid) rather than breaking the trace.
+// Any other InitGlobalVariable failure is still an error.
+func setTidFilterTgid(cfg flags.Config, bpfModule *bpf.Module, warn func(args ...any)) error {
+	err := bpfModule.InitGlobalVariable("TID_FILTER_TGID", tidFilterTgid(cfg, procTgid))
+	if err == nil {
+		return nil
+	}
+	if err.Error() != errSymbolNotFound {
 		return fmt.Errorf("unable to set up TID_FILTER_TGID global variable: %w", err)
+	}
+	if cfg.TidFilter > 0 {
+		warn("BPF object has no TID_FILTER_TGID global (built before the scoped group-dead bypass): " +
+			"-tid cannot forward the process exit of an untraced thread, so the traced process's fd entries age out through the LRU cap instead")
 	}
 	return nil
 }

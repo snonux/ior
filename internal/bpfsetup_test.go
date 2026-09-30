@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -256,5 +258,73 @@ func TestResizeBPFMapsAgainstRealObject(t *testing.T) {
 				t.Fatalf("event_map max_entries = %d for request %d: rounded up by more than 2x", got, tc.size)
 			}
 		})
+	}
+}
+
+// openObjectWithRenamedGlobal opens the embedded BPF object after renaming one
+// global to a same-length name, which leaves a valid ELF (symbol table and BTF
+// strings both changed) whose object no longer defines that global - exactly
+// what an IOR_BPF_OBJECT override built before the global existed looks like
+// to libbpfgo, without needing a second checked-in object or a clang run.
+func openObjectWithRenamedGlobal(t *testing.T, name string) *bpf.Module {
+	t.Helper()
+	renamed := name[:len(name)-1] + "X"
+	object := bytes.ReplaceAll(embeddedBPFObject, []byte(name), []byte(renamed))
+	if bytes.Equal(object, embeddedBPFObject) {
+		t.Fatalf("embedded BPF object does not mention %s", name)
+	}
+	mod, err := bpf.NewModuleFromBuffer(object, embeddedBPFObjectName)
+	if err != nil {
+		skipIfUnprivilegedOpen(t, err)
+	}
+	t.Cleanup(mod.Close)
+	return mod
+}
+
+// TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid pins the compatibility
+// the AGENTS.md promises for IOR_BPF_OBJECT overrides: TID_FILTER_TGID was
+// added after the legacy exec/exit records, so every object emitting the
+// 24-byte exit record lacks it, and a missing symbol used to abort setup at
+// the "set globals" stage. It now passes without -tid, warns (once) under -tid,
+// and real failures of other globals still surface. It runs the real libbpfgo
+// against a real object, which also guards the error text setTidFilterTgid
+// matches.
+func TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tid       int
+		wantWarns int
+	}{
+		{name: "no -tid stays silent", tid: -1, wantWarns: 0},
+		{name: "-tid warns that the bypass is unavailable", tid: os.Getpid(), wantWarns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mod := openObjectWithRenamedGlobal(t, "TID_FILTER_TGID")
+			var warnings []string
+			warn := func(args ...any) { warnings = append(warnings, fmt.Sprint(args...)) }
+			cfg := flags.Config{PidFilter: -1, TidFilter: tc.tid}
+			if err := setBPFGlobals(cfg, mod, warn); err != nil {
+				t.Fatalf("setBPFGlobals on an object without TID_FILTER_TGID = %v, want nil", err)
+			}
+			if len(warnings) != tc.wantWarns {
+				t.Fatalf("warnings = %q, want %d", warnings, tc.wantWarns)
+			}
+			if tc.wantWarns > 0 && !strings.Contains(warnings[0], "TID_FILTER_TGID") {
+				t.Fatalf("warning %q does not name the missing global", warnings[0])
+			}
+		})
+	}
+}
+
+// TestSetBPFGlobalsStillFailsOnAMissingRequiredGlobal is the negative twin:
+// only TID_FILTER_TGID is optional. An object lacking TID_FILTER - which every
+// supported object defines - must keep failing setup, with the global's name
+// in the error, so the tolerance does not swallow real breakage. (The rename
+// also hits TID_FILTER_TGID, which is fine: TID_FILTER is written first.)
+func TestSetBPFGlobalsStillFailsOnAMissingRequiredGlobal(t *testing.T) {
+	mod := openObjectWithRenamedGlobal(t, "TID_FILTER")
+	err := setBPFGlobals(flags.Config{PidFilter: -1, TidFilter: -1}, mod, func(...any) {})
+	if err == nil || !strings.Contains(err.Error(), "TID_FILTER global variable") {
+		t.Fatalf("setBPFGlobals without TID_FILTER = %v, want an error naming TID_FILTER", err)
 	}
 }

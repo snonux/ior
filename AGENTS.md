@@ -1166,6 +1166,12 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   bypasses `-tid` in BPF, because the thread that ends the group is usually
   not the traced one; the bypass is scoped to the traced thread's process via
   the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
+  An object that predates the global (every one that emits the legacy exit
+  record) does not define it: `setTidFilterTgid` treats libbpfgo's "symbol not
+  found" as non-fatal - silent without `-tid`, one setup warning with it - so
+  such an `IOR_BPF_OBJECT` still loads
+  (`TestSetBPFGlobalsToleratesAnObjectWithoutTidFilterTgid`; a missing
+  `TID_FILTER` and any other error stay fatal).
   Every group-dead record that reaches userspace and is not a per-pid
   duplicate is counted (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
   `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`

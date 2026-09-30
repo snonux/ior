@@ -99,7 +99,7 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 		return nil, nil, noRelease, setupBPFModuleError("start", err)
 	}
 
-	bpfModule, stage, err := loadConfiguredBPFModule(cfg)
+	bpfModule, stage, err := loadConfiguredBPFModule(cfg, log.withDefaults().warn)
 	if err != nil {
 		if bpfModule != nil {
 			bpfModule.Close()
@@ -123,10 +123,11 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 }
 
 // loadConfiguredBPFModule opens the embedded BPF object, sizes its maps, sets
-// its globals, loads it into the kernel and applies the sampling rates. On
+// its globals, loads it into the kernel and applies the sampling rates. warn
+// receives non-fatal setup degradations (see setTidFilterTgid). On
 // failure it returns the failed stage and, when the module was already opened,
 // the module itself so the caller can close it (nil otherwise).
-func loadConfiguredBPFModule(cfg flags.Config) (*bpf.Module, string, error) {
+func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Module, string, error) {
 	bpfModule, stage, err := loadBPFModule()
 	if err != nil {
 		return nil, stage, err
@@ -134,7 +135,7 @@ func loadConfiguredBPFModule(cfg flags.Config) (*bpf.Module, string, error) {
 	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
 		return bpfModule, "resize maps", err
 	}
-	if err := setBPFGlobals(cfg, bpfModule); err != nil {
+	if err := setBPFGlobals(cfg, bpfModule, warn); err != nil {
 		return bpfModule, "set globals", err
 	}
 	if err := bpfModule.BPFLoadObject(); err != nil {
