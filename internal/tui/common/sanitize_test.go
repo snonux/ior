@@ -3,6 +3,7 @@ package common
 import (
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
@@ -25,10 +26,21 @@ const (
 	// (RLO) reverses the rest of the line (Trojan-Source style).
 	rloSpoof = "invoice\u202efdp.exe"
 	// cleanEmoji holds sequences whose glue runes must survive: a ZWJ family,
-	// a skin-tone modifier, text/emoji variation selectors and a regional-
-	// indicator flag.
-	cleanEmoji = "\U0001F468\u200D\U0001F469\u200D\U0001F467 \U0001F44D\U0001F3FD \u2764\uFE0F \u2603\uFE0E \U0001F1E9\U0001F1EA"
+	// a skin-tone modifier, text/emoji variation selectors, a regional-
+	// indicator flag, a ZWJ after U+FE0F (rainbow flag) and a ZWJ after a
+	// skin tone (man technologist, medium skin).
+	cleanEmoji = "\U0001F468\u200D\U0001F469\u200D\U0001F467 \U0001F44D\U0001F3FD \u2764\uFE0F \u2603\uFE0E \U0001F1E9\U0001F1EA" +
+		" \U0001F3F3\uFE0F\u200D\U0001F308 \U0001F468\U0001F3FD\u200D\U0001F4BB"
+	// englandFlag is black flag + tag letters "gbeng" + cancel tag. Tag runes
+	// are replaced (see isInvisibleFormat), so it degrades to 1 flag + 6 '?'.
+	englandFlag = "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
 )
+
+// boundaryNeighbours holds visible code points right next to replaced
+// ranges: U+00AC/00AE around the soft hyphen, U+0606 after U+0600..0605,
+// U+2027/2030 around U+2028..202E, U+205E before U+2060, U+2070 after
+// U+206F and U+FFFC after U+FFF0..FFFB.
+const boundaryNeighbours = "\u00ac\u00ae\u0606\u2027\u2030\u205e\u2070\ufffc"
 
 // invisibleFormatCases lists one payload per neutralised rune class and the
 // expected sanitised output.
@@ -43,10 +55,25 @@ var invisibleFormatCases = []struct{ name, in, want string }{
 	{"soft hyphen", "ab\u00adc", "ab?c"},
 	{"interlinear annotations", "a\ufff9b\ufffac\ufffbd", "a?b?c?d"},
 	{"tag chars first and last", "a\U000E0000\U000E0041\U000E007Fb", "a???b"},
+	{"word joiner and invisible operators", "a\u2060\u2061\u2062\u2063\u2064b", "a?????b"},
+	{"deprecated format U+206A..206F", "a\u206a\u206fb", "a??b"},
+	{"Mongolian vowel separator", "a\u180eb", "a?b"},
+	{"musical and hieroglyph format", "a\U0001D173\U0001D17A\U00013430\U0001343Fb", "a????b"},
+	{"shorthand format", "a\U0001BCA0\U0001BCA3b", "a??b"},
+	{"CGJ and Khmer inherent vowels", "a\u034f\u17b4\u17b5b", "a???b"},
+	{"VS1 and VS14", "a\ufe00\ufe0db", "a??b"},
+	{"variation selector supplement smuggling", "a\U000E0100\U000E01EFb", "a??b"},
+	{"Hangul fillers", "a\u115f\u1160\u3164\uffa0b", "a????b"},
+	{"prepended concatenation marks", "a\u0600b\u06ddc\u070fd\u0890e\u08e2f\U000110BDg\U000110CDh", "a?b?c?d?e?f?g?h"},
+	{"ZWJ between letters", "pass\u200dwd", "pass?wd"},
+	{"ZWJ at start", "\u200d\U0001F525", "?\U0001F525"},
+	{"ZWJ after replaced rune", "\U0001F525\ufe00\u200d\U0001F525", "\U0001F525??\U0001F525"},
+	{"ZWJ after invalid byte", "\xff\u200dx", "??x"},
+	{"England flag degrades", englandFlag, "\U0001F3F4??????"},
 	{"mixed with controls", "\x1b\u202e\n", "?? "},
 	{"clean emoji kept", cleanEmoji, cleanEmoji},
 	{"ZWNJ kept", "\u0645\u200c\u06cc", "\u0645\u200c\u06cc"},
-	{"boundary neighbours kept", "\u00ac\u00ae\u2027\u202f\u2065\u206a\ufff8\ufffc", "\u00ac\u00ae\u2027\u202f\u2065\u206a\ufff8\ufffc"},
+	{"boundary neighbours kept", boundaryNeighbours, boundaryNeighbours},
 }
 
 // assertTerminalSafe fails when s contains any byte or rune a terminal could
@@ -96,10 +123,11 @@ func TestSanitizeReplacesControls(t *testing.T) {
 	}
 }
 
-// TestSanitizeReplacesInvisibleFormat checks bidi controls, separators and
-// zero-width format runes become the visible '?', while emoji glue (ZWJ,
-// variation selectors, skin tones), regional-indicator flags and ZWNJ, as
-// well as the code points right next to each replaced range, are kept.
+// TestSanitizeReplacesInvisibleFormat checks bidi controls, separators,
+// format, default-ignorable and variation-selector runes and a ZWJ outside an
+// emoji sequence become the visible '?', while emoji glue (ZWJ after an
+// emoji, VS15/VS16, skin tones), regional-indicator flags and ZWNJ, as well
+// as the visible code points next to each replaced range, are kept.
 func TestSanitizeReplacesInvisibleFormat(t *testing.T) {
 	for _, tt := range invisibleFormatCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,6 +144,23 @@ func TestSanitizeReplacesInvisibleFormat(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestInvisibleFormatMatchesClasses checks isInvisibleFormat against the
+// Unicode tables for every code point: its cheap range pre-check must not
+// hide any member of Cf, Variation_Selector or
+// Other_Default_Ignorable_Code_Point, and only the documented exceptions
+// (ZWNJ, ZWJ, VS15, VS16) and the separators may differ from the classes.
+func TestInvisibleFormatMatchesClasses(t *testing.T) {
+	exceptions := map[rune]bool{0x200C: true, 0x200D: true, 0xFE0E: true, 0xFE0F: true}
+	extra := map[rune]bool{0x2028: true, 0x2029: true}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		inClass := unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+		want := (inClass && !exceptions[r]) || extra[r]
+		if got := isInvisibleFormat(r); got != want {
+			t.Fatalf("isInvisibleFormat(%U) = %v, want %v", r, got, want)
+		}
 	}
 }
 
@@ -143,9 +188,19 @@ func TestSanitizeFormatWidthIsExact(t *testing.T) {
 		t.Fatalf("RLO spoof width = %d, want %d", got, want)
 	}
 	// Family (2) + space + thumbs-up (2) + space + heart (2) + space +
-	// snowman text-style (1) + space + flag (2).
-	if got, want := DisplayWidth(Sanitize(cleanEmoji)), 13; got != want {
+	// snowman text-style (1) + space + flag (2) + space + rainbow flag (2) +
+	// space + technologist (2).
+	if got, want := DisplayWidth(Sanitize(cleanEmoji)), 19; got != want {
 		t.Fatalf("emoji width = %d, want %d", got, want)
+	}
+	// A prepended concatenation mark would merge with the next cell; as '?'
+	// it is one cell of its own.
+	if got := DisplayWidth(Sanitize("a\u0600b")); got != 3 {
+		t.Fatalf("a<U+0600>b width = %d, want 3", got)
+	}
+	// Black flag (2) + six '?' cells.
+	if got := DisplayWidth(Sanitize(englandFlag)); got != 8 {
+		t.Fatalf("England flag width = %d, want 8", got)
 	}
 }
 
