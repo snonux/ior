@@ -387,9 +387,8 @@ func finalModelError(final tea.Model) error {
 //
 // The pid/tid pair goes through resolveStartupPIDFilters, the same helper the
 // production path uses, so that "the exact same model wiring" above is true of
-// the filters too: an explicit -pid clears -tid here exactly as it does for a
-// real attach, rather than test-flames quietly honouring a combination the
-// real TUI drops.
+// the filters too: -pid and -tid combine here exactly as they do for a real
+// attach.
 func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
 	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
 	model := newModelWithRuntimeConfig(modelStartup{
@@ -531,8 +530,9 @@ func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarte
 // stream to pid=1 as well.
 type modelStartup struct {
 	// initialPID is a genuine attach target. When > 0 it both seeds the
-	// pid filter (overriding pidFilter/tidFilter) and skips the picker.
-	// Use -1 for "no attach target".
+	// pid filter and skips the picker. It clears tidFilter only when it
+	// differs from pidFilter (see resolveStartupPIDFilters). Use -1 for
+	// "no attach target".
 	initialPID int
 	// skipPicker starts on the dashboard and begins tracing immediately
 	// without an attach target, for modes whose data is seeded rather than
@@ -540,7 +540,8 @@ type modelStartup struct {
 	skipPicker bool
 	// filter is the startup global filter (built from the CLI config).
 	filter globalfilter.Filter
-	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter).
+	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter). A
+	// positive tidFilter also skips the picker (see initialScreen).
 	pidFilter int
 	tidFilter int
 	// exportEnabled mirrors -tuiExport.
@@ -594,22 +595,35 @@ func newModelWithRuntimeConfig(startup modelStartup) *Model {
 
 // initialScreen picks the first screen: the dashboard when startup has an
 // attach target or explicitly skips the picker, otherwise the PID picker.
+//
+// A -tid given without -pid is an attach target as well: the thread id names
+// the process to trace, so the picker would only ask for something the user
+// already answered - and its PID result (handlePidSelected) discards the tid,
+// turning `-tid T` into a whole-process trace of whatever was picked. The
+// trace then starts with just the TID predicate, exactly as headless mode does.
 func initialScreen(startup modelStartup) Screen {
-	if startup.initialPID > 0 || startup.skipPicker {
+	if startup.initialPID > 0 || startup.skipPicker || startup.tidFilter > 0 {
 		return ScreenDashboard
 	}
 	return ScreenPIDPicker
 }
 
 // resolveStartupPIDFilters computes the effective pid/tid filter values from
-// the startup arguments. When initialPID is provided it overrides the config
-// PID filter and forces tid to -1 (no TID filter).
+// the startup arguments. An initialPID that differs from the configured -pid
+// is a different attach target than the one -tid was given for, so it
+// overrides the config PID filter and clears the TID filter. When initialPID
+// is the configured -pid itself (the production `ior -pid P -tid T` path,
+// where newRunModel passes cfg.PidFilter for both), the -tid is kept: it used
+// to be dropped unconditionally, so the first TraceRequest covered the whole
+// process instead of the one thread the user named.
 func resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter int) (pid, tid int) {
 	pid = selectedPIDFilter(startupPidFilter)
 	tid = selectedPIDFilter(startupTidFilter)
 	if initialPID > 0 {
+		if selectedPIDFilter(initialPID) != pid {
+			tid = -1
+		}
 		pid = selectedPIDFilter(initialPID)
-		tid = -1
 	}
 	return pid, tid
 }

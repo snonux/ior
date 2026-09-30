@@ -2763,11 +2763,10 @@ func TestNewTestFlamesModelHonoursConfigPidFilter(t *testing.T) {
 	if m.proc.pid != 2002 {
 		t.Fatalf("expected pid filter 2002, got %d", m.proc.pid)
 	}
-	// -pid clears -tid, exactly as the production path does via
-	// resolveStartupPIDFilters. Test-flames must not honour a pid+tid
-	// combination the real TUI drops, or it stops being a faithful harness.
-	if m.proc.tid != -1 {
-		t.Fatalf("expected -pid to clear the tid filter as production does, got %d", m.proc.tid)
+	// -pid and -tid combine, exactly as on the production path through
+	// resolveStartupPIDFilters (TestNewRunModelKeepsTidWithPid).
+	if m.proc.tid != 2202 {
+		t.Fatalf("expected -tid to combine with -pid as production does, got %d", m.proc.tid)
 	}
 }
 
@@ -2787,8 +2786,8 @@ func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
 
 // TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
 // path real users take. Every field is asserted across its two subtests
-// (tidFilter is only reachable when no -pid is given, because an attach pid
-// clears it): a modelStartup field is silently optional where a positional
+// (tidFilter is exercised by the -tid tests below): a modelStartup field is
+// silently optional where a positional
 // argument would not compile, so an omission anywhere in this literal is valid
 // Go that no other test in the repo would notice. Dropping initialPID made
 // `ior -pid <n>` open the PID picker instead of the dashboard; dropping
@@ -2835,11 +2834,9 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 }
 
 // TestNewRunModelWiresTidFilterWithoutPid covers the one modelStartup field the
-// case above cannot reach: with an attach pid, resolveStartupPIDFilters forces
-// tid to -1, so only `ior -tid T` with no -pid exercises tidFilter. Dropping it
-// silently degrades to -1, losing the model-side tid filter and the
-// "Filter: tid=..." status display (kernel-side filtering still applies, so
-// rows stay correct - it is a display/filter-stack loss, not data loss).
+// case above cannot reach: `ior -tid T` with no -pid is the one startup that
+// leaves pidFilter at -1. Dropping tidFilter silently degrades it to -1,
+// losing the model-side tid filter and the "Filter: tid=..." status display.
 func TestNewRunModelWiresTidFilterWithoutPid(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = -1
