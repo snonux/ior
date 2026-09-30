@@ -72,6 +72,14 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 `./ior -help` lists the valid values. [Syscall tracing](./docs/syscall-tracing-plan.md)
 explains classification and sampling.
 
+In the TUI you can change the traced set at runtime: press `o` for the probes modal, `tab`
+to switch to the Families view (attached/total probes per family), and `space` to attach
+the selected family, or detach it if any of its probes is attached. The Syscalls view
+toggles single probes. Runtime changes survive trace restarts (PID/TID reselect, filter
+changes), and newly attached syscalls get the same sampling rates as at startup. `[`/`]`
+only scope the view to a family; on a family with no attached probe the status line says
+how to attach it.
+
 ### Save output
 
 | Mode | Command or key | Output |

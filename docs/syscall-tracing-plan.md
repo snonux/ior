@@ -26,6 +26,17 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 set. `-no-trace-families`, `-no-trace-kinds` and `-no-trace-syscalls` remove matches. The
 generated registry, not this page, is the authority for each syscall's family and kind.
 
+The flags only choose the startup set. In the TUI, the probes modal (`o`) changes it at
+runtime: its Syscalls view toggles single probes, and its Families view (`tab`) lists every
+family with its attached/total probe count and attaches or detaches a whole family with
+`space`/`enter` (detach when any of its probes is attached, attach otherwise). Family
+membership is the same registry `-trace-families` uses. A family batch runs in the
+background with a progress line; a tracepoint the kernel lacks is reported and skipped,
+and the rest of the family still attaches. Once changed, the attached set is carried into
+every later trace session, so a PID/TID reselect or a filter change that restarts the
+trace keeps it instead of reverting to the flags. `[`/`]` only scope the dashboard view to
+a family; when that family has no attached probe, the status line says how to attach it.
+
 The selector kind describes a syscall's role. It is separate from the BPF record type. For
 example, fd xattr calls still select as `fd` even though their requested size now travels in
 a dedicated `fd_size_event`; `memfd_create` still selects as `eventfd`, and `move_mount`
@@ -97,6 +108,9 @@ BPF record type (see What attaches).
 `-syscall-sampling-families` and `-syscall-sampling-syscalls` accept `name=rate`: `0` keeps
 aggregate counts only, `1` emits every event, and `N` emits about one in N events. Futex
 variants and `clock_gettime` default to aggregate-only in the TUI.
+The rates are written for every syscall when the BPF object loads, whether or not it is
+attached, so a syscall attached later from the probes modal is sampled exactly as if the
+startup flags had selected it.
 
 The kernel aggregates the invocations it does not emit. Aggregate rows plus emitted rows
 therefore give exact TUI counts, errors, latency sums and histograms for sampled syscalls.

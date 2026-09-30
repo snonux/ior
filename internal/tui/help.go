@@ -51,9 +51,12 @@ func (m *Model) helpSections() []helpSection {
 	if m.keys.ExportEnabled() {
 		line1 += "  e stream export"
 	}
+	// '['/']' only re-scope the view; attaching a whole family at runtime is
+	// the probes modal's Families view (o, then tab), hence the second line.
 	globalLines := []string{
 		"H help  esc/? close help  q quit",
 		line1,
+		"[ ] scope view to a family  o tab: attach/detach whole families",
 	}
 
 	return []helpSection{

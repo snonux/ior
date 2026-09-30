@@ -461,6 +461,10 @@ type Model struct {
 	exportEnabled bool
 	isDark        bool
 	focused       bool
+	// familyHintShown reports that the dashboard's filter notice currently
+	// holds a "family not traced" hint (see refreshFamilyHint), so it may be
+	// cleared again without erasing a filter-refusal notice.
+	familyHintShown bool
 
 	kb keyboardState
 }
@@ -776,6 +780,15 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case probes.ProbeToggledMsg:
 		next, cmd := m.handleProbeToggledMsg(msg)
 		return next, cmd, true
+	case probes.FamilyBatchProgressMsg:
+		// Always forwarded, even with the modal closed: the returned command
+		// waits for the batch's next update (see probes.FamilyBatchProgressMsg).
+		var cmd tea.Cmd
+		m.probeModal, cmd = m.probeModal.Update(msg)
+		return m, cmd, true
+	case probes.FamilyToggledMsg:
+		next, cmd := m.handleFamilyToggledMsg(msg)
+		return next, cmd, true
 	case PidSelectedMsg:
 		next, cmd := m.handlePidSelected(msg)
 		return next, cmd, true
@@ -839,13 +852,14 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 }
 
 // handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
-// so the new probe set is reflected immediately. The post-reset tick goes
+// so the new probe set is reflected immediately, and records the new probe
+// set for the next trace restart (afterProbeChange). The post-reset tick goes
 // through the dashboard's normal stats handling, so a failed snapshot keeps
 // the last good one exactly as a failed refresh or baseline reset does.
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.probeModal, cmd = m.probeModal.Update(msg)
-	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
+	return m, tea.Batch(m.afterProbeChange(), cmd)
 }
 
 // handleTracingStarted wires live sources into the dashboard once the trace
@@ -856,6 +870,9 @@ func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 	m.dashboard.SetGlobalFilter(m.filters.current())
 	m.syncDashboardFilterState()
+	// The new session's probe manager is published now; a family scope that
+	// was set while it attached gets its "not traced" hint here.
+	m.refreshFamilyHint()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	m.dashboard = next.(*dashboardui.Model)
@@ -1381,7 +1398,7 @@ func (m *Model) setProcessFilters(pid, tid int) {
 	// showing. This changes the one showing - and restarts the trace - so the
 	// notice would be left explaining a filter the user is no longer looking
 	// at, in a session it never applied to.
-	m.dashboard.SetFilterNotice("")
+	m.setFilterNotice("")
 	m.syncDashboardFilterState()
 }
 
@@ -1420,14 +1437,15 @@ func (m *Model) syncDashboardFilterState() {
 // the only writer - undoGlobalFilter and setProcessFilters clear it too,
 // because both change the filter on screen without going through here - but it
 // is the only one that ever sets a reason, and between the three the notice
-// cannot outlive the filter it describes.
+// cannot outlive the filter it describes. (refreshFamilyHint also writes the
+// notice, with a hint rather than a reason; see there.)
 func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
 	err := filter.ValidateTracepointFields()
 	if err == nil {
-		m.dashboard.SetFilterNotice("")
+		m.setFilterNotice("")
 		return false
 	}
-	m.dashboard.SetFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
+	m.setFilterNotice(fmt.Sprintf("FILTER REFUSED (%v) - keeping the previous filter", err))
 	return true
 }
 
@@ -1531,7 +1549,7 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 	// the rest), so there is nothing to re-check here - but the filter on
 	// screen is about to change, so a refusal notice describing the previous
 	// one must not survive it.
-	m.dashboard.SetFilterNotice("")
+	m.setFilterNotice("")
 	m.setGlobalFilter(prev)
 	if m.router.current() != ScreenDashboard || before.Equal(prev) {
 		return m, nil

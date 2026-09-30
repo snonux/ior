@@ -13,6 +13,7 @@ import (
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
 	"ior/internal/tui/eventstream"
+	"ior/internal/types"
 )
 
 // sessionProbeManager is a distinguishable probe manager per session.
@@ -21,6 +22,12 @@ type sessionProbeManager struct{ name string }
 func (sessionProbeManager) States() []probemanager.ProbeState { return nil }
 func (sessionProbeManager) Toggle(string) error               { return nil }
 func (sessionProbeManager) ActiveCount() (int, int)           { return 0, 0 }
+func (sessionProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
+func (sessionProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
 
 // fakeSession is what one trace session publishes through its bindings view
 // and how it releases it again, mirroring setupBPFModule (probe manager) and

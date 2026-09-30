@@ -18,6 +18,7 @@ import (
 	"ior/internal/runtime"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
+	"ior/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -394,7 +395,7 @@ func tuiTraceStarterFromRunTrace(
 			}
 		}()
 
-		cfg := traceConfigForRequest(baseCfg, req.Filter)
+		cfg := traceConfigForRequest(baseCfg, req)
 
 		rt, err := buildTUIRuntime(cfg, req.Bindings)
 		if err != nil {
@@ -493,18 +494,36 @@ func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
 }
 
 // traceConfigForRequest returns the config one TUI trace session runs with:
-// baseCfg with the request's filter applied. A nil filter keeps baseCfg's
-// filter and PID/TID scope as configured; a non-nil one replaces the global
-// filter with a clone (so the caller may keep mutating its own copy) and
-// derives the scope from it.
-func traceConfigForRequest(baseCfg flags.Config, filter *globalfilter.Filter) flags.Config {
+// baseCfg with the request's filter and probe selection applied. A nil filter
+// keeps baseCfg's filter and PID/TID scope as configured; a non-nil one
+// replaces the global filter with a clone (so the caller may keep mutating its
+// own copy) and derives the scope from it. The probe selection is applied by
+// applyProbeSelection.
+func traceConfigForRequest(baseCfg flags.Config, req runtime.TraceRequest) flags.Config {
 	cfg := baseCfg
-	if filter == nil {
+	applyProbeSelection(&cfg, req.AttachSyscalls)
+	if req.Filter == nil {
 		return cfg
 	}
-	cfg.GlobalFilter = filter.Clone()
+	cfg.GlobalFilter = req.Filter.Clone()
 	applyTraceScopeFromGlobalFilter(&cfg, cfg.GlobalFilter)
 	return cfg
+}
+
+// applyProbeSelection replaces the configured tracepoint selector with one
+// attaching exactly syscalls when the TUI carried a runtime probe selection
+// into this session (non-nil, see runtime.TraceRequest.AttachSyscalls); nil
+// keeps the startup -trace-* / -tps selection. Only attachment changes: the
+// sampling rates are configured for every syscall at load time
+// (buildSyscallSamplingRates walks all trace IDs, not just attached ones), so
+// a syscall attached through the selection - or later at runtime from the
+// probes modal - gets the same sampling / aggregate-only treatment as one
+// attached through the startup flags.
+func applyProbeSelection(cfg *flags.Config, syscalls []string) {
+	if syscalls == nil {
+		return
+	}
+	cfg.TracepointSelector = tracepoints.SelectorForSyscalls(syscalls)
 }
 
 func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filter) {
