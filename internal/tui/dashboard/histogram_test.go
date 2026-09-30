@@ -61,19 +61,25 @@ func TestRenderLatencyAndGapsTabIncludeSparkline(t *testing.T) {
 	}
 }
 
-func TestRenderHistogramTruncatesForSmallHeight(t *testing.T) {
+func TestRenderHistogramFoldsForSmallHeight(t *testing.T) {
 	hist := statsengine.NewHistogramSnapshot(3, []statsengine.HistogramBucketSnapshot{
 		{Label: "[0,1us)", Count: 1},
 		{Label: "[1us,10us)", Count: 1},
 		{Label: "[10us,100us)", Count: 1},
 	})
 
+	// A one-bucket-row panel cannot show three buckets: they fold into one
+	// "[0,+inf)" row that still accounts for all 3 events instead of cutting
+	// the slow ones off.
 	out := renderHistogram(hist, "Latency Histogram", 100, 3)
-	if !strings.Contains(out, "[0,1us)") {
-		t.Fatalf("expected first bucket in output: %q", out)
+	if !strings.Contains(out, "[0,+inf)") {
+		t.Fatalf("expected the folded row in output: %q", out)
 	}
-	if strings.Contains(out, "[1us,10us)") || strings.Contains(out, "[10us,100us)") {
-		t.Fatalf("expected histogram rows to be truncated for small height: %q", out)
+	if strings.Contains(out, "[0,1us)") || strings.Contains(out, "[1us,10us)") || strings.Contains(out, "[10us,100us)") {
+		t.Fatalf("expected the buckets to be folded for small height: %q", out)
+	}
+	if !strings.Contains(out, " 3 ") {
+		t.Fatalf("expected the folded row to carry all 3 events: %q", out)
 	}
 }
 

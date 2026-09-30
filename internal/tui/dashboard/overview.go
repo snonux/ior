@@ -28,20 +28,38 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 		width = 80
 	}
 
-	boxWidth := summaryBoxWidth(width)
-	row := lipgloss.JoinHorizontal(lipgloss.Top,
-		renderSyscallBox(snap, boxWidth),
-		renderBytesBox(snap, boxWidth),
-		renderErrorBox(snap, boxWidth),
-	)
 	panel := theme.PanelStyle.Width(panelWidth(width))
-	return fitBlocks([]string{
-		row,
-		theme.HighlightStyle.Render(overviewTrendsLine(snap)),
+	blocks := append(summaryBoxBlocks(snap, width),
+		// The trend line does not wrap, so it is cut to the terminal width.
+		theme.HighlightStyle.MaxWidth(width).Render(overviewTrendsLine(snap)),
 		panel.Render(overviewSparklineLines(snap, panelInnerWidth(width))),
 		panel.Render(overviewTopLines(snap)),
 		panel.Render(overviewHistogramLines(snap)),
-	}, height)
+	)
+	return fitBlocks(blocks, height)
+}
+
+// summaryBoxBlocks renders the three summary boxes (syscalls, bytes, errors).
+// Side by side they need three minimum-width boxes; on a terminal narrower than
+// that the row would be wider than the screen and a real terminal would
+// soft-wrap it, breaking the height guarantee, so the boxes are stacked as
+// three full-width blocks instead (fitBlocks then sheds whole boxes by
+// priority when the height is short too).
+func summaryBoxBlocks(snap *statsengine.Snapshot, width int) []string {
+	if width < 3*minSummaryBoxWidth {
+		boxWidth := panelWidth(width)
+		return []string{
+			renderSyscallBox(snap, boxWidth),
+			renderBytesBox(snap, boxWidth),
+			renderErrorBox(snap, boxWidth),
+		}
+	}
+	boxWidth := summaryBoxWidth(width)
+	return []string{lipgloss.JoinHorizontal(lipgloss.Top,
+		renderSyscallBox(snap, boxWidth),
+		renderBytesBox(snap, boxWidth),
+		renderErrorBox(snap, boxWidth),
+	)}
 }
 
 // overviewTrendsLine summarises the latency/gap/throughput trend arrows.
@@ -224,15 +242,15 @@ func formatBytes(value float64) string {
 	return fmt.Sprintf("%.1f%s", value, units[unit])
 }
 
+// minSummaryBoxWidth is the narrowest a summary box may get before its longest
+// line ("Latency mean: ...ns") would wrap.
+const minSummaryBoxWidth = 18
+
 func summaryBoxWidth(width int) int {
 	if width <= 0 {
 		return 24
 	}
-	w := width / 3
-	if w < 18 {
-		return 18
-	}
-	return w
+	return max(width/3, minSummaryBoxWidth)
 }
 
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
