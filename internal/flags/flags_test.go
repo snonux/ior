@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ior/internal/collapse"
+	appconfig "ior/internal/config"
 	"ior/internal/textsafe"
 )
 
@@ -504,6 +505,46 @@ func TestParsePositiveMapSizeAccepted(t *testing.T) {
 	}
 	if cfg.EventMapSize != 8192 {
 		t.Fatalf("EventMapSize = %d, want 8192", cfg.EventMapSize)
+	}
+}
+
+func TestParseDefaultMapSizeIsTheSharedDefault(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.EventMapSize != appconfig.DefaultEventMapSize {
+		t.Fatalf("EventMapSize = %d, want %d", cfg.EventMapSize, appconfig.DefaultEventMapSize)
+	}
+	// The old 64 KiB default lost events on bursty loads; guard against a
+	// regression to a size that small.
+	if cfg.EventMapSize < 1<<20 {
+		t.Fatalf("default EventMapSize = %d, want at least 1 MiB", cfg.EventMapSize)
+	}
+}
+
+func TestParseMapSizeNotPowerOfTwoAccepted(t *testing.T) {
+	// libbpf rounds ring-buffer sizes up, so a plain byte count is fine.
+	cfg, err := parseForTest(t, "-mapSize", "100000")
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.EventMapSize != 100000 {
+		t.Fatalf("EventMapSize = %d, want 100000", cfg.EventMapSize)
+	}
+}
+
+func TestParseMapSizeAboveUint32PowerOfTwoReturnsError(t *testing.T) {
+	// 4 GiB would wrap to 0 in the uint32 cast; 2 GiB is the largest valid.
+	if _, err := parseForTest(t, "-mapSize", "2147483648"); err != nil {
+		t.Fatalf("2 GiB should be accepted: %v", err)
+	}
+	_, err := parseForTest(t, "-mapSize", "4294967296")
+	if err == nil {
+		t.Fatalf("expected parse error for mapSize above 2 GiB")
+	}
+	if !strings.Contains(err.Error(), "invalid mapSize") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -8,8 +8,10 @@ import (
 	"sync"
 	"testing"
 
+	bpf "github.com/aquasecurity/libbpfgo"
 	"golang.org/x/sys/unix"
 
+	"ior/internal/config"
 	"ior/internal/flags"
 )
 
@@ -120,5 +122,97 @@ func TestProcTgidOfSiblingThread(t *testing.T) {
 	}
 	if got != os.Getpid() {
 		t.Fatalf("procTgid(%d) = %d, want %d", sibling, got, os.Getpid())
+	}
+}
+
+// TestRingbufMapSize pins the mirror of libbpf's adjust_ringbuf_sz(): the
+// kernel wants a power-of-two multiple of the page size, libbpf rounds any
+// other request up to the next such size, and a request that cannot be
+// rounded inside uint32 must be an error rather than libbpf's silent 0.
+func TestRingbufMapSize(t *testing.T) {
+	const page = 4096
+	for _, tc := range []struct {
+		name      string
+		requested uint32
+		want      uint32
+		wantErr   bool
+	}{
+		{"one page passes through", page, page, false},
+		{"legacy 64KiB default passes through", 65536, 65536, false},
+		{"16MiB default passes through", 1 << 24, 1 << 24, false},
+		{"largest uint32 power of two passes through", 1 << 31, 1 << 31, false},
+		{"below a page rounds up to a page", 100, page, false},
+		{"just above a page rounds to two pages", page + 1, 2 * page, false},
+		{"three pages round to four", 3 * page, 4 * page, false},
+		{"non power of two rounds up", 100000, 131072, false},
+		{"just below a power of two rounds up to it", (1 << 24) - 1, 1 << 24, false},
+		{"above 2GiB cannot be represented", 1<<31 + 1, 0, true},
+		{"zero is rejected", 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ringbufMapSize(tc.requested, page)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ringbufMapSize(%d) error = %v, wantErr %v", tc.requested, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("ringbufMapSize(%d) = %d, want %d", tc.requested, got, tc.want)
+			}
+		})
+	}
+	if _, err := ringbufMapSize(4096, 0); err == nil {
+		t.Fatal("a zero page size must be rejected instead of dividing by it")
+	}
+}
+
+// TestResizeBPFMapsAgainstRealObject drives resizeBPFMaps against the real
+// embedded BPF object with the real libbpf, without loading it (opening and
+// resizing need no privileges). It pins the two things a unit test of
+// ringbufMapSize cannot: that the shipped default really reaches event_map,
+// and that a -mapSize which is not a valid ring-buffer size is accepted (libbpf
+// rounds it) instead of failing the post-resize check with "actual size is X".
+func TestResizeBPFMapsAgainstRealObject(t *testing.T) {
+	page := uint32(os.Getpagesize())
+	for _, tc := range []struct {
+		name string
+		size int
+		// exact is the expected max_entries when the request is already a
+		// valid ring-buffer size; 0 means "libbpf must round it up".
+		exact uint32
+	}{
+		{"default", config.DefaultEventMapSize, config.DefaultEventMapSize},
+		{"legacy 64KiB", 65536, 65536},
+		{"not a power of two", 100000, 0},
+		{"smaller than a page", 100, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use the embedded object directly: tests elsewhere stub the loader vars.
+			mod, err := bpf.NewModuleFromBuffer(embeddedBPFObject, embeddedBPFObjectName)
+			if err != nil {
+				t.Skipf("cannot open BPF object: %v", err)
+			}
+			defer mod.Close()
+			if err := resizeBPFMaps(flags.Config{EventMapSize: tc.size}, mod); err != nil {
+				t.Fatalf("resizeBPFMaps(%d) = %v", tc.size, err)
+			}
+			m, err := mod.GetMap("event_map")
+			if err != nil {
+				t.Fatalf("GetMap: %v", err)
+			}
+			got := m.MaxEntries()
+			if tc.exact != 0 {
+				if got != tc.exact {
+					t.Fatalf("event_map max_entries = %d, want %d", got, tc.exact)
+				}
+				return
+			}
+			// Rounded: a power-of-two multiple of the page size that covers
+			// the request without more than doubling it.
+			if got < uint32(tc.size) || got%page != 0 || !isPowerOfTwo(got/page) {
+				t.Fatalf("event_map max_entries = %d for request %d: not a page-multiple power of two covering it", got, tc.size)
+			}
+			if got > 2*uint32(tc.size) && got > page {
+				t.Fatalf("event_map max_entries = %d for request %d: rounded up by more than 2x", got, tc.size)
+			}
+		})
 	}
 }

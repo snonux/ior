@@ -236,7 +236,7 @@ func syscallFamilyNames() []string {
 func registerFilterFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
 	fs.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
-	fs.IntVar(&cfg.EventMapSize, "mapSize", cfg.EventMapSize, "BPF FD event ring buffer map size")
+	fs.IntVar(&cfg.EventMapSize, "mapSize", cfg.EventMapSize, "BPF event ring buffer size in bytes (non-swappable kernel memory; libbpf rounds it up to a power-of-two multiple of the page size; larger absorbs consumer stalls without dropping events)")
 	fs.IntVar(&cfg.Duration, "duration", cfg.Duration, "Probe duration in seconds")
 
 	fs.StringVar(&cfg.CommFilter, "comm", "", "Command to filter for")
@@ -362,6 +362,11 @@ func resolveSamplingRates(cfg *Config, familySampling, syscallSampling *string) 
 	return nil
 }
 
+// maxEventMapSize is the largest -mapSize (bytes) accepted: 2 GiB, the
+// biggest power of two that fits the uint32 max_entries of a BPF map, so
+// libbpf's round-up in bpf_map__set_max_entries can never overflow.
+const maxEventMapSize int64 = 1 << 31
+
 // maxDurationSeconds is the largest -duration (in seconds) that still fits in
 // a time.Duration (int64 nanoseconds), roughly 292 years. It is typed int64
 // so the constant also compiles where int is 32 bits wide.
@@ -388,9 +393,12 @@ func validateConfig(cfg Config) error {
 	}
 	// A non-positive mapSize would wrap to a huge uint32 when cast in
 	// resizeBPFMaps, causing libbpf to fail with a confusing "map too large"
-	// error. Reject it here with a clear diagnostic instead.
-	if cfg.EventMapSize <= 0 {
-		return fmt.Errorf("invalid mapSize: %d (must be > 0)", cfg.EventMapSize)
+	// error. Reject it here with a clear diagnostic instead. The upper bound
+	// is the largest power of two a uint32 holds (the biggest ring buffer
+	// libbpf can round up to); anything above would wrap in the same cast.
+	if cfg.EventMapSize <= 0 || int64(cfg.EventMapSize) > maxEventMapSize {
+		return fmt.Errorf("invalid mapSize: %d (must be between 1 and %d bytes)",
+			cfg.EventMapSize, maxEventMapSize)
 	}
 	// A -pid/-tid of 0 matches only the idle task, and any negative value
 	// other than the -1 "no filter" sentinel wraps to a huge uint32 BPF

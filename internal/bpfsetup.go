@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -95,25 +96,65 @@ func parseStatusTgid(r io.Reader) (int, error) {
 	return 0, fmt.Errorf("no Tgid field in status")
 }
 
+// resizeBPFMaps applies the user-visible size knobs to the loaded-but-not-yet-
+// attached BPF object. Only event_map is resizable: it is a ring buffer, so
+// its size is in bytes (not entries) and libbpf rounds the request up to a
+// power-of-two multiple of the page size (see ringbufMapSize).
 func resizeBPFMaps(cfg flags.Config, bpfModule *bpf.Module) error {
+	requested := uint32(cfg.EventMapSize)
+	want, err := ringbufMapSize(requested, uint32(os.Getpagesize()))
+	if err != nil {
+		return fmt.Errorf("resize map event_map to %d: %w", requested, err)
+	}
 	// resizeBPFMap already includes the map name in any error it returns,
 	// so no additional wrapping is needed here.
-	return resizeBPFMap(bpfModule, "event_map", uint32(cfg.EventMapSize))
+	return resizeBPFMap(bpfModule, "event_map", requested, want)
 }
 
-func resizeBPFMap(module *bpf.Module, name string, size uint32) error {
+// ringbufMapSize mirrors libbpf's adjust_ringbuf_sz(): the kernel requires a
+// BPF_MAP_TYPE_RINGBUF's max_entries to be a power-of-two multiple of the page
+// size, so bpf_map__set_max_entries() silently replaces any other value with
+// the smallest page_size*2^n strictly greater than the request. Exact
+// matches pass through unchanged. It returns the size the map will really
+// have, so the post-resize sanity check compares against that rather than
+// rejecting every -mapSize that is not already a valid ring-buffer size. A
+// request too large to round up inside uint32 is an error (libbpf would hand
+// back 0 there).
+func ringbufMapSize(requested, pageSize uint32) (uint32, error) {
+	if requested == 0 || pageSize == 0 {
+		return 0, fmt.Errorf("invalid ring buffer size %d (page size %d)", requested, pageSize)
+	}
+	if requested%pageSize == 0 && isPowerOfTwo(requested/pageSize) {
+		return requested, nil
+	}
+	for mul := uint32(1); mul <= math.MaxUint32/pageSize; mul <<= 1 {
+		if mul*pageSize > requested {
+			return mul * pageSize, nil
+		}
+	}
+	return 0, fmt.Errorf("ring buffer size %d is too large to round up to a power-of-two multiple of the %d byte page size", requested, pageSize)
+}
+
+func isPowerOfTwo(n uint32) bool {
+	return n != 0 && n&(n-1) == 0
+}
+
+// resizeBPFMap sets the map's max_entries to requested and verifies libbpf
+// took it as want. want equals requested for plain maps; for a ring buffer it
+// is the page-rounded size (see ringbufMapSize).
+func resizeBPFMap(module *bpf.Module, name string, requested, want uint32) error {
 	m, err := module.GetMap(name)
 	if err != nil {
 		// Wrap with map name so callers know which map lookup failed.
 		return fmt.Errorf("resize map %s: get map: %w", name, err)
 	}
-	if err = m.SetMaxEntries(size); err != nil {
+	if err = m.SetMaxEntries(requested); err != nil {
 		// Wrap with map name and target size so callers know which map failed
 		// and what size was requested.
-		return fmt.Errorf("resize map %s to %d: %w", name, size, err)
+		return fmt.Errorf("resize map %s to %d: %w", name, requested, err)
 	}
-	if actual := m.MaxEntries(); actual != size {
-		return fmt.Errorf("resize map %s to %d failed: actual size is %d", name, size, actual)
+	if actual := m.MaxEntries(); actual != want {
+		return fmt.Errorf("resize map %s to %d failed: actual size is %d, expected %d", name, requested, actual, want)
 	}
 	return nil
 }

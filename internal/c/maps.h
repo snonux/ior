@@ -1,5 +1,11 @@
 //+build ignore
 
+// event_map is the ring buffer carrying every event to userspace. max_entries
+// is its size in BYTES and must stay equal to config.DefaultEventMapSize
+// (internal/config/buffers.go, pinned by TestDefaultEventMapSizeMatchesMapsH):
+// userspace overrides it at load time from -mapSize (resizeBPFMaps), and the
+// default is 16 MiB because a smaller buffer drops events whenever the consumer
+// pauses for more than a fraction of a millisecond under load.
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 1 << 24);
