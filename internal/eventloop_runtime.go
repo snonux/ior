@@ -22,19 +22,30 @@ func logStatus(args ...any) {
 
 func (e *eventLoop) run(ctx context.Context, rawCh <-chan []byte) {
 	defer close(e.done)
-	// Registered after close(e.done), so it runs first: buffered -plain rows
-	// reach stdout before stats() is unblocked and before the process exits.
-	defer e.flushOutput()
 	defer e.shutdownCommResolver()
 	stopAggregateLoop := e.startAggregateDrainLoop(ctx)
 	defer stopAggregateLoop()
 	stopDropMonitor := e.startRingbufDropMonitor(ctx)
 	defer stopDropMonitor()
+	// Registered last so it runs first (defers are LIFO): buffered -plain rows
+	// reach stdout before the drop monitor, the aggregate drainer and the comm
+	// resolver are stopped (their final drain can take a moment) and before
+	// close(e.done) unblocks stats(). Only this goroutine feeds the sink
+	// (drainPairs), so none of those stoppers can race with the flush. It must
+	// stay a defer: a panic that unwinds through run then still writes the rows
+	// buffered before it (TestPlainSinkPanicFlushesEarlierRows). An exit that
+	// skips defers altogether - a crash in another goroutine, SIGHUP, SIGQUIT -
+	// loses the still-buffered rows; see the plainSink doc.
+	defer e.flushOutput()
 
 	if e.cfg.pprofEnable {
 		e.notifyStatus("Profiling, press Ctrl+C to stop")
 	}
 	if e.cfg.plainMode && !e.cfg.pprofEnable {
+		// Written straight to stdout, not through the buffered sink: it is
+		// safe only because no row can be buffered yet (the event loop has not
+		// started), so it always precedes the first row. Do not move it after
+		// processRawEvents starts (TestPlainRunHeaderPrecedesRows).
 		fmt.Println(event.EventStreamHeader)
 	}
 	e.flushPendingWarnings()

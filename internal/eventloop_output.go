@@ -51,10 +51,13 @@ type outputFormatter struct {
 // off to another owner. This is the production wiring seam for the mode
 // packages (plain output, TUI ingest, parquet/flamegraph recorders).
 //
-// It also drops the default -plain sink's flusher: that sink is no longer
-// fed, so there is nothing left for the loop to flush. A wrapper that still
-// feeds the previous callback must use WrapPrintCallback instead, which keeps
-// the flusher.
+// It also drops the default -plain sink's flusher, because it replaces the
+// callback outright: that sink is no longer fed, so there is nothing left for
+// the loop to flush. Use it for a callback that wraps but does NOT feed the
+// previous callback/sink (TUI ingest, recorders). A wrapper that still feeds
+// the previous callback must use WrapPrintCallback instead, which keeps the
+// flusher; using SetPrintCallback there would leave the sink fed but never
+// flushed on the timer or at shutdown.
 func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
 	e.printCb = cb
 	e.flusher = nil

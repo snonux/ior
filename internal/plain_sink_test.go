@@ -53,6 +53,17 @@ func (w *recordingWriter) snapshot() (writes int, out string) {
 	return len(w.writes), strings.Join(w.writes, "")
 }
 
+// sizes returns the byte count of every Write so far, in order.
+func (w *recordingWriter) sizes() []int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	sizes := make([]int, len(w.writes))
+	for i, chunk := range w.writes {
+		sizes[i] = len(chunk)
+	}
+	return sizes
+}
+
 // plainTestPair is a small clean pair (no hostile bytes).
 func plainTestPair(pid uint32) *event.Pair {
 	pair := event.NewPair(&types.OpenEvent{TraceId: types.SYS_ENTER_OPENAT, Pid: pid, Tid: pid})
@@ -83,21 +94,32 @@ func TestPlainSinkBatchesWrites(t *testing.T) {
 		t.Fatalf("after Flush: %d writes, out %q, pending %v", n, out, sink.Pending())
 	}
 
-	// Enough rows to cross the threshold: far fewer writes than rows.
-	rows := 3 * plainFlushBytes / len(want.String())
+	// Enough rows to cross the threshold several times. The writes seen
+	// BEFORE the final Flush can only come from the size threshold in Print
+	// (nothing else flushes here), so they must number about
+	// bytes/plainFlushBytes, and each must carry at least plainFlushBytes.
+	rowLen := len(want.String())
+	rows := 4 * plainFlushBytes / rowLen
+	writesBefore, _ := w.snapshot()
 	for i := 0; i < rows; i++ {
 		sink.Print(plainTestPair(1))
 		want.WriteString("00000009,00000007,dd,1.1,openat,3,\"/tmp/x%(3,O_RDONLY)\"\n")
 	}
+	threshold := rows*rowLen/plainFlushBytes - 1 // -1: the last partial chunk stays buffered
+	n0, _ := w.snapshot()
+	if got := n0 - writesBefore; got < threshold || got > rows/10 {
+		t.Fatalf("%d rows caused %d threshold writes before Flush, want at least %d (and far fewer than rows)", rows, got, threshold)
+	}
+	for i, size := range w.sizes()[writesBefore:] {
+		if size < plainFlushBytes {
+			t.Fatalf("threshold write %d carried %d bytes, want at least plainFlushBytes (%d)", i, size, plainFlushBytes)
+		}
+	}
 	if err := sink.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	n, out := w.snapshot()
-	if out != want.String() {
+	if _, out := w.snapshot(); out != want.String() {
 		t.Fatalf("output differs from the expected rows (%d bytes vs %d)", len(out), want.Len())
-	}
-	if n < 2 || n > rows/10 {
-		t.Fatalf("%d rows took %d writes, want batching (a few writes, more than one)", rows, n)
 	}
 }
 
@@ -270,7 +292,10 @@ func TestWrapPrintCallbackKeepsFlusher(t *testing.T) {
 
 // swapStdoutPipe replaces os.Stdout with the write end of a real pipe (a
 // non-terminal, so the -plain sink buffers) for the rest of the test and
-// returns both ends. The caller closes the write end before reading to EOF.
+// returns both ends. The caller closes the write end (the returned w, never
+// os.Stdout, which may already be restored) before reading to EOF. Cleanup
+// restores os.Stdout first, then closes each end that is still open; an end the
+// test already closed is not an error.
 func swapStdoutPipe(t *testing.T) (r, w *os.File) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -281,8 +306,11 @@ func swapStdoutPipe(t *testing.T) (r, w *os.File) {
 	os.Stdout = w
 	t.Cleanup(func() {
 		os.Stdout = old
-		_ = w.Close()
-		_ = r.Close()
+		for _, end := range []*os.File{w, r} {
+			if err := end.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+				t.Errorf("closing pipe end: %v", err)
+			}
+		}
 	})
 	return r, w
 }
@@ -304,9 +332,9 @@ func readAll(t *testing.T, r *os.File) string {
 // run: the default event loop (buffered stdout sink), a probe manager with
 // openat active, and a raw channel the test feeds. os.Stdout is a real pipe,
 // so a row visible on the read end has really gone through write(2).
-func plainTraceInfra(t *testing.T) (infra *traceInfra, rawCh chan []byte, pipeR *os.File) {
+func plainTraceInfra(t *testing.T) (infra *traceInfra, rawCh chan []byte, pipeR, pipeW *os.File) {
 	t.Helper()
-	pipeR, _ = swapStdoutPipe(t)
+	pipeR, pipeW = swapStdoutPipe(t)
 	el := mustNewEventLoop(t, eventLoopConfig{plainMode: true, commResolver: newHermeticCommResolver()})
 	t.Cleanup(el.commResolver.shutdown)
 
@@ -322,7 +350,7 @@ func plainTraceInfra(t *testing.T) (infra *traceInfra, rawCh chan []byte, pipeR 
 		t.Fatal(err)
 	}
 	rawCh = make(chan []byte)
-	return &traceInfra{ch: rawCh, ctx: ctx, cancel: cancel, profiling: profiling, el: el, mgr: mgr}, rawCh, pipeR
+	return &traceInfra{ch: rawCh, ctx: ctx, cancel: cancel, profiling: profiling, el: el, mgr: mgr}, rawCh, pipeR, pipeW
 }
 
 // runTraceLoopAsync runs runTraceLoop with configure == nil, the -plain
@@ -344,88 +372,172 @@ func runTraceLoopAsync(t *testing.T, infra *traceInfra) (stop func()) {
 	}
 }
 
+// readPipeFor reads whatever reaches r within d and returns it; a timeout is
+// not an error, it just ends the read (pipes support read deadlines).
+func readPipeFor(t *testing.T, r *os.File, d time.Duration) string {
+	t.Helper()
+	if err := r.SetReadDeadline(time.Now().Add(d)); err != nil {
+		t.Fatal(err)
+	}
+	// Clear the deadline so a later blocking read (readAll) is not cut short.
+	defer func() { _ = r.SetReadDeadline(time.Time{}) }()
+	var sb strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		sb.Write(buf[:n])
+		if err != nil {
+			return sb.String()
+		}
+	}
+}
+
 // TestPlainRunTimerFlushThroughTraceWiring is the end-to-end -plain check the
 // hand-wired loop tests missed: through runTraceLoop and
-// configureEventLoopOutput (the active-probe wrapper) a lone row must show up
-// on a real pipe within about plainFlushInterval, far below plainFlushBytes,
-// while the loop keeps running. The interval is stretched to 200ms so that a
-// row-per-write regression cannot pass for a timer flush either.
+// configureEventLoopOutput (the active-probe wrapper) a lone row, far below
+// plainFlushBytes, must show up on a real pipe while the loop keeps running.
+// Only the timer can put it there, so the wait has a generous deadline: the
+// assertion is that it arrives, not how fast, which a stalled host could
+// otherwise turn into a flaky failure. That the timer (and not the row)
+// controls the write is proved without timing by
+// TestPlainRunShutdownFlushThroughTraceWiring, where an hour-long interval
+// keeps the same row off the pipe until shutdown.
 func TestPlainRunTimerFlushThroughTraceWiring(t *testing.T) {
 	old := plainFlushInterval
-	plainFlushInterval = 200 * time.Millisecond
+	plainFlushInterval = 50 * time.Millisecond
 	t.Cleanup(func() { plainFlushInterval = old })
 
-	infra, rawCh, pipeR := plainTraceInfra(t)
+	infra, rawCh, pipeR, _ := plainTraceInfra(t)
 	stop := runTraceLoopAsync(t, infra)
 	defer stop()
 
-	start := time.Now()
 	sendOpenPair(t, rawCh, defaulTime)
 
-	rowCh := make(chan string, 1)
-	go func() {
-		line := make([]byte, 0, 256)
-		b := make([]byte, 1)
-		for {
-			if _, err := pipeR.Read(b); err != nil {
-				return
-			}
-			line = append(line, b[0])
-			// The header line is written directly by run; the row is the
-			// second line.
-			if b[0] == '\n' && strings.Count(string(line), "\n") == 2 {
-				rowCh <- string(line)
-				return
-			}
+	deadline := time.Now().Add(10 * time.Second)
+	var got string
+	for !strings.Contains(got, ",openat,") {
+		if time.Now().After(deadline) {
+			t.Fatalf("buffered row never reached the pipe (got %q): the flush timer is not active behind runTraceLoop", got)
 		}
-	}()
-	select {
-	case got := <-rowCh:
-		if elapsed := time.Since(start); elapsed < plainFlushInterval/2 {
-			t.Fatalf("row arrived after %v, before the flush timer could have fired: not batched", elapsed)
-		}
-		if !strings.Contains(got, ",openat,") {
-			t.Fatalf("got %q, want the openat row", got)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("buffered row never reached the pipe: the flush timer is not active behind runTraceLoop")
+		got += readPipeFor(t, pipeR, 100*time.Millisecond)
+	}
+	if rows := strings.Count(got, ",openat,"); rows != 1 {
+		t.Fatalf("got %q, want exactly the one openat row", got)
 	}
 }
 
 // TestPlainRunShutdownFlushThroughTraceWiring: with the timer stretched to an
 // hour, the rows can only leave through the flush on the loop's exit path,
-// which requires configureEventLoopOutput to have kept the flusher.
+// which requires configureEventLoopOutput to have kept the flusher. It also
+// shows they were still buffered while the loop ran, so the flush is not
+// per-row.
 func TestPlainRunShutdownFlushThroughTraceWiring(t *testing.T) {
 	old := plainFlushInterval
 	plainFlushInterval = time.Hour
 	t.Cleanup(func() { plainFlushInterval = old })
 
-	infra, rawCh, pipeR := plainTraceInfra(t)
+	infra, rawCh, pipeR, pipeW := plainTraceInfra(t)
 	stop := runTraceLoopAsync(t, infra)
 	sendOpenPair(t, rawCh, defaulTime)
+	// The loop took the enter record of this second pair, so it has emitted
+	// (buffered) the first row by now.
 	sendOpenPair(t, rawCh, defaulTime+1000)
+	if early := readPipeFor(t, pipeR, 100*time.Millisecond); strings.Contains(early, ",openat,") {
+		t.Fatalf("rows reached the pipe before shutdown although the timer is an hour: %q", early)
+	}
 	stop()
 
 	// runTraceLoop has returned, so the loop has flushed; close the write end
-	// (os.Stdout) and read what really went through the pipe.
-	_ = os.Stdout.Close()
+	// and read what really went through the pipe.
+	_ = pipeW.Close()
 	out := readAll(t, pipeR)
 	if rows := strings.Count(out, ",openat,"); rows != 2 {
 		t.Fatalf("pipe holds %q, want both rows flushed at shutdown", out)
 	}
 }
 
+// TestPlainRunHeaderPrecedesRows: run writes the CSV header straight to stdout,
+// bypassing the buffered sink, so it must be the first line on the pipe, ahead
+// of every row, and appear once.
+func TestPlainRunHeaderPrecedesRows(t *testing.T) {
+	infra, rawCh, pipeR, pipeW := plainTraceInfra(t)
+	stop := runTraceLoopAsync(t, infra)
+	sendOpenPair(t, rawCh, defaulTime)
+	sendOpenPair(t, rawCh, defaulTime+1000)
+	stop()
+	_ = pipeW.Close()
+	out := readAll(t, pipeR)
+	if !strings.HasPrefix(out, event.EventStreamHeader+"\n") {
+		t.Fatalf("output %q does not start with the header line", out)
+	}
+	if n := strings.Count(out, event.EventStreamHeader); n != 1 {
+		t.Fatalf("header appears %d times in %q, want once", n, out)
+	}
+	if rows := strings.Count(out, ",openat,"); rows != 2 {
+		t.Fatalf("output %q holds %d rows, want 2", out, rows)
+	}
+}
+
 // TestPlainRunActiveProbeFilterStillApplies: the wrapper that keeps the
 // flusher must still drop pairs of inactive probes.
 func TestPlainRunActiveProbeFilterStillApplies(t *testing.T) {
-	infra, rawCh, pipeR := plainTraceInfra(t)
+	infra, rawCh, pipeR, pipeW := plainTraceInfra(t)
 	infra.mgr = probemanager.NewManager(&fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}})
 	stop := runTraceLoopAsync(t, infra)
 	sendOpenPair(t, rawCh, defaulTime)
 	stop()
-	_ = os.Stdout.Close()
+	_ = pipeW.Close()
 	if out := readAll(t, pipeR); strings.Contains(out, ",openat,") {
 		t.Fatalf("row of an inactive probe was printed: %q", out)
+	}
+}
+
+// TestPlainSinkPanicFlushesEarlierRows: a print callback that panics after
+// rows were buffered must not take them down with the process. The panic
+// unwinds through run (drainPairs does not recover), and the flush is a defer,
+// so the earlier rows still reach the writer. The interval is an hour, so
+// neither the timer nor the size threshold can be what flushed them.
+func TestPlainSinkPanicFlushesEarlierRows(t *testing.T) {
+	old := plainFlushInterval
+	plainFlushInterval = time.Hour
+	t.Cleanup(func() { plainFlushInterval = old })
+
+	w := &recordingWriter{}
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
+	t.Cleanup(el.commResolver.shutdown)
+	sink := newPlainSink(w, textsafe.EscapeNever)
+	rows := 0
+	el.printCb, el.flusher = func(ep *event.Pair) {
+		if rows == 2 {
+			ep.Recycle()
+			panic("printCb boom")
+		}
+		rows++
+		sink.Print(ep)
+	}, sink
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	rawCh := make(chan []byte)
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		el.run(ctx, rawCh)
+	}()
+	sendOpenPair(t, rawCh, defaulTime)
+	sendOpenPair(t, rawCh, defaulTime+1000)
+	sendOpenPair(t, rawCh, defaulTime+2000) // its exit record makes printCb panic
+
+	select {
+	case r := <-recovered:
+		if r != "printCb boom" {
+			t.Fatalf("run recovered %v, want the printCb panic to unwind through it", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not unwind after the printCb panic")
+	}
+	if _, out := w.snapshot(); strings.Count(out, "\n") != 2 {
+		t.Fatalf("output after the panic = %q, want the two rows buffered before it", out)
 	}
 }
 

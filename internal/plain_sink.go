@@ -47,6 +47,14 @@ type pairFlusher interface {
 // buffer is written when it reaches plainFlushBytes, by the event loop within
 // plainFlushInterval of the first buffered row, and when the loop stops.
 //
+// Accepted trade-off: buffering means rows can be lost on an exit that does not
+// run the event loop's defers. The flush on loop stop covers a normal exit,
+// ctx cancellation (SIGINT/SIGTERM) and even a panic unwinding through run, but
+// not a crash in another goroutine, SIGHUP, SIGQUIT or SIGKILL: up to
+// plainFlushInterval of rows, or plainFlushBytes, are then lost, where the old
+// row-per-write writer lost nothing. That is the price of the ~2x throughput,
+// and a process dying that way is already not producing a complete trace.
+//
 // A plainSink is used from the event-loop goroutine only and needs no lock.
 type plainSink struct {
 	w           io.Writer
@@ -58,7 +66,8 @@ type plainSink struct {
 	// a transient failure loses only the affected rows; Err lets the caller
 	// surface it. A partial write (n < len, err != nil) drops the whole
 	// buffer too, including the n bytes that did get out: the unwritten tail
-	// is not retried, because a retry could duplicate or tear a row.
+	// is not retried, because a retry could duplicate or tear a row. Err is
+	// what the -plain write-error task (tr2) consumes to report lost rows.
 	err error
 }
 
