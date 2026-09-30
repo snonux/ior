@@ -7,6 +7,9 @@ import (
 
 // Recorder aggregates event pairs and writes them to the legacy .ior.zst format.
 // Integration tests still use this artifact to assert trace output end-to-end.
+// It holds at most DefaultMaxRecordKeys distinct records in memory; events of
+// further new keys are folded into "[other]" records with exact totals and
+// reported on stderr (recordcap.go, task uq2).
 type Recorder struct {
 	name string
 	// layout is the time.Format layout of the timestamp in the output name;
@@ -17,10 +20,12 @@ type Recorder struct {
 
 // NewRecorder creates a recorder for one trace run.
 func NewRecorder(name string) *Recorder {
+	data := newIorData()
+	data.maxKeys = DefaultMaxRecordKeys // bound the memory of long, churny runs (task uq2)
 	return &Recorder{
 		name:   name,
 		layout: timestampLayout,
-		data:   newIorData(),
+		data:   data,
 	}
 }
 
@@ -29,7 +34,12 @@ func (r *Recorder) AddPair(pair *event.Pair) {
 	if r == nil || pair == nil {
 		return
 	}
+	before := r.data.foldedEvents
 	r.data.addEventPair(pair)
+	if before == 0 && r.data.foldedEvents > 0 {
+		// First fold: warn now, not at Write, which may be 900s away.
+		r.announceFold(statusOut)
+	}
 }
 
 // SetSampling records the run's sampling outcome, which Write stores in the
@@ -49,5 +59,9 @@ func (r *Recorder) Write() error {
 	if r == nil {
 		return nil
 	}
-	return r.data.serializeToFile(r.name, r.layout)
+	if err := r.data.serializeToFile(r.name, r.layout); err != nil {
+		return err
+	}
+	r.reportFolds(statusOut)
+	return nil
 }

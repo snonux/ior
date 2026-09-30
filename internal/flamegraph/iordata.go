@@ -68,6 +68,12 @@ type iorData struct {
 	// sampled has fewer records than invocations; this says which syscalls
 	// and how many there really were. Persisted in the header (iorformat.go).
 	sampling sampling.Summary
+	// maxKeys caps len(records): once reached, a new key is folded into its
+	// overflow key (recordcap.go). Zero means unbounded, which is what data
+	// loaded from disk and test fixtures use; NewRecorder sets the cap.
+	maxKeys int
+	// foldedEvents counts the events (Counter.Count) that were folded.
+	foldedEvents uint64
 }
 
 func newIorData() iorData {
@@ -125,6 +131,12 @@ func (iod *iorData) add(path pathType, traceId traceIdType, comm commType,
 		Flags:   flags,
 	}
 	cnt, ok := iod.records[key]
+	if !ok && iod.full() {
+		// At the cap a new key is redirected to its overflow key, which may
+		// or may not exist yet; existing keys above keep aggregating exactly.
+		key = iod.fold(key, addCnt)
+		cnt, ok = iod.records[key]
+	}
 	if !ok {
 		iod.records[key] = addCnt
 		return
