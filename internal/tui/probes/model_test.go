@@ -290,3 +290,42 @@ func TestBracketedPasteWithoutSearchLineIsIgnored(t *testing.T) {
 			cmd != nil, m.TextInputFocused(), m.search, m.Visible(), fm.toggles, fm.changes)
 	}
 }
+
+// A session change rebinds an open modal; an error or refusal shown for the
+// old session (a failed toggle, BulkBusyNotice) must not linger against the new
+// one, while the cursor and the info line survive.
+func TestRebindClearsStaleErrorKeepsInfoAndCursor(t *testing.T) {
+	old := &fakeManager{states: []probemanager.ProbeState{{Syscall: "a"}, {Syscall: "b"}, {Syscall: "c"}}}
+	m := NewModel(old).WithSession(1).SetSize(100, 40).Open()
+	m, _ = m.Update(keyMsg("j"))
+	m.lastInfo = "FS: attached 2 of 2 probes (trace restarted)"
+	m = m.SetError(BulkBusyNotice)
+	if !strings.Contains(m.View(100, 40), "Error:") {
+		t.Fatal("setup: the modal does not show the error")
+	}
+
+	fresh := &fakeManager{states: []probemanager.ProbeState{{Syscall: "a"}, {Syscall: "b"}, {Syscall: "c"}}}
+	m = m.Rebind(fresh, 2)
+	view := m.View(100, 40)
+	if m.lastErr != "" || strings.Contains(view, "Error:") {
+		t.Fatalf("stale error survived the rebind: lastErr=%q", m.lastErr)
+	}
+	if !strings.Contains(view, "trace restarted") {
+		t.Fatalf("the info line was dropped by the rebind:\n%s", view)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 kept", m.cursor)
+	}
+}
+
+// A family batch that finishes after the first rebind reports its outcome in
+// lastInfo; a second rebind (the new manager being published) must keep it.
+func TestRebindKeepsFamilyBatchOutcomeAcrossSecondRebind(t *testing.T) {
+	m := NewModel(familyTestManager()).WithSession(1).SetSize(100, 40).Open()
+	m = m.Rebind(nil, 2)
+	m = m.FinishBatch(FamilyToggledMsg{Family: types.FamilyFS, Attach: true}, "(trace restarted)")
+	m = m.Rebind(familyTestManager(), 2)
+	if !strings.Contains(m.lastInfo, "(trace restarted)") || !strings.Contains(m.View(100, 40), "trace restarted") {
+		t.Fatalf("the family-batch outcome was lost on the second rebind: %q", m.lastInfo)
+	}
+}

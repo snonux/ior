@@ -143,12 +143,18 @@ func (m Model) SetBulkRunning(running bool) Model {
 
 // Rebind points the modal at manager and session, the ones of a trace session
 // that began while the modal was open, and reloads the probe list (empty for a
-// nil manager: the session has not published one yet). Cursor, search and
-// the notice lines are kept. Without it the modal would keep toggling the old
-// session's closed manager with results tagged by an ended session.
+// nil manager: the session has not published one yet). Cursor, search and the
+// info line (lastInfo: a family batch's "trace restarted" outcome, which is
+// shown in the open modal on purpose) are kept. The error line is cleared: an
+// error or refusal (a failed toggle, BulkBusyNotice) was about the old
+// session's manager or walk and would otherwise still be shown against the new
+// session until the next toggle result replaces it. Without the rebind the
+// modal would keep toggling the old session's closed manager with results
+// tagged by an ended session.
 func (m Model) Rebind(manager Manager, session uint64) Model {
 	m.manager = manager
 	m.session = session
+	m.lastErr = ""
 	return m.reload().clampCursor()
 }
 

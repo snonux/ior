@@ -101,9 +101,10 @@ func (m *Model) newProbeModal() probes.Model {
 // rebindProbeModal points an open probes modal at the current trace session
 // and its probe manager (none while the session is still attaching); a modal
 // that is not open is rebuilt by newProbeModal when it opens, so it is left
-// alone. The modal keeps its cursor and its notices (a family batch's
-// "trace restarted" outcome is shown in it), and the guard of a walk is
-// re-derived: a walk of an ended session no longer blocks anything.
+// alone. The modal keeps its cursor and its info line (a family batch's
+// "trace restarted" outcome is shown in it) but drops an error or refusal of
+// the old session, and the guard of a walk is re-derived: a walk of an ended
+// session no longer blocks anything.
 func (m *Model) rebindProbeModal() {
 	if !m.probeModal.Visible() {
 		return
@@ -303,9 +304,9 @@ func allSelection(states []probemanager.ProbeState, active bool) []string {
 // press already. The result of the running walk (and only of that one: a stale
 // result of an earlier session must not release the running walk's guard)
 // ends it and lifts the modal's refusal of single toggles. Either way the
-// dashboard aggregates are reset; the
-// post-reset tick goes through the dashboard's normal stats handling, so a
-// failed snapshot keeps the last good one.
+// dashboard aggregates are reset; the post-reset tick goes through the
+// dashboard's normal stats handling, so a failed snapshot keeps the last good
+// one.
 func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
 	if msg.Syscall == "" && m.bulkRun.active && msg.Session == m.bulkRun.session {
 		// Only the walk's own result ends it: a stale result of an earlier
