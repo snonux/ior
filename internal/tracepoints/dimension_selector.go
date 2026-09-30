@@ -66,81 +66,119 @@ func ParseSelectorWithDimensions(attach, exclude string, dims DimensionSelectorC
 	return sel, nil
 }
 
+// buildAllowedSyscalls resolves the dimension selectors into the set of
+// syscalls to attach: the union of the positive -trace-* selectors (or the
+// FS-family default when none is given), minus everything any -no-trace-*
+// selector names. Positive selectors are validated before negative ones, so
+// an invalid positive entry is the error reported when both are invalid.
 func buildAllowedSyscalls(dims DimensionSelectorConfig) (map[string]struct{}, error) {
 	knownSyscalls := allKnownSyscalls()
 	knownKinds := allKnownKinds()
 
-	includeFamilies, familyFilterProvided, err := parseFamiliesCSV(dims.TraceFamilies)
+	include, err := parseDimensionSets(dims.TraceFamilies, dims.TraceKinds, dims.TraceSyscalls,
+		knownKinds, knownSyscalls)
 	if err != nil {
 		return nil, err
 	}
-	includeKinds, kindFilterProvided, err := parseKindsCSV(dims.TraceKinds, knownKinds)
-	if err != nil {
-		return nil, err
-	}
-	includeSyscalls, syscallFilterProvided, err := parseSyscallsCSV(dims.TraceSyscalls, knownSyscalls)
+	exclude, err := parseDimensionSets(dims.NoTraceFamilies, dims.NoTraceKinds, dims.NoTraceSyscalls,
+		knownKinds, knownSyscalls)
 	if err != nil {
 		return nil, err
 	}
 
+	allow := include.includedSyscalls()
+	exclude.removeExcluded(allow)
+	return allow, nil
+}
+
+// dimensionSets is one direction (include or exclude) of the parsed
+// family/kind/syscall selectors. provided reports whether any of the three
+// fields held at least one entry.
+type dimensionSets struct {
+	families map[string]struct{}
+	kinds    map[string]struct{}
+	syscalls map[string]struct{}
+	provided bool
+}
+
+// parseDimensionSets parses and validates the three comma-separated selector
+// fields of one direction, in family, kind, syscall order.
+func parseDimensionSets(families, kinds, syscalls string,
+	knownKinds, knownSyscalls map[string]struct{}) (dimensionSets, error) {
+	var sets dimensionSets
+	var familiesProvided, kindsProvided, syscallsProvided bool
+	var err error
+	if sets.families, familiesProvided, err = parseFamiliesCSV(families); err != nil {
+		return dimensionSets{}, err
+	}
+	if sets.kinds, kindsProvided, err = parseKindsCSV(kinds, knownKinds); err != nil {
+		return dimensionSets{}, err
+	}
+	if sets.syscalls, syscallsProvided, err = parseSyscallsCSV(syscalls, knownSyscalls); err != nil {
+		return dimensionSets{}, err
+	}
+	sets.provided = familiesProvided || kindsProvided || syscallsProvided
+	return sets, nil
+}
+
+// includedSyscalls returns the syscalls selected by the positive selectors:
+// every syscall whose family or kind is listed plus every listed syscall.
+// Without any positive selector it falls back to the FS family only - the
+// backward-compatible default that keeps existing file-I/O coverage on and
+// leaves the newer non-IO families disabled unless explicitly opted in.
+func (d dimensionSets) includedSyscalls() map[string]struct{} {
 	allow := make(map[string]struct{})
-	hasPositive := familyFilterProvided || kindFilterProvided || syscallFilterProvided
-	if hasPositive {
-		for syscall, family := range syscallFamilies {
-			if _, ok := includeFamilies[family]; ok {
-				allow[syscall] = struct{}{}
-			}
-		}
-		for syscall, kind := range syscallKinds {
-			if _, ok := includeKinds[kind]; ok {
-				allow[syscall] = struct{}{}
-			}
-		}
-		for syscall := range includeSyscalls {
-			allow[syscall] = struct{}{}
-		}
-	} else {
-		// Backward compatibility default: keep existing file-I/O coverage on and
-		// leave newly-expanded non-IO families disabled unless explicitly opted in.
+	if !d.provided {
 		for syscall, family := range syscallFamilies {
 			if family == string(types.FamilyFS) {
 				allow[syscall] = struct{}{}
 			}
 		}
+		return allow
 	}
+	for syscall, family := range syscallFamilies {
+		if _, ok := d.families[family]; ok {
+			allow[syscall] = struct{}{}
+		}
+	}
+	for syscall, kind := range syscallKinds {
+		if _, ok := d.kinds[kind]; ok {
+			allow[syscall] = struct{}{}
+		}
+	}
+	for syscall := range d.syscalls {
+		allow[syscall] = struct{}{}
+	}
+	return allow
+}
 
-	excludeFamilies, _, err := parseFamiliesCSV(dims.NoTraceFamilies)
-	if err != nil {
-		return nil, err
-	}
-	excludeKinds, _, err := parseKindsCSV(dims.NoTraceKinds, knownKinds)
-	if err != nil {
-		return nil, err
-	}
-	excludeSyscalls, _, err := parseSyscallsCSV(dims.NoTraceSyscalls, knownSyscalls)
-	if err != nil {
-		return nil, err
-	}
-
+// removeExcluded deletes from allow every syscall the negative selectors name
+// directly or through its family or kind. Exclusion always wins over
+// inclusion.
+func (d dimensionSets) removeExcluded(allow map[string]struct{}) {
 	for syscall := range allow {
-		if _, ok := excludeSyscalls[syscall]; ok {
+		if d.excludes(syscall) {
 			delete(allow, syscall)
-			continue
-		}
-		if family, ok := syscallFamilies[syscall]; ok {
-			if _, excluded := excludeFamilies[family]; excluded {
-				delete(allow, syscall)
-				continue
-			}
-		}
-		if kind, ok := syscallKinds[syscall]; ok {
-			if _, excluded := excludeKinds[kind]; excluded {
-				delete(allow, syscall)
-			}
 		}
 	}
+}
 
-	return allow, nil
+// excludes reports whether syscall is named directly, by family, or by kind.
+func (d dimensionSets) excludes(syscall string) bool {
+	if _, ok := d.syscalls[syscall]; ok {
+		return true
+	}
+	if family, ok := syscallFamilies[syscall]; ok {
+		if _, excluded := d.families[family]; excluded {
+			return true
+		}
+	}
+	if kind, ok := syscallKinds[syscall]; ok {
+		if _, excluded := d.kinds[kind]; excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func parseFamiliesCSV(raw string) (map[string]struct{}, bool, error) {
