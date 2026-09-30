@@ -149,7 +149,7 @@ func TestTaskNewtaskRecordReplacesAStaleRecycledComm(t *testing.T) {
 	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, newTaskComm, 0),
 		make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(newTaskTid); !ok || got != newTaskComm {
+	if got, ok := el.commState().cached(newTaskTid); !ok || got != newTaskComm {
 		t.Fatalf("cached comm = %q (present=%v), want %q", got, ok, newTaskComm)
 	}
 }
@@ -181,10 +181,10 @@ func TestTaskNewtaskRecordSeedsOnlyTheChild(t *testing.T) {
 	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, "worker", cloneThread),
 		make(chan *event.Pair, 1))
 
-	if got, _ := el.cachedComm(newTaskPid); got != "leader" {
+	if got, _ := el.commState().cached(newTaskPid); got != "leader" {
 		t.Fatalf("parent comm = %q, want it untouched (\"leader\")", got)
 	}
-	if got, _ := el.cachedComm(newTaskTid); got != "worker" {
+	if got, _ := el.commState().cached(newTaskTid); got != "worker" {
 		t.Fatalf("child comm = %q, want \"worker\"", got)
 	}
 }
@@ -197,7 +197,7 @@ func TestTruncatedTaskNewtaskRecordIsRejected(t *testing.T) {
 
 	el.processRawEvent(raw[:taskNewtaskEventWireSize-1], make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(newTaskTid); ok {
+	if got, ok := el.commState().cached(newTaskTid); ok {
 		t.Fatalf("truncated record seeded comm %q, want nothing cached", got)
 	}
 }

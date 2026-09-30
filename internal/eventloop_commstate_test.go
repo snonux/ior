@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// commState runs several times per traced event (comm, cachedComm,
+// commState runs several times per traced event (comm, cached,
 // queueCommLookup, setCachedComm*), so its steady state must not allocate.
 // It used to re-evaluate the method value e.notifyWarning on every call,
 // which heap-allocates a closure and accounted for ~46% of all pipeline
@@ -66,7 +66,7 @@ func TestCommStateWarmCacheDoesNotAllocate(t *testing.T) {
 	}{
 		{"commState", func() { _ = el.commState() }},
 		{"comm", func() { _ = el.comm(tid) }},
-		{"cachedComm", func() { _, _ = el.cachedComm(tid) }},
+		{"cached", func() { _, _ = el.commState().cached(tid) }},
 		{"setCachedComm", func() { el.setCachedComm(tid, "warm") }},
 		{"fdState", func() { _ = el.fdState() }},
 		{"pendingHandleState", func() { _ = el.pendingHandleState() }},
@@ -155,8 +155,8 @@ func TestCommStateWarmCacheMutatorsDoNotAllocate(t *testing.T) {
 	}
 
 	// The comm ends up as the last write left it.
-	if got, ok := el.cachedComm(tid); !ok || got != "warm" {
-		t.Errorf("cachedComm(%d) = %q, %v; want %q, true", tid, got, ok, "warm")
+	if got, ok := el.commState().cached(tid); !ok || got != "warm" {
+		t.Errorf("cached(%d) = %q, %v; want %q, true", tid, got, ok, "warm")
 	}
 }
 
@@ -215,8 +215,8 @@ func TestCommStateWiresResolverAssignedToZeroValueLoop(t *testing.T) {
 	// The resolver is wired now: it must work as a cache and stay on the
 	// allocation-free fast path.
 	el.setCachedComm(7, "seven")
-	if got, ok := el.cachedComm(7); !ok || got != "seven" {
-		t.Fatalf("cachedComm(7) = %q, %v; want %q, true", got, ok, "seven")
+	if got, ok := el.commState().cached(7); !ok || got != "seven" {
+		t.Fatalf("cached(7) = %q, %v; want %q, true", got, ok, "seven")
 	}
 	if allocs := testing.AllocsPerRun(100, func() { _ = el.commState() }); allocs != 0 {
 		t.Errorf("commState after wiring allocates %.1f times per call, want 0", allocs)

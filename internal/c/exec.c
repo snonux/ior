@@ -293,8 +293,9 @@ int handle_sched_process_exit(void *ctx) {
 // worker gets to it has no /proc entry any more, so every row it produced
 // carried an empty comm, and the first rows of a thread that lives a few
 // milliseconds were empty too, until the lookup landed. Under -comm it was
-// worse than cosmetic: the enter-side gate recycles a non-open/exec enter whose
-// tid has no cached comm yet, so such rows were dropped, silently.
+// worse than cosmetic: an empty comm matches no ordinary -comm pattern at the
+// exit-side comm check, so such rows were dropped, silently (and before task
+// dr2 the enter of a non-open/exec syscall was dropped outright).
 //
 // task:task_newtask fires from copy_process() once the child has its pid and
 // its inherited comm, and before the child is first woken (wake_up_new_task),

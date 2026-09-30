@@ -65,7 +65,7 @@ func commOfNextSyscall(t *testing.T, el *eventLoop, at uint64) string {
 func waitForCachedComm(t *testing.T, el *eventLoop, want string) {
 	t.Helper()
 	waitForCondition(t, 2*time.Second, "timed out waiting for comm "+want, func() bool {
-		got, ok := el.cachedComm(execCommTid)
+		got, ok := el.commState().cached(execCommTid)
 		return ok && got == want
 	})
 }
@@ -104,7 +104,7 @@ func TestRecycledTidDoesNotInheritTheDeadProcessComm(t *testing.T) {
 	// The kernel reports the task gone; the tid number is free again.
 	el.processRawEvent(makeProcessExitEvent(t, defaulTime+200, execCommPid, execCommTid),
 		make(chan *event.Pair, 1))
-	if got, ok := el.cachedComm(execCommTid); ok {
+	if got, ok := el.commState().cached(execCommTid); ok {
 		t.Fatalf("comm %q still cached for a tid the kernel reported as exited", got)
 	}
 
@@ -168,7 +168,7 @@ func TestExitEvictionSurvivesAnInFlightLookup(t *testing.T) {
 	releaseWorker()
 	waitForNoPendingLookup(t, resolver)
 
-	if got, ok := el.cachedComm(execCommTid); ok {
+	if got, ok := el.commState().cached(execCommTid); ok {
 		t.Fatalf("in-flight lookup resurrected the evicted comm %q", got)
 	}
 
@@ -204,10 +204,10 @@ func TestProcessExitEvictsOnlyTheExitedTasksComm(t *testing.T) {
 	el.processRawEvent(makeThreadExitEvent(t, defaulTime, execCommPid, execCommTid),
 		make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(execCommTid); ok {
+	if got, ok := el.commState().cached(execCommTid); ok {
 		t.Fatalf("comm %q still cached for the exited task", got)
 	}
-	if got, ok := el.cachedComm(siblingTid); !ok || got != "sibling" {
+	if got, ok := el.commState().cached(siblingTid); !ok || got != "sibling" {
 		t.Fatalf("sibling thread comm = %q (present=%v), want \"sibling\"", got, ok)
 	}
 }

@@ -27,7 +27,7 @@ func TestSeedTrackedPidCommCachesTrackedPidComm(t *testing.T) {
 
 	el.seedTrackedPidComm()
 
-	got, ok := el.cachedComm(pid)
+	got, ok := el.commState().cached(pid)
 	if !ok {
 		t.Fatalf("expected pid %d to be seeded", pid)
 	}
@@ -46,7 +46,7 @@ func TestSeedTrackedPidCommSeedsCurrentProcessWhenPidFilterDisabled(t *testing.T
 
 	el.seedTrackedPidComm()
 
-	if _, ok := el.cachedComm(uint32(os.Getpid())); !ok {
+	if _, ok := el.commState().cached(uint32(os.Getpid())); !ok {
 		t.Fatalf("expected current process pid to be seeded")
 	}
 }

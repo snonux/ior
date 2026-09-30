@@ -156,3 +156,45 @@ func TestRenamedThreadsSurviveTheRenamedCommFilter(t *testing.T) {
 		t.Fatalf("-comm %s kept %d measured pread64 rows, want %d", renamedThreadComm, total, threadCommRows)
 	}
 }
+
+const threadCommFdTableScenario = "thread-comm-fdtable"
+
+// TestFdTableChangeOfAnUncachedThreadReachesRowsUnderCommFilter pins task dr2
+// end to end. The scenario's second thread pre-dates ior's attach, so no
+// task_newtask record names it and its first traced syscall meets a tid with no
+// cached comm; it dup3s b's description over a's descriptor number, and the
+// main thread (comm seeded) then preads that number. Under -comm the old
+// enter-side gate recycled the dup3 enter of such a thread, the shared fd table
+// never changed, and the main thread's row reported a's path.
+//
+// Only ior-traced syscalls are involved (openat, dup3, pread64), so the path of
+// the surviving row comes from the fd table, not from a lazy /proc lookup, and
+// nothing depends on timing: the pread is issued after the dup3 returned.
+func TestFdTableChangeOfAnUncachedThreadReachesRowsUnderCommFilter(t *testing.T) {
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	result, pid, err := h.RunWithIorArgs(threadCommFdTableScenario, defaultDuration,
+		[]string{"-trace-syscalls", "openat,dup3,pread64", "-comm", "ioworkload"})
+	if err != nil {
+		t.Fatalf("run scenario %s: %v", threadCommFdTableScenario, err)
+	}
+	AssertNoUnexpectedPID(t, result, pid)
+
+	var onB, onA uint64
+	for _, rec := range result.Records {
+		if !strings.Contains(rec.TraceID.String(), "pread64") {
+			continue
+		}
+		switch {
+		case strings.Contains(rec.Path, "fdtable-b.txt"):
+			onB += rec.Cnt.Count
+		case strings.Contains(rec.Path, "fdtable-a.txt"):
+			onA += rec.Cnt.Count
+		default:
+			t.Errorf("pread64 record with unexpected path %q", rec.Path)
+		}
+	}
+	if onA != 0 || onB != 1 {
+		t.Fatalf("pread64 after the other thread's dup3: %d row(s) on a's path, %d on b's path; want 0 and 1", onA, onB)
+	}
+}

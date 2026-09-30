@@ -349,8 +349,12 @@ func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (ru
 // There is deliberately no comm-based gate here. The comm filter is applied to
 // the pair at the exit checkpoint (finishPair -> MatchPair), where the tid's
 // cached comm is attached; a tid whose comm is unknown yields "", which matches
-// no -comm pattern, so its row is dropped there just like a cached
-// non-matching one. An earlier version recycled the enter of every non-open,
+// no ordinary -comm pattern, so its row is dropped there just like a cached
+// non-matching one. Only the patterns that match the empty string (^$, ^, $;
+// all are valid -comm values) select such a row; that is intended: the TUI's
+// exact-pattern helper produces ^$ for a row whose comm cell is empty, and it
+// must find that row's kind (TestCommFilterEmptyPatternSelectsUncachedTid).
+// An earlier version recycled the enter of every non-open,
 // non-exec syscall of a tid with no cached comm (task dr2): the exit handler
 // then never ran, so a close/dup2/dup3/close_range/fcntl of such a thread never
 // reached the fd table. The table is per process and shared by all its

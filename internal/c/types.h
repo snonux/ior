@@ -589,8 +589,8 @@ struct process_exit_event {
 // Why: a task's comm was otherwise resolved lazily and asynchronously from
 // /proc/<tid>/comm, which loses the race against short-lived tasks (the
 // thread has exited before the read, so its rows carry an empty comm) and,
-// under -comm, made the enter-side gate drop the first syscalls of every new
-// tid whose name was not cached yet.
+// under -comm, gave the first rows of every new tid whose name was not cached
+// yet an empty comm, which the exit-side comm check drops.
 //
 // pid is the *child's* thread-group id and tid the child's task id: the
 // record is emitted from the parent's context, but describes the child.

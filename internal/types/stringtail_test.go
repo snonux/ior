@@ -174,9 +174,8 @@ func fillStringFields(ev any, terminate bool) []string {
 	return written
 }
 
-// The generated String() is what fmt's %v renders for an event, e.g. in the
-// uncached-comm warning, which the TUI turns into a searchable, exportable
-// stream row. Since task 79 the bytes after a string's terminator are stale
+// The generated String() is what fmt's %v renders for an event, e.g. in a log
+// line or a TUI row. Since task 79 the bytes after a string's terminator are stale
 // ring-buffer data, so String() must render every string field only up to its
 // first NUL.
 func TestGeneratedStringStopsAtTheTerminator(t *testing.T) {

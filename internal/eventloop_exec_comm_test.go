@@ -135,7 +135,7 @@ func TestFirstPostExecSyscallCarriesPostExecComm(t *testing.T) {
 	el.processRawEvent(makeProcessExecEvent(t, defaulTime-1, execCommPid, execCommTid, "cat"),
 		make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after exec record = %q (present=%v), want \"cat\"", got, ok)
 	}
 
@@ -165,7 +165,7 @@ func TestLegacyProcessExecRecordRefreshesComm(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("legacy exec record raised warnings %q, want none", warnings)
 	}
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after legacy exec record = %q (present=%v), want \"cat\"", got, ok)
 	}
 }
@@ -272,7 +272,7 @@ func TestExecExitDoesNotCacheThePreExecComm(t *testing.T) {
 		t.Fatal("expected the execve pair to be emitted")
 	}
 
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after execve exit = %q (present=%v), want \"cat\"", got, ok)
 	}
 }
@@ -324,7 +324,7 @@ func TestFailedExecCachesTheCallerComm(t *testing.T) {
 				t.Fatal("expected the execve pair to be emitted")
 			}
 
-			got, ok := el.cachedComm(execCommTid)
+			got, ok := el.commState().cached(execCommTid)
 			if ok != tc.wantCache {
 				t.Fatalf("cached comm present = %v, want %v (got %q)", ok, tc.wantCache, got)
 			}
@@ -347,7 +347,7 @@ func TestProcessExecEventWithEmptyCommKeepsCachedName(t *testing.T) {
 	el.processRawEvent(makeProcessExecEvent(t, defaulTime-1, execCommPid, execCommTid, ""),
 		make(chan *event.Pair, 1))
 
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after an all-zero control record = %q (present=%v), want \"cat\"", got, ok)
 	}
 }
@@ -553,7 +553,7 @@ func TestExecRecordWinsOverAnInFlightProcfsLookup(t *testing.T) {
 	// The exec record lands while that worker is parked.
 	el.processRawEvent(makeProcessExecEvent(t, defaulTime-1, execCommPid, execCommTid, "cat"),
 		make(chan *event.Pair, 1))
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm right after the exec record = %q (present=%v), want \"cat\"", got, ok)
 	}
 
@@ -561,7 +561,7 @@ func TestExecRecordWinsOverAnInFlightProcfsLookup(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "timed out waiting for the stale lookup to complete",
 		func() bool { return pendingCount(resolver) == 0 })
 
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after the stale lookup landed = %q (present=%v), want \"cat\"", got, ok)
 	}
 	ep := feedFirstPostExecSyscall(t, el)
@@ -917,7 +917,7 @@ func TestKernelCommWinsOverAnInFlightProcfsLookup(t *testing.T) {
 	default:
 		t.Fatal("expected the open pair to be emitted")
 	}
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm right after the open event = %q (present=%v), want \"cat\"", got, ok)
 	}
 
@@ -925,7 +925,7 @@ func TestKernelCommWinsOverAnInFlightProcfsLookup(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "timed out waiting for the stale lookup to complete",
 		func() bool { return pendingCount(resolver) == 0 })
 
-	if got, ok := el.cachedComm(execCommTid); !ok || got != "cat" {
+	if got, ok := el.commState().cached(execCommTid); !ok || got != "cat" {
 		t.Fatalf("cached comm after the stale lookup landed = %q (present=%v), want \"cat\"", got, ok)
 	}
 }

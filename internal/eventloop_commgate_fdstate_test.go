@@ -21,8 +21,8 @@ import (
 // The fd table is per process, not per thread, and handleFdExit & co. apply
 // their state change before the pair filter precisely so a row the run does
 // not want still leaves the table correct. The enter gate contradicted that
-// rule; it is gone, and the exit-side filter (finishPair, comm "" matches no
-// -comm pattern) is what drops the unwanted thread's own row.
+// rule; it is gone, and the exit-side filter (finishPair; comm "" matches no
+// ordinary -comm pattern) is what drops the unwanted thread's own row.
 
 const (
 	gateWantedComm = "curl"
@@ -110,8 +110,14 @@ func gateCases() []gateCase {
 // its open payload, the worker not at all.
 func newGateEventLoop(t *testing.T) (el *eventLoop, warnings *[]string) {
 	t.Helper()
+	return newGateEventLoopFor(t, gateWantedComm)
+}
+
+// newGateEventLoopFor is newGateEventLoop with an arbitrary -comm pattern.
+func newGateEventLoopFor(t *testing.T, pattern string) (el *eventLoop, warnings *[]string) {
+	t.Helper()
 	el = mustNewEventLoop(t, eventLoopConfig{
-		filter:       globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: gateWantedComm}},
+		filter:       globalfilter.Filter{Comm: &globalfilter.StringFilter{Pattern: pattern}},
 		commResolver: newHermeticCommResolver(),
 	})
 	t.Cleanup(el.commResolver.shutdown)
@@ -145,7 +151,7 @@ func TestUncachedThreadFdChangesReachTheFdTableUnderCommFilter(t *testing.T) {
 			el, _ := newGateEventLoop(t)
 			openAsWantedThread(t, el, gateOpenedName, gateFdSource)
 			openAsWantedThread(t, el, gateOtherName, gateFdOther)
-			if _, cached := el.cachedComm(gateWorkerTid); cached {
+			if _, cached := el.commState().cached(gateWorkerTid); cached {
 				t.Fatal("fixture broken: the worker thread's comm must not be cached")
 			}
 
@@ -210,5 +216,44 @@ func TestUncachedThreadEnterIsParkedNotRecycled(t *testing.T) {
 	}
 	if len(*warnings) != 0 {
 		t.Fatalf("unexpected warnings %q", *warnings)
+	}
+}
+
+// TestCommFilterEmptyPatternSelectsUncachedTid pins what the exit-side check
+// does with an unknown comm. A tid with no cached comm reaches the filter with
+// comm "", so an ordinary pattern ("foo") drops its row while the patterns that
+// match the empty string (^$, ^ and $ - all valid -comm values) select it. That
+// is intended, not an accident of the old gate's removal: the TUI's
+// exact-pattern helper produces ^$ for a row whose comm cell is empty, and
+// filtering on that row must find the rows of such uncached tids.
+func TestCommFilterEmptyPatternSelectsUncachedTid(t *testing.T) {
+	for _, tc := range []struct {
+		pattern  string
+		wantEmit bool
+	}{
+		{"^$", true},
+		{"^", true},
+		{"$", true},
+		{"foo", false},
+		{gateWantedComm, false},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			el, _ := newGateEventLoopFor(t, tc.pattern)
+			if _, cached := el.commState().cached(gateWorkerTid); cached {
+				t.Fatal("fixture broken: the worker thread's comm must not be cached")
+			}
+			_, enterRaw := makeEnterFdEvent(t, defaulTime+1000, execCommPid, gateWorkerTid, gateFdSource, types.SYS_ENTER_READ)
+			_, exitRaw := makeExitRetEvent(t, defaulTime+1100, execCommPid, gateWorkerTid, types.SYS_EXIT_READ, 7)
+			ep := feedRawPair(t, el, enterRaw, exitRaw)
+			if ep != nil {
+				defer ep.Recycle()
+			}
+			if got := ep != nil; got != tc.wantEmit {
+				t.Fatalf("-comm %q: uncached tid's row emitted = %v, want %v", tc.pattern, got, tc.wantEmit)
+			}
+			if ep != nil && ep.Comm != "" {
+				t.Fatalf("row comm = %q, want empty for an uncached tid", ep.Comm)
+			}
+		})
 	}
 }

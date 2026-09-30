@@ -13,8 +13,8 @@ import "ior/internal/types"
 // comm; and even a thread that lives on had its first rows (whatever the event
 // loop emitted before the lookup landed) labelled empty. Under -comm the loss
 // was silent and total: a tid with no cached comm carries "" into the exit-side
-// comm check, which matches no -comm pattern, so those rows never reached any
-// output (before task dr2 the enter of a non-open/exec syscall was dropped
+// comm check, which matches no ordinary -comm pattern (only ^$, ^ and $ match
+// an empty comm), so those rows never reached any output (before task dr2 the enter of a non-open/exec syscall was dropped
 // outright, which also lost the thread's fd-table changes).
 //
 // The record is emitted from the creating task's context before the child is

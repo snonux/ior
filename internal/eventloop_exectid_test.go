@@ -115,7 +115,7 @@ func TestNonLeaderExecPairsUnderLeaderTid(t *testing.T) {
 	if got := el.pairs.prevTime(nleExecPid); got != 2000 {
 		t.Errorf("leader tid gap baseline = %d, want the execve exit time 2000", got)
 	}
-	if got, ok := el.cachedComm(nleExecPid); !ok || got != "newprog" {
+	if got, ok := el.commState().cached(nleExecPid); !ok || got != "newprog" {
 		t.Errorf("leader tid comm = %q (present=%v), want newprog", got, ok)
 	}
 }
@@ -133,7 +133,7 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 	if _, ok := el.pairs.prevTimes[nleExecCaller]; ok {
 		t.Error("gap baseline left under the pre-exec tid")
 	}
-	if _, ok := el.cachedComm(nleExecCaller); ok {
+	if _, ok := el.commState().cached(nleExecCaller); ok {
 		t.Error("comm left cached under the pre-exec tid")
 	}
 	for _, tid := range []uint32{nleExecCaller, nleExecPid} {
@@ -197,7 +197,7 @@ func TestProcessExecEventWithKeptTidMovesNothing(t *testing.T) {
 		if _, ok := el.pairs.enters[nleExecPid]; ok {
 			t.Errorf("old tid %d: enter appeared under the leader tid", oldTid)
 		}
-		if _, ok := el.cachedComm(nleExecCaller); !ok {
+		if _, ok := el.commState().cached(nleExecCaller); !ok {
 			t.Errorf("old tid %d: caller comm evicted", oldTid)
 		}
 	}
@@ -446,7 +446,7 @@ func TestUntracedNonLeaderExecCompletesFromExecRecord(t *testing.T) {
 			assertUntracedExecRow(t, ep, tc.wantExitID)
 			verifyFdNotTracked(t, el, nleExecPid, 7)
 			assertNoCallerState(t, el)
-			if got, ok := el.cachedComm(nleExecPid); !ok || got != "newprog" {
+			if got, ok := el.commState().cached(nleExecPid); !ok || got != "newprog" {
 				t.Errorf("leader tid comm = %q (present=%v), want newprog", got, ok)
 			}
 		})

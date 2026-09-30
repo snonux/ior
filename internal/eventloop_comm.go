@@ -656,10 +656,6 @@ func (e *eventLoop) comm(tid uint32) string {
 	return e.commState().comm(tid)
 }
 
-func (e *eventLoop) cachedComm(tid uint32) (string, bool) {
-	return e.commState().cached(tid)
-}
-
 func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 	e.commState().setCached(tid, comm)
 }
