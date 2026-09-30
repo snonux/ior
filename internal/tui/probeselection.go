@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"slices"
 
@@ -11,9 +12,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// familyRunState is the family batch the model owns. Only one runs at a
-// time; seq numbers the runs so messages of any other run are ignored, and
-// session is the trace session whose probe manager the batch works on.
+// familyRunState is the family batch the model owns. seq numbers the runs so
+// messages of any other run are ignored, and session is the trace session
+// whose probe manager the batch works on.
+//
+// active means the run's result is still awaited. Only a run of the current
+// session blocks anything (Model.familyBatchRunning): one at a time, and no
+// Syscalls-view change meanwhile. Ending the session cancels the batch (it
+// runs on the session's context) and releases that block at once, without
+// waiting for the stale result, so the next session can start a family batch
+// right away; a newer run then takes over seq and the stale result is
+// ignored when it arrives.
 type familyRunState struct {
 	seq     uint64
 	active  bool
@@ -27,10 +36,17 @@ type familyRunState struct {
 }
 
 // staleBatchNote is appended to a family batch's outcome when the trace was
-// restarted or stopped while the batch ran on the old session's manager: the
-// intended set is kept for the next session (the current one, after a
-// restart, already started with it).
-const staleBatchNote = "(trace restarted or stopped meanwhile; the intended probe set is kept for the next session)"
+// restarted or stopped while the batch ran on the old session's manager,
+// which cancels the batch: the intended set is kept for the next session (the
+// current one, after a restart, already started with it).
+const staleBatchNote = "(trace restarted or stopped meanwhile, batch cancelled; the intended probe set is kept for the next session)"
+
+// familyBatchRunning reports whether a family batch of the current trace
+// session is in flight. A batch of an ended session no longer counts: it was
+// cancelled with its session and must not hold up the next one.
+func (m *Model) familyBatchRunning() bool {
+	return m.familyRun.active && m.tracer.isCurrent(m.familyRun.session)
+}
 
 // newProbeModal builds the probes modal for the current probe manager. Its
 // Families cursor starts on the dashboard's scoped family, so the family
@@ -41,14 +57,15 @@ func (m *Model) newProbeModal() probes.Model {
 		WithSession(m.tracer.session).
 		SetDarkMode(m.isDark).
 		FocusFamily(scopedFamily(m.filters.current()))
-	if m.familyRun.active {
+	if m.familyBatchRunning() {
 		modal = modal.ShowBatchProgress(m.familyRun.last)
 	}
 	return modal
 }
 
 // startFamilyBatch starts the family attach/detach the probes modal asked
-// for, unless one is already running.
+// for, unless one of the current session is already running. The batch runs
+// on the session's context, so it stops when the session ends.
 //
 // Before the batch starts, the probe set it is meant to produce is recorded
 // as the selection for the next trace sessions. A restart can then happen at
@@ -57,7 +74,7 @@ func (m *Model) newProbeModal() probes.Model {
 // completion replaces the intent with the read-back truth only while the
 // batch's session is still current (handleFamilyToggledMsg).
 func (m *Model) startFamilyBatch(req probes.FamilyBatchRequestMsg) tea.Cmd {
-	if m.familyRun.active {
+	if m.familyBatchRunning() {
 		m.probeModal = m.probeModal.ShowBatchProgress(m.familyRun.last).
 			SetError("a family batch is already running")
 		return nil
@@ -78,32 +95,43 @@ func (m *Model) startFamilyBatch(req probes.FamilyBatchRequestMsg) tea.Cmd {
 	m.familyRun.last = probes.FamilyBatchProgressMsg{
 		Run: m.familyRun.seq, Family: req.Family, Attach: req.Attach, Total: batchSize(states, req.Family, req.Attach),
 	}
-	return probes.StartFamilyBatch(manager, m.familyRun.seq, req.Family, req.Attach)
+	return probes.StartFamilyBatch(m.tracer.sessionContext(), manager, m.familyRun.seq, req.Family, req.Attach)
 }
 
 // handleFamilyBatchProgress shows the owned batch's progress and keeps
-// following it; the probes modal may be closed or rebuilt meanwhile.
+// following it; the probes modal may be closed or rebuilt meanwhile. The
+// progress of a batch whose session has ended is not shown - it would make
+// the modal refuse changes again - but the batch is still followed to its
+// (cancelled) result, which reports the outcome.
 func (m *Model) handleFamilyBatchProgress(msg probes.FamilyBatchProgressMsg) tea.Cmd {
 	if !m.familyRun.owns(msg.Run) {
 		return nil
 	}
-	m.familyRun.last = msg
-	m.probeModal = m.probeModal.ShowBatchProgress(msg)
+	if m.familyBatchRunning() {
+		m.familyRun.last = msg
+		m.probeModal = m.probeModal.ShowBatchProgress(msg)
+	}
 	return msg.Next()
 }
 
 // handleFamilyToggledMsg ends the owned family batch. While its session is
 // still the current one, the model reacts like to any probe change
 // (afterProbeChange reads the attached set back from the manager). If the
-// trace was restarted or stopped meanwhile, the batch changed a manager that
-// is gone: the intent recorded at start stays the selection (the new session
-// already attached it) and the outcome says so.
+// trace was restarted or stopped meanwhile, the batch was cancelled on a
+// manager that is gone: the intent recorded at start stays the selection (the
+// new session already attached it) and the outcome says so, reporting the
+// probes changed before the cancellation rather than the cancellation as an
+// error. A stale result arriving after a newer batch started is not owned any
+// more and ignored outright.
 func (m *Model) handleFamilyToggledMsg(msg probes.FamilyToggledMsg) (tea.Model, tea.Cmd) {
 	if !m.familyRun.owns(msg.Run) {
 		return m, nil
 	}
 	m.familyRun.active = false
 	if !m.tracer.isCurrent(m.familyRun.session) {
+		if errors.Is(msg.Err, context.Canceled) {
+			msg.Err = nil
+		}
 		m.probeModal = m.probeModal.FinishBatch(msg, staleBatchNote)
 		m.refreshFamilyHint()
 		return m, nil
@@ -227,7 +255,7 @@ func (m *Model) rememberProbeSelection() {
 		return
 	}
 	states := manager.States()
-	if m.familyRun.active && m.tracer.isCurrent(m.familyRun.session) {
+	if m.familyBatchRunning() {
 		m.tracer.setAttachSyscalls(intendedSelection(states, m.familyRun.family, m.familyRun.attach))
 		return
 	}

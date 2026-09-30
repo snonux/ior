@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"errors"
 
 	"ior/internal/probemanager"
@@ -63,7 +64,13 @@ type familyBatchRun struct {
 // StartFamilyBatch starts attaching (attach) or detaching every probe of
 // family through manager as run number run, and returns a command yielding
 // its first progress update (or its result).
-func StartFamilyBatch(manager Manager, run uint64, family types.SyscallFamily, attach bool) tea.Cmd {
+//
+// ctx bounds the batch: the TUI passes the context of the trace session that
+// owns manager, so ending that session (restart, stop, quit) stops the batch
+// between two probes instead of letting it attach the rest of the family to
+// a module that is about to close. The batch then still ends with a
+// FamilyToggledMsg, whose Err is the context's error.
+func StartFamilyBatch(ctx context.Context, manager Manager, run uint64, family types.SyscallFamily, attach bool) tea.Cmd {
 	return func() tea.Msg {
 		if manager == nil {
 			return FamilyToggledMsg{Run: run, Family: family, Attach: attach, Err: errors.New("probe manager unavailable")}
@@ -75,7 +82,7 @@ func StartFamilyBatch(manager Manager, run uint64, family types.SyscallFamily, a
 			progress: make(chan [2]int, 1),
 			done:     make(chan FamilyToggledMsg, 1),
 		}
-		go r.execute(manager)
+		go r.execute(ctx, manager)
 		return r.next()
 	}
 }
@@ -89,13 +96,15 @@ func (msg FamilyBatchProgressMsg) Next() tea.Cmd {
 	return msg.run.next
 }
 
-// execute runs the batch and publishes its result.
-func (r *familyBatchRun) execute(manager Manager) {
+// execute runs the batch and publishes its result. done is buffered, so the
+// goroutine ends even when nobody waits for the result any more (a stale
+// run whose chain the TUI stopped following).
+func (r *familyBatchRun) execute(ctx context.Context, manager Manager) {
 	operation := manager.DetachFamily
 	if r.attach {
 		operation = manager.AttachFamily
 	}
-	result, err := operation(r.family, r.report)
+	result, err := operation(ctx, r.family, r.report)
 	r.done <- FamilyToggledMsg{Run: r.id, Family: r.family, Attach: r.attach, Result: result, Err: err}
 }
 

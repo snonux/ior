@@ -1,6 +1,8 @@
 package probes
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -62,7 +64,7 @@ func runBatch(t *testing.T, m Model, fm *fakeManager, cmd tea.Cmd) (Model, []Fam
 		t.Fatal("the modal's command is not a FamilyBatchRequestMsg")
 	}
 	var progress []FamilyBatchProgressMsg
-	next := StartFamilyBatch(fm, 7, req.Family, req.Attach)
+	next := StartFamilyBatch(context.Background(), fm, 7, req.Family, req.Attach)
 	for range 100 {
 		switch msg := next().(type) {
 		case FamilyBatchProgressMsg:
@@ -202,7 +204,7 @@ func TestDetachProgressTotalCountsAttachedProbes(t *testing.T) {
 }
 
 func TestFamilyBatchWithoutManagerReportsError(t *testing.T) {
-	msg := StartFamilyBatch(nil, 3, types.FamilyFS, true)()
+	msg := StartFamilyBatch(context.Background(), nil, 3, types.FamilyFS, true)()
 	done, ok := msg.(FamilyToggledMsg)
 	if !ok || done.Err == nil || done.Run != 3 {
 		t.Fatalf("msg = %#v, want run 3's FamilyToggledMsg with an error", msg)
@@ -333,5 +335,37 @@ func TestSyscallChangesRefusedWhileFamilyBatchRuns(t *testing.T) {
 	m = m.FinishBatch(FamilyToggledMsg{Family: types.FamilyNetwork, Attach: true}, "")
 	if _, cmd := m.Update(keyMsg("a")); cmd == nil {
 		t.Fatal("a refused after the batch finished")
+	}
+}
+
+// ctxManager is a fakeManager whose family batches report the context they
+// were given: a cancelled one ends the batch with its error.
+type ctxManager struct {
+	*fakeManager
+}
+
+func (c ctxManager) AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return probemanager.BatchResult{}, err
+	}
+	return c.fakeManager.AttachFamily(ctx, family, progress)
+}
+
+// TestFamilyBatchHonoursItsContext: StartFamilyBatch hands its context to
+// the manager, so a batch whose trace session has ended stops, and the run
+// still ends with a FamilyToggledMsg carrying the cancellation.
+func TestFamilyBatchHonoursItsContext(t *testing.T) {
+	fm := familyTestManager()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	msg := StartFamilyBatch(ctx, ctxManager{fm}, 5, types.FamilyNetwork, true)()
+	done, ok := msg.(FamilyToggledMsg)
+	if !ok || done.Run != 5 || !errors.Is(done.Err, context.Canceled) {
+		t.Fatalf("msg = %#v, want run 5's FamilyToggledMsg with context.Canceled", msg)
+	}
+	for _, state := range fm.States() {
+		if state.Active && state.Syscall != "read" {
+			t.Fatalf("%s attached by a cancelled batch", state.Syscall)
+		}
 	}
 }

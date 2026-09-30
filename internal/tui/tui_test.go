@@ -40,10 +40,10 @@ func (f fakeProbeManager) Toggle(string) error               { return nil }
 func (f fakeProbeManager) Attach(string) error               { return nil }
 func (f fakeProbeManager) Detach(string) error               { return nil }
 func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
-func (f fakeProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (f fakeProbeManager) AttachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
-func (f fakeProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (f fakeProbeManager) DetachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
 

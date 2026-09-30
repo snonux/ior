@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,8 +24,11 @@ type selectionProbeManager struct {
 	fakeProbeManager
 	mu sync.Mutex
 	// hold, when set, stops a family batch after its first probe until it
-	// is closed, so a test can act while the batch is half done.
+	// is closed (or the batch is cancelled), so a test can act while the
+	// batch is half done.
 	hold chan struct{}
+	// inFlight is the number of family batches currently running.
+	inFlight atomic.Int32
 }
 
 func (f *selectionProbeManager) States() []probemanager.ProbeState {
@@ -54,17 +58,27 @@ func (f *selectionProbeManager) Detach(syscall string) error {
 	return nil
 }
 
-func (f *selectionProbeManager) AttachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
-	return f.setFamily(family, true, progress), nil
+func (f *selectionProbeManager) AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(ctx, family, true, progress)
 }
 
-func (f *selectionProbeManager) DetachFamily(family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
-	return f.setFamily(family, false, progress), nil
+func (f *selectionProbeManager) DetachFamily(ctx context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(ctx, family, false, progress)
 }
 
-func (f *selectionProbeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+// setFamily flips the family's probes one by one. Like the real manager's
+// batch it checks ctx before each probe and returns the partial result with
+// ctx.Err() once cancelled; the hold after the first probe also ends on
+// cancellation. inFlight counts running batches, so a test can tell that a
+// cancelled batch's goroutine has returned.
+func (f *selectionProbeManager) setFamily(ctx context.Context, family types.SyscallFamily, active bool, progress func(int, int)) (probemanager.BatchResult, error) {
+	f.inFlight.Add(1)
+	defer f.inFlight.Add(-1)
 	var result probemanager.BatchResult
 	for i := range f.states {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		f.mu.Lock()
 		change := f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family
 		if change {
@@ -74,11 +88,14 @@ func (f *selectionProbeManager) setFamily(family types.SyscallFamily, active boo
 		}
 		f.mu.Unlock()
 		if change && result.Changed == 1 && f.hold != nil {
-			<-f.hold
+			select {
+			case <-f.hold:
+			case <-ctx.Done():
+			}
 		}
 	}
 	progress(result.Total, result.Total)
-	return result
+	return result, nil
 }
 
 // newSelectionManager returns read (FS) active and socket/connect (Network)

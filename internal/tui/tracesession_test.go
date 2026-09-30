@@ -24,10 +24,10 @@ func (sessionProbeManager) Toggle(string) error               { return nil }
 func (sessionProbeManager) Attach(string) error               { return nil }
 func (sessionProbeManager) Detach(string) error               { return nil }
 func (sessionProbeManager) ActiveCount() (int, int)           { return 0, 0 }
-func (sessionProbeManager) AttachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (sessionProbeManager) AttachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
-func (sessionProbeManager) DetachFamily(types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+func (sessionProbeManager) DetachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
 	return probemanager.BatchResult{}, nil
 }
 

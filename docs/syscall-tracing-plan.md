@@ -39,7 +39,8 @@ every later trace session, so a PID/TID reselect or a filter change that restart
 trace keeps it instead of reverting to the flags. The carried set is normally read back
 from the probes that are actually attached. A change still running when the trace restarts
 or stops carries its intended set instead (a single-probe change only adds or removes that
-probe);
+probe); a family batch is also cancelled when its trace session ends, so it stops attaching
+to the old session and the new session can start a family batch right away;
 probes of it that cannot attach are retried at each session start and skipped with a log
 line until the next probe change reads the attached set back. After detaching everything,
 later sessions attach nothing, and only restarting `ior` returns to the startup selection. `[`/`]` only scope the dashboard view to
