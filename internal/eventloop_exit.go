@@ -165,9 +165,79 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 	// the pre-exec name here would re-introduce exactly the stale label that
 	// record exists to prevent.
 	ep.Comm = types.StringValue(execEv.Comm[:])
-	ep.File = file.NewPathname(execEv.Filename[:])
+	ep.File = e.execTarget(ep, execEv)
 	e.cacheCommOfFailedExec(ep, execEv)
+	// The exec enter has no raw filter, so the path dimension is applied here
+	// against the resolved target rather than the captured relative name.
 	return e.finishPair(ep)
+}
+
+// execTarget returns the file an exec pair reports. execveat(dirfd, "ls")
+// names the program relative to dirfd, and glibc's fexecve is
+// execveat(fd, "", AT_EMPTY_PATH), which names the descriptor itself; both
+// resolve through the fd table like the open family does.
+//
+// The resolution normally happened at enter time (storeEnter) and arrives as
+// ep.File, because a successful exec's control record drops FD_CLOEXEC
+// descriptors - fexecve's included - before the exit is processed. Callers
+// that built the pair without passing through storeEnter get the same
+// resolution here, against the current table. The one fact enter time could
+// not know is the outcome: an empty name only stands for the descriptor when
+// the kernel accepted it, so a failed empty-name exec reports no path.
+func (e *eventLoop) execTarget(ep *event.Pair, execEv *types.ExecEvent) file.File {
+	if types.StringValue(execEv.Filename[:]) == "" &&
+		!execEventAllowsEmptyPath(execEv, retEventSucceeded(ep)) {
+		return file.NewPathname(nil)
+	}
+	if ep.File != nil {
+		return ep.File
+	}
+	return e.resolveExecTarget(execEv)
+}
+
+// snapshotExecTarget resolves an exec enter's target for storeEnter. It
+// optimistically allows AT_EMPTY_PATH (execTarget withdraws that on failure)
+// and copies a tracked descriptor so later fd-table updates cannot change
+// what this pending pair reports.
+func (e *eventLoop) snapshotExecTarget(execEv *types.ExecEvent) file.File {
+	target := e.resolveExecTarget(execEv)
+	if fdFile, ok := target.(*file.FdFile); ok {
+		return fdFile.Dup(fdFile.FD())
+	}
+	return target
+}
+
+// resolveExecTarget applies dirfd semantics to an exec's captured filename,
+// allowing an empty name whenever an execveat asked for AT_EMPTY_PATH.
+//
+// exec_event carries no filename read status (unlike open_event): a failed
+// read leaves an empty buffer. A non-empty name is therefore always a good
+// read and is passed on as PATH_READ_OK. An empty one is ambiguous between a
+// real "" and an unreadable name; it is only resolved to the descriptor for an
+// AT_EMPTY_PATH execveat, where "" is the overwhelmingly common case (fexecve),
+// and reported as no path otherwise.
+func (e *eventLoop) resolveExecTarget(execEv *types.ExecEvent) file.File {
+	return e.resolveCapturedDirfdPath(execEventDirfd(execEv), execEv.Pid,
+		types.StringValue(execEv.Filename[:]), types.PATH_READ_OK,
+		execEventAllowsEmptyPath(execEv, true))
+}
+
+// execEventDirfd returns the directory descriptor an exec resolved its
+// filename against. Only execveat has one; BPF fills plain execve's dirfd
+// with -1, which would otherwise be looked up as a real descriptor, so it is
+// mapped to AT_FDCWD - the semantics execve(2) actually has.
+func execEventDirfd(execEv *types.ExecEvent) int32 {
+	if execEv.TraceId != types.SYS_ENTER_EXECVEAT {
+		return unix.AT_FDCWD
+	}
+	return execEv.Dirfd
+}
+
+// execEventAllowsEmptyPath reports whether an empty exec filename names the
+// dirfd itself: only for a successful execveat carrying AT_EMPTY_PATH.
+func execEventAllowsEmptyPath(execEv *types.ExecEvent, succeeded bool) bool {
+	return succeeded && execEv.TraceId == types.SYS_ENTER_EXECVEAT &&
+		execEv.Flags&unix.AT_EMPTY_PATH != 0
 }
 
 // cacheCommOfFailedExec warms the comm cache from a *failed* execve.

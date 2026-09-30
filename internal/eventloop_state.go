@@ -666,6 +666,14 @@ func newPairTracker() pairTracker {
 // Maps are initialized lazily on first write; consume is safe on a nil map because
 // Go map reads on nil return the zero value.
 func (p *pairTracker) set(enterEv event.Event) {
+	p.setWithFile(enterEv, nil)
+}
+
+// setWithFile is set for an enter whose target was already resolved when the
+// enter arrived (see eventLoop.storeEnter): the pending pair carries target as
+// its File, so the exit handler sees the enter-time resolution even if a
+// control record processed in between changed the fd table.
+func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) {
 	if p.enters == nil {
 		p.enters = make(map[uint32]*event.Pair)
 		p.enterAges = make(map[uint32]uint64)
@@ -674,6 +682,7 @@ func (p *pairTracker) set(enterEv event.Event) {
 	}
 	tid := enterEv.GetTid()
 	pair := event.NewPair(enterEv)
+	pair.File = target
 	if prev, ok := p.enters[tid]; ok && prev != nil {
 		prev.Recycle()
 	}

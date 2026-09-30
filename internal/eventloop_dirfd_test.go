@@ -731,3 +731,130 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 		}
 	})
 }
+
+// newExecPair builds an exec enter/exit pair as BPF reports it: plain execve
+// carries dirfd -1 and no flags, execveat its real dirfd and flags word.
+func newExecPair(traceID types.TraceId, pid uint32, dirfd, flags int32, name string, ret int64) (*types.ExecEvent, *types.RetEvent) {
+	enter := &types.ExecEvent{
+		EventType: types.ENTER_EXEC_EVENT,
+		TraceId:   traceID,
+		Time:      1,
+		Pid:       pid,
+		Tid:       pid,
+		Dirfd:     dirfd,
+		Flags:     flags,
+	}
+	copy(enter.Filename[:], name)
+	copy(enter.Comm[:], "launcher")
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   traceID - 1,
+		Time:      2,
+		Pid:       pid,
+		Tid:       pid,
+		Ret:       ret,
+	}
+	return enter, exit
+}
+
+func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
+	const (
+		pid    = uint32(2700)
+		dirfd  = int32(30)
+		progfd = int32(31)
+		failed = int64(-int64(syscall.ENOENT))
+	)
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "prog")
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
+	el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+
+	tests := []struct {
+		name     string
+		traceID  types.TraceId
+		dirfd    int32
+		flags    int32
+		filename string
+		ret      int64
+		wantName string
+		wantFD   int32
+	}{
+		{name: "execveat relative to dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
+		{name: "failed execveat keeps resolved path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", ret: failed, wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
+		{name: "fexecve AT_EMPTY_PATH names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
+		{name: "failed fexecve reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, ret: failed, wantName: "", wantFD: -1},
+		{name: "empty name without AT_EMPTY_PATH", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, wantName: "", wantFD: -1},
+		{name: "absolute name ignores dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "/usr/bin/true", wantName: "/usr/bin/true", wantFD: -1},
+		{name: "execveat AT_FDCWD stays relative", traceID: types.SYS_ENTER_EXECVEAT, dirfd: unix.AT_FDCWD, filename: "ls", wantName: "ls", wantFD: -1},
+		{name: "execve dirfd -1 means AT_FDCWD", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, filename: "./prog", wantName: "./prog", wantFD: -1},
+		{name: "execve ignores AT_EMPTY_PATH bits", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, flags: unix.AT_EMPTY_PATH, wantName: "", wantFD: -1},
+		{name: "invalid dirfd keeps name and attribution", traceID: types.SYS_ENTER_EXECVEAT, dirfd: -9, filename: "ls", ret: -int64(syscall.EBADF), wantName: "ls", wantFD: -9},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			enter, exit := newExecPair(tc.traceID, pid, tc.dirfd, tc.flags, tc.filename, tc.ret)
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+			if ok := el.handleExecExit(ep, enter); !ok {
+				t.Fatal("handleExecExit returned false")
+			}
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+			}
+		})
+	}
+}
+
+// TestFexecveResolvesCloexecDescriptorBeforeExecRecord drives the real ring
+// buffer order of a successful fexecve: enter, then the sched_process_exec
+// control record (which evicts the O_CLOEXEC descriptor from the fd table),
+// then the exit. The row must still name the program the descriptor held.
+func TestFexecveResolvesCloexecDescriptorBeforeExecRecord(t *testing.T) {
+	// Beyond any pid_max, so no procfs fallback can supply a name by accident.
+	const (
+		pid    = uint32(0x7ffffff0)
+		progfd = int32(5)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	for _, tc := range []struct {
+		name     string
+		filename string
+		flags    int32
+		want     string
+	}{
+		{name: "fexecve AT_EMPTY_PATH", flags: unix.AT_EMPTY_PATH, want: prog},
+		{name: "execveat relative to cloexec dirfd", filename: "ls", want: filepath.Join(prog, "ls")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY|syscall.O_CLOEXEC))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, tc.flags, tc.filename, 0)
+			enterRaw, err := enter.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec enter: %v", err)
+			}
+			exitRaw, err := exit.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec exit: %v", err)
+			}
+			out := make(chan *event.Pair, 1)
+			el.processRawEvent(enterRaw, out)
+			el.processRawEvent(makeProcessExecEvent(t, 2, pid, pid, "prog"), out)
+			if _, ok := el.fdState().get(progfd, pid); ok {
+				t.Fatal("exec record did not drop the O_CLOEXEC descriptor; ordering not exercised")
+			}
+			el.processRawEvent(exitRaw, out)
+
+			select {
+			case ep := <-out:
+				defer ep.Recycle()
+				if ep.File.Name() != tc.want || ep.File.FD() != progfd {
+					t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.want, progfd)
+				}
+			default:
+				t.Fatal("exec pair was not emitted")
+			}
+		})
+	}
+}
