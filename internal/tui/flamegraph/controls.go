@@ -55,6 +55,13 @@ func resetBoolSet(values map[int]bool) map[int]bool {
 	return values
 }
 
+// resetBaseline is the flame tab's `r` key. It deliberately drops the flame
+// selection: clearSnapshotState resets the selection manager together with
+// the zoom, as it does for a field-order or metric change, because the user
+// asked for a fresh baseline. The automatic 30s reset and the `r` key on the
+// dashboard tables are different on purpose: they keep the selected item (the
+// tables via stickyKey, the flame via SelectionManager's wantedPath) so the
+// cursor does not jump to row 0 / root every time the data refills.
 func (m *Model) resetBaseline() {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()

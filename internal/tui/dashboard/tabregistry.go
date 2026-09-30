@@ -484,17 +484,17 @@ func captureSyscallsSelection(m *Model) func() {
 	)
 }
 
-// captureFilesSelection is the Files tab's CaptureSelection hook. The
-// dir-grouped selection is anchored even while another tab is shown:
-// skipping it would let the selection drift to a different item by the time
-// the Files tab is shown again.
+// captureFilesSelection is the Files tab's CaptureSelection hook. A pending
+// wish for the plain table (filesTab.wanted) wins over the selected row, as
+// in keyedSelection.capture. The dir-grouped selection is anchored even
+// while another tab is shown: skipping it would let the selection drift to a
+// different item by the time the Files tab is shown again.
 func captureFilesSelection(m *Model) func() {
 	selectedFile := ""
 	if !m.filesDirGrouped && m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
-		selectedFile = m.selectedFilePath()
+		selectedFile = m.filesTab.wanted.peek()
 		if selectedFile == "" {
-			// Empty file list: follow the path remembered from before it emptied.
-			selectedFile = m.filesTab.wanted.take(m.filesTab.offset)
+			selectedFile = m.selectedFilePath()
 		}
 	}
 	reanchorDir := m.filesDirSelection().capture(m.filesDirGrouped && m.filesDirAnchorsByKey())
@@ -532,7 +532,11 @@ func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.syscallsTab.mode == tabVizModeTreemap {
 		sel := m.syscallsTreemapSelection()
-		return scrollOffset(keyStr, sel.offset, len(sel.keys())), nil
+		handled := scrollOffset(keyStr, sel.offset, len(sel.keys()))
+		if handled {
+			sel.wanted.forget() // a move, even a clamped no-op one, is the user's choice
+		}
+		return handled, nil
 	}
 	return m.syscallsTab.navigate(keyStr, m.syscallsRowCount(),
 		len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
@@ -557,12 +561,12 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // while h/l still move the table column, which picks Enter's PID or Comm
 // filter (selectedProcessFilter) there too.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	row, rows := &m.processesTab.offset, m.processesRowCount()
+	row, rows, wanted := &m.processesTab.offset, m.processesRowCount(), &m.processesTab.wanted
 	if m.processesTab.mode == tabVizModeTreemap {
 		sel := m.processesTreemapSelection()
-		row, rows = sel.offset, len(sel.keys())
+		row, rows, wanted = sel.offset, len(sel.keys()), sel.wanted
 	}
-	return m.processesTab.navigateRow(msg.String(), row, rows,
+	return m.processesTab.navigateRow(msg.String(), row, wanted, rows,
 		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 

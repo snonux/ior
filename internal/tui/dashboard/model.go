@@ -341,7 +341,8 @@ func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // snapshot refresh (handleStatsTick): it finds the previously selected path
 // in the freshly ordered rows and falls back to clamping the current offset.
 // Like every keyed selection it survives an empty snapshot (the auto-reset):
-// the path is remembered in filesTab.wanted and found again when rows return.
+// the path is remembered in filesTab.wanted and found again when rows return
+// (see stickyKey for how long and until when).
 func (m *Model) reanchorFilesOffset(selectedPath string) {
 	m.filesTab.offset = reanchorSticky(m.filesTab.offset, &m.filesTab.wanted, m.sortedFileRows(), selectedPath, findFileOffset)
 }
@@ -932,7 +933,8 @@ func (m *Model) keepProcessesSelection(change func()) {
 // as is and the offsets are left for the first tick to clamp, as a
 // positional selection is. A snapshot with no rows is data and still
 // re-anchors, but an empty list never resets an offset to 0: the selected
-// key is remembered (stickyKey) and looked for again when rows return.
+// key is remembered (stickyKey) and looked for again in the following
+// snapshots, until the user moves the selection or the grace passes.
 func (m *Model) keepSnapshotSelections(change func(), sels ...keyedSelection) {
 	if m.latest == nil {
 		change()

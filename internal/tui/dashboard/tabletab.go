@@ -20,8 +20,9 @@ type tableTabState[SortKey comparable] struct {
 	// offset is the selected row index; it is always used through
 	// selectedIndex/selected, which clamp it against the live row count.
 	offset int
-	// wanted remembers the selected row's key across a snapshot with no
-	// rows (see stickyKey), so a reset does not lose the selection.
+	// wanted remembers the selected row's key across snapshots that lack
+	// the row (see stickyKey), so a reset does not lose the selection. User
+	// navigation and sorting cancel it.
 	wanted stickyKey
 	// col is the selected table column index.
 	col int
@@ -75,15 +76,33 @@ func (t *tableTabState[SortKey]) selected(rows int) (int, bool) {
 // navigate applies one navigation key press to the selection, clamping the
 // row against maxRows and the column against columns.
 func (t *tableTabState[SortKey]) navigate(keyStr string, maxRows, columns, pageStep int) bool {
-	return t.navigateRow(keyStr, &t.offset, maxRows, columns, pageStep)
+	return t.navigateRow(keyStr, &t.offset, &t.wanted, maxRows, columns, pageStep)
 }
 
 // navigateRow is navigate with the row selection held elsewhere - a viz
 // mode's own offset, such as the Processes treemap's: the row keys (j/k,
 // g/G, pgup/pgdn) move row, the column keys (h/l) still move the tab's
 // column, which drives Enter's filter dimension in every mode.
-func (t *tableTabState[SortKey]) navigateRow(keyStr string, row *int, maxRows, columns, pageStep int) bool {
-	return common.HandleTableNavigationKey(keyStr, row, &t.col, maxRows, columns, pageStep)
+//
+// A row key ends the wish (wanted, the sticky key of the selection row
+// indexes) even when it changes nothing: on an empty list every row move
+// clamps to 0, and pressing j there is still the user taking the selection
+// into their own hands. Column keys leave it alone.
+func (t *tableTabState[SortKey]) navigateRow(keyStr string, row *int, wanted *stickyKey, maxRows, columns, pageStep int) bool {
+	handled := common.HandleTableNavigationKey(keyStr, row, &t.col, maxRows, columns, pageStep)
+	if handled && !isColumnKey(keyStr) {
+		wanted.forget()
+	}
+	return handled
+}
+
+// isColumnKey reports whether keyStr is a table column-navigation key.
+func isColumnKey(keyStr string) bool {
+	switch keyStr {
+	case "left", "h", "right", "l":
+		return true
+	}
+	return false
 }
 
 // applySort toggles the sort for the given column and hands the new offset
@@ -103,6 +122,8 @@ func (t *tableTabState[SortKey]) applySort(reverse bool, col int,
 		return false
 	}
 	current := t.offset
+	// Re-sorting is the user's decision about the view, like a move.
+	t.wanted.forget()
 	t.sort = t.sort.toggled(key, reverse)
 	t.offset = reanchor(current)
 	return true
