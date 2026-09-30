@@ -138,6 +138,14 @@ type eventLoop struct {
 	// (handleProcessExitEvent). Written only by the event-loop goroutine;
 	// stats() reads it after <-e.done like the counters above.
 	numGroupDeadExits uint
+	// numDiscardedAtStop counts the records still buffered in rawCh at the
+	// stop that the stop-time drain could not decode (see
+	// drainBacklogAtStop); they are in neither numTracepoints nor the kernel
+	// drop counter. Written by the event-loop goroutine only; stats() reads it
+	// after <-e.done.
+	numDiscardedAtStop uint
+	// stopDrainBudget overrides defaultStopDrainBudget when positive (tests).
+	stopDrainBudget time.Duration
 	// stopOnTargetExit arms endTraceOnTargetExit, the record-based trigger: the
 	// -pid target's group-dead exit record cancels the trace. Set by
 	// runTraceLoop for the headless modes before the loop starts; false (the
@@ -349,7 +357,7 @@ func (e *eventLoop) stats() string {
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.outputLossStatLine()+e.ringbufDropStatLine(rate), e.samplingStatLines(),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine(), e.samplingStatLines(),
 	)
 }
 

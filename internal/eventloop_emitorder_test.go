@@ -207,23 +207,20 @@ func TestRunDoesNotDecodeAheadOfEmission(t *testing.T) {
 	}
 }
 
-// TestRunStopsPromptlyAfterCancel pins how much a cancelled run can still
-// emit - what a TUI restart (tracer.stop() then resetStreamBuffer) can leak
-// into the next session. Nothing is decoded ahead, so the only pairs after
-// the one that cancelled come from raw records the loop's select picked over
-// ctx.Done(); each pick is a coin flip, so a backlog of hundreds of pairs
-// (as a buffered handoff produced) is out of reach while every emitted pair
-// is still accounted for.
+// TestRunStopsPromptlyAfterCancel pins what a cancelled run does with the raw
+// backlog: it decodes the records already buffered at the cancel (bounded by
+// the snapshot taken then, see drainBacklogAtStop) and stops. Everything still
+// happens inside run(), so nothing is emitted after it returned - what a TUI
+// restart (tracer.stop() then resetStreamBuffer) could otherwise leak into the
+// next session, as a buffered handoff did. Whether the select or the drain
+// consumes a given record is a coin flip, so the assertion is the accounting
+// that holds for both: every record of the backlog was taken and every pair it
+// formed was emitted (task tq2 - they used to be discarded at stop).
 func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 	const (
 		n        = 512
 		cancelAt = 10
 		trials   = 20
-		// Each pair takes two raw records, so more than 32 trailing pairs
-		// need at least 66 consecutive picks of rawCh over the ready
-		// ctx.Done() (select picks uniformly among ready cases): P = 2^-66
-		// per trial.
-		maxTrailer = 32
 	)
 	for trial := 0; trial < trials; trial++ {
 		el := newEmitOrderEventLoop(t)
@@ -241,12 +238,19 @@ func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 
 		el.run(ctx, rawCh)
 		cancel()
+		emittedAtReturn := len(times)
 
-		if trailer := len(times) - (cancelAt + 1); trailer < 0 || trailer > maxTrailer {
-			t.Fatalf("trial %d: %d pairs emitted after the cancelling one, want 0..%d", trial, trailer, maxTrailer)
+		if len(rawCh) != 0 {
+			t.Fatalf("trial %d: %d buffered records left behind by run()", trial, len(rawCh))
+		}
+		if emittedAtReturn != n {
+			t.Fatalf("trial %d: %d pairs emitted, want all %d", trial, emittedAtReturn, n)
 		}
 		requireOrderedPairs(t, times, len(times))
-		requireEveryProducedPairEmitted(t, el, len(times), 2*n-len(rawCh))
+		requireEveryProducedPairEmitted(t, el, len(times), 2*n)
+		if el.numDiscardedAtStop != 0 {
+			t.Fatalf("trial %d: numDiscardedAtStop = %d, want 0", trial, el.numDiscardedAtStop)
+		}
 	}
 }
 

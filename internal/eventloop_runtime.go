@@ -200,7 +200,9 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 //     rawCh and, through it, the BPF ring buffer.
 //
 // rawCh itself stays buffered (see appconfig.DefaultChannelBufferSize), so
-// ring-buffer polling remains decoupled from decoding.
+// ring-buffer polling remains decoupled from decoding. Records still buffered
+// when ctx is cancelled are not abandoned: drainBacklogAtStop decodes them
+// first (bounded by count and time) and accounts for any it cannot.
 func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 	// A raw record completes at most one pair (tracepointExited, through
 	// sendPair, is the only sender), so one slot always suffices. sendPair
@@ -221,19 +223,27 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 			if !ok {
 				return
 			}
-			if len(raw) == 0 {
-				continue
-			}
-			// Recover from any panic inside a handler so a single bad
-			// event cannot crash the entire process.
-			e.processRawEventSafe(raw, pairs)
-			e.drainPairs(pairs)
-			flush.armIfPending()
+			e.consumeRaw(raw, pairs, flush)
 		case <-ctx.Done():
 			e.notifyStatus("Stopping event loop")
+			e.drainBacklogAtStop(rawCh, pairs, flush)
 			return
 		}
 	}
+}
+
+// consumeRaw decodes one raw record and emits the pair it completed, if any.
+// It is the single per-record step of both the running loop and the drain at
+// stop, so a record counts the same wherever it is taken from.
+func (e *eventLoop) consumeRaw(raw []byte, pairs chan *event.Pair, flush *flushTimer) {
+	if len(raw) == 0 {
+		return
+	}
+	// Recover from any panic inside a handler so a single bad
+	// event cannot crash the entire process.
+	e.processRawEventSafe(raw, pairs)
+	e.drainPairs(pairs)
+	flush.armIfPending()
 }
 
 // flushOutput writes out whatever the default -plain sink still buffers. It
