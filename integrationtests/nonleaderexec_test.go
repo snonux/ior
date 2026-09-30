@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,8 +56,15 @@ func TestNonLeaderExecUnderTidFilterIsCompleted(t *testing.T) {
 	h.WorkloadEnv = []string{workerTidFileEnv + "=" + tidFile}
 	// The scenario parks the exec thread and publishes its tid before the
 	// PID is announced, so the tid is known when ior starts.
-	h.IorArgsForPID = func(int) []string {
-		return []string{"-pid", "-1", "-tid", strconv.Itoa(readCallerTid(t, tidFile))}
+	// An unreadable tid file is returned as an error, not t.Fatal: the
+	// callback runs after the workload started and the harness must get the
+	// chance to kill and reap it.
+	h.IorArgsForPID = func(int) ([]string, error) {
+		tid, err := readCallerTidFile(tidFile)
+		if err != nil {
+			return nil, err
+		}
+		return []string{"-pid", "-1", "-tid", strconv.Itoa(tid)}, nil
 	}
 	result, pid, err := h.RunWithIorArgs(nonLeaderExecTidScenario, defaultDuration,
 		[]string{"-trace-syscalls", "execve"})
@@ -71,16 +79,27 @@ func TestNonLeaderExecUnderTidFilterIsCompleted(t *testing.T) {
 	assertOneExecveRowFor(t, result, callerTid)
 }
 
-// readCallerTid reads the exec'ing thread's tid published by the workload.
-func readCallerTid(t *testing.T, path string) int {
-	t.Helper()
+// readCallerTidFile reads and parses the exec'ing thread's tid published by
+// the workload. It returns an error instead of failing the test so it is safe
+// to call from the harness's IorArgsForPID callback.
+func readCallerTidFile(path string) (int, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read caller tid: %v", err)
+		return 0, fmt.Errorf("read caller tid: %w", err)
 	}
 	tid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
-		t.Fatalf("parse caller tid %q: %v", raw, err)
+		return 0, fmt.Errorf("parse caller tid %q: %w", raw, err)
+	}
+	return tid, nil
+}
+
+// readCallerTid is readCallerTidFile for test bodies: it fails the test.
+func readCallerTid(t *testing.T, path string) int {
+	t.Helper()
+	tid, err := readCallerTidFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return tid
 }

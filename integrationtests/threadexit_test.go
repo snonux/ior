@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,8 +54,8 @@ func TestThreadExitKeepsFdName(t *testing.T) {
 // stability under a tid filter; the scoped group-dead bypass is exercised by
 // TestTidFilterForwardsGroupDeadExitOfUntracedThread.
 func TestThreadExitKeepsFdNameUnderTidFilter(t *testing.T) {
-	runThreadExitScenario(t, func(pid int) []string {
-		return []string{"-pid", "-1", "-tid", strconv.Itoa(pid)}
+	runThreadExitScenario(t, func(pid int) ([]string, error) {
+		return []string{"-pid", "-1", "-tid", strconv.Itoa(pid)}, nil
 	})
 }
 
@@ -72,13 +73,12 @@ func TestTidFilterForwardsGroupDeadExitOfUntracedThread(t *testing.T) {
 	h.IorOutput = &OutputCapture{}
 	tidFile := filepath.Join(h.OutputDir, "worker.tid")
 	h.WorkloadEnv = []string{workerTidFileEnv + "=" + tidFile}
-	h.IorArgsForPID = func(int) []string {
+	h.IorArgsForPID = func(int) ([]string, error) {
 		raw, err := os.ReadFile(tidFile)
 		if err != nil {
-			t.Errorf("read worker tid: %v", err)
-			return nil
+			return nil, fmt.Errorf("read worker tid: %w", err)
 		}
-		return []string{"-pid", "-1", "-tid", strings.TrimSpace(string(raw))}
+		return []string{"-pid", "-1", "-tid", strings.TrimSpace(string(raw))}, nil
 	}
 	result, pid, err := h.RunWithIorArgs(tidWorkerScenario, defaultDuration, threadExitTraceArgs)
 	if err != nil {
@@ -109,9 +109,10 @@ func groupDeadExits(t *testing.T, logged string) int {
 }
 
 // runThreadExitScenario runs the thread-exit scenario with the extra ior args
-// scopeArgs(workloadPID) returns (nil: none) and asserts the pipe name is
+// scopeArgs(workloadPID) returns (nil: none; an error aborts the run and the
+// harness reaps the workload) and asserts the pipe name is
 // stable, the exit probe attached, and no ring-buffer record was lost.
-func runThreadExitScenario(t *testing.T, scopeArgs func(pid int) []string) {
+func runThreadExitScenario(t *testing.T, scopeArgs func(pid int) ([]string, error)) {
 	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)

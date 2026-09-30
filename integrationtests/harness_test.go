@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +177,50 @@ func TestIorStartFailureCleansUpWorkload(t *testing.T) {
 		if signalErr := proc.Signal(syscall.Signal(0)); signalErr == nil {
 			t.Error("workload process is still running after ior start failure")
 		}
+	}
+}
+
+// TestIorArgsForPIDErrorCleansUpWorkload pins task 3q2: when the IorArgsForPID
+// callback fails (e.g. an unreadable tid file) after the workload started,
+// the run returns the error and the harness kills and reaps the workload
+// instead of leaving it to block on its startup file as a zombie. Both the
+// flamegraph and the Parquet entry points are covered.
+func TestIorArgsForPIDErrorCleansUpWorkload(t *testing.T) {
+	runs := map[string]func(h *TestHarness) (int, error){
+		"RunWithIorArgs": func(h *TestHarness) (int, error) {
+			_, pid, err := h.RunWithIorArgs("test", 5, nil)
+			return pid, err
+		},
+		"RunParquetWithIorArgs": func(h *TestHarness) (int, error) {
+			_, pid, err := h.RunParquetWithIorArgs("test", 5, nil)
+			return pid, err
+		},
+	}
+	for name, run := range runs {
+		t.Run(name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			// exec keeps the shell's pid, so killing it kills the sleep too.
+			workloadBin := writeScript(t, tmpDir, "workload", `echo $$; exec sleep 30`)
+			wantErr := errors.New("tid file unreadable")
+			h := TestHarness{
+				IorBinary:      "/nonexistent/ior", // must never be reached
+				WorkloadBinary: workloadBin,
+				OutputDir:      t.TempDir(),
+				IorArgsForPID:  func(int) ([]string, error) { return nil, wantErr },
+			}
+			pid, err := run(&h)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want it to wrap %v", err, wantErr)
+			}
+			if pid == 0 {
+				t.Fatal("expected non-zero workload PID")
+			}
+			// Signal 0 also succeeds for an unreaped zombie, so this checks
+			// both that the workload was killed and that it was waited for.
+			if err := syscall.Kill(pid, 0); err == nil {
+				t.Error("workload still exists (running or unreaped) after the callback failed")
+			}
+		})
 	}
 }
 

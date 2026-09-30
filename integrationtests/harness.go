@@ -40,8 +40,12 @@ type TestHarness struct {
 	// IorArgsForPID, when set, returns extra ior args that depend on the
 	// workload PID (known only once it started), e.g. "-tid <pid>". They are
 	// appended after the harness's own args, so they override its -pid.
-	// Honoured by RunWithIorArgs and RunParquetWithIorArgs.
-	IorArgsForPID func(pid int) []string
+	// Honoured by RunWithIorArgs and RunParquetWithIorArgs. It runs after the
+	// workload started, so it must report failure through its error result
+	// and never t.Fatal/runtime.Goexit: the harness kills and reaps the
+	// workload when an error is returned, whereas an unwound goroutine would
+	// skip that cleanup and leave the workload to time out as a zombie.
+	IorArgsForPID func(pid int) ([]string, error)
 }
 
 // OutputCapture is a goroutine-safe line sink: ior's stdout and stderr are
@@ -80,7 +84,10 @@ func (h *TestHarness) RunWithIorArgs(scenario string, duration int, extraIorArgs
 		return TestResult{}, 0, err
 	}
 
-	extraIorArgs = h.withPIDScopedArgs(extraIorArgs, workloadPID)
+	extraIorArgs, err = h.withPIDScopedArgs(extraIorArgs, workloadPID, workloadCmd)
+	if err != nil {
+		return TestResult{}, workloadPID, err
+	}
 	iorCmd, readyCh, err := h.startIorForRun(workloadPID, scenario, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
@@ -129,7 +136,10 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 		return "", 0, err
 	}
 
-	extraIorArgs = h.withPIDScopedArgs(extraIorArgs, workloadPID)
+	extraIorArgs, err = h.withPIDScopedArgs(extraIorArgs, workloadPID, workloadCmd)
+	if err != nil {
+		return "", workloadPID, err
+	}
 	iorCmd, readyCh, err := h.startIorParquetForRun(workloadPID, parquetPath, duration, extraIorArgs)
 	if err != nil {
 		_ = workloadCmd.Process.Kill()
@@ -151,12 +161,19 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 }
 
 // withPIDScopedArgs appends the IorArgsForPID args for pid to extra, leaving
-// the caller's slice untouched.
-func (h *TestHarness) withPIDScopedArgs(extra []string, pid int) []string {
+// the caller's slice untouched. If IorArgsForPID fails, the already started
+// workload is killed and reaped here (it would otherwise block for its
+// startup file and linger as a zombie) and the error is returned.
+func (h *TestHarness) withPIDScopedArgs(extra []string, pid int, workloadCmd *exec.Cmd) ([]string, error) {
 	if h.IorArgsForPID == nil {
-		return extra
+		return extra, nil
 	}
-	return append(slices.Clone(extra), h.IorArgsForPID(pid)...)
+	scoped, err := h.IorArgsForPID(pid)
+	if err != nil {
+		killAndReap(workloadCmd)
+		return nil, fmt.Errorf("ior args for workload pid %d: %w", pid, err)
+	}
+	return append(slices.Clone(extra), scoped...), nil
 }
 
 func (h *TestHarness) workloadStartupFile(scenario string) string {
