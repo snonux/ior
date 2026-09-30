@@ -184,19 +184,36 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 }
 
 // registerFlags binds all CLI flags to cfg and returns the string pointers for
-// fields that require post-parse resolution (tracepoint regexes, collapse fields).
+// fields that require post-parse resolution (tracepoint regexes, collapse fields,
+// sampling rates, and the tracepoint dimension selectors). Registration is
+// split by concern into the register*Flags helpers below; the order does not
+// matter because the flag package sorts the help output by name.
 func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields, familySampling, syscallSampling *string, dims *tracepoints.DimensionSelectorConfig) {
-	validFields := collapse.ValidFields()
-	validCounts := collapse.ValidCountFields()
 	// Families and kinds enumerate their full valid sets in the help text
 	// (audit domain-06 D2); syscall names are too numerous to list.
-	validFamilies := make([]string, 0, 12)
-	for _, family := range types.AllSyscallFamilies() {
-		validFamilies = append(validFamilies, string(family))
-	}
-	validKinds := tracepoints.KnownKinds()
-	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
+	validFamilies := syscallFamilyNames()
 
+	registerFilterFlags(fs, cfg)
+	tpsAttach, tpsExclude, dims = registerTraceSelectionFlags(fs, validFamilies)
+	registerOutputFlags(fs, cfg)
+	familySampling, syscallSampling = registerSamplingFlags(fs, validFamilies)
+	fields = registerCollapseFlags(fs, cfg)
+	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dims
+}
+
+// syscallFamilyNames lists every syscall family name for the help texts.
+func syscallFamilyNames() []string {
+	families := types.AllSyscallFamilies()
+	names := make([]string, 0, len(families))
+	for _, family := range families {
+		names = append(names, string(family))
+	}
+	return names
+}
+
+// registerFilterFlags binds the process/comm/path filters and the basic probe
+// settings (map size, duration, pprof).
+func registerFilterFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.IntVar(&cfg.PidFilter, "pid", cfg.PidFilter, "Filter for processes ID")
 	fs.IntVar(&cfg.TidFilter, "tid", cfg.TidFilter, "Filter for thread ID")
 	fs.IntVar(&cfg.EventMapSize, "mapSize", cfg.EventMapSize, "BPF FD event ring buffer map size")
@@ -205,6 +222,14 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.StringVar(&cfg.CommFilter, "comm", "", "Command to filter for")
 	fs.StringVar(&cfg.PathFilter, "path", "", "Path to filter for")
 	fs.BoolVar(&cfg.PprofEnable, "pprof", false, "Enable profiling")
+}
+
+// registerTraceSelectionFlags binds the tracepoint regex lists and the
+// family/kind/syscall attach selectors. The regex lists stay raw strings
+// because they are compiled into a Selector after parsing.
+func registerTraceSelectionFlags(fs *flag.FlagSet, validFamilies []string) (tpsAttach, tpsExclude *string, dims *tracepoints.DimensionSelectorConfig) {
+	validKinds := tracepoints.KnownKinds()
+	dimensionCfg := &tracepoints.DimensionSelectorConfig{}
 
 	tpsAttach = fs.String("tps", "", "Comma separated list of regexes for tracepoints to load (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
 	tpsExclude = fs.String("tpsExclude", "", "Comma separated list of regexes for tracepoints to exclude (whitespace around each regex and empty entries are ignored; a regex cannot contain a comma)")
@@ -220,7 +245,12 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 		"Comma separated tracepoint kinds to exclude from attachment (valid: "+strings.Join(validKinds, ",")+")")
 	fs.StringVar(&dimensionCfg.NoTraceSyscalls, "no-trace-syscalls", "",
 		"Comma separated syscall names to exclude from attachment")
+	return tpsAttach, tpsExclude, dimensionCfg
+}
 
+// registerOutputFlags binds the output-mode flags (plain CSV, flamegraph,
+// parquet, synthetic flame test modes) and the TUI timing/export settings.
+func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); control and invisible characters in traced text are escaped (\\x1b, \\u202e) as selected by -escape")
 	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control and invisible characters in traced text: auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
@@ -234,16 +264,29 @@ func registerFlags(fs *flag.FlagSet, cfg *Config) (tpsAttach, tpsExclude, fields
 	fs.BoolVar(&cfg.TUIExportEnable, "tuiExport", cfg.TUIExportEnable, "Enable TUI stream CSV export (e and stream-tab x/X/E shortcuts plus their hints; separate from Parquet recording)")
 	fs.DurationVar(&cfg.ResetTimer, "resetTimer", cfg.ResetTimer,
 		"Auto-reset interval for aggregate dashboard state (flamegraph trie + stats engine); set to 0 to disable")
+	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
+}
+
+// registerSamplingFlags binds the per-family and per-syscall sampling rate
+// lists, which are resolved into cfg after parsing.
+func registerSamplingFlags(fs *flag.FlagSet, validFamilies []string) (familySampling, syscallSampling *string) {
 	familySampling = fs.String("syscall-sampling-families", "",
 		"Per-family sampling rates as name=rate, for example \"Time=100,Misc=0\" (0=aggregate-only, 1=all, N=1-in-N; family rate 0 is promoted to 1 in raw output modes -plain/-flamegraph/-parquet which have no aggregate sink; valid families: "+strings.Join(validFamilies, ",")+")")
 	syscallSampling = fs.String("syscall-sampling-syscalls", "",
 		"Per-syscall sampling rates as name=rate, for example \"futex=0,clock_gettime=200\" (overrides family rates)")
-	fs.BoolVar(&cfg.ShowVersion, "version", false, "Print version banner and exit")
+	return familySampling, syscallSampling
+}
+
+// registerCollapseFlags binds the collapse field list (resolved after parsing)
+// and the collapse count field.
+func registerCollapseFlags(fs *flag.FlagSet, cfg *Config) (fields *string) {
+	validFields := collapse.ValidFields()
+	validCounts := collapse.ValidCountFields()
 	fields = fs.String("fields", "",
 		fmt.Sprintf("Comma separated list of fields to collapse, valid are: %v", validFields))
 	fs.StringVar(&cfg.CountField, "count", cfg.CountField,
 		fmt.Sprintf("Count field to collapse, valid are: %v", validCounts))
-	return tpsAttach, tpsExclude, fields, familySampling, syscallSampling, dimensionCfg
+	return fields
 }
 
 // resolvePostParseFields compiles the tracepoint selector and collapse field
