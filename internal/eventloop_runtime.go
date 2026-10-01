@@ -511,6 +511,16 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep, ok = e.adoptLostExecCaller(exitEv)
 	}
 	if !ok {
+		// An exit with no enter is dropped without a row and without a count
+		// (it is neither a mismatch nor a syscall ior saw start). Besides a
+		// lost enter record it is ordinary kernel behaviour: the first return
+		// of a clone/fork child, a call already in flight when the probes
+		// attached, and a call a seccomp filter denies with an errno - the
+		// filter runs before sys_enter, so only sys_exit fires and there is
+		// nothing to build the row's arguments from (task qr2; such calls are
+		// invisible in the trace, but they no longer consume a parked enter
+		// and inflate the mismatch count now that noreturn enters are not
+		// parked, task pr2).
 		exitEv.Recycle()
 		return
 	}

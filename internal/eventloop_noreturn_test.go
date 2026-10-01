@@ -2,6 +2,7 @@ package internal
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 
 	"ior/internal/event"
@@ -205,5 +206,40 @@ func TestReturningNullSyscallStillPairs(t *testing.T) {
 	}
 	if ret, ok := ep.ExitEv.(event.RetCarrier); !ok || ret.GetRet() != 42 {
 		t.Fatalf("getpid row lost its return value")
+	}
+}
+
+// TestDeniedSyscallExitAfterASignalReturnIsNotAMismatch is the regression test
+// for the mismatch half of task qr2. A syscall a seccomp filter denies with an
+// errno never fires sys_enter (the filter runs before the tracepoint) but still
+// fires sys_exit, so the kernel delivers an exit with no enter - and in a
+// signal-driven program the denied call follows an rt_sigreturn. While
+// noreturn enters were parked, that orphan exit consumed the rt_sigreturn
+// enter and was counted as a mismatch (10 denied fchmod calls showed "5
+// mismatches (6.58%)"). The rt_sigreturn row is complete at enter now, so the
+// orphan exit finds nothing parked: it is dropped without a row and without
+// touching the mismatch counter or the counted syscalls.
+func TestDeniedSyscallExitAfterASignalReturnIsNotAMismatch(t *testing.T) {
+	el := newPairEvictionEventLoop(t)
+	out := make(chan *event.Pair, 2)
+
+	row := feedNoReturnEnter(t, el, out, defaulTime, types.SYS_ENTER_RT_SIGRETURN)
+	if row == nil {
+		t.Fatal("rt_sigreturn enter produced no row")
+	}
+	row.Recycle()
+
+	_, deniedExit := makeExitRetEvent(t, defaulTime+10, execCommPid, execCommTid, types.SYS_EXIT_FCHMOD, -int64(syscall.EPERM))
+	el.processRawEvent(deniedExit, out)
+
+	if ep := nextRow(out); ep != nil {
+		ep.Recycle()
+		t.Fatal("an exit without an enter produced a row")
+	}
+	if el.numTracepointMismatches != 0 {
+		t.Fatalf("numTracepointMismatches = %d, want 0: the denied exit consumed a parked enter", el.numTracepointMismatches)
+	}
+	if el.numSyscalls != 1 {
+		t.Fatalf("numSyscalls = %d, want only the rt_sigreturn row", el.numSyscalls)
 	}
 }
