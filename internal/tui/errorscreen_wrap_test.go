@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -130,9 +131,10 @@ func TestFitErrorBody(t *testing.T) {
 // fitted. Every line must fit at every width from 1 to 24 columns, for both
 // hints, at a tall and a short height, and the hint must still start with its
 // first key. The body is checked too: lipgloss keeps a warning row's "  - "
-// indent whole when wrapping, and a 2-cell rune cannot fit one column.
+// indent whole when wrapping, a 2-cell rune cannot fit one column, and a
+// keycap is counted 1 cell by ansi's wrap but 2 by the terminal.
 func TestErrorScreenFitsNarrowTerminals(t *testing.T) {
-	err := errors.New("failed to load BPF object: permission denied\nWarnings logged during setup:\n  - libbpf: prog 'ior_x': verifier: R1 invalid mem access 'scalar'\n  - open /tmp/漢字")
+	err := errors.New("failed to load BPF object: permission denied\nWarnings logged during setup:\n  - libbpf: prog 'ior_x': verifier: R1 invalid mem access 'scalar'\n  - open /tmp/漢字" + keycap + keycap + keycap)
 	kinds := []struct {
 		kind  errorScreenKind
 		first string
@@ -147,15 +149,8 @@ func TestErrorScreenFitsNarrowTerminals(t *testing.T) {
 				m.setError(err, k.kind)
 
 				view := ansi.Strip(m.View().Content)
+				assertLinesFit(t, m.View().Content, width, height)
 				lines := strings.Split(view, "\n")
-				if len(lines) > height {
-					t.Fatalf("kind %v width %d height %d: %d lines:\n%s", k.kind, width, height, len(lines), view)
-				}
-				for _, line := range lines {
-					if w := ansi.StringWidth(line); w > width {
-						t.Fatalf("kind %v width %d height %d: line of width %d: %q", k.kind, width, height, w, line)
-					}
-				}
 				hint := strings.TrimSpace(lines[len(lines)-1])
 				if height == 40 {
 					// Placed at the top: the hint is the last non-blank line.
@@ -173,10 +168,9 @@ func TestErrorScreenFitsNarrowTerminals(t *testing.T) {
 
 // TestWrapErrorTextWrapsRatherThanCuts: an over-wide line (an indent, a word
 // longer than the terminal) is broken onto further lines, so no text is lost;
-// only a grapheme wider than the terminal itself is cut. Tabs are expanded
-// before wrapping, so lipgloss's own tab expansion cannot widen a line later;
-// leading blanks that do not fit with the next word go with the break, as
-// at any other word break.
+// only a grapheme wider than the terminal itself is dropped. Leading blanks
+// that do not fit with the next word go with the break, as at any other word
+// break.
 func TestWrapErrorTextWrapsRatherThanCuts(t *testing.T) {
 	cases := []struct {
 		text  string
@@ -185,8 +179,6 @@ func TestWrapErrorTextWrapsRatherThanCuts(t *testing.T) {
 	}{
 		{"  - abc\nx", 2, "  \n-\nab\nc\nx"},
 		{"foo bar baz quux", 7, "foo bar\nbaz\nquux"},
-		{"\tab", 6, "    ab"},
-		{"\tab", 5, "\nab"},
 	}
 	for _, c := range cases {
 		if got := wrapErrorText(c.text, c.width); got != c.want {
@@ -201,7 +193,12 @@ func TestWrapErrorTextWrapsRatherThanCuts(t *testing.T) {
 // TestWrapErrorTextKeepsGraphemesWhole: lipgloss's Width wrap (used before)
 // broke "yyyye\u0301x" at 5 columns between the "e" and its combining accent,
 // so the accent started the next line on its own. Every line must start and
-// end on a grapheme boundary, and the text must survive the wrap.
+// end on a grapheme boundary (but for the documented space+mark case), be at
+// most width cells by ansi.StringWidth, and the text must survive the wrap.
+// keycap is "1" + U+FE0F + U+20E3: one grapheme, 2 cells by ansi.StringWidth
+// but 1 by ansi.Wordwrap, Hardwrap and Truncate.
+const keycap = "1\ufe0f\u20e3"
+
 func TestWrapErrorTextKeepsGraphemesWhole(t *testing.T) {
 	cases := []struct {
 		text  string
@@ -211,10 +208,27 @@ func TestWrapErrorTextKeepsGraphemesWhole(t *testing.T) {
 		{"yyyye\u0301x", 5, "yyyye\u0301\nx"},
 		{"ae\u0301\u0301b", 2, "ae\u0301\u0301\nb"},
 		{"warn: cafe\u0301 cafe\u0301", 8, "warn:\ncafe\u0301\ncafe\u0301"},
+		// Keycaps: ansi's wrap and Truncate count each as 1 cell, StringWidth
+		// (lipgloss, the terminal) as 2; the lines are re-broken by the latter.
+		{keycap + keycap + keycap, 4, keycap + keycap + "\n" + keycap},
+		{"x" + keycap + "verylongword", 2, "x\n" + keycap + "\nve\nry\nlo\nng\nwo\nrd"},
+		{"#\ufe0f\u20e3ab", 3, "#\ufe0f\u20e3a\nb"},
+		// Too wide for the whole terminal: dropped, never shown 2 cells wide.
+		{keycap, 1, ""},
+		{"a" + keycap + "b", 1, "a\n\nb"},
+		// The documented exception: a space+mark cluster at a word break loses
+		// its space like any break, the zero-width mark leads the next line.
+		{"x \u0301y", 2, "x\n\u0301y"},
 	}
 	for _, c := range cases {
-		if got := wrapErrorText(c.text, c.width); got != c.want {
+		got := wrapErrorText(c.text, c.width)
+		if got != c.want {
 			t.Errorf("wrapErrorText(%q, %d) = %q, want %q", c.text, c.width, got, c.want)
+		}
+		for _, line := range strings.Split(got, "\n") {
+			if w := ansi.StringWidth(line); w > c.width {
+				t.Errorf("wrapErrorText(%q, %d): line %q is %d cells wide", c.text, c.width, line, w)
+			}
 		}
 	}
 }
@@ -232,6 +246,42 @@ func TestErrorScreenKeepsCombiningMarksOnTheirLine(t *testing.T) {
 	for _, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
 		if strings.HasPrefix(strings.TrimLeft(line, " "), "\u0301") {
 			t.Fatalf("a line starts with the combining accent: %q", line)
+		}
+	}
+}
+
+// TestErrorScreenFitsWithKeycapsAtEverySize sweeps the full view over widths
+// 1..40 and heights 1..10 with keycap-laden text: ansi's wrap counts a keycap
+// as 1 cell and lipgloss pads every line to the widest, so one miscounted line
+// used to widen the whole screen past the terminal.
+func TestErrorScreenFitsWithKeycapsAtEverySize(t *testing.T) {
+	text := "warn " + strings.Repeat(keycap, 9) + " x" + keycap + "verylongword #\ufe0f\u20e3 漢字 " + keycap
+	for width := 1; width <= 40; width++ {
+		for height := 1; height <= 10; height++ {
+			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+			m.router.showDashboard()
+			m.attaching = false
+			m.width, m.height = width, height
+			m.setError(errors.New(text), errorScreenFatal)
+			assertLinesFit(t, m.View().Content, width, height)
+		}
+	}
+}
+
+// assertLinesFit fails when the rendered view has more than height lines or a
+// line wider than width, measured both with ansi.StringWidth (on the stripped
+// line) and lipgloss.Width (on the styled one), the measures the terminal
+// layout relies on.
+func assertLinesFit(t *testing.T, view string, width, height int) {
+	t.Helper()
+	lines := strings.Split(view, "\n")
+	if len(lines) > height {
+		t.Fatalf("width %d height %d: %d lines:\n%s", width, height, len(lines), view)
+	}
+	for _, line := range lines {
+		sw, lw := ansi.StringWidth(ansi.Strip(line)), lipgloss.Width(line)
+		if sw > width || lw > width {
+			t.Fatalf("width %d height %d: line of width %d (lipgloss %d): %q", width, height, sw, lw, ansi.Strip(line))
 		}
 	}
 }
