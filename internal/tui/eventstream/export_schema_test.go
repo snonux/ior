@@ -280,8 +280,16 @@ func TestStreamCSVCellsMatchParquetRecord(t *testing.T) {
 			t.Errorf("CSV column %q = %q, want the parquet.Record %q value %q", name, got, pc.name, want)
 		}
 		// The check above is only as strong as the row is distinct: a bool
-		// has two values, everything else must not repeat.
+		// has two values, everything else must not repeat and must not be
+		// zero or empty. Without the non-zero requirement a field that
+		// distinctRow forgot to set would compare "0" against a cell
+		// hard-coded to "0" and pass. Bools are exempt because a bool cell
+		// is "true" or "false" and distinctRow sets IsError to true, so
+		// the false rendering is already what a missing cell would show.
 		if rec.Field(pc.field).Kind() != reflect.Bool {
+			if want == "0" || want == "" {
+				t.Errorf("distinctRow leaves column %q at %q; a cell hard-coded to that zero would pass", name, want)
+			}
 			if other, dup := seenValue[want]; dup {
 				t.Errorf("distinctRow gives columns %q and %q the same value %q; the swap check is blind to them", other, name, want)
 			}
