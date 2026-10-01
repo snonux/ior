@@ -440,7 +440,9 @@ the workload waiting 30s for its startup file as a zombie. On the workload side,
 *before* the PID is printed, i.e. before ior starts: `thread-exit-tid-worker`
 and `exec-non-leader-thread-tid` use it (`startParkedWorker`) to park a worker
 thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
-`IorArgsForPID` reads to pass `-tid <worker>`.
+`IorArgsForPID` reads to pass `-tid <worker>`. `TestHarness.IorEnv` adds
+`KEY=VALUE` entries to ior's environment for every run built through
+`iorCommand`, e.g. ior's `IOR_TEST_*` hooks (task wz2).
 
 ## TUI Behavior
 
@@ -1797,7 +1799,21 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`
   parses that exact line to prove the bypass forwards the group-dead exit of an
   untraced thread under `-tid <worker>` (it reads 0 with the bypass disabled),
-  so keep its format stable.
+  so keep its format stable. That test runs ior with both target-exit
+  triggers off (`IOR_TEST_DISABLE_TARGET_EXIT_RECORD=1`,
+  `IOR_TEST_DISABLE_TARGET_WATCH=1`, through the harness's `IorEnv`), so the
+  run lasts until `-duration` (task wz2): since os2 a headless `-tid <worker>`
+  run ends on the worker's own exit record, before the process exits, and the
+  stop drain only decodes the backlog present at the stop (the trace window
+  ends there, by design), so the later group-dead record was counted only when
+  it happened to be buffered already. Bisected to `15f7ecd` (20 runs each:
+  `15f7ecd^` 20/20 pass, `15f7ecd` 11/20; 1/10 on `d97df48`); with the
+  triggers off it passed 20/20 idle and 20/20 under 2x-nproc CPU load. It also
+  fails on any "exited, stopping the trace" line, so a renamed hook cannot
+  bring the race back silently. In a real headless `-tid <non-leader>` run the
+  bypassed record therefore normally arrives after the stop; it matters to the
+  TUI, which outlives its target, and to a leader target, whose process's
+  group-dead record is a stop trigger (`endTraceOnTargetThreadExit`).
   Both control records keep a pre-change `IOR_BPF_OBJECT` override
   compatible (`NewProcessExitEventFast`/`NewProcessExecEventFast` in
   `internal/types/fastdecode.go`). The legacy 24-byte exit record predates
