@@ -142,9 +142,10 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	rows := make([]StreamEvent, 0)
 	if source != nil {
 		snapshot := source.Snapshot()
-		// Same row selection as Model.applyFilter, so the export contains
-		// exactly the rows the Stream tab is showing; the only exception is
-		// the synthetic warning rows, which writeStreamCSV leaves out.
+		// Same row selection as Model.applyFilter, so the export holds the
+		// filtered real rows the Stream tab is showing; the synthetic warning
+		// rows filterRows lets through for the tab are excluded here by
+		// writeStreamCSV, so they never reach the file.
 		rows = filterRows(make([]StreamEvent, 0, len(snapshot)), snapshot, filter)
 	}
 

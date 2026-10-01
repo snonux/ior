@@ -680,15 +680,17 @@ func (m *Model) takeSnapshot() {
 // An inactive filter matches every row, so it bulk-copies src instead of
 // evaluating Matches per row: that is the common case (no filter set) and it
 // runs over the whole ring buffer on every stream tick. Both Model.applyFilter
-// and the CSV export use it, so the export contains exactly the rows the
-// Stream tab shows.
+// and the CSV export use it, so the export starts from the same filtered
+// selection the Stream tab shows (the export then drops the warning rows, see
+// below).
 //
 // Synthetic warning rows (Row.IsWarning) always pass, whatever the filter says.
 // They describe the trace itself (a -tid that is not a thread of -pid, zero
 // probes attached, dropped events), not a traced syscall, so a user filter has
 // nothing to say about them - and the active -pid/-tid predicates of exactly
 // the scopes that raise such warnings used to hide the explanation of why the
-// trace stays empty (tasks ur2/wr2). The CSV export skips them separately.
+// trace stays empty (tasks ur2/wr2). The CSV export skips them separately: it
+// contains the filtered real rows only, never the warning rows.
 //
 // Trade-off: because the bypassed warnings land in the returned slice, they
 // are counted by the Stream tab's "filtered" counter (len(Model.filtered)

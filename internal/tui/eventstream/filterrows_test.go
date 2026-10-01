@@ -99,9 +99,12 @@ func BenchmarkFilterRows(b *testing.B) {
 // There is deliberately no "errors only" case: NewWarning builds its rows with
 // IsError set (RetVal -1), so a warning satisfies that predicate through plain
 // Filter.Matches and the case would pass with the bypass removed - it could
-// not tell the bypass from ordinary matching. Every case below is one a
+// not tell the bypass from ordinary matching. Every filtering case below is one a
 // warning row does not satisfy on its own (it is Syscall "warning", Family
-// Misc, PID 0), so each fails if the IsWarning bypass is taken out.
+// Misc, PID 0), so each of those fails if the IsWarning bypass is taken out.
+// The "inactive filter" case is only a control: an inactive filter takes the
+// bulk-copy path that never reaches the bypass, so it passes either way and
+// just pins that real rows and the warning all come through unfiltered.
 func TestFilterRowsKeepsWarningRowsWhateverTheFilterSays(t *testing.T) {
 	warn := NewWarningEvent(5, "ior: -tid 1: not a thread of -pid 7: the trace will stay empty")
 	src := append(filterRowsFixture(), warn)
