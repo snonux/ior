@@ -91,7 +91,8 @@ func (m *Model) helpSections() []helpSection {
 // dashboardTabHelpLines builds the Dashboard Tabs section of the global help
 // overlay. The stream export shortcuts (x/X/E) line is included only when
 // export is enabled, so -tuiExport=false hides both the hints and the
-// shortcuts themselves.
+// shortcuts themselves. The last line explains the status line's warning
+// badge.
 func dashboardTabHelpLines(exportEnabled bool) []string {
 	lines := []string{
 		"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
@@ -108,7 +109,11 @@ func dashboardTabHelpLines(exportEnabled bool) []string {
 	if exportEnabled {
 		lines = append(lines, "stream: x/X export  E open")
 	}
-	return lines
+	// The status-line warning badge is drawn only off the Stream tab, so the
+	// overlay says what it points at (task ys2). It goes last: an 80x24
+	// overlay cuts the section from the bottom, and the key hints above it
+	// outrank an explanation of a badge the user can follow without it.
+	return append(lines, `status "warnings: N (7:Stream)": warning rows on the Stream tab`)
 }
 
 func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {

@@ -1178,12 +1178,14 @@ func (m *Model) View() tea.View {
 }
 
 // renderStatusBlock renders the bottom of the frame: the one-line help hint,
-// or the expanded help bar, with the filter/recording status on its last row.
+// or the expanded help bar, with the live status on its last row - the
+// Stream tab's warning badge (on the other tabs, Model.statusTail) and the
+// filter/recording summary.
 func (m *Model) renderStatusBlock(width int) string {
 	if m.showHelp {
-		return renderHelpBarWithStatus(m.keys, width, m.filterSummary())
+		return renderHelpBarWithStatus(m.keys, width, m.statusTail())
 	}
-	return renderHelpHintWithStatus(width, m.filterSummary())
+	return renderHelpHintWithStatus(width, m.statusTail())
 }
 
 // renderBody renders the active tab into at most bodyRows rows. With fewer
@@ -1207,7 +1209,7 @@ func (m *Model) filterSummary() string {
 	// (filter stack, recording status, auto-reset label) on every render tick.
 	var b strings.Builder
 	// The refusal goes first: it is the newest thing that happened to the
-	// filter, and appendStatusText trims this summary from the right. The
+	// filter, and fitStatusRow trims this summary from the right. The
 	// family hint follows it, so on a narrow row the hint - whose attach state
 	// the probes modal's Families view also shows - is trimmed before the
 	// refusal, which they cannot get back anywhere else.
