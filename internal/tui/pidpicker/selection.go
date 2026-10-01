@@ -13,10 +13,12 @@ import (
 // user selected vanished in PID mode (relocateUserSelection, with a notice,
 // sticky until the user moves), or a selection derived from a non-empty filter
 // found the list empty (followFilter's no-match branch, recomputed on every
-// rebuild). The latter covers a filter that matches no process, shown with the
-// no-match notice, and a failed scan that emptied the list, shown with no
-// notice because the scan error line already explains it (applyScan holds a
-// derived pid across it, see heldPid).
+// rebuild). The latter covers three cases: a filter that matches no process,
+// shown with the no-match notice; a failed scan that emptied the list, shown
+// with no notice because the scan error line already explains it (applyScan
+// holds a derived pid across it, see heldPid); and a filter typed before the
+// first scan result arrived, also without a notice, because the empty list only
+// means "not loaded yet" (the arriving scan re-derives the selection).
 const noSelection = -1
 
 // idNoun names what a picker row is in the current mode, for notices: the TID
@@ -202,11 +204,11 @@ func (m Model) followFilter(queryEmpty bool) Model {
 // A failed scan carries no processes, so it empties the list and a derived
 // process row with it (noSelection via followFilter's no-match branch, Enter a
 // no-op, only the scan error shown; a derived All row survives, since an empty
-// filter derives it without looking at the list). Its pid
-// is kept in heldPid and tracked by the next successful scan instead: without
-// that, the empty list in between would make that scan see no previous
-// selection, and if the pid exited meanwhile the new first match would take
-// over without the notice an uninterrupted rescan gives.
+// filter derives it without looking at the list). Its pid is kept in heldPid
+// and tracked by the next successful scan instead: without that, the empty
+// list in between would make that scan see no previous selection, and if the
+// pid exited meanwhile the new first match would take over without the notice
+// an uninterrupted rescan gives.
 func (m Model) applyScan(msg processesLoadedMsg) Model {
 	prevPid, tracked := m.trackedDerivedPid()
 	m.processes = msg.processes
