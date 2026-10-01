@@ -137,14 +137,16 @@ func (m Model) messages(layout boxLayout) []string {
 }
 
 // fitMessage fits a note or status message to textWidth cells: when wrap is
-// set, wrapped at spaces only and hard-wrapped inside words still longer
+// set, wrapped at whitespace only and hard-wrapped inside words still longer
 // than the width (a path), by wrapAtSpaces, so a path that fits a line is
 // never broken at its hyphens and the " - " of PausedNote never stands on a
 // line of its own; else cut to one line ending in "…". The wrapping is done
 // here rather than by the box style: lipgloss's own wrap of a word longer
 // than a narrow box let lines through wider than the box, which widened it
-// past the view. Each line is cut to the width as well, for a wide rune in
-// a one-cell box.
+// past the view. Each line is cut to the width as well: wrapAtSpaces puts a
+// wide rune wider than a one-cell text area (a 7-column view) on a line of
+// its own two cells wide, which the cut leaves empty, so the box keeps to
+// its view (TestBoxFitsItsArea's wide-rune cases).
 func fitMessage(text string, textWidth int, wrap bool) []string {
 	if !wrap {
 		return []string{cutLine(text, textWidth, common.Ellipsis)}

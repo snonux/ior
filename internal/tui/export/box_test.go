@@ -2,6 +2,7 @@ package export
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,8 @@ type boxCase struct {
 }
 
 // boxCases are the modal's states: live, paused (with the note), with a long
-// status message, while exporting (no hint), and paused with a status.
+// status message, while exporting (no hint), and paused with a status, plus
+// wideStatusCases.
 func boxCases() []boxCase {
 	open := NewModel().Open()
 	paused := NewModel().OpenFor(true)
@@ -31,13 +33,34 @@ func boxCases() []boxCase {
 	pausedDone := paused
 	pausedDone.status = "Export failed: disk full"
 	hint := []string{"> CSV stream rows", "Cancel", "Enter confirm"}
-	return []boxCase{
+	cases := []boxCase{
 		{"live", open, hint, 5},
 		{"paused", paused, hint, 5},
 		{"status", done, append(hint, "Exported:"), 6},
 		{"exporting", exporting, []string{"  CSV stream rows", "Cancel", "Exporting"}, 5},
 		{"paused+status", pausedDone, append(hint, "Export failed"), 6},
 	}
+	return append(cases, wideStatusCases(open, hint)...)
+}
+
+// wideStatusCases are status messages of two-cell runes (CJK, emoji, and a
+// status of nothing else): in a one-cell text area (a 7-column view) such a
+// rune is wider than its line, which fitMessage must cut so the box does
+// not grow a cell past its view (task ns2).
+func wideStatusCases(open Model, hint []string) []boxCase {
+	statuses := []struct{ name, status, want string }{
+		{"status-cjk", "Exported: /日本語", "Exported:"},
+		{"status-cjk-path", "Exported: /var/tmp/日本語のディレクトリ/ior-stream.csv", "Exported:"},
+		{"status-emoji", "Exported: /tmp/😀🎉/x.csv", "Exported:"},
+		{"status-all-wide", "日本語 😀🎉 ディレクトリ", "日本語"},
+	}
+	cases := make([]boxCase, 0, len(statuses))
+	for _, s := range statuses {
+		m := open
+		m.status = s.status
+		cases = append(cases, boxCase{s.name, m, append(slices.Clone(hint), s.want), 6})
+	}
+	return cases
 }
 
 // boxWidths are the view widths TestBoxFitsItsArea sweeps: every width up
@@ -51,10 +74,11 @@ func boxWidths() []int {
 }
 
 // TestBoxFitsItsArea holds Box to every area from 1x1 to 56x30, and 80 and
-// 120 columns, in every modal state (task ns2): it is never wider than the
-// area (from seven columns, the narrowest whole box), never taller from its
-// most compact height up, always a whole border, and from 30 columns it
-// shows the options, the hint (not while exporting) and the status message.
+// 120 columns, in every modal state (task ns2), status messages of wide
+// runes included (wideStatusCases): it is never wider than the area (from
+// seven columns, the narrowest whole box), never taller from its most
+// compact height up, always a whole border, and from 30 columns it shows
+// the options, the hint (not while exporting) and the status message.
 func TestBoxFitsItsArea(t *testing.T) {
 	for _, c := range boxCases() {
 		t.Run(c.name, func(t *testing.T) {

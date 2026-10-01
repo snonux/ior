@@ -64,11 +64,11 @@ func overlayFrames(m *Model, width, height int) (base, overlay string) {
 // TestExportOverlayFitsTheTerminal holds the frame with the export modal
 // open to the terminal on every dashboard tab, with and without the help
 // bar, and on the PID picker, at heights 1..30 and the overlayWidths widths
-// (1, 7, 30, 52 and 120 columns): it may not
-// be taller or wider than the terminal (it used to be the modal's full
-// screen stacked above the whole dashboard, about twice the height, task
-// ns2), and where there is room it shows the modal whole between the
-// untouched tab bar and status line (assertOverlayContent).
+// (1, 7, 30, 52 and 120 columns): it may not be taller or wider than the
+// terminal (it used to be the modal's full screen stacked above the whole
+// dashboard, about twice the height, task ns2), and where there is room it
+// shows the modal whole between the untouched tab bar and status line
+// (assertOverlayContent).
 func TestExportOverlayFitsTheTerminal(t *testing.T) {
 	for _, tab := range []string{"1", "2", "3", "4", "5", "6", "7"} {
 		for _, help := range []bool{false, true} {
