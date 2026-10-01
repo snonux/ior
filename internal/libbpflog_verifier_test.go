@@ -80,14 +80,21 @@ func TestShortenWarningVerifierEdgeCases(t *testing.T) {
 			want: []string{"libbpf: prog 'p': verifier: "},
 		},
 		{
-			name: "pathological program name is bounded",
-			in:   verifierLoadWarning(strings.Repeat("n", 5000), "R1 bad\n"),
-			want: []string{"verifier: R1 bad"},
+			name: "empty log says so instead of counting the END marker",
+			in:   verifierLoadWarning("p", ""),
+			want: []string{"libbpf: prog 'p': verifier: (empty log)"},
+			not:  []string{"more lines", progLoadLogBegin},
 		},
 		{
-			name: "empty log falls back to the first line",
-			in:   verifierLoadWarning("p", ""),
-			want: []string{"libbpf: prog 'p': " + progLoadLogBegin + " ... (2 more lines)"},
+			name: "blank-only log is an empty log",
+			in:   verifierLoadWarning("p", "\n   \r\n\t\n"),
+			want: []string{"libbpf: prog 'p': verifier: (empty log)"},
+			not:  []string{"more lines"},
+		},
+		{
+			name: "omitted blank lines are not counted",
+			in:   verifierLoadWarning("p", "a\n\n  \nb\n\r\nc\nR1 bad\nprocessed 1 insns\n\n"),
+			want: []string{"verifier: c | R1 bad | processed 1 insns ... (2 more lines)"},
 		},
 		{
 			name: "banner without a body falls back to the first line",
@@ -101,8 +108,11 @@ func TestShortenWarningVerifierEdgeCases(t *testing.T) {
 		if strings.Contains(got, "\n") {
 			t.Errorf("%s: row is multi-line: %q", tc.name, got)
 		}
-		if len(got) > maxRoutedWarningBytes+64 {
-			t.Errorf("%s: row is %d bytes, over the bound", tc.name, len(got))
+		if len(got) > maxRoutedWarningBytes {
+			t.Errorf("%s: row is %d bytes, over the %d-byte bound", tc.name, len(got), maxRoutedWarningBytes)
+		}
+		if again := shortenWarning(got, maxRoutedWarningBytes); again != got {
+			t.Errorf("%s: shortening is not idempotent:\n %q\n %q", tc.name, got, again)
 		}
 		for _, w := range tc.want {
 			if !strings.Contains(got, w) {
@@ -127,14 +137,23 @@ func TestShortenWarningLeavesOrdinaryWarningsAlone(t *testing.T) {
 	if got := shortenWarning("libbpf: a\r\nb\r\nc", maxRoutedWarningBytes); got != "libbpf: a ... (2 more lines)" {
 		t.Errorf("multi-line CRLF warning = %q", got)
 	}
+	// The marker counts text, not blank lines or a trailing newline.
+	if got := shortenWarning("libbpf: a\n\n  \nb\n", maxRoutedWarningBytes); got != "libbpf: a ... (1 more lines)" {
+		t.Errorf("multi-line warning with blank lines = %q", got)
+	}
+	if got := shortenWarning("libbpf: a\n\n", maxRoutedWarningBytes); got != "libbpf: a" {
+		t.Errorf("warning with only blank continuation lines = %q, want no marker", got)
+	}
 }
 
 // TestShortenWarningKeepsAnExistingMarkerWhenCuttingAgain: a row the route
 // shaped is cut again by explainFailure; only its content may shrink.
 func TestShortenWarningKeepsAnExistingMarkerWhenCuttingAgain(t *testing.T) {
 	row := strings.Repeat("a", 100) + " ... (42 more lines)"
+	// 30 bytes in all: the 20-byte marker leaves 10 for the content, "..."
+	// included.
 	got := shortenWarning(row, 30)
-	if want := strings.Repeat("a", 30) + "... ... (42 more lines)"; got != want {
+	if want := strings.Repeat("a", 7) + "... ... (42 more lines)"; got != want {
 		t.Errorf("recut = %q, want %q", got, want)
 	}
 	if got := shortenWarning(row, 200); got != row {

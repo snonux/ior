@@ -88,9 +88,11 @@ func TestExplainFailureBoundsAndEscapesWarnings(t *testing.T) {
 	if !strings.HasSuffix(text, "... and 24 more warning(s)") {
 		t.Fatalf("overflow row missing or wrong: %q", text[max(0, len(text)-60):])
 	}
-	// Each row is bounded (240 bytes of text, plus marker and bullet).
+	// Each row is bounded: maxFailureWarningBytes of text with the marker and
+	// ellipses included, plus the "  - " bullet. None of these rows grows by
+	// escaping beyond the first, which is far below the bound.
 	for _, line := range strings.Split(text, "\n") {
-		if len(line) > maxFailureWarningBytes+64 {
+		if len(line) > len("  - ")+maxFailureWarningBytes {
 			t.Fatalf("row of %d bytes exceeds the bound: %.80q...", len(line), line)
 		}
 	}
@@ -129,7 +131,13 @@ func TestSetupTraceInfraFailureCarriesLibbpfWarnings(t *testing.T) {
 }
 
 // TestSetupTraceInfraFailureWithoutWarningsIsUnchanged is the negative twin: a
-// failed load that logged no libbpf WARN returns the loader's error as is.
+// failed load that logged no libbpf WARN returns the setup's own error and
+// nothing more. The setup itself wraps the loader's error with its stage
+// ("setup BPF module: load embedded module: "), so err == loadErr cannot hold
+// here; identity is pinned one level down by
+// TestExplainFailureWithoutWarningsKeepsTheError. What this test pins is that
+// no setupFailure joined the chain and the text is exactly the stage-wrapped
+// cause.
 func TestSetupTraceInfraFailureWithoutWarningsIsUnchanged(t *testing.T) {
 	withLibbpfLogger(t, true, false)
 	origBuffer := newBPFModuleFromBuffer
@@ -141,7 +149,9 @@ func TestSetupTraceInfraFailureWithoutWarningsIsUnchanged(t *testing.T) {
 
 	_, err := setupTraceInfraWithEventLoop(context.Background(), flags.NewFlags(), nil,
 		traceSetupHooks{}, func(...any) {}, newTraceEventLoop)
-	if err == nil || strings.Contains(err.Error(), "Warnings logged") || !errors.Is(err, loadErr) {
-		t.Fatalf("setup error = %v, want the loader error without a warnings block", err)
+	var failure *setupFailure
+	if !errors.Is(err, loadErr) || errors.As(err, &failure) ||
+		err.Error() != "setup BPF module: load embedded module: load failed" {
+		t.Fatalf("setup error = %q, want the stage-wrapped loader error without a warnings block", err)
 	}
 }

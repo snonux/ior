@@ -1839,23 +1839,7 @@ func (m *Model) View() tea.View {
 	}
 
 	if m.lastErr != nil {
-		theme := common.Current()
-		hint := "q / esc  quit"
-		if m.errorKind == errorScreenRecoverable {
-			hint = "esc  back  •  q  quit"
-		}
-		// Errors can echo traced or user-supplied paths; SanitizeLines keeps
-		// intentional line breaks but no escape sequence.
-		// The error text is the only explanation a failed trace setup gives
-		// (it carries the libbpf warnings, whose rows are hundreds of bytes),
-		// so it wraps to the terminal width instead of being clipped by
-		// placeToViewport. A zero width means "no size known yet": no wrap.
-		errStyle := theme.ErrorStyle
-		if width > 0 {
-			errStyle = errStyle.Width(width)
-		}
-		body := errStyle.Render(common.SanitizeLines(m.lastErr.Error())) + "\n\n" + theme.HelpBarStyle.Render(hint)
-		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
+		return altScreenView(m.errorScreenView(width, height), title)
 	}
 	if m.helpOverlayVisible {
 		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())

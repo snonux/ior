@@ -14,11 +14,14 @@ const (
 	// rows plus a summary; the error screen is much smaller than the stream
 	// tab, so fewer lines are kept and the rest only counted.
 	maxFailureWarnings = 8
-	// maxFailureWarningBytes cuts the content of each appended line (before
-	// escaping) so a long line cannot fill the error screen on its own. It
-	// equals the route's row bound on purpose: a routed verifier row is already
-	// that long and holds the reason the user is after, so cutting it harder
-	// here would throw the reason away again.
+	// maxFailureWarningBytes bounds each appended line before escaping -
+	// "(N more lines)" marker and "..." ellipses included - so a long line
+	// cannot fill the error screen on its own. It equals the route's row
+	// bound on purpose: a routed verifier row is already within that bound
+	// and holds the reason the user is after, and because shortenWarning is
+	// idempotent at a given bound, re-shortening such a row here leaves it
+	// byte for byte unchanged instead of cutting the reason a second time.
+	// Escaping can still lengthen the line (one control byte becomes four).
 	maxFailureWarningBytes = maxRoutedWarningBytes
 )
 
@@ -111,7 +114,8 @@ func (e *setupFailure) Unwrap() error { return e.err }
 // failed program load becomes its program name plus the verifier log's last
 // lines, any other multi-line warning its first line; a "(N more lines)"
 // marker the libbpf route added is kept, only the content is cut) bounded by
-// maxFailureWarningBytes, is escaped with textsafe.Escape so kernel or traced
+// maxFailureWarningBytes (a row the route already shaped to the same bound
+// passes unchanged), is escaped with textsafe.Escape so kernel or traced
 // text cannot carry terminal escapes, and at most maxFailureWarnings are
 // listed with the rest counted. The route shortens its own rows already, but
 // other collector users make no such promise.
