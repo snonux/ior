@@ -99,3 +99,19 @@ func TestBubbleAndTreemapDetailsShowDashForNoLatency(t *testing.T) {
 		t.Fatalf("got %d bubble/treemap items %v, want 8", checks, details)
 	}
 }
+
+// TestSyscallRowsShowDashForNoPercentiles (task 003): an aggregate-only
+// syscall has a timed mean/min/max but no percentile samples, so only its
+// P50/P95/P99 cells render "-"; the cells that are measured keep their values.
+func TestSyscallRowsShowDashForNoPercentiles(t *testing.T) {
+	aggregate := statsengine.SyscallSnapshot{Name: "futex", Count: 4, LatencyMeanNs: 1500, LatencyMinNs: 1000,
+		LatencyMaxNs: 2000, TotalLatencyNs: 6000, NoPercentiles: true}
+	full := syscallRowsFull([]statsengine.SyscallSnapshot{aggregate})[0]
+	if got, want := strings.Join(full[4:10], "|"), "1.5µs|1.0µs|2.0µs|-|-|-"; got != want {
+		t.Errorf("full latency cells = %s, want %s", got, want)
+	}
+	compact := syscallRowsCompact([]statsengine.SyscallSnapshot{aggregate})[0]
+	if got, want := strings.Join(compact[4:7], "|"), "1.5µs|-|-"; got != want {
+		t.Errorf("compact latency cells = %s, want %s", got, want)
+	}
+}

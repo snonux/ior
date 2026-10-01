@@ -893,7 +893,7 @@ func syscallBubbleData(rows []statsengine.SyscallSnapshot, metric bubbleMetric) 
 	}
 	return rankBubbleData(data, metric, func(row int) string {
 		syscall := rows[row]
-		return fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, latencyCellUint(syscall.NoLatency, syscall.LatencyP95Ns))
+		return fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, latencyCellUint(syscall.NoPercentileData(), syscall.LatencyP95Ns))
 	})
 }
 

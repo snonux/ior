@@ -128,7 +128,7 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 			"rate %.1f/s, errors %d, p95 %s",
 			syscall.RatePerSec,
 			syscall.Errors,
-			latencyCellUint(syscall.NoLatency, syscall.LatencyP95Ns),
+			latencyCellUint(syscall.NoPercentileData(), syscall.LatencyP95Ns),
 		)
 	})
 }

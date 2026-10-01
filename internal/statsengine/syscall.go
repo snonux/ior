@@ -97,7 +97,10 @@ type syscallSnapshotInput struct {
 	untimedCount uint64
 	// hasTimed is syscallStats.hasTimed: whether any invocation carried a
 	// latency (SyscallSnapshot.NoLatency is its negation).
-	hasTimed   bool
+	hasTimed bool
+	// hasSamples is whether the percentile reservoir holds any latency
+	// (SyscallSnapshot.NoPercentiles is its negation).
+	hasSamples bool
 	p50Latency uint64
 	p95Latency uint64
 	p99Latency uint64
@@ -358,6 +361,7 @@ func (s *syscallStats) snapshotInput() syscallSnapshotInput {
 		maxLatency:   s.maxLatency,
 		untimedCount: s.untimedCount,
 		hasTimed:     s.hasTimed,
+		hasSamples:   len(s.samples) > 0,
 		p50Latency:   s.cachedP50,
 		p95Latency:   s.cachedP95,
 		p99Latency:   s.cachedP99,
@@ -395,7 +399,8 @@ func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 		// The flag, not timedCount(count, untimedCount) == 0: the untimed
 		// count of a kernel aggregate row is an estimate that may be one too
 		// high after a torn per-CPU read (see syscallStats.hasTimed).
-		NoLatency: !s.hasTimed,
+		NoLatency:     !s.hasTimed,
+		NoPercentiles: !s.hasSamples,
 	}
 }
 

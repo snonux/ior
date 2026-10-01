@@ -101,6 +101,20 @@ type SyscallSnapshot struct {
 	// so that a literal SyscallSnapshot (test fixtures, -testflames) keeps
 	// showing its latencies.
 	NoLatency bool
+	// NoPercentiles reports that LatencyP50/95/99Ns are 0 placeholders: the
+	// percentile reservoir holds no latency sample for this syscall. A kernel
+	// aggregate row (a syscall at sampling rate 0, e.g. futex) has a timed
+	// mean/min/max from the BPF aggregate but no per-invocation samples, so
+	// its percentiles are unknown, not 0ns, and the views show "-" for them
+	// (task 003). Like NoLatency it is a negative flag so a literal
+	// SyscallSnapshot keeps showing the percentiles it carries.
+	NoPercentiles bool
+}
+
+// NoPercentileData reports whether the percentile cells have nothing to show:
+// the row has no timed invocation at all, or no sample behind its percentiles.
+func (s SyscallSnapshot) NoPercentileData() bool {
+	return s.NoLatency || s.NoPercentiles
 }
 
 // FileSnapshot is an aggregated per-file ranking entry.

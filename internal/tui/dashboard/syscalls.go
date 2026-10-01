@@ -285,9 +285,9 @@ func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) [][]string {
 			latencyCell(s.NoLatency, s.LatencyMeanNs),
 			latencyCellUint(s.NoLatency, s.LatencyMinNs),
 			latencyCellUint(s.NoLatency, s.LatencyMaxNs),
-			latencyCellUint(s.NoLatency, s.LatencyP50Ns),
-			latencyCellUint(s.NoLatency, s.LatencyP95Ns),
-			latencyCellUint(s.NoLatency, s.LatencyP99Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP50Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP95Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
@@ -304,8 +304,8 @@ func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) [][]string {
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
 			latencyCell(s.NoLatency, s.LatencyMeanNs),
-			latencyCellUint(s.NoLatency, s.LatencyP95Ns),
-			latencyCellUint(s.NoLatency, s.LatencyP99Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP95Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
