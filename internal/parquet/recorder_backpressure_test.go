@@ -134,12 +134,15 @@ func TestRecorderShedModeStillDoesNotBlock(t *testing.T) {
 // error instead of blocking forever on a queue nobody drains any more.
 func TestRecorderBlockedProducerWakesWhenWriterDies(t *testing.T) {
 	writeErr := errors.New("disk full")
+	registered := make(chan struct{}, 1)
+	waiterRegisteredHook = func() { registered <- struct{}{} }
+	t.Cleanup(func() { waiterRegisteredHook = nil })
 	w := newGateWriter(writeErr)
 	r := newGatedRecorder(t, w, true)
 
 	done := recordAsync(r, 3)
-	time.Sleep(50 * time.Millisecond) // let it reach the wait
-	close(w.release)                  // the write now fails and kills the session
+	<-registered     // the producer is registered as a waiter on the full queue
+	close(w.release) // the write now fails and kills the session
 
 	select {
 	case err := <-done:
@@ -260,18 +263,95 @@ func TestRecorderBackpressureIsLosslessThroughRealWriter(t *testing.T) {
 	}
 }
 
-// TestDefaultQueueCapacities pins the memory bounds: the zero config keeps a
-// modest shed-mode queue and the headless size stays a fixed, bounded figure
-// (slots are ~224 bytes each and allocated up front).
-func TestDefaultQueueCapacities(t *testing.T) {
-	if got := normalizeRecorderConfig(RecorderConfig{}).QueueCapacity; got != defaultRecorderQueueCapacity {
-		t.Fatalf("default QueueCapacity = %d, want %d", got, defaultRecorderQueueCapacity)
+// fillStalledQueue stalls the writer on row 1 (batch size 1, so the session
+// goroutine holds it inside WriteRows) and then offers exactly capacity more
+// rows, every one of which must be accepted into the queue. The next Record
+// call meets a full queue.
+func fillStalledQueue(t *testing.T, r *Recorder, w *gateWriter, capacity int) {
+	t.Helper()
+	mustStart(t, r)
+	if err := r.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record(1) error = %v", err)
 	}
-	if defaultRecorderQueueCapacity <= 4096 {
-		t.Fatalf("default queue %d does not cover a row-group flush at high rates", defaultRecorderQueueCapacity)
+	<-w.started
+	for i := 0; i < capacity; i++ {
+		if err := r.Record(testStreamRow(uint64(2+i), "read", false), 0); err != nil {
+			t.Fatalf("Record of queued row %d/%d error = %v, want it accepted", i+1, capacity, err)
+		}
 	}
-	if HeadlessQueueCapacity < defaultRecorderQueueCapacity || HeadlessQueueCapacity > 1<<18 {
-		t.Fatalf("HeadlessQueueCapacity = %d, want between the default and 262144 (~56 MiB)", HeadlessQueueCapacity)
+}
+
+func gatedRecorderConfig(w *gateWriter, cfg RecorderConfig) RecorderConfig {
+	cfg.BatchSize = 1
+	cfg.FlushInterval = time.Hour
+	cfg.newWriter = func(string, WriterConfig, FileMetadata) (rowWriter, error) { return w, nil }
+	return cfg
+}
+
+// TestDefaultRecorderQueueHoldsItsCapacityThenSheds pins the shed-mode (TUI)
+// queue size behaviourally: with the writer stalled, a default-config recorder
+// accepts exactly defaultRecorderQueueCapacity rows, sheds the next one at once
+// (counted, never blocking), and writes everything it accepted.
+func TestDefaultRecorderQueueHoldsItsCapacityThenSheds(t *testing.T) {
+	w := newGateWriter(nil)
+	r := NewRecorder(gatedRecorderConfig(w, RecorderConfig{}))
+	fillStalledQueue(t, r, w, defaultRecorderQueueCapacity)
+
+	select {
+	case err := <-recordAsync(r, 1<<20):
+		if !errors.Is(err, ErrRecorderStartedDropping) {
+			t.Fatalf("Record beyond the default queue error = %v, want %v", err, ErrRecorderStartedDropping)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a default (shed-mode) recorder blocked on a full queue")
+	}
+	if dropped := r.Status().RowsDropped; dropped != 1 {
+		t.Fatalf("RowsDropped = %d, want 1", dropped)
+	}
+	close(w.release)
+	if err := r.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if want := uint64(1 + defaultRecorderQueueCapacity); w.written.Load() != want {
+		t.Fatalf("writer got %d rows, want %d", w.written.Load(), want)
+	}
+}
+
+// TestHeadlessRecorderQueueHoldsItsCapacityThenBlocks is the headless twin: a
+// backpressured recorder of HeadlessQueueCapacity slots accepts exactly that
+// many rows with the writer stalled, then makes the next Record wait (it sheds
+// nothing) until the writer frees room; every row ends up written.
+func TestHeadlessRecorderQueueHoldsItsCapacityThenBlocks(t *testing.T) {
+	registered := make(chan struct{}, 1)
+	waiterRegisteredHook = func() { registered <- struct{}{} }
+	t.Cleanup(func() { waiterRegisteredHook = nil })
+
+	w := newGateWriter(nil)
+	r := NewRecorder(gatedRecorderConfig(w, RecorderConfig{
+		QueueCapacity: HeadlessQueueCapacity,
+		BlockWhenFull: true,
+	}))
+	fillStalledQueue(t, r, w, HeadlessQueueCapacity)
+
+	done := recordAsync(r, 1<<20)
+	<-registered // the producer met the full queue and waits for room
+	select {
+	case err := <-done:
+		t.Fatalf("Record beyond the headless queue returned %v, want it to wait", err)
+	default:
+	}
+	if dropped := r.Status().RowsDropped; dropped != 0 {
+		t.Fatalf("RowsDropped = %d, want 0 in backpressure mode", dropped)
+	}
+	close(w.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Record after room freed error = %v, want nil", err)
+	}
+	if err := r.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if want := uint64(2 + HeadlessQueueCapacity); w.written.Load() != want {
+		t.Fatalf("writer got %d rows, want %d", w.written.Load(), want)
 	}
 }
 
@@ -313,6 +393,71 @@ func TestRecorderStopWaitsForRegisteredWaiter(t *testing.T) {
 		}
 		if got := w.written.Load(); got != accepted {
 			t.Fatalf("trial %d: writer got %d rows but %d were accepted: an accepted row was lost", trial, got, accepted)
+		}
+	}
+}
+
+// TestRecorderWriterDeathRacingStopWithBlockedProducers kills the writer and
+// calls Stop while several producers wait for room, in both orders. Nothing may
+// deadlock or close a channel twice (both paths close stopC and finish the
+// session); every producer is released with nil or a rejection; and the
+// failure is reported exactly once, by Stop, never again by TakeFailure or a
+// second Stop. The producers are registered as waiters before the race starts
+// (waiterRegisteredHook), so no sleep decides whether they are blocked.
+func TestRecorderWriterDeathRacingStopWithBlockedProducers(t *testing.T) {
+	writeErr := errors.New("disk full")
+	const producers = 4
+	registered := make(chan struct{}, producers)
+	waiterRegisteredHook = func() { registered <- struct{}{} }
+	t.Cleanup(func() { waiterRegisteredHook = nil })
+
+	for trial := 0; trial < 20; trial++ {
+		w := newGateWriter(writeErr)
+		r := newGatedRecorder(t, w, true)
+
+		results := make(chan error, producers)
+		for p := 0; p < producers; p++ {
+			go func(p int) { results <- r.Record(testStreamRow(uint64(10+p), "read", false), 0) }(p)
+		}
+		for p := 0; p < producers; p++ {
+			<-registered
+		}
+
+		stopped := make(chan error, 1)
+		if trial%2 == 0 {
+			go func() { stopped <- r.Stop() }()
+			close(w.release) // the stalled write fails: the writer dies
+		} else {
+			close(w.release)
+			go func() { stopped <- r.Stop() }()
+		}
+
+		for p := 0; p < producers; p++ {
+			select {
+			case err := <-results:
+				if err != nil && !errors.Is(err, writeErr) && !errors.Is(err, ErrRecorderNotActive) {
+					t.Fatalf("trial %d: Record error = %v, want nil, %v or %v", trial, err, writeErr, ErrRecorderNotActive)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("trial %d: a producer is stuck after the writer died and Stop ran", trial)
+			}
+		}
+		select {
+		case err := <-stopped:
+			if !errors.Is(err, writeErr) {
+				t.Fatalf("trial %d: Stop() error = %v, want the writer failure %v", trial, err, writeErr)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("trial %d: Stop hung after the writer died", trial)
+		}
+		if err := r.TakeFailure(); err != nil {
+			t.Fatalf("trial %d: TakeFailure() = %v after Stop reported it, want nil", trial, err)
+		}
+		if err := r.Stop(); err != nil {
+			t.Fatalf("trial %d: second Stop() = %v, want nil", trial, err)
+		}
+		if st := r.Status(); st.Active || !errors.Is(st.LastError, writeErr) {
+			t.Fatalf("trial %d: status = %+v, want an inactive recording that failed with %v", trial, st, writeErr)
 		}
 	}
 }

@@ -14,16 +14,21 @@ import (
 const (
 	// defaultRecorderQueueCapacity is the shed-mode (TUI) queue size. The
 	// channel is allocated up front at about 224 bytes per slot (one
-	// streamrow.Row plus the filter epoch), so 16384 slots cost ~3.5 MiB per
-	// recording. That covers roughly 19 ms of a 870k rows/s burst - a row-group
+	// streamrow.Row plus the filter epoch), so 16384 slots cost ~3.5 MiB of
+	// slot array per recording (plus the path strings of the rows queued,
+	// bounded the same way as for HeadlessQueueCapacity). That covers roughly 19 ms of a 870k rows/s burst - a row-group
 	// flush (every column compressed at once on the recorder goroutine) fits
 	// inside it, while the old 4096 slots (~5 ms) did not. Headless runs that
 	// need a lossless file choose backpressure instead (RecorderConfig.
 	// BlockWhenFull) and a bigger queue (HeadlessQueueCapacity).
 	defaultRecorderQueueCapacity = 16384
 	// HeadlessQueueCapacity is the queue size a backpressured headless
-	// recording asks for: 65536 slots, ~14 MiB up front, ~75 ms of a 870k
-	// rows/s burst. Memory is bounded by this constant; once it is full the
+	// recording asks for: 65536 slots, ~14 MiB of slot array up front, ~75 ms
+	// of a 870k rows/s burst. The slots do not own the whole cost: a queued
+	// row also pins its heap strings (FileName, OldName, Comm; a path can be
+	// up to PATH_MAX = 4096 bytes). Typical short paths add a few MiB; a queue
+	// full of 4 KiB paths would add ~256 MiB at worst. Memory is still bounded
+	// by this constant (slots x row size), because once the queue is full the
 	// producer waits rather than the queue growing.
 	HeadlessQueueCapacity        = 65536
 	defaultRecorderBatchSize     = 256
@@ -67,7 +72,8 @@ type writerFactory func(path string, cfg WriterConfig, meta FileMetadata) (rowWr
 // RecorderConfig controls queueing and batching behavior.
 type RecorderConfig struct {
 	// QueueCapacity bounds the rows buffered between Record and the writer
-	// goroutine; memory use is bounded by it in both overflow modes.
+	// goroutine; memory use (slot array plus the strings of the queued rows)
+	// is bounded by it in both overflow modes.
 	QueueCapacity int
 	// BlockWhenFull selects backpressure instead of shedding: a Record call on
 	// a full queue waits for room rather than dropping the row, so a headless
@@ -164,6 +170,17 @@ type recordRequest struct {
 // NewRecorder constructs a reusable parquet recorder controller.
 func NewRecorder(config RecorderConfig) *Recorder {
 	return &Recorder{config: normalizeRecorderConfig(config)}
+}
+
+// Config returns the effective (normalized) configuration the recorder was
+// built with: defaults filled in, so QueueCapacity is the real queue size.
+// Callers that choose a recorder's overflow mode (the headless run, the TUI)
+// use it in tests to pin which mode they asked for.
+func (r *Recorder) Config() RecorderConfig {
+	if r == nil {
+		return RecorderConfig{}
+	}
+	return r.config
 }
 
 // Start begins a new recording session. It discards the previous recording's

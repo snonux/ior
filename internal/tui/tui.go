@@ -121,6 +121,10 @@ type runtimeBindings struct {
 	filterEpoch atomic.Uint64
 }
 
+// newRuntimeBindings builds the TUI's bindings. Their recorder is the zero
+// RecorderConfig on purpose: the shed (non-blocking) overflow mode, because the
+// event loop that records also feeds the live views and must never stall
+// behind the disk (the headless run asks for backpressure instead; task 4s2).
 func newRuntimeBindings() *runtimeBindings {
 	streamBuffer := eventstream.NewRingBuffer()
 	return &runtimeBindings{

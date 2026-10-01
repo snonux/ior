@@ -63,6 +63,14 @@ func headlessRecorderConfig() parquet.RecorderConfig {
 	}
 }
 
+// newHeadlessRecorder builds the recorder of a headless run from the given
+// configuration; parquet.NewRecorder in production. It is a variable only so a
+// test can capture the configuration runHeadlessParquetWith really passes and
+// pin that the call site applies headlessRecorderConfig (a call site that
+// silently fell back to the zero config would shed rows again, and no
+// recorder-level test could notice).
+var newHeadlessRecorder = parquet.NewRecorder
+
 // isFatalRecorderError reports whether a recorder error must abort the
 // headless run. Queue overflow sheds the single row while the session stays
 // active, so it is surfaced via Status().RowsDropped after the run instead
@@ -164,7 +172,7 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 	// totals follow when the recording stops (finishHeadlessParquetRecording).
 	meta := parquet.NewFileMetadata("headless")
 	meta.Sampling = infra.el.samplingPlan()
-	recorder := parquet.NewRecorder(headlessRecorderConfig())
+	recorder := newHeadlessRecorder(headlessRecorderConfig())
 	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: meta}); err != nil {
 		return fmt.Errorf("start parquet recording: %w", err)
 	}
