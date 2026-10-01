@@ -567,6 +567,18 @@ int handle_task_newtask(void *raw_ctx) {
 // thread: only the thread-group check in the kernel (same_thread_group) ties it
 // to the writer, so the record's tgid is read from the renamed task itself.
 //
+// Known race (not fixable here): __set_task_comm() fires this tracepoint
+// *before* it copies the new name into task->comm. When thread A renames a
+// sibling T (/proc/<T>/comm write, pthread_setname_np) while T enters openat on
+// another CPU, T's open record can be reserved after this one and still carry
+// the old name (bpf_get_current_comm read it before the copy). In ring order
+// the stale payload then follows the rename. The window is nanoseconds wide,
+// and a self-rename (prctl) cannot hit it, since T is busy renaming itself.
+// Userspace mitigates it: an open payload that contradicts the cached name
+// leaves the entry stale, and T's next use re-reads /proc/<T>/comm, which by
+// then holds the new name (setCachedFromEnterPayload in
+// internal/eventloop_comm.go); only the row in between keeps the old name.
+//
 // Cost: one 40-byte record per rename. Renames are rare (worker pools rename each
 // thread once at start; exec renames once per exec), so this is far below the
 // per-exec and per-newtask records in volume.
