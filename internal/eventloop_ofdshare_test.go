@@ -25,9 +25,12 @@ const (
 	ofdName       = "/tmp/ofd-share.txt"
 	ofdOpenFlags  = int32(syscall.O_WRONLY | syscall.O_CREAT | syscall.O_TRUNC)
 	ofdSetflFlags = int32(syscall.O_APPEND | syscall.O_NONBLOCK)
-	// What the kernel reports after F_SETFL(O_APPEND|O_NONBLOCK) on a descriptor
+	// What the model reports after F_SETFL(O_APPEND|O_NONBLOCK) on a descriptor
 	// opened O_WRONLY|O_CREAT|O_TRUNC: the setting adds the two settable bits,
-	// the access mode and the creation flags stay as they were.
+	// the access mode and the flags as open() reported them stay as they were.
+	// The kernel's own F_GETFL word would lack O_CREAT|O_TRUNC (it drops the
+	// open-only flags from f_flags, 0106001); the model keeps them until an
+	// F_GETFL replaces the whole word (see the F_GETFL refresh test below).
 	ofdAfterSetfl = ofdOpenFlags | ofdSetflFlags
 	// ofdSetflArg is what a caller passes: F_GETFL's word with the new bits ORed
 	// in, so the access mode is part of the argument too.
@@ -157,7 +160,7 @@ func ofdDupKinds() []ofdDupKind {
 // TestSetflThroughADuplicateIsSeenThroughTheOriginal is the reproduction of the
 // task: every duplicating syscall, F_SETFL on the duplicate, then a row on the
 // original must report the changed status word (the pre-fix word was the stale
-// open flags), with access mode and creation flags kept.
+// open flags), with the access mode and open()'s other flags kept.
 func TestSetflThroughADuplicateIsSeenThroughTheOriginal(t *testing.T) {
 	for _, kind := range ofdDupKinds() {
 		t.Run(kind.name, func(t *testing.T) {

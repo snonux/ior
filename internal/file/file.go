@@ -60,8 +60,9 @@ func appendText(dst []byte, s string, text func(string) string) []byte {
 // FdFile represents a file descriptor-backed file reference.
 //
 // The kernel splits what a descriptor knows into two layers, and FdFile
-// mirrors the split (task nr2): the status word (access mode, creation flags,
-// O_APPEND/O_NONBLOCK/...) lives in the open file description, which every
+// mirrors the split (task nr2): the status word (access mode, O_APPEND/
+// O_NONBLOCK/... and, as open() reported them until F_GETFL replaces the word
+// with the kernel's, O_CREAT/O_TRUNC/...) lives in the open file description, which every
 // duplicate of the descriptor (dup, dup2, dup3, F_DUPFD, and the copy a fork
 // inherits) shares through desc; FD_CLOEXEC belongs to the descriptor alone
 // and stays in the FdFile. Name and number are per descriptor too: the number
@@ -254,7 +255,9 @@ func (f *FdFile) AddFlags(flags int32) {
 //
 // This is the update shape fcntl(2) F_SETFL has: it changes the settable
 // status flags only, while the access mode (O_RDONLY/O_WRONLY/O_RDWR) and the
-// creation flags of the descriptor keep the values open(2) gave them. Callers
+// open-only flags (O_CREAT, O_TRUNC, ...) keep the values open(2) was called
+// with (the kernel itself forgets the open-only ones, which F_GETFL then drops
+// from the word, see SetStatusFlags). Callers
 // typically pass the full word they got from F_GETFL, so a plain SetFlags of
 // arg&mask would mask the access mode away and make a read-write descriptor
 // report as read-only for the rest of its life.

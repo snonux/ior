@@ -13,15 +13,24 @@ package file
 // FdFile used to carry its whole flag word by value and Dup copied it, so a
 // F_SETFL on one descriptor updated one table entry and left every duplicate
 // reporting the old word (live evidence: a write on the original showed
-// O_WRONLY|O_CREAT|O_TRUNC while the kernel returned 0106001, and a later dup of
-// the original inherited the stale word even after F_GETFL had refreshed it).
+// O_WRONLY|O_CREAT|O_TRUNC, the word open() was called with, while the kernel's
+// F_GETFL returned 0106001, and a later dup of the original inherited the stale
+// word even after F_GETFL had refreshed it).
 // openFileDesc is the shared object; Dup is the one operation that shares it.
 
 // openFileDesc is the part of a descriptor's state that all duplicates of one
-// open file description share: the status word as open(2) and F_SETFL left it
-// (access mode, creation flags, status flags). It never carries O_CLOEXEC, which
-// belongs to the descriptor (FdFile.closeOnExec). status is unknownFlag until
-// procfs, an open() event or F_GETFL supplies it.
+// open file description share: the status word as open(2) reported it and
+// F_SETFL has updated it since. That is the access mode, the status flags and,
+// until an F_GETFL refreshes the word, the open-only flags that were part of
+// open()'s arguments (O_CREAT, O_TRUNC, O_EXCL, O_NOCTTY). The kernel itself
+// drops those four from the description's f_flags, so its F_GETFL answer
+// (e.g. 0106001 after a F_SETFL on an O_WRONLY|O_CREAT|O_TRUNC open) lacks
+// them; the model cannot see the kernel's word before the first F_GETFL, keeps
+// what open() was called with, and replaces the whole word with the kernel's
+// the moment an F_GETFL (SetStatusFlags) reports it, for every duplicate. The
+// word never carries O_CLOEXEC, which belongs to the descriptor
+// (FdFile.closeOnExec). status is unknownFlag until procfs, an open() event or
+// F_GETFL supplies it.
 //
 // Only the single event-loop goroutine mutates it; a row that leaves that
 // goroutine gets a Detach()ed copy, which owns a private openFileDesc.

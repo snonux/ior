@@ -1397,7 +1397,8 @@ func (e *eventLoop) applyFcntlStatusFlags(ep *event.Pair, fcntlEv *types.FcntlEv
 		fdFile.SetStatusFlags(int32(ret))
 	} else {
 		// F_SETFL changes the settable status flags only; the access mode and
-		// the creation flags stay exactly as open(2) set them. Merge, do not
+		// the open-only flags (O_CREAT, ...) stay as open(2) reported them, until
+		// an F_GETFL replaces the word with the kernel's. Merge, do not
 		// replace: callers do F_GETFL then OR, so arg carries the access mode
 		// too, and masking it out of the stored word made an O_RDWR descriptor
 		// report O_RDONLY on the fcntl row and on every later row for that fd.
@@ -1412,7 +1413,7 @@ func (e *eventLoop) applyFcntlStatusFlags(ep *event.Pair, fcntlEv *types.FcntlEv
 // descriptor flag, not part of the F_GETFL status-flag word; the file model
 // carries it as O_CLOEXEC so every row can render the descriptor's complete
 // tracked state. Both commands translate FD_CLOEXEC into that bit without
-// disturbing status or creation flags. It reports whether ep is still alive;
+// disturbing the status word. It reports whether ep is still alive;
 // a malformed F_SETFD return value recycles the pair.
 func (e *eventLoop) applyFcntlDescriptorFlags(ep *event.Pair, fcntlEv *types.FcntlEvent,
 	fdFile *file.FdFile, fd int32, ret int64) bool {

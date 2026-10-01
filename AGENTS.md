@@ -1056,10 +1056,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `$IOR_WORKLOAD_CHILD_PID_FILE`.
 
   **Duplicated descriptors share one open file description (task nr2).** The
-  kernel keeps the status word (access mode, creation flags, `O_APPEND`,
-  `O_NONBLOCK`, ...) in the open file description that `dup`, `dup2`, `dup3`,
+  kernel keeps the status word (access mode, `O_APPEND`, `O_NONBLOCK`, ...) in
+  the open file description that `dup`, `dup2`, `dup3`,
   `fcntl(F_DUPFD*)` and `fork` share between descriptors, and `FD_CLOEXEC` in the
   descriptor itself; a second `open()` of the same path is a new description.
+  The model's shared word is that status word *as `open()` reported it* and
+  `F_SETFL` updated it since: it still carries `O_CREAT`/`O_TRUNC`/`O_EXCL`/
+  `O_NOCTTY` from `open()`'s arguments, which the kernel drops from `f_flags`
+  (its `F_GETFL` returns e.g. `0106001`, without `O_CREAT|O_TRUNC`), until an
+  `F_GETFL` replaces the whole word with the kernel's, for every duplicate.
   `FdFile` mirrors that split (`internal/file/fdfile_desc.go`): the status word
   is a `*openFileDesc` (no `O_CLOEXEC` bit in it), `closeOnExec`/`closeOnExecKnown`
   and the number and name are per `FdFile`, and `Flags()` folds the descriptor's
@@ -1070,7 +1075,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `snapshotExecTarget`, because a row must keep the flags of its moment while the
   live table entry moves on). Before nr2 `Dup` copied the flag word, so an
   `fcntl(dup, F_SETFL, O_APPEND|O_NONBLOCK)` updated one table entry and the
-  original kept reporting `O_WRONLY|O_CREAT|O_TRUNC` (kernel: `0106001`), and a
+  original kept reporting `O_WRONLY|O_CREAT|O_TRUNC` (open()'s word; the kernel's
+  `F_GETFL`: `0106001`), and a
   later `dup(orig)` started from the stale word even after `F_GETFL` refreshed
   the original. Rule for new code: change a status flag through
   `SetStatusFlags`/`MergeFlags`/`AddFlags` on the descriptor the syscall named
@@ -1085,8 +1091,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `internal/eventloop_ofdshare_test.go` (every dup variant, both directions, dup
   of a dup, cleared flags, `F_GETFL` refresh incl. later dups, independent opens
   and `FD_CLOEXEC` per descriptor as negative controls, close of one leaves the
-  other, emitted rows keep their moment, fork) and the `TestFdFile*` tests in
-  `internal/file/file_test.go`.
+  other, emitted rows keep their moment, fork), by
+  `internal/eventloop_ofdshare_boundary_test.go` (a fork-inherited
+  *procfs-cache-only* descriptor shares its word with the child's copy, with an
+  independent description as negative control; and a `-race` test that an emitted
+  row's `File` can be read and `Dup`ed from another goroutine while the loop
+  does `F_SETFL`/`F_SETFD`/`dup` on the live table, which fails with a DATA RACE
+  if `freezePairForEmission` stops calling `Detach`) and the `TestFdFile*` tests
+  in `internal/file/file_test.go`.
 
   **`CLONE_FILES` processes share one fd table (task hr2).** The kernel gives two
   processes that `clone(CLONE_FILES)` a single descriptor table, so what one
