@@ -194,9 +194,9 @@ func TestNamedBlanksAreUnsafe(t *testing.T) {
 func TestBenignTextIsNotMistakenForBlank(t *testing.T) {
 	for _, s := range []string{
 		"etc passwd", " leading and trailing ", "日本語のファイル.txt", "한국어 파일",
-		"café", "é", "\U0001F468‍\U0001F469‍\U0001F467", "\U0001F1E9\U0001F1EA",
-		"1️⃣", "❤️", "\U0001F44D\U0001F3FD", "م‌ی",
-		"⠁⡀⣿", "�", "\U0001D15A\U0001D158", "\U00016FE3", "␣", "·",
+		"café", "é", "\U0001F468\u200d\U0001F469\u200d\U0001F467", "\U0001F1E9\U0001F1EA",
+		"1\ufe0f⃣", "❤\ufe0f", "\U0001F44D\U0001F3FD", "م\u200cی",
+		"⠁⡀⣿", "\ufffd", "\U0001D15A\U0001D158", "\U00016FE3", "␣", "·",
 	} {
 		if i := FirstUnsafe(s, false); i >= 0 {
 			t.Errorf("FirstUnsafe(%q) = %d, want -1", s, i)

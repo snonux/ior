@@ -801,14 +801,21 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `overlayCoversScreen`, pinned by `TestOverlayPredicatesCoverEveryOverlayState`).
   Known cosmetic limit: while a text input is being edited it shows a pasted
   bidi override (U+202E), zero-width character or blank-rendering space
-  lookalike (NBSP, U+3000, U+2800, ...) as is: bubbles `textinput` only drops
-  control runes and flattens tabs/newlines, and every editing view renders
-  `textinput.View()` unsanitised (PID picker, filter modal while a field is
-  edited, flamegraph `/` search bar, probes search, stream search/export modals,
-  recording modal). Once the text is committed or no longer being edited it is
-  rendered through `common.Sanitize` (filter fields, the flamegraph toolbar and
-  status-bar `filter:` query, the stream filter summary), so the stored value
-  stays raw for matching and only the display is made safe.
+  lookalike (NBSP, U+3000, U+2800, ...) as is. Bubbles v2.0.0
+  `internal/runeutil` (what `textinput` uses on typed and pasted runes) drops
+  exactly the runes `unicode.IsControl` reports and U+FFFD (`utf8.RuneError`),
+  and replaces each tab, CR and LF with one space (`textinput` configures
+  `ReplaceTabs(" ")` and `ReplaceNewlines(" ")`); everything else, including
+  Cf format runes (bidi, zero-width) and Zs spaces, is kept. Every editing view
+  renders `textinput.View()` unsanitised (PID picker, filter modal while a field is edited, flamegraph `/`
+  search bar, probes search, stream search/export modals, recording modal), so
+  that is the documented limit. Once the text is committed and shown somewhere
+  else it is rendered through `common.Sanitize`: the filter modal's fields, the
+  flamegraph toolbar, status-bar `filter:` query and the `Filter "..."` status
+  line / no-match placeholder (`%q` alone prints U+2800 and U+FFFC raw), the
+  stream search status and filter summary, and the probes modal's `Filter:`
+  header (task ms2). The stored value stays raw for matching and only the
+  display is made safe.
   A new text input must accept `tea.PasteMsg` as well as keys.
   Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
 - **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).
@@ -839,32 +846,25 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   the first match, so typing `mysql` and pressing Enter picks that process rather
   than the whole system, and a filter without a match selects nothing (the
   `noSelection` state with a "no process matches the filter" notice, "thread" in
-  the TID picker; Enter is a no-op in both). That notice stays hidden while an
-  empty list does not mean "no match": before the first scan result is in (it
-  only means "not loaded yet") and after a failed scan (the scan error line
-  explains it). The derived state is recomputed on every edit of the text and
-  every rescan, so backspacing to an empty filter returns to All. A derived
-  process row keeps its pid across a rescan (`applyScan`, `keepDerivedProcess`):
-  a new process sorting ahead does not take over, and if the highlighted first
-  match left the list the next match is selected with a notice that names both
-  and the reason (`pid 30 exited - selected pid 40 instead`, or `pid 30 no
-  longer matches the filter - ...` when the process still runs; `tid` in the TID
-  picker) instead of silently. Up/Down hands the selection to the user (a
-  process row then follows the process as above); a user who moved back onto
-  the All row and then edits the filter text gets it handed back to the filter,
-  so Enter right after typing never means All unless Up was the last key. Only
-  a change of the text counts (`editFilter` compares the value and rebuilds
-  nothing otherwise): cursor keys, an empty paste or any other message that
-  reaches the focused input leave the selection alone, so a derived pid tracked
-  across a rescan is not reset to row 1 by an unrelated key. The same keeps the
-  All row that a thread the TID picker's typed filter hid falls back to (that
+  the TID picker; Enter is a no-op in both, and the notice stays hidden until
+  the first scan result is in, since an empty list before that only means
+  "not loaded yet"). The derived state is recomputed on every
+  keystroke and rescan, so backspacing to an empty filter returns to All. A
+  derived process row keeps its pid across a rescan (`applyScan`,
+  `keepDerivedProcess`): a new process sorting ahead does not take over, and if
+  the highlighted first match left the list the next match is selected with a
+  `pid 30 left the list - selected pid 40 instead` notice (`tid` in the TID
+  picker) instead of silently. Up/Down
+  hands the selection to the user (a process row then follows the process as
+  above); a user who moved back onto the All row and then edits the filter text
+  gets it handed back to the filter, so Enter right after typing never means All
+  unless Up was the last key. Only a change of the text counts (`editFilter`
+  compares the value): cursor keys on the focused input keep the All row, which
+  is also what a thread the TID picker's typed filter hid falls back to (that
   user-owned All TIDs row stays within the process and is not swapped for
-  another thread; the next real edit hands it to the filter). Startup is
-  unaffected: `-pid`/`-tid` skip the picker (task ur2), and the picker's
-  `PidSelectedMsg` still replaces any startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go` and, as
-  a seeded randomized comparison with an independent reference model (Enter
-  emits exactly the highlighted row's pid, pid 0 only for the All row, nothing
-  without a selection), `internal/tui/pidpicker/selection_model_test.go`.
+  another thread; the next real edit hands it to the filter). Startup is unaffected: `-pid`/`-tid` skip the
+  picker (task ur2), and the picker's `PidSelectedMsg` still replaces any
+  startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than

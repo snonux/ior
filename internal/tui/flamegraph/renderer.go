@@ -570,7 +570,8 @@ func buildToolbar(frames []tuiFrame, width int, params renderViewParams) string 
 
 // buildFilteredStatus builds the per-selection status line when a search filter
 // is active. The searchQuery is embedded in the status so the user can see
-// which pattern is applied.
+// which pattern is applied; it is typed or pasted text, so it is sanitised
+// first (%q alone prints U+2800 and U+FFFC raw; task ms2).
 func buildFilteredStatus(frames []tuiFrame, selected tuiFrame, selectedIdx int, matchSet map[int]bool, metricLabel, searchQuery string, globalTotal uint64, visibleFrames int) string {
 	filterCoveredTotal, filterBaseTotal := filterCoverageTotals(frames, matchSet, globalTotal)
 	filterSystemShare := percentOfTotal(filterCoveredTotal, filterBaseTotal)
@@ -591,7 +592,7 @@ func buildFilteredStatus(frames []tuiFrame, selected tuiFrame, selectedIdx int, 
 		frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
 	}
 	return fmt.Sprintf("Filter %q: %.1f%% %s (%d/%d matches, %.1f%% frames shown) | Selected: %s total(%s)=%d depth=%d %.2f%% filtered %s",
-		searchQuery, filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
+		common.Sanitize(searchQuery), filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
 		selected.Name, metricLabel, selected.Total, selected.Depth, selectedFilterShare, metricLabel)
 }
 
@@ -621,7 +622,7 @@ func RenderTerminalView(ctx RenderContext) string {
 	}
 	filterSet, filterIsActive := resolveRenderFilterSet(ctx)
 	if filterIsActive && filterHidesAllFrames(filterSet) {
-		return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", ctx.SearchQuery))
+		return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", common.Sanitize(ctx.SearchQuery)))
 	}
 	ctx.FilterSet = filterSet
 	return renderSelectedView(ctx, filterIsActive)

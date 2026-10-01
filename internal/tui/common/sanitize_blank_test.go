@@ -7,16 +7,16 @@ import "testing"
 // one in the operator's TUI, while an ordinary space and neighbouring text
 // (CJK, Braille dots, emoji) stay as they are.
 var blankLookalikeCases = []struct{ name, in, want string }{
-	{"Braille blank in name", "pass⠀wd", "pass?wd"},
-	{"no-break space in path", "etc passwd", "etc?passwd"},
-	{"ideographic space in CJK name", "日本　語", "日本?語"},
-	{"en quad", "a b", "a?b"},
-	{"em space", "a b", "a?b"},
-	{"hair space", "a b", "a?b"},
-	{"narrow no-break space", "a b", "a?b"},
-	{"medium mathematical space", "a b", "a?b"},
-	{"Ogham space mark", "a b", "a?b"},
-	{"object replacement", "a￼b", "a?b"},
+	{"Braille blank in name", "pass\u2800wd", "pass?wd"},
+	{"no-break space in path", "etc\u00a0passwd", "etc?passwd"},
+	{"ideographic space in CJK name", "日本\u3000語", "日本?語"},
+	{"en quad", "a\u2000b", "a?b"},
+	{"em space", "a\u2003b", "a?b"},
+	{"hair space", "a\u200ab", "a?b"},
+	{"narrow no-break space", "a\u202fb", "a?b"},
+	{"medium mathematical space", "a\u205fb", "a?b"},
+	{"Ogham space mark", "a\u1680b", "a?b"},
+	{"object replacement", "a\ufffcb", "a?b"},
 	{"Khitan filler", "a\U00016FE4b", "a?b"},
 	{"musical null notehead", "a\U0001D159b", "a?b"},
 	{"ideographic half fill space", "a\u303fb", "a?b"},
@@ -25,7 +25,7 @@ var blankLookalikeCases = []struct{ name, in, want string }{
 	{"ASCII space kept", "etc passwd", "etc passwd"},
 	{"Braille dots kept", "⠁⣿", "⠁⣿"},
 	{"CJK and emoji kept", "日本語 \U0001F600", "日本語 \U0001F600"},
-	{"replacement character kept", "a�b", "a�b"},
+	{"replacement character kept", "a\ufffdb", "a\ufffdb"},
 }
 
 // TestSanitizeReplacesBlankLookalikes checks the replacement, idempotence and

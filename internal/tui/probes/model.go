@@ -524,7 +524,11 @@ func (m Model) headerLines() []string {
 	if m.searching {
 		lines = append(lines, m.textInput.View())
 	} else if m.search != "" {
-		lines = append(lines, "Filter: "+m.search)
+		// The committed filter text may come from a terminal paste carrying a
+		// bidi override, zero-width or blank-rendering rune, which the textinput
+		// does not drop, so the display copy is sanitised; m.search itself stays
+		// raw because the row filter matches against it.
+		lines = append(lines, "Filter: "+common.Sanitize(m.search))
 	}
 	return append(lines, "")
 }

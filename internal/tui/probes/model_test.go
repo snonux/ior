@@ -279,6 +279,57 @@ func TestSearchLineAcceptsBracketedPaste(t *testing.T) {
 	}
 }
 
+// commitSearch opens the search line, pastes text and presses Enter, leaving
+// the committed filter shown in the header.
+func commitSearch(t *testing.T, text string) Model {
+	t.Helper()
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	m := NewModel(fm).SetSize(100, 40).Open()
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m, _ = m.Update(tea.PasteMsg{Content: text})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.TextInputFocused() {
+		t.Fatalf("Enter did not close the search line")
+	}
+	return m
+}
+
+// A committed filter is rendered through common.Sanitize: a pasted NBSP,
+// Braille blank or bidi override (which textinput lets through) shows as the
+// visible '?' in the header, while the stored filter stays raw for matching.
+func TestCommittedFilterHeaderIsSanitised(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"no-break space", "re\u00a0ad", "Filter: re?ad"},
+		{"Braille blank", "re\u2800ad", "Filter: re?ad"},
+		{"bidi override", "re\u202ead", "Filter: re?ad"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := commitSearch(t, tc.in)
+			view := m.View(100, 40)
+			if !strings.Contains(view, tc.want) {
+				t.Errorf("header lacks %q:\n%s", tc.want, view)
+			}
+			for _, r := range "\u00a0\u2800\u202e" {
+				if strings.ContainsRune(view, r) {
+					t.Errorf("view still contains %U:\n%q", r, view)
+				}
+			}
+			if m.search != tc.in {
+				t.Errorf("stored filter = %q, want the raw %q", m.search, tc.in)
+			}
+		})
+	}
+}
+
+// Negative: ordinary filter text, with an ASCII space and non-ASCII letters,
+// is shown unchanged.
+func TestCommittedFilterHeaderKeepsOrdinaryText(t *testing.T) {
+	m := commitSearch(t, "re ad \u65e5\u672c")
+	if view := m.View(100, 40); !strings.Contains(view, "Filter: re ad \u65e5\u672c") {
+		t.Errorf("ordinary filter text was altered:\n%s", view)
+	}
+}
+
 // With the search line closed the list keys are commands (a all-on, n all-off,
 // q close), so a paste must not run them nor open the search line.
 func TestBracketedPasteWithoutSearchLineIsIgnored(t *testing.T) {

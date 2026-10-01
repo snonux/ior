@@ -118,8 +118,8 @@ func TestAppendCSVRowGolden(t *testing.T) {
 // quoting and escaping branch: delimiters, quotes, line breaks, leading
 // Unicode spaces, ESC, a ZWJ next to emoji, and invalid UTF-8 bytes.
 func randomText(r *rand.Rand) string {
-	alphabet := []string{"a", "Z", "/", ".", ",", `"`, " ", "\n", "\r", "\t", "\x1b", " ",
-		"‍", "\U0001F468", "é", "\xff", "\xc3", "%", "(", ")", "\\", "-", ">"}
+	alphabet := []string{"a", "Z", "/", ".", ",", `"`, " ", "\n", "\r", "\t", "\x1b", "\u00a0",
+		"\u200d", "\U0001F468", "é", "\xff", "\xc3", "%", "(", ")", "\\", "-", ">"}
 	var sb strings.Builder
 	for n := r.Intn(12); n > 0; n-- {
 		sb.WriteString(alphabet[r.Intn(len(alphabet))])
@@ -180,7 +180,7 @@ func TestAppendCSVRowKeepsThePrefix(t *testing.T) {
 // with the string form for fields at the boundaries: nothing to quote, all
 // quotes, quotes at either end, and a field starting with a Unicode space.
 func TestQuoteInPlaceMatchesQuoteCSVField(t *testing.T) {
-	for _, in := range []string{"", "x", `"`, `""`, `a"`, `"a`, `,`, `\.`, " x", " x", "x\ny", "\xff,\xfe", `a"b"c,d`} {
+	for _, in := range []string{"", "x", `"`, `""`, `a"`, `"a`, `,`, `\.`, "\u00a0x", " x", "x\ny", "\xff,\xfe", `a"b"c,d`} {
 		dst := quoteInPlace(append([]byte("P:"), in...), 2)
 		if got, want := string(dst), "P:"+quoteCSVField(in); got != want {
 			t.Errorf("quoteInPlace(%q) = %q, want %q", in, got, want)
