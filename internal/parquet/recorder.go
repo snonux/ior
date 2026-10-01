@@ -15,21 +15,29 @@ const (
 	// defaultRecorderQueueCapacity is the shed-mode (TUI) queue size. The
 	// channel is allocated up front at about 224 bytes per slot (one
 	// streamrow.Row plus the filter epoch), so 16384 slots cost ~3.5 MiB of
-	// slot array per recording (plus the path strings of the rows queued,
-	// bounded the same way as for HeadlessQueueCapacity). That covers roughly 19 ms of a 870k rows/s burst - a row-group
-	// flush (every column compressed at once on the recorder goroutine) fits
-	// inside it, while the old 4096 slots (~5 ms) did not. Headless runs that
-	// need a lossless file choose backpressure instead (RecorderConfig.
+	// slot array per recording, plus the strings of the rows queued (see
+	// HeadlessQueueCapacity for that bound; a quarter of it here). That
+	// covers roughly 19 ms of a 870k rows/s burst - a row-group flush (every
+	// column compressed at once on the recorder goroutine) fits inside it,
+	// while the old 4096 slots (~5 ms) did not. Headless runs that need a
+	// lossless file choose backpressure instead (RecorderConfig.
 	// BlockWhenFull) and a bigger queue (HeadlessQueueCapacity).
 	defaultRecorderQueueCapacity = 16384
 	// HeadlessQueueCapacity is the queue size a backpressured headless
 	// recording asks for: 65536 slots, ~14 MiB of slot array up front, ~75 ms
-	// of a 870k rows/s burst. The slots do not own the whole cost: a queued
-	// row also pins its heap strings (FileName, OldName, Comm; a path can be
-	// up to PATH_MAX = 4096 bytes). Typical short paths add a few MiB; a queue
-	// full of 4 KiB paths would add ~256 MiB at worst. Memory is still bounded
-	// by this constant (slots x row size), because once the queue is full the
-	// producer waits rather than the queue growing.
+	// of a 870k rows/s burst. The slots are not the whole cost: a queued row
+	// also pins its heap strings (FileName, OldName, Comm). Kernel-captured
+	// names are capped at MAX_FILENAME_LENGTH = 256 bytes (comm at 16) and a
+	// row carries at most two of them (rename/link rows: FileName + OldName),
+	// so kernel-sourced strings add at most 65536 x 512 bytes = 32 MiB for a
+	// completely full queue; typically a few MiB, since most rows carry one
+	// short path and rows of one file share the cached string. Names the
+	// event loop resolves itself (/proc/<pid>/fd readlinks, dirfd-joined
+	// paths) can be longer, up to PATH_MAX = 4096 bytes and a little more
+	// when joined, but only for distinct deep paths, which is not a
+	// realistic full-queue load. Memory is still bounded by this constant
+	// (slots x row size), because once the queue is full the producer waits
+	// rather than the queue growing.
 	HeadlessQueueCapacity        = 65536
 	defaultRecorderBatchSize     = 256
 	defaultRecorderFlushInterval = 250 * time.Millisecond

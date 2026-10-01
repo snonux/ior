@@ -18,7 +18,10 @@ type gateWriter struct {
 	err     error
 
 	startOnce sync.Once
-	written   atomic.Uint64
+	// openOnce makes open idempotent, so a failing test's cleanup can release
+	// a writer that the test body may already have released.
+	openOnce sync.Once
+	written  atomic.Uint64
 }
 
 func newGateWriter(err error) *gateWriter {
@@ -34,6 +37,10 @@ func (w *gateWriter) WriteRows(rows []Record) error {
 	w.written.Add(uint64(len(rows)))
 	return nil
 }
+
+// open releases every blocked and future WriteRows call; safe to call twice.
+func (w *gateWriter) open() { w.openOnce.Do(func() { close(w.release) }) }
+
 func (w *gateWriter) Close() error      { return nil }
 func (w *gateWriter) Abort() error      { return nil }
 func (w *gateWriter) FinalPath() string { return "ignored.parquet" }
@@ -363,101 +370,214 @@ func TestHeadlessRecorderQueueHoldsItsCapacityThenBlocks(t *testing.T) {
 // a queue that nobody drains any more. Without awaitSenders about half of the
 // trials lose the accepted row.
 func TestRecorderStopWaitsForRegisteredWaiter(t *testing.T) {
+	t.Cleanup(func() { waiterRegisteredHook = nil })
 	for trial := 0; trial < 40; trial++ {
-		registered, proceed := make(chan struct{}), make(chan struct{})
-		waiterRegisteredHook = func() {
-			close(registered)
-			<-proceed
-		}
-		w := newGateWriter(nil)
-		r := newGatedRecorder(t, w, true)
-
-		result := recordAsync(r, 3)
-		<-registered
-		stopped := make(chan error, 1)
-		go func() { stopped <- r.Stop() }()
-		time.Sleep(2 * time.Millisecond) // Stop has closed stopC by now
-		close(w.release)                 // the writer drains: room appears
-		time.Sleep(5 * time.Millisecond) // a barrier-less Stop would finish here
-		waiterRegisteredHook = nil
-		close(proceed)
-
-		accepted := uint64(2)
-		if err := <-result; err == nil {
-			accepted++
-		} else if !errors.Is(err, ErrRecorderNotActive) {
-			t.Fatalf("trial %d: Record error = %v, want nil or %v", trial, err, ErrRecorderNotActive)
-		}
-		if err := <-stopped; err != nil {
-			t.Fatalf("trial %d: Stop() error = %v", trial, err)
-		}
-		if got := w.written.Load(); got != accepted {
-			t.Fatalf("trial %d: writer got %d rows but %d were accepted: an accepted row was lost", trial, got, accepted)
-		}
+		runWaiterBarrierTrial(t, trial)
 	}
 }
 
+// runWaiterBarrierTrial is one trial of the test above. Its cleanup runs even
+// after a Fatalf: it lets the parked producer proceed, opens the writer and
+// stops the recorder, so a failure cannot leak a goroutine that races the
+// next test through the shared waiterRegisteredHook.
+func runWaiterBarrierTrial(t *testing.T, trial int) {
+	registered, proceed := make(chan struct{}), make(chan struct{})
+	var proceedOnce sync.Once
+	letProceed := func() { proceedOnce.Do(func() { close(proceed) }) }
+	waiterRegisteredHook = func() {
+		close(registered)
+		<-proceed
+	}
+	w := newGateWriter(nil)
+	r := newGatedRecorder(t, w, true)
+	t.Cleanup(func() {
+		waiterRegisteredHook = nil
+		letProceed()
+		w.open()
+		_ = r.Stop()
+	})
+
+	result := recordAsync(r, 3)
+	<-registered
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop() }()
+	time.Sleep(2 * time.Millisecond) // Stop has closed stopC by now
+	w.open()                         // the writer drains: room appears
+	time.Sleep(5 * time.Millisecond) // a barrier-less Stop would finish here
+	waiterRegisteredHook = nil
+	letProceed()
+
+	accepted := uint64(2)
+	if err := <-result; err == nil {
+		accepted++
+	} else if !errors.Is(err, ErrRecorderNotActive) {
+		t.Fatalf("trial %d: Record error = %v, want nil or %v", trial, err, ErrRecorderNotActive)
+	}
+	if err := <-stopped; err != nil {
+		t.Fatalf("trial %d: Stop() error = %v", trial, err)
+	}
+	if got := w.written.Load(); got != accepted {
+		t.Fatalf("trial %d: writer got %d rows but %d were accepted: an accepted row was lost", trial, got, accepted)
+	}
+}
+
+// raceOrder names one way the writer's death and Stop can interleave. The test
+// below forces each of them with explicit waits; letting the scheduler pick
+// (goroutine start order) exercised the Stop-first orders in only a few
+// percent of the trials.
+type raceOrder int
+
+const (
+	// deathBeforeStop: the session is dead and published before Stop is
+	// called, so Stop meets no active session.
+	deathBeforeStop raceOrder = iota
+	// stopBeforeDeath: Stop has closed stopC and waits for the session, which
+	// is still stuck in the stalled write, when that write fails.
+	stopBeforeDeath
+	// deathInStopWindow: the writer dies and the session finishes after Stop
+	// has marked its request and released r.mu but before it stops the session
+	// (stopUnlockedHook), so Stop must still report the failure, once.
+	deathInStopWindow
+)
+
+func (o raceOrder) String() string {
+	return [...]string{"death-before-stop", "stop-before-death", "death-in-stop-window"}[o]
+}
+
+// stopRequested reports whether the active session's stopC is closed, i.e.
+// Stop (or a dead writer) has asked it to end.
+func stopRequested(r *Recorder) bool {
+	r.mu.RLock()
+	session := r.active
+	r.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	select {
+	case <-session.stopC:
+		return true
+	default:
+		return false
+	}
+}
+
+// sessionDead reports whether the session has published its failure.
+func sessionDead(r *Recorder) bool {
+	st := r.Status()
+	return !st.Active && st.LastError != nil
+}
+
+// awaitCondition polls cond for up to five seconds and reports whether it held.
+func awaitCondition(cond func() bool) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	return true
+}
+
+// stopWithWriterFailure ends the recording through Stop while the stalled
+// write fails in the given order, and returns Stop's result.
+func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceOrder) <-chan error {
+	t.Helper()
+	stopped := make(chan error, 1)
+	stop := func() { stopped <- r.Stop() }
+	switch order {
+	case deathBeforeStop:
+		w.open()
+		if !awaitCondition(func() bool { return sessionDead(r) }) {
+			t.Fatalf("%v: the writer failure was never published", order)
+		}
+		go stop()
+	case stopBeforeDeath:
+		go stop()
+		if !awaitCondition(func() bool { return stopRequested(r) }) {
+			t.Fatalf("%v: Stop never closed stopC", order)
+		}
+		w.open()
+	case deathInStopWindow:
+		// Runs on Stop's goroutine, after it released r.mu: Status is safe.
+		stopUnlockedHook = func() {
+			w.open()
+			awaitCondition(func() bool { return sessionDead(r) })
+		}
+		go stop()
+	}
+	return stopped
+}
+
 // TestRecorderWriterDeathRacingStopWithBlockedProducers kills the writer and
-// calls Stop while several producers wait for room, in both orders. Nothing may
-// deadlock or close a channel twice (both paths close stopC and finish the
-// session); every producer is released with nil or a rejection; and the
-// failure is reported exactly once, by Stop, never again by TakeFailure or a
-// second Stop. The producers are registered as waiters before the race starts
+// calls Stop while several producers wait for room, in each of the orders of
+// raceOrder, every one forced deterministically. Nothing may deadlock or close
+// a channel twice (both paths close stopC and finish the session); every
+// producer is released with nil or a rejection; and the failure is reported
+// exactly once, by Stop, never again by TakeFailure or a second Stop. The
+// producers are registered as waiters before the race starts
 // (waiterRegisteredHook), so no sleep decides whether they are blocked.
 func TestRecorderWriterDeathRacingStopWithBlockedProducers(t *testing.T) {
-	writeErr := errors.New("disk full")
 	const producers = 4
 	registered := make(chan struct{}, producers)
 	waiterRegisteredHook = func() { registered <- struct{}{} }
-	t.Cleanup(func() { waiterRegisteredHook = nil })
+	t.Cleanup(func() { waiterRegisteredHook = nil; stopUnlockedHook = nil })
 
-	for trial := 0; trial < 20; trial++ {
-		w := newGateWriter(writeErr)
-		r := newGatedRecorder(t, w, true)
+	for trial := 0; trial < 30; trial++ {
+		order := raceOrder(trial % 3)
+		runDeathRaceTrial(t, trial, order, producers, registered)
+	}
+}
 
-		results := make(chan error, producers)
-		for p := 0; p < producers; p++ {
-			go func(p int) { results <- r.Record(testStreamRow(uint64(10+p), "read", false), 0) }(p)
-		}
-		for p := 0; p < producers; p++ {
-			<-registered
-		}
+func runDeathRaceTrial(t *testing.T, trial int, order raceOrder, producers int, registered <-chan struct{}) {
+	writeErr := errors.New("disk full")
+	w := newGateWriter(writeErr)
+	r := newGatedRecorder(t, w, true)
+	// A failing trial must not leave producers or the session goroutine behind.
+	t.Cleanup(func() { w.open(); stopUnlockedHook = nil; _ = r.Stop() })
 
-		stopped := make(chan error, 1)
-		if trial%2 == 0 {
-			go func() { stopped <- r.Stop() }()
-			close(w.release) // the stalled write fails: the writer dies
-		} else {
-			close(w.release)
-			go func() { stopped <- r.Stop() }()
-		}
+	results := make(chan error, producers)
+	for p := 0; p < producers; p++ {
+		go func(p int) { results <- r.Record(testStreamRow(uint64(10+p), "read", false), 0) }(p)
+	}
+	for p := 0; p < producers; p++ {
+		<-registered
+	}
 
-		for p := 0; p < producers; p++ {
-			select {
-			case err := <-results:
-				if err != nil && !errors.Is(err, writeErr) && !errors.Is(err, ErrRecorderNotActive) {
-					t.Fatalf("trial %d: Record error = %v, want nil, %v or %v", trial, err, writeErr, ErrRecorderNotActive)
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatalf("trial %d: a producer is stuck after the writer died and Stop ran", trial)
-			}
-		}
+	stopped := stopWithWriterFailure(t, r, w, order)
+	for p := 0; p < producers; p++ {
 		select {
-		case err := <-stopped:
-			if !errors.Is(err, writeErr) {
-				t.Fatalf("trial %d: Stop() error = %v, want the writer failure %v", trial, err, writeErr)
+		case err := <-results:
+			if err != nil && !errors.Is(err, writeErr) && !errors.Is(err, ErrRecorderNotActive) {
+				t.Fatalf("trial %d (%v): Record error = %v, want nil, %v or %v", trial, order, err, writeErr, ErrRecorderNotActive)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatalf("trial %d: Stop hung after the writer died", trial)
+			t.Fatalf("trial %d (%v): a producer is stuck after the writer died and Stop ran", trial, order)
 		}
-		if err := r.TakeFailure(); err != nil {
-			t.Fatalf("trial %d: TakeFailure() = %v after Stop reported it, want nil", trial, err)
+	}
+	assertFailureReportedOnce(t, trial, order, r, stopped, writeErr)
+	stopUnlockedHook = nil // do not leak this trial's hook into the next one
+}
+
+// assertFailureReportedOnce checks that Stop returned the writer failure and
+// that neither TakeFailure nor a second Stop reports it again.
+func assertFailureReportedOnce(t *testing.T, trial int, order raceOrder, r *Recorder, stopped <-chan error, writeErr error) {
+	t.Helper()
+	select {
+	case err := <-stopped:
+		if !errors.Is(err, writeErr) {
+			t.Fatalf("trial %d (%v): Stop() error = %v, want the writer failure %v", trial, order, err, writeErr)
 		}
-		if err := r.Stop(); err != nil {
-			t.Fatalf("trial %d: second Stop() = %v, want nil", trial, err)
-		}
-		if st := r.Status(); st.Active || !errors.Is(st.LastError, writeErr) {
-			t.Fatalf("trial %d: status = %+v, want an inactive recording that failed with %v", trial, st, writeErr)
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("trial %d (%v): Stop hung after the writer died", trial, order)
+	}
+	if err := r.TakeFailure(); err != nil {
+		t.Fatalf("trial %d (%v): TakeFailure() = %v after Stop reported it, want nil", trial, order, err)
+	}
+	if err := r.Stop(); err != nil {
+		t.Fatalf("trial %d (%v): second Stop() = %v, want nil", trial, order, err)
+	}
+	if st := r.Status(); st.Active || !errors.Is(st.LastError, writeErr) {
+		t.Fatalf("trial %d (%v): status = %+v, want an inactive recording that failed with %v", trial, order, st, writeErr)
 	}
 }
