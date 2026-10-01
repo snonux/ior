@@ -61,7 +61,20 @@ const (
 // explainFailure re-shorten a routed row with the same bound without cutting
 // it twice. Carriage returns are dropped so a CRLF log does not leave a stray
 // "\r" in a row.
+//
+// The fixed-point argument: a second pass sees one line (so no PROG LOAD LOG
+// body follows a banner), trims a trailing "\r", splits off a marker and
+// rejoins it, and returns the row unchanged when it fits. The one thing that
+// pass changes is a trailing "\r", so the result never ends in one: a cut
+// below 3 bytes has no ellipsis and can stop right after a "\r" from the
+// middle of a line ("a\rb" at limit 2 was "a\r", then "a" on the second pass).
 func shortenWarning(msg string, limit int) string {
+	return strings.TrimRight(shapeWarning(msg, limit), "\r")
+}
+
+// shapeWarning is shortenWarning before its final trailing "\r" trim: the
+// verifier summary for a PROG LOAD LOG, else the first line plus marker.
+func shapeWarning(msg string, limit int) string {
 	if row, ok := summarizeProgLoadLog(msg, limit); ok {
 		return row
 	}
@@ -214,8 +227,10 @@ func countNonBlankLines(text string) int {
 
 // splitMoreLinesMarker separates a trailing " ... (N more lines)" (or "... (1
 // more line)") marker from row, so callers can shorten the content without
-// eating the marker. Only the exact forms moreLinesMarker renders are
-// recognised: the singular with a count of 1, the plural with any other.
+// eating the marker. Recognised are the singular with a count of 1 and the
+// plural with any other run of digits: every form moreLinesMarker renders,
+// plus counts it never renders (0, 007), which only a warning's own text can
+// hold; such a marker is kept whole too, which is harmless and idempotent.
 func splitMoreLinesMarker(row string) (content, marker string) {
 	suffix := moreLinesSuffix
 	if strings.HasSuffix(row, moreLineSuffix) {

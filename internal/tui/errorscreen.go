@@ -20,26 +20,26 @@ import (
 // and, worse, the hint saying how to leave used to fall off the bottom. The
 // body is therefore cut to the rows left above the hint, with an explicit
 // "... (N more lines)" marker, so the hint's key line stays on screen at
-// every height from 1 up (at 1 row its top border goes, see lastLines). The hint is also cut to the width (errorScreenHintText): it is
-// 13 columns ("q / esc  quit"), 21 for the recoverable one, and on a narrower
-// terminal it showed past the right edge; there it keeps its start, so the
-// first key stays readable down to one column. The wrapped body is clamped
-// to the width as well (clampLinesToWidth), so no line of the screen is wider
-// than the terminal at any width from 1 up. A zero width or height means "no
-// size known yet": no wrap, no cut.
+// every height from 1 up (at 1 row its top border goes, see lastLines).
+//
+// The hint is also cut to the width (errorScreenHintText): it is 13 columns
+// ("q / esc  quit"), 21 for the recoverable one, and on a narrower terminal
+// it showed past the right edge; there it keeps its start, so the first key
+// stays readable down to one column. The body is wrapped by wrapErrorText
+// before it is styled, so no line of the screen is wider than the terminal
+// at any width from 1 up and no grapheme is split across lines. A zero width
+// or height means "no size known yet": no wrap, no cut.
 func (m *Model) errorScreenView(width, height int) string {
 	theme := common.Current()
 	hint := theme.HelpBarStyle.Render(m.errorScreenHintText(width))
 	// Errors can echo traced or user-supplied paths; SanitizeLines keeps
 	// intentional line breaks but no escape sequence.
-	errStyle := theme.ErrorStyle
+	text := common.SanitizeLines(m.lastErr.Error())
 	if width > 0 {
-		errStyle = errStyle.Width(width)
+		text = wrapErrorText(text, width)
 	}
-	body := errStyle.Render(common.SanitizeLines(m.lastErr.Error()))
-	if width > 0 {
-		body = clampLinesToWidth(body, width)
-	}
+	// Render styles each line on its own, so a wrapped line keeps the colour.
+	body := theme.ErrorStyle.Render(text)
 	screen := hint
 	if height > 0 {
 		// One row goes to the blank line between body and hint.
@@ -71,15 +71,22 @@ func (m *Model) errorScreenHint() string {
 	return "q / esc  quit"
 }
 
-// clampLinesToWidth makes every line of the styled body at most width cells.
-// ErrorStyle.Width wraps on words, but lipgloss keeps a line's leading
-// whitespace whole, so on a terminal narrower than a warning row's "  - "
-// indent plus one character that row's first line stayed wider than the
-// screen. ansi.Hardwrap breaks such lines (keeping the text and the escape
-// codes); a grapheme wider than the whole terminal (a 2-cell rune at width 1)
-// cannot be wrapped and is cut by the ANSI-aware truncation instead.
-func clampLinesToWidth(body string, width int) string {
-	lines := strings.Split(ansi.Hardwrap(body, width, true), "\n")
+// errorTabWidth is how many spaces a tab becomes, lipgloss's default (which
+// Render would otherwise apply after the text was wrapped, widening lines).
+const errorTabWidth = 4
+
+// wrapErrorText wraps the plain error text to at most width cells per line.
+// It used to be wrapped by ErrorStyle.Width, but lipgloss splits a grapheme
+// cluster at a line end ("yyyye\u0301x" at 5 put the combining accent at the
+// start of the next line) and keeps a line's leading whitespace whole, so a
+// row's "  - " indent stayed wider than a 1..3-column terminal. ansi.Wordwrap
+// breaks at spaces and keeps clusters whole but lets a word longer than the
+// width overflow; ansi.Hardwrap then breaks those (again between clusters,
+// keeping leading spaces); a single grapheme wider than the whole terminal
+// (a 2-cell rune at width 1) cannot be wrapped and is cut by ansi.Truncate.
+func wrapErrorText(text string, width int) string {
+	text = strings.ReplaceAll(text, "\t", strings.Repeat(" ", errorTabWidth))
+	lines := strings.Split(ansi.Hardwrap(ansi.Wordwrap(text, width, ""), width, true), "\n")
 	for i, line := range lines {
 		if ansi.StringWidth(line) > width {
 			lines[i] = ansi.Truncate(line, width, "")

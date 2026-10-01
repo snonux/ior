@@ -171,14 +171,67 @@ func TestErrorScreenFitsNarrowTerminals(t *testing.T) {
 	}
 }
 
-// TestClampLinesToWidthWrapsRatherThanCuts: an over-wide line (lipgloss keeps
-// an indent whole) is broken onto further lines, so no text is lost; only a
-// grapheme wider than the terminal itself is cut.
-func TestClampLinesToWidthWrapsRatherThanCuts(t *testing.T) {
-	if got := clampLinesToWidth("  - abc\nx", 2); got != "  \n- \nab\nc\nx" {
-		t.Errorf("clampLinesToWidth(indented, 2) = %q", got)
+// TestWrapErrorTextWrapsRatherThanCuts: an over-wide line (an indent, a word
+// longer than the terminal) is broken onto further lines, so no text is lost;
+// only a grapheme wider than the terminal itself is cut. Tabs are expanded
+// before wrapping, so lipgloss's own tab expansion cannot widen a line later;
+// leading blanks that do not fit with the next word go with the break, as
+// at any other word break.
+func TestWrapErrorTextWrapsRatherThanCuts(t *testing.T) {
+	cases := []struct {
+		text  string
+		width int
+		want  string
+	}{
+		{"  - abc\nx", 2, "  \n-\nab\nc\nx"},
+		{"foo bar baz quux", 7, "foo bar\nbaz\nquux"},
+		{"\tab", 6, "    ab"},
+		{"\tab", 5, "\nab"},
 	}
-	if got := clampLinesToWidth("漢", 1); ansi.StringWidth(got) > 1 {
-		t.Errorf("clampLinesToWidth(wide rune, 1) = %q, wider than 1", got)
+	for _, c := range cases {
+		if got := wrapErrorText(c.text, c.width); got != c.want {
+			t.Errorf("wrapErrorText(%q, %d) = %q, want %q", c.text, c.width, got, c.want)
+		}
+	}
+	if got := wrapErrorText("漢", 1); ansi.StringWidth(got) > 1 {
+		t.Errorf("wrapErrorText(wide rune, 1) = %q, wider than 1", got)
+	}
+}
+
+// TestWrapErrorTextKeepsGraphemesWhole: lipgloss's Width wrap (used before)
+// broke "yyyye\u0301x" at 5 columns between the "e" and its combining accent,
+// so the accent started the next line on its own. Every line must start and
+// end on a grapheme boundary, and the text must survive the wrap.
+func TestWrapErrorTextKeepsGraphemesWhole(t *testing.T) {
+	cases := []struct {
+		text  string
+		width int
+		want  string
+	}{
+		{"yyyye\u0301x", 5, "yyyye\u0301\nx"},
+		{"ae\u0301\u0301b", 2, "ae\u0301\u0301\nb"},
+		{"warn: cafe\u0301 cafe\u0301", 8, "warn:\ncafe\u0301\ncafe\u0301"},
+	}
+	for _, c := range cases {
+		if got := wrapErrorText(c.text, c.width); got != c.want {
+			t.Errorf("wrapErrorText(%q, %d) = %q, want %q", c.text, c.width, got, c.want)
+		}
+	}
+}
+
+// TestErrorScreenKeepsCombiningMarksOnTheirLine: the same through the view,
+// with the error style applied: no line of the screen starts with a
+// combining mark.
+func TestErrorScreenKeepsCombiningMarksOnTheirLine(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	m.router.showDashboard()
+	m.attaching = false
+	m.width, m.height = 5, 20
+	m.setError(errors.New("yyyye\u0301x"), errorScreenFatal)
+
+	for _, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " "), "\u0301") {
+			t.Fatalf("a line starts with the combining accent: %q", line)
+		}
 	}
 }
