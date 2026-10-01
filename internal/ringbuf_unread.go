@@ -112,12 +112,12 @@ func (r *kernelRingUnread) Unread() (ringbufUnread, error) {
 	if err != nil {
 		return ringbufUnread{}, fmt.Errorf("map the ring buffer consumer page: %w", err)
 	}
-	defer syscall.Munmap(consumer) //nolint:errcheck // nothing to do about a failed unmap of a read-only view
+	defer func() { _ = syscall.Munmap(consumer) }() // nothing to do about a failed unmap of a read-only view
 	producer, err := syscall.Mmap(r.fd, int64(page), page+2*r.size, syscall.PROT_READ, syscall.MAP_SHARED)
 	if err != nil {
 		return ringbufUnread{}, fmt.Errorf("map the ring buffer producer page and data: %w", err)
 	}
-	defer syscall.Munmap(producer) //nolint:errcheck // as above
+	defer func() { _ = syscall.Munmap(producer) }() // as above
 	consumerPos := atomic.LoadUint64((*uint64)(unsafe.Pointer(&consumer[0])))
 	producerPos := atomic.LoadUint64((*uint64)(unsafe.Pointer(&producer[0])))
 	return countUnreadRingRecords(consumerPos, producerPos, producer[page:]), nil
