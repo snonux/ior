@@ -1578,7 +1578,8 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 //
 // It does not stop the previous session itself: beginTraceCmd owns that
 // (traceLifecycle.beginCmd cancels any running session before starting the
-// next), so at most one session is ever live. Callers that must quiesce the
+// next), so at most one session is ever current (the cancelled one may still
+// be tearing down, see traceLifecycle.beginCmd). Callers that must quiesce the
 // old session before touching state it feeds - selectProcess before
 // resetStreamBuffer, the filter fallback before PrepareForTraceRestart - stop
 // it explicitly first, and beginCmd's stop is then a no-op. With no tracer

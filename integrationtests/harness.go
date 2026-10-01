@@ -244,8 +244,10 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 
 // workloadCommand builds the (unstarted) workload command. Its stderr is teed
 // to the test's stderr and to the returned buffer. The environment is only
-// overridden when extra env or a startup file is requested; a stale startup
-// file is removed first so the workload's fresh write is what callers see.
+// overridden when extra env or a startup file is requested. A stale startup
+// file is removed first: the harness writes the file to release the workload
+// (releaseWorkloadWhenIorReady) and the workload polls for it, so a leftover
+// one would let the workload start before ior has attached.
 func (h *TestHarness) workloadCommand(scenario, startupFile string) (*exec.Cmd, *bytes.Buffer) {
 	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
 	stderr := &bytes.Buffer{}

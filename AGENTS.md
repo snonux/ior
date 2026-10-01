@@ -45,7 +45,7 @@ set). That is why unchecked `fmt.Fprintf(os.Stderr, …)` and
 `strings.Builder`/`bytes.Buffer` writes are reported nowhere in the tree, while
 the same `Fprintf` to a generic `io.Writer` is: `cmd/ior/main.go:59`
 writes an unannotated `fmt.Fprintf(os.Stderr, …)`, while
-`integrationtests/harness.go:296` has to write `_, _ = fmt.Fprintln(w, line)`
+`integrationtests/harness.go`'s `scanIorOutput` has to write `_, _ = fmt.Fprintln(w, line)`
 because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
 not an oversight, and unannotated stderr writes are common throughout the
 tree.
@@ -260,7 +260,8 @@ pruning, cost 26366 / 1479201 and trips both.
 `SnapshotTree` holds the trie's read lock, and every event's `AddRecord`
 needs the write lock, so snapshot cost is ingest stall time. It is therefore
 proportional to the *visible* nodes, not the recorded history:
-`insertTriePath` maintains each node's subtree totals and its
+`insertLiveTriePath` (the live trie's insert; the batch `insertTriePath` skips the
+`topChildren` upkeep) maintains each node's subtree totals and its
 `topChildren` (the 8 largest non-empty children) on every insert, and the
 `snapshotBuilder` decides pruning from those before recursing — a pruned
 subtree is never walked or allocated, and a wide fan-out's pruned tail is
@@ -298,8 +299,8 @@ frame forever (`TestLiveTrieCompactionKeepsALateFrameOverOldIdleFrames`).
 
 Compaction runs inside the `AddRecord` that crossed the cap, under the write
 lock, and that is the event-loop goroutine (`internal/ior.go` print callback
--> `rt.liveTrie.Ingest`): for about 40ms at the default cap
-(`BenchmarkLiveTrieCompaction`; over 100ms on a heavily oversubscribed dev
+-> `rt.liveTrie.Ingest`): for tens of ms at the default cap (measured 40-70ms
+with `BenchmarkLiveTrieCompaction`; over 100ms on a heavily oversubscribed dev
 box), plus GC of the folded nodes, no
 events are consumed, so under a high rate of unique paths the BPF ring buffer
 can back up and drop events. It happens at most once per cap/4 new nodes. A

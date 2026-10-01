@@ -180,8 +180,10 @@ func markShownNodes(root *trieNode) []*trieNode {
 func collectFoldCandidates(root *trieNode, nodeCount int, clock rateClock, includeShown bool) []foldCandidate {
 	candidates := make([]foldCandidate, 0, nodeCount)
 	// walk returns the rank of node: the maximum of its rate and its frame
-	// children's ranks. A bucket is skipped; its folded mass must not keep
-	// its parent alive.
+	// children's ranks. A bucket is skipped as a child (it is not a fold
+	// candidate and its own rate does not lift the parent's rank), but its
+	// folded mass is still part of the parent's total, so it counts in the
+	// parent's own rate.
 	var walk func(node *trieNode, depth int) float64
 	walk = func(node *trieNode, depth int) float64 {
 		rank := clock.rate(node)

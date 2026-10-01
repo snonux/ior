@@ -129,9 +129,10 @@ func fileRows(snap *statsengine.Snapshot) [][]string {
 }
 
 // processRows returns the syscall and latency rows of every process. A
-// process row's id is ProcessSnapshot.ID: the bare PID, or "PID#n" for the
-// n-th later process the kernel handed a recycled PID, so the rows of
-// distinct processes never share an id.
+// process row's id is ProcessSnapshot.ID: the bare PID, or "PID#n" for a
+// later row of a recycled PID (n is a per-PID row number, which compaction of
+// retired rows can renumber, not a count of processes), so the rows of one
+// snapshot never share an id.
 func processRows(snap *statsengine.Snapshot) [][]string {
 	var rows [][]string
 	for _, p := range snap.Processes() {

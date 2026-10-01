@@ -153,11 +153,14 @@ func (d DirSnapshot) IsRemainder() bool {
 // each row with its own counts and comm.
 type ProcessSnapshot struct {
 	PID uint32
-	// Lifetime tells apart the rows of one PID: 0 for the first process seen
-	// with it in the session, counting up with each one that exited before
-	// (see Engine.RetireProcess). It is stable for the life of a row and for
-	// the life of the process: Engine.Reset clears the rows but a process that
-	// is still running reappears with the same Lifetime.
+	// Lifetime is a per-PID row number that tells apart the rows of one PID
+	// (it is not a count of recycled processes): 0 for the first row of the
+	// PID, counting up with each row retired before it (see
+	// Engine.RetireProcess). Compaction of the retired rows (keepOnly) can
+	// renumber the survivors, so a still-running process may get a different
+	// number, or restart at 0, after one; within one snapshot the ID is
+	// unique, which is all it promises. Engine.Reset clears the rows but a
+	// process that is still running reappears with the same Lifetime.
 	Lifetime uint32
 	Comm     string
 
