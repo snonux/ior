@@ -1271,7 +1271,7 @@ func TestCreateTempRefusesASymlinkPlantedAtTheTempName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp = %v, want it to retry past the planted name", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if len(tried) != 2 {
 		t.Fatalf("CreateTemp tried %d names, want the planted one refused and a retry", len(tried))
 	}
