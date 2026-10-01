@@ -123,8 +123,10 @@ The TUI treats a name as generated only when it matches the generated pattern ex
 replaced. A typed name may carry a directory (`/tmp/x.csv`, `out/x.csv`, `../x.csv`): the stream
 export honours it as typed, relative to the current directory unless absolute, and the Stream
 tab shows the path it wrote. ior does not create missing directories. An empty name, a
-directory, a NUL byte, or a missing or unwritable directory is refused with the reason shown in
-the `X` prompt, which stays open with your text so you can fix it. A killed ior can leave an
+name that denotes a directory (`out/`, `out/.`), a name over 255 bytes, a NUL byte, or a missing
+or unwritable directory is refused with the reason shown in the `X` prompt, which stays open
+with your text and cursor so you can fix it. The name is cleaned as text, not through symlinks:
+`link/../x.csv` means `x.csv` next to `link`, even when `link` points elsewhere. A killed ior can leave an
 orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
 
 With an explicit sampling rate, a raw-mode run (`-plain`, `-flamegraph`, `-parquet`) writes only a
