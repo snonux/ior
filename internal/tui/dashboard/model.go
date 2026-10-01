@@ -396,11 +396,31 @@ func (m *Model) reanchorFilesOffset(selectedPath string) {
 // re-anchor operate on, via the generic tableTabState selection.
 func (m *Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 	rows := m.sortedSyscallRows()
+	// The treemap and the bubble chart keep their own selections, keyed by
+	// syscall name, like the Processes tab (selectedProcessSnapshot): Enter
+	// must act on the tile or bubble that is highlighted, not on whatever the
+	// table offset points at (task cr2).
+	switch m.syscallsTab.mode {
+	case tabVizModeTreemap:
+		return syscallByName(rows, m.syscallsTreemapSelection().selectedKey())
+	case tabVizModeBubbles:
+		return syscallByName(rows, m.syscallsTab.bubble.selectedID())
+	}
 	index, ok := m.syscallsTab.selected(len(rows))
 	if !ok {
 		return statsengine.SyscallSnapshot{}, false
 	}
 	return rows[index], true
+}
+
+// syscallByName returns the row named name; an empty name matches no row.
+func syscallByName(rows []statsengine.SyscallSnapshot, name string) (statsengine.SyscallSnapshot, bool) {
+	for _, row := range rows {
+		if name != "" && row.Name == name {
+			return row, true
+		}
+	}
+	return statsengine.SyscallSnapshot{}, false
 }
 
 func (m *Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
@@ -560,11 +580,37 @@ func (m *Model) selectedFilePath() string {
 
 func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	rows := m.sortedDirRows()
+	// Like the Syscalls and Processes tabs, the bubble chart and the treemap
+	// are selected by their own identity (the directory key), not by the table
+	// row the shared offset points at (task cr2). The icicle's tile keys are
+	// full paths that match a directory row only when the tile is one, so a
+	// tile without a row (a synthetic ancestor) selects nothing.
+	switch m.filesTab.mode {
+	case tabVizModeBubbles:
+		return dirByKey(rows, m.filesTab.bubble.selectedID())
+	case tabVizModeTreemap, tabVizModeIcicle:
+		keys := m.filesDirSelectionKeys()
+		if index, ok := m.filesDirTab.selected(len(keys)); ok {
+			return dirByKey(rows, keys[index])
+		}
+		return DirSnapshot{}, false
+	}
 	index, ok := m.filesDirTab.selected(len(rows))
 	if !ok {
 		return DirSnapshot{}, false
 	}
 	return rows[index], true
+}
+
+// dirByKey returns the directory row whose dirKey is key; an empty key matches
+// no row.
+func dirByKey(rows []DirSnapshot, key string) (DirSnapshot, bool) {
+	for _, row := range rows {
+		if key != "" && dirKey(row) == key {
+			return row, true
+		}
+	}
+	return DirSnapshot{}, false
 }
 
 func (m *Model) sortedDirRows() []DirSnapshot {

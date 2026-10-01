@@ -924,13 +924,7 @@ func (m *Model) openFDTraceView() bool {
 		return true
 	}
 
-	matches := make([]StreamEvent, 0, len(m.allEvents))
-	for i := range m.allEvents {
-		ev := &m.allEvents[i]
-		if ev.PID == selected.PID && ev.FD == selected.FD {
-			matches = append(matches, *ev)
-		}
-	}
+	matches := fdLifetimeEvents(m.allEvents, selected)
 
 	m.fdTraceView.visible = true
 	m.fdTraceView.pid = selected.PID
@@ -938,6 +932,41 @@ func (m *Model) openFDTraceView() bool {
 	m.fdTraceView.events = matches
 	m.fdTraceView.offset = 0
 	return true
+}
+
+// fdLifetimeEvents returns the rows of selected's descriptor in events
+// (oldest first) that belong to the same life of the number as selected: a
+// descriptor number is reused as soon as it is closed, so matching (pid, fd)
+// alone merged the rows of every file that ever held the number into one
+// trace (task cr2). A life ends at a successful close of the number (included
+// in the trace) and the next life starts after it. Only closes ior sees end a
+// life: a number reused without a close row in the snapshot (a dup2 over it, an
+// io_uring close, a close that fell out of the ring) still shares a trace.
+func fdLifetimeEvents(events []StreamEvent, selected StreamEvent) []StreamEvent {
+	var life []StreamEvent
+	holdsSelected := false
+	for i := range events {
+		ev := &events[i]
+		if ev.PID != selected.PID || ev.FD != selected.FD {
+			continue
+		}
+		life = append(life, *ev)
+		holdsSelected = holdsSelected || ev.Seq == selected.Seq
+		if !endsFDLife(ev) {
+			continue
+		}
+		if holdsSelected {
+			return life
+		}
+		life = life[:0]
+	}
+	return life
+}
+
+// endsFDLife reports whether ev is a close that succeeded, after which its
+// descriptor number is free for the next open.
+func endsFDLife(ev *StreamEvent) bool {
+	return ev.Syscall == "close" && !ev.IsError
 }
 
 // viewFDTrace renders the FD-trace overlay: its panel (five chrome rows plus

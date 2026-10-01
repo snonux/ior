@@ -65,11 +65,11 @@ const processCommColumn = 1
 
 // handleSyscallsEnter is the Syscalls tab's HandleEnter hook: Enter on the
 // selected row requests a global filter on that row's syscall name, or on
-// its family when the Family column is selected.
+// its family when the Family column is selected. In the bubbles and treemap
+// views the selected row is the highlighted bubble or tile, and the filter
+// is always by name: those views have no columns, and the table's column
+// selection must not turn Enter into a family filter there (task cr2).
 func handleSyscallsEnter(m *Model) (bool, tea.Cmd) {
-	if m.syscallsTab.mode != tabVizModeTable {
-		return false, nil
-	}
 	return requestSelectedFilter(m.selectedSyscallFilter())
 }
 
@@ -81,9 +81,6 @@ func handleSyscallsEnter(m *Model) (bool, tea.Cmd) {
 // it explains that in the filter notice instead. The notice is cleared like
 // any refusal notice, by the next filter change on screen.
 func handleFilesEnter(m *Model) (bool, tea.Cmd) {
-	if m.filesTab.mode != tabVizModeTable {
-		return false, nil
-	}
 	if m.filesDirGrouped {
 		if selected, ok := m.selectedDirSnapshot(); ok {
 			if notice := dirRowRefusalNotice(selected); notice != "" {
@@ -138,7 +135,7 @@ func (m *Model) selectedSyscallFilter() (globalfilter.Filter, string, bool) {
 	if !ok {
 		return globalfilter.Filter{}, "", false
 	}
-	if m.syscallsTab.col == syscallFamilyColumn {
+	if m.syscallsTab.mode == tabVizModeTable && m.syscallsTab.col == syscallFamilyColumn {
 		family := string(selected.TraceID.Family())
 		if strings.TrimSpace(family) == "" {
 			return globalfilter.Filter{}, "", false
