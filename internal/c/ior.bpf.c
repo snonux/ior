@@ -21,6 +21,10 @@
 // select timeout normalisation used by the generated select handler.
 #include "poll.c"
 
+// Restart fold: the pending-restart state behind filter.c's enter/exit hooks
+// and its two probes (signal:signal_deliver, a second sys_enter_rt_sigreturn).
+#include "restart.c"
+
 // Hand-written non-syscall tracepoints (sched:sched_process_exec, sched:sched_process_exit).
 #include "exec.c"
 

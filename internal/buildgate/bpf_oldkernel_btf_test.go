@@ -206,20 +206,7 @@ var ctxScalarLoad = regexp.MustCompile(`= \*\(u(8|16|32|64) \*\)\(r1 \+ 0x[0-9a-
 // check has teeth: TestCtxScalarLoadPatternRejectsPointerArithmetic feeds the
 // pattern the shape of the bad code.
 func TestTaskNewtaskHandlerHasNoContextPointerArithmetic(t *testing.T) {
-	objdump, err := exec.LookPath("llvm-objdump")
-	if err != nil {
-		t.Skipf("llvm-objdump not installed: %v", err)
-	}
-	clang, includeDir, srcDir := bpfBuildInputs(t)
-	obj := filepath.Join(t.TempDir(), "ior.bpf.o")
-	if out, err := compileBPF(clang, includeDir, filepath.Join(srcDir, "ior.bpf.c"), obj); err != nil {
-		t.Fatalf("compile: %v\n%s", err, out)
-	}
-	out, err := exec.Command(objdump, "-dr", "--no-show-raw-insn",
-		"--section=tracepoint/task/task_newtask", obj).CombinedOutput()
-	if err != nil {
-		t.Fatalf("llvm-objdump: %v\n%s", err, out)
-	}
+	out := sectionDisassembly(t, "tracepoint/task/task_newtask")
 	relocated := coreRelocatedInstructions(string(out))
 	if len(relocated) < 2 {
 		t.Fatalf("found %d CO-RE relocated instructions in handle_task_newtask, want at least the pid and "+
@@ -230,6 +217,53 @@ func TestTaskNewtaskHandlerHasNoContextPointerArithmetic(t *testing.T) {
 			t.Errorf("CO-RE relocated instruction %q is not a fixed-offset load from the context register", insn)
 		}
 	}
+}
+
+// TestSignalDeliverHandlerHasNoContextPointerArithmetic is the same guard for
+// the restart fold's signal:signal_deliver handler (task 103, restart.c): it
+// reads sa_handler and sa_flags out of the tracepoint context through a CO-RE
+// flavor, and both must stay plain fixed-offset loads from the context
+// register, or the 4.18/5.14 verifiers reject the program and with it the
+// whole object. Exactly those two fields are relocated; the flavor's name
+// must survive in the object so the offsets come from the running kernel.
+func TestSignalDeliverHandlerHasNoContextPointerArithmetic(t *testing.T) {
+	out := sectionDisassembly(t, "tracepoint/signal/signal_deliver")
+	relocated := coreRelocatedInstructions(string(out))
+	if len(relocated) != 2 {
+		t.Fatalf("found %d CO-RE relocated instructions in handle_signal_deliver, want the sa_handler and "+
+			"sa_flags loads; the disassembly parser or the section name is broken:\n%s", len(relocated), out)
+	}
+	for _, insn := range relocated {
+		if !ctxScalarLoad.MatchString(insn) {
+			t.Errorf("CO-RE relocated instruction %q is not a fixed-offset load from the context register", insn)
+		}
+	}
+	for _, field := range []string{"trace_event_raw_signal_deliver___ior::sa_handler", "trace_event_raw_signal_deliver___ior::sa_flags"} {
+		if !bytes.Contains(out, []byte(field)) {
+			t.Errorf("handle_signal_deliver does not relocate %s:\n%s", field, out)
+		}
+	}
+}
+
+// sectionDisassembly compiles ior.bpf.c against the host vmlinux.h and returns
+// llvm-objdump's disassembly, with relocations, of one program section. The
+// test is skipped when llvm-objdump or the BPF build inputs are missing.
+func sectionDisassembly(t *testing.T, section string) []byte {
+	t.Helper()
+	objdump, err := exec.LookPath("llvm-objdump")
+	if err != nil {
+		t.Skipf("llvm-objdump not installed: %v", err)
+	}
+	clang, includeDir, srcDir := bpfBuildInputs(t)
+	obj := filepath.Join(t.TempDir(), "ior.bpf.o")
+	if out, err := compileBPF(clang, includeDir, filepath.Join(srcDir, "ior.bpf.c"), obj); err != nil {
+		t.Fatalf("compile: %v\n%s", err, out)
+	}
+	out, err := exec.Command(objdump, "-dr", "--no-show-raw-insn", "--section="+section, obj).CombinedOutput()
+	if err != nil {
+		t.Fatalf("llvm-objdump: %v\n%s", err, out)
+	}
+	return out
 }
 
 // TestTaskRenameHandlerReadsItsArgumentsWithoutCoreRelocation pins the

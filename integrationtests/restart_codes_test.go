@@ -1,6 +1,7 @@
 package integrationtests
 
 import (
+	"slices"
 	"testing"
 
 	iorparquet "ior/internal/parquet"
@@ -16,20 +17,23 @@ var restartTraceArgs = []string{
 // TestKernelRestartCodesAreNotErrors covers task aq2. A signal that interrupts
 // a blocked syscall makes it exit with a kernel-internal restart code
 // (-ERESTARTSYS -512, -ERESTART_RESTARTBLOCK -516) that user space never sees.
-// The workload interrupts a blocking read (restarted by the kernel, so the
-// program only ever sees the later read that returns 1) and a nanosleep. ior
-// keeps the raw return value visible but must not flag these rows as errors.
-// Both stay separate rows (task fs2 folds only restart_syscall): the read is
-// re-executed rather than resumed, and the sleep's SIGUSR1 handler turns its
-// -516 into EINTR, so no restart_syscall follows and the held -516 row is
-// released unchanged.
+// ior keeps the raw return value visible but must not flag such rows as
+// errors.
+//
+// The workload interrupts a blocking read and a nanosleep with SIGUSR1, which
+// the Go runtime handles with SA_RESTART. The sleep's -516 becomes EINTR for
+// the program (a handler ran, so no restart_syscall follows) and its held row
+// is released unchanged. The read's -512 is restarted by the kernel after the
+// handler, and since task 103 that re-execution is folded: the read is ONE
+// row with the final return value, and no -512 read row is left. (A -512 row
+// that must stay - the program really got EINTR - is covered by
+// TestSignalRestartedReadIsOneRow.)
 func TestKernelRestartCodesAreNotErrors(t *testing.T) {
 	rows, _ := runParquetScenarioRows(t, "signal-restart", defaultDuration,
 		restartTraceArgs, []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 
 	notError := false
 	AssertRowsPresent(t, rows, []ExpectedRow{
-		{Syscall: "read", Comm: "ioworkload", RetVal: ptrTo(int64(-512)), IsError: &notError},
 		{Syscall: "read", Comm: "ioworkload", RetVal: ptrTo(int64(1)), IsError: &notError},
 		{Syscall: "clock_nanosleep", Comm: "ioworkload", RetVal: ptrTo(int64(-516)), IsError: &notError},
 	})
@@ -40,6 +44,105 @@ func TestKernelRestartCodesAreNotErrors(t *testing.T) {
 			t.Errorf("%s ret=%d is flagged is_error=true; kernel restart codes are not errors",
 				row.Syscall, row.Ret)
 		}
+		if row.Syscall == "read" && row.Ret == -512 {
+			t.Errorf("read ret=-512 was not folded into its re-execution: %+v", row)
+		}
+	}
+}
+
+// reexecReadFd mirrors cmd/ioworkload's reexecReadFd: the descriptor the
+// signal-reexec scenario's blocking reads use.
+const reexecReadFd = int32(200)
+
+// reexecRows runs the signal-reexec workload and returns the rows of its
+// reading (main) thread that the tests judge, in emission order: the reads on
+// the scenario's descriptor and, when traced, the rt_sigreturn calls.
+func reexecRows(t *testing.T, syscalls string) []iorparquet.Record {
+	t.Helper()
+	rows, pid := runParquetScenarioRows(t, "signal-reexec", defaultDuration,
+		[]string{"-trace-syscalls", syscalls}, []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
+	var judged []iorparquet.Record
+	for _, row := range rows {
+		// main.go pins the scenario to the main thread, so its tid is the pid.
+		if row.TID != uint32(pid) {
+			continue
+		}
+		if (row.Syscall == "read" && row.FD == reexecReadFd) || row.Syscall == "rt_sigreturn" {
+			judged = append(judged, row)
+		}
+	}
+	return judged
+}
+
+// requireReexecReads checks the scenario's reads among judged: exactly four
+// rows returning 1, 2, -512 and 3, in that order and none flagged an error,
+// and returns their indexes in judged.
+func requireReexecReads(t *testing.T, judged []iorparquet.Record) []int {
+	t.Helper()
+	var reads []int
+	var rets []int64
+	for i, row := range judged {
+		if row.Syscall != "read" {
+			continue
+		}
+		reads = append(reads, i)
+		rets = append(rets, row.Ret)
+		if row.IsError {
+			t.Errorf("read ret=%d is flagged is_error=true: %+v", row.Ret, row)
+		}
+	}
+	want := []int64{1, 2, -512, 3}
+	if !slices.Equal(rets, want) {
+		t.Fatalf("the reading thread's reads returned %v, want %v: a kernel-restarted read is one row, "+
+			"the program's own retry after EINTR is a second one. Rows: %+v", rets, want, judged)
+	}
+	return reads
+}
+
+// TestSignalRestartedReadIsOneRow covers task 103 end to end. The signal-reexec
+// workload has a blocking read interrupted three times, and checks itself
+// what the program observed each time:
+//
+//   - by SIGSTOP/SIGCONT (no handler): the kernel re-executes the read, the
+//     program sees one read returning 1 byte. ONE row, ret 1.
+//   - by a handler installed with SA_RESTART: the handler runs, the kernel
+//     re-executes the read, the program sees one read returning 2 bytes. ONE
+//     row, ret 2.
+//   - by a handler without SA_RESTART: the program gets EINTR and calls read
+//     again itself. TWO rows, ret -512 (not an error) and ret 3 - the
+//     negative control: a retry the program made must never be folded.
+//
+// Before the fold the first two were two rows each (ret -512, then the
+// result). rt_sigreturn is deliberately not traced here: the proof comes from
+// the restart-fold probes, not from the handler's syscalls being visible.
+func TestSignalRestartedReadIsOneRow(t *testing.T) {
+	judged := reexecRows(t, "read,write,pipe2,dup3")
+	reads := requireReexecReads(t, judged)
+	for _, i := range reads[:2] {
+		row := judged[i]
+		if row.Bytes != uint64(row.Ret) {
+			t.Errorf("folded read ret=%d has bytes=%d, want the bytes of the final return", row.Ret, row.Bytes)
+		}
+		if row.LatencyNS == 0 {
+			t.Errorf("folded read ret=%d has no latency: %+v", row.Ret, row)
+		}
+	}
+}
+
+// TestSignalRestartedReadFoldsAroundTheHandlersRows is the same run with
+// rt_sigreturn traced, so the signal handlers' own syscalls are rows on the
+// reading thread. They must neither prevent the fold after the SA_RESTART
+// handler nor be swallowed by it: a handler return is reported between the
+// stopped read and the SA_RESTART read's row (it completes before the call it
+// interrupted), and another between the EINTR row and the program's retry.
+func TestSignalRestartedReadFoldsAroundTheHandlersRows(t *testing.T) {
+	judged := reexecRows(t, "read,write,pipe2,dup3,rt_sigreturn")
+	reads := requireReexecReads(t, judged)
+	if reads[1]-reads[0] < 2 {
+		t.Errorf("no rt_sigreturn row between the stopped read and the SA_RESTART read: %+v", judged)
+	}
+	if reads[3]-reads[2] < 2 {
+		t.Errorf("no rt_sigreturn row between the EINTR read and the program's retry: %+v", judged)
 	}
 }
 

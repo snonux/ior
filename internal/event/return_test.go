@@ -71,6 +71,33 @@ func TestIsRestartBlockRet(t *testing.T) {
 	}
 }
 
+// TestReexecutedRestartRetPredicates pins the codes the kernel answers by
+// re-executing the call (-512/-513/-514, never -516 or a neighbour) and the
+// two single-code predicates the handle_signal rule is built from (task 103).
+func TestReexecutedRestartRetPredicates(t *testing.T) {
+	tests := []struct {
+		ret                     int64
+		reexecuted, sys, noIntr bool
+	}{
+		{ret: -512, reexecuted: true, sys: true},
+		{ret: -513, reexecuted: true, noIntr: true},
+		{ret: -514, reexecuted: true},
+		{ret: -516}, {ret: -515}, {ret: -511}, {ret: -517}, {ret: -4}, {ret: 0},
+		{ret: 512}, {ret: 513}, {ret: math.MinInt64},
+	}
+	for _, tc := range tests {
+		if got := IsReexecutedRestartRet(tc.ret); got != tc.reexecuted {
+			t.Errorf("IsReexecutedRestartRet(%d) = %t, want %t", tc.ret, got, tc.reexecuted)
+		}
+		if got := IsRestartSysRet(tc.ret); got != tc.sys {
+			t.Errorf("IsRestartSysRet(%d) = %t, want %t", tc.ret, got, tc.sys)
+		}
+		if got := IsRestartNoIntrRet(tc.ret); got != tc.noIntr {
+			t.Errorf("IsRestartNoIntrRet(%d) = %t, want %t", tc.ret, got, tc.noIntr)
+		}
+	}
+}
+
 // TestIsErrorRetExcludesRestartCodes pins the split between "no result"
 // (IsErrnoRet, restart codes included) and "failure" (IsErrorRet).
 func TestIsErrorRetExcludesRestartCodes(t *testing.T) {

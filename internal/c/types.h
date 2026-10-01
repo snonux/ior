@@ -72,6 +72,9 @@
 #define TASK_NEWTASK_EVENT 62
 // Control record of the hand-written task:task_rename handler (exec.c).
 #define TASK_RENAME_EVENT 63
+// Control record of the restart-fold probes (restart.c): what the kernel does
+// with a call a signal interrupted.
+#define SYSCALL_RESTART_EVENT 64
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -670,4 +673,40 @@ struct task_rename_event {
     __u32 pid;
     __u32 tid;
     char comm[MAX_PROGNAME_LENGTH];
+};
+
+// Phase of a syscall_restart_event (see there).
+#define RESTART_PHASE_HANDLER 1
+#define RESTART_PHASE_RESUME 2
+
+// syscall_restart_event is a control record, not a syscall event: restart.c
+// emits it for a task whose last traced syscall exit carried -ERESTARTSYS,
+// -ERESTARTNOINTR or -ERESTARTNOHAND (-512/-513/-514), so userspace can fold
+// the interrupted row and the kernel's re-execution of the call into one row
+// (task 103, internal/eventloop_restart.go). It is never rendered as a row.
+//
+// phase says which of two things happened:
+//   - RESTART_PHASE_HANDLER: the signal:signal_deliver probe saw the first
+//     user handler being run for the interrupted call. sa_restart is 1 when
+//     that handler was installed with SA_RESTART, else 0; with the return code
+//     userspace holds it decides, by the kernel's handle_signal rules, whether
+//     the call still restarts once the handler returns or the program gets
+//     EINTR.
+//   - RESTART_PHASE_RESUME: the task's syscall enter that follows this record
+//     is the kernel's re-execution of the interrupted call. It is the only
+//     record that licenses a fold; sa_restart is 0.
+//
+// pid/tid name the interrupted task (every such record is emitted in its own
+// context). sa_restart is a __u32 (0 or 1) because the Go type generator maps
+// only 32/64-bit integers; with phase it completes the 8-byte alignment, so
+// the layout has no implicit padding and the kernel record and a binary.Write
+// payload share one size, 32 bytes.
+struct syscall_restart_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 phase;
+    __u32 sa_restart;
 };

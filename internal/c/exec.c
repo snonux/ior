@@ -356,6 +356,10 @@ int handle_sched_process_exit(void *ctx) {
     __u32 pid = 0, tid = 0, group_dead = 0;
     struct process_exit_event *ev;
 
+    // Before the scope check: a task that dies with an interrupted call
+    // pending (killed while stopped, say) never reaches the enter that would
+    // clear it, and its tid may be recycled (restart.c).
+    ior_restart_forget((__u32)bpf_get_current_pid_tgid());
     if (!ior_process_exit_in_scope(ctx, &pid, &tid, &group_dead))
         return 0;
 

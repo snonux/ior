@@ -144,6 +144,7 @@ const ENTER_EVENTFD_NAME_EVENT = 60
 const EXIT_EVENTFD_NAME_EVENT = 61
 const TASK_NEWTASK_EVENT = 62
 const TASK_RENAME_EVENT = 63
+const SYSCALL_RESTART_EVENT = 64
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -172,6 +173,8 @@ const POLL_TIMEOUT_INFINITE_NS = -1
 const POLL_TIMEOUT_UNKNOWN_NS = -2
 const OPEN_NAME_FIXUP_SLOT_FIRST = 0
 const OPEN_NAME_FIXUP_SLOT_SECOND = 1
+const RESTART_PHASE_HANDLER = 1
+const RESTART_PHASE_RESUME = 2
 const SYS_ENTER_SOCKET TraceId = 1899
 const SYS_EXIT_SOCKET TraceId = 1898
 const SYS_ENTER_SOCKETPAIR TraceId = 1897
@@ -3476,4 +3479,73 @@ func (t *TaskRenameEvent) Bytes() ([]byte, error) {
 
 func (t *TaskRenameEvent) Recycle() {
 	poolOfTaskRenameEvents.Put(t)
+}
+
+type SyscallRestartEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Phase     uint32
+	SaRestart uint32
+}
+
+func (s SyscallRestartEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Phase:%v SaRestart:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Phase, s.SaRestart)
+}
+
+func (s SyscallRestartEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*SyscallRestartEvent)
+	if !ok {
+		return false
+	}
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Phase == otherConcrete.Phase && s.SaRestart == otherConcrete.SaRestart
+}
+
+func (s *SyscallRestartEvent) GetEventType() EventType {
+	return s.EventType
+}
+
+func (s *SyscallRestartEvent) GetTraceId() TraceId {
+	return s.TraceId
+}
+
+func (s *SyscallRestartEvent) GetPid() uint32 {
+	return s.Pid
+}
+
+func (s *SyscallRestartEvent) GetTid() uint32 {
+	return s.Tid
+}
+
+func (s *SyscallRestartEvent) GetTime() uint64 {
+	return s.Time
+}
+
+var poolOfSyscallRestartEvents = sync.Pool{
+	New: func() any { return &SyscallRestartEvent{} },
+}
+
+func NewSyscallRestartEvent(raw []byte) *SyscallRestartEvent {
+	s := poolOfSyscallRestartEvents.Get().(*SyscallRestartEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, s); err != nil {
+		*s = SyscallRestartEvent{}
+		poolOfSyscallRestartEvents.Put(s)
+		return nil
+	}
+	return s
+}
+
+func (s *SyscallRestartEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, s)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (s *SyscallRestartEvent) Recycle() {
+	poolOfSyscallRestartEvents.Put(s)
 }

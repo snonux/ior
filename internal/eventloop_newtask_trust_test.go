@@ -44,16 +44,21 @@ func TestRenameAttachRecorderNotesOnlyTheRenameProbe(t *testing.T) {
 
 // TestTraceSetupCarriesTheRenameAttachToTheLoop pins the rest of the chain,
 // structurally because the setup cannot run unprivileged: setupTraceInfraBPF
-// hands the recorder's note to BPF setup as the attached sink (the sink key
-// itself is pinned by TestSetupTraceInfraWiresConsoleSinks) and copies its
-// result into the infra, and runTraceSetup passes exactly that field to
-// trustRenameRecords.
+// hands the hand-probe recorder's note to BPF setup as the attached sink (the
+// sink key itself is pinned by TestSetupTraceInfraWiresConsoleSinks), that
+// note reaches the rename recorder, its result is copied into the infra, and
+// runTraceSetup passes exactly that field to trustRenameRecords.
 func TestTraceSetupCarriesTheRenameAttachToTheLoop(t *testing.T) {
 	bpfDecl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
-	if !hasAssignment(bpfDecl, "noteAttached", "renameAttach", "note") {
-		t.Fatal("setupTraceInfraBPF must set noteAttached := renameAttach.note")
+	if !hasAssignment(bpfDecl, "noteAttached", "handAttach", "note") {
+		t.Fatal("setupTraceInfraBPF must set noteAttached := handAttach.note")
 	}
-	const carry = "infra.renameProbeAttached = renameAttach.attached"
+	var hand handProbeAttachRecorder
+	hand.note(taskRenameProbeName)
+	if !hand.rename.attached {
+		t.Fatal("handProbeAttachRecorder.note does not reach the rename recorder")
+	}
+	const carry = "infra.renameProbeAttached = handAttach.rename.attached"
 	found := false
 	for _, statement := range bpfDecl.Body.List {
 		var rendered bytes.Buffer

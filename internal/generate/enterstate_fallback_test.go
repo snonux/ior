@@ -141,6 +141,20 @@ static __u32 bpf_get_prandom_u32(void) {
     return sim_rand;
 }
 
+/* The restart fold's two hook entry points (restart.c) are not part of the
+ * accounting: they are identity stand-ins here, and restart_harness_test.go
+ * drives the real ones. */
+static inline void ior_restart_on_enter(__u32 tid, __u64 now) {
+    (void)tid;
+    (void)now;
+}
+
+static inline int ior_restart_on_exit(__u32 tid, __s64 ret, int emits) {
+    (void)tid;
+    (void)ret;
+    return emits;
+}
+
 %s
 
 static void print_aggregate(__u32 id) {

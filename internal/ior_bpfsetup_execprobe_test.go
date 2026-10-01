@@ -475,3 +475,88 @@ func TestAttachTaskRenameProbeFailuresAreNonFatal(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachRestartFoldProbesAttachTheirTracepoints pins the two probes of
+// the restart fold (task 103): each asks for its own program, attaches it as
+// a classic tracepoint to the right event - the rt_sigreturn one to the
+// syscall's enter tracepoint, under a probe name of its own - announces the
+// attach exactly once under that name (trace setup turns the fold on from the
+// signal_deliver announcement) and has an idempotent release.
+func TestAttachRestartFoldProbesAttachTheirTracepoints(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		attach                            func(probemanager.Attacher, bpfSetupLog) func()
+		progName, probeName, category, tp string
+	}{
+		{"signal_deliver", attachSignalDeliverProbe, signalDeliverProgName, signalDeliverProbeName,
+			"signal", "signal_deliver"},
+		{"rt_sigreturn", attachRestartSigreturnProbe, restartSigreturnProgName, restartSigreturnProbeName,
+			"syscalls", "sys_enter_rt_sigreturn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := &fakeProbeLink{}
+			prog := &fakeProbeProgram{link: link}
+			attacher := &fakeProbeAttacher{prog: prog}
+			var announced []string
+
+			release := tc.attach(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+				attached: func(name string) { announced = append(announced, name) }})
+
+			if len(announced) != 1 || announced[0] != tc.probeName {
+				t.Fatalf("attached announcements = %q, want exactly [%q]", announced, tc.probeName)
+			}
+			if attacher.requested != tc.progName {
+				t.Fatalf("requested program %q, want %q", attacher.requested, tc.progName)
+			}
+			if prog.category != tc.category || prog.name != tc.tp {
+				t.Fatalf("attached to %s:%s, want %s:%s", prog.category, prog.name, tc.category, tc.tp)
+			}
+			release()
+			release()
+			if link.destroyCount() != 1 {
+				t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
+			}
+		})
+	}
+}
+
+// TestAttachRestartFoldProbeFailuresAreNonFatal: a missing program (an older
+// IOR_BPF_OBJECT) or a failing attach (a kernel without the tracepoint)
+// leaves kernel-restarted calls unfolded, is reported on the warn sink,
+// leaves a usable no-op release and is never announced as attached - an
+// announcement of the signal probe would turn the fold on without its proof.
+func TestAttachRestartFoldProbeFailuresAreNonFatal(t *testing.T) {
+	attachers := map[string]func() (*fakeProbeAttacher, string){
+		"program missing from the object": func() (*fakeProbeAttacher, string) {
+			return &fakeProbeAttacher{err: errors.New("no such program")}, "get program "
+		},
+		"tracepoint missing on this kernel": func() (*fakeProbeAttacher, string) {
+			return &fakeProbeAttacher{prog: &fakeProbeProgram{err: errors.New("no such tracepoint")}}, "no such tracepoint"
+		},
+	}
+	probes := map[string]func(probemanager.Attacher, bpfSetupLog) func(){
+		signalDeliverProbeName:    attachSignalDeliverProbe,
+		restartSigreturnProbeName: attachRestartSigreturnProbe,
+	}
+	for probeName, attach := range probes {
+		for name, build := range attachers {
+			t.Run(probeName+"/"+name, func(t *testing.T) {
+				attacher, wantLog := build()
+				var rec setupLogRecorders
+				log := rec.log()
+				log.attached = func(name string) { t.Errorf("failed attach announced as attached: %q", name) }
+				release := attach(attacher, log)
+				rec.requireOnlySink(t, &rec.warn)
+				logged := rec.warn.joined()
+				if release == nil {
+					t.Fatal("expected a non-nil release closure even on failure")
+				}
+				release()
+				release()
+				if !strings.Contains(logged, "skipping "+probeName+" probe") || !strings.Contains(logged, wantLog) {
+					t.Fatalf("warn log = %q, want the skipped probe and %q", logged, wantLog)
+				}
+			})
+		}
+	}
+}

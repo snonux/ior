@@ -11,7 +11,9 @@ import (
 )
 
 // Tests for folding restart_syscall into the -516 row it resumes (task fs2,
-// eventloop_restart.go).
+// eventloop_restart.go). The fixture leaves BPF's re-execution proof off, as
+// a run without the signal_deliver probe has it; the re-execution fold of
+// -512/-513/-514 (task 103) is tested in eventloop_restart_reexec_test.go.
 
 const (
 	restartPid      = uint32(4100)
@@ -387,26 +389,46 @@ func TestRestartRowsReleasedWhenTheLoopStops(t *testing.T) {
 
 // TestRestartHoldIsBounded: rows beyond maxHeldRestarts are not held (they
 // are completed at once, unfolded), so lost release records cannot grow the
-// map without bound. Only -516 RetEvent exits are held at all.
+// map without bound. Without BPF's re-execution proof only -516 RetEvent
+// exits are held at all; with it (foldReexecutedRestarts) -512/-513/-514 are
+// held too, never an ordinary errno or a success, and under the same bound.
 func TestRestartHoldIsBounded(t *testing.T) {
 	var tracker restartTracker
-	pairFor := func(tid uint32, ret int64) *event.Pair {
-		return &event.Pair{
+	heldFor := func(tid uint32, ret int64) *heldRestart {
+		return &heldRestart{pair: &event.Pair{
 			EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Tid: tid},
 			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Tid: tid, Ret: ret},
-		}
+		}}
 	}
 	for _, ret := range []int64{-512, -513, -514, -4, 0} {
-		if tracker.hold(pairFor(1, ret)) {
+		if tracker.hold(heldFor(1, ret)) {
 			t.Fatalf("a ret=%d row was held; only -516 has a restart_syscall continuation", ret)
 		}
 	}
 	for tid := uint32(1); tid <= maxHeldRestarts; tid++ {
-		if !tracker.hold(pairFor(tid, -516)) {
+		if !tracker.hold(heldFor(tid, -516)) {
 			t.Fatalf("row %d was not held below the bound", tid)
 		}
 	}
-	if tracker.hold(pairFor(maxHeldRestarts+1, -516)) {
+	if tracker.hold(heldFor(maxHeldRestarts+1, -516)) {
 		t.Fatal("a row beyond maxHeldRestarts was held")
+	}
+
+	proven := restartTracker{reexec: true}
+	for _, ret := range []int64{-4, 0, -515} {
+		if proven.hold(heldFor(1, ret)) {
+			t.Fatalf("a ret=%d row was held; it is not a restart code", ret)
+		}
+	}
+	for i, ret := range []int64{-512, -513, -514, -516} {
+		if !proven.hold(heldFor(uint32(i+1), ret)) {
+			t.Fatalf("a ret=%d row was not held although re-executions are proven", ret)
+		}
+	}
+	for tid := uint32(5); tid <= maxHeldRestarts; tid++ {
+		proven.hold(heldFor(tid, -512))
+	}
+	if proven.hold(heldFor(maxHeldRestarts+1, -512)) {
+		t.Fatal("a -512 row beyond maxHeldRestarts was held")
 	}
 }

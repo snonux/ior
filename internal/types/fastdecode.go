@@ -106,6 +106,11 @@ const (
 	// 4+4+8+4+4+16(comm) = 40 bytes with no padding, so kernel and
 	// binary.Write payloads share one size. It has no legacy layout: it is new.
 	taskRenameEventSize = 40
+	// syscall_restart_event is the control record of the restart-fold probes
+	// (internal/c/restart.c). 4+4+8+4+4+4(phase)+4(sa_restart) = 32 bytes
+	// with no padding, so kernel and binary.Write payloads share one size.
+	// It has no legacy layout: it is new.
+	syscallRestartEventSize = 32
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -1050,6 +1055,30 @@ func NewTaskRenameEventFast(raw []byte) *TaskRenameEvent {
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	copy(p.Comm[:], raw[24:40])
+	return p
+}
+
+// NewSyscallRestartEventFast decodes the restart-fold control record: the
+// interrupted task's tgid (Pid) and tid, the phase (RESTART_PHASE_HANDLER or
+// RESTART_PHASE_RESUME) and, for a handler record, whether the handler was
+// installed with SA_RESTART.
+//
+// Accepted sizes: the current 32-byte layout and anything longer (its prefix
+// is decoded, so a newer object that appends fields stays readable). Every
+// shorter size fails closed with nil rather than decoding fields at wrong
+// offsets: a misread phase could license a fold the kernel never proved.
+func NewSyscallRestartEventFast(raw []byte) *SyscallRestartEvent {
+	if len(raw) < syscallRestartEventSize {
+		return nil
+	}
+	p := poolOfSyscallRestartEvents.Get().(*SyscallRestartEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Phase = binary.LittleEndian.Uint32(raw[24:28])
+	p.SaRestart = binary.LittleEndian.Uint32(raw[28:32])
 	return p
 }
 

@@ -499,6 +499,63 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("task_rename decode mismatch")
 		}
 	})
+
+	// SyscallRestartEvent is the control record of the restart-fold probes
+	// (internal/c/restart.c); same table membership rationale as above.
+	t.Run("SyscallRestartEvent", func(t *testing.T) {
+		ev := &SyscallRestartEvent{EventType: SYSCALL_RESTART_EVENT, Time: 1, Pid: 2, Tid: 3,
+			Phase: RESTART_PHASE_HANDLER, SaRestart: 1}
+		raw := rawBytes(t, ev)
+
+		slow := NewSyscallRestartEvent(raw)
+		fast := NewSyscallRestartEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("syscall_restart decode mismatch")
+		}
+	})
+}
+
+// TestNewSyscallRestartEventFastKernelLayout pins the byte offsets of struct
+// syscall_restart_event as the BPF handlers write them (pid at 16, tid at 20,
+// phase at 24, sa_restart at 28) and the wire size against what
+// encoding/binary makes of the generated Go struct. The phase is what licenses
+// a fold, so a record shorter than the layout must fail closed rather than
+// decode a phase from the wrong bytes; a longer one decodes by its prefix. A
+// pooled event must not leak the previous record's phase or flag.
+func TestNewSyscallRestartEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(SyscallRestartEvent{}); got != syscallRestartEventSize {
+		t.Fatalf("binary.Size(SyscallRestartEvent) = %d, want %d", got, syscallRestartEventSize)
+	}
+	record := func(phase, saRestart uint32) []byte {
+		raw := make([]byte, syscallRestartEventSize)
+		binary.LittleEndian.PutUint32(raw[0:4], SYSCALL_RESTART_EVENT)
+		binary.LittleEndian.PutUint64(raw[8:16], 7)
+		binary.LittleEndian.PutUint32(raw[16:20], 100)
+		binary.LittleEndian.PutUint32(raw[20:24], 101)
+		binary.LittleEndian.PutUint32(raw[24:28], phase)
+		binary.LittleEndian.PutUint32(raw[28:32], saRestart)
+		return raw
+	}
+	NewSyscallRestartEventFast(record(RESTART_PHASE_HANDLER, 1)).Recycle()
+
+	raw := record(RESTART_PHASE_RESUME, 0)
+	ev := NewSyscallRestartEventFast(append(raw, 0xff, 0xff))
+	if ev == nil {
+		t.Fatal("kernel layout payload (with a longer tail) rejected")
+	}
+	defer ev.Recycle()
+	want := SyscallRestartEvent{EventType: SYSCALL_RESTART_EVENT, Time: 7, Pid: 100, Tid: 101,
+		Phase: RESTART_PHASE_RESUME}
+	if *ev != want {
+		t.Fatalf("decoded %#v, want %#v", *ev, want)
+	}
+	for _, n := range []int{0, 1, syscallRestartEventSize - 1} {
+		if short := NewSyscallRestartEventFast(raw[:n]); short != nil {
+			t.Fatalf("%d-byte record decoded as %#v, want nil", n, short)
+		}
+	}
 }
 
 // TestNewTaskRenameEventFastKernelLayout pins the byte offsets of struct

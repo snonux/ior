@@ -1049,10 +1049,15 @@ type traceInfra struct {
 	targetGone func() bool
 
 	// renameProbeAttached records that the task_rename probe attached during
-	// setup (bpfSetupLog.attached through renameAttachRecorder); runTraceSetup
+	// setup (bpfSetupLog.attached through handProbeAttachRecorder); runTraceSetup
 	// hands it to the event loop
 	// (eventLoop.trustRenameRecords) once that exists.
 	renameProbeAttached bool
+
+	// signalProbeAttached records that the signal_deliver probe attached
+	// during setup (signalAttachRecorder); runTraceSetup hands it to the
+	// event loop (eventLoop.foldReexecutedRestarts).
+	signalProbeAttached bool
 
 	cleanups []func()
 }
@@ -1202,6 +1207,7 @@ func runTraceSetup(
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
+	el.foldReexecutedRestarts(infra.signalProbeAttached)
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1230,8 +1236,8 @@ func setupTraceInfraBPF(
 	// call: ending it never disturbs a newer session's routing.
 	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
 	defer endLibbpfRouting()
-	var renameAttach renameAttachRecorder
-	noteAttached := renameAttach.note
+	var handAttach handProbeAttachRecorder
+	noteAttached := handAttach.note
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes,
 		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached})
 	if err != nil {
@@ -1239,7 +1245,8 @@ func setupTraceInfraBPF(
 	}
 
 	infra := newTraceInfra(mgr, hooks.shutdown, logln)
-	infra.renameProbeAttached = renameAttach.attached
+	infra.renameProbeAttached = handAttach.rename.attached
+	infra.signalProbeAttached = handAttach.signal.attached
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -1250,8 +1257,22 @@ func setupTraceInfraBPF(
 	return infra, bpfModule, nil
 }
 
-// renameAttachRecorder is setupTraceInfraBPF's bpfSetupLog.attached sink: it
-// remembers whether the task_rename probe was among the probes that attached.
+// handProbeAttachRecorder is setupTraceInfraBPF's bpfSetupLog.attached sink:
+// it shows every hand-written probe that attached to the two recorders whose
+// facts the event loop needs.
+type handProbeAttachRecorder struct {
+	rename renameAttachRecorder
+	signal signalAttachRecorder
+}
+
+// note records one probe that attached (called by attachHandProbe).
+func (r *handProbeAttachRecorder) note(probeName string) {
+	r.rename.note(probeName)
+	r.signal.note(probeName)
+}
+
+// renameAttachRecorder remembers whether the task_rename probe was among the
+// probes that attached.
 // That one fact is what lets the event loop trust rename records and skip the
 // newtask seed's corrective /proc read (eventLoop.trustRenameRecords, task
 // xr2), so a sink that never turned it on would silently disable the
@@ -1262,9 +1283,27 @@ type renameAttachRecorder struct {
 	attached bool
 }
 
-// note records one probe that attached (called by attachHandProbe).
+// note records one probe that attached.
 func (r *renameAttachRecorder) note(probeName string) {
 	if probeName == taskRenameProbeName {
+		r.attached = true
+	}
+}
+
+// signalAttachRecorder is the same for the signal_deliver probe: it remembers
+// whether that probe was among the probes that attached. Only then does BPF
+// see every handler delivered to an interrupted task, which is what makes its
+// RESUME record a proof (eventLoop.foldReexecutedRestarts, task 103); a sink
+// that turned it on for any other probe would fold a program's own retry
+// after EINTR into the interrupted call. Pinned by
+// TestSignalAttachRecorderNotesOnlyTheSignalProbe.
+type signalAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *signalAttachRecorder) note(probeName string) {
+	if probeName == signalDeliverProbeName {
 		r.attached = true
 	}
 }

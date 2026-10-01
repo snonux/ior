@@ -94,14 +94,17 @@ library functions by signal handlers"):
     `SA_RESTART`.
   - -514 (`ERESTARTNOHAND`) is restarted only when no handler ran.
   - -516 (`ERESTART_RESTARTBLOCK`) is resumed via `restart_syscall` only when no handler ran.
-  For -512, -513 and -514 the row with the restart code is followed by a second row for the
-  re-executed call (for example `read ret=-512`, then `read ret=1`). A -516 call resumed by
-  `restart_syscall` is one row instead; see below.
+  A transparently restarted call is one row with the value it finally returned, so the restart
+  code does not appear at all; see the two sections below.
 - The program gets a real `EINTR` when a handler ran and the code does not allow a restart:
   -512 without `SA_RESTART`, -514 (`ERESTARTNOHAND`, for example `pause` or `sigsuspend`) and -516 (a relative `clock_nanosleep`/`nanosleep` interrupted by a handled
   signal) always. ior still shows the restart code with `is_error=false` in that case, because
-  the rewrite to -4 happens after `sys_exit`. ior cannot tell that case from a transparent
-  restart.
+  the rewrite to -4 happens after `sys_exit`. If the program then calls the syscall again, that
+  retry is a call of its own and a second row (for example `read ret=-512`, then `read ret=1`).
+
+So a row whose `ret` is a restart code is a call the kernel did not carry on as far as ior
+could prove: the program got `EINTR`, or the proof was not available (see "When a restart is
+not folded" below).
 - A call that itself returns `-EINTR` (-4), for example `epoll_wait` when a signal is
   pending, is a genuine result: `ret=-4`, `is_error=true`. Only the four restart codes are
   excluded. `-515` (`ENOIOCTLCMD`) is not a restart code and stays an error.
@@ -111,8 +114,9 @@ library functions by signal handlers"):
 A `nanosleep`, `clock_nanosleep`, `poll` or timed futex wait that is stopped without a handler
 (`kill -STOP`/`-CONT`, Ctrl-Z and `fg`, a debugger attaching, a cgroup freeze) exits with -516
 and is then resumed by the kernel through `restart_syscall`, possibly several times. ior folds
-the `restart_syscall` continuation into the interrupted call, so the recording holds a single
-row for it:
+the `restart_syscall` continuation into the interrupted call (it is the one continuation the
+syscall stream itself proves: the kernel uses it for nothing else), so the recording holds a
+single row for it:
 
 - `syscall` and the arguments (`requested_sleep_ns`, `nfds`, `timeout_ns`, ...) are the
   original call's, `ret` is what the call finally returned (`0` for a completed sleep), and
@@ -123,20 +127,69 @@ row for it:
 - `gap_ns` is the gap before the original call. The call is counted once, and filters (for
   example `-latency`, `-ret`, `-syscall`) judge the folded row.
 
-Only `restart_syscall` is folded, because it is the one continuation that provably belongs to
-the interrupted call. A -516 row that is not followed by `restart_syscall` on the same thread
-stays as it is: a handler ran and the program got `EINTR`, or the trace ended (or the thread
-exited) while the call was stopped. A `restart_syscall` row whose interrupted call was not
-traced (the trace started while the process was stopped, or the original syscall is not
-traced) also stays. The -512/-513/-514 pairs are not folded: the kernel restarts them by
-running the same syscall again, which ior cannot tell apart from a program that saw `EINTR`
-and called it again itself. Kernel-side aggregate counts (sampled-out or aggregate-only
-syscalls) are per invocation and are not folded.
+A -516 row that is not followed by `restart_syscall` on the same thread stays as it is: a
+handler ran and the program got `EINTR`, or the trace ended (or the thread exited) while the
+call was stopped. A `restart_syscall` row whose interrupted call was not traced (the trace
+started while the process was stopped, or the original syscall is not traced) also stays.
 
-Because ior waits for the thread's next syscall to decide whether a -516 row is resumed, such
-a row appears in the stream only when ior sees the thread's next traced syscall or its exit
-(for a folded call, when the call completes), so rows of other threads may be listed before
-it.
+#### A re-executed call is one row
+
+A blocked `read`, `accept`, `wait4`, `futex` wait, ... that a signal interrupts exits with
+-512, -513 or -514, and the kernel restarts it by running the very same syscall again: at once
+when no handler runs (a stop and continue, an ignored signal, a signal another thread took),
+or after the handler returns when the code survives a handler (-513 always, -512 with
+`SA_RESTART`). ior folds that re-execution into the interrupted call, so the recording holds a
+single row for it, shaped exactly like the stopped sleep above:
+
+- `syscall`, the arguments and `gap_ns` are the original call's, `ret` (and `bytes`, `file`,
+  `is_error`) is what the call finally returned, and `latency_ns` spans the whole call from
+  its first enter to the final return, including the time stopped or spent in the handler.
+- The call is counted once, and filters judge the folded row.
+- The syscalls a signal handler makes before the call is re-executed (its `rt_sigreturn`
+  included, when traced) are rows of their own. They complete before the call they
+  interrupted, so they are listed before its row; their `gap_ns` is measured from the
+  interruption.
+
+A program's own retry after `EINTR` looks the same to the syscall tracepoints (an exit with
+the restart code, then an enter of the same syscall), and it is never folded: it is a second
+call. ior tells the two apart in the kernel. A BPF probe on `signal:signal_deliver` sees every
+handler delivered to a thread with an interrupted call pending and applies the rules listed
+above; only when they say the kernel re-executes the call - and, after a handler, only once
+that handler has returned through `rt_sigreturn` - is the thread's next syscall enter marked
+as the re-execution. Without that mark nothing is folded.
+
+#### When a restart is not folded
+
+The fold errs on the side of two rows. A kernel-restarted call keeps its restart-code row,
+followed by a second row for the continuation, when:
+
+- the proof is missing: the `signal_deliver` probe could not be attached (ior warns at
+  startup; no -512/-513/-514 call is folded in that run), a control record was lost to
+  ring-buffer backpressure (see the drop counter), or two threads whose ids collide in the
+  kernel-side table were interrupted at the same time;
+- the continuation's enter or exit was not recorded (sampled out, lost, or the trace ended or
+  the thread exited first);
+- a signal handler made more than about a hundred traced syscalls before returning, never
+  returned (it left through `siglongjmp`), or was itself interrupted in a blocking call (that
+  inner call is folded instead);
+- a second signal with a handler arrived after the kernel had already set the restart up
+  (ior judges that handler as if it had decided);
+- the process is a 32-bit one (its syscalls are not traced at all).
+
+Two exotic programs can make ior fold a call that was not re-executed: a signal handler that
+rewrites the saved user context to resume other code (a preemptive user-level thread switch),
+and a nested handler that leaves through `siglongjmp` into an outer handler - in both cases
+only if the code that runs next immediately issues the same syscall as the interrupted one.
+The same can happen when the syscall's probes are switched off and on again in the TUI while a
+thread sits between the interruption and the re-execution.
+
+Kernel-side aggregate counts (sampled-out or aggregate-only syscalls) are per invocation and
+are not folded.
+
+Because ior waits for the thread's next records to decide whether an interrupted row is
+carried on, such a row appears in the stream only when ior sees the thread's next traced
+syscall, the signal handler being delivered, or the thread's exit (for a folded call, when
+the call completes), so rows of other threads may be listed before it.
 
 ### Syscalls that never return
 

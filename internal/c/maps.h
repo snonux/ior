@@ -131,3 +131,23 @@ struct {
     __type(key, __u32);
     __type(value, __u64);
 } ringbuf_drop_map SEC(".maps");
+
+// restart_pending_map remembers, per task, that its last traced syscall exit
+// carried a restart code the kernel may answer by re-executing the call
+// (-512/-513/-514), until the signal path has decided (restart.c, task 103).
+//
+// It is a direct-mapped ARRAY indexed by the low bits of the tid, each slot
+// one __u64 word holding the owning tid and its state (ior_restart_entry in
+// restart.c), not a HASH keyed by tid: every traced syscall enter has to ask
+// "does this task have a pending restart?", and an array lookup is inlined by
+// the verifier where a hash lookup is a helper call (the cost task 2s2 took
+// out of this path). The price is that two tasks whose tids collide share a
+// slot: the later interrupted exit evicts the earlier one, whose call is then
+// simply not folded. One word per slot makes every update a single store, so
+// a slot never mixes one task's tid with another task's state.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 4096);
+    __type(key, __u32);
+    __type(value, __u64);
+} restart_pending_map SEC(".maps");

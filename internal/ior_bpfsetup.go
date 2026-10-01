@@ -75,8 +75,10 @@ type bpfSetupLog struct {
 	// taskRenameProbeName) of each hand-written sched probe that did attach.
 	// Trace setup uses it to learn whether task_rename records will flow, which
 	// decides whether a new task's inherited comm still needs a corrective
-	// /proc read (eventLoop.trustRenameRecords, task xr2). nil means nobody
-	// listens.
+	// /proc read (eventLoop.trustRenameRecords, task xr2), and whether the
+	// signal_deliver probe attached, which decides whether re-executed
+	// syscalls are folded (eventLoop.foldReexecutedRestarts, task 103). nil
+	// means nobody listens.
 	attached func(probeName string)
 }
 
@@ -205,7 +207,9 @@ func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Mod
 // stale/empty label the exec probe exists to prevent; the same goes for a task
 // created in that window and the newtask probe, and a thread that renamed itself
 // in that window and the rename probe. The exit probe has no ordering requirement
-// but costs nothing to attach here.
+// but costs nothing to attach here. The two restart-fold probes must precede
+// the syscall probes as well: a syscall exit makes a task pending in BPF, and
+// a handler delivered to it before the signal probe attached would go unseen.
 //
 // Cancellation: shouldAttach is wrapped so that once ctx is done every
 // remaining tracepoint is skipped instead of attached, which ends the long
@@ -220,7 +224,10 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 	releaseExitProbe := attachProcessExitProbe(attacher, log)
 	releaseNewtaskProbe := attachTaskNewtaskProbe(attacher, log)
 	releaseRenameProbe := attachTaskRenameProbe(attacher, log)
-	releaseSchedProbes := releaseConcurrently(releaseExecProbe, releaseExitProbe, releaseNewtaskProbe, releaseRenameProbe)
+	releaseSignalProbe := attachSignalDeliverProbe(attacher, log)
+	releaseSigreturnProbe := attachRestartSigreturnProbe(attacher, log)
+	releaseSchedProbes := releaseConcurrently(releaseExecProbe, releaseExitProbe, releaseNewtaskProbe, releaseRenameProbe,
+		releaseSignalProbe, releaseSigreturnProbe)
 
 	attachUnlessCancelled := func(name string) bool {
 		if ctx.Err() != nil {
@@ -452,6 +459,48 @@ func attachTaskRenameProbe(attacher probemanager.Attacher, log bpfSetupLog) func
 		})
 }
 
+// signalDeliverProgName is the BPF program in internal/c/restart.c that sees
+// every user signal handler delivered to a task with an interrupted syscall
+// pending, and decides by the kernel's rules whether the call still restarts.
+const signalDeliverProgName = "handle_signal_deliver"
+
+// signalDeliverProbeName is the probe name attachSignalDeliverProbe reports,
+// in warnings and through bpfSetupLog.attached.
+const signalDeliverProbeName = "signal_deliver"
+
+// attachSignalDeliverProbe attaches signal:signal_deliver, the probe that
+// makes BPF's proof of a re-executed syscall sound (see internal/c/restart.c
+// and eventLoop.foldReexecutedRestarts). Same attach policy as the other hand
+// probes: direct attach, whole run, independent of -trace-* selection.
+// Without it a handler that turns an interrupted call into EINTR would go
+// unseen, so trace setup then leaves -512/-513/-514 rows unfolded, exactly as
+// before the fold existed.
+func attachSignalDeliverProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachHandTracepoint(attacher, signalDeliverProgName, "signal", signalDeliverProbeName, log)
+}
+
+// restartSigreturnProgName is the BPF program in internal/c/restart.c that
+// counts a signal handler's return, next to the generated rt_sigreturn
+// handler that reports the syscall.
+const restartSigreturnProgName = "handle_restart_sigreturn"
+
+// restartSigreturnProbeName is the probe name attachRestartSigreturnProbe
+// reports; it is not the tracepoint's name, which the syscall probe of
+// rt_sigreturn already goes by.
+const restartSigreturnProbeName = "restart rt_sigreturn"
+
+// attachRestartSigreturnProbe attaches the restart fold's own program to
+// syscalls:sys_enter_rt_sigreturn, for the whole run and whether or not
+// rt_sigreturn is selected for tracing. Without it BPF never sees a handler
+// return, so a call restarted after an SA_RESTART handler is not folded;
+// calls restarted without any handler still are.
+func attachRestartSigreturnProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachHandProbe(attacher, restartSigreturnProgName, restartSigreturnProbeName, log,
+		func(prog probemanager.Program) (probemanager.Link, error) {
+			return prog.AttachTracepoint("syscalls", "sys_enter_rt_sigreturn")
+		})
+}
+
 // attachHandTracepoint attaches one hand-written (non-syscall) tracepoint
 // program from internal/c/exec.c, subsystem/tracepointName being the tracepoint
 // it hooks (sched/sched_process_exec, task/task_newtask, ...). The policy is
@@ -464,13 +513,14 @@ func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, t
 }
 
 // attachHandProbe attaches one hand-written (non-syscall) BPF program from
-// internal/c/exec.c through attach, which picks the attach flavor (classic
+// internal/c/exec.c or internal/c/restart.c through attach, which picks the attach flavor (classic
 // tracepoint or raw tracepoint) for the tracepoint named probeName.
 //
 // Failure is deliberately non-fatal and mirrors the per-syscall attach policy:
 // without the exec, newtask or rename probe comms fall back to the asynchronous
 // procfs resolver (or keep an outdated name), and without the exit probe the fd
-// table falls back to LRU eviction - all exactly the pre-fix behaviour:
+// table falls back to LRU eviction, and without the restart-fold probes
+// kernel-restarted calls stay two rows - all exactly the pre-fix behaviour:
 // degraded, not a broken trace.
 //
 // It takes the same probemanager.Attacher seam the syscall probes use rather

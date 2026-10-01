@@ -194,6 +194,12 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// that does not exec (internal/eventloop_taskrename.go).
 		controlRaw(types.TASK_RENAME_EVENT, rawDecoder[types.TaskRenameEvent](types.NewTaskRenameEventFast),
 			typedRuntimeControl((*eventLoop).handleTaskRenameEvent)),
+		// The restart-fold probes report what the kernel does with a call a
+		// signal interrupted. routeHeldRestart applies the record to the row
+		// its tid holds before this dispatch; what arrives here only needs
+		// recycling (internal/eventloop_restart.go).
+		controlRaw(types.SYSCALL_RESTART_EVENT, rawDecoder[types.SyscallRestartEvent](types.NewSyscallRestartEventFast),
+			typedRuntimeControl((*eventLoop).handleSyscallRestartEvent)),
 		// The open-name fixup carries only the pending enter's identity and the
 		// filename re-read at sys_exit once the kernel had faulted the page in.
 		// Its dedicated decoder keeps the compact control record separate from
