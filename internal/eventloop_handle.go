@@ -307,9 +307,14 @@ var handleLessLinkPrefixes = []string{"socket:[", "pipe:[", "anon_inode:"}
 // It is a deny list: every other link text - an absolute path, a pidfd, a
 // namespace ("net:[N]", "mnt:[N]", "ipc:[N]", "uts:[N]", "pid:[N]",
 // "user:[N]", "cgroup:[N]", "time:[N]"; nsfs has export operations) and
-// anything a future kernel may add - stays eligible and is judged by its
-// flags, so a new exportable object is at worst believed too readily, never
-// denied its row.
+// anything a future kernel may add outside the three denied prefixes - stays
+// eligible and is judged by its flags, so such a new exportable object is at
+// worst believed too readily, never denied its row. A new exportable object
+// whose link starts with "anon_inode:" would be denied and need its own
+// exemption, as the pidfd did: pidfs became exportable under exactly that
+// prefix. The exemption is the exact text, not a prefix: pidfs names its
+// dentry dynamically, so the kernel never appends " (deleted)" or anything
+// else to it.
 //
 // That those three filesystems have no export operations is kernel knowledge,
 // not something ior can ask at run time. It was checked on Linux 7.2.5
@@ -334,19 +339,23 @@ func reachableByHandle(target string) bool {
 //
 // An absolute path is a file on a mounted filesystem, where the kernel stores
 // the access mode exactly as requested, so all of handleFixedFlags count.
-// Anything else that a handle can open ("anon_inode:[pidfd]", "net:[N]" and
-// the other namespaces) is an object whose filesystem picks the access mode
-// itself: opening a pidfs handle with O_RDONLY yields O_RDWR in fdinfo
-// (O_WRONLY yields 03), so a differing access mode proves nothing there and
-// would hand a genuine pidfd row to an unrelated stash. Only handleKindFlags
-// are compared for those: pidfs refuses O_DIRECTORY, O_NOFOLLOW and O_PATH
-// outright and nsfs keeps a requested O_PATH, so a genuine open still passes.
+// For the non-path targets a handle can open ("anon_inode:[pidfd]", "net:[N]"
+// and the other namespaces) only handleKindFlags are compared. pidfs is why:
+// it picks the access mode itself - a pidfs handle opened with O_RDONLY shows
+// O_RDWR in fdinfo, O_WRONLY shows 03 - so a differing access mode proves
+// nothing there and would hand a genuine pidfd row to an unrelated stash;
+// pidfs refuses O_DIRECTORY, O_NOFOLLOW and O_PATH outright, so a genuine open
+// still passes. nsfs does not need the smaller mask (it keeps O_RDONLY and a
+// requested O_PATH and refuses the write modes with EPERM, observed on 7.2.5,
+// so a genuine namespace open would pass the full mask too); it gets it only
+// to keep one rule for every non-path target.
 //
 // The price is narrow: a number reused by a pidfd or a namespace descriptor is
 // not told apart by its access mode, only by a kind flag the request carried
-// (usually none), so such a reuse is believed and names the row. Sockets,
-// pipes and the other anonymous inodes, the reuses that matter in practice,
-// never get this far.
+// (usually none), so such a reuse is believed and names the row - for a
+// namespace descriptor that includes an O_RDWR path request, which the full
+// mask would have rejected. Sockets, pipes and the other anonymous inodes, the
+// reuses that matter in practice, never get this far.
 func fixedFlagsMask(target string) int32 {
 	if filepath.IsAbs(target) {
 		return handleFixedFlags

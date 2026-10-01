@@ -814,6 +814,9 @@ func TestReachableByHandle(t *testing.T) {
 		{"", true},
 		{"socket:[42]", false},
 		{"pipe:[42]", false},
+		// The pidfd exemption is the exact link text, not a prefix.
+		{"anon_inode:[pidfd]x", false},
+		{"anon_inode:[pidfd] (deleted)", false},
 		{"anon_inode:[eventfd]", false},
 		{"anon_inode:[eventpoll]", false},
 		{"anon_inode:[timerfd]", false},
