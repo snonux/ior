@@ -1033,8 +1033,9 @@ func (m *Model) ensureSelectedCol() {
 //
 // The action label is the presenter's canonical token for the dimension just
 // set, so it reads exactly like the filter summary. A cell that yields no
-// filter (a blank string cell, an unknown column) is not handled, so no empty
-// undo layer is pushed.
+// filter (a blank string cell, a placeholder cell - the File of a fileless
+// row, the Latency or Ret of a noreturn row - or an unknown column) is not
+// handled, so no empty undo layer is pushed.
 func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false, nil
@@ -1101,12 +1102,24 @@ func setStringCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dime
 // cell and reports the dimension it set; ok is false for a non-numeric
 // column. Durations become lower bounds (>=) so the filter keeps the selected
 // event and everything slower; identifiers and counts use equality.
+//
+// The Latency and Ret cells of a noreturn row (ev.NoReturn: exit, exit_group,
+// rt_sigreturn) are refused like the File cell of a fileless row: they render
+// "-" because the row has neither value, and the 0s behind them are
+// placeholders. Building a filter from them would select by a value the row
+// does not have (latency >= 0 matches every row, ret == 0 every successful
+// one), and the global filter rejects a noreturn row on either dimension
+// anyway (globalfilter.Candidate.NoReturnValue), so not even the selected row
+// would survive it.
 func setNumericCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dimension, bool) {
 	switch col {
 	case streamColGap:
 		next.GapNs = &NumericFilter{Op: OpGte, Value: int64(ev.GapNs)}
 		return presenter.DimGap, true
 	case streamColLatency:
+		if ev.NoReturn {
+			return presenter.DimLatency, false
+		}
 		next.LatencyNs = &NumericFilter{Op: OpGte, Value: int64(ev.DurationNs)}
 		return presenter.DimLatency, true
 	case streamColPID:
@@ -1119,6 +1132,9 @@ func setNumericCellFilter(next *Filter, ev *StreamEvent, col int) (presenter.Dim
 		next.FD = &NumericFilter{Op: OpEq, Value: int64(ev.FD)}
 		return presenter.DimFD, true
 	case streamColRet:
+		if ev.NoReturn {
+			return presenter.DimRet, false
+		}
 		next.RetVal = &NumericFilter{Op: OpEq, Value: ev.RetVal}
 		return presenter.DimRet, true
 	case streamColBytes:

@@ -676,6 +676,44 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 	}
 }
 
+// TestPausedEnterOnNoReturnPlaceholderCellIsNotHandled (task pr2): the
+// Latency and Ret cells of a noreturn row (exit, exit_group, rt_sigreturn)
+// render "-" over placeholder 0s, so Enter there must push no filter, like the
+// File cell of a fileless row: latency >= 0 would match every row and ret == 0
+// every successful one. The other cells of the same row still filter, and the
+// same cells of a normal row with the same 0 values still push the filter, so
+// the refusal is keyed on the flag, not on the values.
+func TestPausedEnterOnNoReturnPlaceholderCellIsNotHandled(t *testing.T) {
+	noReturn := StreamEvent{Seq: 1, PID: 7, TID: 7, Comm: "sh", Syscall: "exit_group", FD: -1, GapNs: 30, NoReturn: true}
+	for _, col := range []int{streamColLatency, streamColRet} {
+		if handled, cmd := pressEnterOnCell(t, noReturn, col); handled || cmd != nil {
+			t.Errorf("column %d of a noreturn row: expected enter to be ignored, got handled=%v cmd=%v", col, handled, cmd != nil)
+		}
+	}
+	for _, col := range []int{streamColGap, streamColPID, streamColSyscall} {
+		if handled, cmd := pressEnterOnCell(t, noReturn, col); !handled || cmd == nil {
+			t.Errorf("column %d of a noreturn row: expected a filter request, got handled=%v", col, handled)
+		}
+	}
+
+	normal := noReturn
+	normal.NoReturn = false
+	normal.Syscall = "read"
+	for _, tt := range []struct {
+		col  int
+		want string
+	}{{streamColLatency, "latency>=0s"}, {streamColRet, "ret=0"}} {
+		handled, cmd := pressEnterOnCell(t, normal, tt.col)
+		if !handled || cmd == nil {
+			t.Fatalf("column %d of a normal row: expected a filter request", tt.col)
+		}
+		req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+		if !ok || req.Action != tt.want {
+			t.Fatalf("column %d of a normal row: got %+v, want action %q", tt.col, req, tt.want)
+		}
+	}
+}
+
 // TestPausedEnterOnFilelessPairRowPushesNoFilter is the task hp2 regression:
 // a pair without a file renders its File cell as event.NoFileName, but the
 // global filter reads that pair's file as "". Enter on the cell used to push
