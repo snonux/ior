@@ -282,7 +282,9 @@ func (m *Model) handleExportModalKey(keyStr string) bool {
 	}
 	path, err := m.exportFilteredToCSV(filename)
 	if err != nil {
-		m.statusMessage = fmt.Sprintf("Export failed: %v", err)
+		// A refused name keeps the modal open with the error beside the typed
+		// name, rather than closing it and losing what was typed.
+		m.exportModal = m.exportModal.Reject(filename, err)
 		return true
 	}
 	m.lastExportPath = path

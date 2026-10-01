@@ -59,6 +59,15 @@ func (m ExportModal) Close() ExportModal {
 	return m
 }
 
+// Reject reopens the modal with the rejected filename still in the input and
+// err shown as its error, so a name the export refused (empty after trimming,
+// a directory, a missing folder, ...) can be corrected instead of retyped.
+func (m ExportModal) Reject(filename string, err error) ExportModal {
+	m = m.Open(filename)
+	m.err = err.Error()
+	return m
+}
+
 // Update returns updated modal, submitted filename, and whether submit occurred.
 func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	if !m.visible {

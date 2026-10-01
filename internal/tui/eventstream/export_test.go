@@ -129,77 +129,206 @@ func TestResolveEditorCommandDoubleQuotedPathWithArgs(t *testing.T) {
 	}
 }
 
-// TestEnsureCSVFilenamePathTraversal verifies that path traversal attempts are
-// rejected or stripped so that the resulting filename stays within exportDir.
-func TestEnsureCSVFilenamePathTraversal(t *testing.T) {
+// TestResolveExportPath pins how the typed export name maps to a path: a bare
+// name lands in exportDir, a directory part is honoured (relative to exportDir
+// or absolute) and never reduced to its base name (task 9s2), ".csv" is
+// appended to the last element only, and names that cannot be a file are
+// rejected.
+func TestResolveExportPath(t *testing.T) {
 	cases := []struct {
-		input   string
-		want    string // empty string means an error is expected
-		wantErr bool
+		name, input, want string
+		wantErr           string // substring; empty means success
 	}{
-		// Normal names — should pass through unchanged (with .csv if needed).
-		{"report", "report.csv", false},
-		{"report.csv", "report.csv", false},
-		{"Report.CSV", "Report.CSV", false},
-		// Directory separators must be stripped — only the base name survives.
-		{"../../etc/passwd", "passwd.csv", false},
-		{"../secret", "secret.csv", false},
-		{"subdir/file.csv", "file.csv", false},
-		{"/absolute/path.csv", "path.csv", false},
-		// Pure directory references must be rejected.
-		{"..", "", true},
-		{"some/../..", "", true},
-		// Empty / whitespace-only must be rejected.
-		{"", "", true},
-		{"   ", "", true},
+		{name: "bare", input: "report", want: "/exp/report.csv"},
+		{name: "bare with extension", input: "report.csv", want: "/exp/report.csv"},
+		{name: "upper-case extension kept", input: "Report.CSV", want: "/exp/Report.CSV"},
+		{name: "surrounding space trimmed", input: "  report  ", want: "/exp/report.csv"},
+		{name: "relative subdirectory", input: "sub/file.csv", want: "/exp/sub/file.csv"},
+		{name: "parent reference is honoured", input: "../x", want: "/x.csv"},
+		{name: "absolute", input: "/tmp/x.csv", want: "/tmp/x.csv"},
+		{name: "absolute gets extension", input: "/tmp/x", want: "/tmp/x.csv"},
+		{name: "dot in directory not an extension", input: "a.csv/x", want: "/exp/a.csv/x.csv"},
+		{name: "empty", input: "", wantErr: "empty"},
+		{name: "blank", input: "   ", wantErr: "empty"},
+		{name: "NUL", input: "a\x00b.csv", wantErr: "NUL"},
+		{name: "NUL in directory", input: "/tmp/a\x00/b.csv", wantErr: "NUL"},
+		{name: "dot", input: ".", wantErr: "directory"},
+		{name: "dotdot", input: "..", wantErr: "directory"},
+		{name: "cleans to dotdot", input: "some/../..", wantErr: "directory"},
+		{name: "cleans to dot", input: "a/..", wantErr: "directory"},
+		{name: "trailing slash", input: "out/", wantErr: "directory"},
+		{name: "root", input: "/", wantErr: "directory"},
 	}
-
 	for _, tc := range cases {
-		got, err := ensureCSVFilename(tc.input)
-		if tc.wantErr {
-			if err == nil {
-				t.Errorf("ensureCSVFilename(%q): expected error, got %q", tc.input, got)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveExportPath("/exp", tc.input)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveExportPath(%q) = %q, %v; want error containing %q", tc.input, got, err, tc.wantErr)
+				}
+				return
 			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("ensureCSVFilename(%q): unexpected error: %v", tc.input, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("ensureCSVFilename(%q): got %q, want %q", tc.input, got, tc.want)
-		}
+			if err != nil {
+				t.Fatalf("resolveExportPath(%q): unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveExportPath(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 
-// TestExportRowsToCSVPathTraversal verifies that exportRowsToCSV writes the
-// output file inside exportDir even when the caller passes a path-traversal
-// filename.
-func TestExportRowsToCSVPathTraversal(t *testing.T) {
-	exportDir := t.TempDir()
-	outside := t.TempDir()
+// TestResolveExportPathWithoutExportDir covers the empty exportDir: a relative
+// name stays relative (the process working directory), an absolute one is
+// untouched.
+func TestResolveExportPathWithoutExportDir(t *testing.T) {
+	if got, err := resolveExportPath("", "sub/x"); err != nil || got != "sub/x.csv" {
+		t.Fatalf("relative: got %q, %v", got, err)
+	}
+	if got, err := resolveExportPath("", "/tmp/x"); err != nil || got != "/tmp/x.csv" {
+		t.Fatalf("absolute: got %q, %v", got, err)
+	}
+}
 
-	// Craft a filename that would escape exportDir without sanitisation.
-	traversal := "../" + outside[len(outside)-1:] // relative path targeting outside dir
+// TestExportRowsToCSVHonoursAbsolutePath is the regression for task 9s2: the
+// directory part of a typed name used to be dropped, so "/tmp/x.csv" was
+// written to ./x.csv in exportDir with nothing said. The file must land where
+// it was asked to, and nothing must appear in exportDir.
+func TestExportRowsToCSVHonoursAbsolutePath(t *testing.T) {
+	exportDir, target := t.TempDir(), t.TempDir()
+	want := filepath.Join(target, "x.csv")
 
-	// Use a clearly recognisable traversal pattern.
-	maliciousName := "../../escape.csv"
-
-	path, err := exportRowsToCSV(nil, exportDir, maliciousName)
+	got, err := exportRowsToCSV(nil, exportDir, want)
 	if err != nil {
-		t.Fatalf("exportRowsToCSV returned unexpected error: %v", err)
+		t.Fatalf("exportRowsToCSV: %v", err)
+	}
+	if got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("file not written at the typed path: %v", err)
+	}
+	if entries, _ := os.ReadDir(exportDir); len(entries) != 0 {
+		t.Fatalf("exportDir must stay empty, holds %d entries", len(entries))
+	}
+}
+
+// TestExportRowsToCSVHonoursRelativeSubdirectory checks a relative name with
+// a directory part is resolved against exportDir, and that a parent reference
+// is followed rather than stripped.
+func TestExportRowsToCSVHonoursRelativeSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	exportDir := filepath.Join(root, "exp")
+	for _, d := range []string{exportDir, filepath.Join(exportDir, "sub")} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// The written file must live inside exportDir, not outside it.
-	rel, err := filepath.Rel(exportDir, path)
-	if err != nil {
-		t.Fatalf("filepath.Rel: %v", err)
+	got, err := exportRowsToCSV(nil, exportDir, "sub/in.csv")
+	if err != nil || got != filepath.Join(exportDir, "sub", "in.csv") {
+		t.Fatalf("subdirectory: got %q, %v", got, err)
 	}
-	if len(rel) >= 2 && rel[:2] == ".." {
-		t.Errorf("output path %q escapes exportDir %q (rel=%q)", path, exportDir, rel)
+	got, err = exportRowsToCSV(nil, exportDir, "../up")
+	if err != nil || got != filepath.Join(root, "up.csv") {
+		t.Fatalf("parent reference: got %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "up.csv")); err == nil {
+		t.Fatal("../up must not be reduced to its base name inside exportDir")
+	}
+}
+
+// TestExportRowsToCSVRejectsUnusableNames pins the negative cases: each is
+// refused with an error naming the problem, and leaves no file behind.
+func TestExportRowsToCSVRejectsUnusableNames(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "adir.csv"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, input, wantErr string }{
+		{"empty", "", "empty"},
+		{"NUL", "a\x00b", "NUL"},
+		{"directory reference", "..", "directory"},
+		{"trailing slash", "adir.csv/", "directory"},
+		{"existing directory", "adir", "is a directory"},
+		{"missing parent", "nope/x.csv", "no such file or directory"},
+		{"missing absolute parent", filepath.Join(dir, "nope", "x.csv"), "no such file or directory"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, err := exportRowsToCSV(nil, dir, tc.input)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("got %q, %v; want error containing %q", path, err, tc.wantErr)
+			}
+			if strings.Contains(err.Error(), ".tmp") {
+				t.Fatalf("error leaks the internal temp name: %v", err)
+			}
+		})
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("a rejected export left files behind: %v, %v", entries, err)
+	}
+}
+
+// TestExportRowsToCSVUnwritableDirectory checks a read-only directory is
+// reported as one. Skipped as root, which ignores directory permissions.
+func TestExportRowsToCSVUnwritableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	_, err := exportRowsToCSV(nil, t.TempDir(), filepath.Join(dir, "x.csv"))
+	if err == nil || !strings.Contains(err.Error(), "permission denied") || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("want a permission error naming %s, got %v", dir, err)
+	}
+}
+
+// TestExportRowsToCSVReplacesExistingTypedFile checks a typed name, also one
+// with a directory part, replaces an existing file, and does not follow a
+// symlink at the name: the link is replaced, its target left alone.
+func TestExportRowsToCSVReplacesExistingTypedFile(t *testing.T) {
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	victim := filepath.Join(elsewhere, "victim.txt")
+	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "out.csv")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
 	}
 
-	_ = traversal // silence unused-variable warning
+	got, err := exportRowsToCSV(nil, t.TempDir(), link)
+	if err != nil || got != link {
+		t.Fatalf("export over a symlink: got %q, %v", got, err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("the symlink target was written through: %q", b)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the symlink should have been replaced by a regular file: %v, %v", info, err)
+	}
+}
+
+// TestExportRowsToCSVGeneratedNameWithDirectoryIsNotReplaced checks the
+// generated-name rule is judged on the file name alone, so a default name
+// typed with a directory part still never overwrites.
+func TestExportRowsToCSVGeneratedNameWithDirectoryIsNotReplaced(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "ior-stream-20260930-135324.csv")
+	first, err := exportRowsToCSV(nil, t.TempDir(), name)
+	if err != nil || first != name {
+		t.Fatalf("first export: %q, %v", first, err)
+	}
+	second, err := exportRowsToCSV(nil, t.TempDir(), name)
+	if err != nil || second == name {
+		t.Fatalf("second export must pick a -N name, got %q, %v", second, err)
+	}
 }
 
 func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {

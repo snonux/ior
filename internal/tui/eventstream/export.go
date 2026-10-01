@@ -123,13 +123,14 @@ func defaultStreamExportFilename() string {
 }
 
 // isDefaultStreamExportName reports whether name, exactly as the user gave it
-// (before ensureCSVFilename appends ".csv"), is a generated default export
+// (before resolveExportPath appends ".csv"), is a generated default export
 // name rather than one the user typed. Generated names are only accurate to
 // the second and are never replaced; a typed name is the user's to overwrite.
 // The match is strict (atomicfile.IsGeneratedName: exact zero-padded layout,
-// including the extension), and it is judged on the raw input so a name that
-// only becomes ".csv" after ensureCSVFilename counts as user-chosen, the same
-// rule the Parquet recording name follows.
+// including the extension, judged on the file name only, so a generated name
+// typed with a directory part still counts). It is judged on the raw input,
+// so a name that only becomes ".csv" after resolveExportPath counts as
+// user-chosen, the same rule the Parquet recording name follows.
 func isDefaultStreamExportName(name string) bool {
 	return atomicfile.IsGeneratedName(name, defaultStreamExportLayout)
 }
@@ -153,29 +154,35 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	return exportRowsToCSV(rows, exportDir, name)
 }
 
-// exportRowsToCSV writes rows to a CSV file under exportDir with the given
-// filename (which is validated and sanitised by ensureCSVFilename) and returns
-// its absolute path.
+// exportRowsToCSV writes rows to a CSV file named filename and returns its
+// absolute path. The name is resolved by resolveExportPath: a bare name lands
+// in exportDir, a name with a directory part is honoured as typed (relative
+// to exportDir, or absolute), exactly like the R recording prompt and
+// -parquet; the Stream tab shows the returned path, so the user always sees
+// where the file went.
 //
 // The rows go to a uniquely named temp file first, so a reader never sees a
 // partial CSV and a symlink planted at a predictable name is never written
 // through. What happens when the target exists depends on who chose the name:
 // a generated default name (only accurate to the second) is never replaced -
 // a taken name yields a "-N" suffix, and the returned path says so - while a
-// name the user typed is atomically replaced, as it always was.
+// name the user typed is atomically replaced, as it always was. Before
+// anything is written the target is probed (probeExportPath), so a missing or
+// unwritable directory, a directory in place of the file and a name the
+// filesystem refuses come back as one readable error naming the directory.
 func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
-	name, err := ensureCSVFilename(filename)
+	path, err := resolveExportPath(exportDir, filename)
 	if err != nil {
 		return "", err
 	}
-	path := name
-	if exportDir != "" {
-		path = filepath.Join(exportDir, name)
+	generated := isDefaultStreamExportName(filename)
+	if err := probeExportPath(path, generated); err != nil {
+		return "", err
 	}
 
 	write := func(w io.Writer) error { return writeStreamCSV(csv.NewWriter(w), rows) }
 	var published string
-	if isDefaultStreamExportName(filename) {
+	if generated {
 		published, err = atomicfile.WriteFile(path, ".csv", write)
 	} else {
 		published, err = atomicfile.ReplaceFile(path, write)
@@ -188,6 +195,21 @@ func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, er
 		return published, nil
 	}
 	return absPath, nil
+}
+
+// probeExportPath checks, before the CSV is rendered, that a file can be
+// published at path. It is the same early check the Parquet recording runs
+// (atomicfile.ProbeReplace: missing or unwritable directory, an existing
+// directory at the name, characters the filesystem refuses), so the message is
+// the readable "cannot create files in <dir>: no such file or directory"
+// instead of the writer's error about an internal ior-<hex>.tmp name. A
+// generated name is never replaced, so the replace-only checks (the name is
+// an existing directory) are left to the publish for it: atomicfile.Probe.
+func probeExportPath(path string, generated bool) error {
+	if generated {
+		return atomicfile.Probe(path)
+	}
+	return atomicfile.ProbeReplace(path)
 }
 
 // streamCSVHeader is the stream CSV export's column order. The first 17
@@ -275,30 +297,57 @@ func streamCSVRecord(ev *StreamEvent) []string {
 	}
 }
 
-// ensureCSVFilename validates and normalises a user-supplied export filename.
-// It strips any directory components (preventing path traversal outside
-// exportDir) and rejects names that resolve to "." or "..".  A ".csv"
-// extension is appended when the caller omits it.
-func ensureCSVFilename(name string) (string, error) {
-	clean := strings.TrimSpace(name)
-	if clean == "" {
+// resolveExportPath turns the filename typed into the export modal into the
+// path to write. The name is honoured as typed, never rewritten:
+//
+//   - a bare name ("trace") lands in exportDir;
+//   - a relative name with a directory part ("out/trace", "../trace") is
+//     resolved against exportDir, an absolute one ("/tmp/trace.csv") is used
+//     as is. Nothing confines it to exportDir: the name is typed by the user
+//     in their own TUI, no privilege boundary is crossed, and the R recording
+//     prompt and -parquet take any path too. (The old behaviour kept only the
+//     base name, so "/tmp/x.csv" was silently written to ./x.csv.) Missing
+//     parent directories are not created - the probe reports them;
+//   - ".csv" is appended to the last element when it lacks it
+//     (case-insensitively).
+//
+// It rejects, with a message the modal shows, an empty name, a NUL byte (no
+// path can hold one) and a name that denotes a directory rather than a file
+// (trailing separator, ".", "..", or a path that cleans to one of them).
+func resolveExportPath(exportDir, name string) (string, error) {
+	typed := strings.TrimSpace(name)
+	switch {
+	case typed == "":
 		return "", errors.New("filename cannot be empty")
+	case strings.ContainsRune(typed, 0):
+		return "", errors.New("filename must not contain a NUL byte")
+	case namesDirectory(typed):
+		return "", fmt.Errorf("%q is a directory, not a file name", typed)
 	}
 
-	// Strip all directory components so that inputs such as
-	// "../../etc/passwd" or "/absolute/path.csv" cannot escape exportDir.
-	base := filepath.Base(clean)
-
-	// filepath.Base returns "." for empty/dot inputs and ".." for a raw ".."
-	// component — both are unusable as a plain filename.
-	if base == "." || base == ".." {
-		return "", errors.New("filename must not be a directory reference")
+	path := filepath.Clean(typed)
+	if !strings.HasSuffix(strings.ToLower(path), ".csv") {
+		path += ".csv"
 	}
-
-	if strings.HasSuffix(strings.ToLower(base), ".csv") {
-		return base, nil
+	if !filepath.IsAbs(path) && exportDir != "" {
+		path = filepath.Join(exportDir, path)
 	}
-	return base + ".csv", nil
+	return path, nil
+}
+
+// namesDirectory reports whether the typed name can only denote a directory:
+// it ends in a path separator, or cleans to the root, "." or ".." (so "a/..",
+// "../.." and "." are all refused instead of becoming ".csv" files named
+// after a directory reference).
+func namesDirectory(typed string) bool {
+	if strings.HasSuffix(typed, string(filepath.Separator)) {
+		return true
+	}
+	switch filepath.Base(filepath.Clean(typed)) {
+	case ".", "..", string(filepath.Separator):
+		return true
+	}
+	return false
 }
 
 // ExportSourceSnapshotToCSV is the export path for callers that must not

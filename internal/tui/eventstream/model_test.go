@@ -3,6 +3,7 @@ package eventstream
 import (
 	"encoding/csv"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1006,6 +1007,49 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	}
 	if _, err := os.Stat(m.lastExportPath); err != nil {
 		t.Fatalf("expected exported file to exist: %v", err)
+	}
+}
+
+// TestPausedExportModalKeepsTheNameWhenTheExportIsRefused is the UI half of
+// task 9s2: a name the export refuses (here a folder that does not exist) must
+// not close the modal and discard the typing; it stays open with the name and
+// the reason, and no file or lastExportPath appears. A corrected name then
+// saves.
+func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
+	exportDir := t.TempDir()
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(exportDir)
+	m.Refresh()
+	_ = pressLocal(t, &m, "space")
+	_ = pressLocal(t, &m, "X")
+
+	m.exportModal = m.exportModal.Open("missing-dir/out.csv")
+	if !pressLocal(t, &m, "enter") {
+		t.Fatalf("enter should be consumed")
+	}
+	if !m.exportModal.Visible() {
+		t.Fatalf("a refused export must keep the modal open")
+	}
+	if got := m.exportModal.textInput.Value(); got != "missing-dir/out.csv" {
+		t.Fatalf("typed name lost, input is %q", got)
+	}
+	if !strings.Contains(m.exportModal.err, "no such file or directory") {
+		t.Fatalf("modal error should say why, got %q", m.exportModal.err)
+	}
+	if view := m.exportModal.View(100, 30); !strings.Contains(view, "Error: ") {
+		t.Fatalf("modal view should show the error:\n%s", view)
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("no export happened, lastExportPath = %q", m.lastExportPath)
+	}
+
+	m.exportModal = m.exportModal.Open("ok.csv")
+	_ = pressLocal(t, &m, "enter")
+	if m.exportModal.Visible() || m.lastExportPath != filepath.Join(exportDir, "ok.csv") {
+		t.Fatalf("corrected name should save: visible=%v path=%q", m.exportModal.Visible(), m.lastExportPath)
 	}
 }
 
