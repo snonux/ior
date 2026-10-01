@@ -571,10 +571,36 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     sampled counts as complete). `ior collapsed` prints the sampling to stderr
     (`CollapsedOptions.Notice`) and `flamegraph.LoadRecording` returns it.
     `-plain` stdout stays the fixed CSV: its marker is the stderr lines only.
-    Not covered: TUI `R` recordings (the stats engine has the kernel counts but
-    the file is not marked). The first version was verified with stubs only;
+    TUI `R` recordings are covered by task qs2 (next item). The first version was verified with stubs only;
     the fix round checked the 1000-read scenario, a ring-buffer-drop run
     (`-mapSize 4096`, 3M reads) and a family rate live.
+  - **TUI `R` recordings carry the same footer keys** (task qs2;
+    `internal/recording_sampling.go`, `internal/tui/recordingsampling.go`,
+    `sampling.Tally`, `internal/parquet/recorder_sampling.go`). A default TUI
+    trace samples (the aggregate-only futex*/clock_gettime defaults), so most
+    R files are marked. The totals do NOT come from the stats engine: it is
+    reset by the auto-reset timer, `r` and every live filter swap and replaced
+    per session, while a recording spans all of that. Instead each recording
+    gets a fresh `sampling.Tally` (`parquet.StartOptions.SamplingTally`):
+    `traced` is counted by the recorder where it writes a row (writer
+    goroutine, so it equals the file's rows; shed rows make it a lower bound),
+    `counted_only` arrives from the TUI event loop's aggregate drain
+    (`forwardAggregatesToRecording` -> session-gated
+    `sessionRecorder.CountKernelOnly` -> `Recorder.CountKernelOnly`, a no-op
+    without an active recording). Window exactness: the session publishes a
+    `runtime.RecordingSampling` (sampled syscalls + `FlushAggregates`, via
+    `aggregateDrainer.Flush`), and the TUI flushes before `Start`, before
+    `Stop` (also at quit and from the signal watcher) and before a session
+    retires while recording (`runtimeBindings.endSession`), so consecutive
+    recordings get disjoint deltas. Rates: those attached at Start
+    (`ior.sampling`); rates never change at runtime (flags only), but a
+    sampled probe attached mid-recording still appears in the totals once
+    invoked. Lower bound: ring-buffer drops or an unreadable drop counter
+    during the recording (`handleRingbufDropResult`), shed rows. Unavailable:
+    a drain failure, or counts withheld by a filter the kernel rows cannot
+    answer (`aggregateDrainResult.withheld`). The sampled-syscall list
+    outlives its session (`runtimeBindings.sampledSyscalls`) so an R pressed
+    while the next session attaches is still marked; the flush does not.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,
