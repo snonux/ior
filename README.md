@@ -85,6 +85,13 @@ sessions attach nothing; only restarting `ior` returns to the `-trace-*` startup
 only scope the view to a family; on a family with no attached probe the status line says
 how to attach it.
 
+Setup and runtime warnings (a `-tid` that is not a thread of `-pid`, no probe attached,
+libbpf warnings, dropped events) are rows in the Stream tab (`7`), whatever its filter. While
+the stream holds any, the status line of every other tab shows `warnings: N (7:Stream)` in the
+warning colour, shortened to `warn: N (7)` or `!N` and then dropped on a narrow terminal
+before the filter summary is cut. It goes away once those rows scroll out of the stream's
+10000-row buffer or a new PID/TID selection clears the stream.
+
 ### Save output
 
 | Mode | Command or key | Output |
