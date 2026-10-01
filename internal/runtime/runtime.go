@@ -264,7 +264,10 @@ type RowEmitter interface {
 // the session's RowEmitter. It is optional so bindings without a session gate
 // (fakes, headless wiring) need not implement it; the core then falls back to
 // the separate Push and RecordRow calls, which behave the same minus the
-// single gate.
+// single gate. When a source does hand out an emitter, the core no longer
+// consults Recorder() or FilterEpoch() for event rows: the emitter owns the
+// stream push, the recording, the recorder warning and the filter-epoch
+// stamp, and reads the recorder and epoch from its own state.
 type RowEmitterSource interface {
 	RowEmitter() RowEmitter
 }
