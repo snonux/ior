@@ -62,10 +62,11 @@ func (m Model) moveSelection(delta int) Model {
 
 // editFilter feeds msg to the filter input (through common.UpdateTextInput,
 // which keeps Alt+D on the last rune from panicking bubbles, task kz2) and,
-// only when the text really changed, rebuilds the list. When the edit happens while the All row is
-// highlighted, the highlight is handed back to the filter (implicit true):
-// typing "mysql" and pressing Enter then means the first mysql process, not the
-// whole system, which is what the untouched All row meant before task hs2. A
+// only when the text really changed, rebuilds the list. When the edit
+// happens while the All row is highlighted, the highlight is handed back to
+// the filter (implicit true): typing "mysql" and pressing Enter then means
+// the first mysql process, not the whole system, which is what the
+// untouched All row meant before task hs2. A
 // highlighted process row keeps its process (applyFilter ->
 // relocateSelection) and a lost-selection noSelection stays sticky, so only the
 // All row is handed back, and the user can return to it with Up at any time.
