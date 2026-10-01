@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"math"
 	"syscall"
 	"testing"
 
@@ -74,7 +75,7 @@ func newNonLeaderExecLoop(t *testing.T) *eventLoop {
 	t.Helper()
 	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
 	t.Cleanup(el.commResolver.shutdown)
-	el.setCachedCommFromKernel(nleExecCaller, "caller")
+	el.setCachedCommFromKernel(nleExecCaller, "caller", math.MaxUint64)
 	return el
 }
 
@@ -153,7 +154,7 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 // row or a mismatch.
 func TestNonLeaderExecDropsStaleEnters(t *testing.T) {
 	el := newNonLeaderExecLoop(t)
-	el.setCachedCommFromKernel(nleExecPid, "caller")
+	el.setCachedCommFromKernel(nleExecPid, "caller", math.MaxUint64)
 	// The dead leader's parked name_to_handle_at pathname: with its exit
 	// record lost, only the exec record can drop it before the new
 	// program's first open_by_handle_at would consume it.

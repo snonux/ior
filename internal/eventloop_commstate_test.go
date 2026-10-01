@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 )
@@ -141,7 +142,7 @@ func TestCommStateWarmCacheMutatorsDoNotAllocate(t *testing.T) {
 		name string
 		fn   func()
 	}{
-		{"setCachedCommFromKernel", func() { el.setCachedCommFromKernel(tid, "kernel") }},
+		{"setCachedCommFromKernel", func() { el.setCachedCommFromKernel(tid, "kernel", math.MaxUint64) }},
 		{"evictCachedComm+setCachedComm", func() {
 			el.evictCachedComm(tid)
 			el.setCachedComm(tid, "warm")

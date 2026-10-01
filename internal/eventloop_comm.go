@@ -763,9 +763,35 @@ func (e *eventLoop) setCachedComm(tid uint32, comm string) {
 }
 
 // setCachedCommFromKernel applies a kernel-reported command name (see
-// commResolver.setCachedFromKernel).
-func (e *eventLoop) setCachedCommFromKernel(tid uint32, comm string) {
+// commResolver.setCachedFromKernel) that came with a record stamped
+// recordTime (boot clock). A record no newer than the last ring-buffer drop
+// the monitor saw may have been reserved before that drop and consumed only
+// now, after the staleness sweep (markAllStale) already ran: the sweep flagged
+// only the entries that existed then, so this write is non-stale although the
+// record that followed it - the one the drop lost - never arrives. The entry is
+// flagged stale here so its next use re-reads /proc once (task lz2; the same
+// record-time check provisionalSeedNeedsRecheck applies to newtask seeds).
+func (e *eventLoop) setCachedCommFromKernel(tid uint32, comm string, recordTime uint64) {
 	e.commState().setCachedFromKernel(tid, comm)
+	if e.recordMayPredateDrop(recordTime) {
+		e.commState().markStale(tid)
+	}
+}
+
+// recordMayPredateDrop reports whether a record stamped recordTime may have
+// been reserved before the newest ring-buffer drop the monitor reported
+// (lastDropSeenBootNs, see requestCommSweepAfterDrop), so that a sweep
+// triggered by that drop cannot have covered a write it causes.
+func (e *eventLoop) recordMayPredateDrop(recordTime uint64) bool {
+	return recordTime <= e.lastDropSeenBootNs.Load()
+}
+
+// markStale flags tid's cached comm for one /proc re-read on next use, like a
+// sweep does for every entry. An unknown tid is left alone.
+func (r *commResolver) markStale(tid uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.markStaleLocked(tid)
 }
 
 // setCachedCommProvisional applies an inherited, possibly outdated command name
@@ -816,7 +842,7 @@ func (e *eventLoop) evictCachedComm(tid uint32) {
 func (e *eventLoop) seedCommFromEnterPayload(ev event.Event) {
 	switch p := ev.(type) {
 	case *types.OpenEvent:
-		e.commState().setCachedFromEnterPayload(p.Tid, types.StringValue(p.Comm[:]), false)
+		e.commState().setCachedFromEnterPayload(p.Tid, types.StringValue(p.Comm[:]), e.recordMayPredateDrop(p.Time))
 	case *types.ExecEvent:
 		e.commState().setCachedFromEnterPayload(p.Tid, types.StringValue(p.Comm[:]), true)
 	}
@@ -900,7 +926,7 @@ func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<-
 		// whatever is cached beats replacing a good label with nothing.
 		return
 	}
-	e.setCachedCommFromKernel(ev.Tid, comm)
+	e.setCachedCommFromKernel(ev.Tid, comm, ev.Time)
 }
 
 // procTidPathPrefix is tid's /proc/<tid> directory on the real procfs.

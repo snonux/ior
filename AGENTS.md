@@ -1212,7 +1212,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   between `attach_pid` and `trace_task_newtask` (its rename record precedes the
   newtask record, whose seed then overwrites the newer name with the
   creator's), or a sibling renaming the creator between `dup_task_struct` and
-  the tracepoint (the record carries a name the child never had). A rename record `handle_task_rename` cannot read the name of is counted as a ring-buffer drop (task mz2), so the drop sweep covers it. Before xr2
+  the tracepoint (the record carries a name the child never had). A rename record `handle_task_rename` cannot read the name of is counted as a ring-buffer drop (task mz2), so the drop sweep covers it. Kernel-sourced comm writes (rename and exec records, open/exec enter payloads) from a record no newer than the last drop stamp (`lastDropSeenBootNs`) leave the entry stale (`setCachedCommFromKernel`, `seedCommFromEnterPayload`, task lz2): such a record was reserved before the drop but consumed from the backlog after the sweep, which only flagged the entries that existed then, so without the flag the record the drop lost could never be healed. Before xr2
   the corrective read healed both windows. `resolveCommFromProcWithError`
   returns at once on ENOENT/ESRCH instead of trying the exe fallback
   (`TestResolveCommOfAGoneTaskSkipsTheExeFallback`, over a fake procfs root

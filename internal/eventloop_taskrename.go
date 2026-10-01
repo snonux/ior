@@ -54,5 +54,5 @@ func (e *eventLoop) handleTaskRenameEvent(ev *types.TaskRenameEvent) {
 	if comm == "" {
 		return
 	}
-	e.setCachedCommFromKernel(ev.Tid, comm)
+	e.setCachedCommFromKernel(ev.Tid, comm, ev.Time)
 }
