@@ -121,6 +121,34 @@ func TestOpenByHandleAtCommFilterDropsNonMatchingRows(t *testing.T) {
 	}
 }
 
+// TestOpenByHandleAtFailuresAreErrorRows is the end-to-end guard for task eq2:
+// a failed open_by_handle_at used to be recycled in the exit handler, so it
+// produced no row and no error count at all. The scenario fails the call with
+// EBADF (mount_fd -1) and ESTALE (the file was unlinked after its handle was
+// taken); each failure must be an error row named after the thread's
+// preceding name_to_handle_at path, with no descriptor.
+func TestOpenByHandleAtFailuresAreErrorRows(t *testing.T) {
+	rows, _ := runParquetScenarioRows(t, "open-by-handle-at-fail", defaultDuration, nil, nil)
+	AssertRowsPresent(t, rows, []ExpectedRow{
+		{
+			FileContains: "handle-ebadf.txt",
+			Syscall:      "open_by_handle_at",
+			Comm:         "ioworkload",
+			RetVal:       ptrTo(-int64(syscall.EBADF)),
+			IsError:      ptrTo(true),
+			FD:           ptrTo(int32(-1)),
+		},
+		{
+			FileContains: "handle-estale-",
+			Syscall:      "open_by_handle_at",
+			Comm:         "ioworkload",
+			RetVal:       ptrTo(-int64(syscall.ESTALE)),
+			IsError:      ptrTo(true),
+			FD:           ptrTo(int32(-1)),
+		},
+	})
+}
+
 func TestOpenEnoent(t *testing.T) {
 	runParquetErrorScenario(t, "open-enoent", syscall.ENOENT, ExpectedRow{
 		FileContains: "enoentfile.txt",

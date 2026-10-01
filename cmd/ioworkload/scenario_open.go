@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -311,6 +312,82 @@ func openByHandleAt() error {
 		return fmt.Errorf("open_by_handle_at: %w", err)
 	}
 	return syscall.Close(fd2)
+}
+
+// openByHandleAtFailures makes open_by_handle_at fail in two ways, five times
+// each so a single dropped event cannot fail the test: EBADF (a valid handle
+// with mount_fd -1, which the kernel rejects before its permission check) and
+// ESTALE (the handle of a file unlinked before it is opened). Each failing
+// call follows its own name_to_handle_at on the same thread, so ior can name
+// the failed row after that pathname. Requires root (CAP_DAC_READ_SEARCH) for
+// the name_to_handle_at/open_by_handle_at pair to get as far as ESTALE.
+func openByHandleAtFailures() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	dir, cleanup, err := makeTempDir("open-by-handle-at-fail")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	for i := 0; i < 5; i++ {
+		if err := openByHandleAtEbadf(dir); err != nil {
+			return err
+		}
+		if err := openByHandleAtEstale(dir, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// openByHandleAtEbadf takes the handle of handle-ebadf.txt and opens it with
+// mount_fd -1, which must fail with EBADF.
+func openByHandleAtEbadf(dir string) error {
+	if err := createEmptyFile(filepath.Join(dir, "handle-ebadf.txt")); err != nil {
+		return err
+	}
+	handle, mountFD, err := nameToHandleAt(dir, "handle-ebadf.txt")
+	if err != nil {
+		return fmt.Errorf("name_to_handle_at: %w", err)
+	}
+	defer syscall.Close(mountFD)
+	return expectOpenByHandleAtErrno(-1, handle, syscall.EBADF)
+}
+
+// openByHandleAtEstale takes the handle of a fresh file, unlinks the file and
+// opens the handle, which must fail with ESTALE. Every round uses a new name
+// so the handle never refers to a file that exists again.
+func openByHandleAtEstale(dir string, round int) error {
+	name := fmt.Sprintf("handle-estale-%d.txt", round)
+	path := filepath.Join(dir, name)
+	if err := createEmptyFile(path); err != nil {
+		return err
+	}
+	handle, mountFD, err := nameToHandleAt(dir, name)
+	if err != nil {
+		return fmt.Errorf("name_to_handle_at: %w", err)
+	}
+	defer syscall.Close(mountFD)
+	if err := syscall.Unlink(path); err != nil {
+		return fmt.Errorf("unlink: %w", err)
+	}
+	return expectOpenByHandleAtErrno(mountFD, handle, syscall.ESTALE)
+}
+
+// expectOpenByHandleAtErrno calls open_by_handle_at and reports an error unless
+// it failed with want (a successful call's fd is closed first).
+func expectOpenByHandleAtErrno(mountFD int, handle []byte, want syscall.Errno) error {
+	fd, err := openByHandleAtSyscall(mountFD, handle, syscall.O_RDONLY)
+	if err == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("open_by_handle_at succeeded, want %v", want)
+	}
+	if !errors.Is(err, want) {
+		return fmt.Errorf("open_by_handle_at: %w, want %v", err, want)
+	}
+	return nil
 }
 
 // fileHandle matches the kernel's struct file_handle layout.

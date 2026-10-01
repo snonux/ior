@@ -1598,7 +1598,18 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     the full pair filter at all.
   - The path kinds and `open_by_handle_at` run the full `finishPairForTid`; for
     `open_by_handle_at` that is the *only* filtering it gets, because its raw
-    enter filter is `nil` (see `rawRuntimeEvents`).
+    enter filter is `nil` (see `rawRuntimeEvents`). A *failed*
+    `open_by_handle_at` (EPERM, EBADF, ESTALE, ...) reaches that checkpoint
+    too, as a descriptor-less pathname row like a failed open: named after
+    the thread's stashed `name_to_handle_at` path (consumed; there is no fd to
+    verify it against, so with several pending handles it may be another
+    handle's path) or empty without one (`failedHandleFile`,
+    `internal/eventloop_handle.go`). It used to be recycled in
+    `handleOpenByHandleAtExit`, so failed calls produced no row, no error and
+    no "syscalls after filter" count (task eq2). Pinned by
+    `internal/eventloop_handle_fail_test.go` and the integration test
+    `TestOpenByHandleAtFailuresAreErrorRows` (scenario
+    `open-by-handle-at-fail`).
   - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
     (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
     checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and

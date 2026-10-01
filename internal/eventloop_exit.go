@@ -624,30 +624,34 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		return false
 	}
 
-	fd, ok := fdFromRet(retEvent.Ret)
-	if !ok {
-		e.pendingHandleState().delete(tid)
-		ep.Recycle()
-		return false
+	if fd, ok := fdFromRet(retEvent.Ret); ok {
+		// The stash is only the thread's LAST name_to_handle_at path; it is
+		// used only if the returned descriptor is not contradicting it (see
+		// openedHandleFile), otherwise the row is named from procfs.
+		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
+		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
+		ep.File = fdFile
+	} else {
+		// A failed call (EPERM, EBADF, ESTALE, ...) is still a row, exactly
+		// like a failed open in handleOpenExit: it used to be recycled here,
+		// so it never reached any sink and was never counted as an error or
+		// in "syscalls after filter".
+		ep.File = e.failedHandleFile(tid)
 	}
-
-	// The stash is only the thread's LAST name_to_handle_at path; it is used
-	// only if the returned descriptor is not contradicting it (see
-	// openedHandleFile), otherwise the row is named from procfs.
-	fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
-	e.fdState().set(fd, openByHandleEv.Pid, fdFile)
-	ep.File = fdFile
 	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
 	// without a checkpoint here NO filter dimension - comm included - was ever
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
 	// emit rows carrying a different comm. The full pair filter is the right
-	// checkpoint: ep.File is in both branches exactly the name the row reports
-	// (the verified name_to_handle_at pathname, or the /proc/<pid>/fd readlink),
-	// so filter and displayed value can never disagree, and unlike the rename
-	// kinds there is no raw match to contradict. Applying -path to a
+	// checkpoint: ep.File is in every branch exactly the name the row reports
+	// (the verified name_to_handle_at pathname, the /proc/<pid>/fd readlink,
+	// or for a failed call the stashed pathname or an empty one), so filter
+	// and displayed value can never disagree, and unlike the rename kinds
+	// there is no raw match to contradict. Applying -path to a
 	// procfs-resolved name is also not new: every fd-based kind already does
 	// that (handleFdExit -> fdTracker.resolve -> file.NewFdWithPid, then
-	// finishPair).
+	// finishPair). A failed row carries no descriptor (FD() is -1, as for a
+	// failed open's pathname), so -path matches it only through the stash and
+	// -fd never matches it.
 	return e.finishPairForTid(ep, tid)
 }
 

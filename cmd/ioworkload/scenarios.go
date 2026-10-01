@@ -13,6 +13,7 @@ var scenarios = map[string]func() error{
 	"open-openat2":                  openOpenat2,
 	"open-creat":                    openCreat,
 	"open-by-handle-at":             openByHandleAt,
+	"open-by-handle-at-fail":        openByHandleAtFailures,
 	"open-duration-gap":             openDurationGap,
 	"open-enoent":                   openEnoent,
 	"open-rdonly-write":             openRdonlyWrite,

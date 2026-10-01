@@ -179,6 +179,26 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 	return file.NewFd(fd, pathname, eventFlags)
 }
 
+// failedHandleFile returns the file a FAILED open_by_handle_at row reports:
+// a descriptor-less pathname, the same shape handleOpenExit gives a failed
+// open, so the row is emitted, filtered and counted like any other error row.
+//
+// The name is the thread's stashed name_to_handle_at path, or empty when there
+// is none. There is no descriptor to verify it against (openedHandleFile's
+// procfs check needs one), so this is the same unverifiable case as a closed
+// descriptor: the stash is the best available hypothesis - right for the usual
+// one-handle-then-open sequence and for ESTALE after the file was deleted, but
+// possibly another handle's path when the thread took several (the events carry
+// no handle bytes to tell them apart). The stash is consumed, as it was when
+// failed calls were dropped: a thread that retries after a failure gets its
+// successful row named from procfs instead, which describes the real file.
+func (e *eventLoop) failedHandleFile(tid uint32) file.File {
+	handles := e.pendingHandleState()
+	pathname, _ := handles.peek(tid)
+	handles.delete(tid)
+	return file.NewPathname([]byte(pathname))
+}
+
 // procFdFile names the descriptor from procfs. A probe that already holds the
 // link text supplies it (one readlink decides both the verdict and the name);
 // with no probe, or a probe whose readlink failed, procfs is asked afresh and
