@@ -28,11 +28,14 @@ func (b *emitterBindings) RowEmitter() runtime.RowEmitter { return b.emitter }
 // TestWireRuntimeBindingsAdoptsTheSessionEmitter: bindings that offer the
 // single-gate emitter get it wired - but only next to their own stream
 // buffer, because the emitter pushes into that buffer. Without one the fresh
-// local buffer keeps receiving the rows through the plain fallback.
+// local buffer keeps receiving the rows through the plain fallback. The
+// recorder and filter-epoch provider are copied into the runtime only for that
+// fallback: with an emitter the session gate reads them from the live
+// bindings, so the runtime must not hold a second source of truth.
 func TestWireRuntimeBindingsAdoptsTheSessionEmitter(t *testing.T) {
 	emitter := &countingRowEmitter{}
 	withSink := &emitterBindings{
-		fakeRuntimeBindings: fakeRuntimeBindings{sink: &fakeEventSink{}, seq: &fakeSequencer{}},
+		fakeRuntimeBindings: fakeRuntimeBindings{sink: &fakeEventSink{}, seq: &fakeSequencer{}, rec: &fakeRowRecorder{}, epoch: 3},
 		emitter:             emitter,
 	}
 	rt := &tuiRuntime{snapSource: fakeSnapshotSource{}}
@@ -42,14 +45,20 @@ func TestWireRuntimeBindingsAdoptsTheSessionEmitter(t *testing.T) {
 	if rt.emitter != runtime.RowEmitter(emitter) {
 		t.Fatal("bindings offering a RowEmitter must have it wired")
 	}
+	if rt.recorder != nil || rt.filterEpochFn != nil {
+		t.Fatal("with an emitter the runtime must not copy the recorder or epoch provider: the gate reads the live bindings")
+	}
 
-	noSink := &emitterBindings{emitter: emitter}
+	noSink := &emitterBindings{fakeRuntimeBindings: fakeRuntimeBindings{rec: &fakeRowRecorder{}, epoch: 3}, emitter: emitter}
 	rt = &tuiRuntime{snapSource: fakeSnapshotSource{}}
 	if err := wireRuntimeBindings(rt, noSink); err != nil {
 		t.Fatalf("wireRuntimeBindings: %v", err)
 	}
 	if rt.emitter != nil {
 		t.Fatal("an emitter must not be wired when the bindings have no stream buffer to push into")
+	}
+	if rt.recorder == nil || rt.currentFilterEpoch() != 3 {
+		t.Fatal("the plain fallback needs the runtime's own recorder and epoch provider")
 	}
 
 	plain := &fakeRuntimeBindings{sink: &fakeEventSink{}}

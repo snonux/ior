@@ -318,11 +318,13 @@ func (k sessionRecorder) RecordWarning(row streamrow.Row, filterEpoch uint64, de
 //
 // The recorder and stream buffer are read from the bindings under the lock,
 // like every gated emit, so a swapped-in buffer is honoured. The filter epoch
-// is read inside the gate too: a restart-style filter change retires the
-// session before it advances the epoch, so a row that passes the gate cannot
-// be stamped with an epoch advanced after its session ended (an in-place
-// live-filter swap advances it while the session runs, and later rows carry
-// the new epoch from then on, as before).
+// is read inside the gate too, as late as possible: the stamp then reflects
+// the epoch current at delivery, not at the moment the caller started waiting
+// for the gate (an in-place live-filter swap advances the epoch while the
+// session runs, and rows delivered after it carry the new epoch). This is
+// freshness, not a safety property: an epoch read before the gate could only
+// be older, and a restart-style filter change retires the session (which this
+// gate then drops) before it advances the epoch either way.
 //
 // The row is a value on purpose: through an interface a pointer would make
 // the caller's per-event row escape to the heap (see runtime.RowEmitter).

@@ -195,7 +195,9 @@ type tuiRuntime struct {
 	// recorder stays behind the narrow runtime.RowRecorder seam: the core
 	// only records rows and claims failures to report, so parquet's wider
 	// surface (start/stop/status, the TUI's concern) cannot ripple into this
-	// wiring.
+	// wiring. It is set only when there is no emitter: the emitter reads the
+	// recorder from the live bindings itself, so the plain fallback is the
+	// sole reader of this field.
 	recorder runtime.RowRecorder
 	// emitter, when non-nil, is the session's single-gate event output (push,
 	// record and recorder warning behind one session gate); the TUI's session
@@ -204,8 +206,9 @@ type tuiRuntime struct {
 	emitter runtime.RowEmitter
 	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
 	// bindings at row-stamp time, so in-place filter swaps advance the epoch
-	// recorded in parquet rows without a trace restart. Nil (headless modes
-	// without TUI bindings) stamps epoch 0.
+	// recorded in parquet rows without a trace restart. Like recorder, it is
+	// set only for the plain fallback (an emitter reads the epoch from the
+	// live bindings). Nil (headless modes without TUI bindings) stamps epoch 0.
 	filterEpochFn func() uint64
 }
 
@@ -271,11 +274,20 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
 		rt.streamSeq = persistentSeq
 	}
-	rt.recorder = bindings.Recorder()
-	// Capture the epoch provider, not the value: the TUI advances the epoch on
-	// every filter change (including in-place swaps that never re-wire the
-	// runtime), and recorded rows must stamp the epoch current at record time.
-	rt.filterEpochFn = bindings.FilterEpoch
+	// Two owners of the row output, never both: with an emitter, the session
+	// gate reads the recorder and the filter epoch from the live bindings on
+	// every event, so those bindings are the single source of truth and the
+	// runtime keeps no copy. Only the plain fallback (plainRowEmitter) has no
+	// gate to read them through and uses the runtime's own recorder and epoch
+	// provider, captured here.
+	if rt.emitter == nil {
+		rt.recorder = bindings.Recorder()
+		// Capture the epoch provider, not the value: the TUI advances the
+		// epoch on every filter change (including in-place swaps that never
+		// re-wire the runtime), and recorded rows must stamp the epoch
+		// current at record time.
+		rt.filterEpochFn = bindings.FilterEpoch
+	}
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
 	bindings.SetDashboardSnapshotSource(rt.snapSource)

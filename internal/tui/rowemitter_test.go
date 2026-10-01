@@ -212,6 +212,39 @@ func TestEndSessionWaitsForAnInFlightEmit(t *testing.T) {
 	}
 }
 
+// TestSessionEmitRowStampsTheEpochReadInsideTheGate pins where EmitRow reads
+// the filter epoch: inside the gate, after the lock is acquired, so the stamp
+// is as fresh as the delivery itself. The emit is parked on the gate (the
+// test holds the write lock), the epoch advances while it waits, and the
+// recorded row must carry the advanced epoch. An implementation that read the
+// epoch before taking the read lock would stamp the older value. (The older
+// stamp would not be wrong, merely staler; this test guards the freshness.)
+func TestSessionEmitRowStampsTheEpochReadInsideTheGate(t *testing.T) {
+	r := newRuntimeBindings()
+	recorder := &countingRecorder{RecordingController: parquet.NewRecorder(parquet.RecorderConfig{})}
+	r.recorder = recorder
+	emitter := r.beginSession().RowEmitter()
+
+	r.mu.Lock() // park the emit on the gate
+	emitted := make(chan struct{})
+	go func() {
+		defer close(emitted)
+		emitRows(emitter, 1)
+	}()
+	select {
+	case <-emitted:
+		t.Fatal("EmitRow returned while the gate was write-locked")
+	case <-time.After(50 * time.Millisecond): // long enough to reach the gate (and any early epoch read)
+	}
+	r.advanceFilterEpoch()
+	r.mu.Unlock()
+	<-emitted
+
+	if recorder.rows != 1 || recorder.epochs[0] != 1 {
+		t.Fatalf("recorder got %d rows at epochs %v, want 1 row at epoch 1 (the epoch current inside the gate)", recorder.rows, recorder.epochs)
+	}
+}
+
 // TestSessionEmitRowRacesWithRetirement hammers the gate from several
 // emitters while the session is retired and restarted: whatever interleaving
 // the scheduler picks, once end returns the stream no longer grows (run it
