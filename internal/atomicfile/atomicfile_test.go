@@ -298,12 +298,108 @@ func TestWriteFileWriteErrorPublishesNothing(t *testing.T) {
 	}
 }
 
+// TestWriteFileMissingDirReportsCreateError: a real (unhooked) create failure
+// names the final path and the bare errno, not the temp name the
+// *fs.PathError carried.
 func TestWriteFileMissingDirReportsCreateError(t *testing.T) {
-	_, err := WriteFile(filepath.Join(t.TempDir(), "nope", "out.csv"), ".csv",
+	final := filepath.Join(t.TempDir(), "nope", "out.csv")
+	_, err := WriteFile(final, ".csv",
 		func(io.Writer) error { t.Error("write callback ran without a file"); return nil })
-	if err == nil || !strings.Contains(err.Error(), "create temp file") {
-		t.Fatalf("WriteFile error = %v, want create temp file context", err)
+	want := "create temp file for " + final + ": " + syscall.ENOENT.Error()
+	if err == nil || err.Error() != want || !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("WriteFile error = %v, want %q wrapping ENOENT", err, want)
 	}
+}
+
+// swapHook replaces a package-level fault-injection seam for one test and
+// restores it afterwards. Tests using it must not call t.Parallel.
+func swapHook[T any](t *testing.T, hook *T, fake T) {
+	t.Helper()
+	orig := *hook
+	*hook = fake
+	t.Cleanup(func() { *hook = orig })
+}
+
+// assertCleanFailure pins what every failed write must look like: exactly the
+// readable message want (final name only, bare errno; no ior-<hex>.tmp), the
+// errno reachable through errors.Is, no temp file left in dir and the existing
+// destination final untouched (still "old" and the only entry).
+func assertCleanFailure(t *testing.T, err error, want string, errno syscall.Errno, dir, final string) {
+	t.Helper()
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if !errors.Is(err, errno) {
+		t.Errorf("error %v does not wrap %v", err, errno)
+	}
+	if got := readFile(t, final); got != "old" {
+		t.Errorf("destination holds %q, want it unchanged (%q)", got, "old")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only the untouched destination", entries)
+	}
+}
+
+// writers are the two public entry points that share writeThenPublish: the
+// generated-name WriteFile and the typed-name ReplaceFile.
+var writers = map[string]func(final string) error{
+	"WriteFile": func(final string) error {
+		_, err := WriteFile(final, ".csv", func(w io.Writer) error { _, err := io.WriteString(w, "new"); return err })
+		return err
+	},
+	"ReplaceFile": func(final string) error {
+		_, err := ReplaceFile(final, func(w io.Writer) error { _, err := io.WriteString(w, "new"); return err })
+		return err
+	},
+}
+
+// TestWriteThenPublishCreateAndCloseErrors drives the create and close error
+// branches of writeThenPublish through the seams, with the *fs.PathError (temp
+// name included) the real calls return: a full disk when the temp file is
+// created, and a delayed write error (quota on NFS) that only close reports.
+// Both must report the final name with the bare errno, remove the temp file
+// and leave the existing destination alone.
+func TestWriteThenPublishCreateAndCloseErrors(t *testing.T) {
+	for name, write := range writers {
+		t.Run(name+"/create", func(t *testing.T) {
+			swapHook(t, &openTempFile, func(path string, _ int, _ fs.FileMode) (*os.File, error) {
+				return nil, &fs.PathError{Op: "open", Path: path, Err: syscall.ENOSPC}
+			})
+			dir := t.TempDir()
+			final := filepath.Join(dir, "out.csv")
+			writeFile(t, final, "old")
+			assertCleanFailure(t, write(final),
+				"create temp file for "+final+": "+syscall.ENOSPC.Error(), syscall.ENOSPC, dir, final)
+		})
+		t.Run(name+"/close", func(t *testing.T) {
+			swapHook(t, &closeTempFile, func(f *os.File) error {
+				if err := f.Close(); err != nil {
+					t.Fatalf("real close: %v", err)
+				}
+				return &fs.PathError{Op: "close", Path: f.Name(), Err: syscall.EDQUOT}
+			})
+			dir := t.TempDir()
+			final := filepath.Join(dir, "out.csv")
+			writeFile(t, final, "old")
+			assertCleanFailure(t, write(final),
+				"finish writing "+final+": "+syscall.EDQUOT.Error(), syscall.EDQUOT, dir, final)
+		})
+	}
+}
+
+// TestReplaceFileChmodErrorNamesFinal drives inheritMode's chmod failure (a
+// filesystem refusing the mode copy onto the temp file): publishReplace must
+// strip the *fs.PathError naming the temp file to the errno, name final once,
+// remove the temp file and leave the replaced-to-be file as it was.
+func TestReplaceFileChmodErrorNamesFinal(t *testing.T) {
+	swapHook(t, &chmodTempFile, func(path string, _ fs.FileMode) error {
+		return &fs.PathError{Op: "chmod", Path: path, Err: syscall.EPERM}
+	})
+	dir := t.TempDir()
+	final := filepath.Join(dir, "chosen.csv")
+	writeFile(t, final, "old")
+	assertCleanFailure(t, writers["ReplaceFile"](final),
+		"publish "+final+": "+syscall.EPERM.Error(), syscall.EPERM, dir, final)
 }
 
 // TestPublishErrorsDoNotNameTheTempFile pins that a failure at the very end

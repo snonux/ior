@@ -70,6 +70,19 @@ const (
 	tempSuffix = ".tmp"
 )
 
+// Fault-injection seams for the temp file's create, close and chmod. They are
+// the real os calls; only tests replace them (restoring them via t.Cleanup),
+// because a full disk at create time, a delayed write error surfacing at
+// close (NFS, quota) or a chmod refused by the filesystem cannot be produced
+// deterministically on the test host, and those error branches must still be
+// pinned to report the final name with the bare errno. Tests that swap them
+// must not run in parallel.
+var (
+	openTempFile  = os.OpenFile
+	closeTempFile = (*os.File).Close
+	chmodTempFile = os.Chmod
+)
+
 // CreateTemp creates a new, uniquely named temp file in the directory of
 // final (so a later rename stays on one filesystem and is atomic) and returns
 // it open for writing. The name is "ior-<16 hex digits>.tmp" - deliberately
@@ -88,7 +101,7 @@ func CreateTemp(final string) (*os.File, error) {
 	var lastErr error
 	for range createAttempts {
 		name := filepath.Join(dir, fmt.Sprintf("%s%016x%s", tempPrefix, rand.Uint64(), tempSuffix))
-		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
+		f, err := openTempFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 		if err == nil {
 			return f, nil
 		}
@@ -247,7 +260,9 @@ func inheritMode(tmp, final string, chown chownFunc) error {
 		// setuid/setgid concerns bits this code never sets.
 		_ = chown(tmp, int(st.Uid), int(st.Gid))
 	}
-	return os.Chmod(tmp, info.Mode().Perm())
+	// The error is the raw *fs.PathError naming tmp; publishReplace strips it
+	// to the errno and names final instead.
+	return chmodTempFile(tmp, info.Mode().Perm())
 }
 
 // renameFunc is the signature of a renameat2(RENAME_NOREPLACE) call; it is a
@@ -328,7 +343,10 @@ func ReplaceFile(final string, write func(io.Writer) error) (string, error) {
 }
 
 // writeThenPublish runs the create/write/close/publish sequence shared by WriteFile
-// and ReplaceFile, removing the temp file on every failure.
+// and ReplaceFile, removing the temp file on every failure. Its own create and
+// close errors name final and the bare errno (errnoOf), never the internal
+// temp name the *fs.PathError carries; the errno stays reachable through
+// errors.Is. Pinned by TestWriteThenPublishCreateAndCloseErrors.
 func writeThenPublish(final string, write func(io.Writer) error, publishTmp func(tmp string) (string, error)) (string, error) {
 	f, err := CreateTemp(final)
 	if err != nil {
@@ -338,7 +356,7 @@ func writeThenPublish(final string, write func(io.Writer) error, publishTmp func
 	if err := write(f); err != nil {
 		return "", errors.Join(err, closeAndRemove(f, tmp))
 	}
-	if err := f.Close(); err != nil {
+	if err := closeTempFile(f); err != nil {
 		return "", errors.Join(fmt.Errorf("finish writing %s: %w", final, errnoOf(err)), os.Remove(tmp))
 	}
 	published, err := publishTmp(tmp)
