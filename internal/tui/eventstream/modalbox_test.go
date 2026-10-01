@@ -143,8 +143,9 @@ var modalInputValues = []string{
 // assertModalCursor checks that the modal out shows the cursor over value's
 // rune at pos, or, at the end, over a blank right after value's last rune:
 // the cursor, and the end of the typed text while typing, are inside the box.
-// Mid-value the input scrolls minimally (the rune before the cursor may be
-// scrolled off at the left edge), so only the rune under it is checked; so
+// Mid-value the input scrolls minimally (fitModalInput; walking left, the
+// cursor stops at the window's left edge, so the rune before it may be
+// scrolled off), so only the rune under it is checked; so
 // it is when room, the input's cells in the box, cannot hold the last rune
 // and the cursor (a wide rune in a two-cell box).
 func assertModalCursor(t *testing.T, label, out string, value []rune, pos, room int) {

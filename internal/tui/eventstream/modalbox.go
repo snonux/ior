@@ -7,6 +7,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // modalForm is the content of a stream input modal (search, export): a title,
@@ -48,39 +50,93 @@ func modalInputWidth(boxWidth, reserved int) int {
 	return max(boxWidth-modalBoxChrome-reserved-1, 1)
 }
 
-// fitModalInput sets ti to width cells and re-anchors its scroll window
-// around the cursor, keeping its value and cursor position.
+// fitModalInput sets ti to width cells and scrolls its window to start at
+// rune start, or as little away from it as keeps the cursor drawn, keeping
+// ti's value and cursor position. It returns the start drawn, which the
+// modal keeps for its next call: the window the user last saw.
 //
-// textinput keeps the window of the value it draws (and so where the cursor
-// sits in it) in private offsets that its handleOverflow recomputes only
-// when the cursor lies outside the window; SetWidth only stores the width.
-// Two cases left a window the box cannot draw (task ls2): a window left
-// from a wider width, and an insert, paste or delete inside the window,
-// after which the window is not recomputed even though its runes changed.
-// With two-cell runes that window can outgrow width plus the cursor cell,
-// and renderModalBox, which cuts every line to the box, cut the cursor off
-// (e.g. "/検f" with an empty cursor at 10 columns); with ASCII, moving right
-// past the window could leave the cursor over a blank mid-value.
+// textinput keeps its window in private offsets that its handleOverflow
+// recomputes only when the cursor lies outside the window; SetWidth only
+// stores the width. That left windows the box cannot draw (task ls2): one
+// from a wider width, and one whose runes an insert, paste or delete inside
+// it changed, so with two-cell runes it outgrew the box and renderModalBox
+// cut the cursor off ("/検f" with an empty cursor at 10 columns), and moving
+// right past its edge put the cursor over a blank mid-value (textinput then
+// ends the window at the cursor, not past it). Re-anchoring on every render
+// around the cursor alone fixed that but jumped: a cursor left of the value's
+// last screenful pinned the window's start to it, hiding what was just typed
+// mid-value. So the modal remembers the window start and modalWindowStart
+// keeps it unless the cursor would not be drawn over its rune.
 //
-// So the window is recomputed on every call: the cursor is moved to the end
-// (always outside or on the window's right edge, so the window is rebuilt
-// ending at the value's end) and back to its position (rebuilt starting at
-// the cursor if it lies left of that window). Either way the window then
-// fits width, plus the cursor cell modalInputWidth reserves, and holds the
-// cursor. The cost is two linear passes over the value per call, nothing
-// next to rendering the box. The window thus always either ends at the
-// value's end or starts at the cursor, rather than scrolling minimally.
+// The window is applied through textinput's public cursor moves: the cursor
+// to the end rebuilds the window ending at the value's end (the cursor is on
+// or past its right edge), to start (left of that window unless start is its
+// start) rebuilds it starting there, and back to the cursor position, inside
+// that window, leaves it. The cost is a few linear passes over the value per
+// call, nothing next to rendering the box.
 //
-// The modals keep their stored width in step with the view (Resize, called
-// by the stream Model on every size change and render) so Update scrolls
-// with the real width; their View calls it as well, on a copy, so the
-// window drawn is re-anchored after every edit, and for a caller that
-// skipped Resize.
-func fitModalInput(ti *textinput.Model, width int) {
+// The modals call it after every Update, from Resize (called by the stream
+// Model on every size change and render) and from View on a copy, for a
+// caller that skipped Resize; with the remembered start the three agree.
+func fitModalInput(ti *textinput.Model, start, width int) int {
 	ti.SetWidth(width)
-	pos := ti.Position()
+	value, pos := []rune(ti.Value()), ti.Position()
+	start = modalWindowStart(value, pos, start, width)
 	ti.CursorEnd()
+	ti.SetCursor(start)
 	ti.SetCursor(pos)
+	return start
+}
+
+// modalWindowStart is the rune index the input window of a width-cell
+// textinput holding value, the cursor at pos, starts at, given the window
+// started at start before: start itself while the window from there still
+// draws the cursor over its rune, else the nearest start that does. The
+// window moves left only to the cursor, when the cursor left it, and right
+// only as far as the rune under the cursor needs to come in; it never starts
+// past the tail window (the last screenful, which ends at the value's end and
+// leaves room for the cursor past it). A value that fits is drawn whole.
+func modalWindowStart(value []rune, pos, start, width int) int {
+	if width <= 0 || uniseg.StringWidth(string(value)) <= width {
+		return 0
+	}
+	tail := tailWindowStart(value, width)
+	start = max(min(start, pos, tail), 0)
+	for start < tail && pos >= headWindowEnd(value, start, width) {
+		start++
+	}
+	return start
+}
+
+// headWindowEnd is where textinput ends a window it starts at start (its
+// handleOverflow for a cursor left of the window): runes are taken while
+// their cells stay within width plus one, the cursor cell modalInputWidth
+// reserves.
+func headWindowEnd(value []rune, start, width int) int {
+	cells, end := 0, start
+	for end < len(value) && cells <= width {
+		cells += runewidth.RuneWidth(value[end])
+		if cells <= width+1 {
+			end++
+		}
+	}
+	return end
+}
+
+// tailWindowStart is where textinput starts the window it ends at the
+// value's end (its handleOverflow for a cursor right of the window): runes
+// are taken back from the end while their cells stay within width, leaving
+// the cursor cell past the end; as in textinput, the first rune is never
+// counted (the value is wider than width when this is asked).
+func tailWindowStart(value []rune, width int) int {
+	cells, i := 0, len(value)-1
+	for i > 0 && cells < width {
+		cells += runewidth.RuneWidth(value[i])
+		if cells <= width {
+			i--
+		}
+	}
+	return i + 1
 }
 
 // renderModal draws form as a bordered box centred in a width x height view.

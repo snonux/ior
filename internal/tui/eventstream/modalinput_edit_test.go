@@ -120,10 +120,12 @@ func assertModalEditCursor(t *testing.T, label string, modal editableModal, out 
 // inside the window left a window that, with two-cell runes, outgrew the
 // box (renderModalBox then cut the cursor off: "/検f" with an empty cursor
 // at 10 columns) and, after moving right past the window, drew the cursor
-// over a blank mid-value. fitModalInput re-anchors the window on every
-// render. Seeded random edit sequences, the input checked after every step,
-// at widths from the narrowest that holds a rune and the cursor (8 export,
-// 9 search) to 80 columns; the third modal is the search left unsized, which
+// over a blank mid-value. fitModalInput keeps the window drawn when it can
+// and moves it as little as the cursor needs; after typing a rune in a sized
+// modal that rune stays drawn left of the cursor (assertTypedRuneDrawn).
+// Seeded random edit sequences, the input checked after every step, at
+// widths from the narrowest that holds a rune and the cursor (8 export, 9
+// search) to 80 columns; the third modal is the search left unsized, which
 // View alone fits. A resize must keep the value and the cursor position.
 func TestStreamModalInputSurvivesMidValueEdits(t *testing.T) {
 	const seeds, steps = 45, 120
@@ -169,5 +171,24 @@ func runModalEdits(t *testing.T, label string, seed int, alphabet []rune, steps 
 			t.Fatalf("%s: resize changed %q at %d to %q at %d", stepLabel, string(value), pos, string(gotValue), gotPos)
 		}
 		assertModalEditCursor(t, stepLabel, modal, modal.view(width, 12), width)
+		if sized && strings.HasPrefix(did, "type") {
+			assertTypedRuneDrawn(t, stepLabel, modal, width)
+		}
+	}
+}
+
+// assertTypedRuneDrawn checks that the rune just typed into modal, right
+// before the cursor, is drawn: the window keeps the text left of the cursor
+// rather than starting at it, unless it is too narrow to hold the typed
+// rune and the cursor (typedRuneFits).
+func assertTypedRuneDrawn(t *testing.T, label string, modal editableModal, width int) {
+	t.Helper()
+	m := scrollModal{editableModal: modal, room: exportInputWidth(width) + 1}
+	if _, ok := modal.(searchInput); ok {
+		m.prefix, m.room = searchPrefixWidth, searchInputWidth(width)+1
+	}
+	_, pos := modal.state()
+	if start := m.windowStart(t, label, width); start > pos-1 && typedRuneFits(m, pos-1) {
+		t.Fatalf("%s: the typed rune at %d is scrolled off, the window starts at %d", label, pos-1, start)
 	}
 }

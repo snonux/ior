@@ -626,10 +626,12 @@ func (m *Model) View(width, height int) string {
 	}
 	// The footer gets only the rows the table leaves of height: on a short
 	// terminal the table (never under one event row) takes them all, and the
-	// footer lines are dropped, the status message first, instead of making
-	// the view taller than its budget. The dashboard can then size its "too
-	// small" threshold by the table alone, so pausing or a status message
-	// never swaps the table for that notice.
+	// footer lines are dropped, Row/Sel first and the status message last
+	// (a single spare row goes to the message, appendStreamFooter, and the
+	// filter-stack line yields its row to it too, fittingFilterStack),
+	// instead of making the view taller than its budget. The dashboard can
+	// then size its "too small" threshold by the table alone, so pausing or a
+	// status message never swaps the table for that notice.
 	return m.appendStreamFooter(base, start, height-lipgloss.Height(base))
 }
 

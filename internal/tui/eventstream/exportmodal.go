@@ -13,7 +13,10 @@ import (
 type ExportModal struct {
 	visible   bool
 	textInput textinput.Model
-	err       string
+	// inputStart is the rune the input's drawn window starts at, kept so
+	// the window stays put while the cursor is drawn in it (fitModalInput).
+	inputStart int
+	err        string
 }
 
 // NewExportModal constructs a dark-mode export modal with an empty input.
@@ -44,6 +47,8 @@ func (m ExportModal) Open(defaultName string) ExportModal {
 	m.err = ""
 	m.textInput.SetValue(defaultName)
 	m.textInput.CursorEnd()
+	// A new value is drawn from its last screenful, the cursor at its end.
+	m.inputStart = fitModalInput(&m.textInput, len([]rune(m.textInput.Value())), m.textInput.Width())
 	m.textInput.Focus()
 	return m
 }
@@ -103,6 +108,9 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	_ = cmd
+	// Keep the window the user saw unless the edit moved the cursor out of
+	// it (fitModalInput), at the width the last Resize stored.
+	m.inputStart = fitModalInput(&m.textInput, m.inputStart, m.textInput.Width())
 	if m.textInput.Value() != before {
 		m.err = ""
 	}
@@ -124,7 +132,7 @@ func exportInputWidth(width int) int {
 // render.
 func (m ExportModal) Resize(width int) ExportModal {
 	if width > 0 {
-		fitModalInput(&m.textInput, exportInputWidth(width))
+		m.inputStart = fitModalInput(&m.textInput, m.inputStart, exportInputWidth(width))
 	}
 	return m
 }
@@ -141,10 +149,10 @@ func (m ExportModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	// m is a copy: the input's scroll window is re-anchored for this render
-	// only (an edit inside the window leaves it stale, and a caller may have
-	// skipped Resize), so the cursor and the rune under it stay visible.
-	fitModalInput(&m.textInput, exportInputWidth(width))
+	// m is a copy: the input's window is fitted to this width for this
+	// render only, for a caller that skipped Resize; after Update and Resize
+	// it is already the remembered one, so this keeps it.
+	fitModalInput(&m.textInput, m.inputStart, exportInputWidth(width))
 	form := modalForm{
 		title: "Export Stream CSV",
 		label: "Filename:",
