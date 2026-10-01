@@ -118,9 +118,26 @@ func publishTestFlamesRuntime(
 	if publisher == nil {
 		return
 	}
-	publisher.SetDashboardSnapshotSource(engine)
+	publisher.SetDashboardSnapshotSource(reseedingEngine{engine})
 	publisher.SetEventStreamSource(streamBuf)
 	publisher.SetLiveTrie(liveTrie)
+}
+
+// reseedingEngine is the dashboard's stats source in the test-flames modes: a
+// Reset (the refresh key, the auto-reset cycle, a probe toggle) clears the
+// engine like it does in a real trace, and then seeds the synthetic data again,
+// because nothing else ever feeds this engine. Without it the Syscalls, Files
+// and Processes tabs showed "no data" from the first reset on (task xs2). The
+// reseed uses the same seed as the start, so the tabs look as they did at the
+// beginning of the session.
+type reseedingEngine struct {
+	*statsengine.Engine
+}
+
+// Reset clears the engine and seeds it with the synthetic test data again.
+func (r reseedingEngine) Reset() {
+	r.Engine.Reset()
+	statsengine.SeedTestStatsData(r.Engine)
 }
 
 // buildTestFlamesRuntime allocates a stats engine, stream buffer, and seeded
