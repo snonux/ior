@@ -219,6 +219,14 @@ func TestWrapErrorTextKeepsGraphemesWhole(t *testing.T) {
 		// The documented exception: a space+mark cluster at a word break loses
 		// its space like any break, the zero-width mark leads the next line.
 		{"x \u0301y", 2, "x\n\u0301y"},
+		// That orphan mark before a keycap: ansi.Truncate cuts mark+keycap as
+		// one cell, StringWidth measures 2, so TruncateRight at width 1 keeps
+		// nothing; the mark fits and must not be dropped with the keycap.
+		{"x \u0301" + keycap + "y", 1, "x\n\u0301\ny"},
+		{"x \u0301" + keycap + "y", 2, "x\n\u0301" + keycap + "\ny"},
+		{"x \u0301" + keycap + "y", 3, "x\n\u0301" + keycap + "y"},
+		{"x \u0301" + keycap + "y", 4, "x \u0301" + keycap + "\ny"},
+		{"\u0301\u0301" + keycap + "ab", 1, "\u0301\u0301\na\nb"},
 	}
 	for _, c := range cases {
 		got := wrapErrorText(c.text, c.width)
@@ -229,6 +237,10 @@ func TestWrapErrorTextKeepsGraphemesWhole(t *testing.T) {
 			if w := ansi.StringWidth(line); w > c.width {
 				t.Errorf("wrapErrorText(%q, %d): line %q is %d cells wide", c.text, c.width, line, w)
 			}
+		}
+		// A zero-width mark always fits, so none may be lost.
+		if in, out := strings.Count(c.text, "́"), strings.Count(got, "́"); in != out {
+			t.Errorf("wrapErrorText(%q, %d) = %q kept %d of %d combining marks", c.text, c.width, got, out, in)
 		}
 	}
 }
@@ -255,7 +267,7 @@ func TestErrorScreenKeepsCombiningMarksOnTheirLine(t *testing.T) {
 // as 1 cell and lipgloss pads every line to the widest, so one miscounted line
 // used to widen the whole screen past the terminal.
 func TestErrorScreenFitsWithKeycapsAtEverySize(t *testing.T) {
-	text := "warn " + strings.Repeat(keycap, 9) + " x" + keycap + "verylongword #\ufe0f\u20e3 漢字 " + keycap
+	text := "warn " + strings.Repeat(keycap, 9) + " x" + keycap + "verylongword #\ufe0f\u20e3 漢字 " + keycap + " \u0301" + keycap
 	for width := 1; width <= 40; width++ {
 		for height := 1; height <= 10; height++ {
 			m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })

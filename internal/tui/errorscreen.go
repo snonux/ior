@@ -92,8 +92,10 @@ func (m *Model) errorScreenHint() string {
 // a space even when a combining mark follows it ("x \u0301y" at 2 gives
 // "x" and "\u0301y"), dropping the space as at any break and leaving the
 // zero-width mark at the start of the next line, which stays within width.
-// Such a cluster only comes from a tab or CR before a mark (SanitizeLines
-// turns both into a space), so it is documented rather than special-cased.
+// Any error text with a space before a combining mark hits this (SanitizeLines
+// keeps a literal space, and turns a tab or CR into one); the mark is kept,
+// only its pairing with the dropped space is lost, so it is documented
+// rather than special-cased.
 func wrapErrorText(text string, width int) string {
 	wrapped := strings.Split(ansi.Hardwrap(ansi.Wordwrap(text, width, ""), width, true), "\n")
 	lines := make([]string, 0, len(wrapped))
@@ -105,23 +107,53 @@ func wrapErrorText(text string, width int) string {
 
 // splitToWidth breaks line into pieces of at most width cells (StringWidth),
 // each the longest grapheme-whole prefix that fits (common.TruncateRight
-// re-measures its cut, unlike ansi.Truncate). A grapheme wider than the
+// re-measures its cut, unlike ansi.Truncate). Only a grapheme wider than the
 // whole terminal (a 2-cell rune or keycap at width 1) cannot be shown and is
-// dropped, so a line holding only that grapheme becomes empty. A line that
-// fits is returned as is; width must be positive.
+// dropped, so a line holding only that grapheme becomes empty. TruncateRight
+// can return "" although the first grapheme fits: an orphan combining mark
+// (from the space+mark break above) before a keycap at width 1 is cut by
+// ansi.Truncate as one cell with the keycap, which StringWidth measures as 2.
+// Such a grapheme is kept, never dropped with what follows it: a zero-width
+// one leads the next piece, a wider one that fits is a piece of its own. A
+// line that fits is returned as is. width must be positive: every round
+// consumes at least one grapheme, so the loop ends, but at width <= 0 every
+// visible grapheme would be dropped.
 func splitToWidth(line string, width int) []string {
 	var pieces []string
+	lead := "" // zero-width graphemes waiting to lead the next piece
 	for ansi.StringWidth(line) > width {
 		head := common.TruncateRight(line, width, "")
 		if head == "" {
 			first, _ := ansi.FirstGraphemeCluster(line, ansi.GraphemeWidth)
 			line = line[len(first):]
-			continue
+			switch w := ansi.StringWidth(first); {
+			case w > width: // cannot be shown at all: dropped
+				continue
+			case w == 0: // a mark: it leads the next piece, not a line of its own
+				lead += first
+				continue
+			}
+			head = first // fits, though TruncateRight did not take it
+		} else {
+			line = line[len(head):]
 		}
-		pieces = append(pieces, head)
-		line = line[len(head):]
+		pieces = append(pieces, withLead(lead, head, width)...)
+		lead = ""
 	}
-	return append(pieces, line)
+	return append(pieces, withLead(lead, line, width)...)
+}
+
+// withLead prefixes the piece s with the zero-width lead carried by
+// splitToWidth. Should the joined text measure wider than width (a lead
+// merging with s into a wider cluster), lead becomes a piece of its own.
+func withLead(lead, s string, width int) []string {
+	if lead == "" {
+		return []string{s}
+	}
+	if joined := lead + s; ansi.StringWidth(joined) <= width {
+		return []string{joined}
+	}
+	return []string{lead, s}
 }
 
 // fitErrorBody cuts the wrapped (and styled, line by line) body to at most
