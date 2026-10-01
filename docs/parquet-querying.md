@@ -114,9 +114,21 @@ Folding the restart row and its continuation into one row is not done yet (task 
 `time_ns` and `gap_ns` as for any row but `latency_ns = 0` and `ret = 0` as placeholders (there is
 no latency and no return value) and `is_error = false`. Leave them out of latency statistics, for
 example with `WHERE syscall NOT IN ('exit', 'exit_group', 'rt_sigreturn')`. ior's own views
-already do: the Stream tab shows `-` for their latency and return value, `-plain` leaves the
-`ret` column empty, and the latency aggregates count them without a duration. Recordings made
-before this change hold no rows for these syscalls at all.
+already do:
+
+- The stats engine counts them as calls without a duration, so they are in every call count
+  but in no latency mean, minimum, maximum, percentile or histogram.
+- The Stream tab shows `-` for their latency and return value, and `Enter` on one of those
+  `-` cells of a paused stream pushes no filter. `-plain` leaves the `ret` column empty.
+- The Syscalls and Processes tabs (tables, bubble and treemap details) show `-` in the latency
+  columns of a syscall or process that has no timed call at all, such as a process seen only at
+  its `exit_group`. One with timed calls shows the figures of those calls alone.
+- A `latency` or `ret` filter never selects these rows, whatever its comparison (`ret == 0`,
+  `ret != 0`, `latency < 1ms`, `latency >= 0` all leave them out), because they have no value to
+  compare; neither does errors-only. Filters on the other fields (syscall, comm, pid, gap, ...)
+  select them as usual.
+
+Recordings made before this change hold no rows for these syscalls at all.
 
 ### Invalid UTF-8 in `comm`, `file` and `old_file`
 

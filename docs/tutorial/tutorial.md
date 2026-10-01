@@ -154,7 +154,10 @@ buffer. A `Comm`, `Syscall` or `File` cell filters on exactly that value (`^valu
 `read` does not also select `readv` or `READ`, and `/tmp/a` not `/tmp/ab`; numeric cells filter on
 equality, and `Gap`/`Latency` on "at least this long". Filters are stackable, so you can
 drill down: first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most
-recent filter (LIFO); keep hitting `Esc` to undo all the way back.
+recent filter (LIFO); keep hitting `Esc` to undo all the way back. The `-` Latency and Ret
+cells of `exit`, `exit_group` and `rt_sigreturn` rows push no filter: these syscalls never
+return, so they have no latency or return value, and a `latency` or `ret` filter never selects
+them (see `docs/parquet-querying.md`, "Syscalls that never return").
 
 ![Pause, push two filters, undo with Esc](./assets/08-stream-pause-filter.gif)
 
