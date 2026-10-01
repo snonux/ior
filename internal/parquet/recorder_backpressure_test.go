@@ -509,9 +509,27 @@ func sessionDead(r *Recorder) bool {
 	return !st.Active && st.LastError != nil
 }
 
-// awaitCondition polls cond for up to five seconds and reports whether it held.
+// stuckTimeout is how long the death-race tests wait for a producer or Stop
+// before calling it stuck, and awaitCondition's default deadline.
+const stuckTimeout = 5 * time.Second
+
+// windowPublishTimeout bounds the deathInStopWindow hook's wait for the writer
+// failure. It must stay well below stuckTimeout: in a broken recorder that
+// publishes the failure only after Stop's own stop(nil), the producers stay
+// blocked for as long as the hook waits, and with equal deadlines the
+// producers' "stuck" timer raced the hook and usually reported the less
+// specific failure. Two seconds is still generous for the happy path, where
+// the failure is published within microseconds of the gate opening.
+const windowPublishTimeout = 2 * time.Second
+
+// awaitCondition polls cond for up to stuckTimeout and reports whether it held.
 func awaitCondition(cond func() bool) bool {
-	deadline := time.Now().Add(5 * time.Second)
+	return awaitConditionWithin(stuckTimeout, cond)
+}
+
+// awaitConditionWithin polls cond for up to timeout and reports whether it held.
+func awaitConditionWithin(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
 	for !cond() {
 		if time.Now().After(deadline) {
 			return false
@@ -528,7 +546,10 @@ func awaitCondition(cond func() bool) bool {
 // forced is always true for them. deathInStopWindow waits inside the hook on
 // Stop's goroutine, where t.Fatal must not be called: a failure that is never
 // published there would let Stop go on and silently test a different order,
-// so the hook records the outcome and the caller fails on it instead.
+// so the hook records the outcome and the caller fails on it instead. The
+// hook gives up after windowPublishTimeout, before the caller's stuckTimeout
+// timers fire, so Stop and the producers move on in time for the caller to
+// report the unforced order rather than a stuck producer.
 func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceOrder) (stopped <-chan error, forced func() bool) {
 	t.Helper()
 	result := make(chan error, 1)
@@ -551,7 +572,7 @@ func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceO
 		// Runs on Stop's goroutine, after it released r.mu: Status is safe.
 		stopUnlockedHook = func() {
 			w.open()
-			published.Store(awaitCondition(func() bool { return sessionDead(r) }))
+			published.Store(awaitConditionWithin(windowPublishTimeout, func() bool { return sessionDead(r) }))
 		}
 		go stop()
 		return result, published.Load
@@ -601,30 +622,41 @@ func runDeathRaceTrial(t *testing.T, trial int, order raceOrder, producers int, 
 			if err != nil && !errors.Is(err, writeErr) && !errors.Is(err, ErrRecorderNotActive) {
 				t.Fatalf("trial %d (%v): Record error = %v, want nil, %v or %v", trial, order, err, writeErr, ErrRecorderNotActive)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(stuckTimeout):
 			t.Fatalf("trial %d (%v): a producer is stuck after the writer died and Stop ran", trial, order)
 		}
 	}
-	// assertFailureReportedOnce receives Stop's result first, so the hook
-	// (which runs inside Stop) has finished before forced is read.
-	assertFailureReportedOnce(t, trial, order, r, stopped, writeErr)
+	// Receiving Stop's result means the hook (which runs inside Stop) has
+	// finished, so forced can be read. It is checked before Stop's error: if
+	// the order was not forced, whatever Stop returned belongs to another
+	// order, and the unforced order is the failure worth reporting.
+	stopErr := awaitStop(t, trial, order, stopped)
 	if !forced() {
 		t.Fatalf("trial %d (%v): the writer failure was not published inside Stop's window, so this order was never tested", trial, order)
 	}
+	assertFailureReportedOnce(t, trial, order, r, stopErr, writeErr)
 	stopUnlockedHook = nil // do not leak this trial's hook into the next one
+}
+
+// awaitStop returns Stop's result, failing the test if Stop does not return
+// within stuckTimeout.
+func awaitStop(t *testing.T, trial int, order raceOrder, stopped <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-stopped:
+		return err
+	case <-time.After(stuckTimeout):
+		t.Fatalf("trial %d (%v): Stop hung after the writer died", trial, order)
+		return nil
+	}
 }
 
 // assertFailureReportedOnce checks that Stop returned the writer failure and
 // that neither TakeFailure nor a second Stop reports it again.
-func assertFailureReportedOnce(t *testing.T, trial int, order raceOrder, r *Recorder, stopped <-chan error, writeErr error) {
+func assertFailureReportedOnce(t *testing.T, trial int, order raceOrder, r *Recorder, stopErr, writeErr error) {
 	t.Helper()
-	select {
-	case err := <-stopped:
-		if !errors.Is(err, writeErr) {
-			t.Fatalf("trial %d (%v): Stop() error = %v, want the writer failure %v", trial, order, err, writeErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("trial %d (%v): Stop hung after the writer died", trial, order)
+	if !errors.Is(stopErr, writeErr) {
+		t.Fatalf("trial %d (%v): Stop() error = %v, want the writer failure %v", trial, order, stopErr, writeErr)
 	}
 	if err := r.TakeFailure(); err != nil {
 		t.Fatalf("trial %d (%v): TakeFailure() = %v after Stop reported it, want nil", trial, order, err)
