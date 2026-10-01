@@ -234,9 +234,19 @@ func TestSessionEmitRowStampsTheEpochReadInsideTheGate(t *testing.T) {
 
 	r.mu.Lock() // park the emit on the gate
 	unlock := sync.OnceFunc(r.mu.Unlock)
-	t.Cleanup(unlock) // a failing wait must not leave the emitter parked
 	baseline := parkwait.Count(emitRowFrame, gateReadReasons...)
 	emitted := make(chan struct{})
+	// A failing wait must not leave the emitter parked, nor let it run on
+	// after the test ended: release the gate, then wait (bounded, in case the
+	// emit is wedged elsewhere) for the emitting goroutine to finish.
+	t.Cleanup(func() {
+		unlock()
+		select {
+		case <-emitted:
+		case <-time.After(10 * time.Second):
+			t.Error("emitting goroutine still running 10s after the gate was released")
+		}
+	})
 	go func() {
 		defer close(emitted)
 		emitRows(emitter, 1)

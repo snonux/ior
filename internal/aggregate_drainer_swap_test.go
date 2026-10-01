@@ -187,7 +187,9 @@ const swapFilterFrame = "(*aggregateDrainer).SwapFilter"
 var swapFilterReasons = []string{parkwait.MutexLock, parkwait.Semacquire}
 
 // blockedInSwapFilter counts goroutines currently parked on a mutex inside
-// aggregateDrainer.SwapFilter. It is the only way to observe "this goroutine
+// aggregateDrainer.SwapFilter, among those started by the calling (test)
+// goroutine, so a goroutine leaked by another test cannot count (see package
+// parkwait). It is the only way to observe "this goroutine
 // reached the lock and is waiting for it" without a test seam in production
 // code: a goroutine that merely started, or that is still spinning before it
 // parks, does not count.

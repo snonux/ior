@@ -1920,6 +1920,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `error` (e.g. `errors.Is(err, syscall.EINTR)`). A bare `errno` returned by
   `syscall.RawSyscall` is a concrete `syscall.Errno` that cannot be wrapped, so
   `errno != 0` and `errno != syscall.EAGAIN` stay as direct comparisons.
+- Tests that must wait until a goroutine is parked on a lock (to change
+  shared state only once it provably waits) use `internal/parkwait`, never a
+  sleep: take `parkwait.Count` as the baseline, start the goroutine, then
+  `parkwait.Await{...}.Run(t)`, which polls `runtime.Stack` until the
+  goroutine's dump header shows the wait reason inside the given frame. It
+  matches by function name, filtered to goroutines started by the calling
+  test goroutine, so start the goroutine and call Count/Run from the test
+  goroutine itself. Test-only: never import it from production code.
 
 ## Rollback
 
