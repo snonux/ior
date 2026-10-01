@@ -501,6 +501,15 @@ static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename
 // ior_on_syscall_exit, which deletes the per-tid entry. The enter_trace_id
 // check makes a stale entry from a different syscall unusable rather than
 // letting it graft a foreign path onto this pair.
+//
+// Cost trade-off: every exit of a path-capturing syscall (open, stat, access,
+// unlink, ...) therefore does one extra syscall_enter_state_map lookup on top
+// of the one inside ior_on_syscall_exit, and the rename/link family does one
+// more for the second slot (three lookups in total). Handing the
+// already-looked-up state pointer to ior_on_syscall_exit would remove them,
+// but it changes the exit hook's signature and the generated prologue order
+// that the generator tests pin for nearly all path kinds, so it is
+// deliberately not bundled with the recovery fix; it is tracked as task 0t2.
 static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 

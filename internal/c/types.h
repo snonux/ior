@@ -160,8 +160,8 @@ struct open_event {
 };
 
 // Control record carrying a pathname re-read at sys_exit (see "Recovering a
-// faulted filename" in filter.c). slot says which of the enter event's path
-// fields it belongs to: OPEN_NAME_FIXUP_SLOT_FIRST for the only (or first)
+// path whose sys_enter read faulted" in filter.c). slot says which of the
+// enter event's path fields it belongs to: OPEN_NAME_FIXUP_SLOT_FIRST for the only (or first)
 // path - filename, pathname, oldname - and OPEN_NAME_FIXUP_SLOT_SECOND for the
 // newname of the rename/link family. slot trails the string so the 268-byte
 // prefix (tid at 8, filename at 12) stays what older readers decoded; a

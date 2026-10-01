@@ -1542,9 +1542,17 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   name the enter side captured itself, and it re-checks the enter trace ID so
   an `openat` fixup cannot be grafted onto a pending `open`. A status other
   than `PATH_READ_FAILED` (a NULL pointer, a read that succeeded) is never
-  promoted, and a slot that does not exist for the kind is ignored. A still-failing re-read is discarded kernel-side rather than
-  submitted; a fixup lost to backpressure simply never arrives and the row keeps
-  its empty name, exactly as before.
+  promoted, and a slot that does not exist for the kind (a `SECOND` record for a
+  single-path kind, or a raw value that is neither slot) is ignored, as is a
+  record whose tid has no pending enter. A still-failing re-read is discarded
+  kernel-side rather than submitted; a fixup lost to backpressure simply never
+  arrives and the row keeps its empty name, exactly as before.
+
+  Cost note: each exit of a path-capturing syscall pays one extra
+  `syscall_enter_state_map` lookup in `ior_take_pending_filename` (two for the
+  rename/link family, which also takes the second slot) besides the one in
+  `ior_on_syscall_exit`; sharing
+  the looked-up state is tracked as task 0t2.
 
   **The enter gate defers, it does not waive.** `matchRawOpenEvent` used to
   judge the path dimension on the payload filename, so an empty-name open was

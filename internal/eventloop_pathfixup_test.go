@@ -25,10 +25,17 @@ import (
 // (ior_emit_name_fixup, internal/c/filter.c) for one path slot.
 func makeSlotFixup(t *testing.T, traceID types.TraceId, slot uint32, filename string) []byte {
 	t.Helper()
+	return makeSlotFixupForTid(t, execCommTid, traceID, slot, filename)
+}
+
+// makeSlotFixupForTid is makeSlotFixup for a thread other than the one the
+// pending enter belongs to (the control record carries the exit's tid).
+func makeSlotFixupForTid(t *testing.T, tid uint32, traceID types.TraceId, slot uint32, filename string) []byte {
+	t.Helper()
 	ev := types.OpenNameFixupEvent{
 		EventType: types.OPEN_NAME_FIXUP_EVENT,
 		TraceId:   traceID,
-		Tid:       execCommTid,
+		Tid:       tid,
 		Slot:      slot,
 	}
 	copy(ev.Filename[:], filename)
@@ -305,6 +312,28 @@ func TestNameFixupRecoversEachNameThroughItsOwnSlot(t *testing.T) {
 	}
 }
 
+// faultedWatchEnter is the enter of an inotify_add_watch whose pathname read
+// faulted (an fd-pathname kind: the fd is the inotify group).
+func faultedWatchEnter(t *testing.T, groupFd int32) []byte {
+	t.Helper()
+	ev := types.FdPathEvent{
+		EventType:      types.ENTER_FD_PATH_EVENT,
+		TraceId:        types.SYS_ENTER_INOTIFY_ADD_WATCH,
+		Time:           defaulTime,
+		Pid:            execCommPid,
+		Tid:            execCommTid,
+		Fd:             groupFd,
+		Dirfd:          unix.AT_FDCWD,
+		PathnameStatus: types.PATH_READ_FAILED,
+		SchemaVersion:  types.FD_PATH_EVENT_SCHEMA_VERSION,
+	}
+	raw, err := ev.Bytes()
+	if err != nil {
+		t.Fatalf("FdPathEvent.Bytes() error = %v", err)
+	}
+	return raw
+}
+
 func TestFdPathFixupRecoversAFaultedWatchTarget(t *testing.T) {
 	const (
 		groupFd = int32(5)
@@ -320,21 +349,7 @@ func TestFdPathFixupRecoversAFaultedWatchTarget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			el := newFilteredEventLoop(t, globalfilter.Filter{})
-			ev := types.FdPathEvent{
-				EventType:      types.ENTER_FD_PATH_EVENT,
-				TraceId:        types.SYS_ENTER_INOTIFY_ADD_WATCH,
-				Time:           defaulTime,
-				Pid:            execCommPid,
-				Tid:            execCommTid,
-				Fd:             groupFd,
-				Dirfd:          unix.AT_FDCWD,
-				PathnameStatus: types.PATH_READ_FAILED,
-				SchemaVersion:  types.FD_PATH_EVENT_SCHEMA_VERSION,
-			}
-			enter, err := ev.Bytes()
-			if err != nil {
-				t.Fatalf("FdPathEvent.Bytes() error = %v", err)
-			}
+			enter := faultedWatchEnter(t, groupFd)
 			var fixups [][]byte
 			if tc.fixup {
 				fixups = append(fixups, makeSlotFixup(t, types.SYS_ENTER_INOTIFY_ADD_WATCH, types.OPEN_NAME_FIXUP_SLOT_FIRST, target))
@@ -349,6 +364,122 @@ func TestFdPathFixupRecoversAFaultedWatchTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An inotify_add_watch has a single path, so only slot FIRST means anything to
+// it; a SECOND-slot record (the rename/link newname) must leave the row alone,
+// exactly as it does for the pathname kinds.
+func TestFdPathFixupIgnoresTheSecondSlot(t *testing.T) {
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	ep := runPairWithFixups(t, el, faultedWatchEnter(t, 5),
+		types.SYS_EXIT_INOTIFY_ADD_WATCH, 1,
+		makeSlotFixup(t, types.SYS_ENTER_INOTIFY_ADD_WATCH, types.OPEN_NAME_FIXUP_SLOT_SECOND, "/tmp/fq2-not-for-me"))
+	if ep == nil {
+		t.Fatal("the inotify_add_watch pair was dropped")
+	}
+	defer ep.Recycle()
+	if got := ep.File.Name(); got != "" {
+		t.Fatalf("a SECOND-slot fixup named the watch target %q, want it left empty", got)
+	}
+}
+
+// The slot is a raw __u32 off the ring buffer and the decoder does not
+// validate it. A value that is neither FIRST nor SECOND must be ignored by the
+// two-path kind: it must not select a field by accident (an unchecked index
+// or a default branch would) and it must not disturb names already captured.
+func TestNameFixupIgnoresAnOutOfRangeSlot(t *testing.T) {
+	const (
+		oldCaptured = "/srv/old-captured"
+		recovered   = "/srv/recovered"
+	)
+	const bogusSlot = uint32(2)
+	if bogusSlot == types.OPEN_NAME_FIXUP_SLOT_FIRST || bogusSlot == types.OPEN_NAME_FIXUP_SLOT_SECOND {
+		t.Fatal("the bogus slot collides with a defined slot")
+	}
+	failed := uint32(types.PATH_READ_FAILED)
+
+	for _, tc := range []struct {
+		name             string
+		oldName          string
+		oldStatus        uint32
+		wantOld, wantNew string
+	}{
+		{name: "both names faulted stay empty", oldStatus: failed},
+		{name: "a captured old name survives next to a faulted new name",
+			oldName: oldCaptured, oldStatus: types.PATH_READ_OK, wantOld: oldCaptured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := newFilteredEventLoop(t, globalfilter.Filter{})
+			enter := nameEnterWithStatus(t, types.SYS_ENTER_RENAME, tc.oldName, tc.oldStatus, "", failed)
+			ep := runPairWithFixups(t, el, enter, types.SYS_EXIT_RENAME, 0,
+				makeSlotFixup(t, types.SYS_ENTER_RENAME, bogusSlot, recovered))
+			if ep == nil {
+				t.Fatal("the rename pair was dropped")
+			}
+			defer ep.Recycle()
+			if ep.Oldname != tc.wantOld || ep.File.Name() != tc.wantNew {
+				t.Fatalf("rename row old=%q new=%q, want old=%q new=%q (out-of-range slot must be ignored)",
+					ep.Oldname, ep.File.Name(), tc.wantOld, tc.wantNew)
+			}
+		})
+	}
+}
+
+// A fixup whose tid has no pending enter - the enter was filtered out, never
+// seen, or already paired - has nothing to repair. It must be dropped without
+// effect: no panic, no change to the pending enter of a different tid, and no
+// row of its own.
+func TestPathFixupWithoutAPendingEnterIsDropped(t *testing.T) {
+	const otherTid = execCommTid + 1000
+	const recovered = "/tmp/fq2-orphan"
+
+	t.Run("no enter pending at all", func(t *testing.T) {
+		el := newFilteredEventLoop(t, globalfilter.Filter{})
+		out := make(chan *event.Pair, 1)
+		for _, slot := range []uint32{types.OPEN_NAME_FIXUP_SLOT_FIRST, types.OPEN_NAME_FIXUP_SLOT_SECOND} {
+			el.processRawEvent(makeSlotFixupForTid(t, otherTid, types.SYS_ENTER_ACCESS, slot, recovered), out)
+		}
+		select {
+		case ep := <-out:
+			ep.Recycle()
+			t.Fatal("a fixup with no pending enter produced a row")
+		default:
+		}
+	})
+
+	t.Run("another tid's pending enter is untouched", func(t *testing.T) {
+		el := newFilteredEventLoop(t, globalfilter.Filter{})
+		ep := runPairWithFixups(t, el,
+			pathEnterWithStatus(t, types.SYS_ENTER_ACCESS, unix.AT_FDCWD, "", types.PATH_READ_FAILED),
+			types.SYS_EXIT_ACCESS, -int64(unix.ENOENT),
+			makeSlotFixupForTid(t, otherTid, types.SYS_ENTER_ACCESS, types.OPEN_NAME_FIXUP_SLOT_FIRST, recovered))
+		if ep == nil {
+			t.Fatal("the access pair was dropped")
+		}
+		defer ep.Recycle()
+		if got := ep.File.Name(); got != "" {
+			t.Fatalf("a fixup for tid %d named the pair of tid %d: %q", otherTid, execCommTid, got)
+		}
+	})
+
+	t.Run("a late fixup after the pair completed is dropped", func(t *testing.T) {
+		el := newFilteredEventLoop(t, globalfilter.Filter{})
+		ep := runPairWithFixups(t, el,
+			pathEnterWithStatus(t, types.SYS_ENTER_ACCESS, unix.AT_FDCWD, "", types.PATH_READ_FAILED),
+			types.SYS_EXIT_ACCESS, -int64(unix.ENOENT))
+		if ep == nil {
+			t.Fatal("the access pair was dropped")
+		}
+		ep.Recycle()
+		out := make(chan *event.Pair, 1)
+		el.processRawEvent(makeSlotFixup(t, types.SYS_ENTER_ACCESS, types.OPEN_NAME_FIXUP_SLOT_FIRST, recovered), out)
+		select {
+		case late := <-out:
+			late.Recycle()
+			t.Fatal("a fixup after the pair completed produced a row")
+		default:
+		}
+	})
 }
 
 // matchRawPathEvent and matchRawNameEvent used to judge the path dimension on
