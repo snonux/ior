@@ -1856,7 +1856,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   per-pid "dead" marker: a failing readlink cannot tell dead pid from closed fd).
 - **Close rows never read procfs (task jr2, `internal/eventloop_procfs_close.go`)**:
   `resolveOnExit` routes close and close_range (not `CLOSE_RANGE_CLOEXEC`,
-  which closes nothing) to `fdTracker.resolveClosing`: the fd-table entry, else
+  and not a close_range that failed, e.g. EINVAL: both close nothing, so their
+  rows keep the ordinary resolution, procfs included; `closesDescriptor`) to
+  `fdTracker.resolveClosing`: the fd-table entry, else
   a procfs-cache entry whose read time (`fdTracker.procFdReadAt`, CLOCK_BOOTTIME
   stamped by `resolve` after the readlink returned, the clock of the BPF record
   timestamps) is earlier than the close's enter time, else an unnamed row with
@@ -1874,9 +1876,18 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `deleteCacheKey` drops it, and `setProcFdCache` (no time) makes an entry a
   close row ignores. A close of an untracked fd no longer costs a procfs read
   (`BenchmarkCloseUntrackedOpenFd`: ~22 allocs and 33-79 us to 2 allocs and
-  ~4-6 us on a busy host). Integration: `TestCloseUntrackedNeverNamesTheReusingFile`
+  ~4-6 us on a busy host). A blind table (`markBlind`, a CLONE_FILES sharer
+  the trace cannot see) keeps no entries and no cache answers, so every close
+  row there is unnamed, even for fds ior saw opened (before jr2: procfs after
+  the close, empty or wrong). The stamp comparison, like
+  `provisionalSeedNeedsRecheck`, assumes ior runs in no time namespace with a
+  boottime offset (user-space CLOCK_BOOTTIME includes it, BPF stamps do not;
+  see `bootClockNs`). Integration: `TestCloseUntrackedNeverNamesTheReusingFile`
   (scenario `close-untracked`: 64 fds opened in a prestart hook, before ior
-  attaches; pre-fix 58-62 of 64 close rows named after the pipe).
+  attaches; pre-fix 58-62 of 64 close rows named after the pipe; the other 63 files are
+  also written right before their close, so the lagging write caches the pipe
+  and the test fails without the read-time check: 62 of 63 pipe-named closes,
+  5/5 runs).
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
