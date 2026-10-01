@@ -155,10 +155,14 @@ func TestWriteStreamCSVRepairsInvalidUTF8LikeParquet(t *testing.T) {
 	// Exactly the BPF capture length (MAX_FILENAME_LENGTH minus the NUL), ending
 	// in half a rune: the shape of a multi-byte name cut by the capture buffer.
 	cutPath := "/" + strings.Repeat("a", types.MAX_FILENAME_LENGTH-3) + "\xc3"
+	// The same shape for the rename source, with other letters so that a
+	// file/old_file mix-up is visible. Without a cut old_file the test would
+	// not notice old_file written through SanitizeUTF8 (no capture-limit trim).
+	cutOldPath := "/" + strings.Repeat("b", types.MAX_FILENAME_LENGTH-3) + "\xc3"
 	rows := []StreamEvent{
 		{Seq: 1, Syscall: "renameat2", Comm: "bad\xffcomm", FileName: "/tmp/\xfe\xffx", OldName: "/old/\x80", FD: -1},
 		{Seq: 2, Syscall: "openat", Comm: "caf\xc3\xa9", FileName: "/tmp/gr\xc3\xbc\xc3\x9f.txt", FD: 3},
-		{Seq: 3, Syscall: "openat", Comm: "n\xc3", FileName: cutPath, FD: 3},
+		{Seq: 3, Syscall: "renameat2", Comm: "n\xc3", FileName: cutPath, OldName: cutOldPath, FD: -1},
 	}
 	var buf bytes.Buffer
 	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
@@ -202,6 +206,9 @@ func TestWriteStreamCSVRepairsInvalidUTF8LikeParquet(t *testing.T) {
 	}
 	if got := records[3][col["file"]]; got != cutPath[:len(cutPath)-1] {
 		t.Errorf("cut rune in a full-length path = %q, want it dropped", got)
+	}
+	if got := records[3][col["old_file"]]; got != cutOldPath[:len(cutOldPath)-1] {
+		t.Errorf("cut rune in a full-length old_file = %q, want it dropped", got)
 	}
 	if got := records[3][col["comm"]]; got != "n" {
 		t.Errorf("cut rune in comm = %q, want it dropped", got)
