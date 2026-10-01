@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 type fieldKey int
@@ -57,6 +56,13 @@ type Model struct {
 	editing     bool
 	textInput   textinput.Model
 	filter      globalfilter.Filter
+	// width is the view width the modal is drawn in, as the last Resize
+	// reported (0: not reported, taken as 80); the edited field's input is
+	// fitted to it. inputStart is the rune the input's drawn window starts
+	// at, kept so the window stays put while the cursor is drawn in it
+	// (common.FitTextInput).
+	width      int
+	inputStart int
 }
 
 var compareOps = []globalfilter.CompareOp{
@@ -75,7 +81,7 @@ func NewModel() Model {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.SetWidth(24)
+	input.SetWidth(filterInputWidth)
 	input.SetStyles(textinput.DefaultStyles(true))
 
 	model := Model{textInput: input}
@@ -163,14 +169,16 @@ func (m Model) updatePaste(msg tea.PasteMsg) Model {
 	var cmd tea.Cmd
 	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd // only ever a cursor-blink command, which nothing routes back
-	return m
+	// Keep the cursor drawn after the edit (common.FitTextInput).
+	return m.fitInput()
 }
 
 // updateEditing handles key presses while the user is typing into the text
 // input for the active field. Esc commits and closes; Enter confirms the value.
 // Every other key edits the field through common.UpdateTextInput (as
 // updatePaste does), which keeps Alt+D on the last rune from panicking
-// bubbles (task kz2).
+// bubbles (task kz2), and the input's window is re-fitted so the cursor
+// stays drawn (fitInput).
 func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 	switch keyMsg.String() {
 	case "esc":
@@ -186,7 +194,7 @@ func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 	var cmd tea.Cmd
 	m.textInput, cmd = common.UpdateTextInput(m.textInput, keyMsg)
 	_ = cmd
-	return m
+	return m.fitInput()
 }
 
 // updateNavigating handles key presses while the user is navigating the field
@@ -238,63 +246,6 @@ func (m Model) toggleBoolField(index int) Model {
 	return m
 }
 
-// View renders the centered modal box within the given viewport.
-func (m Model) View(width, height int) string {
-	if !m.visible {
-		return ""
-	}
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-
-	modalWidth := 64
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 40 {
-			modalWidth = 40
-		}
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(m.bodyLines(), "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
-}
-
-// bodyLines renders the modal content: the editable fields, a read-only
-// Family line when a family scope is active, and the key help. Family has no
-// editable field here (it is set outside the modal: the [ / ] family cycle
-// or the Syscalls-tab Family row filter) and is kept by Esc and by "c", so
-// it is shown to make that carried-over constraint visible.
-func (m Model) bodyLines() []string {
-	lines := []string{"Filter"}
-	for i, field := range m.fields {
-		prefix := "  "
-		if i == m.activeField {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+m.renderField(field, i == m.activeField))
-	}
-	if family := m.filter.Family; family != nil && family.Pattern != "" {
-		lines = append(lines, fmt.Sprintf("  %-8s %s ([ / ] to change)", "Family:", family.Pattern))
-	}
-	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear (keeps family) • Esc apply+close")
-	// The case rule is spelled out because it differs by anchor mode (see
-	// globalfilter.StringFilter): only the fully anchored ^exact$ and the
-	// directory-children ^dir/* - the forms dashboard row filters round-trip
-	// through this modal - are case-sensitive. ^dir/* is listed because it is
-	// the one form whose meaning is not the obvious anchored substring.
-	return append(lines,
-		"strings: substring by default, use ^prefix, suffix$ (any case), or ^exact$ (case-sensitive)",
-		"         ^dir/* = files directly in dir (case-sensitive, no subdirs)")
-}
-
 func (m Model) clearAll() Model {
 	for i := range m.fields {
 		m.fields[i].value = ""
@@ -313,7 +264,10 @@ func (m Model) startEdit() Model {
 	m.textInput.SetValue(m.fields[m.activeField].value)
 	m.textInput.CursorEnd()
 	m.textInput.Focus()
-	return m
+	// The window starts at the value's end, as the cursor does; fitInput
+	// pulls it back to the last screenful (common.WindowStart).
+	m.inputStart = len([]rune(m.textInput.Value()))
+	return m.fitInput()
 }
 
 func (m Model) commitEdit() Model {

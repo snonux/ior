@@ -1,4 +1,4 @@
-package export
+package common
 
 import (
 	"strings"
@@ -6,44 +6,68 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// wrapAtSpaces wraps text to lines of at most width cells, breaking only at
+// WrapAtSpaces wraps text to lines of at most width cells, breaking only at
 // whitespace (strings.Fields: any Unicode white space, so a tab or a no-break
 // space is a break point too): words are filled greedily, and a word wider
 // than a whole line (a long path) starts a line of its own and is
 // hard-wrapped (ansi.Hardwrap, grapheme- and ANSI-aware), its last piece
-// continuing the line. Runs of whitespace collapse to one plain space.
+// continuing the line. Runs of whitespace collapse to one plain space,
+// except a leading run of plain spaces: that indent is kept on the first
+// line when the first word fits after it, and dropped otherwise (the
+// continuation lines are never indented, as lipgloss's own wrap did for the
+// trace filter's "         ^dir/* = ..." note).
 //
 // ansi.Wordwrap and ansi.Wrap are not used because they also break after
 // every '-': an export path such as ".../ior-stream-20261001-161322.csv"
 // came out as ".../ior-" over "stream-...", although it fitted a line, and
-// the " - " of PausedNote stood on a line of its own (task ns2).
+// the " - " of the export modal's paused note stood on a line of its own
+// (task ns2, where this was export's wrapAtSpaces; task rz2 moved it here for
+// every top-level modal).
 //
-// With whitespace as the only break, the " - " of PausedNote stays at the end
-// of the line before when it fits there, else it opens the next line
-// followed by the word after it ("- use x ..."), which reads as the
-// continuation it is; it is alone on a line only below five cells
-// ("- use"). Greedy filling gives that without a rule of its own: the dash
-// is a one-cell word.
+// With whitespace as the only break, a " - " stays at the end of the line
+// before when it fits there, else it opens the next line followed by the
+// word after it, which reads as the continuation it is. Greedy filling gives
+// that without a rule of its own: the dash is a one-cell word.
 //
 // A wide rune wider than width (width 1) still comes out on a line of its
 // own, wider than width. ansi.Hardwrap puts out an empty line before such a
 // rune when it opens the word ("日本" gives "\n日\n本"); add drops that
-// empty piece. The caller cuts each line to the width (fitMessage), which
-// leaves the rune's line empty: in a one-cell text area (a 7-column view) a
-// wide rune shows as a blank row rather than widening the box.
-func wrapAtSpaces(text string, width int) []string {
-	w := spaceWrapper{width: max(width, 1)}
+// empty piece. Callers cut each line to the width (FitWrapped), which leaves
+// the rune's line empty: in a one-cell text area a wide rune shows as a
+// blank row rather than widening the box.
+func WrapAtSpaces(text string, width int) []string {
+	w := spaceWrapper{width: max(width, 1), indent: leadingSpaces(text)}
 	for _, word := range strings.Fields(text) {
 		w.add(word)
 	}
 	return w.finish()
 }
 
-// spaceWrapper accumulates the lines of wrapAtSpaces.
+// FitWrapped wraps text to lines of at most width cells (WrapAtSpaces) and
+// cuts each line to the width as well, trailing blanks dropped: WrapAtSpaces
+// puts a rune wider than the line (a two-cell rune in a one-cell text area)
+// on a line of its own, which the cut leaves empty, so the caller's box keeps
+// to its view.
+func FitWrapped(text string, width int) []string {
+	lines := WrapAtSpaces(text, width)
+	for i, line := range lines {
+		lines[i] = CutLine(strings.TrimRight(line, " "), width, "")
+	}
+	return lines
+}
+
+// leadingSpaces is the run of plain spaces text starts with.
+func leadingSpaces(text string) string {
+	return text[:len(text)-len(strings.TrimLeft(text, " "))]
+}
+
+// spaceWrapper accumulates the lines of WrapAtSpaces. indent is put before
+// the first word, if that still fits the line, and is cleared once used.
 type spaceWrapper struct {
-	width int
-	lines []string
-	line  string
+	width  int
+	indent string
+	lines  []string
+	line   string
 }
 
 // fits reports whether word still fits on the current line after a space.
@@ -54,6 +78,13 @@ func (w *spaceWrapper) fits(word string) bool {
 // add appends word to the current line, starts a new line with it, or, when
 // it is wider than a whole line, hard-wraps it onto lines of its own.
 func (w *spaceWrapper) add(word string) {
+	if indent := w.indent; indent != "" {
+		w.indent = ""
+		if ansi.StringWidth(indent)+ansi.StringWidth(word) <= w.width {
+			w.line = indent + word
+			return
+		}
+	}
 	switch {
 	case w.fits(word):
 		w.line += " " + word

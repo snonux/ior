@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ior/internal/probemanager"
+	common "ior/internal/tui/common"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -76,7 +77,7 @@ func TestViewFillsTerminalHeightExactly(t *testing.T) {
 			m := NewModel(&fakeManager{states: manyProbes(300)}).SetSize(w, 24).Open()
 			m = probeModalState(t, m, state)
 			l := m.layout()
-			box := l.box.Render(strings.Join(m.buildProbeLines(l, m.filtered()), "\n"))
+			box := renderLayout(m, l)
 			if got := lipgloss.Height(box); got != 24 {
 				t.Errorf("state=%s width=%d: box height %d, want 24", state, w, got)
 			}
@@ -120,8 +121,8 @@ func TestProbeRowsWithErrorsStayOneLine(t *testing.T) {
 		if !strings.Contains(line, "attach failed") {
 			continue // header/footer may wrap; only rows are budgeted one line
 		}
-		if w := lipgloss.Width(line); w > contentWidth(l.box) {
-			t.Fatalf("line %q is %d cells, wider than content width %d", line, w, contentWidth(l.box))
+		if w := lipgloss.Width(line); w > l.text {
+			t.Fatalf("line %q is %d cells, wider than content width %d", line, w, l.text)
 		}
 	}
 }
@@ -229,9 +230,11 @@ func TestViewNeverExceedsTerminalWidth(t *testing.T) {
 }
 
 // TestProbeModalWidth pins the width policy: preferred 66 with margins,
-// shrinking to minModalWidth, then the whole terminal, never wider than it.
+// shrinking to minModalWidth, then the whole terminal, never wider than it;
+// below seven columns the box would be wider (common.ModalBoxWidth) and View
+// draws the modal bare instead.
 func TestProbeModalWidth(t *testing.T) {
-	cases := map[int]int{200: 66, 70: 66, 69: 65, 30: 26, 28: 24, 26: 24, 24: 24, 20: 20, 1: 1, 0: 0}
+	cases := map[int]int{200: 66, 70: 66, 69: 65, 30: 26, 28: 24, 26: 24, 24: 24, 20: 20, 7: 7, 1: 7, 0: 7}
 	for term, want := range cases {
 		if got := probeModalWidth(term); got != want {
 			t.Errorf("probeModalWidth(%d) = %d, want %d", term, got, want)
@@ -254,7 +257,7 @@ func TestGrowingHeightPullsOffsetBack(t *testing.T) {
 		t.Fatalf("offset = %d, want %d (len - rows)", m.offset, total-rows)
 	}
 	l := m.layout()
-	box := l.box.Render(strings.Join(m.buildProbeLines(l, m.filtered()), "\n"))
+	box := renderLayout(m, l)
 	if got := lipgloss.Height(box); got != 50 {
 		t.Fatalf("box height = %d, want 50 (window filled)", got)
 	}
@@ -278,4 +281,9 @@ func TestLeavingSearchAtEndPullsOffsetBack(t *testing.T) {
 	if want := total - m.visibleRows(); m.offset != want {
 		t.Fatalf("offset = %d, want %d after leaving search", m.offset, want)
 	}
+}
+
+// renderLayout boxes the lines of layout l as View does for a boxed layout.
+func renderLayout(m Model, l probeLayout) string {
+	return common.RenderModalBox(m.buildProbeLines(l, m.filtered()), l.vpad, l.boxWidth)
 }

@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // Manager defines the probe operations used by the modal. AttachFamily and
@@ -72,6 +71,10 @@ type Model struct {
 	search    string
 	searching bool
 	textInput textinput.Model
+	// inputStart is the rune the search input's drawn window starts at,
+	// kept so the window stays put while the cursor is drawn in it
+	// (common.FitTextInput, fitSearch).
+	inputStart int
 
 	// session tags toggle results with the trace session of manager.
 	session uint64
@@ -114,7 +117,7 @@ func NewModel(manager Manager) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.CharLimit = 0
-	ti.SetWidth(28)
+	ti.SetWidth(searchInputWidth)
 	ti.SetStyles(textinput.DefaultStyles(true))
 	return Model{
 		manager:   manager,
@@ -203,7 +206,7 @@ func (m Model) SetDarkMode(isDark bool) Model {
 func (m Model) SetSize(width, height int) Model {
 	m.width = width
 	m.height = height
-	return m.clampCursor()
+	return m.fitSearch().clampCursor()
 }
 
 // Update dispatches Bubble Tea messages to the appropriate handler.
@@ -315,6 +318,8 @@ func (m Model) handleSyscallKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.textInput.SetValue(m.search)
 		m.textInput.CursorEnd()
 		m.textInput.Focus()
+		m.inputStart = len([]rune(m.search))
+		m = m.fitSearch()
 		// The search line adds a chrome row, shrinking the row budget.
 		return m.clampCursor(), nil
 	case " ", "space", "enter":
@@ -352,13 +357,23 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 // typeIntoSearch feeds a typed key or a pasted text to the search input and
 // re-applies the live filter from its value. It goes through
 // common.UpdateTextInput, which keeps Alt+D on the last rune from panicking
-// bubbles (task kz2).
+// bubbles (task kz2), and re-fits the input's window so the cursor stays
+// drawn (fitSearch).
 func (m Model) typeIntoSearch(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	m.search = strings.TrimSpace(m.textInput.Value())
+	m = m.fitSearch()
 	m = m.clampCursor()
 	return m, cmd
+}
+
+// fitSearch fits the search input's width and window to the text line of
+// the size SetSize reported (common.FitTextInput), remembering the window's
+// start for the next edit and render.
+func (m Model) fitSearch() Model {
+	m.inputStart = common.FitTextInput(&m.textInput, m.inputStart, searchFieldWidth(m.layoutTextWidth()))
+	return m
 }
 
 // reload returns m with probes refreshed from the manager.
@@ -422,164 +437,6 @@ func (m Model) selectedSyscall() string {
 		return ""
 	}
 	return items[m.cursor].Syscall
-}
-
-// probeLayout is the modal layout for one size and state: the header and
-// footer lines around the probe rows, the frame style, and how many rows fit.
-type probeLayout struct {
-	header, footer []string
-	box            lipgloss.Style
-	rows           int
-}
-
-// layout computes the modal layout for the current size and state. The row
-// budget is the terminal height minus the chrome actually rendered around the
-// rows: header and footer are rendered in the real box style and measured
-// with lipgloss.Height. The chrome is measured rather than assumed because it
-// varies with state — the search/filter line, the error block and the help
-// footer, the latter two of which wrap depending on the modal width. At least
-// one row is kept so the selection stays visible; View clips the degenerate
-// tiny-terminal case.
-func (m Model) layout() probeLayout {
-	l := probeLayout{header: m.headerLines(), footer: m.footerLines(), box: m.boxStyle()}
-	height := m.height
-	if height <= 0 {
-		height = defaultHeight // same fallback View renders into
-	}
-	chrome := make([]string, 0, len(l.header)+len(l.footer))
-	chrome = append(append(chrome, l.header...), l.footer...)
-	l.rows = max(height-lipgloss.Height(l.box.Render(strings.Join(chrome, "\n"))), 1)
-	return l
-}
-
-// visibleRows returns how many probe rows fit on screen (see layout).
-func (m Model) visibleRows() int {
-	return m.layout().rows
-}
-
-// boxStyle returns the modal frame style sized for the current terminal width.
-func (m Model) boxStyle() lipgloss.Style {
-	width := m.width
-	if width <= 0 {
-		width = defaultWidth
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(probeModalWidth(width))
-}
-
-// contentWidth returns the cells available to a line inside the given frame.
-// lipgloss v2 widths include border and padding, so the frame is subtracted.
-func contentWidth(box lipgloss.Style) int {
-	return box.GetWidth() - box.GetHorizontalFrameSize()
-}
-
-// View renders the probe modal centered on the terminal. It returns an empty
-// string when the modal is not visible. The window of rows starts at the
-// offset Update kept for the size reported via SetSize; width and height
-// should be that same size. The output never exceeds width x height cells.
-func (m Model) View(width, height int) string {
-	if !m.visible {
-		return ""
-	}
-	if width <= 0 {
-		width = defaultWidth
-	}
-	if height <= 0 {
-		height = defaultHeight
-	}
-	m.width = width
-	m.height = height
-
-	l := m.layout()
-	box := l.box.Render(strings.Join(m.buildProbeLines(l, m.filtered()), "\n"))
-	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
-	// Terminals too small for even the chrome plus one row (or narrower than
-	// the frame) would overflow; cut the excess rather than scroll the screen.
-	return lipgloss.NewStyle().MaxHeight(height).MaxWidth(width).Render(placed)
-}
-
-// probeModalWidth returns the modal width for the given terminal width: the
-// preferred width with a 2-cell margin each side when it fits, shrinking to
-// minModalWidth, and below that the whole terminal width, so the box never
-// grows wider than the terminal.
-func probeModalWidth(termWidth int) int {
-	return max(min(maxModalWidth, termWidth-4), min(minModalWidth, termWidth))
-}
-
-// headerLines returns the modal lines above the probe rows: the title, the
-// search input or active filter (when any), and a spacer.
-func (m Model) headerLines() []string {
-	active, total := 0, len(m.probes)
-	if m.manager != nil {
-		active, total = m.manager.ActiveCount()
-	}
-	title := "Syscalls"
-	if m.view == viewFamilies {
-		title = "Families"
-	}
-	lines := []string{fmt.Sprintf("Probes (%d/%d active) - %s", active, total, title)}
-	if m.view == viewFamilies {
-		return append(lines, "")
-	}
-	if m.searching {
-		lines = append(lines, m.textInput.View())
-	} else if m.search != "" {
-		// The committed filter text may come from a terminal paste carrying a
-		// bidi override, zero-width or blank-rendering rune, which the textinput
-		// does not drop, so the display copy is sanitised; m.search itself stays
-		// raw because the row filter matches against it.
-		lines = append(lines, "Filter: "+common.Sanitize(m.search))
-	}
-	return append(lines, "")
-}
-
-// footerLines returns the modal lines below the probe rows: the running
-// family batch's progress or the last batch's outcome, the last toggle error
-// (when any) and the active view's key help. All may wrap inside the modal.
-func (m Model) footerLines() []string {
-	var lines []string
-	if line := m.batchLine(); line != "" {
-		lines = append(lines, "", line)
-	} else if m.lastInfo != "" {
-		lines = append(lines, "", common.Sanitize(m.lastInfo))
-	}
-	if m.lastErr != "" {
-		lines = append(lines, "", "Error: "+common.Sanitize(m.lastErr))
-	}
-	help := probesHelp
-	if m.view == viewFamilies {
-		help = familiesHelp
-	}
-	return append(lines, "", help)
-}
-
-// buildProbeLines assembles the text lines that make up the modal content
-// from a precomputed layout and filtered item list: header, the l.rows-high
-// window of rows starting at the scroll offset - probes, or in the Families
-// view the families (items is then unused) - and the footer. Rows
-// are cut to the content width so each takes exactly one line, as the row
-// budget assumes.
-func (m Model) buildProbeLines(l probeLayout, items []probemanager.ProbeState) []string {
-	lines := make([]string, 0, len(l.header)+l.rows+len(l.footer))
-	lines = append(lines, l.header...)
-	if m.view == viewFamilies {
-		lines = append(lines, m.familyRows(l)...)
-		return append(lines, l.footer...)
-	}
-
-	start := min(m.offset, len(items))
-	end := min(start+l.rows, len(items))
-	width := contentWidth(l.box)
-	for i := start; i < end; i++ {
-		row := m.renderProbeRow(items[i], i == m.cursor)
-		lines = append(lines, common.TruncateRight(row, width, common.ASCIIEllipsis))
-	}
-	if len(items) == 0 {
-		lines = append(lines, "  (no probes)")
-	}
-	return append(lines, l.footer...)
 }
 
 // renderProbeRow formats a single probe entry with selection prefix, checkbox,

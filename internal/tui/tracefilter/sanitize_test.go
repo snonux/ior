@@ -7,17 +7,17 @@ import (
 	"ior/internal/globalfilter"
 )
 
-// TestBodyLinesSanitizeTracedPatterns verifies filter patterns pushed from
+// TestViewSanitizesTracedPatterns verifies filter patterns pushed from
 // traced comm/file values (an OSC 8 link, SGR hidden text) are shown without
 // escape bytes while the filter itself keeps the raw pattern (task io2).
-func TestBodyLinesSanitizeTracedPatterns(t *testing.T) {
+func TestViewSanitizesTracedPatterns(t *testing.T) {
 	comm := "ev\x1b[8mil"
 	file := "/tmp/\x1b]8;;http://evil\aclick\x1b]8;;\a"
 	model := NewModel().Open(globalfilter.Filter{
 		Comm: &globalfilter.StringFilter{Pattern: comm},
 		File: &globalfilter.StringFilter{Pattern: file},
 	})
-	body := strings.Join(model.bodyLines(), "\n")
+	body := model.View(200, 40)
 	if strings.ContainsAny(body, "\x1b\a") {
 		t.Fatalf("body contains escape bytes: %q", body)
 	}

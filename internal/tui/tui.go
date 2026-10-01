@@ -716,7 +716,12 @@ func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool
 	m.height = msg.Height
 	// The probes modal budgets its rows from the same effective viewport View
 	// renders into, so its scroll offset matches the rows actually drawn.
-	m.probeModal = m.probeModal.SetSize(common.EffectiveViewport(msg.Width, msg.Height))
+	width, height := common.EffectiveViewport(msg.Width, msg.Height)
+	m.probeModal = m.probeModal.SetSize(width, height)
+	// The filter and record modals fit their text input to the width View
+	// draws them at, so typing scrolls the input with that width (task rz2).
+	m.filterModal = m.filterModal.Resize(width)
+	m.recordModal = m.recordModal.Resize(width)
 	next, cmd := m.updateActiveModel(msg)
 	return next, cmd, true
 }
@@ -1533,8 +1538,9 @@ func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
 	m.clearError()
 	m.exporter = tuiexport.NewModel()
 	m.probeModal = m.newProbeModal().SetSize(common.EffectiveViewport(m.width, m.height))
-	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
-	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
+	width, _ := common.EffectiveViewport(m.width, m.height)
+	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark).Resize(width)
+	m.recordModal = newRecordingModal().SetDarkMode(m.isDark).Resize(width)
 	var sizeCmd tea.Cmd
 	m.pidPicker, sizeCmd = applyWindowSizeToPicker(picker.SetDarkMode(m.isDark), m.width, m.height)
 	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
@@ -1893,9 +1899,15 @@ func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 
 // viewDashboardScreen renders the dashboard screen with the appropriate modal
 // overlay (filter, record, probes, export) if one is active. The filter,
-// record and probes modals replace the dashboard; the export modal is drawn
-// over it (overlayExportModal), keeping the tab bar and the status line in
-// view where the terminal has the rows (task ns2).
+// record and probes modals replace the dashboard: each View returns a frame
+// exactly width x height, its box shed to fit or drawn bare below the most
+// compact box (common.PlaceModal, task rz2; placeToViewport only pads, so
+// the box used to come out taller and wider than a small terminal). They
+// stay full-screen rather than drawn over the dashboard because at 80x24 the
+// filter box takes 23 rows and the probes box all 24, so an overlay would
+// show next to nothing of it. The export modal is drawn over the dashboard
+// (overlayExportModal), keeping the tab bar and the status line in view
+// where the terminal has the rows (task ns2).
 func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {

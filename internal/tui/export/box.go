@@ -1,8 +1,6 @@
 package export
 
 import (
-	"strings"
-
 	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
@@ -11,19 +9,14 @@ import (
 const (
 	// title is the modal's heading line.
 	title = "Export Stream CSV"
-	// hintSep separates the segments of the key hint.
-	hintSep = " • "
 	// hint is the key hint shown while no export is running.
-	hint = "Enter confirm" + hintSep + "Esc cancel"
+	hint = "Enter confirm" + common.HintSep + "Esc cancel"
 
 	// preferredBoxWidth and minBoxWidth are the modal's preferred box width
 	// and the narrowest it is made while the view has room for it, borders
 	// and padding included.
 	preferredBoxWidth = 48
 	minBoxWidth       = 30
-	// boxChrome is the cells the box spends on its rounded border and two
-	// cells of horizontal padding on each side.
-	boxChrome = 2 + 2*2
 )
 
 // boxLayout is one arrangement of the modal, from roomy to compact: whether
@@ -73,10 +66,10 @@ func (m Model) Box(width, height int) string {
 		height = 24
 	}
 	boxWidth := fitBoxWidth(width)
-	textWidth := boxWidth - boxChrome
+	textWidth := boxWidth - common.ModalBoxChrome
 	var box string
 	for _, layout := range boxLayouts {
-		box = renderBox(m.boxLines(layout, textWidth), layout.vpad, boxWidth)
+		box = common.RenderModalBox(m.boxLines(layout, textWidth), layout.vpad, boxWidth)
 		if lipgloss.Height(box) <= height {
 			break
 		}
@@ -87,10 +80,9 @@ func (m Model) Box(width, height int) string {
 // fitBoxWidth is the box width for a view width cells wide: the preferred
 // width with a two-cell margin on each side, not narrower than minBoxWidth
 // while that fits, never wider than the view, and at least one text cell
-// wide.
+// wide (common.ModalBoxWidth).
 func fitBoxWidth(width int) int {
-	boxWidth := max(min(preferredBoxWidth, width-4), minBoxWidth)
-	return max(min(boxWidth, width), boxChrome+1)
+	return common.ModalBoxWidth(preferredBoxWidth, minBoxWidth, width)
 }
 
 // boxLines is the modal's text in layout for a box textWidth cells wide:
@@ -98,11 +90,13 @@ func fitBoxWidth(width int) int {
 // status message and the key hint, in sections separated by a blank line
 // when layout.blanks is set. No line is wider than textWidth: each is cut
 // to it except, in a wrapping layout, the note and the status, which are
-// wrapped to it (fitMessage).
+// wrapped to it (fitMessage); the key hint keeps whole segments
+// (common.FitHint: a narrow box drops "• Esc cancel" rather than showing
+// "Esc cance").
 func (m Model) boxLines(layout boxLayout, textWidth int) []string {
 	var sections [][]string
 	if layout.title {
-		sections = append(sections, []string{cutLine(title, textWidth, "")})
+		sections = append(sections, []string{common.CutLine(title, textWidth, "")})
 	}
 	options := make([]string, 0, len(optionLabels))
 	for i, label := range optionLabels {
@@ -110,14 +104,14 @@ func (m Model) boxLines(layout boxLayout, textWidth int) []string {
 		if i == m.selected && !m.exporting {
 			prefix = "> "
 		}
-		options = append(options, cutLine(prefix+label, textWidth, ""))
+		options = append(options, common.CutLine(prefix+label, textWidth, ""))
 	}
 	sections = append(sections, options)
 	for _, text := range m.messages(layout) {
 		sections = append(sections, fitMessage(text, textWidth, layout.wrap))
 	}
 	if !m.exporting {
-		sections = append(sections, []string{fitHint(hint, textWidth)})
+		sections = append(sections, []string{common.FitHint(hint, textWidth)})
 	}
 	return joinSections(sections, layout.blanks)
 }
@@ -138,24 +132,22 @@ func (m Model) messages(layout boxLayout) []string {
 
 // fitMessage fits a note or status message to textWidth cells: when wrap is
 // set, wrapped at whitespace only and hard-wrapped inside words still longer
-// than the width (a path), by wrapAtSpaces, so a path that fits a line is
-// never broken at its hyphens and the " - " of PausedNote never stands on a
-// line of its own; else cut to one line ending in "…". The wrapping is done
-// here rather than by the box style: lipgloss's own wrap of a word longer
-// than a narrow box let lines through wider than the box, which widened it
-// past the view. Each line is cut to the width as well: wrapAtSpaces puts a
-// wide rune wider than a one-cell text area (a 7-column view) on a line of
-// its own two cells wide, which the cut leaves empty, so the box keeps to
-// its view (TestBoxFitsItsArea's wide-rune cases).
+// than the width (a path), by common.FitWrapped, so a path that fits a line
+// is never broken at its hyphens and the " - " of PausedNote never stands on
+// a line of its own; else cut to one line ending in "…". The wrapping is
+// done here rather than by the box style: lipgloss's own wrap of a word
+// longer than a narrow box let lines through wider than the box, which
+// widened it past the view. Each line is cut to the width as well:
+// common.WrapAtSpaces puts a wide rune wider than a one-cell text area (a
+// 7-column view) on a line of its own two cells wide, which the cut leaves
+// empty, so the box keeps to its view (TestBoxFitsItsArea's wide-rune
+// cases). (export/wrap.go held the wrapping until task rz2 moved it to
+// common for the other top-level modals.)
 func fitMessage(text string, textWidth int, wrap bool) []string {
 	if !wrap {
-		return []string{cutLine(text, textWidth, common.Ellipsis)}
+		return []string{common.CutLine(text, textWidth, common.Ellipsis)}
 	}
-	lines := wrapAtSpaces(text, textWidth)
-	for i, line := range lines {
-		lines[i] = cutLine(strings.TrimRight(line, " "), textWidth, "")
-	}
-	return lines
+	return common.FitWrapped(text, textWidth)
 }
 
 // joinSections flattens sections, with a blank line between two sections
@@ -169,48 +161,4 @@ func joinSections(sections [][]string, blanks bool) []string {
 		lines = append(lines, section...)
 	}
 	return lines
-}
-
-// renderBox boxes lines, none wider than the box's text width, in a rounded
-// border boxWidth cells wide with two cells of horizontal padding and, with
-// vpad, one blank row above and below.
-func renderBox(lines []string, vpad bool, boxWidth int) string {
-	vertical := 0
-	if vpad {
-		vertical = 1
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(vertical, 2).
-		Width(boxWidth).
-		Render(strings.Join(lines, "\n"))
-}
-
-// cutLine cuts line to width cells, ending in tail when cut.
-func cutLine(line string, width int, tail string) string {
-	if common.DisplayWidth(line) <= width {
-		return line
-	}
-	return common.TruncateRight(line, width, tail)
-}
-
-// fitHint keeps the longest prefix of whole hintSep-separated segments of h
-// that fits width cells, so a narrow box drops "• Esc cancel" rather than
-// showing "Esc cance". Only when not even the first segment fits is it cut,
-// ending in "…". (eventstream's fitSegments does the same for the stream
-// modals; it is not exported.)
-func fitHint(h string, width int) string {
-	segments := strings.Split(h, hintSep)
-	line := segments[0]
-	if common.DisplayWidth(line) > width {
-		return common.TruncateRight(line, width, common.Ellipsis)
-	}
-	for _, seg := range segments[1:] {
-		next := line + hintSep + seg
-		if common.DisplayWidth(next) > width {
-			break
-		}
-		line = next
-	}
-	return line
 }

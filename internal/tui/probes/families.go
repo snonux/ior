@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"ior/internal/probemanager"
-	common "ior/internal/tui/common"
 	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
@@ -192,18 +191,4 @@ func renderFamilyRow(state probemanager.FamilyState, selected bool) string {
 		check = "[~]"
 	}
 	return fmt.Sprintf("%s%s %-10s %4d/%-4d", prefix, check, state.Family, state.Active, state.Total)
-}
-
-// familyRows renders the l.rows-high window of the Families view.
-func (m Model) familyRows(l probeLayout) []string {
-	families := m.familyStates()
-	start := min(m.famOffset, len(families))
-	end := min(start+l.rows, len(families))
-	width := contentWidth(l.box)
-	rows := make([]string, 0, end-start)
-	for i := start; i < end; i++ {
-		row := renderFamilyRow(families[i], i == m.famCursor)
-		rows = append(rows, common.TruncateRight(row, width, common.ASCIIEllipsis))
-	}
-	return rows
 }

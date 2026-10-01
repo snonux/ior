@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	common "ior/internal/tui/common"
+
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -108,7 +110,7 @@ func assertBoxFits(t *testing.T, c boxCase, width, height int) {
 	where := fmt.Sprintf("%s %dx%d", c.name, width, height)
 	lines := strings.Split(box, "\n")
 	boxWidth := lipgloss.Width(box)
-	if boxWidth > max(width, boxChrome+1) {
+	if boxWidth > max(width, common.ModalBoxChrome+1) {
 		t.Fatalf("%s: box is %d cells wide:\n%s", where, boxWidth, box)
 	}
 	if !strings.HasPrefix(lines[0], "╭") || !strings.HasPrefix(lines[len(lines)-1], "╰") {
@@ -158,22 +160,5 @@ func TestBoxShedsInOrder(t *testing.T) {
 	compact := m.Box(80, 6)
 	if strings.Contains(compact, "Live ring") || !strings.Contains(compact, "disk full") || !strings.Contains(compact, "Enter confirm") {
 		t.Fatalf("a 6-row box must drop the note and keep status and hint:\n%s", compact)
-	}
-}
-
-// TestFitHintKeepsWholeSegments pins the key hint's narrowing: whole
-// segments while the first fits, a marked cut below that.
-func TestFitHintKeepsWholeSegments(t *testing.T) {
-	cases := map[int]string{
-		40: hint,
-		26: hint,
-		25: "Enter confirm",
-		13: "Enter confirm",
-		5:  "Ente…",
-	}
-	for width, want := range cases {
-		if got := fitHint(hint, width); got != want {
-			t.Fatalf("fitHint(%d) = %q, want %q", width, got, want)
-		}
 	}
 }

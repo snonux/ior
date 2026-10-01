@@ -227,13 +227,17 @@ func TestVisibleRowsDefault(t *testing.T) {
 }
 
 // TestVisibleRowsMinimum verifies that visibleRows keeps at least one row
-// (so the selection stays visible) even when the chrome alone exceeds the
-// terminal height.
+// (so the selection stays visible) even when the full chrome alone exceeds
+// the terminal height: the box sheds its padding, blank lines, wrapping and
+// title first (probeLevels) until one row fits: a 5-row terminal keeps the
+// title and one row in the box, and a 1-row one, drawn bare, still one.
 func TestVisibleRowsMinimum(t *testing.T) {
 	m := NewModel(nil)
-	m.height = 5
-	if got := m.visibleRows(); got != 1 {
-		t.Fatalf("visibleRows = %d, want 1", got)
+	for height, want := range map[int]int{5: 1, 1: 1} {
+		m.height = height
+		if got := m.visibleRows(); got != want {
+			t.Fatalf("height %d: visibleRows = %d, want %d", height, got, want)
+		}
 	}
 }
 

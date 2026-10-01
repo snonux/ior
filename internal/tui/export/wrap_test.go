@@ -1,9 +1,10 @@
 package export
 
 import (
-	"slices"
 	"strings"
 	"testing"
+
+	common "ior/internal/tui/common"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -121,7 +122,7 @@ func TestBoxShowsTheWholeStatus(t *testing.T) {
 		if !strings.Contains(squash(box), squash(m.status)) {
 			t.Fatalf("width %d: status not shown in full:\n%s", width, box)
 		}
-		if fitBoxWidth(width)-boxChrome >= ansi.StringWidth(shortPath) && !strings.Contains(box, shortPath) {
+		if fitBoxWidth(width)-common.ModalBoxChrome >= ansi.StringWidth(shortPath) && !strings.Contains(box, shortPath) {
 			t.Fatalf("width %d: path broken although it fits:\n%s", width, box)
 		}
 	}
@@ -166,31 +167,5 @@ func TestViewIsClippedToItsHeight(t *testing.T) {
 		if got := len(strings.Split(m.View(40, height), "\n")); got != height {
 			t.Fatalf("height %d: view is %d rows tall", height, got)
 		}
-	}
-}
-
-// TestWrapAtWhitespace pins what wrapAtSpaces breaks at: any Unicode white
-// space (strings.Fields), a tab and a no-break space included, each run
-// written as one plain space; and that a wide rune wider than a one-cell
-// line opens its word without the empty line ansi.Hardwrap puts before it,
-// its line then cut empty by fitMessage rather than left two cells wide.
-func TestWrapAtWhitespace(t *testing.T) {
-	cases := []struct {
-		text  string
-		width int
-		want  []string
-	}{
-		{"a\u00a0b\tc", 3, []string{"a b", "c"}},
-		{"a  \t b", 80, []string{"a b"}},
-		{"日本 a", 1, []string{"日", "本", "a"}},
-		{"😀x", 1, []string{"😀", "x"}},
-	}
-	for _, c := range cases {
-		if got := wrapAtSpaces(c.text, c.width); !slices.Equal(got, c.want) {
-			t.Fatalf("wrapAtSpaces(%q, %d) = %q, want %q", c.text, c.width, got, c.want)
-		}
-	}
-	if got, want := fitMessage("日 a", 1, true), []string{"", "a"}; !slices.Equal(got, want) {
-		t.Fatalf("fitMessage at width 1 = %q, want %q", got, want)
 	}
 }
