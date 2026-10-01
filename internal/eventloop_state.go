@@ -232,6 +232,14 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 	t.files[key] = f
 	t.fileAges[key] = t.age
 	t.indexFileKey(key)
+	// The fd table now answers for this number, so a procfs cache entry for it
+	// is shadowed and, since the traced syscall just rebound the descriptor,
+	// stale. Left in place it would resurface once the table entry goes (exec
+	// closing a cloexec fd, LRU eviction, close) and name the previous file
+	// (task kr2).
+	if _, shadowed := t.procFdCache[key]; shadowed { // keep the common miss to one lookup
+		t.deleteCacheKey(key)
+	}
 	t.pruneFiles()
 }
 
@@ -682,10 +690,14 @@ func survivesExec(f file.File) bool {
 // with the number of traced processes, and the syscall stream alone does not
 // reclaim a dead process's entries (the sched_process_exit record usually
 // does; see the note on defaultMaxFdTableEntries), so the cap is what bounds
-// it. Eviction is safe rather than merely lossy: resolve falls back to the
-// procfs cache and then to /proc/<pid>/fd, which still answers correctly for
-// a descriptor that is genuinely still open. Victims leave through
-// removeFileKey so the per-pid index forgets them too.
+// it. Eviction is lossy, not wrong: resolve falls back to /proc/<pid>/fd,
+// which identifies a descriptor that is genuinely still open correctly, but
+// reports it in procfs's own form, so a name ior captured from the syscall
+// ("pipe:0:3:4", "memfd:name", "eventfd:0") degrades to "pipe:[N]",
+// "/memfd:name (deleted)" or "anon_inode:[eventfd]" for the later rows of that
+// descriptor. (set clears the shadowed procfs cache entry, so no stale cached
+// name can resurface here, task kr2.) Victims leave through removeFileKey so
+// the per-pid index forgets them too.
 func (t *fdTracker) pruneFiles() {
 	limit := t.filesLimit()
 	if len(t.files) <= limit {
