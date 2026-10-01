@@ -244,6 +244,11 @@ func plainLine(s string) string {
 // has rows, but fewer than the active tab's minimum.
 func assertNoticeThreshold(t *testing.T, m *Model, label, out string, width, body int) {
 	t.Helper()
+	// A notice cut to a few cells (one letter at width 1) is contained in any
+	// text, so it proves nothing there.
+	if width < 8 {
+		return
+	}
 	tooSmall := strings.Contains(out, tooSmallNotice(width))
 	switch min := m.minBodyRowsFor(m.activeTab); {
 	case body >= min && tooSmall:
@@ -266,6 +271,9 @@ func expectedBody(t *testing.T, m *Model, label string, width, height, body int)
 	}
 	_, activeHeight := m.contentViewport(m.activeTab, width, height)
 	raw := m.renderActiveContent(width, min(activeHeight, body), &m.streamModel, m.flamegraphModel)
+	// Below narrowBodyWidth renderBody cuts over-wide lines (task qz2); the
+	// height contract is judged on what it draws.
+	raw = cutBodyToWidth(raw, width)
 	if got := lipgloss.Height(raw); got > body {
 		t.Fatalf("%s: tab drew %d rows into a %d-row body (only the clip saved the frame):\n%s", label, got, body, raw)
 	}
@@ -1329,5 +1337,24 @@ func TestProcessesPageStepFollowsTheNoteRow(t *testing.T) {
 	filtered := newFitModel(t, c, false, 100, 24)
 	if got, want := filtered.activeTableHeight(), plain.activeTableHeight()-1; got != want {
 		t.Fatalf("activeTableHeight with a PID filter = %d, want %d (one row for the note)", got, want)
+	}
+}
+
+// TestEveryTabFitsNarrowTerminals (task qz2) extends the height matrix below 20
+// columns: every tab in every mode must still draw no line wider than the
+// terminal (a wider line soft-wraps and breaks the height budget), from one
+// column up, with and without the help bar. Latency+Gaps got this sweep in
+// ps2 (TestLatencyTabFitsNarrowTerminals).
+func TestEveryTabFitsNarrowTerminals(t *testing.T) {
+	for _, c := range fitCases() {
+		for _, help := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/help=%v", c, help), func(t *testing.T) {
+				for width := 1; width <= 19; width++ {
+					for height := 1; height <= 30; height++ {
+						assertViewFits(t, c, help, width, height)
+					}
+				}
+			})
+		}
 	}
 }

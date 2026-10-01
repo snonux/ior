@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const panelHorizontalChrome = 4
@@ -121,4 +122,26 @@ func clipTailLines(s string, height int) string {
 		return s
 	}
 	return strings.Join(lines[len(lines)-height:], "\n")
+}
+
+// narrowBodyWidth is the terminal width below which the panels' own minimum
+// widths no longer fit and renderBody cuts their lines (cutBodyToWidth).
+const narrowBodyWidth = 20
+
+// cutBodyToWidth cuts every line of body to width cells below narrowBodyWidth
+// columns and returns body untouched from there on, at no cost: the tabs fit
+// the width themselves down to that. It is renderBody's last line of defence
+// against a panel that keeps a minimum width wider than a very narrow terminal;
+// styling is kept up to the cut (ansi.Truncate closes what it opens).
+func cutBodyToWidth(body string, width int) string {
+	if width <= 0 || width >= narrowBodyWidth {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
 }

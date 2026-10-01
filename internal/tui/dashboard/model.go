@@ -1241,14 +1241,18 @@ func (m *Model) renderStatusBlock(width int) string {
 // its own content viewport (which also sizes its sub-model), capped at
 // bodyRows, and the result is clipped to bodyRows as a last line of defence:
 // a tab that keeps a minimum size of its own can then at worst lose its
-// bottom rows, never push the frame past the terminal.
+// bottom rows, never push the frame past the terminal. Below narrowBodyWidth
+// columns the width gets the same last line of defence (cutBodyToWidth): the
+// panels keep a minimum width of their own (a bordered box is 5 cells wide, the
+// overview panels 16-20), and a line wider than the terminal soft-wraps and
+// breaks the height budget (task qz2).
 func (m *Model) renderBody(width, height, bodyRows int) string {
 	if bodyRows < m.minBodyRowsFor(m.activeTab) {
 		return clipLines(tooSmallNotice(width), bodyRows)
 	}
 	_, activeHeight := m.contentViewport(m.activeTab, width, height)
 	body := m.renderActiveContent(width, min(activeHeight, bodyRows), &m.streamModel, m.flamegraphModel)
-	return clipLines(body, bodyRows)
+	return clipLines(cutBodyToWidth(body, width), bodyRows)
 }
 
 func (m *Model) filterSummary() string {
