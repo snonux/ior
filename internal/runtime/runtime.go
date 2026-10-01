@@ -238,6 +238,37 @@ type WarningRecorder interface {
 	RecordWarning(row streamrow.Row, filterEpoch uint64, describe func(rec RowRecorder, result error) string)
 }
 
+// RowEmitter is the per-event output of the trace core: it delivers one
+// event's stream row to everything a session feeds with it - the stream
+// buffer, the recorder and the recorder's warning - behind a single session
+// gate, instead of one gate per destination (EventSink.Push, then
+// WarningRecorder.RecordWarning). The TUI's session view implements it: the
+// print callback runs once per event pair, and the second gate's read-lock
+// round trip and closure call were a measurable part of the per-event cost
+// (task yp2).
+//
+// EmitRow keeps the semantics of the pair it replaces, in the same order:
+// push the row, record it stamped with the filter epoch current inside the
+// gate, and publish the warning the recorder result deserves
+// (RecorderWarningText). A retired session's row is dropped entirely, and
+// once the session's retirement returns no EmitRow of it is still in flight.
+//
+// The row is passed by value on purpose: through an interface, a pointer
+// parameter makes the caller's per-event local escape to the heap (one ~224
+// byte allocation per event, measured), which costs far more than the copy.
+type RowEmitter interface {
+	EmitRow(row streamrow.Row)
+}
+
+// RowEmitterSource is the optional capability of a RuntimeState to hand out
+// the session's RowEmitter. It is optional so bindings without a session gate
+// (fakes, headless wiring) need not implement it; the core then falls back to
+// the separate Push and RecordRow calls, which behave the same minus the
+// single gate.
+type RowEmitterSource interface {
+	RowEmitter() RowEmitter
+}
+
 // RecordingController is the full recorder surface the TUI needs on top of
 // row recording: opening and closing recordings and polling their status.
 // Declaring it here (rather than handing the TUI *parquet.Recorder) keeps the

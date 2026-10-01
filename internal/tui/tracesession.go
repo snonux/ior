@@ -28,7 +28,9 @@ import (
 //   - Event output is gated too: StreamBuffer and Recorder return wrappers
 //     whose Push/Record drop what a superseded session still emits, so its
 //     rows can neither land in the next session's freshly reset stream nor be
-//     recorded with the next session's filter epoch.
+//     recorded with the next session's filter epoch. The trace core's hot
+//     path uses RowEmitter instead: one gate per event for the push, the
+//     record and the recorder warning together (task yp2).
 //
 // Plain reads (stream length/snapshot, sequencer, filter epoch, recorder
 // status) are not gated: that is TUI-owned state outliving every session.
@@ -58,10 +60,19 @@ type sessionRecorder struct {
 	view traceSessionBindings
 }
 
+// sessionRowEmitter is the per-event output of one session: the stream push,
+// the recording and the recorder warning of a row under a single session gate
+// (see EmitRow).
+type sessionRowEmitter struct {
+	view traceSessionBindings
+}
+
 // traceSessionBindings is what a TraceRequest carries, so it must satisfy the
 // full runtime contract; its wrappers must satisfy the sink and recorder ones.
 var (
 	_ runtime.TraceRuntimeBindings = traceSessionBindings{}
+	_ runtime.RowEmitterSource     = traceSessionBindings{}
+	_ runtime.RowEmitter           = sessionRowEmitter{}
 	_ runtime.EventSink            = sessionEventSink{}
 	_ runtime.RecordingController  = sessionRecorder{}
 	_ runtime.WarningRecorder      = sessionRecorder{}
@@ -205,6 +216,12 @@ func (s traceSessionBindings) Recorder() runtime.RecordingController {
 	return sessionRecorder{RecordingController: recorder, view: s}
 }
 
+// RowEmitter returns the session's single-gate event output (see
+// runtime.RowEmitterSource).
+func (s traceSessionBindings) RowEmitter() runtime.RowEmitter {
+	return sessionRowEmitter{view: s}
+}
+
 // StreamSequencer returns the TUI-owned stream row sequencer.
 func (s traceSessionBindings) StreamSequencer() runtime.Sequencer {
 	return s.bindings.StreamSequencer()
@@ -286,17 +303,59 @@ func (k sessionRecorder) TakeFailure() error {
 func (k sessionRecorder) RecordWarning(row streamrow.Row, filterEpoch uint64, describe func(rec runtime.RowRecorder, result error) string) {
 	r := k.view.bindings
 	r.emitIfCurrent(k.view.session, func() {
-		result := k.RecordingController.Record(row, filterEpoch)
-		// describe claims a failure (TakeFailure marks it reported), so only
-		// ask when the warning can be delivered; otherwise the failure stays
-		// available to the record modal and the quit path.
-		if !r.canPushWarningLocked() {
-			return
-		}
-		if message := describe(k.RecordingController, result); message != "" {
-			r.pushWarningLocked(message)
-		}
+		r.recordAndWarnLocked(k.RecordingController, row, filterEpoch, describe)
 	})
+}
+
+// EmitRow delivers one event's row while the session is current: it pushes the
+// row to the stream, records it and publishes the recorder warning, all under
+// one read-lock hold. The lock discipline is emitIfCurrent's - holding the
+// lock across the whole delivery is what makes endSession a barrier, so once
+// it returns no row of the retired session is still in flight - but it is
+// spelled out here instead of calling emitIfCurrent: the closure (and the
+// second lock round trip the separate Push and RecordWarning each paid) was a
+// measurable part of the per-event cost.
+//
+// The recorder and stream buffer are read from the bindings under the lock,
+// like every gated emit, so a swapped-in buffer is honoured. The filter epoch
+// is read inside the gate too: a restart-style filter change retires the
+// session before it advances the epoch, so a row that passes the gate cannot
+// be stamped with an epoch advanced after its session ended (an in-place
+// live-filter swap advances it while the session runs, and later rows carry
+// the new epoch from then on, as before).
+//
+// The row is a value on purpose: through an interface a pointer would make
+// the caller's per-event row escape to the heap (see runtime.RowEmitter).
+func (e sessionRowEmitter) EmitRow(row streamrow.Row) {
+	r := e.view.bindings
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.session != e.view.session {
+		return
+	}
+	if r.streamBuffer != nil {
+		r.streamBuffer.Push(row)
+	}
+	if r.recorder != nil {
+		r.recordAndWarnLocked(r.recorder, row, r.filterEpoch.Load(), runtime.RecorderWarningText)
+	}
+}
+
+// recordAndWarnLocked records row through rec and publishes the warning that
+// describe derives from the result - the one step shared by the gated
+// recorder view (RecordWarning) and the session's single-gate emitter
+// (EmitRow). The caller must hold r.mu and know the session is current.
+func (r *runtimeBindings) recordAndWarnLocked(rec runtime.RowRecorder, row streamrow.Row, filterEpoch uint64, describe func(rec runtime.RowRecorder, result error) string) {
+	result := rec.Record(row, filterEpoch)
+	// describe claims a failure (TakeFailure marks it reported), so only ask
+	// when the warning can be delivered; otherwise the failure stays
+	// available to the record modal and the quit path.
+	if !r.canPushWarningLocked() {
+		return
+	}
+	if message := describe(rec, result); message != "" {
+		r.pushWarningLocked(message)
+	}
 }
 
 // canPushWarningLocked reports whether a warning row has somewhere to go: the

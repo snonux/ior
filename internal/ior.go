@@ -197,6 +197,11 @@ type tuiRuntime struct {
 	// surface (start/stop/status, the TUI's concern) cannot ripple into this
 	// wiring.
 	recorder runtime.RowRecorder
+	// emitter, when non-nil, is the session's single-gate event output (push,
+	// record and recorder warning behind one session gate); the TUI's session
+	// view provides it. Nil (headless modes, fakes) leaves the print callback on
+	// the separate streamBuf.Push and recordRow calls (see rowEmitter).
+	emitter runtime.RowEmitter
 	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
 	// bindings at row-stamp time, so in-place filter swaps advance the epoch
 	// recorded in parquet rows without a trace restart. Nil (headless modes
@@ -256,6 +261,12 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	if persistent := bindings.StreamBuffer(); persistent != nil {
 		rt.streamSrc = persistent
 		rt.streamBuf = persistent
+		// The single-gate emitter pushes into the bindings' own buffer, so it
+		// is only valid next to that buffer: without one the rows stay on the
+		// fresh local buffer through the plain fallback.
+		if source, ok := bindings.(runtime.RowEmitterSource); ok {
+			rt.emitter = source.RowEmitter()
+		}
 	}
 	if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
 		rt.streamSeq = persistentSeq
@@ -297,6 +308,35 @@ func recordRow(el *eventLoop, rec runtime.RowRecorder, row streamrow.Row, filter
 	warnRecorderResult(el, rec, rec.Record(row, filterEpoch))
 }
 
+// rowEmitter returns the output the print callback delivers each row to: the
+// session's single-gate emitter when the bindings provided one, otherwise the
+// plain push-then-record fallback bound to el's warning sink. It is resolved
+// once per event loop, not per event.
+func (rt *tuiRuntime) rowEmitter(el *eventLoop) runtime.RowEmitter {
+	if rt.emitter != nil {
+		return rt.emitter
+	}
+	return plainRowEmitter{rt: rt, el: el}
+}
+
+// plainRowEmitter is the ungated RowEmitter: the stream push followed by
+// recordRow, for runtimes whose bindings have no session gate to share
+// (headless modes, test fakes). It reads rt's fields on every call, like the
+// print callback did before the emitter existed, so a recorder or buffer
+// swapped in after wiring is honoured.
+type plainRowEmitter struct {
+	rt *tuiRuntime
+	el *eventLoop
+}
+
+// EmitRow pushes row to the stream and records it when a recorder is wired.
+func (p plainRowEmitter) EmitRow(row streamrow.Row) {
+	p.rt.streamBuf.Push(row)
+	if p.rt.recorder != nil {
+		recordRow(p.el, p.rt.recorder, row, p.rt.currentFilterEpoch())
+	}
+}
+
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
 // the event loop into the TUI runtime and an ownership-aware function that
 // unregisters its live-filter setter. The callback sets the initial filter,
@@ -306,9 +346,9 @@ func recordRow(el *eventLoop, rec runtime.RowRecorder, row streamrow.Row, filter
 // In TUI mode publisher is the session's bindings view, so a session that a
 // restart has already superseded registers nothing either: its setter would
 // otherwise replace the newer session's (see tui.traceSessionBindings). The
-// stream buffer and recorder in rt come from that same view, which drops the
-// rows and warnings a stopped session still pushes, so the callbacks below
-// need no session check of their own.
+// row emitter (or, without one, the stream buffer and recorder) in rt comes
+// from that same view, which drops the rows and warnings a stopped session
+// still pushes, so the callbacks below need no session check of their own.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
@@ -318,6 +358,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
+		emitter := rt.rowEmitter(el)
 		el.SetPrintCallback(func(ep *event.Pair) {
 			if !shouldIngestTracePair(el.Filter(), ep) {
 				ep.Recycle()
@@ -325,10 +366,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 			}
 			row := streamrow.New(rt.streamSeq.Next(), ep)
 			rt.accumulator.Ingest(ep)
-			rt.streamBuf.Push(row)
-			if rt.recorder != nil {
-				recordRow(el, rt.recorder, row, rt.currentFilterEpoch())
-			}
+			emitter.EmitRow(row)
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so
 			// the pooled pair can be recycled immediately afterwards.
