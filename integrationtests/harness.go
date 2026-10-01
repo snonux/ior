@@ -33,6 +33,10 @@ type TestHarness struct {
 	BpfObject      string // optional path to external BPF object override
 	OutputDir      string // temp dir for .ior.zst output
 	WorkloadEnv    []string
+	// IorEnv holds extra KEY=VALUE entries for ior's environment (on top of
+	// the test process's own), typically ior's IOR_TEST_* hooks. Honoured by
+	// every run that builds ior through iorCommand.
+	IorEnv []string
 	// IorOutput, when set, additionally receives every stdout/stderr line
 	// of ior runs that wait for readiness (RunWithIorArgs). waitBoth reads
 	// both pipes to EOF before it reaps ior, so once a run that ended on its
@@ -356,12 +360,16 @@ func (h *TestHarness) startIorArgs(args []string) (*exec.Cmd, error) {
 }
 
 // iorCommand builds the (unstarted) ior command: run in the output directory
-// and, when configured, with the BPF object override in its environment.
+// and, when configured, with the BPF object override and IorEnv in its
+// environment. A nil Env (neither configured) inherits the test process's.
 func (h *TestHarness) iorCommand(args []string) *exec.Cmd {
 	cmd := exec.Command(h.IorBinary, args...)
 	cmd.Dir = h.OutputDir
-	if h.BpfObject != "" {
-		cmd.Env = append(os.Environ(), bpfObjectOverrideEnv+"="+h.BpfObject)
+	if h.BpfObject != "" || len(h.IorEnv) > 0 {
+		cmd.Env = append(os.Environ(), h.IorEnv...)
+		if h.BpfObject != "" {
+			cmd.Env = append(cmd.Env, bpfObjectOverrideEnv+"="+h.BpfObject)
+		}
 	}
 	return cmd
 }

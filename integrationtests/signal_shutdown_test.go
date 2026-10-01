@@ -443,7 +443,10 @@ const testDisableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 // also exactly "1"): the liveness watcher does not start, leaving the exit
 // records as the only thing that can end a run with its target. Both triggers
 // print the same status line, so a test of the record path needs it: with the
-// 500 ms watcher running, a broken record trigger would still pass.
+// 500 ms watcher running, a broken record trigger would still pass. Set
+// together with testDisableTargetExitRecordEnv, a run ignores its target's exit
+// and lasts until -duration, which
+// TestTidFilterForwardsGroupDeadExitOfUntracedThread relies on (task wz2).
 const testDisableTargetWatchEnv = "IOR_TEST_DISABLE_TARGET_WATCH"
 
 // iorCmdWithEnv returns a newCmd for startSignalRunWith / startTargetRun that

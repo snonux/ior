@@ -237,7 +237,11 @@ func (w *targetWatch) attachTo(infra *traceInfra) {
 // the -tid tests in tid_target_exit_test.go and the -pid test
 // TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord rely on it), which
 // a real lost record or a death during the attach would otherwise be needed for
-// and cannot be forced. It is not documented for users.
+// and cannot be forced. Together with disableTargetWatchEnv it also keeps a
+// run alive past its target's exit, so that
+// TestTidFilterForwardsGroupDeadExitOfUntracedThread sees the group-dead
+// record that follows the traced thread's exit (task wz2). It is not
+// documented for users.
 const disableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 
 // targetExitRecordDisabled reports the test hook above.
@@ -250,7 +254,9 @@ func targetExitRecordDisabled() bool {
 // integration test can prove the exit-record trigger alone ends a run. Both
 // triggers print the same status line, and the watcher polls every 500 ms, so
 // without this a broken record trigger would go unnoticed at integration
-// level. Not documented for users either.
+// level. With disableTargetExitRecordEnv also set, a headless run ignores its
+// target's exit altogether and lasts until -duration (task wz2). Not
+// documented for users either.
 const disableTargetWatchEnv = "IOR_TEST_DISABLE_TARGET_WATCH"
 
 // targetWatchDisabled reports the test hook above.

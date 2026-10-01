@@ -24,6 +24,9 @@ const (
 	// no ring-buffer record; a lost exit record would also make the
 	// assertion vacuous.
 	zeroDropsLine = "ring buffer drops: 0 ("
+	// targetStopLineSuffix ends the status line ior prints when a target-exit
+	// trigger stops a headless run (eventLoop.targetExited).
+	targetStopLineSuffix = "exited, stopping the trace"
 )
 
 var (
@@ -63,10 +66,24 @@ func TestThreadExitKeepsFdNameUnderTidFilter(t *testing.T) {
 // must forward it, and ior's "group-dead exits" statistic must count it.
 // Without the bypass that counter stays 0, because the worker's own exit is
 // not group-dead.
+//
+// Both target-exit triggers are switched off (task wz2). Since task os2 a
+// headless -tid run ends on the traced thread's own exit record, and the
+// liveness watcher ends it within one poll of that thread vanishing; both
+// happen before the process exits, so the group-dead record arrives after
+// the stop. The stop drain decodes only the backlog present at the stop (the
+// trace window ends there), so the record was counted only when it happened
+// to be buffered already: the test failed 9 of 20 runs at 15f7ecd and nearly
+// always on a quiet host later. With the triggers off the run lasts until
+// -duration, long after the workload exited, so the record is consumed
+// inside the window whatever the timing. The bypass is BPF-side and
+// independent of either trigger; the triggers are pinned by
+// tid_target_exit_test.go.
 func TestTidFilterForwardsGroupDeadExitOfUntracedThread(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	h.IorOutput = &OutputCapture{}
+	h.IorEnv = []string{testDisableTargetExitRecordEnv + "=1", testDisableTargetWatchEnv + "=1"}
 	tidFile := filepath.Join(h.OutputDir, "worker.tid")
 	h.WorkloadEnv = []string{workerTidFileEnv + "=" + tidFile}
 	h.IorArgsForPID = func(int) ([]string, error) {
@@ -85,6 +102,11 @@ func TestTidFilterForwardsGroupDeadExitOfUntracedThread(t *testing.T) {
 		{PathContains: "pipe:", Tracepoint: "enter_write", MinCount: 1},
 	})
 	assertExitProbeEffective(t, h.IorOutput)
+	// A stop line means a trigger still fired (a renamed or ignored hook),
+	// which would make the count below timing-dependent again.
+	if strings.Contains(h.IorOutput.String(), targetStopLineSuffix) {
+		t.Fatalf("ior ended on the target's exit despite the disabled triggers; the group-dead count would race the stop")
+	}
 	if got := groupDeadExits(t, h.IorOutput.String()); got < 1 {
 		t.Fatalf("group-dead exits = %d, want >= 1: the untraced thread's group-dead record did not bypass -tid", got)
 	}
