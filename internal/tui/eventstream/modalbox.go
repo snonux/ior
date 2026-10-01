@@ -194,12 +194,12 @@ func modalLayouts(form modalForm) []modalLayout {
 const modalHintSep = " • "
 
 // fitModalHint fits a key hint to textWidth cells by whole segments
-// (fitSegments): trailing segments are dropped first, and only when not even
+// (common.FitSegments): trailing segments are dropped first, and only when not even
 // the first one fits is it cut, ending in "…", so the hint never shows a
 // word cut without a marker (except in a one-cell box, where common's marker
 // rule keeps the first letter). The hints are ior-generated literals.
 func fitModalHint(hint string, textWidth int) string {
-	return fitSegments(strings.Split(hint, modalHintSep), modalHintSep, common.Ellipsis, textWidth)
+	return common.FitSegments(strings.Split(hint, modalHintSep), modalHintSep, common.Ellipsis, textWidth)
 }
 
 // renderModalBox boxes lines, each cut to textWidth cells, in a rounded

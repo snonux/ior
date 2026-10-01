@@ -114,3 +114,32 @@ func TestPlaceModalNonPositiveSizes(t *testing.T) {
 		}
 	}
 }
+
+// TestFitSegmentsKeepsWholeSegmentsWithAnyJoinerAndTail (task sz2): the stream
+// footer and the stream/export modal hints all narrow through FitSegments, with
+// different separators and tails; whole segments only, the first cut with the
+// tail when it alone is too wide, nothing for a non-positive width.
+func TestFitSegmentsKeepsWholeSegmentsWithAnyJoinerAndTail(t *testing.T) {
+	segments := []string{"Sel 3/9", "Esc/F undo", "Row 3/9"}
+	tests := []struct {
+		width int
+		want  string
+	}{
+		{0, ""},
+		{-3, ""},
+		{4, TruncateRight("Sel 3/9", 4, "~")},
+		{7, "Sel 3/9"},
+		{19, "Sel 3/9"},
+		{20, "Sel 3/9 | Esc/F undo"},
+		{29, "Sel 3/9 | Esc/F undo"},
+		{30, "Sel 3/9 | Esc/F undo | Row 3/9"},
+	}
+	for _, tc := range tests {
+		if got := FitSegments(segments, " | ", "~", tc.width); got != tc.want {
+			t.Errorf("width %d: %q, want %q", tc.width, got, tc.want)
+		}
+	}
+	if got := FitSegments(nil, " | ", "~", 40); got != "" {
+		t.Errorf("no segments: %q, want empty", got)
+	}
+}

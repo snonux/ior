@@ -83,35 +83,8 @@ func fdTraceFooterLine(width, row, total int) string {
 }
 
 // fitFooterSegments joins footer segments with footerSep to fit width
-// display cells, cutting with footerTail (see fitSegments). Segments are
+// display cells, cutting with footerTail (see common.FitSegments). Segments are
 // ior-generated (counters and fixed hints), so they need no sanitising.
 func fitFooterSegments(segments []string, width int) string {
-	return fitSegments(segments, footerSep, footerTail, width)
-}
-
-// fitSegments joins segments with sep, keeping the longest prefix of whole
-// segments that fits width display cells, so narrow terminals get a compact
-// line (e.g. just "Sel x/N Col x/N | Esc/F undo") instead of hints cut
-// mid-word. Only when not even the first segment fits is it truncated, ending
-// in tail. Segments must be sanitised already. A width of zero or less
-// yields "".
-func fitSegments(segments []string, sep, tail string, width int) string {
-	if len(segments) == 0 || width <= 0 {
-		return ""
-	}
-	line := segments[0]
-	used := common.DisplayWidth(line)
-	if used > width {
-		return common.TruncateRight(line, width, tail)
-	}
-	sepWidth := common.DisplayWidth(sep)
-	for _, seg := range segments[1:] {
-		next := used + sepWidth + common.DisplayWidth(seg)
-		if next > width {
-			break
-		}
-		line += sep + seg
-		used = next
-	}
-	return line
+	return common.FitSegments(segments, footerSep, footerTail, width)
 }
