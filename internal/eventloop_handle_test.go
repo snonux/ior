@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/types"
 )
 
@@ -471,10 +472,12 @@ func TestClassifyHandlePath(t *testing.T) {
 	}
 }
 
-// TestProcFdFileWhenProcfsIsUnreadableAfterMismatch: the stat said "a different
-// file" but the readlink of the same descriptor failed (closed in between). The
-// row must not borrow the stash; it is unnamed and carries the event's flags.
-func TestProcFdFileWhenProcfsIsUnreadableAfterMismatch(t *testing.T) {
+// TestConfirmedHandleFdRejectsAVanishedDescriptor: the probe contradicted the
+// stash, but the descriptor it glimpsed is gone again - its link was already
+// unreadable, or its fdinfo is by now. The number is changing hands, so the
+// glimpse is not confirmed as the call's descriptor and the caller falls back
+// to the stash.
+func TestConfirmedHandleFdRejectsAVanishedDescriptor(t *testing.T) {
 	dir := tempDir(t)
 	a := writeHandleFile(t, dir, "a")
 	b := writeHandleFile(t, dir, "b")
@@ -482,13 +485,47 @@ func TestProcFdFileWhenProcfsIsUnreadableAfterMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := handleFdProbe{info: info, linkErr: os.ErrNotExist}
-	if got := classifyHandlePath(probe, b); got != handleMismatch {
+	pid := uint32(os.Getpid())
+	// A fd number nothing has open, so fdinfo is unreadable.
+	const closedFd = 1 << 20
+
+	linkGone := handleFdProbe{info: info, linkErr: os.ErrNotExist}
+	if got := classifyHandlePath(linkGone, b); got != handleMismatch {
 		t.Fatalf("verdict = %d, want mismatch", got)
 	}
+	if got, ok := confirmedHandleFd(linkGone, pid, closedFd, syscall.O_RDONLY); ok {
+		t.Errorf("a probe without a link was confirmed as %q", got.Name())
+	}
+	fdinfoGone := handleFdProbe{info: info, target: a}
+	if got, ok := confirmedHandleFd(fdinfoGone, pid, closedFd, syscall.O_RDONLY); ok {
+		t.Errorf("a descriptor without fdinfo was confirmed as %q", got.Name())
+	}
+}
 
-	// A fd number nothing has open, so the fresh procfs lookup fails too.
-	got := procFdFile(&probe, uint32(os.Getpid()), 1<<20, syscall.O_WRONLY)
+// TestConfirmedHandleFdUsesTheProbedLinkText pins the TOCTOU fix: the row
+// carries exactly the link text the verdict was based on, without a second
+// readlink that could see another file, and the kernel's flags from fdinfo.
+func TestConfirmedHandleFdUsesTheProbedLinkText(t *testing.T) {
+	dir := tempDir(t)
+	a := writeHandleFile(t, dir, "a")
+	fd := openHandleFd(t, a)
+	probe := handleFdProbe{target: "/probed/elsewhere"}
+	got, ok := confirmedHandleFd(probe, uint32(os.Getpid()), int32(fd), syscall.O_RDONLY)
+	if !ok {
+		t.Fatal("a live descriptor with the requested flags was not confirmed")
+	}
+	if got.Name() != "/probed/elsewhere" {
+		t.Fatalf("name = %q, want the probed link text, not a fresh readlink", got.Name())
+	}
+	if !got.Flags().Is(syscall.O_CLOEXEC) {
+		t.Errorf("flags = %#o, want fdinfo's (os.Open sets O_CLOEXEC), not the event's", int32(got.Flags()))
+	}
+}
+
+// TestProcFdFileFallsBackToTheEventFlags: without a stash an unreadable
+// descriptor is an unnamed row that carries the flags the caller asked for.
+func TestProcFdFileFallsBackToTheEventFlags(t *testing.T) {
+	got := procFdFile(uint32(os.Getpid()), 1<<20, syscall.O_WRONLY)
 	if got.Name() != "" {
 		t.Errorf("unreadable procfs row named %q, want an empty name", got.Name())
 	}
@@ -497,16 +534,112 @@ func TestProcFdFileWhenProcfsIsUnreadableAfterMismatch(t *testing.T) {
 	}
 }
 
-// TestProcFdFileUsesTheProbedLinkText pins the TOCTOU fix: when the probe
-// already read the link, the row carries exactly that text, without a second
-// readlink that could see another file.
-func TestProcFdFileUsesTheProbedLinkText(t *testing.T) {
+// openReusingDirFd opens dir the way Go's os.RemoveAll does (O_DIRECTORY and
+// O_NOFOLLOW), standing in for the descriptor a traced task opened under the
+// number its open_by_handle_at had returned and already closed again.
+func openReusingDirFd(t *testing.T, dir string) int {
+	t.Helper()
+	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	return fd
+}
+
+// TestOpenByHandleAtIgnoresAReusedDescriptorNumber is the regression for the
+// flaky integration test (task j03): the event loop handles the exit some time
+// after the syscall returned, and by then the task has closed the descriptor
+// and opened something else under the same number (ioworkload: the temp
+// directory, opened by os.RemoveAll). procfs then describes that newer file,
+// which contradicts the stash, and the row - plus the fd table entry every
+// later row on the number reads - was named after the directory. The newer
+// descriptor carries O_DIRECTORY, which the plain O_RDONLY call cannot have
+// produced, so it must not be taken for the opened handle. (The other half of
+// that race, the newer descriptor closed again while it is probed, is
+// TestConfirmedHandleFdRejectsAVanishedDescriptor.)
+func TestOpenByHandleAtIgnoresAReusedDescriptorNumber(t *testing.T) {
+	for _, stashUnlinked := range []bool{false, true} {
+		name := "stash still exists"
+		if stashUnlinked {
+			name = "stash already unlinked"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := tempDir(t)
+			path := writeHandleFile(t, dir, "handlefile.txt")
+			if stashUnlinked {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fd := openReusingDirFd(t, dir)
+
+			feed := newHandleFeed(t)
+			feed.nameToHandle(path)
+			if got := feed.openByHandle(fd).File.Name(); got != path {
+				t.Fatalf("row named %q, want the stashed %q (the number was reused)", got, path)
+			}
+			tracked, ok := feed.el.fdState().get(int32(fd), feed.pid)
+			if !ok || tracked.Name() != path {
+				t.Fatalf("fd table entry = %v (ok=%v), want %q", tracked, ok, path)
+			}
+			if _, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+				t.Fatal("the stash named the row, so it must be consumed")
+			}
+		})
+	}
+}
+
+// TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs is the other side: a
+// descriptor whose fixed flags are what the call asked for is still trusted,
+// so opening a directory handle with O_DIRECTORY while the stash names another
+// file is named from procfs and leaves the stash for its own open.
+func TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs(t *testing.T) {
 	dir := tempDir(t)
-	a := writeHandleFile(t, dir, "a")
-	fd := openHandleFd(t, a)
-	probe := handleFdProbe{target: "/probed/elsewhere"}
-	got := procFdFile(&probe, uint32(os.Getpid()), int32(fd), syscall.O_RDONLY)
-	if got.Name() != "/probed/elsewhere" {
-		t.Fatalf("name = %q, want the probed link text, not a fresh readlink", got.Name())
+	path := writeHandleFile(t, dir, "other.txt")
+	fd := openReusingDirFd(t, dir)
+
+	feed := newHandleFeed(t)
+	feed.nameToHandle(path)
+	_, enter := makeEnterOpenByHandleAtEvent(t, feed.time, feed.pid, feed.pid,
+		syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW)
+	_, exit := makeExitRetEvent(t, feed.time+1, feed.pid, feed.pid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
+	feed.el.processRawEvent(enter, feed.out)
+	feed.el.processRawEvent(exit, feed.out)
+
+	if got := (<-feed.out).File.Name(); got != dir {
+		t.Fatalf("row named %q, want the directory %q from procfs", got, dir)
+	}
+	if got, ok := feed.el.pendingHandleState().peek(feed.pid); !ok || got != path {
+		t.Fatalf("stash = %q (ok=%v), want %q kept for its own open", got, ok, path)
+	}
+}
+
+func TestSameFixedFlags(t *testing.T) {
+	const largefile = 0x8000 // the kernel's O_LARGEFILE, forced on 64-bit opens
+	tests := []struct {
+		name      string
+		procFlags int32
+		requested int32
+		want      bool
+	}{
+		{"same flags", syscall.O_RDONLY, syscall.O_RDONLY, true},
+		{"kernel adds O_LARGEFILE", syscall.O_RDONLY | largefile, syscall.O_RDONLY, true},
+		{"O_CLOEXEC can be changed later", syscall.O_RDWR | syscall.O_CLOEXEC, syscall.O_RDWR, true},
+		{"status flags can be changed later", syscall.O_RDWR | syscall.O_APPEND | syscall.O_NONBLOCK, syscall.O_RDWR, true},
+		{"creation flags are not kept", syscall.O_WRONLY, syscall.O_WRONLY | syscall.O_NOCTTY | syscall.O_TRUNC, true},
+		{"O_PATH drops the access mode", unix.O_PATH, unix.O_PATH | syscall.O_RDWR, true},
+		{"unknown procfs flags confirm nothing", -1, syscall.O_RDONLY, false},
+		{"other access mode", syscall.O_RDWR, syscall.O_RDONLY, false},
+		{"directory flag appeared", syscall.O_RDONLY | syscall.O_DIRECTORY, syscall.O_RDONLY, false},
+		{"directory flag vanished", syscall.O_RDONLY, syscall.O_RDONLY | syscall.O_DIRECTORY, false},
+		{"nofollow flag appeared", syscall.O_RDONLY | syscall.O_NOFOLLOW, syscall.O_RDONLY, false},
+		{"O_PATH appeared", unix.O_PATH, syscall.O_RDONLY, false},
+		{"O_PATH request, ordinary descriptor", syscall.O_RDWR, unix.O_PATH | syscall.O_RDWR, false},
+	}
+	for _, tt := range tests {
+		if got := sameFixedFlags(file.Flags(tt.procFlags), tt.requested); got != tt.want {
+			t.Errorf("%s: sameFixedFlags(%#o, %#o) = %v, want %v", tt.name, tt.procFlags, tt.requested, got, tt.want)
+		}
 	}
 }

@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"ior/internal/file"
 )
@@ -36,12 +39,17 @@ const deletedSuffix = " (deleted)"
 // the magic link) and its link text (readlink), taken back to back so the two
 // describe the same descriptor as closely as userspace can manage.
 //
-// The window between the two syscalls is not zero: the traced task could close
-// the number and reuse it for another file in those microseconds, and ior
-// cannot hold the descriptor still (there is no pidfd_getfd in this path). The
-// consequence is bounded - at worst one row is named after the newer file, the
-// same exposure every procfs-resolved fd row has anyway, since the event is
-// already stale by the time the loop handles it.
+// The probe is a look at the task's fd table NOW, not at the moment the
+// open_by_handle_at returned: the loop handles the exit record some time after
+// the syscall (a ring-buffer poll at best, much longer under load), and a task
+// that closed the descriptor meanwhile has usually handed the number to its
+// next open. The probe then describes that newer file, and ior cannot hold the
+// descriptor still (there is no pidfd_getfd in this path). The same holds, on
+// a far smaller scale, between the two syscalls of the probe itself. So a
+// probe that contradicts the stash is believed only when confirmedHandleFd
+// finds the descriptor still there with the flags the call asked for; a reuse
+// that check cannot see (same flags) names the row after the newer file - the
+// exposure every procfs-resolved fd row has anyway.
 type handleFdProbe struct {
 	info    os.FileInfo
 	statErr error
@@ -146,22 +154,32 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 //
 // The stash is one slot per TID - the thread's last name_to_handle_at - but a
 // thread may take several handles and open them in any order, so the slot is
-// only a hypothesis about which handle was opened. The descriptor is the
-// ground truth and is checked first:
+// only a hypothesis about which handle was opened. procfs is asked what the
+// descriptor is, and that answer is only a hypothesis too: it shows the number
+// as it is when the loop handles the exit, possibly after the task closed the
+// descriptor and opened another file under it (see handleFdProbe).
 //
 //   - no stash (or an empty one): the row is named from procfs.
 //   - match or unverifiable: the stashed name is used and consumed (the
 //     unverifiable case is the legacy behaviour, for a descriptor procfs
 //     cannot answer for).
-//   - mismatch: the stash belongs to a different handle, so it is neither used
-//     nor consumed (its own open may still come) and the row is named from
-//     procfs, which describes the descriptor that really was opened.
+//   - mismatch, and the descriptor procfs showed can be the one this call
+//     returned (confirmedHandleFd): the stash belongs to a different handle,
+//     so it is neither used nor consumed (its own open may still come) and
+//     the row is named from procfs.
+//   - mismatch, but that descriptor is gone again or was opened with other
+//     flags than this call's: procfs described a later file under a reused
+//     number, which says nothing about this call. That is the unverifiable
+//     case, so the stashed name is used and consumed. Without this a
+//     short-lived descriptor (open the handle, use it, close it, open the next
+//     file) was named after whatever the task opened next, and the fd table
+//     entry passed that name on to the rows that followed.
 //
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
 // caller asked for). A procfs-named row takes the kernel's own view from
-// /proc/<pid>/fdinfo - the flags the descriptor really has - and only falls
-// back to the event's when fdinfo is unreadable.
+// /proc/<pid>/fdinfo - the flags the descriptor really has; only the row of a
+// call without a stash falls back to the event's when fdinfo is unreadable.
 func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32) *file.FdFile {
 	handles := e.pendingHandleState()
 	pathname, stashed := handles.peek(tid)
@@ -169,14 +187,72 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 		// An empty name is no stash (set never stores one; this also covers a
 		// hand-built tracker): consuming it would yield an unnamed row even
 		// when procfs can name the descriptor.
-		return procFdFile(nil, pid, fd, eventFlags)
+		return procFdFile(pid, fd, eventFlags)
 	}
 	probe := probeHandleFd(pid, fd)
 	if classifyHandlePath(probe, pathname) == handleMismatch {
-		return procFdFile(&probe, pid, fd, eventFlags)
+		if procFile, ok := confirmedHandleFd(probe, pid, fd, eventFlags); ok {
+			return procFile
+		}
 	}
 	handles.delete(tid)
 	return file.NewFd(fd, pathname, eventFlags)
+}
+
+// confirmedHandleFd returns the procfs-named file for a descriptor whose probe
+// contradicted the stash, provided the descriptor can still be the one the
+// open_by_handle_at returned: its link was readable, its fdinfo still is, and
+// its fixed flags are the ones the call asked for (sameFixedFlags).
+//
+// ok is false when any of that fails, because each failure means the number is
+// changing hands right now or already did, so the contradiction came from
+// another file than the one the call opened: the link or fdinfo vanished
+// between the probe's syscalls (the descriptor it glimpsed was closed within
+// microseconds), or the flags are ones this call cannot have produced.
+//
+// The name is the probe's link text, not a fresh readlink: the name the
+// verdict was based on is the name the row carries. Only the flags are read
+// now, from fdinfo.
+func confirmedHandleFd(probe handleFdProbe, pid uint32, fd int32, eventFlags int32) (procFile *file.FdFile, ok bool) {
+	if probe.linkErr != nil {
+		return nil, false
+	}
+	procFile = file.NewFdWithProcName(fd, pid, probe.target)
+	if !sameFixedFlags(procFile.Flags(), eventFlags) {
+		return nil, false
+	}
+	return procFile, true
+}
+
+// handleFixedFlags are the open flags a descriptor keeps for its whole life:
+// they are set by the open and neither fcntl(F_SETFL) (which changes only
+// O_APPEND, O_ASYNC, O_DIRECT, O_NOATIME and O_NONBLOCK) nor F_SETFD
+// (O_CLOEXEC) can alter them. O_LARGEFILE is left out because the kernel
+// forces it on for 64-bit callers whatever they pass, and the creation flags
+// (O_CREAT, O_EXCL, O_NOCTTY, O_TRUNC) because the kernel does not keep them.
+const handleFixedFlags = syscall.O_ACCMODE | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | unix.O_PATH
+
+// sameFixedFlags reports whether a descriptor with procFlags (the flags from
+// /proc/<pid>/fdinfo) can be the one an open_by_handle_at called with the
+// requested flags returned: its fixed flags (handleFixedFlags) are what that
+// call must have produced. Unknown flags (-1, fdinfo unreadable) confirm
+// nothing and report false.
+//
+// It is one-sided evidence. Differing flags prove that the number was closed
+// and reused since the syscall returned; equal flags do not prove the opposite
+// (the task may have reopened the number with the same flags), and nothing
+// short of the handle bytes, which the BPF events do not carry, could tell
+// those apart.
+func sameFixedFlags(procFlags file.Flags, requested int32) bool {
+	if procFlags == file.Flags(-1) {
+		return false
+	}
+	want := requested & handleFixedFlags
+	if want&unix.O_PATH != 0 {
+		// An O_PATH open ignores the access mode and stores none.
+		want &^= syscall.O_ACCMODE
+	}
+	return int32(procFlags)&handleFixedFlags == want
 }
 
 // failedHandleFile returns the file a FAILED open_by_handle_at row reports:
@@ -199,17 +275,11 @@ func (e *eventLoop) failedHandleFile(tid uint32) file.File {
 	return file.NewPathname([]byte(pathname))
 }
 
-// procFdFile names the descriptor from procfs. A probe that already holds the
-// link text supplies it (one readlink decides both the verdict and the name);
-// with no probe, or a probe whose readlink failed, procfs is asked afresh and
-// an unreadable descriptor yields an unnamed file carrying the event's flags.
-func procFdFile(probe *handleFdProbe, pid uint32, fd int32, eventFlags int32) *file.FdFile {
-	var fdFile *file.FdFile
-	if probe != nil && probe.linkErr == nil {
-		fdFile = file.NewFdWithProcName(fd, pid, probe.target)
-	} else {
-		fdFile = file.NewFdWithPid(fd, pid)
-	}
+// procFdFile names a descriptor nothing is stashed for from procfs. An
+// unreadable descriptor yields an unnamed file, and unreadable flags are
+// replaced by the event's (what the caller asked for).
+func procFdFile(pid uint32, fd int32, eventFlags int32) *file.FdFile {
+	fdFile := file.NewFdWithPid(fd, pid)
 	if fdFile.Flags() == file.Flags(-1) {
 		fdFile.SetFlags(eventFlags)
 	}

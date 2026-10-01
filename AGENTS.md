@@ -1720,7 +1720,33 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     no "syscalls after filter" count (task eq2). Pinned by
     `internal/eventloop_handle_fail_test.go` and the integration test
     `TestOpenByHandleAtFailuresAreErrorRows` (scenario
-    `open-by-handle-at-fail`).
+    `open-by-handle-at-fail`). A *successful* call is named by
+    `openedHandleFile`: the stash is one slot per tid (the thread's last
+    `name_to_handle_at`), so it is checked against the returned descriptor
+    through `/proc/<pid>/fd/<fd>` (inode, then link text) and a contradicted
+    stash is left alone while procfs names the row. That probe is taken when
+    the loop handles the exit, not when the syscall returned, so a task that
+    closed the descriptor and opened something else under the same number
+    makes procfs describe the newer file (task j03: `TestOpenByHandleAt`
+    failed 10 of 40 runs because `os.RemoveAll`'s directory open reused the
+    number, and the row and its `close` were named after the directory).
+    A contradicting descriptor is therefore believed only when
+    `confirmedHandleFd` finds it still there (link read, fdinfo readable) with
+    the fixed open flags the call asked for (`sameFixedFlags`: `O_ACCMODE`,
+    `O_DIRECTORY`, `O_NOFOLLOW`, `O_PATH`, which neither `F_SETFL` nor
+    `F_SETFD` can change); otherwise the number is changing hands and the
+    stash names the row, as in the unverifiable case. Both halves are needed:
+    with the flag comparison alone the test still failed 22 of 100 runs,
+    because the directory descriptor lives for microseconds: closed again
+    between the probe's readlink and the fdinfo read, it left a name but no
+    flags to compare. The
+    evidence is one-sided: a number reused with the *same* fixed flags and
+    still open is taken for the opened handle and names the row; only handle
+    bytes in the BPF events could close that. Pinned by
+    `TestOpenByHandleAtIgnoresAReusedDescriptorNumber`,
+    `TestConfirmedHandleFdRejectsAVanishedDescriptor`,
+    `TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs` and
+    `TestSameFixedFlags` (`internal/eventloop_handle_test.go`).
   - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
     (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
     checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and
