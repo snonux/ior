@@ -90,7 +90,10 @@ libbpf warnings, dropped events) are rows in the Stream tab (`7`), whatever its 
 the stream holds any, the status line of every other tab shows `warnings: N (7:Stream)` in the
 warning colour, shortened to `warn: N (7)` or `!N` and then dropped on a narrow terminal
 before the filter summary is cut. It goes away once those rows scroll out of the stream's
-10000-row buffer or a new PID/TID selection clears the stream.
+10000-row buffer or a new PID/TID selection clears the stream. The Stream tab itself shows no
+badge, although the rows need not be on screen there: a paused stream does not show warnings
+that arrived after the pause (press space to resume), and an early warning scrolls up out of
+the live view (press `g` to jump to the oldest rows).
 
 ### Save output
 
