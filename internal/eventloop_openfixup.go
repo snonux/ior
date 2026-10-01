@@ -107,10 +107,11 @@ func applyRecoveredNameEvent(nameEv *types.NameEvent, ev *types.OpenNameFixupEve
 // applyRecoveredTwoFdNames is applyRecoveredNameEvent for move_mount, whose
 // two_fd_names_event decodes into a types.TwoFdEvent (decodeTwoFdNamesEvent)
 // carrying from_pathname as Oldname and to_pathname as Newname. The lean
-// two_fd_event of close_range and kcmp decodes into the same Go type with
-// zeroed names and statuses; it never stashes a pointer, and a stray record
-// for one is still refused by spliceRecoveredPath's trace-ID and
-// PATH_READ_FAILED guards, so the type switch needs no extra kind check.
+// two_fd_event of close_range and kcmp decodes into the same Go type
+// (NewTwoFdEventFast) with zeroed names and both statuses set to
+// PATH_READ_NULL; it never stashes a pointer, and a stray record for one is
+// still refused by spliceRecoveredPath's trace-ID and PATH_READ_FAILED guards,
+// so the type switch needs no extra kind check.
 func applyRecoveredTwoFdNames(twoFdEv *types.TwoFdEvent, ev *types.OpenNameFixupEvent) {
 	switch ev.Slot {
 	case types.OPEN_NAME_FIXUP_SLOT_FIRST:

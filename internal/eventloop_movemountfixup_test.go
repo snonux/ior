@@ -52,58 +52,78 @@ func runMoveMount(t *testing.T, el *eventLoop, enter []byte, fixups ...[]byte) *
 	return runPairWithFixups(t, el, enter, types.SYS_EXIT_MOVE_MOUNT, -int64(unix.EINVAL), fixups...)
 }
 
-func TestMoveMountFixupRecoversEachPathThroughItsOwnSlot(t *testing.T) {
-	const (
-		fromCaptured = "/srv/vs2-from-captured"
-		toCaptured   = "/srv/vs2-to-captured"
-		fromRecover  = "/srv/vs2-from-recovered"
-		toRecover    = "/srv/vs2-to-recovered"
-	)
-	ok, failed, null := uint32(types.PATH_READ_OK), uint32(types.PATH_READ_FAILED), uint32(types.PATH_READ_NULL)
-	first, second := uint32(types.OPEN_NAME_FIXUP_SLOT_FIRST), uint32(types.OPEN_NAME_FIXUP_SLOT_SECOND)
-	mm := types.SYS_ENTER_MOVE_MOUNT
-	both := func(t *testing.T) [][]byte {
-		return [][]byte{makeSlotFixup(t, mm, first, fromRecover), makeSlotFixup(t, mm, second, toRecover)}
-	}
+const (
+	mmFromCaptured = "/srv/vs2-from-captured"
+	mmToCaptured   = "/srv/vs2-to-captured"
+	mmFromRecover  = "/srv/vs2-from-recovered"
+	mmToRecover    = "/srv/vs2-to-recovered"
+)
 
-	for _, tc := range []struct {
-		name             string
-		from, to         string
-		fromStat, toStat uint32
-		fixups           func(t *testing.T) [][]byte
-		wantFrom, wantTo string
-	}{
-		{name: "both faulted, both recovered", fromStat: failed, toStat: failed, fixups: both,
-			wantFrom: fromRecover, wantTo: toRecover},
-		{name: "only from_pathname faulted", to: toCaptured, fromStat: failed, toStat: ok,
-			fixups:   func(t *testing.T) [][]byte { return [][]byte{makeSlotFixup(t, mm, first, fromRecover)} },
-			wantFrom: fromRecover, wantTo: toCaptured},
-		{
-			// Without the slot a recovered to_pathname would land on the
-			// still-empty from_pathname.
-			name: "only to_pathname faulted", from: fromCaptured, fromStat: ok, toStat: failed,
-			fixups:   func(t *testing.T) [][]byte { return [][]byte{makeSlotFixup(t, mm, second, toRecover)} },
-			wantFrom: fromCaptured, wantTo: toRecover,
-		},
-		{name: "both faulted, only to_pathname recovered", fromStat: failed, toStat: failed,
-			fixups: func(t *testing.T) [][]byte { return [][]byte{makeSlotFixup(t, mm, second, toRecover)} },
-			wantTo: toRecover},
-		{name: "both faulted, nothing recovered", fromStat: failed, toStat: failed,
-			fixups: func(t *testing.T) [][]byte { return nil }},
-		{name: "captured paths are never overwritten", from: fromCaptured, to: toCaptured, fromStat: ok, toStat: ok,
-			fixups: both, wantFrom: fromCaptured, wantTo: toCaptured},
-		{name: "a NULL pointer is never promoted to a path", fromStat: null, toStat: null, fixups: both},
-		{name: "a fixup recorded for another syscall is ignored", fromStat: failed, toStat: failed,
-			fixups: func(t *testing.T) [][]byte {
-				return [][]byte{makeSlotFixup(t, types.SYS_ENTER_RENAME, first, fromRecover),
-					makeSlotFixup(t, types.SYS_ENTER_RENAME, second, toRecover)}
-			}},
-		{name: "an out-of-range slot is ignored", fromStat: failed, toStat: failed,
-			fixups: func(t *testing.T) [][]byte { return [][]byte{makeSlotFixup(t, mm, 2, toRecover)} }},
-	} {
+// slotFixup describes one fixup record a case feeds between enter and exit as
+// a (trace, slot, name) triple, so a case can also forge a record stamped for
+// another syscall or an out-of-range slot.
+type slotFixup struct {
+	trace types.TraceId
+	slot  uint32
+	name  string
+}
+
+// buildSlotFixups encodes a case's fixups into raw ring-buffer records, in
+// order; no fixups yields no records.
+func buildSlotFixups(t *testing.T, fixups []slotFixup) [][]byte {
+	t.Helper()
+	raw := make([][]byte, 0, len(fixups))
+	for _, f := range fixups {
+		raw = append(raw, makeSlotFixup(t, f.trace, f.slot, f.name))
+	}
+	return raw
+}
+
+var (
+	mmFirst  = slotFixup{types.SYS_ENTER_MOVE_MOUNT, types.OPEN_NAME_FIXUP_SLOT_FIRST, mmFromRecover}
+	mmSecond = slotFixup{types.SYS_ENTER_MOVE_MOUNT, types.OPEN_NAME_FIXUP_SLOT_SECOND, mmToRecover}
+	mmBoth   = []slotFixup{mmFirst, mmSecond}
+)
+
+// moveMountSlotCases is the table of TestMoveMountFixupRecoversEachPathThroughItsOwnSlot:
+// the captured paths and statuses of the enter, the fixups that follow it and
+// the from/to names the row must end up with.
+var moveMountSlotCases = []struct {
+	name             string
+	from, to         string
+	fromStat, toStat uint32
+	fixups           []slotFixup
+	wantFrom, wantTo string
+}{
+	{name: "both faulted, both recovered", fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_FAILED,
+		fixups: mmBoth, wantFrom: mmFromRecover, wantTo: mmToRecover},
+	{name: "only from_pathname faulted", to: mmToCaptured, fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_OK,
+		fixups: []slotFixup{mmFirst}, wantFrom: mmFromRecover, wantTo: mmToCaptured},
+	{
+		// Without the slot a recovered to_pathname would land on the
+		// still-empty from_pathname.
+		name: "only to_pathname faulted", from: mmFromCaptured, fromStat: types.PATH_READ_OK, toStat: types.PATH_READ_FAILED,
+		fixups: []slotFixup{mmSecond}, wantFrom: mmFromCaptured, wantTo: mmToRecover,
+	},
+	{name: "both faulted, only to_pathname recovered", fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_FAILED,
+		fixups: []slotFixup{mmSecond}, wantTo: mmToRecover},
+	{name: "both faulted, nothing recovered", fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_FAILED},
+	{name: "captured paths are never overwritten", from: mmFromCaptured, to: mmToCaptured,
+		fromStat: types.PATH_READ_OK, toStat: types.PATH_READ_OK, fixups: mmBoth, wantFrom: mmFromCaptured, wantTo: mmToCaptured},
+	{name: "a NULL pointer is never promoted to a path", fromStat: types.PATH_READ_NULL, toStat: types.PATH_READ_NULL, fixups: mmBoth},
+	{name: "a fixup recorded for another syscall is ignored", fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_FAILED,
+		fixups: []slotFixup{{types.SYS_ENTER_RENAME, types.OPEN_NAME_FIXUP_SLOT_FIRST, mmFromRecover},
+			{types.SYS_ENTER_RENAME, types.OPEN_NAME_FIXUP_SLOT_SECOND, mmToRecover}}},
+	{name: "an out-of-range slot is ignored", fromStat: types.PATH_READ_FAILED, toStat: types.PATH_READ_FAILED,
+		fixups: []slotFixup{{types.SYS_ENTER_MOVE_MOUNT, 2, mmToRecover}}},
+}
+
+func TestMoveMountFixupRecoversEachPathThroughItsOwnSlot(t *testing.T) {
+	for _, tc := range moveMountSlotCases {
 		t.Run(tc.name, func(t *testing.T) {
 			el := newFilteredEventLoop(t, globalfilter.Filter{})
-			ep := runMoveMount(t, el, moveMountEnterWithStatus(t, tc.from, tc.fromStat, tc.to, tc.toStat), tc.fixups(t)...)
+			enter := moveMountEnterWithStatus(t, tc.from, tc.fromStat, tc.to, tc.toStat)
+			ep := runMoveMount(t, el, enter, buildSlotFixups(t, tc.fixups)...)
 			if ep == nil {
 				t.Fatal("the move_mount pair was dropped")
 			}
@@ -147,8 +167,9 @@ func TestMoveMountPathFilterSeesTheRecoveredName(t *testing.T) {
 
 // applyRecoveredFilename is the per-kind dispatch; these cases pin its
 // move_mount branch directly, including the lean two_fd_event of close_range
-// and kcmp, which decodes into the same Go type with zeroed names and
-// PATH_READ_OK statuses and must never be named by a stray record.
+// and kcmp, which NewTwoFdEventFast decodes into the same Go type with zeroed
+// names and both statuses set to PATH_READ_NULL, and which must never be named
+// by a stray record.
 func TestApplyRecoveredFilenameTwoFdEvent(t *testing.T) {
 	const recovered = "/srv/vs2-direct"
 	fixup := func(traceID types.TraceId, slot uint32) *types.OpenNameFixupEvent {
@@ -156,12 +177,10 @@ func TestApplyRecoveredFilenameTwoFdEvent(t *testing.T) {
 		copy(ev.Filename[:], recovered)
 		return ev
 	}
-	enter := func(traceID types.TraceId, fromStatus, toStatus uint32) *types.TwoFdEvent {
-		return &types.TwoFdEvent{TraceId: traceID, OldnameStatus: fromStatus, NewnameStatus: toStatus}
-	}
 
 	t.Run("each slot fills only its own path", func(t *testing.T) {
-		ev := enter(types.SYS_ENTER_MOVE_MOUNT, types.PATH_READ_FAILED, types.PATH_READ_FAILED)
+		ev := &types.TwoFdEvent{TraceId: types.SYS_ENTER_MOVE_MOUNT,
+			OldnameStatus: types.PATH_READ_FAILED, NewnameStatus: types.PATH_READ_FAILED}
 		applyRecoveredFilename(ev, fixup(types.SYS_ENTER_MOVE_MOUNT, types.OPEN_NAME_FIXUP_SLOT_SECOND))
 		if got := types.StringValue(ev.Oldname[:]); got != "" || ev.OldnameStatus != types.PATH_READ_FAILED {
 			t.Fatalf("a SECOND-slot record touched from_pathname: %q status %d", got, ev.OldnameStatus)
@@ -177,16 +196,50 @@ func TestApplyRecoveredFilenameTwoFdEvent(t *testing.T) {
 
 	t.Run("the lean close_range/kcmp payload is never named", func(t *testing.T) {
 		for _, traceID := range []types.TraceId{types.SYS_ENTER_CLOSE_RANGE, types.SYS_ENTER_KCMP} {
-			ev := enter(traceID, types.PATH_READ_OK, types.PATH_READ_OK)
-			for _, slot := range []uint32{types.OPEN_NAME_FIXUP_SLOT_FIRST, types.OPEN_NAME_FIXUP_SLOT_SECOND} {
-				applyRecoveredFilename(ev, fixup(traceID, slot))
-			}
-			if types.StringValue(ev.Oldname[:]) != "" || types.StringValue(ev.Newname[:]) != "" {
-				t.Fatalf("trace %d: lean two-fd payload got names %q/%q", traceID,
-					types.StringValue(ev.Oldname[:]), types.StringValue(ev.Newname[:]))
+			for _, size := range []int{leanTwoFdKernelSize, leanTwoFdCompactSize} {
+				ev := decodeLeanTwoFdEnter(t, traceID, size)
+				for _, slot := range []uint32{types.OPEN_NAME_FIXUP_SLOT_FIRST, types.OPEN_NAME_FIXUP_SLOT_SECOND} {
+					applyRecoveredFilename(ev, fixup(traceID, slot))
+				}
+				if types.StringValue(ev.Oldname[:]) != "" || types.StringValue(ev.Newname[:]) != "" {
+					t.Fatalf("trace %d, %d-byte payload: lean two-fd payload got names %q/%q", traceID, size,
+						types.StringValue(ev.Oldname[:]), types.StringValue(ev.Newname[:]))
+				}
+				ev.Recycle()
 			}
 		}
 	})
+}
+
+// The lean two_fd_event reaches userspace as sizeof(struct two_fd_event), 48
+// bytes with tail padding, or as its 44-byte compact form; NewTwoFdEventFast
+// accepts both.
+const (
+	leanTwoFdKernelSize  = 48
+	leanTwoFdCompactSize = 44
+)
+
+// decodeLeanTwoFdEnter runs a lean close_range/kcmp enter payload of the given
+// size through the real decoder, NewTwoFdEventFast, and pins the shape it
+// yields: no names and both statuses PATH_READ_NULL. A stray fixup for such an
+// event must then be refused by spliceRecoveredPath's PATH_READ_FAILED guard,
+// since its trace ID matches.
+func decodeLeanTwoFdEnter(t *testing.T, traceID types.TraceId, size int) *types.TwoFdEvent {
+	t.Helper()
+	_, raw := makeEnterTwoFdEvent(t, defaulTime, execCommPid, execCommTid, 3, 9, 0, traceID)
+	if len(raw) != leanTwoFdKernelSize {
+		t.Fatalf("lean two_fd_event encoded to %d bytes, want %d", len(raw), leanTwoFdKernelSize)
+	}
+	ev := types.NewTwoFdEventFast(raw[:size])
+	if ev == nil {
+		t.Fatalf("NewTwoFdEventFast rejected a %d-byte lean payload", size)
+	}
+	if ev.OldnameStatus != types.PATH_READ_NULL || ev.NewnameStatus != types.PATH_READ_NULL ||
+		types.StringValue(ev.Oldname[:]) != "" || types.StringValue(ev.Newname[:]) != "" {
+		t.Fatalf("lean two-fd decode: names %q/%q statuses %d/%d, want empty and PATH_READ_NULL",
+			types.StringValue(ev.Oldname[:]), types.StringValue(ev.Newname[:]), ev.OldnameStatus, ev.NewnameStatus)
+	}
+	return ev
 }
 
 // A move_mount fixup whose tid has no pending enter (filtered, never seen, or

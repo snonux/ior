@@ -3676,7 +3676,16 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
+	firstSlot, secondSlot := checkArtifactRecoveringHandlers(t, artifact)
+	checkArtifactRecoveryCallSites(t, artifact, firstSlot, secondSlot)
+}
 
+// checkArtifactRecoveringHandlers runs the per-handler recovery checks over
+// every recovering family of the committed artifact and returns how many
+// handlers use the first fixup slot (all of them) and the second (only the
+// two-path kinds), so checkArtifactRecoveryCallSites can pin the totals.
+func checkArtifactRecoveringHandlers(t *testing.T, artifact string) (firstSlot, secondSlot int) {
+	t.Helper()
 	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open|open-tree)\)$`).
 		FindAllStringSubmatch(artifact, -1)
 	if len(openEnters) == 0 {
@@ -3706,19 +3715,23 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 	for _, enter := range twoPath {
 		checkPathFilenameRecovery(t, artifact, enter, true)
 	}
+	firstSlot = len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls) + len(singlePath) + len(twoPath)
+	return firstSlot, len(twoPath)
+}
 
-	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
-	// make every exit handler pay extra map operations. Every recovering handler
-	// uses the first slot; only the two-path kinds (rename/link, move_mount)
-	// also use the second.
-	firstSlot := len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls) + len(singlePath) + len(twoPath)
+// checkArtifactRecoveryCallSites pins exactly the reviewed recovery pairs,
+// nothing else: an over-broad splice would make every exit handler pay extra
+// map operations. Every recovering handler uses the first slot; only the
+// two-path kinds (rename/link, move_mount) also use the second.
+func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, secondSlot int) {
+	t.Helper()
 	for helper, want := range map[string]int{
 		"ior_take_pending_filename(":   firstSlot,
 		"ior_emit_open_name_fixup(":    firstSlot,
 		"ior_stash_pending_filename(":  firstSlot,
-		"ior_take_pending_filename2(":  len(twoPath),
-		"ior_emit_second_name_fixup(":  len(twoPath),
-		"ior_stash_pending_filename2(": len(twoPath),
+		"ior_take_pending_filename2(":  secondSlot,
+		"ior_emit_second_name_fixup(":  secondSlot,
+		"ior_stash_pending_filename2(": secondSlot,
 	} {
 		if got := strings.Count(artifact, helper); got != want {
 			t.Errorf("%d %s) call sites, want %d", got, helper, want)
