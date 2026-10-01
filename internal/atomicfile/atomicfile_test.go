@@ -1221,3 +1221,67 @@ func TestRiskyNameCharsIsBounded(t *testing.T) {
 		t.Errorf("ProbeNameChars with the capped set = %v (probe name too long?)", err)
 	}
 }
+
+// CreateTemp promises that the temp file is created with O_EXCL|O_NOFOLLOW, so
+// a symlink planted at the guessed name is refused instead of followed (task
+// 303). Dropping both flags used to pass the whole package. Two tests: the
+// flags themselves, and the behaviour through a forced first name that is a
+// planted symlink.
+func TestCreateTempOpensWithExclusiveNoFollowFlags(t *testing.T) {
+	var gotFlags int
+	var gotMode fs.FileMode
+	swapHook(t, &openTempFile, func(path string, flag int, mode fs.FileMode) (*os.File, error) {
+		gotFlags, gotMode = flag, mode
+		return os.OpenFile(path, flag, mode)
+	})
+	f, err := CreateTemp(filepath.Join(t.TempDir(), "out.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	for name, bit := range map[string]int{"O_EXCL": os.O_EXCL, "O_NOFOLLOW": syscall.O_NOFOLLOW, "O_CREATE": os.O_CREATE} {
+		if gotFlags&bit == 0 {
+			t.Errorf("CreateTemp opens without %s (flags %#x)", name, gotFlags)
+		}
+	}
+	if gotMode != 0o666 {
+		t.Errorf("mode = %#o, want 0666 (the umask filters it)", gotMode)
+	}
+}
+
+func TestCreateTempRefusesASymlinkPlantedAtTheTempName(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "planted.tmp")
+	if err := os.Symlink(victim, planted); err != nil {
+		t.Fatal(err)
+	}
+	var tried []string
+	swapHook(t, &openTempFile, func(path string, flag int, mode fs.FileMode) (*os.File, error) {
+		tried = append(tried, path)
+		if len(tried) == 1 {
+			path = planted // the attacker guessed the first name
+		}
+		return os.OpenFile(path, flag, mode)
+	})
+	f, err := CreateTemp(filepath.Join(dir, "out.csv"))
+	if err != nil {
+		t.Fatalf("CreateTemp = %v, want it to retry past the planted name", err)
+	}
+	defer f.Close()
+	if len(tried) != 2 {
+		t.Fatalf("CreateTemp tried %d names, want the planted one refused and a retry", len(tried))
+	}
+	if f.Name() == planted || f.Name() == victim {
+		t.Fatalf("CreateTemp returned %q, the planted link or its target", f.Name())
+	}
+	if _, err := f.WriteString("new"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != "keep" {
+		t.Fatalf("the symlink's target was written through: %q, %v", got, err)
+	}
+}
