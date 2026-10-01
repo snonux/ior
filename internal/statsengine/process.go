@@ -58,6 +58,9 @@ type processStats struct {
 	count        uint64
 	totalBytes   uint64
 	totalLatency uint64
+	// untimedCount is the part of count without a latency: noreturn pairs
+	// (event.Pair.NoReturn). The average latency divides by the timed rest.
+	untimedCount uint64
 }
 
 type processSnapshotInput struct {
@@ -67,6 +70,7 @@ type processSnapshotInput struct {
 	count        uint64
 	totalBytes   uint64
 	totalLatency uint64
+	untimedCount uint64
 }
 
 func newProcessAccumulator() *processAccumulator {
@@ -160,7 +164,11 @@ func (a *processAccumulator) Add(pair *event.Pair) {
 
 	stats.count++
 	stats.totalBytes += pair.Bytes
-	stats.totalLatency += pair.Duration
+	if pair.NoReturn {
+		stats.untimedCount++
+	} else {
+		stats.totalLatency += pair.Duration
+	}
 	stats.observeComm(pair.EnterEv.GetTid(), pair.Comm)
 	a.compactIfNeeded()
 }
@@ -359,6 +367,7 @@ func (s *processStats) snapshotInput() processSnapshotInput {
 		count:        s.count,
 		totalBytes:   s.totalBytes,
 		totalLatency: s.totalLatency,
+		untimedCount: s.untimedCount,
 	}
 }
 
@@ -405,8 +414,8 @@ func (s *processStats) label() string {
 
 func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 	avg := 0.0
-	if s.count > 0 {
-		avg = float64(s.totalLatency) / float64(s.count)
+	if timed := timedCount(s.count, s.untimedCount); timed > 0 {
+		avg = float64(s.totalLatency) / float64(timed)
 	}
 
 	return ProcessSnapshot{

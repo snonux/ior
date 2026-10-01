@@ -438,7 +438,10 @@ func perSecondRate(secs float64) func(uint64) float64 {
 // counted once per *pair* (tracepointExited: the exit found its parked enter
 // but their trace IDs do not belong together), and numSyscalls is incremented
 // on that very path just before the ID check, so every mismatch is also a
-// member of the denominator and the result is a true 0..100% share. It used
+// member of the denominator and the result is a true 0..100% share. A
+// noreturn row (completeNoReturnEnter) also counts in numSyscalls: it is a
+// formed pair, just one that cannot mismatch, since no exit record is involved.
+// It used
 // to divide by numTracepoints, which counts ring-buffer *records* - at least
 // two per pair, plus control records - so even a run where every pair
 // mismatched printed at most ~50%.

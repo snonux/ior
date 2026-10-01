@@ -176,7 +176,9 @@ static __always_inline void ior_update_syscall_aggregate(__u32 enter_trace_id, _
 // syscall_aggregate_map without a duration or a return value: only count
 // moves. It is the fallback for an enter whose syscall_enter_state_map write
 // failed (see ior_on_syscall_enter), where neither the start time nor the
-// sampling decision survives until sys_exit. The row's latency fields and
+// sampling decision survives until sys_exit, and it counts the sampled-out
+// enters of noreturn syscalls, which have no duration at all
+// (ior_on_noreturn_syscall_enter). The row's latency fields and
 // histogram keep describing the timed invocations only, so userspace sees
 // count > sum(histogram) and must not take min/max from a row without
 // histogram samples (rawSyscallAggregate.add in
@@ -305,20 +307,32 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id,
 }
 
 // ior_on_noreturn_syscall_enter is the enter hook for noreturn syscalls
-// (exit, exit_group, rt_sigreturn). Unlike ior_on_syscall_enter it deliberately
-// does NOT write a per-tid entry into syscall_enter_state_map. A noreturn
-// syscall never returns to the syscall site (exit/exit_group terminate;
-// rt_sigreturn restores the pre-signal context), so its sys_exit tracepoint
-// never fires and the matching
-// exit handler is suppressed by the generator (see internal/generate/codegen.go
-// isNoreturnSyscall). With no exit handler, nothing would ever look up or
-// bpf_map_delete_elem that enter-state entry, so recording it would only leave
-// stale per-tid entries crowding the bounded (32768) map on hosts churning many
-// distinct tids. We still honor the sampling decision so the enter null_event is
-// emitted (or dropped) exactly as a normal syscall's enter would be, but without
-// the dead, unreclaimable map write.
+// (exit, exit_group, rt_sigreturn). A noreturn syscall never returns to the
+// syscall site (exit/exit_group terminate; rt_sigreturn restores the
+// pre-signal context, and restore_sigcontext sets orig_ax to -1, so
+// ftrace_syscall_exit skips it), so its sys_exit tracepoint never fires and
+// the matching exit handler is suppressed by the generator (see
+// internal/generate/codegen.go isNoreturnSyscall). That decides the two
+// differences from ior_on_syscall_enter:
+//
+//   - It does NOT write a per-tid entry into syscall_enter_state_map. With no
+//     exit handler nothing would ever look up or bpf_map_delete_elem that
+//     entry, so recording it would only leave stale per-tid entries crowding
+//     the bounded (32768) map on hosts churning many distinct tids.
+//   - The invocation is complete at enter, so the aggregate-vs-emit partition
+//     that ior_on_syscall_exit applies at sys_exit happens here: an emitted
+//     enter becomes a row in userspace (eventLoop.completeNoReturnEnter, which
+//     counts it on the stats side), and an enter the sampling rate suppresses
+//     (rate 0, or the N-1 of 1-in-N) is counted untimed in
+//     syscall_aggregate_map. Before task pr2 a suppressed enter was counted
+//     nowhere, so an aggregate-only exit_group never reached the Syscalls tab.
+//     Untimed is the truthful shape: a noreturn syscall has no duration and no
+//     return value, so it must neither add a histogram sample nor an error.
 static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
-    return ior_should_emit_trace(enter_trace_id);
+    if (ior_should_emit_trace(enter_trace_id))
+        return 1;
+    ior_count_untimed_syscall(enter_trace_id);
+    return 0;
 }
 
 static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {

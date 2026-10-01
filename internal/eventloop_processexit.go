@@ -55,16 +55,18 @@ import (
 // syscall is ordinary kernel behaviour - counting it there would inflate the
 // health percentage stats() prints and mask a real pairing regression behind
 // routine traffic. This eviction in fact *removes* false positives from that
-// counter, which is the strongest argument for keeping them apart:
-// exit/exit_group/rt_sigreturn emit an enter and have no exit handler at all
-// (ior_on_noreturn_syscall_enter), and no matching exit trace ID exists, so
-// such an enter parks forever and any exit that does consume it is
-// necessarily counted as a mismatch. Usually the recycled tid's own enter
-// supersedes it first and nothing is counted; the mismatch needs that enter to
-// be missing, which is the ring-buffer loss case below.
-// Routing eviction drops into the same counter would have cancelled that
-// improvement rather than measured anything. Note this concerns runs tracing
-// the Process family: exit_group is not in the default FS-only allowlist.
+// counter, which is the strongest argument for keeping them apart: a killed
+// task's enter that survived would be consumed by the recycled tid's exit of
+// a *different* syscall whenever that tid's own enter was lost (ring-buffer
+// loss, below), and be counted as a mismatch. Routing eviction drops into the
+// same counter would have cancelled that improvement rather than measured
+// anything. (The noreturn syscalls exit/exit_group/rt_sigreturn used to be the
+// common source of such parked enters - they have no exit handler at all - but
+// they are no longer parked: completeNoReturnEnter emits their row at enter,
+// task pr2. That row is not the synthetic row this eviction refuses to
+// fabricate: a noreturn syscall is complete at enter by definition and its
+// row carries the enter's own timestamp and no latency, whereas the enter
+// dropped here belongs to a call that was cut short and never completed.)
 //
 // A statistic of its own is a judgement call rather than an impossibility. An
 // enter can die unpaired four ways - here, superseded in set() when an exit

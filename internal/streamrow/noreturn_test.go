@@ -1,0 +1,29 @@
+package streamrow
+
+import (
+	"testing"
+
+	"ior/internal/event"
+	"ior/internal/types"
+)
+
+// TestNewCarriesNoReturn (task pr2): a noreturn row (exit, exit_group,
+// rt_sigreturn) keeps its marker in the shared row, so the Stream tab can show
+// "-" for its placeholder latency and return value, while the data outputs
+// keep RetVal 0, DurationNs 0 and IsError false.
+func TestNewCarriesNoReturn(t *testing.T) {
+	enter := &types.NullEvent{EventType: types.ENTER_NULL_EVENT, TraceId: types.SYS_ENTER_EXIT_GROUP, Time: 5, Pid: 1, Tid: 1}
+	pair := event.NewPair(enter)
+	pair.ExitEv = &types.NullEvent{EventType: types.EXIT_NULL_EVENT, TraceId: types.SYS_ENTER_EXIT_GROUP - 1, Time: 5, Pid: 1, Tid: 1}
+	pair.NoReturn = true
+
+	got := New(1, pair)
+	if !got.NoReturn || got.Syscall != "exit_group" || got.RetVal != 0 || got.IsError || got.DurationNs != 0 {
+		t.Fatalf("row = %+v, want NoReturn exit_group with RetVal 0, no error, no latency", got)
+	}
+
+	pair.NoReturn = false
+	if New(2, pair).NoReturn {
+		t.Fatal("a row built from an ordinary pair is marked NoReturn")
+	}
+}

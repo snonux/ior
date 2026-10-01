@@ -22,11 +22,11 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `seq` | UInt64 | Event sequence number |
 | `time_ns` | UInt64 | Timestamp in nanoseconds since boot |
 | `gap_ns` | UInt64 | Gap since the previous traced syscall on the same thread |
-| `latency_ns` | UInt64 | Syscall duration |
+| `latency_ns` | UInt64 | Syscall duration; `0` for the [syscalls that never return](#syscalls-that-never-return) |
 | `comm`, `syscall`, `family` | String | Process name, syscall name and family |
 | `pid`, `tid` | UInt32 | Process and thread IDs |
 | `fd` | Int32 | File descriptor; `-1` when the syscall has none (not `0`, which is a real descriptor) |
-| `ret` | Int64 | Return value as seen at `sys_exit`; negative values are errno results, except the kernel-internal restart codes -512, -513, -514 and -516, which are interruptions rather than errors (see the `is_error` rule below) |
+| `ret` | Int64 | Return value as seen at `sys_exit`; negative values are errno results, except the kernel-internal restart codes -512, -513, -514 and -516, which are interruptions rather than errors (see the `is_error` rule below); `0` for the [syscalls that never return](#syscalls-that-never-return) |
 | `bytes` | UInt64 | Classified payload bytes |
 | `address_space_bytes` | UInt64 | Virtual address space added, removed or moved by `mmap`, `munmap`, `mremap` (the larger of old and new size) and `brk` (how far the program break moved since the process's previous `brk`; the first `brk` seen for a process and `brk(0)` queries report 0), rounded up to whole host pages. `msync`, `mprotect`, `madvise` and `mlock*` do not change the address space and report 0. `brk` is tracked per process, not per address space: a `vfork`/`CLONE_VM` child shares its parent's heap, so its first `brk` reports 0 and the parent's next `brk` may absorb heap movement the child caused (exec resets the baseline) |
 | `requested_sleep_ns` | Int64 | Requested relative sleep duration; `-1` unknown (null/invalid timespec, `TIMER_ABSTIME`), `9223372036854775807` for requests too large for Int64 (e.g. `sleep infinity`) |
@@ -106,6 +106,17 @@ library functions by signal handlers"):
   excluded. `-515` (`ENOIOCTLCMD`) is not a restart code and stays an error.
 
 Folding the restart row and its continuation into one row is not done yet (task fs2).
+
+### Syscalls that never return
+
+`exit`, `exit_group` and `rt_sigreturn` never return to their caller, so the kernel fires no
+`sys_exit` tracepoint for them. ior records each call as a row at `sys_enter` instead, with
+`time_ns` and `gap_ns` as for any row but `latency_ns = 0` and `ret = 0` as placeholders (there is
+no latency and no return value) and `is_error = false`. Leave them out of latency statistics, for
+example with `WHERE syscall NOT IN ('exit', 'exit_group', 'rt_sigreturn')`. ior's own views
+already do: the Stream tab shows `-` for their latency and return value, `-plain` leaves the
+`ret` column empty, and the latency aggregates count them without a duration. Recordings made
+before this change hold no rows for these syscalls at all.
 
 ### Invalid UTF-8 in `comm`, `file` and `old_file`
 

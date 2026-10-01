@@ -199,6 +199,7 @@ var scenarios = map[string]func() error{
 	"aio-getevents":                 aioGetevents,
 	"aio-cancel":                    aioCancel,
 	"signals-basic":                 signalsBasic,
+	"noreturn-syscalls":             noreturnSyscalls,
 	"misc-basic":                    miscBasic,
 	"sched-basic":                   schedBasic,
 	"priority-basic":                priorityBasic,

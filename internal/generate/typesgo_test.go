@@ -346,6 +346,45 @@ func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
 	requireContains(t, output, `return fmt.Sprintf("unknown_trace_id_%d", s)`)
 }
 
+// TestGenerateTypesGoNoReturnSet pins the userspace half of the noreturn rule
+// (task pr2): exactly the sys_enter IDs of isNoreturnSyscall land in
+// noReturnTraceIds, which the event loop reads (TraceId.NoReturn) to emit
+// those enters as rows instead of parking them for an exit that never comes.
+// A returning syscall and the exit side of a noreturn name stay out: the exit
+// constants are not even generated for them, but a defensive SYS_EXIT_ define
+// must not be mistaken for an enter.
+func TestGenerateTypesGoNoReturnSet(t *testing.T) {
+	defines := testDefines + `#define SYS_ENTER_EXIT 150
+#define SYS_ENTER_EXIT_GROUP 148
+#define SYS_EXIT_EXIT_GROUP 147
+#define SYS_ENTER_RT_SIGRETURN 57
+#define SYS_ENTER_EXITX 33
+`
+	structs, constants, err := ParseCTypesInput(strings.NewReader(testTypesH + defines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	requireContains(t, output, "func (s TraceId) NoReturn() bool")
+	start := strings.Index(output, "var noReturnTraceIds = map[TraceId]bool{\n")
+	if start < 0 {
+		t.Fatalf("noReturnTraceIds not generated:\n%s", output)
+	}
+	end := strings.Index(output[start:], "}\n")
+	block := output[start : start+end]
+	for _, want := range []string{"\t150: true,", "\t148: true,", "\t57: true,"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("noReturnTraceIds lacks %q:\n%s", want, block)
+		}
+	}
+	for _, unwanted := range []string{"147:", "33:", "784:", "783:", "782:", "781:"} {
+		if strings.Contains(block, unwanted) {
+			t.Errorf("noReturnTraceIds must not contain %q:\n%s", unwanted, block)
+		}
+	}
+}
+
 func TestGenerateTypesGoPackageDecl(t *testing.T) {
 	input := testTypesH
 	structs, constants, err := ParseCTypesInput(strings.NewReader(input))

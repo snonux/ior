@@ -154,15 +154,22 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 	if ev.FD >= 0 {
 		fd = strconv.FormatInt(int64(ev.FD), 10)
 	}
+	// A noreturn syscall (exit, exit_group, rt_sigreturn) has neither a
+	// latency nor a return value; its 0s are placeholders, shown as "-" like
+	// an absent descriptor.
+	latency, ret := formatDurationNs(ev.DurationNs), strconv.FormatInt(ev.RetVal, 10)
+	if ev.NoReturn {
+		latency, ret = "-", "-"
+	}
 	cells := []string{
 		fitCell(formatDurationNs(ev.GapNs), columns[0].Width),
-		fitCell(formatDurationNs(ev.DurationNs), columns[1].Width),
+		fitCell(latency, columns[1].Width),
 		fitCell(ev.Comm, columns[2].Width),
 		fitCell(strconv.FormatUint(uint64(ev.PID), 10), columns[3].Width),
 		fitCell(strconv.FormatUint(uint64(ev.TID), 10), columns[4].Width),
 		fitCell(ev.Syscall, columns[5].Width),
 		fitCell(fd, columns[6].Width),
-		fitCell(strconv.FormatInt(ev.RetVal, 10), columns[7].Width),
+		fitCell(ret, columns[7].Width),
 		fitCell(strconv.FormatUint(ev.Bytes, 10), columns[8].Width),
 		fitCell(ev.FileName, columns[9].Width),
 	}

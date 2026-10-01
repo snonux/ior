@@ -135,9 +135,16 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 
 	stats.count++
 	stats.totalBytes += pair.Bytes
-	stats.totalLatency += pair.Duration
-	stats.updateMinMax(pair.Duration)
-	stats.addSample(pair.Duration, a.sampleCap, a.rng)
+	if pair.NoReturn {
+		// A noreturn syscall has no latency (event.Pair.NoReturn): count it
+		// untimed, so it neither seeds min/max nor enters the percentile
+		// reservoir, and the mean divides by the timed rest.
+		stats.untimedCount++
+	} else {
+		stats.totalLatency += pair.Duration
+		stats.updateMinMax(pair.Duration)
+		stats.addSample(pair.Duration, a.sampleCap, a.rng)
+	}
 
 	// Any ret-carrying exit event counts here, including the kind-specific
 	// exits (accept/accept4, pipe/pipe2, socketpair, eventfd/pidfd).

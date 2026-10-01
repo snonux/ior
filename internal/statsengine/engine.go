@@ -200,17 +200,31 @@ func (e *Engine) Ingest(pair *event.Pair) {
 	e.totalSyscalls++
 	e.totalBytes += pair.Bytes
 	e.totalAddressSpaceBytes += pair.AddressSpaceBytes
-	e.totalLatency += pair.Duration
 
 	e.updateErrorAndByteClasses(pair)
+	e.ingestLatency(pair, now)
 	e.ingestGap(pair, now)
 	e.syscalls.Add(pair)
 	e.files.Add(pair)
 	e.dirs.Add(pair)
 	e.processes.Add(pair)
+	e.throughputSeries.Add(float64(pair.Bytes), now)
+}
+
+// ingestLatency records pair's syscall latency. A noreturn pair (exit,
+// exit_group, rt_sigreturn; event.Pair.NoReturn) has no latency: its
+// Duration of 0 is no measurement, so it is booked as untimed - counted in
+// totalSyscalls but kept out of the latency total, histogram and series,
+// exactly like the kernel aggregate's untimed invocations - instead of
+// pulling the mean and the low buckets toward zero.
+func (e *Engine) ingestLatency(pair *event.Pair, now time.Time) {
+	if pair.NoReturn {
+		e.totalUntimed++
+		return
+	}
+	e.totalLatency += pair.Duration
 	e.latencyHist.Increment(pair.Duration)
 	e.latencySeries.Add(float64(pair.Duration), now)
-	e.throughputSeries.Add(float64(pair.Bytes), now)
 }
 
 // RetireProcess ends the current lifetime of pid in the per-process stats:

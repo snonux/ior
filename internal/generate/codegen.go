@@ -180,9 +180,14 @@ func isEnterRejected(kind TracepointKind) bool {
 
 // noreturnSyscalls lists syscalls that never return to the syscall site.
 // Their sys_exit tracepoint can never fire, so the generator suppresses the
-// matching exit handler (see classifySyscall) to avoid dead code in the
-// generated BPF program, and the enter handler uses the noreturn enter hook
-// that skips the (otherwise un-reclaimable) syscall_enter_state_map write.
+// matching exit handler (see generatedTracepointsFor) to avoid dead code in
+// the generated BPF program, and the enter handler uses the noreturn enter
+// hook (ior_on_noreturn_syscall_enter) that skips the (otherwise
+// un-reclaimable) syscall_enter_state_map write and counts a sampled-out
+// enter in the kernel aggregate itself. The same set is emitted into
+// internal/types as TraceId.NoReturn (writeTraceIdNoReturnSet), which the
+// event loop uses to turn such an enter into a complete row at once instead
+// of parking it for an exit that never arrives (task pr2).
 //
 //   - exit / exit_group terminate the thread/process; control never returns.
 //   - rt_sigreturn restores the pre-signal execution context off the signal
@@ -200,7 +205,7 @@ var noreturnSyscalls = map[string]bool{
 }
 
 // isNoreturnSyscall reports whether the named syscall never returns and thus
-// must not have an exit handler emitted.
+// must not have an exit handler emitted (and is emitted as a row at enter).
 func isNoreturnSyscall(name string) bool {
 	return noreturnSyscalls[name]
 }

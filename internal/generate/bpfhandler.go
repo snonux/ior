@@ -160,11 +160,13 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 	switch {
 	case h.isEnter && h.noreturn:
-		// Noreturn enter: only the sampling decision, no enter-state write. The
-		// syscall never returns, so its exit handler is suppressed and nothing
-		// would ever look up or delete a recorded enter-state entry. Skipping
-		// the write avoids leaking stale per-tid entries in the bounded
-		// syscall_enter_state_map; the enter null_event is still emitted below.
+		// Noreturn enter: only the sampling decision (a sampled-out enter is
+		// counted untimed in the kernel aggregate by the hook itself), no
+		// enter-state write. The syscall never returns, so its exit handler is
+		// suppressed and nothing would ever look up or delete a recorded
+		// enter-state entry. Skipping the write avoids leaking stale per-tid
+		// entries in the bounded syscall_enter_state_map; the enter null_event
+		// is still emitted below, and userspace turns it into the complete row.
 		// The hook needs no timestamp, so the clock is read only once the event
 		// is known to be emitted, as before.
 		fmt.Fprintf(b, "    if (!ior_on_noreturn_syscall_enter(%s))\n", strings.ToUpper(h.name))

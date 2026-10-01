@@ -236,8 +236,9 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 // when ctx is cancelled are not abandoned: drainBacklogAtStop decodes them
 // first (bounded by count and time) and accounts for any it cannot.
 func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
-	// A raw record completes at most one pair (tracepointExited, through
-	// sendPair, is the only sender), so one slot always suffices. sendPair
+	// A raw record completes at most one pair (tracepointExited and, for a
+	// noreturn enter, completeNoReturnEnter are the only senders, both through
+	// sendPair), so one slot always suffices. sendPair
 	// never blocks: a second pair for one record panics instead of
 	// deadlocking this goroutine, which is the channel's only reader.
 	pairs := make(chan *event.Pair, 1)
@@ -348,7 +349,8 @@ func (e *eventLoop) initRawHandlers() {
 
 // rawRuntimeEventHandler builds the raw handler for one registered event
 // kind: it decodes the record, applies control records to event-loop state,
-// and hands syscall enter/exit events on to pairing.
+// and hands syscall enter/exit events on to pairing (syscallEntered,
+// tracepointExited).
 func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHandler {
 	return func(raw []byte, ch chan<- *event.Pair) {
 		ev, ok := e.decodeRuntimeEvent(rawEvent, raw)
@@ -383,15 +385,27 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 			e.tracepointExited(syscallEvent, ch)
 			return
 		}
-		// Before the enter filter: the payload comm is true whether or not this
-		// run wants the row, and a filtered-out enter must still heal the cache.
-		e.seedCommFromEnterPayload(syscallEvent)
-		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), syscallEvent) {
-			syscallEvent.Recycle()
-			return
-		}
-		e.tracepointEntered(syscallEvent)
+		e.syscallEntered(rawEvent, syscallEvent, ch)
 	}
+}
+
+// syscallEntered handles a decoded syscall enter record: it seeds the comm
+// cache, applies the kind's raw enter filter, and then either parks the enter
+// for its exit (tracepointEntered) or, for a syscall that never returns,
+// completes the row right away (completeNoReturnEnter).
+func (e *eventLoop) syscallEntered(rawEvent rawRuntimeEvent, enterEv event.Event, ch chan<- *event.Pair) {
+	// Before the enter filter: the payload comm is true whether or not this
+	// run wants the row, and a filtered-out enter must still heal the cache.
+	e.seedCommFromEnterPayload(enterEv)
+	if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), enterEv) {
+		enterEv.Recycle()
+		return
+	}
+	if enterEv.GetTraceId().NoReturn() {
+		e.completeNoReturnEnter(enterEv, ch)
+		return
+	}
+	e.tracepointEntered(enterEv)
 }
 
 func (e *eventLoop) decodeRuntimeEvent(rawEvent rawRuntimeEvent, raw []byte) (runtimeDecodedEvent, bool) {

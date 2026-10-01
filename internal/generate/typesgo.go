@@ -173,10 +173,12 @@ func writeTypeDefsAndMaps(b *strings.Builder, constants []CConstant) {
 		return strings.ToLower(s)
 	})
 	writeTraceIdFamilyMap(b, sysConstants)
+	writeTraceIdNoReturnSet(b, sysConstants)
 
 	writeTraceIdStringMethod(b)
 	writeTraceIdNameMethod(b)
 	writeTraceIdFamilyMethod(b)
+	writeTraceIdNoReturnMethod(b)
 	b.WriteString("\n")
 }
 
@@ -223,6 +225,23 @@ func writeTraceIdFamilyMap(b *strings.Builder, constants []CConstant) {
 	}
 	b.WriteString(strings.Join(entries, ", "))
 	b.WriteString(",\n}\n\n")
+}
+
+// writeTraceIdNoReturnSet emits the sys_enter trace IDs of the noreturn
+// syscalls (isNoreturnSyscall), the userspace half of the generator's noreturn
+// rule: the BPF side gets an enter handler without enter state and no exit
+// handler, and the event loop, which can never see an exit for these, turns
+// the enter itself into the row (eventLoop.completeNoReturnEnter). Deriving
+// the set here keeps a single source of truth for both sides.
+func writeTraceIdNoReturnSet(b *strings.Builder, constants []CConstant) {
+	b.WriteString("var noReturnTraceIds = map[TraceId]bool{\n")
+	for _, c := range constants {
+		name, isEnter := strings.CutPrefix(c.Name, "SYS_ENTER_")
+		if isEnter && isNoreturnSyscall(strings.ToLower(name)) {
+			fmt.Fprintf(b, "\t%s: true,\n", c.Value)
+		}
+	}
+	b.WriteString("}\n\n")
 }
 
 func syscallFamilyConstName(family SyscallFamily) string {
@@ -286,6 +305,17 @@ func (s TraceId) Family() SyscallFamily {
 		return FamilyMisc
 	}
 	return family
+}
+
+`)
+}
+
+func writeTraceIdNoReturnMethod(b *strings.Builder) {
+	b.WriteString(`// NoReturn reports whether this is the sys_enter tracepoint of a syscall
+// that never returns to its caller (exit, exit_group, rt_sigreturn), whose
+// sys_exit tracepoint therefore never fires.
+func (s TraceId) NoReturn() bool {
+	return noReturnTraceIds[s]
 }
 
 `)

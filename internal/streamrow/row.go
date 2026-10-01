@@ -45,7 +45,13 @@ type Row struct {
 	TimeoutNs int64
 	RetVal    int64
 	IsError   bool
-	FD        int32
+	// NoReturn marks the row of a syscall that never returns (exit,
+	// exit_group, rt_sigreturn; event.Pair.NoReturn). It has neither a return
+	// value nor a latency: RetVal and DurationNs stay 0 in the data outputs
+	// (Parquet, the stream CSV export, which must agree with it), and the
+	// Stream tab shows "-" in both cells instead.
+	NoReturn bool
+	FD       int32
 	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
 	// empty for non-epoll_ctl rows. EpollTargetFD and EpollEvents hold the
 	// registered descriptor (args[2]) and requested event mask (args[3]->events)
@@ -194,6 +200,7 @@ func New(seq uint64, pair *event.Pair) Row {
 		FileName:          pair.FileName(),
 		NoFile:            pair.File == nil,
 		DurationNs:        pair.Duration,
+		NoReturn:          pair.NoReturn,
 		GapNs:             pair.DurationToPrev,
 		Bytes:             pair.Bytes,
 		AddressSpaceBytes: pair.AddressSpaceBytes,

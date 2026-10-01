@@ -8,6 +8,7 @@ import (
 	"ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestRenderStatusAndFilterLines(t *testing.T) {
@@ -104,6 +105,28 @@ func TestRenderEventRowIsSingleLineWithControlCharsAndLongValues(t *testing.T) {
 	}
 	if !strings.Contains(row, "...") {
 		t.Fatalf("expected truncation ellipsis in narrow row, got %q", row)
+	}
+}
+
+// TestRenderEventRowShowsDashesForNoReturn (task pr2): a noreturn row (exit,
+// exit_group, rt_sigreturn) has neither a latency nor a return value, so the
+// Stream tab shows "-" in both cells rather than the placeholder 0s, and an
+// ordinary row with the same zeros still shows them.
+func TestRenderEventRowShowsDashesForNoReturn(t *testing.T) {
+	columns := streamColumns(120)
+	cellsOf := func(ev StreamEvent) []string {
+		return strings.Fields(ansi.Strip(renderEventRow(ev, columns, false, -1)))
+	}
+	ev := StreamEvent{Syscall: "exit_group", Comm: "proc", PID: 7, TID: 7, FD: -1, FileName: "N:file", NoReturn: true}
+	got := cellsOf(ev)
+	// gap, latency, comm, pid, tid, syscall, fd, ret, bytes, file
+	if len(got) != 10 || got[1] != "-" || got[7] != "-" {
+		t.Fatalf("noreturn row cells = %q, want latency and ret \"-\"", got)
+	}
+	ev.NoReturn = false
+	got = cellsOf(ev)
+	if len(got) != 10 || got[1] == "-" || got[7] != "0" {
+		t.Fatalf("ordinary row cells = %q, want a latency and ret 0", got)
 	}
 }
 

@@ -51,7 +51,18 @@ type Pair struct {
 	// durations were calculated, so DurationToPrev is 0 by definition rather
 	// than a measured gap. Consumers that average or bucket gaps skip it.
 	FirstOnTID bool
-	Bytes      uint64 // Number of bytes transferred (read/write/transfer syscalls only)
+	// NoReturn marks the row of a syscall that never returns to its caller
+	// (exit, exit_group, rt_sigreturn; types.TraceId.NoReturn): its sys_exit
+	// tracepoint never fires, so the event loop completes the pair at enter
+	// (completeNoReturnEnter in internal/eventloop_noreturn.go). ExitEv is
+	// then a synthetic *types.NullEvent stamped with the enter's time and
+	// tid; it carries no return value (it is not a RetCarrier, so the -plain
+	// ret column is empty and ret filters see 0), and Duration is 0 because
+	// there is no latency to measure, not because the call took no time.
+	// Latency aggregates count such a pair as untimed (statsengine).
+	// DurationToPrev is a real gap, measured to the enter like any pair's.
+	NoReturn bool
+	Bytes    uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 	// AddressSpaceBytes is the virtual address space a memory syscall added,
 	// removed or moved, in whole host pages: the page-rounded length of
 	// mmap/munmap, the larger of the old and new size for mremap, and how far
