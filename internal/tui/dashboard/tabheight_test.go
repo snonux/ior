@@ -837,41 +837,95 @@ func TestLatencyTabPlaceholdersFitNarrowTerminals(t *testing.T) {
 }
 
 // A snapshot taken mid-update may count events in its buckets that its total
-// does not include yet. The count column is then as wide as the bucket sum,
-// not the total, and the layout must be planned for it: here the buckets add
-// up to 6 digits under a 4-digit total=, which makes the compact row
-// ("[10us,100us) | 100000", 21 cells) wider than the short title line, so
-// the panel needs one column more than the total alone would suggest. No line
-// may be wider than the terminal at any width, from the one where the panel
-// is first drawn on.
+// does not include yet, so a rendered count can have more digits than
+// total=. Here total=9999 (4 digits) while the two slowest buckets hold 60000
+// each: a short panel folds them into a tail row such as
+// "[100us,+inf) | 120003" (6 digits). The count column must be planned for
+// that sum. Planned for total= alone, the panel picks a layout whose rows are
+// wider than its inner width; lipgloss, rendering through PanelStyle.Width,
+// soft-wraps those rows inside the panel instead of drawing a wider line, so
+// the panel grows taller than its row budget, fitBlocks cuts it mid-row, its
+// bottom border is lost and the counts shown no longer add up. Every drawn
+// panel must therefore be whole (rows, bottom border, at most height rows)
+// with rows summing to the buckets' sum, and drawn exactly from
+// countColumnSnapshotMinWidth on, a width worked out by hand rather than by
+// histogramMinWidth, the function under test.
 func TestHistogramCountColumnFitsBucketsAheadOfTotal(t *testing.T) {
+	snap := countColumnSnapshot()
+	// The tail row with the 6-digit sum is really drawn: without it the
+	// count column's width is never put to the test.
+	if out := ansi.Strip(renderLatencyTab(snap, countColumnSnapshotMinWidth, 7)); !strings.Contains(out, "[100us,+inf) | 120003") {
+		t.Fatalf("no 6-digit folded tail row at %dx7:\n%s", countColumnSnapshotMinWidth, out)
+	}
+	heights := []int{0, 7, 8, 12, 30}
+	// First every drawn panel is whole, at every width and height: a
+	// soft-wrapped panel is the failure this test is about, so it is
+	// reported as such before any width mismatch (a panel drawn one column
+	// early may still fit at one height and break at another).
+	for _, r := range histogramRenderers {
+		for width := 1; width <= 60; width++ {
+			for _, height := range heights {
+				label := fmt.Sprintf("%s %dx%d", r.name, width, height)
+				assertCountColumnPanelsWhole(t, label, r.render(snap, width, height), width, height)
+			}
+		}
+	}
+	// Then the panel is drawn exactly from its minimum width on.
+	for _, r := range histogramRenderers {
+		for width := 1; width <= 60; width++ {
+			for _, height := range heights {
+				out := r.render(snap, width, height)
+				if drawn := len(drawnHistograms(t, out)) > 0; drawn != (width >= countColumnSnapshotMinWidth) {
+					t.Fatalf("%s %dx%d: histogram drawn = %v, its minimum width is %d:\n%s",
+						r.name, width, height, drawn, countColumnSnapshotMinWidth, out)
+				}
+			}
+		}
+	}
+}
+
+// countColumnSnapshotMinWidth is the narrowest panel of countColumnSnapshot,
+// for Latency and Gaps alike: the 4 cells of panel chrome around a compact
+// row of 12 label cells ("[10us,100us)", or the folded "[100us,+inf)"), the
+// 3-cell " | " and 6 count digits (the bucket sum 120006), 21 cells, which
+// is wider than either short title line ("Latency (total=9999)", 20 cells).
+const countColumnSnapshotMinWidth = 4 + 12 + 3 + 6
+
+// countColumnSnapshot is a torn snapshot: its latency and gap buckets sum to
+// 120006 while its total is 9999.
+func countColumnSnapshot() *statsengine.Snapshot {
 	labels := []string{"[0,1us)", "[1us,10us)", "[10us,100us)", "[100us,1ms)", "[1ms,10ms)", "[10ms,100ms)", "[100ms,1s)", "[1s,+inf)"}
+	counts := []uint64{1, 1, 1, 1, 1, 1, 60000, 60000}
 	var buckets []statsengine.HistogramBucketSnapshot
 	for i, l := range labels {
-		count := uint64(1)
-		if i == 0 {
-			count = 100000 - uint64(len(labels)-1)
-		}
-		buckets = append(buckets, statsengine.HistogramBucketSnapshot{Label: l, Count: count})
+		buckets = append(buckets, statsengine.HistogramBucketSnapshot{Label: l, Count: counts[i]})
 	}
 	hist := statsengine.NewHistogramSnapshot(9999, buckets)
 	series := []float64{10, 20, 15, 30}
 	snap := statsengine.NewSnapshot(series, series, series, nil, nil, nil, hist, hist)
-	for _, r := range histogramRenderers {
-		minWidth := histogramMinWidth(hist, r.specs[0])
-		for width := 1; width <= 60; width++ {
-			for _, height := range []int{0, 6, 12, 30} {
-				label := fmt.Sprintf("%s %dx%d", r.name, width, height)
-				out := r.render(&snap, width, height)
-				for _, line := range strings.Split(out, "\n") {
-					if w := lipgloss.Width(line); w > width {
-						t.Fatalf("%s: line is %d cells wide: %q\n%s", label, w, line, out)
-					}
-				}
-				if drawn := len(drawnHistograms(t, out)) > 0; drawn != (width >= minWidth) {
-					t.Fatalf("%s: histogram drawn = %v, its minimum width is %d:\n%s", label, drawn, minWidth, out)
-				}
-			}
+	return &snap
+}
+
+// assertCountColumnPanelsWhole checks the rendering of countColumnSnapshot:
+// at most height rows (height <= 0: unbounded), no line wider than width, and
+// every drawn histogram panel whole: bucket rows, closed by its bottom border,
+// and its rows adding up to the buckets' sum 120006 (not total=, which the
+// torn snapshot undercounts). A panel whose rows soft-wrap fails here: its
+// wrapped rows are not "label | count" rows and its border gets cut.
+func assertCountColumnPanelsWhole(t *testing.T, label, out string, width, height int) {
+	t.Helper()
+	if height > 0 && lipgloss.Height(out) > height {
+		t.Fatalf("%s: %d rows:\n%s", label, lipgloss.Height(out), out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Fatalf("%s: line is %d cells wide: %q\n%s", label, w, line, out)
+		}
+	}
+	for _, p := range drawnHistograms(t, out) {
+		if p.rows == 0 || p.sum != 120006 || p.total != 9999 || !p.closed {
+			t.Fatalf("%s: histogram %q is broken: %d rows summing to %d of the buckets' 120006 (total=%d), closed=%v:\n%s",
+				label, p.title, p.rows, p.sum, p.total, p.closed, out)
 		}
 	}
 }
