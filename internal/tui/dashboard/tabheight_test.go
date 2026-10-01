@@ -1102,7 +1102,9 @@ func TestRenderBodyLaysTheTabOutForTheBudget(t *testing.T) {
 // they never decide whether the stream is drawn at all. At the minimum the
 // stream fits unclipped; each further row brings back the next footer line,
 // except that a status message takes the first spare row ahead of Row/Sel:
-// it is how errors such as "Export failed" reach the user.
+// it is how errors such as "Export failed" reach the user, so it is drawn
+// with the help bar off and the stream live too (task iz2), where Row/Sel
+// is not.
 func TestStreamMinimumIgnoresItsFooter(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -1137,7 +1139,7 @@ func TestStreamMinimumIgnoresItsFooter(t *testing.T) {
 			if got := strings.Contains(raw, "Row ") || strings.Contains(raw, "Sel "); got != wantRow {
 				t.Errorf("%s body=%d: footer line shown = %v, want %v:\n%s", tc.name, body, got, wantRow, raw)
 			}
-			wantMsg := footer && tc.status && body >= streamTableMinRows+1
+			wantMsg := tc.status && body >= streamTableMinRows+1
 			if got := strings.Contains(raw, "exported"); got != wantMsg {
 				t.Errorf("%s body=%d: status message shown = %v, want %v:\n%s", tc.name, body, got, wantMsg, raw)
 			}

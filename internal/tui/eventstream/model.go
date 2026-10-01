@@ -167,14 +167,16 @@ func (m *Model) resizeModals(width int) {
 	m.searchModal = m.searchModal.Resize(width)
 }
 
-// SetFooterVisible controls whether stream footer/status lines are shown.
+// SetFooterVisible controls whether the live stream shows its Row x/N footer
+// (the dashboard's help-bar toggle). A status message is shown either way.
 func (m *Model) SetFooterVisible(visible bool) {
 	m.showFooter = visible
 }
 
-// footerShown reports whether View appends the footer below the table: the
-// dashboard help bar turns it on (m.showFooter), and a paused stream always
-// shows it because its selection/column/search line is interaction feedback.
+// footerShown reports whether View appends the Row/Sel footer below the
+// table: the dashboard help bar turns it on (m.showFooter), and a paused
+// stream always shows it because its selection/column line is interaction
+// feedback. The status message does not depend on it (appendStreamFooter).
 func (m *Model) footerShown() bool {
 	return m.showFooter || m.paused
 }
@@ -643,13 +645,6 @@ func (m *Model) View(width, height int) string {
 	if m.searchModal.Visible() {
 		return m.searchModal.View(width, height)
 	}
-	// The paused selection/column/search footer is essential interaction
-	// feedback while the user navigates rows and columns, so render it whenever
-	// the stream is paused, independent of the dashboard help-bar toggle
-	// (m.showFooter). The live Row x/N footer remains tied to the help bar.
-	if !m.footerShown() {
-		return base
-	}
 	// The footer gets only the rows the table leaves of height: on a short
 	// terminal the table (never under one event row) takes them all, and the
 	// footer lines are dropped, Row/Sel first and the status message last
@@ -657,7 +652,9 @@ func (m *Model) View(width, height int) string {
 	// filter-stack line yields its row to it too, fittingFilterStack),
 	// instead of making the view taller than its budget. The dashboard can
 	// then size its "too small" threshold by the table alone, so pausing or a
-	// status message never swaps the table for that notice.
+	// status message never swaps the table for that notice. Which footer
+	// lines exist at all is appendStreamFooter's call (footerShown for
+	// Row/Sel; the status message always).
 	return m.appendStreamFooter(base, start, height-lipgloss.Height(base))
 }
 
@@ -695,10 +692,12 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 // show outranks the stack line: the row it needs is kept free first, so a
 // single spare row goes to "Export failed", "Invalid regex" or "No match"
 // (appendStreamFooter) rather than to the stack, which loses nothing when
-// dropped because the dashboard status line summarises the same stack.
+// dropped because the dashboard status line summarises the same stack. The
+// message is drawn with the help bar off and the stream live too, so it
+// reserves its row in every footer state.
 func (m *Model) fittingFilterStack(eventRows int) []string {
 	messageRows := 0
-	if m.statusMessage != "" && m.footerShown() {
+	if m.statusMessage != "" {
 		messageRows = 1
 	}
 	if streamTableChromeRows+eventRows+1+messageRows > m.height {

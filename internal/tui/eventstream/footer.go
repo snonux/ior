@@ -2,6 +2,7 @@ package eventstream
 
 import (
 	"fmt"
+	"strings"
 
 	"ior/internal/tui/common"
 )
@@ -22,32 +23,42 @@ const footerTail = "..."
 
 // appendStreamFooter appends the Row/Sel footer line and then the optional
 // status message line to the rendered table, each fitted to width, as far
-// as spare rows allow. On a short terminal the table (which keeps one event
-// row) takes priority: with no spare row the table is returned as is, and
-// with exactly one the status message, when there is one, takes that row in
-// place of the Row/Sel line. The message is how a failed export or open, an
-// invalid regex or a missed search reaches the user, so it must not vanish on
-// a 9-10 row terminal; Row/Sel is only lost while the message stands (the
-// next key clears or replaces it) and the table still marks the selection.
-// The filter-stack line above the table yields its row to the message too
+// as spare rows allow. Row/Sel is drawn only while footerShown (help bar on,
+// or paused); the status message is drawn in every state, because it is how
+// a failed export or open, an invalid regex or a missed search reaches the
+// user, and with the help bar off and the stream live it used to be set but
+// never shown (task iz2). On a short terminal the table (which keeps one
+// event row) takes priority: with no spare row the table is returned as is,
+// and with exactly one the status message, when there is one, takes that row
+// in place of the Row/Sel line, so it does not vanish on a 9-10 row
+// terminal; Row/Sel is only lost while the message stands (the next key
+// clears or replaces it) and the table still marks the selection. The
+// filter-stack line above the table yields its row to the message too
 // (fittingFilterStack keeps that row free before the table is drawn), so the
 // message is the last line besides the table to go.
 func (m *Model) appendStreamFooter(base string, start, spare int) string {
 	if spare < 1 {
 		return base
 	}
-	footer := fitFooterSegments(m.streamFooterSegments(start), m.width)
-	if m.statusMessage == "" {
-		return base + "\n" + footer
+	var lines []string
+	if m.footerShown() {
+		lines = append(lines, fitFooterSegments(m.streamFooterSegments(start), m.width))
 	}
-	// The message can echo export paths, error text and search terms, so it
-	// is sanitised like every other foreign string before being cut to the
-	// view width (the width helpers expect sanitised input).
-	message := common.TruncateRight(common.Sanitize(m.statusMessage), m.width, footerTail)
-	if spare < 2 {
-		return base + "\n" + message
+	if m.statusMessage != "" {
+		// The message can echo export paths, error text and search terms, so
+		// it is sanitised like every other foreign string before being cut
+		// to the view width (the width helpers expect sanitised input).
+		lines = append(lines, common.TruncateRight(common.Sanitize(m.statusMessage), m.width, footerTail))
 	}
-	return base + "\n" + footer + "\n" + message
+	// Keep the last lines that fit: the message is last, so it outlives
+	// Row/Sel when only one row is spare.
+	if len(lines) > spare {
+		lines = lines[len(lines)-spare:]
+	}
+	if len(lines) == 0 {
+		return base
+	}
+	return base + "\n" + strings.Join(lines, "\n")
 }
 
 // streamFooterSegments returns the stream footer's segments in priority
