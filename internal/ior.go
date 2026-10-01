@@ -1434,6 +1434,8 @@ func closeTraceInfra(
 	}
 	if bpfModule != nil {
 		bpfModule.Close()
+		// libbpf's load allocations are freed now; give them back (task yr2).
+		releaseFreedHeap()
 	}
 	if stopSignals != nil {
 		stopSignals()
