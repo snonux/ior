@@ -802,8 +802,9 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 // and runs them in the export command
 // (eventstream.ExportSourceSnapshotToCSV, writing the filtered
 // snapshot via exportRowsToCSV), and the resulting CompletedMsg sets the modal's
-// "Exported: <path>" status. The test asserts that status, then polls the temp
-// dir for the ior-stream-*.csv and asserts it contains the CSV header plus a
+// "Exported: <path>" status. The test waits for that status, polls the temp
+// dir for the ior-stream-*.csv, checks the status (its wrapped lines rejoined)
+// names that file, and asserts the file contains the CSV header plus a
 // seeded data row (a "batch" comm on a "/srv" path), proving the seeded rows were
 // exported.
 func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
@@ -821,11 +822,16 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	s.waitFor("Export Stream CSV", "CSV stream rows", "Enter confirm")
 
 	// Enter submits OptionCSV; the export runs and the modal reports success with
-	// the written path.
+	// the written path. The path is longer than the box is wide, so the modal
+	// hard-wraps it at some column of the temp dir's name: match the status
+	// lines rejoined (tuiExportedStatus), never a fragment of one line.
 	s.press(tea.KeyEnter)
-	s.waitFor("Exported: ", "ior-stream-")
+	s.waitFor("Exported:")
 
 	path := tuiWaitForFile(t, dir, "ior-stream-*.csv")
+	if shown := tuiExportedStatus(s.screen()); !strings.HasSuffix(shown, string(filepath.Separator)+filepath.Base(path)) {
+		t.Fatalf("export status shows %q, want the written file %q.\n--- screen ---\n%s", shown, path, s.screen())
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -845,6 +851,41 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	if got := tuiCSVDataRows(csv); got != streamrow.TestStreamRowCount() {
 		t.Fatalf("exported csv %q has %d data rows, want %d:\n%s", path, got, streamrow.TestStreamRowCount(), csv)
 	}
+}
+
+// tuiExportedStatus is the path the export modal's "Exported: <path>" status
+// shows on scr, its wrapped lines rejoined: the text after "Exported:" on its
+// line, then each following line's text from the same column (the box's
+// padding aligns them) up to the box's right border, until an empty one.
+func tuiExportedStatus(scr string) string {
+	lines := strings.Split(scr, "\n")
+	for i, line := range lines {
+		runes := []rune(line)
+		col := strings.Index(line, "Exported:")
+		if col < 0 {
+			continue
+		}
+		col = len([]rune(line[:col]))
+		shown := tuiBoxText(runes[col+len("Exported:"):])
+		for _, next := range lines[i+1:] {
+			piece := tuiBoxText([]rune(next)[min(col, len([]rune(next))):])
+			if piece == "" {
+				break
+			}
+			shown += piece
+		}
+		return shown
+	}
+	return ""
+}
+
+// tuiBoxText is the text of runes up to the next box border, trimmed.
+func tuiBoxText(runes []rune) string {
+	text := string(runes)
+	if end := strings.Index(text, "│"); end >= 0 {
+		text = text[:end]
+	}
+	return strings.TrimSpace(text)
 }
 
 // tuiCSVDataRows counts the non-empty lines of a CSV beyond its header row.

@@ -6,7 +6,6 @@ import (
 	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -138,17 +137,19 @@ func (m Model) messages(layout boxLayout) []string {
 }
 
 // fitMessage fits a note or status message to textWidth cells: when wrap is
-// set, word-wrapped at spaces and then hard-wrapped inside words still
-// longer than the width (a path), else cut to one line ending in "…". The
-// wrapping is done here rather than by the box style: lipgloss's own wrap
-// of a word longer than a narrow box let lines through wider than the box,
-// which widened it past the view. (ansi.Wrap, which does both in one pass,
-// drops the " - " of PausedNote when it breaks there.)
+// set, wrapped at spaces only and hard-wrapped inside words still longer
+// than the width (a path), by wrapAtSpaces, so a path that fits a line is
+// never broken at its hyphens and the " - " of PausedNote never stands on a
+// line of its own; else cut to one line ending in "…". The wrapping is done
+// here rather than by the box style: lipgloss's own wrap of a word longer
+// than a narrow box let lines through wider than the box, which widened it
+// past the view. Each line is cut to the width as well, for a wide rune in
+// a one-cell box.
 func fitMessage(text string, textWidth int, wrap bool) []string {
 	if !wrap {
 		return []string{cutLine(text, textWidth, common.Ellipsis)}
 	}
-	lines := strings.Split(ansi.Hardwrap(ansi.Wordwrap(text, textWidth, ""), textWidth, true), "\n")
+	lines := wrapAtSpaces(text, textWidth)
 	for i, line := range lines {
 		lines[i] = cutLine(strings.TrimRight(line, " "), textWidth, "")
 	}

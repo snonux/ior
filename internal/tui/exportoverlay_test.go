@@ -63,7 +63,8 @@ func overlayFrames(m *Model, width, height int) (base, overlay string) {
 
 // TestExportOverlayFitsTheTerminal holds the frame with the export modal
 // open to the terminal on every dashboard tab, with and without the help
-// bar, and on the PID picker, at heights 1..30 and widths 1..120: it may not
+// bar, and on the PID picker, at heights 1..30 and the overlayWidths widths
+// (1, 7, 30, 52 and 120 columns): it may not
 // be taller or wider than the terminal (it used to be the modal's full
 // screen stacked above the whole dashboard, about twice the height, task
 // ns2), and where there is room it shows the modal whole between the
@@ -229,6 +230,33 @@ func TestPlaceOverlayBox(t *testing.T) {
 		{6, 6, 5, 0},    // covers the tab bar, keeps the status line
 		{5, 9, 7, 1},    // neither region fits: the frame's height-2 rows
 		{3, 3, 5, 0},    // nothing fits: the compact box from the top, clipped
+	}
+	for _, c := range cases {
+		box, top := placeOverlayBox(render, c.baseRows, 40, c.height)
+		if rows := lipgloss.Height(box); rows != c.rows || top != c.top {
+			t.Fatalf("base %d rows, frame %d: box of %d rows at %d, want %d at %d",
+				c.baseRows, c.height, rows, top, c.rows, c.top)
+		}
+	}
+}
+
+// TestFitOverlayBoxReservesTwoRowsFirst pins fitOverlayBox's order with a
+// stand-in modal that fills any area of at least 5 rows (so a box of
+// height-2 rows tells a first try at height-2 from one at height-1): it
+// keeps both the tab bar and the status line where a height-2 box fits,
+// then only the status line, then neither.
+func TestFitOverlayBoxReservesTwoRowsFirst(t *testing.T) {
+	render := func(_, height int) string {
+		rows := max(height, 5)
+		return strings.Repeat("x\n", rows-1) + "x"
+	}
+	cases := []struct {
+		baseRows, height, rows, top int
+	}{
+		{5, 9, 7, 1}, // both regions under 5 rows: a height-2 box, rows 1..7
+		{5, 8, 6, 1}, // the same one row shorter
+		{6, 6, 5, 0}, // height-1: the status line kept
+		{5, 5, 5, 0}, // all rows
 	}
 	for _, c := range cases {
 		box, top := placeOverlayBox(render, c.baseRows, 40, c.height)
