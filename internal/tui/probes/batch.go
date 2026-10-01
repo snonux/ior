@@ -52,7 +52,8 @@ type FamilyToggledMsg struct {
 // progress holds at most the latest update: report replaces an unread one
 // instead of blocking, so a slow renderer never slows the attach down and
 // nothing is left blocked if the TUI stops waiting. done is buffered for the
-// same reason.
+// same reason; next also uses its slot to hold the result back behind a
+// still-unread update, so that update is never lost to the result.
 type familyBatchRun struct {
 	id       uint64
 	family   types.SyscallFamily
@@ -75,15 +76,22 @@ func StartFamilyBatch(ctx context.Context, manager Manager, run uint64, family t
 		if manager == nil {
 			return FamilyToggledMsg{Run: run, Family: family, Attach: attach, Err: errors.New("probe manager unavailable")}
 		}
-		r := &familyBatchRun{
-			id:       run,
-			family:   family,
-			attach:   attach,
-			progress: make(chan [2]int, 1),
-			done:     make(chan FamilyToggledMsg, 1),
-		}
+		r := newFamilyBatchRun(run, family, attach)
 		go r.execute(ctx, manager)
 		return r.next()
+	}
+}
+
+// newFamilyBatchRun returns the not yet started run number run of the batch
+// attaching (attach) or detaching family, with the one-slot channels the
+// type's comment explains.
+func newFamilyBatchRun(run uint64, family types.SyscallFamily, attach bool) *familyBatchRun {
+	return &familyBatchRun{
+		id:       run,
+		family:   family,
+		attach:   attach,
+		progress: make(chan [2]int, 1),
+		done:     make(chan FamilyToggledMsg, 1),
 	}
 }
 
@@ -120,13 +128,40 @@ func (r *familyBatchRun) report(completed, total int) {
 }
 
 // next blocks until the batch has progressed or finished and returns the
-// corresponding message. A progress update still unread when the batch ends
-// may be delivered before the result; it is simply superseded by it.
+// corresponding message.
+//
+// Ordering contract: the latest progress update reported before the batch
+// ended is always delivered before its FamilyToggledMsg. Older updates can
+// still be coalesced away (report keeps only the latest), which is fine for
+// a progress bar. A plain select over done and progress cannot keep that
+// promise: when the batch finishes before the TUI asks for the next update
+// (a fast or tiny family), both channels are ready and Go picks one at
+// random, so about half of those runs skipped the last update - the cause of
+// the flaky TestFamilyToggleAttachesWholeFamilyWithProgress (task gs2). So a
+// result is held back while a progress update is pending: execute sends
+// every update before the result on the same goroutine, so once the result
+// has been received any earlier update is already buffered and the
+// non-blocking check below sees it deterministically. The result goes back
+// into done, whose one-slot buffer was just emptied and which has no other
+// sender, so that send cannot block, and the following next returns it (no
+// update can follow the result).
 func (r *familyBatchRun) next() tea.Msg {
 	select {
 	case msg := <-r.done:
-		return msg
+		select {
+		case p := <-r.progress:
+			r.done <- msg
+			return r.progressMsg(p)
+		default:
+			return msg
+		}
 	case p := <-r.progress:
-		return FamilyBatchProgressMsg{Run: r.id, Family: r.family, Attach: r.attach, Completed: p[0], Total: p[1], run: r}
+		return r.progressMsg(p)
 	}
+}
+
+// progressMsg wraps the update p (completed, total) of this batch in the
+// message the TUI renders and follows with Next.
+func (r *familyBatchRun) progressMsg(p [2]int) FamilyBatchProgressMsg {
+	return FamilyBatchProgressMsg{Run: r.id, Family: r.family, Attach: r.attach, Completed: p[0], Total: p[1], run: r}
 }
