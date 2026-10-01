@@ -155,6 +155,8 @@ func (e *eventLoop) provisionalSeedNeedsRecheck(seedTime uint64) bool {
 	if !e.renameRecordsTrusted || e.ringbufDropReadFailed.Load() {
 		return true
 	}
+	// Record time vs a user-space boot-clock reading: assumes no time-namespace
+	// boottime offset (see bootClockNs; fdTracker.cacheReadBefore likewise).
 	return seedTime <= e.lastDropSeenBootNs.Load()
 }
 
@@ -231,6 +233,13 @@ func (e *eventLoop) inheritFdTable(ev *types.TaskNewtaskEvent) {
 // failed read (not expected on Linux) returns the maximum value: every seed
 // then counts as possibly predating a lost record and keeps its /proc read,
 // the conservative side of provisionalSeedNeedsRecheck.
+//
+// The orderings assume ior does not run in a time namespace with a boottime
+// offset: user-space CLOCK_BOOTTIME includes that offset, the BPF stamps do
+// not. A negative offset would make every reading look earlier than the
+// records it follows, so provisionalSeedNeedsRecheck would skip rechecks it
+// needs and a close row (fdTracker.cacheReadBefore, task jr2) would accept a
+// procfs answer read after the close again.
 func bootClockNs() uint64 {
 	var ts unix.Timespec
 	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {

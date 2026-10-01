@@ -58,6 +58,13 @@ func openUntrackedFiles() error {
 // number, i.e. the one just closed; the pipes stay open until the process
 // exits, so a resolver that reads /proc/<pid>/fd after the close sees the pipe
 // there instead of the file.
+//
+// Every descriptor after the first is also written to right before its close,
+// without a pause. ior processes such a write after the close and the reusing
+// pipe much of the time, so the write's procfs read names and caches the pipe,
+// stamped after the close entered. That exercises the close row's read-time
+// rule: a resolver that took any cached procfs answer would name the close
+// after the pipe.
 func closeUntracked() error {
 	defer closeUntrackedState.cleanup()
 	fds := closeUntrackedState.fds
@@ -65,17 +72,31 @@ func closeUntracked() error {
 		return fmt.Errorf("write fd %d: %w", fds[0], err)
 	}
 	time.Sleep(closeUntrackedSettle)
-	for _, fd := range fds {
-		if err := syscall.Close(fd); err != nil {
-			return fmt.Errorf("close fd %d: %w", fd, err)
+	for i, fd := range fds {
+		if err := closeAndReuse(fd, i > 0); err != nil {
+			return err
 		}
-		var pipefd [2]int
-		if err := syscall.Pipe2(pipefd[:], syscall.O_CLOEXEC); err != nil {
-			return fmt.Errorf("pipe2 after closing fd %d: %w", fd, err)
+	}
+	return nil
+}
+
+// closeAndReuse closes fd, after writing to it when writeFirst is set, and
+// puts a pipe on the freed number.
+func closeAndReuse(fd int, writeFirst bool) error {
+	if writeFirst {
+		if _, err := syscall.Write(fd, []byte("written-just-before-close")); err != nil {
+			return fmt.Errorf("write fd %d: %w", fd, err)
 		}
-		if pipefd[0] != fd {
-			return fmt.Errorf("pipe2 after closing fd %d got %v, not the closed number", fd, pipefd)
-		}
+	}
+	if err := syscall.Close(fd); err != nil {
+		return fmt.Errorf("close fd %d: %w", fd, err)
+	}
+	var pipefd [2]int
+	if err := syscall.Pipe2(pipefd[:], syscall.O_CLOEXEC); err != nil {
+		return fmt.Errorf("pipe2 after closing fd %d: %w", fd, err)
+	}
+	if pipefd[0] != fd {
+		return fmt.Errorf("pipe2 after closing fd %d got %v, not the closed number", fd, pipefd)
 	}
 	return nil
 }

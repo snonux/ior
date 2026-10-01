@@ -799,6 +799,10 @@ func (t *fdTracker) storeProcFdCache(fd int32, pid uint32, resolved *file.FdFile
 
 // copyProcFdReadAt gives the cache entry at dst the read time of the one at
 // src, or none when src has none (copyTable and rekeyTable copy entries).
+// Clearing dst is defensive: deleteCacheKey drops a stamp with its entry, and
+// both callers write to a pid that holds no entries (copyTable's child,
+// rekeyTable's to), so dst never has a stamp today. It keeps a stale stamp
+// from surviving should a caller ever overwrite an entry.
 func (t *fdTracker) copyProcFdReadAt(src, dst uint64) {
 	if readNs, ok := t.procFdReadAt[src]; ok {
 		t.procFdReadAt[dst] = readNs

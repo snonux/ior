@@ -255,8 +255,29 @@ func TestCloexecCloseRangeStillResolvesThroughProcfs(t *testing.T) {
 	verifyProcFdCached(t, el, pid, n)
 }
 
+// A close_range that fails (EINVAL: first > last or unknown flags) returns
+// before releasing anything, so its descriptor is still open and procfs names
+// it correctly; the row must keep that name rather than go blank, and the
+// failed call evicts nothing.
+func TestFailedCloseRangeStillResolvesThroughProcfs(t *testing.T) {
+	pid := uint32(os.Getpid())
+	n := freeFdNumber(t)
+	want := placePipeOn(t, n)
+	el := newFilteredEventLoop(t, globalfilter.Filter{})
+
+	ep := mustEmit(t, feedRealPidCloseRangeAt(t, el, n, n-1, 0, bootClockNs(), -int64(syscall.EINVAL)), "close_range")
+	if got := ep.File.Name(); got != want || !strings.HasPrefix(got, "pipe:[") {
+		t.Fatalf("failed close_range row named %q, want the still-open pipe %q", got, want)
+	}
+	verifyProcFdCached(t, el, pid, n)
+}
+
 func TestClosesDescriptor(t *testing.T) {
 	pair := func(ev event.Event) *event.Pair { return &event.Pair{EnterEv: ev} }
+	exited := func(ev event.Event, ret int64) *event.Pair {
+		return &event.Pair{EnterEv: ev, ExitEv: &types.RetEvent{Ret: ret}}
+	}
+	closeRange := func() *types.TwoFdEvent { return &types.TwoFdEvent{TraceId: types.SYS_ENTER_CLOSE_RANGE} }
 	for name, tc := range map[string]struct {
 		ep   *event.Pair
 		want bool
@@ -265,6 +286,9 @@ func TestClosesDescriptor(t *testing.T) {
 		"close_range":         {pair(&types.TwoFdEvent{TraceId: types.SYS_ENTER_CLOSE_RANGE}), true},
 		"close_range unshare": {pair(&types.TwoFdEvent{TraceId: types.SYS_ENTER_CLOSE_RANGE, Extra: closeRangeUnshare}), true},
 		"close_range cloexec": {pair(&types.TwoFdEvent{TraceId: types.SYS_ENTER_CLOSE_RANGE, Extra: closeRangeCloexec}), false},
+		"close_range ok":      {exited(closeRange(), 0), true},
+		"close_range EINVAL":  {exited(closeRange(), -int64(syscall.EINVAL)), false},
+		"close EINTR":         {exited(&types.FdEvent{TraceId: types.SYS_ENTER_CLOSE}, -int64(syscall.EINTR)), true},
 		"read":                {pair(&types.FdEvent{TraceId: types.SYS_ENTER_READ}), false},
 		"dup2":                {pair(&types.FdEvent{TraceId: types.SYS_ENTER_DUP2}), false},
 		"no enter record":     {&event.Pair{}, false},
