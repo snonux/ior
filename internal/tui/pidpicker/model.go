@@ -79,6 +79,15 @@ type Model struct {
 	// filter must not claim that nothing matches (see followFilter); a failed
 	// scan is no "no match" either (lastErr).
 	scanned bool
+	// heldPid is the pid of a derived process row that a failed scan emptied
+	// out of the list (0: none). The failed scan shows nothing selected, and
+	// the next successful scan tracks heldPid as if it were still highlighted,
+	// so a move to another first match is announced (keepDerivedProcess)
+	// instead of happening silently. It is only consulted while the selection
+	// is derived (implicit); a real edit of the filter text drops it, as the new
+	// text derives a new selection, and after Up/Down it is ignored until such
+	// an edit makes the selection derived again.
+	heldPid int
 	// notice is the one-line explanation under the list: why selectedIndex is
 	// noSelection, or that a rescan moved a derived selection (see
 	// keepDerivedProcess). It is cleared by Up/Down and by every recompute of

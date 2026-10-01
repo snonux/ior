@@ -1947,24 +1947,39 @@ func TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh(t *testing.T) {
 // by attaching and transitioning to the populated dashboard (asserted via the
 // flame tab's "view:root" token and the "filter: pid=N" status line).
 
+// pickerNoMatchNeedle returns a filter that no row of the real /proc picker
+// can match, so the no-match test does not depend on what runs on the host. A
+// fixed word such as "zzz" could occur in any comm or command line. This one is
+// made up at run time (the nanosecond clock in base 36 plus this test's pid)
+// and lives only in this process's memory and the picker's input: it is never
+// part of an argv, so not even the test binary's own command line, nor any
+// command line of another process, can contain it. Its letters keep it from
+// matching the pid column (digits only), and it is lowercase because the
+// picker lowercases the query and the searched text alike.
+func pickerNoMatchNeedle() string {
+	return "nomatch" + strconv.FormatInt(time.Now().UnixNano(), 36) + "x" + strconv.Itoa(os.Getpid())
+}
+
 // TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard starts on
-// the PID picker and types "zzz", which matches no process: the filter is
-// echoed, the no-match notice is shown, no row is highlighted and Enter does
-// nothing (the picker stays up, no dashboard). Backspacing the filter empty
-// returns the highlight to "All PIDs" (derived from the filter, not sticky),
-// and Enter on it then emits PidSelectedMsg{Pid:0}, which transitions to the
-// dashboard, asserted via the seeded flame view.
+// the PID picker and types a filter that matches no process
+// (pickerNoMatchNeedle): the filter is echoed, the no-match notice is shown, no
+// row is highlighted and Enter does nothing (the picker stays up, no
+// dashboard). Backspacing the filter empty returns the highlight to "All PIDs"
+// (derived from the filter, not sticky), and Enter on it then emits
+// PidSelectedMsg{Pid:0}, which transitions to the dashboard, asserted via the
+// seeded flame view.
 func TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard(t *testing.T) {
 	s := tuiNewPickerModel(t)
 	// Picker chrome: the header, the filter input prompt, and the synthetic
 	// "All PIDs" row, which starts selected ("> ").
 	s.waitFor("Select PID", "Filter: ", "> All PIDs")
 
-	// Typing focuses the input and echoes into the "Filter: " prompt; "zzz" is an
-	// unlikely comm/pid substring, so no process matches: the notice appears and
-	// the selection is dropped instead of silently staying on All PIDs.
-	s.typeStr("zzz")
-	s.waitFor("Filter: zzz", "no process matches the filter")
+	// Typing focuses the input and echoes into the "Filter: " prompt; the needle
+	// matches no process, so the notice appears and the selection is dropped
+	// instead of silently staying on All PIDs.
+	needle := pickerNoMatchNeedle()
+	s.typeStr(needle)
+	s.waitFor("Filter: "+needle, "no process matches the filter")
 	if scr := s.screen(); strings.Contains(scr, "> All PIDs") {
 		t.Fatalf("no-match filter must not leave All PIDs highlighted.\n--- screen ---\n%s", scr)
 	}
@@ -1981,7 +1996,7 @@ func TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard(t *testi
 
 	// Clearing the filter re-derives the selection: the empty filter highlights
 	// All PIDs again and the notice goes away.
-	for range len("zzz") {
+	for range len(needle) {
 		s.press(tea.KeyBackspace)
 	}
 	s.waitForAbsent("no process matches the filter", "Select PID", "> All PIDs")

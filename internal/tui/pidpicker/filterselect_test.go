@@ -413,6 +413,80 @@ func TestScanErrorOnDerivedSelectionShowsOnlyTheError(t *testing.T) {
 	}
 }
 
+// failScan delivers a failed scan result (no processes, an error).
+func failScan(t *testing.T, m Model) Model {
+	t.Helper()
+	next, _ := m.Update(processesLoadedMsg{err: errors.New("boom")})
+	return next.(Model)
+}
+
+// TestFailedScanKeepsDerivedPidForNextScan is the hs2 re-review regression: a
+// failed scan between two good ones empties the list, and the derived pid 30
+// exits meanwhile. The next good scan must still announce the move to pid 40
+// like an uninterrupted rescan does, not silently select the new first match.
+func TestFailedScanKeepsDerivedPidForNextScan(t *testing.T) {
+	m := failScan(t, failScan(t, typeText(t, mysqlModel(t), "mysql"))) // derived: pid 30
+	if m.selectedIndex != noSelection || m.notice != "" {
+		t.Fatalf("setup: selectedIndex=%d notice=%q, want noSelection without a notice", m.selectedIndex, m.notice)
+	}
+	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if want := "pid 30 exited - selected pid 40 instead"; m.notice != want {
+		t.Fatalf("notice = %q, want %q", m.notice, want)
+	}
+	wantPid(t, m, 40)
+}
+
+// TestFailedScanKeepsDerivedPidWhenItSurvives: the held pid is still listed
+// after the failed scan, so it is selected again (not the new first match 25)
+// and nothing needs announcing.
+func TestFailedScanKeepsDerivedPidWhenItSurvives(t *testing.T) {
+	m := failScan(t, typeText(t, mysqlModel(t), "mysql"))
+	m = loadedModel(t, m, ProcessInfo{Pid: 25, Comm: "mysqlx"},
+		ProcessInfo{Pid: 30, Comm: "mysqld"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if m.selectedIndex != 2 || m.notice != "" {
+		t.Fatalf("selectedIndex=%d notice=%q, want pid 30 kept on row 2 without a notice", m.selectedIndex, m.notice)
+	}
+	wantPid(t, m, 30)
+}
+
+// TestHeldPidDroppedByEditAndMove (negative): after the failed scan, a real
+// edit or Up/Down starts a new selection, so the next scan must not announce
+// the long-gone pid 30.
+func TestHeldPidDroppedByEditAndMove(t *testing.T) {
+	after := []ProcessInfo{{Pid: 10, Comm: "bash"}, {Pid: 40, Comm: "mysql-proxy"}}
+	for name, act := range map[string]func(Model) Model{
+		"edit": func(m Model) Model { return pressKey(t, m, tea.KeyBackspace) },
+		"up":   func(m Model) Model { return pressKey(t, m, tea.KeyUp) },
+		"down": func(m Model) Model { return pressDown(t, m, 1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := act(failScan(t, typeText(t, mysqlModel(t), "mysql")))
+			if m = loadedModel(t, m, after...); strings.Contains(m.notice, "pid 30") {
+				t.Fatalf("notice = %q, the held pid must be dropped by %s", m.notice, name)
+			}
+		})
+	}
+}
+
+// TestHeldPidUsedOnlyByTheNextGoodScan (negative): the good scan after the
+// failed one consumes the held pid 30. When a later scan finds no match at all
+// (no-match notice) and the one after that brings pid 40, that is an ordinary
+// re-derivation from "nothing matched", so no stale "pid 30 ..." notice.
+func TestHeldPidUsedOnlyByTheNextGoodScan(t *testing.T) {
+	m := failScan(t, typeText(t, mysqlModel(t), "mysql"))
+	m = loadedModel(t, m, ProcessInfo{Pid: 30, Comm: "mysqld"}) // held pid 30 back
+	wantPid(t, m, 30)
+	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"}) // nothing matches
+	if m.notice != m.noMatchNotice() {
+		t.Fatalf("notice = %q, want the no-match notice", m.notice)
+	}
+	m = loadedModel(t, m, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want none: pid 30 was no longer held", m.notice)
+	}
+	wantPid(t, m, 40)
+}
+
 // nonEditingMessages reach the focused filter input without changing its text.
 func nonEditingMessages() map[string]tea.Msg {
 	return map[string]tea.Msg{

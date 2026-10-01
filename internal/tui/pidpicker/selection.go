@@ -37,7 +37,9 @@ func (m Model) noMatchNotice() string {
 //
 // Any move makes the selection the user's own (implicit false): from then on
 // it is no longer re-derived from the typed filter (followFilter) until an
-// edit of the filter text finds it back on the All row (editFilter).
+// edit of the filter text finds it back on the All row (editFilter). That also
+// retires a derived pid held across a failed scan (heldPid): only a derived
+// selection consults it, and the way back to one is an edit, which drops it.
 func (m Model) moveSelection(delta int) Model {
 	if m.selectedIndex == noSelection {
 		m.selectedIndex = 0
@@ -79,6 +81,9 @@ func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 	if m.input.Value() == before {
 		return m, cmd
 	}
+	// New text derives a new selection, so a pid held across a failed scan
+	// (applyScan) no longer describes what Enter would mean.
+	m.heldPid = 0
 	if m.selectedIndex == 0 {
 		m.implicit = true
 	}
@@ -153,12 +158,16 @@ func (m Model) relocateSelection(pid int, hadSelection, queryEmpty bool) Model {
 //     mode, but only when the empty list really means "nothing matches": not
 //     before the first scan arrived (nothing is loaded yet) and not after a
 //     failed scan (the list is empty because of the error, which the view
-//     shows by itself). Backspacing to a filter with matches re-derives row 1,
-//     and Up/Down still reach the All row deliberately.
+//     shows by itself; applyScan holds the lost derived pid for the next
+//     successful scan, see heldPid). Backspacing to a filter with matches
+//     re-derives row 1, and Up/Down still reach the All row deliberately.
 //
 // The derived state is never sticky: every rebuild of the list recomputes it,
 // so a rescan that brings the first process of a typed filter selects it
-// (applyScan then lets a derived process row keep its identity across a rescan).
+// (applyScan then lets a derived process row keep its identity across a rescan,
+// even across a failed one, via heldPid). Note that a derived All row is not
+// limited to an empty filter text: a whitespace-only filter trims to the empty
+// query and keeps the All row too.
 func (m Model) followFilter(queryEmpty bool) Model {
 	m.notice = ""
 	switch {
@@ -182,17 +191,41 @@ func (m Model) followFilter(queryEmpty bool) Model {
 // tracked by identity across the rescan like a user's pick (keepDerivedProcess),
 // but unlike the user's pick it may fall through to the new first match, with a
 // notice, since the filter still decides what it means.
+//
+// A failed scan carries no processes, so it empties the list and the derived
+// row with it (noSelection, Enter a no-op, only the scan error shown). Its pid
+// is kept in heldPid and tracked by the next successful scan instead: without
+// that, the empty list in between would make that scan see no previous
+// selection, and if the pid exited meanwhile the new first match would take
+// over without the notice an uninterrupted rescan gives.
 func (m Model) applyScan(msg processesLoadedMsg) Model {
-	prevPid, had := m.selectedProcessPid()
-	tracked := had && m.implicit
+	prevPid, tracked := m.trackedDerivedPid()
 	m.processes = msg.processes
 	m.lastErr = msg.err
 	m.scanned = true
+	m.heldPid = 0
 	m = m.applyFilter()
-	if tracked {
+	switch {
+	case tracked && msg.err != nil:
+		m.heldPid = prevPid
+	case tracked:
 		m = m.keepDerivedProcess(prevPid)
 	}
 	return m
+}
+
+// trackedDerivedPid returns the pid of the derived process row a rescan must
+// keep by identity: the highlighted one, or the one a failed scan held
+// (heldPid). ok is false for a selection the user made (relocateUserSelection
+// tracks that) and for a derived All row or no-match state (no process).
+func (m Model) trackedDerivedPid() (pid int, ok bool) {
+	if !m.implicit {
+		return 0, false
+	}
+	if pid, ok := m.selectedProcessPid(); ok {
+		return pid, true
+	}
+	return m.heldPid, m.heldPid != 0
 }
 
 // keepDerivedProcess is applyScan's second half for a derived process row on
