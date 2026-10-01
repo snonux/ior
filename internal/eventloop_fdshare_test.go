@@ -67,11 +67,18 @@ func closeAs(t *testing.T, el *eventLoop, pid uint32, fd int32) {
 	}
 }
 
-// closeRangeAs feeds a successful close_range(first, last, flags) of pid.
+// closeRangeAs feeds a successful close_range(first, last, flags) of the
+// process pid, called by its leader thread.
 func closeRangeAs(t *testing.T, el *eventLoop, pid uint32, first, last int32, flags uint64) {
 	t.Helper()
-	_, enterRaw := makeEnterTwoFdEvent(t, forkStart, pid, pid, first, last, flags, types.SYS_ENTER_CLOSE_RANGE)
-	_, exitRaw := makeExitRetEvent(t, forkStart+100, pid, pid, types.SYS_EXIT_CLOSE_RANGE, 0)
+	closeRangeAsTid(t, el, pid, pid, first, last, flags)
+}
+
+// closeRangeAsTid feeds the same call made by thread tid of process pid.
+func closeRangeAsTid(t *testing.T, el *eventLoop, pid, tid uint32, first, last int32, flags uint64) {
+	t.Helper()
+	_, enterRaw := makeEnterTwoFdEvent(t, forkStart, pid, tid, first, last, flags, types.SYS_ENTER_CLOSE_RANGE)
+	_, exitRaw := makeExitRetEvent(t, forkStart+100, pid, tid, types.SYS_EXIT_CLOSE_RANGE, 0)
 	if ep := feedRawPair(t, el, enterRaw, exitRaw); ep != nil {
 		ep.Recycle()
 	}
@@ -137,6 +144,15 @@ func assertFdShareInvariants(t *testing.T, tr *fdTracker) {
 			}
 		}
 	}
+}
+
+// sharesTable reports whether pid's table has another tgid using it. Only the
+// tests ask; production code never needs to know.
+func (t *fdTracker) sharesTable(pid uint32) bool {
+	if _, ok := t.share.tableOf[pid]; ok {
+		return true
+	}
+	return len(t.share.sharers[pid]) > 0
 }
 
 func hasKey(set map[uint64]struct{}, key uint64) bool { _, ok := set[key]; return ok }
@@ -393,6 +409,143 @@ func TestRecycledPidThatHeldASharedTableKeepsItForItsSharers(t *testing.T) {
 		t.Error("the recycled pid inherited the previous holder's table")
 	}
 	assertFdShareInvariants(t, el.fdState())
+}
+
+// TestCloseRangeUnshareByAWorkerThreadLeavesTheTableAlone: a thread that is not
+// the group leader privatises only its own table, so the tgid's table, which the
+// tracker keys by and which the other threads and a CLONE_FILES process still
+// use, must be neither detached nor closed. The negative control is the same call
+// by the leader, which does detach (and closes the range in its private copy).
+func TestCloseRangeUnshareByAWorkerThreadLeavesTheTableAlone(t *testing.T) {
+	const worker = shareChild + 1
+	for _, tc := range []struct {
+		name       string
+		tid        uint32
+		wantShared bool // the child is still aliased to the creator's table
+		wantKept   bool // the creator still tracks fd 3 afterwards
+	}{
+		{"worker thread", worker, true, true},
+		{"leader (negative control)", shareChild, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := newTaskEventLoop(t, "")
+			openAs(t, el, shareCreator, shareHost, 3)
+			feedForkRecord(t, el, shareCreator, shareChild, shareChild, cloneFlagFiles|forkSigchld)
+
+			closeRangeAsTid(t, el, shareChild, tc.tid, 3, -1, closeRangeUnshare)
+
+			if got := el.fdState().sharesTable(shareChild); got != tc.wantShared {
+				t.Errorf("child still shares the table = %v, want %v", got, tc.wantShared)
+			}
+			_, ok := el.fdState().get(3, shareCreator)
+			if ok != tc.wantKept {
+				t.Errorf("creator tracks fd 3 = %v, want %v", ok, tc.wantKept)
+			}
+			if tc.wantShared {
+				// The thread's range was applied to its private table, not ours.
+				if _, ok := el.fdState().get(3, shareChild); !ok {
+					t.Error("the shared table lost fd 3 to a worker thread's private close_range")
+				}
+			}
+			assertFdShareInvariants(t, el.fdState())
+		})
+	}
+}
+
+// TestCloseRangeUnshareDoesNotUnblindATable is the reviewed failure: -pid P, P
+// runs an out-of-scope clone(CLONE_FILES) child, and then a thread of P calls
+// close_range(CLOSE_RANGE_UNSHARE). The table must stay blind (answered from
+// procfs) after the worker's call, and after the leader's too: a leader cannot be
+// told to be alone, and the invisible child may still share the table with a
+// sibling thread. Only an exec un-blinds (detachShared, exact).
+func TestCloseRangeUnshareDoesNotUnblindATable(t *testing.T) {
+	const worker = shareCreator + 1
+	for _, tid := range []uint32{worker, shareCreator} {
+		el := newTaskEventLoop(t, "")
+		el.processRawEvent(makeScopedForkRecord(t, shareCreator, shareChild, shareChild,
+			cloneFlagFiles|forkSigchld, types.TaskNewtaskChildOutOfScope), make(chan *event.Pair, 1))
+		if !el.fdState().isBlind(shareCreator) {
+			t.Fatal("the out-of-scope record did not blind the creator's table")
+		}
+
+		closeRangeAsTid(t, el, shareCreator, tid, 3, -1, closeRangeUnshare)
+
+		if !el.fdState().isBlind(shareCreator) {
+			t.Errorf("close_range(UNSHARE) by tid %d un-blinded a table an invisible process still shares", tid)
+		}
+		assertFdShareInvariants(t, el.fdState())
+	}
+
+	// Contrast: an exec leaves nobody else on the table, so it does un-blind.
+	el := newTaskEventLoop(t, "")
+	el.processRawEvent(makeScopedForkRecord(t, shareCreator, shareChild, shareChild,
+		cloneFlagFiles|forkSigchld, types.TaskNewtaskChildOutOfScope), make(chan *event.Pair, 1))
+	el.fdState().detachShared(shareCreator)
+	if el.fdState().isBlind(shareCreator) {
+		t.Error("an exec did not un-blind the table")
+	}
+}
+
+// TestCloseRangeUnshareByABlindSharerStaysBlind: an in-scope sharer of a blind
+// table that unshares leaves the group but takes the blind mark along (it may
+// have sibling threads that still share the table with the invisible process).
+func TestCloseRangeUnshareByABlindSharerStaysBlind(t *testing.T) {
+	el := newTaskEventLoop(t, "")
+	tr := el.fdState()
+	tr.shareTable(shareChild, shareCreator)
+	tr.markBlind(shareCreator)
+
+	closeRangeAs(t, el, shareChild, 3, -1, closeRangeUnshare)
+
+	if tr.sharesTable(shareChild) || !tr.isBlind(shareChild) || !tr.isBlind(shareCreator) {
+		t.Errorf("shares=%v blind(child)=%v blind(creator)=%v, want false true true",
+			tr.sharesTable(shareChild), tr.isBlind(shareChild), tr.isBlind(shareCreator))
+	}
+	assertFdShareInvariants(t, tr)
+}
+
+// TestNewCloneFilesChildDropsWhatAStaleNumberAliased pins the deletePid call in
+// shareTable. The tgid of a dead task whose exit record was lost comes back as
+// the child of a new CLONE_FILES record; if the stale state were kept, the
+// sharer bookkeeping would still list it under its old table, and when that
+// table's holder exited handOverTable would re-point the new child back at the
+// old table (stale holder: the same, with the dead task's entries in the way).
+func TestNewCloneFilesChildDropsWhatAStaleNumberAliased(t *testing.T) {
+	const (
+		oldHolder, otherSharer, stale = 10, 11, 12
+		newCreator                    = 20
+	)
+	for _, tc := range []struct {
+		name  string
+		stale uint32 // the reused tgid
+	}{
+		{"stale sharer of another table", stale},
+		{"stale holder of another table", oldHolder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := newTaskEventLoop(t, "")
+			tr := el.fdState()
+			tr.set(3, oldHolder, file.NewFd(3, shareHost, syscall.O_RDONLY))
+			tr.shareTable(otherSharer, oldHolder)
+			tr.shareTable(stale, oldHolder)
+			openAs(t, el, newCreator, shareOsRel, 3)
+
+			// The reused tgid is now a CLONE_FILES child of the new creator.
+			feedForkRecord(t, el, newCreator, tc.stale, tc.stale, cloneFlagFiles|forkSigchld)
+			assertFdShareInvariants(t, tr)
+
+			if tc.stale != oldHolder {
+				tr.deletePid(oldHolder) // the old table's holder exits later
+				assertFdShareInvariants(t, tr)
+			}
+			if got := readName(t, el, tc.stale, 3); got != shareOsRel {
+				t.Errorf("the new child's fd 3 = %q, want the new creator's %q", got, shareOsRel)
+			}
+			if got := readName(t, el, otherSharer, 3); got != shareHost {
+				t.Errorf("the old table's remaining sharer lost its table: fd 3 = %q, want %q", got, shareHost)
+			}
+		})
+	}
 }
 
 // TestOutOfScopeCloneFilesChildBlindsTheCreatorsTable is the -pid case

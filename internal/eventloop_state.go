@@ -532,7 +532,7 @@ func (t *fdTracker) inherit(parent, child uint32) {
 // with id src, under the rules inherit describes: bounded by
 // maxInheritedEntries and by the table caps, independent FdFile copies, age 0.
 // It is also how a process that leaves a shared table (exec, CLOSE_RANGE_UNSHARE;
-// see detachShared) gets its private one.
+// see detachShared, unshareFiles) gets its private one.
 func (t *fdTracker) copyTable(src, child uint32) {
 	keys := t.pidIndex[src]
 	if keys == nil {

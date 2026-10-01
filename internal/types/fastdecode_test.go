@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -2066,5 +2070,28 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 				t.Fatalf("expected nil for short payload")
 			}
 		})
+	}
+}
+
+// TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine ties the Go constant to the
+// BPF define it copies. The two are hand-kept: the generator emits neither, and
+// the bit is written by the kernel-side handler and read by userspace across the
+// ring buffer, so a drift would silently make every flagged record read as "in
+// scope" (or the reverse) with no compile error on either side.
+func TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine(t *testing.T) {
+	src, err := os.ReadFile("../c/exec.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^#define\s+IOR_NEWTASK_CHILD_OUT_OF_SCOPE\s+(\S+)`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("IOR_NEWTASK_CHILD_OUT_OF_SCOPE is no longer #defined in internal/c/exec.c; update this test and the Go constant together")
+	}
+	want, err := strconv.ParseUint(strings.TrimRight(string(m[1]), "uUlL"), 0, 32)
+	if err != nil {
+		t.Fatalf("cannot parse the define's value %q: %v", m[1], err)
+	}
+	if uint64(TaskNewtaskChildOutOfScope) != want {
+		t.Errorf("TaskNewtaskChildOutOfScope = %#x, BPF IOR_NEWTASK_CHILD_OUT_OF_SCOPE = %#x", TaskNewtaskChildOutOfScope, want)
 	}
 }

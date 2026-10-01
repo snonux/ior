@@ -1003,8 +1003,11 @@ const closeRangeCloexec = 1 << 2
 
 // closeRangeUnshare mirrors CLOSE_RANGE_UNSHARE: the caller first gets a private
 // copy of its descriptor table, then the range is closed (or marked) in that
-// copy only. For a process that shares its table through CLONE_FILES that ends
-// the sharing; see fdTracker.detachShared for what is and is not modelled.
+// copy only. For a single-threaded process that shares its table through
+// CLONE_FILES that ends the sharing; the kernel privatises only the calling
+// *thread's* table, so applyCloseRangeState acts on it for a thread-group leader
+// only. See fdTracker.unshareFiles and the file comment of eventloop_fdshare.go
+// for what is and is not modelled.
 const closeRangeUnshare = 1 << 1
 
 // applyCloseRangeState evicts the fds closed by a successful close_range. The
@@ -1017,9 +1020,20 @@ func (e *eventLoop) applyCloseRangeState(ep *event.Pair, ev *types.TwoFdEvent) {
 		return
 	}
 	if ev.Extra&closeRangeUnshare != 0 {
-		// Before the range is applied: it acts on the private copy, and the
-		// former sharers keep every descriptor the range covers.
-		e.fdState().detachShared(ev.Pid)
+		if ev.Tid != ev.Pid {
+			// A worker thread privatises only its own table and applies the
+			// range to that copy; the tgid's table - the one the tracker keys by,
+			// still used by every other thread and by any CLONE_FILES process -
+			// is untouched. Nothing here may change it: no detach, no un-blind,
+			// and no range either (it would drop entries the other users still
+			// have). The unsharing thread's later rows on those numbers keep the
+			// tracked name: the per-thread table is not modelled (AGENTS.md).
+			return
+		}
+		// A leader is taken to own the table alone (unshareFiles). Before the
+		// range is applied: it acts on the private copy, and the former
+		// sharers keep every descriptor the range covers.
+		e.fdState().unshareFiles(ev.Pid)
 	}
 	if ev.Extra&closeRangeCloexec != 0 {
 		e.fdState().addFlagsRange(ev.FdA, ev.FdB, ev.Pid, syscall.O_CLOEXEC)

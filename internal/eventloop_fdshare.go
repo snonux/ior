@@ -22,22 +22,48 @@ package internal
 //     creator's table. The only truthful answer is to stop answering from tracked
 //     state: markBlind drops the table's entries and keeps it empty; every lookup
 //     then reads /proc/<pid>/fd (resolve), which is the live shared table. The
-//     price is one readlink per event on such a process (about 4.5 us) and the
-//     procfs spelling of anonymous descriptors (pipe:[N]) instead of the traced
-//     one - the state before task gr2 - for as long as the process lives.
+//     price is one successful procfs resolution per event on such a process
+//     (NewFdWithPid, about 13 us measured; the 4.5 us figure is only the cost of a
+//     failing readlink) and the procfs spelling of anonymous descriptors
+//     (pipe:[N]) instead of the traced one - the state before task gr2. The child's
+//     exit is filtered out too, so nothing ever says the invisible sharer is gone:
+//     a blind table stays blind for the life of its holder (until the holder
+//     execs, which gives it a private table, or exits; the mark moves with the
+//     table when the holder hands it over).
 //   - A member leaves the sharing: it execs (the kernel copies the table before
-//     closing close-on-exec descriptors, detachShared), it calls close_range with
-//     CLOSE_RANGE_UNSHARE (same), or it exits (deletePid; the table lives on for
-//     the remaining users, handed to one of them so that no table id is left
-//     dangling on a tgid the kernel may reuse).
+//     closing close-on-exec descriptors, detachShared; de_thread has killed every
+//     other thread by then, so the exec'ing process alone uses the new table), it
+//     calls close_range with CLOSE_RANGE_UNSHARE (unshareFiles, see below), or it
+//     exits (deletePid; the table lives on for the remaining users, handed to one
+//     of them so that no table id is left dangling on a tgid the kernel may
+//     reuse).
 //
-// Not modelled: a *thread* that unshares its own table (unshare(CLONE_FILES) or
-// CLOSE_RANGE_UNSHARE from a thread of a multi-threaded process) stays mapped to
-// its process's table, because the tracker is keyed by tgid and the event stream
-// has no per-thread table to key it by; unshare is also a null-kind record that
-// carries no flags, so the call cannot even be recognised. The same holds for
-// -tid, where the filter hides the sibling threads that write the shared table.
-// These stay the pre-hr2 behaviour (see AGENTS.md).
+// close_range(CLOSE_RANGE_UNSHARE) privatises the table of the *calling thread*
+// only. Which tgids that frees is knowable only for a single-threaded caller, and
+// the event stream does not say how many threads a process has, so
+// unshareFiles is applied for a thread-group leader only (the event loop skips
+// calls by any other thread: their unshare leaves the tgid's table, and its
+// sharers, exactly as they were) and the leader is assumed to be alone. A leader
+// that is not alone is the one wrong case; it errs on the side of correct names:
+// a blind table stays blind (the caller joins it as a blind private table),
+// because a sibling thread may still share the table with an invisible process.
+//
+// Not modelled (stay as before hr2, see AGENTS.md):
+//
+//   - A *thread* that unshares its own table (unshare(CLONE_FILES), or
+//     CLOSE_RANGE_UNSHARE from a non-leader thread) stays mapped to its process's
+//     table: the tracker is keyed by tgid and the stream has no per-thread table.
+//   - unshare(CLONE_FILES) by anything: unshare is a null-kind record that carries
+//     no flags, so the call cannot even be recognised. For a thread that is the
+//     old behaviour; for a CLONE_FILES child *process* it is a new wrong-name
+//     mode compared with before hr2 (each tgid then had its own table): the child
+//     stays aliased to the creator's table after the kernel has given it a copy,
+//     so its later close/open of a shared number overwrites the creator's entry.
+//   - -tid: the filter hides the sibling threads that write the shared table.
+//   - A -pid target that was itself created with CLONE_FILES by a creator the
+//     trace never saw (a record exists only for children of in-scope creators)
+//     has an aliased table nobody has blinded, so a sibling's writes go
+//     unnoticed.
 
 // fdTableShare is the sharing state of an fdTracker; the zero value means every
 // tgid owns its table, which is what nearly every process does.
@@ -80,14 +106,6 @@ func (t *fdTracker) isBlind(pid uint32) bool {
 	}
 	_, ok := t.share.blind[t.tableID(pid)]
 	return ok
-}
-
-// sharesTable reports whether pid's table has another tgid using it.
-func (t *fdTracker) sharesTable(pid uint32) bool {
-	if _, ok := t.share.tableOf[pid]; ok {
-		return true
-	}
-	return len(t.share.sharers[pid]) > 0
 }
 
 // shareTable makes child use creator's descriptor table, as clone(CLONE_FILES)
@@ -208,26 +226,57 @@ func collectKeys(set map[uint64]struct{}) []uint64 {
 	return keys
 }
 
-// detachShared gives pid a table of its own when it shares one, the way the
-// kernel does for a process that execs (unshare_files in begin_new_exec) or
-// calls close_range(CLOSE_RANGE_UNSHARE): the new table starts as a copy of the
-// shared one (bounded like a fork's copy, copyTable) and the former sharers keep
-// the original. A process that shares nothing keeps its table, except that a
-// blind one is no longer blind: a table this process alone uses has no invisible
-// writer left (an exec'ing creator no longer shares with its out-of-scope
-// CLONE_FILES child), and its entries were purged, so it starts empty.
-func (t *fdTracker) detachShared(pid uint32) {
-	id, isSharer := t.share.tableOf[pid]
-	switch {
-	case isSharer:
+// leaveSharing takes pid out of the sharing of its table, if any: it reports
+// the id of the table pid left and whether there was one. The former sharers keep
+// that table (re-keyed onto an heir when pid held it, handOverTable).
+func (t *fdTracker) leaveSharing(pid uint32) (id uint32, shared bool) {
+	if id, isSharer := t.share.tableOf[pid]; isSharer {
 		t.unlinkSharer(pid, id)
-	case len(t.share.sharers[pid]) > 0:
-		id = t.handOverTable(pid)
-	default:
+		return id, true
+	}
+	if len(t.share.sharers[pid]) > 0 {
+		return t.handOverTable(pid), true
+	}
+	return pid, false
+}
+
+// detachShared gives pid a table of its own when it shares one, the way the
+// kernel does for a process that execs (unshare_files in begin_new_exec): the new
+// table starts as a copy of the shared one (bounded like a fork's copy,
+// copyTable) and the former sharers keep the original. Exec first kills every
+// other thread (de_thread), so the process alone uses the new table and nothing
+// of it can still be shared with an invisible task: a blind table is therefore
+// no longer blind for the exec'ing process (an exec'ing creator no longer shares
+// with its out-of-scope CLONE_FILES child), and its entries were purged, so it
+// starts empty.
+func (t *fdTracker) detachShared(pid uint32) {
+	id, shared := t.leaveSharing(pid)
+	if !shared {
 		delete(t.share.blind, pid)
 		return
 	}
 	t.copyTable(id, pid)
+}
+
+// unshareFiles models close_range(CLOSE_RANGE_UNSHARE) by a thread-group leader
+// (the caller checks that; see the file comment for why leaders only): the leader
+// gets a private copy of the table and leaves the sharing, like detachShared. The
+// difference is the blind mark. Unlike exec, an unsharing leader may have
+// siblings, which still share the old table with whatever invisible process
+// blinded it, so a blind table is never trusted again here: the leader stays
+// blind with an empty table of its own and keeps answering from procfs. That
+// costs the speed-up of tracked names, never the correctness of names.
+func (t *fdTracker) unshareFiles(pid uint32) {
+	wasBlind := t.isBlind(pid)
+	id, shared := t.leaveSharing(pid)
+	switch {
+	case !shared:
+		return // alone with its table: nothing to copy, a blind mark stays
+	case wasBlind:
+		t.markBlind(pid)
+	default:
+		t.copyTable(id, pid)
+	}
 }
 
 // markBlind stops tracking the table pid uses: its entries are dropped, and

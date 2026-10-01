@@ -980,7 +980,9 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 
 // TaskNewtaskChildOutOfScope is the ScopeFlags bit of a task_newtask record
 // whose child the PID/TID filter excludes (IOR_NEWTASK_CHILD_OUT_OF_SCOPE in
-// internal/c/exec.c): a CLONE_FILES process child of an in-scope creator.
+// internal/c/exec.c): a CLONE_FILES process child of an in-scope creator. The
+// value is a hand-kept copy of the define; TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine
+// fails when the two drift apart.
 const TaskNewtaskChildOutOfScope = 0x1
 
 // ChildOutOfScope reports whether the record describes a child the trace does
