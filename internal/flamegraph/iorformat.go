@@ -97,7 +97,7 @@ func newRecordingHeader(records map[recordKey]Counter, samples sampling.Summary)
 // encodeRecords writes the full recording stream (magic, header, records) to w.
 //
 // Memory: the records map is one gob value, and gob encodes a whole value into
-// an in-memory buffer (grown by doubling) before it hands it to w in a single
+// an in-memory buffer (grown by append) before it hands it to w in a single
 // Write, which the zstd writer in encodeCompressed answers with a destination
 // buffer of CompressBound of that size. The serialized form is ~60-120 bytes
 // per record depending on path length, and the peak extra heap while saving
