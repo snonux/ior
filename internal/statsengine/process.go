@@ -412,9 +412,13 @@ func (s *processStats) label() string {
 	return s.firstComm
 }
 
+// toSnapshot builds the process row. Its untimedCount is exact (it counts
+// noreturn pairs only; kernel aggregate rows carry no process), so a timed
+// count of 0 reliably means the row has no latency at all (NoLatency).
 func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 	avg := 0.0
-	if timed := timedCount(s.count, s.untimedCount); timed > 0 {
+	timed := timedCount(s.count, s.untimedCount)
+	if timed > 0 {
 		avg = float64(s.totalLatency) / float64(timed)
 	}
 
@@ -427,5 +431,6 @@ func (s processSnapshotInput) toSnapshot(rateDiv float64) ProcessSnapshot {
 		Bytes:          s.totalBytes,
 		AvgLatencyNs:   avg,
 		TotalLatencyNs: s.totalLatency,
+		NoLatency:      timed == 0,
 	}
 }

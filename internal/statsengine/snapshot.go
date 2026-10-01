@@ -92,6 +92,15 @@ type SyscallSnapshot struct {
 	LatencyP50Ns   uint64
 	LatencyP95Ns   uint64
 	LatencyP99Ns   uint64
+	// NoLatency reports that none of Count carried a latency: every
+	// invocation was untimed (noreturn rows of exit, exit_group and
+	// rt_sigreturn, which never reach sys_exit; kernel aggregate counts
+	// without a duration, see SyscallAggregate.UntimedCount). The latency
+	// fields above are then 0 placeholders, not a measured 0ns, and the
+	// views show "-" for them. It is the negation of "has a timed sample"
+	// so that a literal SyscallSnapshot (test fixtures, -testflames) keeps
+	// showing its latencies.
+	NoLatency bool
 }
 
 // FileSnapshot is an aggregated per-file ranking entry.
@@ -158,6 +167,11 @@ type ProcessSnapshot struct {
 
 	AvgLatencyNs   float64
 	TotalLatencyNs uint64
+	// NoLatency reports that none of Syscalls carried a latency (all of
+	// them were noreturn rows, e.g. a process seen only at its exit_group),
+	// so AvgLatencyNs is a 0 placeholder that the views show as "-". See
+	// SyscallSnapshot.NoLatency.
+	NoLatency bool
 }
 
 // HistogramBucketSnapshot is one bucket of a histogram snapshot.

@@ -94,3 +94,54 @@ func TestSyscallAccumulatorNeverTimesANoReturnPair(t *testing.T) {
 		t.Fatalf("rt_sigreturn row = %+v, want count 2 with only the timed 1000ns sample", row)
 	}
 }
+
+// TestSnapshotNoLatencyMarksRowsWithoutTimedSamples (task pr2): a syscall or
+// process whose every invocation is untimed has only placeholder 0s in its
+// latency fields, and the snapshot says so (NoLatency), so the Syscalls and
+// Processes tabs show "-" instead of a measured-looking 0ns. One timed
+// sample clears the flag, as does a timed kernel aggregate row, while an
+// aggregate row of untimed counts only (a sampled-out exit_group) keeps it.
+func TestSnapshotNoLatencyMarksRowsWithoutTimedSamples(t *testing.T) {
+	e := NewEngine(10)
+	const exiting, mixed = 4200, 4201
+	// exiting is seen only at its exit_group; mixed has a timed read and a
+	// signal handler return.
+	e.Ingest(newNoReturnPair(types.SYS_ENTER_EXIT_GROUP, exiting))
+	e.Ingest(newEnginePair(types.SYS_ENTER_READ, 10, types.READ_CLASSIFIED, "proc", mixed, "/f", 10, 0, 1000, 0))
+	e.Ingest(newNoReturnPair(types.SYS_ENTER_RT_SIGRETURN, mixed))
+	e.IngestSyscallAggregates([]SyscallAggregate{
+		{TraceID: types.SYS_ENTER_EXIT, Count: 3, UntimedCount: 3},
+		{TraceID: types.SYS_ENTER_RT_SIGRETURN, Count: 1, UntimedCount: 1},
+		{TraceID: types.SYS_ENTER_WRITE, Count: 2, TotalLatencyNs: 600, MinLatencyNs: 200, MaxLatencyNs: 400, LatencyHistogramNs: [8]uint64{2}},
+	})
+
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"exit_group": true, "rt_sigreturn": true, "exit": true, "read": false, "write": false} {
+		if got := findSyscall(t, snap.Syscalls(), name).NoLatency; got != want {
+			t.Errorf("%s NoLatency = %v, want %v", name, got, want)
+		}
+	}
+	for _, proc := range snap.Processes() {
+		if want := proc.PID == exiting; proc.NoLatency != want {
+			t.Errorf("process %d NoLatency = %v, want %v (row %+v)", proc.PID, proc.NoLatency, want, proc)
+		}
+	}
+	if len(snap.Processes()) != 2 {
+		t.Fatalf("process rows = %+v, want 2", snap.Processes())
+	}
+
+	// A timed sample arriving later clears the flag.
+	timed := newNoReturnPair(types.SYS_ENTER_RT_SIGRETURN, mixed)
+	timed.NoReturn, timed.Duration = false, 700
+	e.Ingest(timed)
+	snap, err = e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := findSyscall(t, snap.Syscalls(), "rt_sigreturn"); row.NoLatency || row.LatencyMinNs != 700 {
+		t.Errorf("rt_sigreturn after a timed sample = %+v, want NoLatency false, min 700", row)
+	}
+}

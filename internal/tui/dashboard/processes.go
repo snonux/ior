@@ -161,7 +161,7 @@ func processRows(processes []statsengine.ProcessSnapshot) [][]string {
 			strconv.FormatUint(p.Syscalls, 10),
 			fmt.Sprintf("%.1f", p.RatePerSec),
 			formatBytes(float64(p.Bytes)),
-			formatDurationNs(p.AvgLatencyNs),
+			latencyCell(p.NoLatency, p.AvgLatencyNs),
 		})
 	}
 	return rows

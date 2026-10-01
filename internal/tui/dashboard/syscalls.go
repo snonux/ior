@@ -256,12 +256,12 @@ func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) [][]string {
 			string(s.TraceID.Family()),
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
-			formatDurationNs(s.LatencyMeanNs),
-			formatDurationUintNs(s.LatencyMinNs),
-			formatDurationUintNs(s.LatencyMaxNs),
-			formatDurationUintNs(s.LatencyP50Ns),
-			formatDurationUintNs(s.LatencyP95Ns),
-			formatDurationUintNs(s.LatencyP99Ns),
+			latencyCell(s.NoLatency, s.LatencyMeanNs),
+			latencyCellUint(s.NoLatency, s.LatencyMinNs),
+			latencyCellUint(s.NoLatency, s.LatencyMaxNs),
+			latencyCellUint(s.NoLatency, s.LatencyP50Ns),
+			latencyCellUint(s.NoLatency, s.LatencyP95Ns),
+			latencyCellUint(s.NoLatency, s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
@@ -277,14 +277,36 @@ func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) [][]string {
 			string(s.TraceID.Family()),
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
-			formatDurationNs(s.LatencyMeanNs),
-			formatDurationUintNs(s.LatencyP95Ns),
-			formatDurationUintNs(s.LatencyP99Ns),
+			latencyCell(s.NoLatency, s.LatencyMeanNs),
+			latencyCellUint(s.NoLatency, s.LatencyP95Ns),
+			latencyCellUint(s.NoLatency, s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
 	}
 	return rows
+}
+
+// noLatencyCell is what a latency cell shows for a row without a single
+// timed sample (statsengine SyscallSnapshot/ProcessSnapshot NoLatency), e.g.
+// exit_group, exit and rt_sigreturn, which never reach sys_exit: their 0s are
+// placeholders, not a measured 0ns. It is the Stream tab's "-" for the same
+// rows' latency cell.
+const noLatencyCell = "-"
+
+// latencyCell formats a latency figure of a dashboard row, or noLatencyCell
+// when the row has no timed sample (noLatency).
+func latencyCell(noLatency bool, v float64) string {
+	if noLatency {
+		return noLatencyCell
+	}
+	return formatDurationNs(v)
+}
+
+// latencyCellUint is latencyCell for the uint64 figures (min, max,
+// percentiles).
+func latencyCellUint(noLatency bool, v uint64) string {
+	return latencyCell(noLatency, float64(v))
 }
 
 func formatDurationUintNs(v uint64) string {

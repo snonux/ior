@@ -95,9 +95,12 @@ type syscallSnapshotInput struct {
 	minLatency   uint64
 	maxLatency   uint64
 	untimedCount uint64
-	p50Latency   uint64
-	p95Latency   uint64
-	p99Latency   uint64
+	// hasTimed is syscallStats.hasTimed: whether any invocation carried a
+	// latency (SyscallSnapshot.NoLatency is its negation).
+	hasTimed   bool
+	p50Latency uint64
+	p95Latency uint64
+	p99Latency uint64
 }
 
 func newSyscallAccumulator() *syscallAccumulator {
@@ -354,6 +357,7 @@ func (s *syscallStats) snapshotInput() syscallSnapshotInput {
 		minLatency:   s.minLatency,
 		maxLatency:   s.maxLatency,
 		untimedCount: s.untimedCount,
+		hasTimed:     s.hasTimed,
 		p50Latency:   s.cachedP50,
 		p95Latency:   s.cachedP95,
 		p99Latency:   s.cachedP99,
@@ -388,6 +392,10 @@ func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 		LatencyP50Ns:   s.p50Latency,
 		LatencyP95Ns:   s.p95Latency,
 		LatencyP99Ns:   s.p99Latency,
+		// The flag, not timedCount(count, untimedCount) == 0: the untimed
+		// count of a kernel aggregate row is an estimate that may be one too
+		// high after a torn per-CPU read (see syscallStats.hasTimed).
+		NoLatency: !s.hasTimed,
 	}
 }
 

@@ -127,7 +127,7 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 			"rate %.1f/s, errors %d, p95 %s",
 			syscall.RatePerSec,
 			syscall.Errors,
-			formatDurationUintNs(syscall.LatencyP95Ns),
+			latencyCellUint(syscall.NoLatency, syscall.LatencyP95Ns),
 		)
 	})
 }
@@ -195,7 +195,7 @@ func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric)
 			"pid %d, rate %.1f/s, avg %s",
 			proc.PID,
 			proc.RatePerSec,
-			formatDurationNs(proc.AvgLatencyNs),
+			latencyCell(proc.NoLatency, proc.AvgLatencyNs),
 		)
 	})
 }
