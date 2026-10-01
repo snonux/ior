@@ -18,10 +18,11 @@
 // renderings can never disagree about what is dangerous.
 //
 // The package also holds the UTF-8 repair for data files (utf8repair.go:
-// SanitizeUTF8, SanitizeComm, SanitizePath), which the Parquet recording,
-// the stream CSV export and the dashboard snapshot CSV apply to the traced
-// comm and path text they write so strict readers accept it; it reuses Escape's \xHH notation for invalid bytes but, unlike the
-// terminal escaping, keeps every valid rune.
+// SanitizeUTF8, SanitizeComm, SanitizePath), applied so strict readers accept
+// the traced text: the Parquet recording and the stream CSV export repair the
+// comm and path columns, the dashboard snapshot CSV (which writes no comm)
+// only the file path. It reuses Escape's \xHH notation for invalid bytes
+// but, unlike the terminal escaping, keeps every valid rune.
 package textsafe
 
 import (

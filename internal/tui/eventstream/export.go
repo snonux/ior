@@ -258,10 +258,13 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
 // parquet.RecordFromStream applies to the recording (a rune cut at the
 // comm/path capture limit is dropped, any other invalid byte becomes a \xHH
 // escape), so a strict reader such as DuckDB's read_csv accepts the file and
-// the CSV and the Parquet recording hold identical text for the same row
-// (pinned by TestStreamCSVCellsMatchParquetRecord). Calling textsafe directly
-// instead of RecordFromStream keeps the Parquet library out of this package's
-// dependencies (task 4z2). Valid text is unchanged.
+// the CSV and the Parquet recording hold identical text for the same row.
+// TestWriteStreamCSVRepairsInvalidUTF8LikeParquet pins that equality for
+// invalid and capture-limit-cut input; TestStreamCSVCellsMatchParquetRecord
+// only uses valid ASCII (distinctRow) and pins the column-to-field mapping.
+// Calling textsafe directly instead of RecordFromStream keeps the Parquet
+// library out of this package's dependencies (task 4z2). Valid text is
+// unchanged.
 func streamCSVRecord(ev *StreamEvent) []string {
 	return []string{
 		fmt.Sprintf("%d", ev.Seq),
