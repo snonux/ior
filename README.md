@@ -120,7 +120,12 @@ into a TUI export/recording prompt) is replaced if it exists, keeping that file'
 The TUI treats a name as generated only when it matches the generated pattern exactly
 (zero-padded date and time, right extension); a hand-typed near miss such as
 `ior-stream-20260930-90500.csv` or a missing `.csv`/`.parquet` counts as your own name and is
-replaced. A killed ior can leave an orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
+replaced. A typed name may carry a directory (`/tmp/x.csv`, `out/x.csv`, `../x.csv`): the stream
+export honours it as typed, relative to the current directory unless absolute, and the Stream
+tab shows the path it wrote. ior does not create missing directories. An empty name, a
+directory, a NUL byte, or a missing or unwritable directory is refused with the reason shown in
+the `X` prompt, which stays open with your text so you can fix it. A killed ior can leave an
+orphaned `ior-*.tmp` behind; `mage mrproper` removes `*.tmp`.
 
 With an explicit sampling rate, a raw-mode run (`-plain`, `-flamegraph`, `-parquet`) writes only a
 sample of the sampled syscalls. It says so on stderr at startup, reports their exact totals
