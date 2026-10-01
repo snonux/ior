@@ -71,6 +71,13 @@ type bpfSetupLog struct {
 	// teardown error it must stay visible in all modes (audit domain-10 F2),
 	// so trace setup wires the always-on stderr logger here.
 	teardown func(args ...any)
+	// attached receives the probe name (the probeName of attachHandProbe, e.g.
+	// taskRenameProbeName) of each hand-written sched probe that did attach.
+	// Trace setup uses it to learn whether task_rename records will flow, which
+	// decides whether a new task's inherited comm still needs a corrective
+	// /proc read (eventLoop.trustRenameRecords, task xr2). nil means nobody
+	// listens.
+	attached func(probeName string)
 }
 
 // withDefaults returns l with every nil sink replaced by the stderr logger.
@@ -83,6 +90,9 @@ func (l bpfSetupLog) withDefaults() bpfSetupLog {
 	}
 	if l.teardown == nil {
 		l.teardown = logStatus
+	}
+	if l.attached == nil {
+		l.attached = func(string) {}
 	}
 	return l
 }
@@ -420,6 +430,10 @@ func attachTaskNewtaskProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // pthread_setname_np) is relabelled instead of keeping its old cached name.
 const taskRenameProgName = "handle_task_rename"
 
+// taskRenameProbeName is the probe name attachTaskRenameProbe reports, in
+// warnings and through bpfSetupLog.attached.
+const taskRenameProbeName = "task_rename"
+
 // attachTaskRenameProbe attaches the task_rename raw tracepoint, whose records
 // update a renamed task's cached comm (see internal/c/exec.c and
 // eventLoop.handleTaskRenameEvent). Same attach policy as the exec, exit and
@@ -428,7 +442,7 @@ const taskRenameProgName = "handle_task_rename"
 // it. It attaches as a raw tracepoint (not a classic one) for the verifier
 // reasons given in exec.c, which is why it has its own attach path.
 func attachTaskRenameProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachHandProbe(attacher, taskRenameProgName, "task_rename", log,
+	return attachHandProbe(attacher, taskRenameProgName, taskRenameProbeName, log,
 		func(prog probemanager.Program) (probemanager.Link, error) {
 			raw, ok := prog.(probemanager.RawTracepointProgram)
 			if !ok {
@@ -468,7 +482,8 @@ func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, t
 //
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
-// goes to log.teardown, which stays visible in every mode.
+// goes to log.teardown, which stays visible in every mode. A probe that did
+// attach is announced through log.attached.
 func attachHandProbe(attacher probemanager.Attacher, progName, probeName string, log bpfSetupLog,
 	attach func(probemanager.Program) (probemanager.Link, error)) func() {
 	noop := func() {}
@@ -486,6 +501,7 @@ func attachHandProbe(attacher probemanager.Attacher, progName, probeName string,
 		log.warn(fmt.Sprintf("skipping %s probe: %v", probeName, err))
 		return noop
 	}
+	log.attached(probeName)
 	var once sync.Once
 	return func() {
 		once.Do(func() {

@@ -48,8 +48,9 @@ const resolveCommTimeout = time.Second
 // check (finishPair) - but it triggers one asynchronous procfs re-read on next use.
 // That read happens after the exec, so it returns the new name and heals the
 // label. The same flag marks a provisional entry - the name a new task
-// inherited from its creator (setCachedProvisional) - whose one re-read picks up
-// a rename the task performed on itself - and an entry seeded from an enter
+// inherited from its creator (setCachedProvisional), when a rename of it could
+// go unreported - whose one re-read picks up a rename the task performed on
+// itself - and an entry seeded from an enter
 // payload that is either about to be superseded (an exec enter) or contradicted
 // the cache (setCachedFromEnterPayload).
 type commEntry struct {
@@ -587,7 +588,8 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 }
 
 // setCachedProvisional stores a best-guess name for tid without invalidating
-// procfs lookups and marks the entry stale, so it is re-read from /proc once.
+// procfs lookups and, when recheck is set, marks the entry stale, so it is
+// re-read from /proc once.
 //
 // It is the write for a name that is known to be *inherited* rather than
 // current: the comm a task_newtask record reports is the creator's, and a new
@@ -600,12 +602,21 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 //   - The epoch is not bumped, so a procfs result may overwrite the guess
 //     (storeLookupResult only discards results that predate an authoritative
 //     write). Bumping it would pin the parent's name for the thread's life.
-//   - The entry is flagged stale, which makes the first use of the tid queue
-//     exactly one /proc/<tid>/comm read (refreshStaleComm). The read happens
-//     after the thread's first traced syscall reached userspace, i.e. after any
-//     rename that precedes it, and its result replaces the guess. A read of a
-//     task that has already exited yields nothing and leaves the guess in
-//     place, which is still better than an empty comm.
+//   - With recheck, the entry is flagged stale, which makes the first use of
+//     the tid queue exactly one /proc/<tid>/comm read (refreshStaleComm). The
+//     read happens after the thread's first traced syscall reached userspace,
+//     i.e. after any rename that precedes it, and its result replaces the
+//     guess. A read of a task that has already exited yields nothing and leaves
+//     the guess in place, which is still better than an empty comm.
+//
+// recheck is the caller's verdict on whether a rename could go unreported
+// (eventLoop.provisionalSeedNeedsRecheck, task xr2). When the task_rename probe
+// is attached and ring-buffer drops are monitored, every rename either arrives
+// as a record or shows up as a drop whose markAllStale sweep flags the entry,
+// so the read is pure overhead - and under thread churn it was most of the
+// resolver's work: one read per new thread, nearly all of them ENOENT because
+// the thread had exited before a worker got to it. Without recheck the entry
+// is stored non-stale and costs nothing until a sweep or a record touches it.
 //
 // A later authoritative write (exec record, task_rename record, open or exec
 // enter payload) bumps the epoch and so still outranks a read that was in
@@ -617,14 +628,16 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 // payload may predate a sibling's rename. A matching open payload clears the
 // flag, which is fine: it confirms the guess with a name the kernel reported
 // after the task started running.
-func (r *commResolver) setCachedProvisional(tid uint32, comm string) {
+func (r *commResolver) setCachedProvisional(tid uint32, comm string, recheck bool) {
 	if comm == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.setCommLocked(tid, comm)
-	r.markStaleLocked(tid)
+	if recheck {
+		r.markStaleLocked(tid)
+	}
 }
 
 // touchCommLocked refreshes the LRU age of an existing comms entry. Callers
@@ -753,9 +766,10 @@ func (e *eventLoop) setCachedCommFromKernel(tid uint32, comm string) {
 }
 
 // setCachedCommProvisional applies an inherited, possibly outdated command name
-// (see commResolver.setCachedProvisional).
-func (e *eventLoop) setCachedCommProvisional(tid uint32, comm string) {
-	e.commState().setCachedProvisional(tid, comm)
+// (see commResolver.setCachedProvisional); recheck asks for the one corrective
+// /proc read.
+func (e *eventLoop) setCachedCommProvisional(tid uint32, comm string, recheck bool) {
+	e.commState().setCachedProvisional(tid, comm, recheck)
 }
 
 // evictCachedComm drops the cached command name of an exited task (see
@@ -940,6 +954,15 @@ func readWithDeadline(ctx context.Context, read func() (string, error)) (string,
 	}
 }
 
+// resolveCommFromProcWithError reads tid's comm from /proc/<tid>/comm and falls
+// back to the basename of /proc/<tid>/exe when that read fails for a reason
+// other than the task being gone, or yields an empty name.
+//
+// A transient failure (ENOENT, ESRCH: the task has exited) returns at once
+// without the exe fallback: /proc/<tid> is gone as a whole, so the readlink
+// would fail the same way. Under thread churn that is the common outcome of a
+// lookup (task xr2 measured 99% ENOENT at 300 new threads/s), and the
+// fallback doubled the syscalls of every one of them.
 func resolveCommFromProcWithError(tid uint32) (string, error) {
 	procPath := procTidPathPrefix(tid)
 	commPath := procPath + "/comm"
@@ -953,7 +976,7 @@ func resolveCommFromProcWithError(tid uint32) (string, error) {
 			return comm, nil
 		}
 	} else if isTransientProcError(commErr) {
-		commErr = nil
+		return "", nil
 	} else {
 		commErr = fmt.Errorf("read %s: %w", commPath, commErr)
 	}

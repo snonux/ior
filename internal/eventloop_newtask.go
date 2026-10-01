@@ -1,6 +1,12 @@
 package internal
 
-import "ior/internal/types"
+import (
+	"math"
+
+	"golang.org/x/sys/unix"
+
+	"ior/internal/types"
+)
 
 // The clone(2) flags that decide what a new task shares with its creator
 // (include/uapi/linux/sched.h); the same values the BPF handler tests
@@ -42,12 +48,14 @@ const (
 // have attached, and writing the seed as authoritative would bump the tid's
 // rename generation, discard every later procfs result and pin the parent's
 // name on such a thread for good - hiding its rows from -comm <renamed>. As a
-// provisional entry it is flagged stale instead: the first use of the tid
-// queues one /proc/<tid>/comm read whose result replaces it. Rows emitted before
-// that read lands still carry the inherited name (and under -comm are matched
-// against it), which is what the base behaviour had too: it had no name at all
-// until the read landed. An exec, rename or open record that arrives meanwhile
-// is authoritative and still outranks the read.
+// provisional entry it can be flagged stale instead: the first use of the tid
+// then queues one /proc/<tid>/comm read whose result replaces it. Rows emitted
+// before that read lands still carry the inherited name (and under -comm are
+// matched against it), which is what the base behaviour had too: it had no name
+// at all until the read landed. An exec, rename or open record that arrives
+// meanwhile is authoritative and still outranks the read. Whether the read is
+// needed at all is provisionalSeedNeedsRecheck's call (task xr2): when every
+// rename is either reported or detected as a drop, it is skipped.
 //
 // A fork that then execve()s is renamed by the sched_process_exec record, which
 // arrives after this one and needs no read at all.
@@ -91,7 +99,47 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 	if comm == "" {
 		return
 	}
-	e.setCachedCommProvisional(ev.Tid, comm)
+	e.setCachedCommProvisional(ev.Tid, comm, e.provisionalSeedNeedsRecheck(ev.Time))
+}
+
+// provisionalSeedNeedsRecheck decides whether the inherited name a task_newtask
+// record seeds (recorded at seedTime, the record's bpf_ktime_get_boot_ns) needs
+// the one corrective /proc/<tid>/comm read (task xr2).
+//
+// The read exists for a rename that userspace would otherwise never hear of.
+// With renameRecordsTrusted (the task_rename probe attached and the ring-buffer
+// drop counter monitored, see trustRenameRecords) there is no such rename: it
+// arrives as a record, which outranks the seed, or its record was lost, which
+// the drop monitor detects and answers with a markAllStale sweep that flags
+// the seed for the same one read. Skipping the read then saves exactly what
+// churn workloads paid for it - one lookup per new thread, which almost always
+// failed with ENOENT because the thread had already exited.
+//
+// One ordering needs the read even then. The sweep only flags entries that
+// exist when the event loop applies it, but the loop consumes a backlog: a
+// newtask record reserved *before* a drop the monitor has already reported can
+// still be in the ring when the sweep runs, and its seed, written afterwards,
+// would escape it while the lost record (a rename of that very thread) is gone
+// for good. lastDropSeenBootNs is the boot-clock time of the newest poll that
+// saw drops, taken after the counter read, so every record lost before it was
+// reserved earlier still; a seed whose record is no newer than that is treated
+// as possibly predating a lost rename and keeps the read. A seed recorded after
+// that poll is covered by the next poll's sweep, or by this check once that
+// poll has moved lastDropSeenBootNs past it.
+func (e *eventLoop) provisionalSeedNeedsRecheck(seedTime uint64) bool {
+	if !e.renameRecordsTrusted {
+		return true
+	}
+	return seedTime <= e.lastDropSeenBootNs.Load()
+}
+
+// trustRenameRecords tells the loop whether the task_rename probe attached for
+// this run (trace setup, before the loop starts). Rename records count as
+// complete only when ring-buffer drops are monitored too (dropSrc): a lost
+// record is then detected and swept (markAllStale), whereas without the
+// monitor it would be lost silently. See provisionalSeedNeedsRecheck.
+func (e *eventLoop) trustRenameRecords(renameProbeAttached bool) {
+	e.renameRecordsTrusted = renameProbeAttached && e.dropSrc != nil
 }
 
 // retireRecycledTid drops the per-tid state a previous owner of tid left behind
@@ -151,4 +199,17 @@ func (e *eventLoop) inheritFdTable(ev *types.TaskNewtaskEvent) {
 	default:
 		fds.inherit(ev.CreatorPid, ev.Pid)
 	}
+}
+
+// bootClockNs reads CLOCK_BOOTTIME, the clock bpf_ktime_get_boot_ns stamps the
+// ring-buffer records with, so its readings order against record times. A
+// failed read (not expected on Linux) returns the maximum value: every seed
+// then counts as possibly predating a lost record and keeps its /proc read,
+// the conservative side of provisionalSeedNeedsRecheck.
+func bootClockNs() uint64 {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
+		return math.MaxUint64
+	}
+	return uint64(ts.Nano())
 }

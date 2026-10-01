@@ -184,8 +184,20 @@ type eventLoop struct {
 	// control record) and consumed by the event-loop goroutine in
 	// applyPendingCommRefresh, which owns the comm cache's lazy init.
 	commRefreshPending atomic.Bool
-	startTime          time.Time
-	done               chan struct{}
+	// lastDropSeenBootNs is the CLOCK_BOOTTIME reading (the clock of the
+	// records' bpf_ktime_get_boot_ns timestamps) taken right after the newest
+	// drop-counter poll that reported lost records: every lost record was
+	// reserved before it. Written by the drop-monitor goroutine, read by the
+	// event-loop goroutine (provisionalSeedNeedsRecheck), hence atomic.
+	lastDropSeenBootNs atomic.Uint64
+	// renameRecordsTrusted is set by trace setup (trustRenameRecords) before
+	// the loop starts and only read afterwards: the task_rename probe attached
+	// and drops are monitored, so a provisional newtask seed needs no
+	// corrective /proc read (provisionalSeedNeedsRecheck). False in tests and
+	// whenever either is missing, which keeps the read.
+	renameRecordsTrusted bool
+	startTime            time.Time
+	done                 chan struct{}
 }
 
 // Filter returns a snapshot of the currently active global filter. Each call

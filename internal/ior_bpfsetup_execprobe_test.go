@@ -396,14 +396,21 @@ func TestAttachTaskNewtaskProbeFailuresAreNonFatal(t *testing.T) {
 // program and that it goes through the raw-tracepoint attach (the classic one
 // is never used: the program's section is raw_tracepoint, and a classic attach
 // of it fails on every kernel, silently returning to the stale-name behaviour).
-// The release closure stays idempotent.
+// The release closure stays idempotent, and the attach is announced on the
+// attached sink exactly once (trace setup trusts rename records from it, task
+// xr2).
 func TestAttachTaskRenameProbeAttachesTheRawTracepoint(t *testing.T) {
 	link := &fakeProbeLink{}
 	prog := &rawProbeProgram{fakeProbeProgram: fakeProbeProgram{link: link}}
 	attacher := &fakeProbeAttacher{prog: prog}
+	var announced []string
 
-	release := attachTaskRenameProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+	release := attachTaskRenameProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+		attached: func(name string) { announced = append(announced, name) }})
 
+	if len(announced) != 1 || announced[0] != taskRenameProbeName {
+		t.Fatalf("attached announcements = %q, want exactly [%q]", announced, taskRenameProbeName)
+	}
 	if attacher.requested != taskRenameProgName {
 		t.Fatalf("requested program %q, want %q", attacher.requested, taskRenameProgName)
 	}
@@ -423,8 +430,9 @@ func TestAttachTaskRenameProbeAttachesTheRawTracepoint(t *testing.T) {
 
 // TestAttachTaskRenameProbeFailuresAreNonFatal: a missing program, a failing
 // raw attach and a program that cannot attach as a raw tracepoint at all each
-// degrade to serving the old cached name, are reported on the warn sink and
-// leave a usable no-op release.
+// degrade to serving the old cached name, are reported on the warn sink,
+// leave a usable no-op release and are never announced as attached (which
+// would make trace setup skip the corrective comm reads, task xr2).
 func TestAttachTaskRenameProbeFailuresAreNonFatal(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -451,7 +459,9 @@ func TestAttachTaskRenameProbeFailuresAreNonFatal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec setupLogRecorders
-			release := attachTaskRenameProbe(tc.attacher, rec.log())
+			log := rec.log()
+			log.attached = func(name string) { t.Errorf("failed attach announced as attached: %q", name) }
+			release := attachTaskRenameProbe(tc.attacher, log)
 			rec.requireOnlySink(t, &rec.warn)
 			logged := rec.warn.joined()
 			if release == nil {

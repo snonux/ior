@@ -1019,6 +1019,11 @@ type traceInfra struct {
 	// -pid / -tid, the TUI). Set by runTraceWithContext, whose watch predates the probe attach.
 	targetGone func() bool
 
+	// renameProbeAttached records that the task_rename probe attached during
+	// setup (bpfSetupLog.attached); runTraceSetup hands it to the event loop
+	// (eventLoop.trustRenameRecords) once that exists.
+	renameProbeAttached bool
+
 	cleanups []func()
 }
 
@@ -1160,6 +1165,9 @@ func runTraceSetup(
 	if infra.mgr != nil {
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
+	// After the factory, which wires the drop counter that the trust also
+	// depends on (task xr2).
+	el.trustRenameRecords(infra.renameProbeAttached)
 
 	// Nothing fallible may follow. Every step above still reaches the caller
 	// through err, and in TUI mode that is the only path an error has: once
@@ -1194,12 +1202,20 @@ func setupTraceInfraBPF(
 	// call: ending it never disturbs a newer session's routing.
 	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
 	defer endLibbpfRouting()
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	renameProbeAttached := false
+	noteAttached := func(probeName string) {
+		if probeName == taskRenameProbeName {
+			renameProbeAttached = true
+		}
+	}
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes,
+		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached})
 	if err != nil {
 		return nil, nil, err
 	}
 
 	infra := newTraceInfra(mgr, hooks.shutdown, logln)
+	infra.renameProbeAttached = renameProbeAttached
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here

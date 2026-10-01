@@ -80,12 +80,13 @@ func BenchmarkEBADFLoopThroughEventLoop(b *testing.B) {
 }
 
 // mustBenchBytes serialises one wire event for replay. (The makeEnter*
-// helpers of the unit tests take a *testing.T and cannot be used here.)
-func mustBenchBytes(b *testing.B, ev interface{ Bytes() ([]byte, error) }) []byte {
-	b.Helper()
+// helpers of the unit tests take a *testing.T and cannot be used here.) It takes
+// a testing.TB so tests that build an ad-hoc record can use it too.
+func mustBenchBytes(tb testing.TB, ev interface{ Bytes() ([]byte, error) }) []byte {
+	tb.Helper()
 	raw, err := ev.Bytes()
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	return raw
 }

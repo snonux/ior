@@ -151,6 +151,12 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	// keep that name forever. Ask the event-loop goroutine to re-resolve the
 	// comm cache; the flag is consumed in applyPendingCommRefresh because this
 	// callback runs on the monitor goroutine.
+	//
+	// The boot-clock time goes first: it is taken after the counter read, so
+	// every record counted here was reserved before it, and a newtask seed the
+	// event loop consumes after the sweep but recorded before this point keeps
+	// its corrective /proc read (provisionalSeedNeedsRecheck).
+	e.lastDropSeenBootNs.Store(bootClockNs())
 	e.commRefreshPending.Store(true)
 	// Modes without a warning sink (-plain, -flamegraph, headless -parquet)
 	// would otherwise only learn about the loss from the end-of-run

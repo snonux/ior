@@ -311,7 +311,8 @@ func TestAttachSyscallProbesWithNilLoggerFallsBackToStderr(t *testing.T) {
 // The functions cannot run unprivileged (setupBPFModule fails on rlimit
 // first), so, like the ordering tests in ior_setup_test.go, this checks their
 // structure: BPF setup receives the mode-dependent logln as status, the
-// setup-warning collector as warn and the always-on logger as teardown; the
+// setup-warning collector as warn, the always-on logger as teardown and the
+// rename-probe recorder as attached (task xr2); the
 // event-loop factory receives the same collector; and the loop is wired to
 // logln and the collected warnings right after it is stored, before the start
 // signal.
@@ -329,7 +330,7 @@ func TestSetupTraceInfraWiresConsoleSinks(t *testing.T) {
 	if !ok || !isIdentifier(literal.Type, "bpfSetupLog") {
 		t.Fatal("setupBPFModule's log argument must be a bpfSetupLog literal")
 	}
-	wantSinks := map[string]string{"status": "logln", "warn": "warnSetup", "teardown": "logTeardown"}
+	wantSinks := map[string]string{"status": "logln", "warn": "warnSetup", "teardown": "logTeardown", "attached": "noteAttached"}
 	gotSinks := map[string]string{}
 	for _, element := range literal.Elts {
 		kv, ok := element.(*ast.KeyValueExpr)
