@@ -50,7 +50,8 @@ type outputFormatter struct {
 
 	// stopTrace ends the trace from inside the event loop: when output fails
 	// (there is no point tracing on once the rows have nowhere to go) and, in
-	// the headless modes, when the -pid target exits (endTraceOnTargetExit).
+	// the headless modes, when the -pid process or -tid thread exits
+	// (endTraceOnTargetExit, endTraceOnTargetThreadExit).
 	// runTraceLoop wires it to the trace's cancel func; nil (tests, other
 	// modes) just records the error / does nothing.
 	stopTrace func()

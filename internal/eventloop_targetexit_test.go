@@ -14,8 +14,15 @@ import (
 // headless -pid run, with stopTrace and the status sink recorded.
 func targetExitLoop(t *testing.T, pid int, armed bool) (el *eventLoop, stops *int, status *[]string) {
 	t.Helper()
+	return targetExitLoopTid(t, pid, -1, armed)
+}
+
+// targetExitLoopTid is targetExitLoop with a -tid filter as well.
+func targetExitLoopTid(t *testing.T, pid, tid int, armed bool) (el *eventLoop, stops *int, status *[]string) {
+	t.Helper()
 	el = mustNewEventLoop(t, eventLoopConfig{
 		pidFilter:    pid,
+		tidFilter:    tid,
 		filter:       globalfilter.Filter{},
 		commResolver: newHermeticCommResolver(),
 	})

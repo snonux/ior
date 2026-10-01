@@ -121,6 +121,10 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// write and close on the descriptor reports it too: a wrong row rather
 	// than a missing one, and a persistent one.
 	e.pendingHandleState().delete(ev.Tid)
+	// Last: every piece of state the exit retires is gone before a -tid trace
+	// is told to end, so the shutdown statistics see the final picture (the
+	// -pid half does the same at the end of applyProcessDeath).
+	e.endTraceOnTargetThreadExit(ev)
 }
 
 // applyProcessDeath performs the tgid-keyed half of an exit record: fd-table

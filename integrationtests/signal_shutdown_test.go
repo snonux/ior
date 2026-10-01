@@ -102,6 +102,31 @@ func startSignalRun(t *testing.T, h TestHarness, modeArgs []string, duration int
 	})
 }
 
+// signalTarget is the workload a signalRun traces and how ior is pointed at
+// it: scenario is the ioworkload scenario and scope returns the filter
+// arguments ior gets for the workload's pid. The zero value is the open-basic
+// workload traced with -pid.
+type signalTarget struct {
+	scenario string
+	scope    func(pid int) ([]string, error)
+}
+
+// scenarioName is the scenario to start, open-basic by default.
+func (st signalTarget) scenarioName() string {
+	if st.scenario == "" {
+		return "open-basic"
+	}
+	return st.scenario
+}
+
+// scopeArgs is "-pid <pid>" unless the target brings its own scope.
+func (st signalTarget) scopeArgs(pid int) ([]string, error) {
+	if st.scope == nil {
+		return []string{"-pid", strconv.Itoa(pid)}, nil
+	}
+	return st.scope(pid)
+}
+
 // startSignalRunWith is startSignalRun with the command construction left to
 // the caller, so a test can start ior through a wrapper (for instance a shell
 // that ignores SIGHUP first). newCmd receives ior's full argument list; the
@@ -109,15 +134,27 @@ func startSignalRun(t *testing.T, h TestHarness, modeArgs []string, duration int
 // ior.
 func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration int, newCmd func(iorArgs []string) *exec.Cmd) *signalRun {
 	t.Helper()
-	startupFile := h.workloadStartupFile("open-basic")
-	holdFile := filepath.Join(h.OutputDir, "open-basic.hold")
+	return startTargetRun(t, h, signalTarget{}, modeArgs, duration, newCmd)
+}
+
+// startTargetRun is startSignalRunWith for any signalTarget: the workload
+// runs the target's scenario and ior traces it with the target's scope.
+func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs []string, duration int, newCmd func(iorArgs []string) *exec.Cmd) *signalRun {
+	t.Helper()
+	scenario := target.scenarioName()
+	startupFile := h.workloadStartupFile(scenario)
+	holdFile := filepath.Join(h.OutputDir, scenario+".hold")
 	h.WorkloadEnv = append(slices.Clone(h.WorkloadEnv), holdFileEnv+"="+holdFile)
-	workloadCmd, pid, _, err := h.startWorkload("open-basic", startupFile)
+	workloadCmd, pid, _, err := h.startWorkload(scenario, startupFile)
 	if err != nil {
 		t.Fatalf("start workload: %v", err)
 	}
 	t.Cleanup(func() { killAndWait(workloadCmd) })
-	args := append([]string{"-pid", strconv.Itoa(pid), "-duration", strconv.Itoa(duration)}, modeArgs...)
+	scope, err := target.scopeArgs(pid)
+	if err != nil {
+		t.Fatalf("scope ior to the workload: %v", err)
+	}
+	args := append(append(scope, "-duration", strconv.Itoa(duration)), modeArgs...)
 	cmd := newCmd(args)
 	cmd.Dir = h.OutputDir
 	stdout, err := cmd.StdoutPipe()

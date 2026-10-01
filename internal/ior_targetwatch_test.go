@@ -76,7 +76,7 @@ func TestTargetWatchGoneFromProcfs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := fakeProcStat(t, pid, statLine(pid, "S", "100"), pid)
-			w := &targetWatch{pid: pid, root: root, pidfd: -1, startTime: "100"}
+			w := &targetWatch{target: traceTarget{id: pid}, root: root, pidfd: -1, startTime: "100"}
 			if tt.stat == "" {
 				if err := os.RemoveAll(filepath.Join(root, fmt.Sprint(pid))); err != nil {
 					t.Fatal(err)
@@ -100,7 +100,7 @@ func TestTargetWatchUnknownIsAlive(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "7", "stat"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w := &targetWatch{pid: 7, root: root, pidfd: -1, startTime: "1"}
+	w := &targetWatch{target: traceTarget{id: 7}, root: root, pidfd: -1, startTime: "1"}
 	if w.gone() {
 		t.Fatal("an unreadable stat entry was treated as a dead target")
 	}
@@ -117,7 +117,7 @@ func TestTargetWatchRealProcess(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
-	w := openTargetWatch(procRoot, cmd.Process.Pid)
+	w := openTargetWatch(procRoot, traceTarget{id: cmd.Process.Pid})
 	defer w.Close()
 	if w.startTime == "" {
 		t.Fatal("the start time of a live child was not captured")
@@ -126,7 +126,7 @@ func TestTargetWatchRealProcess(t *testing.T) {
 		t.Fatal("a live process reported gone")
 	}
 
-	recycled := &targetWatch{pid: w.pid, root: procRoot, pidfd: -1, startTime: w.startTime + "1"}
+	recycled := &targetWatch{target: w.target, root: procRoot, pidfd: -1, startTime: w.startTime + "1"}
 	if !recycled.gone() {
 		t.Fatal("a pid whose start time changed was not reported gone")
 	}
@@ -138,7 +138,7 @@ func TestTargetWatchRealProcess(t *testing.T) {
 	if !w.gone() {
 		t.Fatal("a killed and reaped process was not reported gone")
 	}
-	procfsOnly := &targetWatch{pid: w.pid, root: procRoot, pidfd: -1, startTime: w.startTime}
+	procfsOnly := &targetWatch{target: w.target, root: procRoot, pidfd: -1, startTime: w.startTime}
 	if !procfsOnly.gone() {
 		t.Fatal("the procfs fallback did not report the dead process gone")
 	}

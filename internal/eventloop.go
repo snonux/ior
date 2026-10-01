@@ -146,14 +146,16 @@ type eventLoop struct {
 	numDiscardedAtStop uint
 	// stopDrainBudget overrides defaultStopDrainBudget when positive (tests).
 	stopDrainBudget time.Duration
-	// stopOnTargetExit arms endTraceOnTargetExit, the record-based trigger: the
-	// -pid target's group-dead exit record cancels the trace. Set by
+	// stopOnTargetExit arms endTraceOnTargetExit and
+	// endTraceOnTargetThreadExit, the record-based triggers: the -pid
+	// target's group-dead exit record, or the -tid thread's own exit record,
+	// cancels the trace. Set by
 	// runTraceLoop for the headless modes before the loop starts; false (the
 	// zero value) in the TUI and in tests. The liveness watcher
 	// (watchTargetLiveness) does not need it: it is started separately.
 	stopOnTargetExit bool
-	// targetExitSeen makes the two triggers (the event-loop goroutine's
-	// record and the watcher goroutine's liveness poll) fire the stop and its
+	// targetExitSeen makes the triggers (the event-loop goroutine's records
+	// and the watcher goroutine's liveness poll) fire the stop and its
 	// status line once between them, hence atomic.
 	targetExitSeen atomic.Bool
 	// recentGroupDead remembers the pids of recently counted group-dead
