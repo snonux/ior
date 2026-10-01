@@ -14,9 +14,12 @@ const (
 	// rows plus a summary; the error screen is much smaller than the stream
 	// tab, so fewer lines are kept and the rest only counted.
 	maxFailureWarnings = 8
-	// maxFailureWarningBytes cuts each appended line (before escaping) so a
-	// long verifier-log line cannot fill the error screen on its own.
-	maxFailureWarningBytes = 240
+	// maxFailureWarningBytes cuts the content of each appended line (before
+	// escaping) so a long line cannot fill the error screen on its own. It
+	// equals the route's row bound on purpose: a routed verifier row is already
+	// that long and holds the reason the user is after, so cutting it harder
+	// here would throw the reason away again.
+	maxFailureWarningBytes = maxRoutedWarningBytes
 )
 
 // setupWarnings collects non-fatal degradations found while a trace is being
@@ -104,11 +107,14 @@ func (e *setupFailure) Unwrap() error { return e.err }
 // loop starts, which a failed setup never gets to, and the dashboard is not
 // there yet - the error screen is the only thing shown. The text is also what
 // a headless run prints, which is why it is made safe here and not only by
-// the TUI's own SanitizeLines: each warning is cut to its first line and
-// maxFailureWarningBytes (the libbpf route already shortens its rows, but
-// other collector users make no such promise), escaped with textsafe.Escape
-// so kernel or traced text cannot carry terminal escapes, and at most
-// maxFailureWarnings are listed with the rest counted.
+// the TUI's own SanitizeLines: each warning goes through shortenWarning (a
+// failed program load becomes its program name plus the verifier log's last
+// lines, any other multi-line warning its first line; a "(N more lines)"
+// marker the libbpf route added is kept, only the content is cut) bounded by
+// maxFailureWarningBytes, is escaped with textsafe.Escape so kernel or traced
+// text cannot carry terminal escapes, and at most maxFailureWarnings are
+// listed with the rest counted. The route shortens its own rows already, but
+// other collector users make no such promise.
 func (w *setupWarnings) explainFailure(err error) error {
 	if err == nil {
 		return nil // success: the warnings stay queued for the event loop

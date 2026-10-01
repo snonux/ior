@@ -286,13 +286,12 @@ func TestRoutedWarningsAreCappedWithOneSummary(t *testing.T) {
 	}
 }
 
-// TestRoutedVerifierLogIsTruncatedButHeadlessKeepsItAll: a failed program load
-// is one multi-line WARN holding the entire verifier log.
-func TestRoutedVerifierLogIsTruncatedButHeadlessKeepsItAll(t *testing.T) {
-	verifier := "libbpf: prog 'ior_x': BPF program load failed: Permission denied\n" +
-		"libbpf: prog 'ior_x': -- BEGIN PROG LOAD LOG --\n" +
-		strings.Repeat("0: (b7) r0 = 0\n", 5000) +
-		"libbpf: prog 'ior_x': -- END PROG LOAD LOG --\n"
+// TestRoutedVerifierLogIsSummarisedButHeadlessKeepsItAll: a failed program load
+// is one multi-line WARN holding the entire verifier log. The TUI row keeps the
+// program name and the log's last lines (the reason); headless stderr keeps
+// everything.
+func TestRoutedVerifierLogIsSummarisedButHeadlessKeepsItAll(t *testing.T) {
+	verifier := verifierLoadWarning("ior_x", strings.Repeat("0: (b7) r0 = 0\n", 5000)+verifierRejection)
 
 	withLibbpfLogger(t, true, false)
 	w := &setupWarnings{}
@@ -304,10 +303,10 @@ func TestRoutedVerifierLogIsTruncatedButHeadlessKeepsItAll(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d rows, want 1", len(got))
 	}
-	if !strings.HasPrefix(got[0], "libbpf: prog 'ior_x': BPF program load failed: Permission denied") {
-		t.Errorf("row lost the failure reason: %q", got[0])
+	if !strings.HasPrefix(got[0], "libbpf: prog 'ior_x': verifier: ") || !strings.Contains(got[0], "R1 invalid mem access 'scalar'") {
+		t.Errorf("row lost the program name or the verifier's reason: %q", got[0])
 	}
-	if !strings.HasSuffix(got[0], "... (5002 more lines)") {
+	if !strings.HasSuffix(got[0], "... (5001 more lines)") {
 		t.Errorf("row lacks the omitted-lines marker: %q", got[0][max(0, len(got[0])-60):])
 	}
 	if len(got[0]) > maxRoutedWarningBytes+64 || strings.Contains(got[0], "\n") {

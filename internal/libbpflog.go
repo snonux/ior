@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 
@@ -25,11 +24,15 @@ const (
 	// maxRoutedWarnings caps how many libbpf WARN lines one TUI setup turns
 	// into warning rows; the rest are counted and summarised in one row.
 	maxRoutedWarnings = 16
-	// maxRoutedWarningBytes truncates each routed row. A failed program load
-	// is reported as ONE WARN holding the whole verifier log (multi-line, up
-	// to megabytes), which would otherwise become a single dashboard row of
-	// that size. Headless stderr and the returned load error keep the full
-	// text; only the TUI's setup-warning row is shortened.
+	// maxRoutedWarningBytes bounds each routed row. A failed program load is
+	// reported as ONE WARN holding the whole verifier log (multi-line, up to
+	// megabytes), which would otherwise become a single dashboard row of that
+	// size; shortenWarning reduces it to the program name plus the last lines
+	// of the log. Only the TUI's setup-warning row is shortened: headless
+	// stderr prints the full text. The error a failed load returns is just
+	// libbpf's errno ("failed to load BPF object: permission denied"), so in
+	// the TUI the routed row (appended to the error by explainFailure) is the
+	// only place the verifier's reason shows up.
 	maxRoutedWarningBytes = 512
 )
 
@@ -177,7 +180,9 @@ func (l *libbpfLogger) routeWarnings(warn func(...any)) (end func()) {
 //     the warning rows, so they are dropped here without being counted as
 //     suppressed.
 //   - a failed program load is ONE WARN carrying the whole verifier log, so
-//     every row is cut to its first line plus a "(N more lines)" marker and
+//     the row becomes the program name plus the last lines of that log (the
+//     verifier's reason) and a "(N more lines)" marker; any other multi-line
+//     warning keeps its first line, see shortenWarning. Every row is also cut
 //     to maxRoutedWarningBytes.
 //
 // Beyond maxRoutedWarnings rows the remainder is only counted.
@@ -208,24 +213,6 @@ func (r *libbpfRoute) flush() {
 func isTracepointSkipWarning(msg string) bool {
 	return strings.Contains(msg, "failed to determine tracepoint '") &&
 		strings.Contains(msg, "perf event ID")
-}
-
-// shortenWarning keeps the first line of msg and at most limit bytes of it,
-// cut on a rune boundary, and says how much was left out.
-func shortenWarning(msg string, limit int) string {
-	first, rest, multiline := strings.Cut(msg, "\n")
-	extra := ""
-	if multiline {
-		extra = fmt.Sprintf(" ... (%d more lines)", strings.Count(rest, "\n")+1)
-	}
-	if len(first) > limit {
-		cut := limit
-		for cut > 0 && !utf8.RuneStart(first[cut]) {
-			cut--
-		}
-		first = first[:cut] + "..."
-	}
-	return first + extra
 }
 
 // log is the libbpf print callback. libbpf hands over complete lines that
