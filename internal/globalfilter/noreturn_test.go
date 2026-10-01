@@ -39,6 +39,9 @@ func fastSuccessPair() *event.Pair {
 // whatever its operator, and errors-only does too. The control pair - a real
 // call that returned 0 quickly - must keep matching exactly the predicates it
 // satisfies, so the rule is keyed on Pair.NoReturn and not on the values.
+// The != cases use a reference other than the placeholder 0 (ret != -2,
+// latency != 5): there the placeholder itself satisfies the predicate, so
+// only the NoReturn rule rejects the row, and exempting OpNeq from it fails.
 func TestOutcomeFiltersRejectNoReturnPairs(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -47,6 +50,7 @@ func TestOutcomeFiltersRejectNoReturnPairs(t *testing.T) {
 	}{
 		{"ret == 0", Filter{RetVal: &NumericFilter{Op: OpEq, Value: 0}}, true},
 		{"ret != 0", Filter{RetVal: &NumericFilter{Op: OpNeq, Value: 0}}, false},
+		{"ret != -2", Filter{RetVal: &NumericFilter{Op: OpNeq, Value: -2}}, true},
 		{"ret >= 0", Filter{RetVal: &NumericFilter{Op: OpGte, Value: 0}}, true},
 		{"ret < 0", Filter{RetVal: &NumericFilter{Op: OpLt, Value: 0}}, false},
 		{"latency < 1ms", Filter{LatencyNs: &NumericFilter{Op: OpLt, Value: 1_000_000}}, true},
@@ -54,6 +58,7 @@ func TestOutcomeFiltersRejectNoReturnPairs(t *testing.T) {
 		{"latency > 100ns", Filter{LatencyNs: &NumericFilter{Op: OpGt, Value: 100}}, true},
 		{"latency >= 0", Filter{LatencyNs: &NumericFilter{Op: OpGte, Value: 0}}, true},
 		{"latency == 0", Filter{LatencyNs: &NumericFilter{Op: OpEq, Value: 0}}, false},
+		{"latency != 5", Filter{LatencyNs: &NumericFilter{Op: OpNeq, Value: 5}}, true},
 		{"errors only", Filter{ErrorsOnly: true}, false},
 	}
 	for _, tt := range tests {
@@ -103,6 +108,8 @@ func TestCandidateNoReturnValueRejectsOutcomes(t *testing.T) {
 		"ret == 0":     {RetVal: &NumericFilter{Op: OpEq, Value: 0}},
 		"latency >= 0": {LatencyNs: &NumericFilter{Op: OpGte, Value: 0}},
 		"latency < 1":  {LatencyNs: &NumericFilter{Op: OpLt, Value: 1}},
+		"ret != -2":    {RetVal: &NumericFilter{Op: OpNeq, Value: -2}},
+		"latency != 5": {LatencyNs: &NumericFilter{Op: OpNeq, Value: 5}},
 	} {
 		if filter.Matches(row) {
 			t.Errorf("%s matched a NoReturnValue candidate", name)
