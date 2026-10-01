@@ -311,9 +311,17 @@ func streamCSVRecord(ev *StreamEvent) []string {
 //   - ".csv" is appended to the last element when it lacks it
 //     (case-insensitively).
 //
+// The path is cleaned lexically (filepath.Clean), not the way the kernel
+// resolves it: "lnk/../x" becomes "x" even when lnk is a symlink to another
+// directory, where the kernel would go to that directory's parent. The
+// returned path is what the Stream tab shows, so the user sees where the file
+// went either way.
+//
 // It rejects, with a message the modal shows, an empty name, a NUL byte (no
-// path can hold one) and a name that denotes a directory rather than a file
-// (trailing separator, ".", "..", or a path that cleans to one of them).
+// path can hold one), a name that denotes a directory rather than a file
+// (see namesDirectory) and a file name longer than the filesystem's NAME_MAX
+// (checked here, like parquet's Recorder.Prepare, because the probe only
+// creates a short temp name and would let it through to fail at the publish).
 func resolveExportPath(exportDir, name string) (string, error) {
 	typed := strings.TrimSpace(name)
 	switch {
@@ -329,25 +337,29 @@ func resolveExportPath(exportDir, name string) (string, error) {
 	if !strings.HasSuffix(strings.ToLower(path), ".csv") {
 		path += ".csv"
 	}
+	if n := len(filepath.Base(path)); n > atomicfile.NameMax {
+		return "", fmt.Errorf("file name is too long: %d bytes (with .csv), the filesystem allows %d", n, atomicfile.NameMax)
+	}
 	if !filepath.IsAbs(path) && exportDir != "" {
 		path = filepath.Join(exportDir, path)
 	}
 	return path, nil
 }
 
-// namesDirectory reports whether the typed name can only denote a directory:
-// it ends in a path separator, or cleans to the root, "." or ".." (so "a/..",
-// "../.." and "." are all refused instead of becoming ".csv" files named
-// after a directory reference).
+// namesDirectory reports whether the typed name denotes a directory rather
+// than a file: it is "." or "..", or it ends in a path separator or in a "."
+// or ".." element ("out/", "out/.", "out/..", "a/..", "/"). It looks at the
+// raw text, not the cleaned path: Clean("out/.") is "out", which would pass
+// as a file name and silently write out.csv although the user typed a
+// directory reference.
 func namesDirectory(typed string) bool {
-	if strings.HasSuffix(typed, string(filepath.Separator)) {
+	sep := string(filepath.Separator)
+	if typed == "." || typed == ".." {
 		return true
 	}
-	switch filepath.Base(filepath.Clean(typed)) {
-	case ".", "..", string(filepath.Separator):
-		return true
-	}
-	return false
+	return strings.HasSuffix(typed, sep) ||
+		strings.HasSuffix(typed, sep+".") ||
+		strings.HasSuffix(typed, sep+"..")
 }
 
 // ExportSourceSnapshotToCSV is the export path for callers that must not

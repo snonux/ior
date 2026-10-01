@@ -1010,12 +1010,50 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	}
 }
 
-// TestPausedExportModalKeepsTheNameWhenTheExportIsRefused is the UI half of
-// task 9s2: a name the export refuses (here a folder that does not exist) must
-// not close the modal and discard the typing; it stays open with the name and
-// the reason, and no file or lastExportPath appears. A corrected name then
-// saves.
-func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
+// pressTea sends one real key message through HandleTeaKey, the path the
+// dashboard uses, so the export modal's text input sees the same messages as
+// in the running TUI (a backspace or arrow key, not a key name typed as text).
+func pressTea(t *testing.T, m *Model, msg tea.KeyPressMsg) {
+	t.Helper()
+	if handled, cmd := m.HandleTeaKey(msg); !handled || cmd != nil {
+		t.Fatalf("key %v: want consumed without a command, got handled=%v cmd=%v", msg, handled, cmd != nil)
+	}
+}
+
+// typeText types text rune by rune into the focused modal input.
+func typeText(t *testing.T, m *Model, text string) {
+	t.Helper()
+	for _, r := range text {
+		pressTea(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+}
+
+// repeatKey presses the same special key n times.
+func repeatKey(t *testing.T, m *Model, code rune, n int) {
+	t.Helper()
+	for range n {
+		pressTea(t, m, tea.KeyPressMsg{Code: code})
+	}
+}
+
+// openExportModalWithText pauses the stream, opens the export modal with 'X'
+// and replaces the pre-filled default name with text, all through keys.
+func openExportModalWithText(t *testing.T, m *Model, text string) {
+	t.Helper()
+	_ = pressLocal(t, m, "space")
+	_ = pressLocal(t, m, "X")
+	if !m.exportModal.Visible() {
+		t.Fatal("X should open the export modal")
+	}
+	repeatKey(t, m, tea.KeyBackspace, len(m.exportModal.textInput.Value()))
+	typeText(t, m, text)
+	if got := m.exportModal.textInput.Value(); got != text {
+		t.Fatalf("typed %q, input holds %q", text, got)
+	}
+}
+
+func newPausedModelForExport(t *testing.T) (Model, string) {
+	t.Helper()
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
 	exportDir := t.TempDir()
@@ -1023,13 +1061,20 @@ func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
 	m.height = 20
 	m.setExportDirForTest(exportDir)
 	m.Refresh()
-	_ = pressLocal(t, &m, "space")
-	_ = pressLocal(t, &m, "X")
+	return m, exportDir
+}
 
-	m.exportModal = m.exportModal.Open("missing-dir/out.csv")
-	if !pressLocal(t, &m, "enter") {
-		t.Fatalf("enter should be consumed")
-	}
+// TestPausedExportModalKeepsTheNameWhenTheExportIsRefused is the UI half of
+// task 9s2, driven by key messages only: a name the export refuses (here a
+// folder that does not exist) must not close the modal and discard the typing;
+// it stays open with the name, the cursor where it was and the reason, and no
+// file or lastExportPath appears. Cursor movement keeps the reason; the first
+// edit clears it, and the corrected text, edited in place with keys, saves.
+func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
+	m, exportDir := newPausedModelForExport(t)
+	openExportModalWithText(t, &m, "missing-dir/out.csv")
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.exportModal.Visible() {
 		t.Fatalf("a refused export must keep the modal open")
 	}
@@ -1046,10 +1091,57 @@ func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
 		t.Fatalf("no export happened, lastExportPath = %q", m.lastExportPath)
 	}
 
-	m.exportModal = m.exportModal.Open("ok.csv")
-	_ = pressLocal(t, &m, "enter")
-	if m.exportModal.Visible() || m.lastExportPath != filepath.Join(exportDir, "ok.csv") {
+	// Move the cursor in front of "out.csv": the error still describes the
+	// rejected name, so it stays; then delete "missing-dir/" with backspace,
+	// the first of which is an edit and clears the error.
+	repeatKey(t, &m, tea.KeyLeft, len("out.csv"))
+	if m.exportModal.err == "" {
+		t.Fatal("moving the cursor must not clear the error")
+	}
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if m.exportModal.err != "" {
+		t.Fatalf("an edit should clear the stale error, still %q", m.exportModal.err)
+	}
+	repeatKey(t, &m, tea.KeyBackspace, len("missing-dir/")-1)
+	if got := m.exportModal.textInput.Value(); got != "out.csv" {
+		t.Fatalf("edited name = %q, want out.csv", got)
+	}
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.exportModal.Visible() || m.lastExportPath != filepath.Join(exportDir, "out.csv") {
 		t.Fatalf("corrected name should save: visible=%v path=%q", m.exportModal.Visible(), m.lastExportPath)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "out.csv")); err != nil {
+		t.Fatalf("export file missing: %v", err)
+	}
+}
+
+// TestPausedExportModalEscAfterRefusalClosesWithoutSaving: after a refused
+// export the user may give up; Esc closes the modal, clears the error, writes
+// nothing and leaves lastExportPath alone. The next X starts clean.
+func TestPausedExportModalEscAfterRefusalClosesWithoutSaving(t *testing.T) {
+	m, exportDir := newPausedModelForExport(t)
+	openExportModalWithText(t, &m, "missing-dir/out.csv")
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.exportModal.Visible() || m.exportModal.err == "" {
+		t.Fatalf("setup: export should have been refused (visible=%v err=%q)", m.exportModal.Visible(), m.exportModal.err)
+	}
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.exportModal.Visible() || m.exportModal.err != "" {
+		t.Fatalf("Esc should close and clear the error: visible=%v err=%q", m.exportModal.Visible(), m.exportModal.err)
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("Esc must not export, lastExportPath = %q", m.lastExportPath)
+	}
+	if entries, _ := os.ReadDir(exportDir); len(entries) != 0 {
+		t.Fatalf("Esc must not write files, exportDir holds %v", entries)
+	}
+
+	_ = pressLocal(t, &m, "X")
+	if !m.exportModal.Visible() || m.exportModal.err != "" || !strings.HasPrefix(m.exportModal.textInput.Value(), "ior-stream-") {
+		t.Fatalf("reopening should start clean: visible=%v err=%q input=%q",
+			m.exportModal.Visible(), m.exportModal.err, m.exportModal.textInput.Value())
 	}
 }
 

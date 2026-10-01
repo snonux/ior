@@ -124,10 +124,20 @@ func publish(tmp, final, ext string, rename renameFunc) (string, error) {
 			return candidate, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return "", fmt.Errorf("publish %s as %s: %w", tmp, candidate, err)
+			return "", publishError(candidate, err)
 		}
 	}
-	return "", fmt.Errorf("publish %s: no free name near %s after %d attempts", tmp, final, publishAttempts)
+	return "", fmt.Errorf("publish: no free name near %s after %d attempts", final, publishAttempts)
+}
+
+// publishError is the error of a failed publish to final. It names only the
+// name the user chose and the bare cause ("file name too long", "permission
+// denied"): the temp file is the random ior-<hex>.tmp CreateTemp made, which
+// means nothing to the user, and the *os.LinkError a failed rename returns
+// would print it (and final) a second time. The errno stays reachable through
+// errors.Is.
+func publishError(final string, err error) error {
+	return fmt.Errorf("publish %s: %w", final, errnoOf(err))
 }
 
 // suffixed returns final for n == 0 and otherwise final with "-n" inserted
@@ -213,10 +223,10 @@ type chownFunc func(name string, uid, gid int) error
 // itself).
 func publishReplace(tmp, final string, chown chownFunc) error {
 	if err := inheritMode(tmp, final, chown); err != nil {
-		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
+		return publishError(final, err)
 	}
 	if err := os.Rename(tmp, final); err != nil {
-		return fmt.Errorf("publish %s as %s: %w", tmp, final, err)
+		return publishError(final, err)
 	}
 	return nil
 }
@@ -322,14 +332,14 @@ func ReplaceFile(final string, write func(io.Writer) error) (string, error) {
 func writeThenPublish(final string, write func(io.Writer) error, publishTmp func(tmp string) (string, error)) (string, error) {
 	f, err := CreateTemp(final)
 	if err != nil {
-		return "", fmt.Errorf("create temp file for %s: %w", final, err)
+		return "", fmt.Errorf("create temp file for %s: %w", final, errnoOf(err))
 	}
 	tmp := f.Name()
 	if err := write(f); err != nil {
 		return "", errors.Join(err, closeAndRemove(f, tmp))
 	}
 	if err := f.Close(); err != nil {
-		return "", errors.Join(fmt.Errorf("close temp file %s: %w", tmp, err), os.Remove(tmp))
+		return "", errors.Join(fmt.Errorf("finish writing %s: %w", final, errnoOf(err)), os.Remove(tmp))
 	}
 	published, err := publishTmp(tmp)
 	if err != nil {
@@ -488,13 +498,18 @@ func absDir(final string) string {
 	return dirOf(final)
 }
 
-// errnoOf strips the operation and path an *fs.PathError adds, leaving the
-// bare cause: the path is an internal temp name the user never chose, and the
-// message already names the directory. Other errors pass through unchanged.
+// errnoOf strips the operation and paths an *fs.PathError or *os.LinkError
+// adds, leaving the bare cause: the paths include an internal temp name the
+// user never chose, and the message already names the directory or the final
+// name. Other errors pass through unchanged.
 func errnoOf(err error) error {
 	var pathErr *fs.PathError
 	if errors.As(err, &pathErr) {
 		return pathErr.Err
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err
 	}
 	return err
 }

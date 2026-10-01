@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/atomicfile"
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 )
@@ -157,6 +158,15 @@ func TestResolveExportPath(t *testing.T) {
 		{name: "cleans to dotdot", input: "some/../..", wantErr: "directory"},
 		{name: "cleans to dot", input: "a/..", wantErr: "directory"},
 		{name: "trailing slash", input: "out/", wantErr: "directory"},
+		{name: "trailing slash dot slash", input: "out/./", wantErr: "directory"},
+		{name: "trailing dot element", input: "out/.", wantErr: "directory"},
+		{name: "trailing dotdot element", input: "out/..", wantErr: "directory"},
+		{name: "absolute trailing dot element", input: "/tmp/out/.", wantErr: "directory"},
+		{name: "dot inside is a file name", input: "out/.hidden", want: "/exp/out/.hidden.csv"},
+		{name: "dots as a name suffix are a file name", input: "out/a..", want: "/exp/out/a...csv"},
+		{name: "longest file name fits", input: strings.Repeat("a", atomicfile.NameMax-4), want: "/exp/" + strings.Repeat("a", atomicfile.NameMax-4) + ".csv"},
+		{name: "file name past NAME_MAX", input: strings.Repeat("a", atomicfile.NameMax-3), wantErr: "too long"},
+		{name: "long name judged on its last element", input: strings.Repeat("d", atomicfile.NameMax) + "/x", want: "/exp/" + strings.Repeat("d", atomicfile.NameMax) + "/x.csv"},
 		{name: "root", input: "/", wantErr: "directory"},
 	}
 	for _, tc := range cases {
@@ -249,6 +259,8 @@ func TestExportRowsToCSVRejectsUnusableNames(t *testing.T) {
 		{"empty", "", "empty"},
 		{"NUL", "a\x00b", "NUL"},
 		{"directory reference", "..", "directory"},
+		{"trailing dot element", "adir.csv/.", "directory"},
+		{"too long", strings.Repeat("a", atomicfile.NameMax), "too long"},
 		{"trailing slash", "adir.csv/", "directory"},
 		{"existing directory", "adir", "is a directory"},
 		{"missing parent", "nope/x.csv", "no such file or directory"},
@@ -272,10 +284,12 @@ func TestExportRowsToCSVRejectsUnusableNames(t *testing.T) {
 }
 
 // TestExportRowsToCSVUnwritableDirectory checks a read-only directory is
-// reported as one. Skipped as root, which ignores directory permissions.
+// reported as one readable error naming the directory. The chmod variant is
+// skipped as root, which ignores directory permissions; the /sys variant
+// below covers root.
 func TestExportRowsToCSVUnwritableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
+		t.Skip("root ignores directory permissions; see TestExportRowsToCSVUnwritableSysDirectory")
 	}
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o555); err != nil {
@@ -286,6 +300,50 @@ func TestExportRowsToCSVUnwritableDirectory(t *testing.T) {
 	_, err := exportRowsToCSV(nil, t.TempDir(), filepath.Join(dir, "x.csv"))
 	if err == nil || !strings.Contains(err.Error(), "permission denied") || !strings.Contains(err.Error(), dir) {
 		t.Fatalf("want a permission error naming %s, got %v", dir, err)
+	}
+	if strings.Contains(err.Error(), ".tmp") {
+		t.Fatalf("error leaks the internal temp name: %v", err)
+	}
+}
+
+// TestExportRowsToCSVUnwritableSysDirectory is the unwritable-directory check
+// that also runs as root: files cannot be created in /sys, root or not
+// (EACCES), so no chmod and no skip for root is needed. It is skipped only
+// where /sys does not exist. The error must be the single readable message
+// naming the directory, once, without the internal temp name.
+func TestExportRowsToCSVUnwritableSysDirectory(t *testing.T) {
+	for _, dir := range []string{"/sys", "/sys/kernel"} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Skipf("%s is not available: %v", dir, err)
+		}
+		path, err := exportRowsToCSV(nil, t.TempDir(), filepath.Join(dir, "x.csv"))
+		if err == nil {
+			_ = os.Remove(path)
+			t.Fatalf("%s accepted an export", dir)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "cannot create files in "+dir) || !strings.Contains(msg, "permission denied") ||
+			strings.Count(msg, dir) != 1 || strings.Contains(msg, ".tmp") {
+			t.Fatalf("%s: want one readable permission error naming the directory, got %v", dir, err)
+		}
+	}
+}
+
+// TestExportRowsToCSVTooLongNameIsRefusedReadably: a final name past NAME_MAX
+// passes the probe (it only creates a short temp name) and would fail at the
+// publish, so resolveExportPath refuses it up front with one message that
+// names the limit, not the temp file, and nothing is left behind.
+func TestExportRowsToCSVTooLongNameIsRefusedReadably(t *testing.T) {
+	dir := t.TempDir()
+	_, err := exportRowsToCSV(nil, dir, strings.Repeat("a", atomicfile.NameMax))
+	if err == nil || !strings.Contains(err.Error(), "too long") || !strings.Contains(err.Error(), "255") {
+		t.Fatalf("want a too-long error naming the limit, got %v", err)
+	}
+	if strings.Contains(err.Error(), ".tmp") {
+		t.Fatalf("error leaks the internal temp name: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("a refused export left files behind: %v", entries)
 	}
 }
 

@@ -62,13 +62,28 @@ func (m ExportModal) Close() ExportModal {
 // Reject reopens the modal with the rejected filename still in the input and
 // err shown as its error, so a name the export refused (empty after trimming,
 // a directory, a missing folder, ...) can be corrected instead of retyped.
+//
+// Close leaves the typed text and the cursor in the input, so when the input
+// still holds filename (modulo the surrounding space Update trimmed off) it
+// is reopened untouched and the cursor stays where the user left it, in the
+// middle of the name if that is where they were editing. Only for any other
+// filename is the input replaced, via Open, with the cursor at the end.
 func (m ExportModal) Reject(filename string, err error) ExportModal {
-	m = m.Open(filename)
+	if strings.TrimSpace(m.textInput.Value()) != filename {
+		m = m.Open(filename)
+	}
+	m.visible = true
+	m.textInput.Focus()
 	m.err = err.Error()
 	return m
 }
 
 // Update returns updated modal, submitted filename, and whether submit occurred.
+//
+// An error (the empty-name message here, or the reason a Reject gave) stays
+// until the user edits the text: it describes the name that was submitted, so
+// the first keystroke that changes the input makes it stale and clears it.
+// Cursor movement alone leaves it, as the name is still the rejected one.
 func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	if !m.visible {
 		return m, "", false
@@ -86,9 +101,13 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 			return m.Close(), filename, true
 		}
 	}
+	before := m.textInput.Value()
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	_ = cmd
+	if m.textInput.Value() != before {
+		m.err = ""
+	}
 	return m, "", false
 }
 

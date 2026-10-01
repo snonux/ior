@@ -306,6 +306,36 @@ func TestWriteFileMissingDirReportsCreateError(t *testing.T) {
 	}
 }
 
+// TestPublishErrorsDoNotNameTheTempFile pins that a failure at the very end
+// (here a final name past NAME_MAX, which only the rename notices because the
+// temp name is short) names the final path once and the bare cause, never the
+// internal ior-<hex>.tmp name nor the doubled paths of an *os.LinkError, for
+// both the generated-name (WriteFile) and the typed-name (ReplaceFile) path.
+// The errno stays reachable and the temp file is removed.
+func TestPublishErrorsDoNotNameTheTempFile(t *testing.T) {
+	write := func(io.Writer) error { return nil }
+	for name, publishFn := range map[string]func(string) error{
+		"WriteFile":   func(p string) error { _, err := WriteFile(p, ".csv", write); return err },
+		"ReplaceFile": func(p string) error { _, err := ReplaceFile(p, write); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			final := filepath.Join(dir, strings.Repeat("a", NameMax+1)+".csv")
+			err := publishFn(final)
+			if !errors.Is(err, syscall.ENAMETOOLONG) {
+				t.Fatalf("got %v, want ENAMETOOLONG", err)
+			}
+			msg := err.Error()
+			if strings.Contains(msg, ".tmp") || strings.Count(msg, final) != 1 {
+				t.Fatalf("error must name the final path once and no temp file: %v", err)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Fatalf("failed publish left %v behind", entries)
+			}
+		})
+	}
+}
+
 func TestSuffixedKeepsExtensionLast(t *testing.T) {
 	for _, tc := range []struct {
 		final, ext string
