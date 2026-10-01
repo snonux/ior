@@ -21,6 +21,7 @@ func NewExportModal() ExportModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
+	// A default until the stream Model sizes it to its view (Resize).
 	input.SetWidth(44)
 	input.SetStyles(textinput.DefaultStyles(true))
 	return ExportModal{textInput: input}
@@ -111,6 +112,22 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 // exportModalSize is the export box's preferred and smallest width.
 var exportModalSize = modalSize{preferred: 74, min: 44}
 
+// exportInputWidth is the input width of the export box in a view width
+// cells wide.
+func exportInputWidth(width int) int {
+	return modalInputWidth(modalBoxWidth(exportModalSize, width), 0)
+}
+
+// Resize fits the input to the box drawn in a view width cells wide, so
+// Update scrolls the typed text with the width View draws it at
+// (fitModalInput). The stream Model calls it on every size change.
+func (m ExportModal) Resize(width int) ExportModal {
+	if width > 0 {
+		fitModalInput(&m.textInput, exportInputWidth(width))
+	}
+	return m
+}
+
 // View renders the centered modal box within the given viewport, fitted to
 // it like the search modal (renderModal).
 func (m ExportModal) View(width, height int) string {
@@ -123,8 +140,9 @@ func (m ExportModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	// m is a copy, so sizing its input here leaves the modal's state alone.
-	m.textInput.SetWidth(modalInputWidth(modalBoxWidth(exportModalSize, width), 0))
+	// m is a copy: a no-op after Resize(width), else the input is fitted for
+	// this render only, so the end of the value and the cursor stay visible.
+	fitModalInput(&m.textInput, exportInputWidth(width))
 	form := modalForm{
 		title: "Export Stream CSV",
 		label: "Filename:",

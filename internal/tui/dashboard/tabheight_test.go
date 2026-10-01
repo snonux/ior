@@ -711,7 +711,9 @@ func TestRenderBodyLaysTheTabOutForTheBudget(t *testing.T) {
 // bar, pause or status message: the footer lines below the panel are drawn
 // only while the body has rows left for them (eventstream.Model.View), so
 // they never decide whether the stream is drawn at all. At the minimum the
-// stream fits unclipped; each further row brings back the next footer line.
+// stream fits unclipped; each further row brings back the next footer line,
+// except that a status message takes the first spare row ahead of Row/Sel:
+// it is how errors such as "Export failed" reach the user.
 func TestStreamMinimumIgnoresItsFooter(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -737,12 +739,16 @@ func TestStreamMinimumIgnoresItsFooter(t *testing.T) {
 			if got := lipgloss.Height(raw); got > body {
 				t.Errorf("%s: stream is %d rows in a %d-row body:\n%s", tc.name, got, body, raw)
 			}
-			// The footer line comes back first, the message under it last.
+			// The first spare row goes to the message if there is one, else
+			// to the Row/Sel line; the second brings Row/Sel above the message.
 			wantRow := footer && body >= streamTableMinRows+1
+			if tc.status {
+				wantRow = footer && body >= streamTableMinRows+2
+			}
 			if got := strings.Contains(raw, "Row ") || strings.Contains(raw, "Sel "); got != wantRow {
 				t.Errorf("%s body=%d: footer line shown = %v, want %v:\n%s", tc.name, body, got, wantRow, raw)
 			}
-			wantMsg := footer && tc.status && body >= streamTableMinRows+2
+			wantMsg := footer && tc.status && body >= streamTableMinRows+1
 			if got := strings.Contains(raw, "exported"); got != wantMsg {
 				t.Errorf("%s body=%d: status message shown = %v, want %v:\n%s", tc.name, body, got, wantMsg, raw)
 			}

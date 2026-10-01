@@ -170,3 +170,47 @@ func TestStreamViewFitsItsHeightWithEveryExtraLine(t *testing.T) {
 		}
 	}
 }
+
+// The FD-trace overlay fits its height from six rows up too (task ls2): its
+// panel keeps one event row, so at six rows it drops its footer line instead
+// of drawing seven lines and losing the last to the dashboard's clip; from
+// seven rows up the footer and its "esc:back" hint are back.
+func TestFDTraceViewFitsItsHeight(t *testing.T) {
+	m := newFooterTestModel(t)
+	m.fdTraceView.visible = true
+	m.fdTraceView.events = m.filtered
+	for height := 6; height <= 30; height++ {
+		out := m.View(100, height)
+		if got := lipgloss.Height(out); got > height {
+			t.Fatalf("height %d: fd-trace view is %d rows:\n%s", height, got, out)
+		}
+		if got, want := strings.Contains(out, "\nesc:back"), height >= 7; got != want {
+			t.Fatalf("height %d: footer shown = %v, want %v:\n%s", height, got, want, out)
+		}
+	}
+}
+
+// With a single row free below the table, a status message takes it in
+// place of the Row/Sel line: it is how "Export failed", "Invalid regex" and
+// "No match" reach the user, while Row/Sel only repeats what the table's
+// selection shows. A second free row brings Row/Sel back above it, and with
+// no message the row is Row/Sel's (task ls2).
+func TestStatusMessageTakesTheOnlySpareRow(t *testing.T) {
+	m := NewModel(NewRingBuffer())
+	m.width = 100
+	const base = "table"
+	m.SetStatusMessage("Export failed: no such directory")
+	if got := m.appendStreamFooter(base, 0, 1); got != base+"\nExport failed: no such directory" {
+		t.Fatalf("one spare row: %q, want the message alone", got)
+	}
+	if got := m.appendStreamFooter(base, 0, 2); got != base+"\nRow 0/0\nExport failed: no such directory" {
+		t.Fatalf("two spare rows: %q, want Row/Sel above the message", got)
+	}
+	if got := m.appendStreamFooter(base, 0, 0); got != base {
+		t.Fatalf("no spare row: %q, want the table alone", got)
+	}
+	m.SetStatusMessage("")
+	if got := m.appendStreamFooter(base, 0, 1); got != base+"\nRow 0/0" {
+		t.Fatalf("one spare row, no message: %q, want Row/Sel", got)
+	}
+}

@@ -151,11 +151,20 @@ func (m *Model) SetViewport(width, height int) {
 	if width > 0 {
 		m.width = width
 		m.viewport.SetWidth(width)
+		m.resizeModals(width)
 	}
 	if height > 0 {
 		m.height = height
 		m.viewport.SetHeight(m.visibleRows())
 	}
+}
+
+// resizeModals keeps the search and export inputs sized to the boxes they
+// are drawn in at view width, so typing scrolls their text by the width on
+// screen and the cursor never falls outside the box (fitModalInput).
+func (m *Model) resizeModals(width int) {
+	m.exportModal = m.exportModal.Resize(width)
+	m.searchModal = m.searchModal.Resize(width)
 }
 
 // SetFooterVisible controls whether stream footer/status lines are shown.
@@ -593,6 +602,7 @@ func (m *Model) View(width, height int) string {
 	m.height = height
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.visibleRows())
+	m.resizeModals(width)
 
 	if m.fdTraceView.visible {
 		return m.viewFDTrace(width)
@@ -814,7 +824,9 @@ const streamTableChromeRows = 5
 // event rows: the panel chrome, the optional filter-stack line and the two
 // footer lines (Row/Sel and the status message). Below that height the table
 // keeps one event row and the extra lines are dropped (fittingFilterStack,
-// View), so the view never outgrows its height from 6 rows up.
+// appendStreamFooter, viewFDTrace's footer), so neither the stream table nor
+// the FD-trace overlay outgrows its height from 6 rows up; the modals fit
+// any height down to their compact layout (renderModal).
 const streamReservedRows = streamTableChromeRows + 1 + 2
 
 // visibleRows is how many event rows the table shows at the current height.
@@ -893,6 +905,11 @@ func (m *Model) openFDTraceView() bool {
 	return true
 }
 
+// viewFDTrace renders the FD-trace overlay: its panel (five chrome rows plus
+// visibleRows event rows) and, when a row is left for it, the footer line.
+// visibleRows keeps one event row however short the view, so at six rows the
+// panel alone fills it and the footer (with its "esc:back" hint; Esc still
+// works) is dropped rather than making the view taller than its budget.
 func (m *Model) viewFDTrace(width int) string {
 	rows := m.visibleRows()
 	start := clamp(m.fdTraceView.offset, 0, m.maxFDTraceOffset())
@@ -902,6 +919,9 @@ func (m *Model) viewFDTrace(width int) string {
 	}
 	visible := m.fdTraceView.events[start:end]
 	base := RenderFDTraceTable(width, m.fdTraceView.pid, m.fdTraceView.fd, len(m.fdTraceView.events), visible)
+	if lipgloss.Height(base) >= m.height {
+		return base
+	}
 	return base + "\n" + fdTraceFooterLine(width, rowNumber(start, len(m.fdTraceView.events)), len(m.fdTraceView.events))
 }
 

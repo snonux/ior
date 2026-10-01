@@ -2,7 +2,6 @@ package eventstream
 
 import (
 	"fmt"
-	"strings"
 
 	"ior/internal/tui/common"
 )
@@ -23,28 +22,29 @@ const footerTail = "..."
 
 // appendStreamFooter appends the Row/Sel footer line and then the optional
 // status message line to the rendered table, each fitted to width, as far
-// as spare rows allow: with no spare row the table is returned as is, with
-// one the status message is the line left out. On a short terminal the table
-// (which keeps one event row) takes priority, and the message is transient
-// anyway (the next key clears or replaces it).
+// as spare rows allow. On a short terminal the table (which keeps one event
+// row) takes priority: with no spare row the table is returned as is, and
+// with exactly one the status message, when there is one, takes that row in
+// place of the Row/Sel line. The message is how a failed export or open, an
+// invalid regex or a missed search reaches the user, so it must not vanish on
+// a 9-10 row terminal; Row/Sel is only lost while the message stands (the
+// next key clears or replaces it) and the table still marks the selection.
 func (m *Model) appendStreamFooter(base string, start, spare int) string {
 	if spare < 1 {
 		return base
 	}
-	// Use a Builder to avoid a redundant allocation for the optional status-message
-	// line appended conditionally on every render call.
-	var b strings.Builder
-	b.WriteString(base)
-	b.WriteString("\n")
-	b.WriteString(fitFooterSegments(m.streamFooterSegments(start), m.width))
-	if m.statusMessage != "" && spare >= 2 {
-		// The message can echo export paths, error text and search terms,
-		// so it is sanitised like every other foreign string before being
-		// cut to the view width (the width helpers expect sanitised input).
-		b.WriteString("\n")
-		b.WriteString(common.TruncateRight(common.Sanitize(m.statusMessage), m.width, footerTail))
+	footer := fitFooterSegments(m.streamFooterSegments(start), m.width)
+	if m.statusMessage == "" {
+		return base + "\n" + footer
 	}
-	return b.String()
+	// The message can echo export paths, error text and search terms, so it
+	// is sanitised like every other foreign string before being cut to the
+	// view width (the width helpers expect sanitised input).
+	message := common.TruncateRight(common.Sanitize(m.statusMessage), m.width, footerTail)
+	if spare < 2 {
+		return base + "\n" + message
+	}
+	return base + "\n" + footer + "\n" + message
 }
 
 // streamFooterSegments returns the stream footer's segments in priority
@@ -68,27 +68,35 @@ func fdTraceFooterLine(width, row, total int) string {
 	return fitFooterSegments([]string{"esc:back", fmt.Sprintf("FD Trace Row %d/%d", row, total), "j/k:scroll"}, width)
 }
 
-// fitFooterSegments joins segments with footerSep, keeping the longest prefix
-// of whole segments that fits width display cells, so narrow terminals get a
-// compact footer (e.g. just "Sel x/N Col x/N | Esc/F undo") instead of hints cut
-// mid-word. Only when not even the first segment fits is it truncated with
-// footerTail. Segments are ior-generated (counters and fixed hints), so they
-// need no sanitising. A width of zero or less yields "".
+// fitFooterSegments joins footer segments with footerSep to fit width
+// display cells, cutting with footerTail (see fitSegments). Segments are
+// ior-generated (counters and fixed hints), so they need no sanitising.
 func fitFooterSegments(segments []string, width int) string {
+	return fitSegments(segments, footerSep, footerTail, width)
+}
+
+// fitSegments joins segments with sep, keeping the longest prefix of whole
+// segments that fits width display cells, so narrow terminals get a compact
+// line (e.g. just "Sel x/N Col x/N | Esc/F undo") instead of hints cut
+// mid-word. Only when not even the first segment fits is it truncated, ending
+// in tail. Segments must be sanitised already. A width of zero or less
+// yields "".
+func fitSegments(segments []string, sep, tail string, width int) string {
 	if len(segments) == 0 || width <= 0 {
 		return ""
 	}
 	line := segments[0]
 	used := common.DisplayWidth(line)
 	if used > width {
-		return common.TruncateRight(line, width, footerTail)
+		return common.TruncateRight(line, width, tail)
 	}
+	sepWidth := common.DisplayWidth(sep)
 	for _, seg := range segments[1:] {
-		next := used + len(footerSep) + common.DisplayWidth(seg)
+		next := used + sepWidth + common.DisplayWidth(seg)
 		if next > width {
 			break
 		}
-		line += footerSep + seg
+		line += sep + seg
 		used = next
 	}
 	return line

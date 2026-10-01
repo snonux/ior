@@ -5,12 +5,13 @@ import (
 
 	"ior/internal/tui/common"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 )
 
 // modalForm is the content of a stream input modal (search, export): a title,
 // a label above the input line, the input line itself, an optional error and
-// the key hint.
+// the key hint, whose segments are joined by modalHintSep.
 type modalForm struct {
 	title, label, input, err, hint string
 }
@@ -38,9 +39,42 @@ func modalBoxWidth(size modalSize, width int) int {
 
 // modalInputWidth is the text-input width that keeps the input line of a box
 // boxWidth cells wide on one row: the box's text width less reserved cells
-// (a "/" prefix) and the cursor cell textinput draws past its width.
+// (a "/" prefix) and the cursor cell textinput draws past its width (or the
+// extra rune its window holds when it starts at the cursor). It is at least
+// one cell, so a box with fewer than reserved+2 text cells (views under 8
+// columns for export, 9 for search) or a wide rune in reserved+2 cells
+// cannot show the typed text and the cursor together, and the line is cut.
 func modalInputWidth(boxWidth, reserved int) int {
 	return max(boxWidth-modalBoxChrome-reserved-1, 1)
+}
+
+// fitModalInput sets ti to width cells and, when that changes its width,
+// re-anchors its scroll window around the cursor for the new width.
+//
+// textinput's SetWidth only stores the width: the window of the value it
+// draws (and so where the cursor sits in it) is recomputed by its private
+// handleOverflow, which runs from Update, SetValue and SetCursor, not from
+// SetWidth. A window left from a wider width can be wider than the box, and
+// renderModalBox cuts every line to the box, so the end of the value and the
+// cursor were cut off (task ls2). SetCursor re-runs handleOverflow, which
+// recomputes the window only for a cursor outside it, so the cursor is first
+// moved to the end (always outside or on the window's right edge: the window
+// is recomputed ending at the value's end) and then back (recomputed
+// starting at the cursor if it lies left of that window). Either way the
+// window then fits width, plus the cursor cell modalInputWidth reserves.
+//
+// The modals keep their stored width in step with the view (Resize, called
+// by the stream Model on every size change and render) so Update scrolls
+// with the real width and this re-anchoring happens only on a resize; their
+// View calls it as well, on a copy, for a caller that skipped Resize.
+func fitModalInput(ti *textinput.Model, width int) {
+	if ti.Width() == width {
+		return
+	}
+	ti.SetWidth(width)
+	pos := ti.Position()
+	ti.CursorEnd()
+	ti.SetCursor(pos)
 }
 
 // renderModal draws form as a bordered box centred in a width x height view.
@@ -51,9 +85,12 @@ func modalInputWidth(boxWidth, reserved int) int {
 // without an error) the input line and the key hint stay on screen inside a
 // whole border. Only a shorter view clips the box, which the dashboard never
 // asks for: the Stream tab is drawn from six body rows (streamTableMinRows).
+// The key hint is fitted by whole segments (fitModalHint) rather than cut,
+// so a narrow box drops "• Esc cancel" instead of showing "Esc cance".
 func renderModal(form modalForm, size modalSize, width, height int) string {
 	boxWidth := modalBoxWidth(size, width)
 	textWidth := boxWidth - modalBoxChrome
+	form.hint = fitModalHint(form.hint, textWidth)
 	var box string
 	for _, layout := range modalLayouts(form) {
 		box = renderModalBox(layout.lines, layout.vpad, boxWidth, textWidth)
@@ -89,6 +126,18 @@ func modalLayouts(form modalForm) []modalLayout {
 		{lines: append(withErr(form.title, form.input), form.hint)},
 		{lines: append(withErr(form.input), form.hint)},
 	}
+}
+
+// modalHintSep separates the segments of a modal's key hint.
+const modalHintSep = " • "
+
+// fitModalHint fits a key hint to textWidth cells by whole segments
+// (fitSegments): trailing segments are dropped first, and only when not even
+// the first one fits is it cut, ending in "…", so the hint never shows a
+// word cut without a marker (except in a one-cell box, where common's marker
+// rule keeps the first letter). The hints are ior-generated literals.
+func fitModalHint(hint string, textWidth int) string {
+	return fitSegments(strings.Split(hint, modalHintSep), modalHintSep, common.Ellipsis, textWidth)
 }
 
 // renderModalBox boxes lines, each cut to textWidth cells, in a rounded

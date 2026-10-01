@@ -33,6 +33,7 @@ func NewSearchModal() SearchModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
+	// A default until the stream Model sizes it to its view (Resize).
 	input.SetWidth(44)
 	input.SetStyles(textinput.DefaultStyles(true))
 	return SearchModal{textInput: input, direction: SearchForward}
@@ -101,6 +102,26 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 // searchModalSize is the search box's preferred and smallest width.
 var searchModalSize = modalSize{preferred: 58, min: 40}
 
+// searchPrefixWidth is the cells of the "/" or "?" direction prefix drawn
+// before the input.
+const searchPrefixWidth = 1
+
+// searchInputWidth is the input width of the search box in a view width
+// cells wide.
+func searchInputWidth(width int) int {
+	return modalInputWidth(modalBoxWidth(searchModalSize, width), searchPrefixWidth)
+}
+
+// Resize fits the input to the box drawn in a view width cells wide, so
+// Update scrolls the typed text with the width View draws it at
+// (fitModalInput). The stream Model calls it on every size change.
+func (m SearchModal) Resize(width int) SearchModal {
+	if width > 0 {
+		fitModalInput(&m.textInput, searchInputWidth(width))
+	}
+	return m
+}
+
 // View renders the centered modal box within the given viewport, fitted to
 // it (renderModal): the box and its input line shrink with a narrow view and
 // shed their spacing on a short one, so the modal never outgrows the stream
@@ -119,8 +140,9 @@ func (m SearchModal) View(width, height int) string {
 	if m.direction == SearchBackward {
 		prefix = "?"
 	}
-	// m is a copy, so sizing its input here leaves the modal's state alone.
-	m.textInput.SetWidth(modalInputWidth(modalBoxWidth(searchModalSize, width), len(prefix)))
+	// m is a copy: a no-op after Resize(width), else the input is fitted for
+	// this render only, so the end of the value and the cursor stay visible.
+	fitModalInput(&m.textInput, searchInputWidth(width))
 	form := modalForm{
 		title: "Regex Search",
 		label: "Pattern:",
