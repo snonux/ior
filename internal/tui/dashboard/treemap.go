@@ -50,7 +50,7 @@ type syscallTreemapTile struct {
 // to distinguish the "waiting for stats" (nil) state from the "no data" state.
 func renderSyscallsTreemap(snap *statsengine.Snapshot, rows []statsengine.SyscallSnapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Syscalls treemap: waiting for stats..."
+		return fitTableLine("Syscalls treemap: waiting for stats...", width)
 	}
 	items := buildSyscallTreemapItems(rows, metric)
 	return renderTreemapPanel("Syscalls treemap", "Syscalls treemap: no data", items, width, height, metric, selected, isDark)
@@ -58,7 +58,7 @@ func renderSyscallsTreemap(snap *statsengine.Snapshot, rows []statsengine.Syscal
 
 func renderFilesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Files treemap: waiting for stats..."
+		return fitTableLine("Files treemap: waiting for stats...", width)
 	}
 	items := buildFilesTreemapItems(snap, metric)
 	return renderTreemapPanel("Files treemap", "Files treemap: no directory data", items, width, height, metric, selected, isDark)
@@ -66,7 +66,7 @@ func renderFilesTreemap(snap *statsengine.Snapshot, width, height int, metric bu
 
 func renderProcessesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Processes treemap: waiting for stats..."
+		return fitTableLine("Processes treemap: waiting for stats...", width)
 	}
 	items := buildProcessesTreemapItems(snap, metric)
 	return renderTreemapPanel("Processes treemap", "Processes treemap: no data", items, width, height, metric, selected, isDark)
@@ -81,7 +81,8 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	}
 	header := fmt.Sprintf("%s | metric:%s | v mode | b metric | j/k select", title, treemapMetricLabel(metric))
 	if len(items) == 0 {
-		return header + "\n" + emptyText + "\nsel: none"
+		// Cut to the width like the waiting line above (task cz2).
+		return fitPlaceholderLines(width, header, emptyText, "sel: none")
 	}
 
 	selected = clampOffset(selected, len(items))

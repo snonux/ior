@@ -36,7 +36,7 @@ type icicleTile struct {
 // renderFilesIcicle renders the icicle chart for directory-based file stats.
 func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Files icicle: waiting for stats..."
+		return fitTableLine("Files icicle: waiting for stats...", width)
 	}
 	if width <= 0 {
 		width = 80
@@ -48,10 +48,10 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 
 	tiles, ok := buildIcicleTiles(snap, width, height, metric)
 	if !ok {
-		return header + "\nFiles icicle: no directory data\nsel: none"
+		return fitPlaceholderLines(width, header, "Files icicle: no directory data", "sel: none")
 	}
 	if len(tiles) == 0 {
-		return header + "\nFiles icicle: no visible tiles\nsel: none"
+		return fitPlaceholderLines(width, header, "Files icicle: no visible tiles", "sel: none")
 	}
 	return renderIcicleGrid(header, tiles, width, height, metric, selected, isDark)
 }

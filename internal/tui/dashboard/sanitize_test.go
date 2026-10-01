@@ -54,10 +54,10 @@ func TestDashboardViewsSanitizeTracedLabels(t *testing.T) {
 	}
 	assertNoControl(t, "top files", summarizeTopFiles(&snap))
 	assertNoControl(t, "top processes", summarizeTopProcesses(&snap))
-	for _, row := range fileRows(snap.Files(), 80) {
+	for _, row := range fileRows(snap.Files()) {
 		assertNoControl(t, "file row", strings.Join(row, " "))
 	}
-	for _, row := range dirRows(snapshotDirRows(&snap), 80) {
+	for _, row := range dirRows(snapshotDirRows(&snap)) {
 		assertNoControl(t, "dir row", strings.Join(row, " "))
 	}
 	for _, row := range processRows(snap.Processes()) {

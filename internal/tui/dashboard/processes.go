@@ -24,38 +24,67 @@ func renderProcesses(snap *statsengine.Snapshot, width, height int) string {
 	return renderProcessesWithSort(snap, width, height, 0, 0, -1, tableSortState[processSortKey]{})
 }
 
+// renderProcessesWithSort renders the Processes table. Every line is at most
+// width cells wide: the placeholders and the PID-filter note are cut, the
+// table is fitted by renderSelectableTable (processTableSpec).
 func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol, pidFilter int, sortState tableSortState[processSortKey]) string {
 	if snap == nil {
-		return "Processes: waiting for stats..."
+		return fitTableLine("Processes: waiting for stats...", width)
 	}
 
 	rows := processRows(sortedProcessTableRows(snap.Processes(), sortState))
 	if len(rows) == 0 {
-		return "Processes: no data"
+		return fitTableLine("Processes: no data", width)
 	}
 
-	columns := processColumns()
-	out := renderSelectableTable(columns, rows, height, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
+	out := renderSelectableTable(processTableSpec(), rows, width, height, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
 	if pidFilter > 0 {
 		// Use a Builder to avoid an extra allocation for the PID-filter note suffix.
 		var b strings.Builder
 		b.WriteString(out)
-		b.WriteString("\nNote: this tab is most useful with All PIDs.")
+		b.WriteString("\n")
+		b.WriteString(fitTableLine("Note: this tab is most useful with All PIDs.", width))
 		return b.String()
 	}
 	return out
 }
 
+// processColumns returns the logical Processes columns at their natural
+// widths; their indexes are what processSortKeyForColumn refers to.
 func processColumns() []common.TableColumn {
 	return []common.TableColumn{
 		// 10 cells fit a 7-digit PID (pid_max tops out at 4194304) plus a
 		// "#n" lifetime suffix for a recycled PID's later rows.
 		{Title: "PID", Width: 10},
-		{Title: "Comm", Width: 18},
+		{Title: "Comm", Width: processCommWidth},
 		{Title: "Syscalls", Width: 10},
 		{Title: "Rate/s", Width: 8},
 		{Title: "Total Bytes", Width: 12},
 		{Title: "Avg Latency", Width: 12},
+	}
+}
+
+// processCommWidth is the natural width of the Comm column (a 16-byte kernel
+// comm plus room); processCommMinWidth the narrowest it is cut to before the
+// table gives way to its notice.
+const (
+	processCommWidth    = 18
+	processCommMinWidth = 8
+)
+
+// processTableSpec is the Processes table with its narrow-terminal policy
+// (fitTableColumns): Rate/s goes first, then Total Bytes, Avg Latency and the
+// Syscalls count; the PID and the comm (cut with "...", down to
+// processCommMinWidth) are required. The natural row is 75 cells wide.
+func processTableSpec() tableSpec {
+	return tableSpec{
+		title:   "Processes",
+		columns: processColumns(),
+		flex:    1,
+		flexMin: processCommMinWidth,
+		cut:     truncateText,
+		// 0 PID, 1 Comm, 2 Syscalls, 3 Rate/s, 4 Total Bytes, 5 Avg Latency.
+		dropOrder: []int{3, 4, 5, 2},
 	}
 }
 
@@ -152,12 +181,15 @@ func findProcessOffset(rows []statsengine.ProcessSnapshot, key string) (int, boo
 	return 0, false
 }
 
+// processRows returns the Processes table rows. The comm cell is the whole
+// sanitised comm: renderSelectableTable cuts it (truncateText) to the width
+// its column gets on the terminal.
 func processRows(processes []statsengine.ProcessSnapshot) [][]string {
 	rows := make([][]string, 0, len(processes))
 	for _, p := range processes {
 		rows = append(rows, []string{
 			p.ID(), // "PID#lifetime" for a recycled PID's later rows
-			truncateText(p.Comm, 18),
+			common.Sanitize(p.Comm),
 			strconv.FormatUint(p.Syscalls, 10),
 			fmt.Sprintf("%.1f", p.RatePerSec),
 			formatBytes(float64(p.Bytes)),

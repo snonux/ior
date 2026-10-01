@@ -42,21 +42,24 @@ func renderFiles(snap *statsengine.Snapshot, width, height int) string {
 	return renderFilesWithSort(snap, width, height, 0, 0, tableSortState[fileSortKey]{})
 }
 
+// renderFilesWithSort renders the per-file table. Every line is at most width
+// cells wide: the placeholders are cut, the table is fitted by
+// renderSelectableTable (fileTableSpec), which also cuts each shown path to
+// its column, keeping both ends.
 func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileSortKey]) string {
 	if snap == nil {
-		return "Files: waiting for stats..."
+		return fitTableLine("Files: waiting for stats...", width)
 	}
 
-	pathWidth := filePathWidth(width)
-	rows := fileRows(sortedFileSnapshots(snap.Files(), sortState), pathWidth)
+	rows := fileRows(sortedFileSnapshots(snap.Files(), sortState))
 	if len(rows) == 0 {
-		return "Files: no data"
+		return fitTableLine("Files: no data", width)
 	}
 
-	columns := fileColumns(width)
 	return renderSelectableTable(
-		columns,
+		fileTableSpec(width),
 		rows,
+		width,
 		height,
 		offset,
 		selectedCol,
@@ -68,21 +71,22 @@ func renderFilesWithSort(snap *statsengine.Snapshot, width, height, offset, sele
 	)
 }
 
+// renderFilesDirGroupedWithSort renders the dir-grouped table, fitted to the
+// width like renderFilesWithSort (fileDirTableSpec).
 func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, offset, selectedCol int, sortState tableSortState[fileDirSortKey]) string {
 	if snap == nil {
-		return "Files (dirs): waiting for stats..."
+		return fitTableLine("Files (dirs): waiting for stats...", width)
 	}
 
-	pathWidth := dirPathWidth(width)
-	rows := dirRows(sortedDirSnapshots(snapshotDirRows(snap), sortState), pathWidth)
+	rows := dirRows(sortedDirSnapshots(snapshotDirRows(snap), sortState))
 	if len(rows) == 0 {
-		return "Files (dirs): no data"
+		return fitTableLine("Files (dirs): no data", width)
 	}
 
-	columns := fileDirColumns(width)
 	return renderSelectableTable(
-		columns,
+		fileDirTableSpec(width),
 		rows,
+		width,
 		height,
 		offset,
 		selectedCol,
@@ -95,7 +99,10 @@ func renderFilesDirGroupedWithSort(snap *statsengine.Snapshot, width, height, of
 	)
 }
 
-func fileRows(files []statsengine.FileSnapshot, pathWidth int) [][]string {
+// fileRows returns the per-file table rows. The path cell is the whole
+// sanitised path: renderSelectableTable cuts it (truncatePathMiddle) to the
+// width its column gets on the terminal, which only the fit knows.
+func fileRows(files []statsengine.FileSnapshot) [][]string {
 	rows := make([][]string, 0, len(files))
 	for _, f := range files {
 		rows = append(rows, []string{
@@ -104,18 +111,20 @@ func fileRows(files []statsengine.FileSnapshot, pathWidth int) [][]string {
 			formatBytes(float64(f.BytesWritten)),
 			formatDurationNs(f.AvgLatencyNs),
 			formatDurationUintNs(f.MaxLatencyNs),
-			truncatePathMiddle(f.Path, pathWidth),
+			common.Sanitize(f.Path),
 		})
 	}
 	return rows
 }
 
+// filePathWidth is the natural width of the Path column: whatever the 48
+// cells of metric columns and their separators leave, at least 14 cells (so
+// the natural row is width-5 cells from 72 columns up and 67 below; narrower
+// terminals are fitted by fileTableSpec's policy).
 func filePathWidth(width int) int {
 	if width <= 0 {
 		return 24
 	}
-	// Keep fixed metrics visible and let path consume the remaining space.
-	// Fixed columns sum to 48 chars; reserve extra for separators/padding.
 	w := width - 58
 	if w < 14 {
 		return 14
@@ -123,11 +132,12 @@ func filePathWidth(width int) int {
 	return w
 }
 
+// dirPathWidth is filePathWidth for the dir-grouped table, whose extra 5-cell
+// Files column (+1 separator) it reserves as well.
 func dirPathWidth(width int) int {
 	if width <= 0 {
 		return 24
 	}
-	// Directory view adds a 5-char Files column (+1 spacing), so reserve 6 more.
 	w := width - 64
 	if w < 14 {
 		return 14
@@ -135,6 +145,8 @@ func dirPathWidth(width int) int {
 	return w
 }
 
+// fileColumns returns the logical per-file columns at their natural widths;
+// their indexes are what fileSortKeyForColumn and the selection refer to.
 func fileColumns(width int) []common.TableColumn {
 	pathWidth := filePathWidth(width)
 	return []common.TableColumn{
@@ -147,6 +159,8 @@ func fileColumns(width int) []common.TableColumn {
 	}
 }
 
+// fileDirColumns returns the logical dir-grouped columns at their natural
+// widths; their indexes are what fileDirSortKeyForColumn refers to.
 func fileDirColumns(width int) []common.TableColumn {
 	pathWidth := dirPathWidth(width)
 	return []common.TableColumn{
@@ -157,6 +171,41 @@ func fileDirColumns(width int) []common.TableColumn {
 		{Title: "Max Latency", Width: 11},
 		{Title: "Files", Width: 5},
 		{Title: "Directory", Width: pathWidth},
+	}
+}
+
+// filePathMinWidth is the narrowest a Path or Directory column gets before
+// the table gives way to its notice: "/da...ile0" still shows both ends.
+const filePathMinWidth = 10
+
+// fileTableSpec is the per-file table with its narrow-terminal policy
+// (fitTableColumns): Max Latency goes first, then Write, Read and Avg
+// Latency; Accesses and the path (cut in the middle, down to
+// filePathMinWidth) are required.
+func fileTableSpec(width int) tableSpec {
+	return tableSpec{
+		title:   "Files",
+		columns: fileColumns(width),
+		flex:    5,
+		flexMin: filePathMinWidth,
+		cut:     truncatePathMiddle,
+		// 0 Accesses, 1 Read, 2 Write, 3 Avg Latency, 4 Max Latency, 5 Path.
+		dropOrder: []int{4, 2, 1, 3},
+	}
+}
+
+// fileDirTableSpec is fileTableSpec for the dir-grouped table, which drops
+// its extra Files count after Read and before Avg Latency.
+func fileDirTableSpec(width int) tableSpec {
+	return tableSpec{
+		title:   "Files (dirs)",
+		columns: fileDirColumns(width),
+		flex:    6,
+		flexMin: filePathMinWidth,
+		cut:     truncatePathMiddle,
+		// 0 Accesses, 1 Read, 2 Write, 3 Avg Latency, 4 Max Latency,
+		// 5 Files, 6 Directory.
+		dropOrder: []int{4, 2, 1, 5, 3},
 	}
 }
 
@@ -405,7 +454,9 @@ func snapshotDirRows(snap *statsengine.Snapshot) []DirSnapshot {
 	return rows
 }
 
-func dirRows(dirs []DirSnapshot, pathWidth int) [][]string {
+// dirRows returns the dir-grouped table rows; like fileRows, the directory
+// cell is the whole (sanitised) label, cut to its column when rendered.
+func dirRows(dirs []DirSnapshot) [][]string {
 	rows := make([][]string, 0, len(dirs))
 	for _, d := range dirs {
 		rows = append(rows, []string{
@@ -415,7 +466,7 @@ func dirRows(dirs []DirSnapshot, pathWidth int) [][]string {
 			formatDurationNs(d.AvgLatencyNs),
 			formatDurationUintNs(d.MaxLatencyNs),
 			strconv.FormatUint(d.FileCount, 10),
-			truncatePathMiddle(dirDisplayLabel(d), pathWidth),
+			dirDisplayLabel(d),
 		})
 	}
 	return rows

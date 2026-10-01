@@ -29,20 +29,23 @@ const (
 // renderSyscallsWithSort renders the Syscalls table from the already
 // filter-scoped row set rowsData (see Model.visibleSyscallRows). snap is passed
 // only to distinguish the "waiting for stats" state (nil snapshot) from the
-// "no data" state (non-nil snapshot but empty rows after filtering).
+// "no data" state (non-nil snapshot but empty rows after filtering). Every
+// line is at most width cells wide: the placeholders are cut, the table is
+// fitted by renderSelectableTable (syscallTableSpec).
 func renderSyscallsWithSort(snap *statsengine.Snapshot, rowsData []statsengine.SyscallSnapshot, width, height, offset, selectedCol int, sortState tableSortState[syscallSortKey]) string {
 	if snap == nil {
-		return "Syscalls: waiting for stats..."
+		return fitTableLine("Syscalls: waiting for stats...", width)
 	}
 
 	rowsData = sortedSyscallSnapshots(rowsData, sortState)
-	columns, rows := syscallTableData(rowsData, width)
+	spec, rows := syscallTableData(rowsData, width)
 	if len(rows) == 0 {
-		return "Syscalls: no data"
+		return fitTableLine("Syscalls: no data", width)
 	}
 	return renderSelectableTable(
-		columns,
+		spec,
 		rows,
+		width,
 		height,
 		offset,
 		selectedCol,
@@ -54,14 +57,37 @@ func renderSyscallsWithSort(snap *statsengine.Snapshot, rowsData []statsengine.S
 	)
 }
 
-func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]common.TableColumn, [][]string) {
-	columns := syscallColumns(width)
+func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) (tableSpec, [][]string) {
+	spec := syscallTableSpec(width)
 	if width < 140 {
-		return columns, syscallRowsCompact(syscalls)
+		return spec, syscallRowsCompact(syscalls)
 	}
-	return columns, syscallRowsFull(syscalls)
+	return spec, syscallRowsFull(syscalls)
 }
 
+// syscallTableSpec is the Syscalls table with its narrow-terminal policy
+// (fitTableColumns): the percentiles go first, then the family, bytes,
+// errors, rate and finally the mean latency; the name (shrinking to 8 cells)
+// and the count are required. Below 140 columns the compact column set
+// applies, whose natural row is 82 cells wide, so from 81 columns down the
+// policy takes over; the full set (125 cells) always fits from 140 on.
+func syscallTableSpec(width int) tableSpec {
+	spec := tableSpec{title: "Syscalls", columns: syscallColumns(width), flex: 0, flexMin: 8}
+	if width < 140 {
+		// Compact: 0 Syscall, 1 Family, 2 Count, 3 Rate/s, 4 Avg, 5 p95,
+		// 6 p99, 7 Bytes, 8 Errors.
+		spec.dropOrder = []int{6, 5, 1, 7, 8, 3, 4}
+		return spec
+	}
+	// Full: 0 Syscall, 1 Family, 2 Count, 3 Rate/s, 4 Avg, 5 Min, 6 Max,
+	// 7 p50, 8 p95, 9 p99, 10 Bytes, 11 Errors.
+	spec.dropOrder = []int{7, 5, 9, 8, 6, 1, 10, 11, 3, 4}
+	return spec
+}
+
+// syscallColumns returns the logical Syscalls columns at their natural widths:
+// the compact set below 140 columns, the full set from 140 on. Their indexes
+// are what the column selection and syscallSortKeyForColumn refer to.
 func syscallColumns(width int) []common.TableColumn {
 	if width < 140 {
 		return []common.TableColumn{

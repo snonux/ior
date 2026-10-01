@@ -221,7 +221,7 @@ func assertFrameFits(t *testing.T, m *Model, c fitCase, label string, width, hei
 	if out != want {
 		t.Fatalf("%s: View differs from tab bar + tab output + status:\n--- got\n%s\n--- want\n%s", label, out, want)
 	}
-	assertFrameWidth(t, c, label, lines, rows, width)
+	assertFrameWidth(t, label, lines, width)
 	return rows.body > 0 && rows.body < m.minBodyRowsFor(m.activeTab)
 }
 
@@ -278,38 +278,21 @@ func expectedFrame(rows frameRows, tabBar, body, status string) string {
 }
 
 // assertFrameWidth checks that no line of the frame is wider than the
-// terminal, which would soft-wrap into extra rows and break the height
-// guarantee. Only the body lines of the Syscalls, Files and Processes table
-// views are exempt: their fixed column widths are wider than narrow terminals
-// today, which is task cz2 (clamp the table columns to the width), not this
-// budget. Their tab bar and status lines are still checked, without the
-// trailing blanks View's ScreenStyle pads every line with up to the widest
-// (body) line: that padding is the same cz2 overflow, not theirs.
-func assertFrameWidth(t *testing.T, c fitCase, label string, lines []string, rows frameRows, width int) {
+// terminal, measured both by lipgloss.Width and by ansi.StringWidth (the
+// measure the table and truncation helpers use), so a disagreement about a
+// cluster cannot hide an overflow. bubbletea v2 clips such a line at the
+// terminal edge, cutting whatever is rightmost, and a renderer that
+// soft-wraps would make it extra rows and break the height guarantee. Every
+// body is held to it, the Syscalls, Files and Processes tables included
+// (their columns are fitted to the width since task cz2, which removed the
+// knownWideTable exemption they had).
+func assertFrameWidth(t *testing.T, label string, lines []string, width int) {
 	t.Helper()
-	wide := knownWideTable(c)
-	bodyStart, bodyEnd := rows.tabBar, rows.tabBar+rows.body
 	for i, line := range lines {
-		if wide && i >= bodyStart && i < bodyEnd {
-			continue
-		}
-		measured := line
-		if wide {
-			measured = plainLine(line)
-		}
-		if w := lipgloss.Width(measured); w > width {
-			t.Fatalf("%s: line %d is %d cells wide, terminal has %d: %q", label, i, w, width, line)
+		if w, sw := lipgloss.Width(line), ansi.StringWidth(line); w > width || sw > width {
+			t.Fatalf("%s: line %d is %d (lipgloss) / %d (ansi) cells wide, terminal has %d: %q", label, i, w, sw, width, line)
 		}
 	}
-}
-
-// knownWideTable reports whether c is a table view tracked by task cz2.
-func knownWideTable(c fitCase) bool {
-	switch c.tab {
-	case TabSyscalls, TabFiles, TabProcesses:
-		return c.mode == tabVizModeTable
-	}
-	return false
 }
 
 func TestClipLines(t *testing.T) {

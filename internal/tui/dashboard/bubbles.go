@@ -504,7 +504,10 @@ func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 		if c.statusHint != "" {
 			body = c.statusHint
 		}
-		return header + "\n" + body + "\n" + "sel: none"
+		// Each line is cut to the width (task cz2): a narrow terminal shows
+		// this empty state right at startup, and the header alone is ~65
+		// cells.
+		return fitPlaceholderLines(width, header, body, "sel: none")
 	}
 
 	chartHeight := height - 2

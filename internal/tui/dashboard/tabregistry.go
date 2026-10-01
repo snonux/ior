@@ -451,10 +451,12 @@ func (m *Model) forEachBubbleChart(fn func(*bubbleChart)) {
 	}
 }
 
-// renderWaitingForStats is the placeholder a snapshot-driven tab shows
-// before the first stats snapshot arrives.
-func renderWaitingForStats(tab Tab) string {
-	return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
+// renderWaitingForStats is the placeholder a snapshot-driven table tab shows
+// before the first stats snapshot arrives: a PanelStyle box cut to the width
+// (common.RenderMessagePanel; task cz2), since a narrow terminal shows it
+// right at startup and a wider line would be clipped or soft-wrapped.
+func renderWaitingForStats(tab Tab, width int) string {
+	return common.RenderMessagePanel(tab.String()+": waiting for stats...", width)
 }
 
 // tabRenderFlame adapts the flame model's View to the tabRenderFn signature.
@@ -494,7 +496,7 @@ func tabRenderSyscalls(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mode
 		return m.syscallsTab.bubble.Render("Syscalls", width, height)
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabSyscalls)
+		return renderWaitingForStats(TabSyscalls, width)
 	}
 	return renderSyscallsWithSort(snap, m.visibleSyscallRows(snap), width, height, m.syscallsTab.offset, m.syscallsTab.col, m.syscallsTab.sort)
 }
@@ -515,7 +517,7 @@ func tabRenderFiles(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, 
 		}
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabFiles)
+		return renderWaitingForStats(TabFiles, width)
 	}
 	if m.filesDirGrouped {
 		return renderFilesDirGroupedWithSort(snap, width, height, m.filesDirTab.offset, m.filesDirTab.col, m.filesDirTab.sort)
@@ -533,7 +535,7 @@ func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mod
 		return m.processesTab.bubble.Render("Processes", width, height)
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabProcesses)
+		return renderWaitingForStats(TabProcesses, width)
 	}
 	return renderProcessesWithSort(snap, width, height, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort)
 }
