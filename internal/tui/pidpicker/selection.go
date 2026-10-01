@@ -14,8 +14,20 @@ import (
 // moves), or a typed filter that matches no process (followFilter, derived).
 const noSelection = -1
 
+// idNoun names what a picker row is in the current mode, for notices: the TID
+// picker lists threads, so "no process matches" would be wrong there.
+func (m Model) idNoun() (row, id string) {
+	if m.mode == PickerModeTID {
+		return "thread", "tid"
+	}
+	return "process", "pid"
+}
+
 // noMatchNotice explains the second noSelection source.
-const noMatchNotice = "no process matches the filter"
+func (m Model) noMatchNotice() string {
+	row, _ := m.idNoun()
+	return "no " + row + " matches the filter"
+}
 
 // moveSelection moves the highlight by delta (-1 up, +1 down), blurs the
 // filter input and clears the notice. From noSelection either direction lands
@@ -46,6 +58,15 @@ func (m Model) moveSelection(delta int) Model {
 // its process (applyFilter -> relocateSelection) and a lost-selection
 // noSelection stays sticky, so only the All row is handed back, and the user
 // can return to it with Up at any time.
+//
+// The "text really changed" test matters: a focused input also receives
+// non-editing keys (Left, Home, ctrl+a, an empty paste) and those must not hand
+// the All row back. The reachable case is the TID picker, where a thread the
+// user moved onto and a typed filter then hid falls back to the All TIDs row
+// (relocateUserSelection) with the input focused by that typing. That All row
+// is the user's own (harmless: it stays in the process, and the user's pick must
+// not silently turn into another thread), so cursor movement keeps it, and only
+// the next real edit of the text hands it to the filter.
 func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 	before := m.input.Value()
 	var cmd tea.Cmd
@@ -118,13 +139,16 @@ func (m Model) relocateSelection(pid int, hadSelection, queryEmpty bool) Model {
 //   - matches exist: the first match, row 1. Leaving the All row highlighted
 //     would make Enter right after typing a whole-system trace
 //     (selectedPIDFilter(0) == -1), the task hs2 bug.
-//   - no match: noSelection plus a notice. Falling back to the All row would
+//   - no match: noSelection plus a notice (worded for the picker mode, and
+//     only once the first scan arrived: before that the list is empty because
+//     nothing is loaded, not because nothing matches). Falling back to the All row would
 //     again make a reflexive Enter trace everything, now for a filter that
 //     found nothing. Backspacing to a filter with matches re-derives row 1,
 //     and Up/Down still reach the All row deliberately.
 //
 // The derived state is never sticky: every rebuild of the list recomputes it,
-// so a rescan that brings the first process of a typed filter selects it.
+// so a rescan that brings the first process of a typed filter selects it
+// (applyScan then lets a derived process row keep its identity across a rescan).
 func (m Model) followFilter(queryEmpty bool) Model {
 	m.notice = ""
 	switch {
@@ -134,8 +158,52 @@ func (m Model) followFilter(queryEmpty bool) Model {
 		m.selectedIndex = 1
 	default:
 		m.selectedIndex = noSelection
-		m.notice = noMatchNotice
+		if m.scanned {
+			m.notice = m.noMatchNotice()
+		}
 	}
+	return m
+}
+
+// applyScan installs a scan result and rebuilds the list. A selection derived
+// from the filter (m.implicit) normally follows the first match, which would let
+// a rescan silently change the pid Enter emits: the highlighted first match
+// exited, or a new process sorted ahead of it. So a derived process row is
+// tracked by identity across the rescan like a user's pick (keepDerivedProcess),
+// but unlike the user's pick it may fall through to the new first match, with a
+// notice, since the filter still decides what it means.
+func (m Model) applyScan(msg processesLoadedMsg) Model {
+	prevPid, had := m.selectedProcessPid()
+	tracked := had && m.implicit
+	m.processes = msg.processes
+	m.lastErr = msg.err
+	m.scanned = true
+	m = m.applyFilter()
+	if tracked {
+		m = m.keepDerivedProcess(prevPid)
+	}
+	return m
+}
+
+// keepDerivedProcess is applyScan's second half for a derived process row on
+// prevPid (applyFilter already re-derived the first match). If prevPid is still
+// listed it keeps the selection, wherever the rescan put it; if it left the
+// list and the selection moved to another process, a notice names both so the
+// change is not silent. An empty result (noSelection plus its own notice) needs
+// nothing here. The notice stays until Up/Down or the next recompute.
+func (m Model) keepDerivedProcess(prevPid int) Model {
+	if m.selectedIndex < 1 || m.filtered[m.selectedIndex-1].Pid == prevPid {
+		return m
+	}
+	for i, process := range m.filtered {
+		if process.Pid == prevPid {
+			m.selectedIndex = i + 1
+			return m
+		}
+	}
+	_, id := m.idNoun()
+	m.notice = fmt.Sprintf("%s %d left the list - selected %s %d instead",
+		id, prevPid, id, m.filtered[m.selectedIndex-1].Pid)
 	return m
 }
 

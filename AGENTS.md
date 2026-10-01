@@ -830,13 +830,24 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   the All row (a bare Enter still means all PIDs), a filter with matches selects
   the first match, so typing `mysql` and pressing Enter picks that process rather
   than the whole system, and a filter without a match selects nothing (the
-  `noSelection` state with a "no process matches the filter" notice, Enter is a
-  no-op, also in the TID picker). The derived state is recomputed on every
-  keystroke and rescan, so backspacing to an empty filter returns to All. Up/Down
+  `noSelection` state with a "no process matches the filter" notice, "thread" in
+  the TID picker; Enter is a no-op in both, and the notice stays hidden until
+  the first scan result is in, since an empty list before that only means
+  "not loaded yet"). The derived state is recomputed on every
+  keystroke and rescan, so backspacing to an empty filter returns to All. A
+  derived process row keeps its pid across a rescan (`applyScan`,
+  `keepDerivedProcess`): a new process sorting ahead does not take over, and if
+  the highlighted first match left the list the next match is selected with a
+  `pid 30 left the list - selected pid 40 instead` notice (`tid` in the TID
+  picker) instead of silently. Up/Down
   hands the selection to the user (a process row then follows the process as
   above); a user who moved back onto the All row and then edits the filter text
   gets it handed back to the filter, so Enter right after typing never means All
-  unless Up was the last key. Startup is unaffected: `-pid`/`-tid` skip the
+  unless Up was the last key. Only a change of the text counts (`editFilter`
+  compares the value): cursor keys on the focused input keep the All row, which
+  is also what a thread the TID picker's typed filter hid falls back to (that
+  user-owned All TIDs row stays within the process and is not swapped for
+  another thread; the next real edit hands it to the filter). Startup is unaffected: `-pid`/`-tid` skip the
   picker (task ur2), and the picker's `PidSelectedMsg` still replaces any
   startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`

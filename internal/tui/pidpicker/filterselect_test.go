@@ -81,14 +81,14 @@ func TestFirstMatchFollowsEachKeystroke(t *testing.T) {
 // explains why and no row is highlighted.
 func TestNoMatchSelectsNothing(t *testing.T) {
 	m := typeText(t, mysqlModel(t), "nosuchprocess")
-	if m.selectedIndex != noSelection || m.notice != noMatchNotice {
+	if m.selectedIndex != noSelection || m.notice != m.noMatchNotice() {
 		t.Fatalf("selectedIndex=%d notice=%q, want noSelection and the no-match notice", m.selectedIndex, m.notice)
 	}
 	if cmd := enterCmd(m); cmd != nil {
 		t.Fatalf("Enter emitted %+v, want a no-op without a match", cmd())
 	}
 	view := m.View().Content
-	if !strings.Contains(view, noMatchNotice) || strings.Contains(view, "> ") {
+	if !strings.Contains(view, "no process matches the filter") || strings.Contains(view, "> ") {
 		t.Fatalf("view lacks the notice or highlights a row:\n%s", view)
 	}
 }
@@ -245,5 +245,134 @@ func TestTIDPickerTypingSelectsFirstMatch(t *testing.T) {
 	}
 	if cmd := enterCmd(none); cmd != nil {
 		t.Fatalf("Enter emitted %+v, want a no-op without a match", cmd())
+	}
+}
+
+// tidThreadsModel is a TID picker for pid 100 with one main thread and two
+// workers.
+func tidThreadsModel(t *testing.T) Model {
+	t.Helper()
+	return loadedModel(t, NewTIDWithKeys(100, DefaultKeyMap()),
+		ProcessInfo{Pid: 100, ParentPID: 100, Comm: "main"},
+		ProcessInfo{Pid: 101, ParentPID: 100, Comm: "worker"},
+		ProcessInfo{Pid: 102, ParentPID: 100, Comm: "worker"})
+}
+
+// TestNonEditingKeysKeepUserOwnedAllRowInTIDPicker pins editFilter's "text
+// really changed" guard. The user moves onto thread 102, then types "m", which
+// hides it: the TID picker falls back to the All TIDs row with the input
+// focused. That All row is the user's own, so cursor keys (which reach the
+// focused input but do not edit it) must not hand it back to the filter and
+// jump to the first match; only a real edit does.
+func TestNonEditingKeysKeepUserOwnedAllRowInTIDPicker(t *testing.T) {
+	m := typeText(t, pressDown(t, tidThreadsModel(t), 3), "m") // tid 102, then hide it
+	if m.selectedIndex != 0 || !m.input.Focused() || m.implicit {
+		t.Fatalf("setup: selectedIndex=%d focused=%v implicit=%v, want a focused user-owned All row",
+			m.selectedIndex, m.input.Focused(), m.implicit)
+	}
+	for _, press := range []tea.KeyPressMsg{
+		{Code: tea.KeyLeft}, {Code: tea.KeyHome}, {Code: tea.KeyEnd}, {Code: 'a', Mod: tea.ModCtrl},
+	} {
+		next, _ := m.Update(press)
+		m = next.(Model)
+		if m.selectedIndex != 0 {
+			t.Fatalf("after %v selectedIndex = %d, want the All TIDs row kept", press, m.selectedIndex)
+		}
+	}
+	if msg, ok := enterMsg(t, m).(messages.TidSelectedMsg); !ok || msg != (messages.TidSelectedMsg{}) {
+		t.Fatalf("Enter emitted %+v, want the All TIDs message", msg)
+	}
+
+	// A real edit then hands the All row to the filter: first match, tid 100.
+	// (ctrl+a left the cursor at the start, so move to the end to extend "m".)
+	m = typeText(t, pressKey(t, m, tea.KeyEnd), "a")
+	if msg, ok := enterMsg(t, m).(messages.TidSelectedMsg); !ok || msg.Tid != 100 {
+		t.Fatalf("Enter after editing emitted %+v, want tid 100", msg)
+	}
+}
+
+// TestUnchangedTextKeepsUserOwnedAllRowInPIDPicker: a paste that adds no text
+// focuses the blurred input (Up blurred it) without editing it, so the All row
+// the user moved back to must stay.
+func TestUnchangedTextKeepsUserOwnedAllRowInPIDPicker(t *testing.T) {
+	m := pressKey(t, typeText(t, mysqlModel(t), "my"), tea.KeyUp)
+	next, _ := m.Update(tea.PasteMsg{Content: ""})
+	m = next.(Model)
+	if !m.input.Focused() {
+		t.Fatalf("setup: the paste should have focused the input")
+	}
+	if m.selectedIndex != 0 {
+		t.Fatalf("selectedIndex = %d, want the All row kept", m.selectedIndex)
+	}
+	wantPid(t, m, 0)
+}
+
+// TestRescanKeepsDerivedFirstMatchByPid: a derived first match is followed by
+// pid across a rescan, so a new process sorting ahead of it does not silently
+// change what Enter emits.
+func TestRescanKeepsDerivedFirstMatchByPid(t *testing.T) {
+	m := typeText(t, mysqlModel(t), "mysql") // derived selection: pid 30
+	m = loadedModel(t, m, ProcessInfo{Pid: 25, Comm: "mysqlx"},
+		ProcessInfo{Pid: 30, Comm: "mysqld"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if m.selectedIndex != 2 || m.notice != "" {
+		t.Fatalf("selectedIndex=%d notice=%q, want pid 30 kept on row 2 without a notice", m.selectedIndex, m.notice)
+	}
+	wantPid(t, m, 30)
+	// Still derived: the next keystroke re-derives the first match.
+	wantPid(t, typeText(t, m, "-"), 40)
+}
+
+// TestRescanNoticeWhenDerivedFirstMatchExited: the highlighted first match
+// exited, so the next match becomes the selection, which must not be silent.
+func TestRescanNoticeWhenDerivedFirstMatchExited(t *testing.T) {
+	m := typeText(t, mysqlModel(t), "mysql")
+	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if m.selectedIndex != 1 || m.notice != "pid 30 left the list - selected pid 40 instead" {
+		t.Fatalf("selectedIndex=%d notice=%q, want the move to pid 40 announced", m.selectedIndex, m.notice)
+	}
+	if view := m.View().Content; !strings.Contains(view, m.notice) {
+		t.Fatalf("view lacks the notice:\n%s", view)
+	}
+	wantPid(t, m, 40)
+	if m = pressDown(t, m, 1); m.notice != "" {
+		t.Fatalf("notice %q survived Down", m.notice)
+	}
+}
+
+// TestRescanNoticeIsModeAware: TID mode words the same notice with "tid".
+func TestRescanNoticeIsModeAware(t *testing.T) {
+	m := typeText(t, tidThreadsModel(t), "work") // derived: tid 101
+	m = loadedModel(t, m, ProcessInfo{Pid: 100, ParentPID: 100, Comm: "main"},
+		ProcessInfo{Pid: 102, ParentPID: 100, Comm: "worker"})
+	if want := "tid 101 left the list - selected tid 102 instead"; m.notice != want {
+		t.Fatalf("notice = %q, want %q", m.notice, want)
+	}
+}
+
+// TestNoMatchNoticeWaitsForFirstScan: typing before the first scan result has
+// nothing to match yet, which is not the same as "nothing matches", so the red
+// notice stays hidden (Enter is still a no-op) until a scan has been seen.
+func TestNoMatchNoticeWaitsForFirstScan(t *testing.T) {
+	m := typeText(t, NewWithKeys(DefaultKeyMap()), "mysql")
+	if m.selectedIndex != noSelection || m.notice != "" {
+		t.Fatalf("selectedIndex=%d notice=%q, want noSelection and no notice before the first scan", m.selectedIndex, m.notice)
+	}
+	if view := m.View().Content; strings.Contains(view, "matches the filter") {
+		t.Fatalf("view shows the no-match notice before the first scan:\n%s", view)
+	}
+	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"})
+	if m.notice != "no process matches the filter" {
+		t.Fatalf("notice = %q, want the no-match notice once a scan found nothing", m.notice)
+	}
+}
+
+// TestNoMatchNoticeSaysThreadInTIDMode: the TID picker lists threads.
+func TestNoMatchNoticeSaysThreadInTIDMode(t *testing.T) {
+	m := typeText(t, tidThreadsModel(t), "zz")
+	if m.notice != "no thread matches the filter" {
+		t.Fatalf("notice = %q, want the thread wording", m.notice)
+	}
+	if view := m.View().Content; !strings.Contains(view, "no thread matches the filter") {
+		t.Fatalf("view lacks the thread notice:\n%s", view)
 	}
 }

@@ -74,8 +74,14 @@ type Model struct {
 	// the initial state, and the All row after the filter text changed. It is
 	// cleared by Up/Down. See followFilter.
 	implicit bool
-	// notice is the one-line explanation shown while selectedIndex is
-	// noSelection; it is cleared by the next Up/Down.
+	// scanned is true once the first scan result (even a failed or empty one)
+	// has arrived. Until then an empty list means "not loaded yet", so a typed
+	// filter must not claim that nothing matches (see followFilter).
+	scanned bool
+	// notice is the one-line explanation under the list: why selectedIndex is
+	// noSelection, or that a rescan moved a derived selection (see
+	// keepDerivedProcess). It is cleared by Up/Down and by every recompute of
+	// the derived selection (followFilter: each edit and each rescan).
 	notice    string
 	mode      PickerMode
 	targetPID int
@@ -152,10 +158,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(inputWidth)
 		return m, nil
 	case processesLoadedMsg:
-		m.processes = msg.processes
-		m.lastErr = msg.err
-		m = m.applyFilter()
-		return m, nil
+		return m.applyScan(msg), nil
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case tea.PasteMsg:
