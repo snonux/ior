@@ -44,15 +44,21 @@ func boxCases() []boxCase {
 }
 
 // wideStatusCases are status messages of two-cell runes (CJK, emoji, and a
-// status of nothing else): in a one-cell text area (a 7-column view) such a
-// rune is wider than its line, which fitMessage must cut so the box does
-// not grow a cell past its view (task ns2).
+// status of nothing else). The first four wrap to at most 30 rows in a
+// one-cell text area (a view of 7 columns or fewer), so from some height up
+// Box wraps them there, and each two-cell rune is wider than its line:
+// fitMessage must cut it, or the box grows a cell past its view (task ns2).
+// The long CJK path wraps to more lines than 30 rows hold there, so in those
+// views Box always falls back to one cut line and never reaches that cut;
+// it covers hard-wrapping a path of CJK runes in the wider views (from 8
+// columns, a text area of two cells or more), where every rune fits its line.
 func wideStatusCases(open Model, hint []string) []boxCase {
 	statuses := []struct{ name, status, want string }{
 		{"status-cjk", "Exported: /日本語", "Exported:"},
-		{"status-cjk-path", "Exported: /var/tmp/日本語のディレクトリ/ior-stream.csv", "Exported:"},
+		{"status-cjk-path", "Exported: /日本/x.csv", "Exported:"},
 		{"status-emoji", "Exported: /tmp/😀🎉/x.csv", "Exported:"},
 		{"status-all-wide", "日本語 😀🎉 ディレクトリ", "日本語"},
+		{"status-cjk-long-path", "Exported: /var/tmp/日本語のディレクトリ/ior-stream.csv", "Exported:"},
 	}
 	cases := make([]boxCase, 0, len(statuses))
 	for _, s := range statuses {
