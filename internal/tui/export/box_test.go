@@ -44,19 +44,23 @@ func boxCases() []boxCase {
 }
 
 // wideStatusCases are status messages of two-cell runes (CJK, emoji, and a
-// status of nothing else). The first four wrap to at most 30 rows in a
-// one-cell text area (a view of 7 columns or fewer), so from some height up
-// Box wraps them there, and each two-cell rune is wider than its line:
-// fitMessage must cut it, or the box grows a cell past its view (task ns2).
-// The long CJK path wraps to more lines than 30 rows hold there, so in those
-// views Box always falls back to one cut line and never reaches that cut;
-// it covers hard-wrapping a path of CJK runes in the wider views (from 8
-// columns, a text area of two cells or more), where every rune fits its line.
+// status of nothing else). The first four are short enough to wrap within
+// the 30 rows checked in a one-cell text area (a view of 7 columns or
+// fewer), so from some height up Box wraps them there, and each two-cell
+// rune is wider than its line: fitMessage must cut it, or the box grows a
+// cell past its view (task ns2). Without that cut, status-emoji fails from
+// 20 rows, status-cjk from 22, status-cjk-path from 26 and status-all-wide
+// from 28, so none of them hangs on the tallest height alone; the emoji
+// status is kept short (no path tail) for that margin. The long CJK path
+// wraps to more lines than 30 rows hold there, so in those views Box always
+// falls back to one cut line and never reaches that cut; it covers
+// hard-wrapping a path of CJK runes in the wider views (from 8 columns, a
+// text area of two cells or more), where every rune fits its line.
 func wideStatusCases(open Model, hint []string) []boxCase {
 	statuses := []struct{ name, status, want string }{
 		{"status-cjk", "Exported: /日本語", "Exported:"},
 		{"status-cjk-path", "Exported: /日本/x.csv", "Exported:"},
-		{"status-emoji", "Exported: /tmp/😀🎉/x.csv", "Exported:"},
+		{"status-emoji", "Exported: /😀🎉", "Exported:"},
 		{"status-all-wide", "日本語 😀🎉 ディレクトリ", "日本語"},
 		{"status-cjk-long-path", "Exported: /var/tmp/日本語のディレクトリ/ior-stream.csv", "Exported:"},
 	}
