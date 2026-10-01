@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ior/internal/atomicfile"
+	"ior/internal/parquet"
 	"ior/internal/statsengine"
 )
 
@@ -63,49 +64,92 @@ func writeSnapshotRows(w *csv.Writer, snap *statsengine.Snapshot) error {
 }
 
 // writeSnapshotDetailRows writes per-item rows for syscalls, files, processes,
-// and histograms. It is called only when snap is non-nil.
+// and histograms, in that order. It is called only when snap is non-nil.
 func writeSnapshotDetailRows(w *csv.Writer, snap *statsengine.Snapshot) error {
-	for _, s := range snap.Syscalls() {
-		if err := w.Write([]string{"syscall", s.Name, fmt.Sprint(s.Count), fmt.Sprintf("%.2f", s.RatePerSec), fmt.Sprint(s.Bytes)}); err != nil {
-			return err
-		}
-		if err := w.Write([]string{"syscall_latency_ns", s.Name, fmt.Sprintf("%.2f", s.LatencyMeanNs), fmt.Sprint(s.LatencyMinNs), fmt.Sprint(s.LatencyMaxNs)}); err != nil {
-			return err
-		}
-		if err := w.Write([]string{"syscall_percentiles_ns", s.Name, fmt.Sprint(s.LatencyP50Ns), fmt.Sprint(s.LatencyP95Ns), fmt.Sprint(s.LatencyP99Ns)}); err != nil {
-			return err
-		}
+	sections := [][][]string{
+		syscallRows(snap),
+		fileRows(snap),
+		processRows(snap),
+		histogramRows("latency_hist", snap.LatencyHistogram),
+		histogramRows("gap_hist", snap.GapHistogram),
 	}
-	for _, r := range snap.Files() {
-		if err := w.Write([]string{"file", r.Path, fmt.Sprint(r.Accesses), fmt.Sprint(r.BytesRead), fmt.Sprint(r.BytesWritten)}); err != nil {
-			return err
-		}
-		if err := w.Write([]string{"file_latency_ns", r.Path, fmt.Sprintf("%.2f", r.AvgLatencyNs), fmt.Sprint(r.MaxLatencyNs), ""}); err != nil {
-			return err
-		}
-	}
-	// A process row's id is ProcessSnapshot.ID: the bare PID, or "PID#n"
-	// for the n-th later process the kernel handed a recycled PID, so the
-	// rows of distinct processes never share an id.
-	for _, p := range snap.Processes() {
-		if err := w.Write([]string{"process", p.ID(), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)}); err != nil {
-			return err
-		}
-		if err := w.Write([]string{"process_latency_ns", p.ID(), fmt.Sprintf("%.2f", p.AvgLatencyNs), "", ""}); err != nil {
-			return err
-		}
-	}
-	for _, b := range snap.LatencyHistogram.Buckets() {
-		if err := w.Write([]string{"latency_hist", b.Label, fmt.Sprint(b.Count), fmt.Sprint(b.LowerNs), fmt.Sprint(b.UpperNs)}); err != nil {
-			return err
-		}
-	}
-	for _, b := range snap.GapHistogram.Buckets() {
-		if err := w.Write([]string{"gap_hist", b.Label, fmt.Sprint(b.Count), fmt.Sprint(b.LowerNs), fmt.Sprint(b.UpperNs)}); err != nil {
+	for _, rows := range sections {
+		if err := writeRows(w, rows); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeRows writes rows to w, stopping at the first error.
+func writeRows(w *csv.Writer, rows [][]string) error {
+	for _, row := range rows {
+		if err := w.Write(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syscallRows returns the count, latency and percentile rows of every
+// syscall. The names come from ior's own syscall table, never traced text.
+func syscallRows(snap *statsengine.Snapshot) [][]string {
+	var rows [][]string
+	for _, s := range snap.Syscalls() {
+		rows = append(rows,
+			[]string{"syscall", s.Name, fmt.Sprint(s.Count), fmt.Sprintf("%.2f", s.RatePerSec), fmt.Sprint(s.Bytes)},
+			[]string{"syscall_latency_ns", s.Name, fmt.Sprintf("%.2f", s.LatencyMeanNs), fmt.Sprint(s.LatencyMinNs), fmt.Sprint(s.LatencyMaxNs)},
+			[]string{"syscall_percentiles_ns", s.Name, fmt.Sprint(s.LatencyP50Ns), fmt.Sprint(s.LatencyP95Ns), fmt.Sprint(s.LatencyP99Ns)},
+		)
+	}
+	return rows
+}
+
+// fileRows returns the access and latency rows of every ranked file.
+//
+// The file path is the only free-form traced text in the snapshot (the
+// syscall names and histogram labels are ior's own, and the process column is
+// a numeric id, not the comm). It goes through parquet.SanitizePath, the
+// repair the Parquet recording and the stream CSV export apply (task 3z2): a
+// rune cut at the BPF path capture limit is dropped and any other invalid
+// UTF-8 byte becomes a \xHH escape, so a strict reader such as DuckDB's
+// read_csv accepts the file. Valid text, including control characters, is
+// kept as it is, and quotes, commas and newlines are left to the csv.Writer's
+// quoting, so the file stays valid CSV.
+func fileRows(snap *statsengine.Snapshot) [][]string {
+	var rows [][]string
+	for _, r := range snap.Files() {
+		path := parquet.SanitizePath(r.Path)
+		rows = append(rows,
+			[]string{"file", path, fmt.Sprint(r.Accesses), fmt.Sprint(r.BytesRead), fmt.Sprint(r.BytesWritten)},
+			[]string{"file_latency_ns", path, fmt.Sprintf("%.2f", r.AvgLatencyNs), fmt.Sprint(r.MaxLatencyNs), ""},
+		)
+	}
+	return rows
+}
+
+// processRows returns the syscall and latency rows of every process. A
+// process row's id is ProcessSnapshot.ID: the bare PID, or "PID#n" for the
+// n-th later process the kernel handed a recycled PID, so the rows of
+// distinct processes never share an id.
+func processRows(snap *statsengine.Snapshot) [][]string {
+	var rows [][]string
+	for _, p := range snap.Processes() {
+		rows = append(rows,
+			[]string{"process", p.ID(), fmt.Sprint(p.Syscalls), fmt.Sprintf("%.2f", p.RatePerSec), fmt.Sprint(p.Bytes)},
+			[]string{"process_latency_ns", p.ID(), fmt.Sprintf("%.2f", p.AvgLatencyNs), "", ""},
+		)
+	}
+	return rows
+}
+
+// histogramRows returns one row per bucket of h under the given section name.
+func histogramRows(section string, h statsengine.HistogramSnapshot) [][]string {
+	var rows [][]string
+	for _, b := range h.Buckets() {
+		rows = append(rows, []string{section, b.Label, fmt.Sprint(b.Count), fmt.Sprint(b.LowerNs), fmt.Sprint(b.UpperNs)})
+	}
+	return rows
 }
 
 func snapValue(snap *statsengine.Snapshot, get func(*statsengine.Snapshot) uint64) uint64 {

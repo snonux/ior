@@ -213,6 +213,16 @@ func sanitizePath(path string) string {
 	return sanitizeUTF8(path)
 }
 
+// SanitizePath is sanitizePath for data files outside the Parquet recording
+// that hold a traced path but no streamrow.Row, such as the dashboard
+// snapshot CSV (internal/export, task 3z2). It keeps one definition of the
+// repair, so such a file stores the same text as the recording and the
+// stream CSV export for the same path. Task 4z2 moves the repair to
+// internal/textsafe; callers then switch to it.
+func SanitizePath(path string) string {
+	return sanitizePath(path)
+}
+
 // maxCapturedPath is the longest path the BPF side captures: the
 // MAX_FILENAME_LENGTH buffer minus its NUL terminator.
 const maxCapturedPath = types.MAX_FILENAME_LENGTH - 1
