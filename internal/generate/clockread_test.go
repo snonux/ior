@@ -221,9 +221,33 @@ func TestCheckHandlerClockReadRejectsViolations(t *testing.T) {
 		}
 	}
 
-	cases := []struct {
-		name, body string
-	}{
+	for _, tc := range clockReadViolations(enter, exit, noreturn, taking) {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.body == enter || tc.body == exit || tc.body == noreturn || tc.body == taking {
+				t.Fatal("mutation did not apply; the fixture shape changed")
+			}
+			if err := checkHandlerClockRead("mutated", tc.body); err == nil {
+				t.Errorf("checker accepted:\n%s", tc.body)
+			}
+		})
+	}
+}
+
+// clockReadViolation is one handler body mutated so that it breaks the
+// single-clock-read contract checkHandlerClockRead enforces.
+type clockReadViolation struct {
+	name, body string
+}
+
+// clockReadViolations is the mutation table of
+// TestCheckHandlerClockReadRejectsViolations, kept apart from the test so the
+// test body stays short. Each entry rewrites one of the four valid fixture
+// handlers (a plain enter, a plain exit, a noreturn enter and a
+// pointer-taking exit) into a shape the checker must reject; a mutation whose
+// anchor text no longer matches returns the handler unchanged, which the test
+// reports as a fixture change rather than as an accepted violation.
+func clockReadViolations(enter, exit, noreturn, taking string) []clockReadViolation {
+	return []clockReadViolation{
 		{"second read for ev->time", strings.Replace(enter, "ev->time = now;", "ev->time = bpf_ktime_get_boot_ns();", 1)},
 		{"no clock read at all", strings.Replace(exit, clockReadLine, "    __u64 now = 0;\n", 1)},
 		{"hook not given the timestamp", strings.Replace(exit, "ctx->ret, now)", "ctx->ret)", 1)},
@@ -244,15 +268,5 @@ func TestCheckHandlerClockReadRejectsViolations(t *testing.T) {
 		{"noreturn clock read before the sampling decision", strings.Replace(
 			strings.Replace(noreturn, "\n"+clockReadLine, "", 1),
 			"    if (!ior_on_noreturn_syscall_enter(", clockReadLine+"    if (!ior_on_noreturn_syscall_enter(", 1)},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.body == enter || tc.body == exit || tc.body == noreturn || tc.body == taking {
-				t.Fatal("mutation did not apply; the fixture shape changed")
-			}
-			if err := checkHandlerClockRead("mutated", tc.body); err == nil {
-				t.Errorf("checker accepted:\n%s", tc.body)
-			}
-		})
 	}
 }

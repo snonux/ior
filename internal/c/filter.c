@@ -300,8 +300,8 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 //
 // What does need the entry at rate 1 is the pending-filename recovery: its
 // stash writes the user pointer onto the state (ior_stash_pending_filename)
-// and the exit hook reads it back (ior_on_syscall_exit_take_filename). The generator emits
-// ior_on_syscall_enter_stateful for those enter handlers
+// and the exit hook reads it back (ior_on_syscall_exit_take_filename). The
+// generator emits ior_on_syscall_enter_stateful for those enter handlers
 // (handlerSpec.keepsEnterState in internal/generate/bpfhandler.go), which
 // always writes the entry. Other rates need it everywhere: they carry the
 // per-invocation sampling decision and the start time to the exit.
@@ -386,9 +386,10 @@ static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
 // are copied only when the entry belongs to this syscall (enter_trace_id
 // match); a missing or foreign entry is the stateless path and both outputs
 // stay 0, exactly what the standalone take returned for it, so a stale entry
-// can never graft a foreign path onto this pair. A NULL output pointer means the handler has no
-// such slot; the callers pass compile-time constants, so the dead stores and
-// branches vanish after inlining and the non-path handlers cost what they did.
+// can never graft a foreign path onto this pair. A NULL output pointer means
+// the handler has no such slot; the callers pass compile-time constants, so
+// the dead stores and branches vanish after inlining and the non-path handlers
+// cost what they did.
 static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
                                                     __u64 *pending_filename, __u64 *pending_filename2) {
     __u64 duration;
@@ -585,10 +586,11 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
 // read at sys_enter (outputPathSyscalls in internal/generate/classify.go). Its
 // enter handler stashes args[0] unconditionally once ior_on_syscall_enter has
 // decided to emit the event; its exit handler takes the pointer the same way
-// (ior_on_syscall_exit_take_filename) but emits the fixup only when ctx->ret > 0, because a failed getcwd wrote
-// nothing into the buffer. Userspace attaches that string to the pending pair
-// instead of splicing it into the (header-only) enter event
-// (applyCapturedOutputPath / finishGetcwdPath, internal/eventloop_getcwd.go).
+// (ior_on_syscall_exit_take_filename) but emits the fixup only when
+// ctx->ret > 0, because a failed getcwd wrote nothing into the buffer.
+// Userspace attaches that string to the pending pair instead of splicing it
+// into the (header-only) enter event (applyCapturedOutputPath /
+// finishGetcwdPath, internal/eventloop_getcwd.go).
 
 // ior_stash_pending_filename records filename_ptr on this tid's in-flight
 // syscall state so the matching exit handler can read the string there. The

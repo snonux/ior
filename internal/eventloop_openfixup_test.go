@@ -263,7 +263,9 @@ func TestOpenNameFixupIgnoresAForeignPendingEnter(t *testing.T) {
 
 	// The kernel already refuses to recover a name whose per-tid enter state
 	// belongs to a different syscall (the enter_trace_id check in
-	// ior_take_pending_filename). This is the userspace half of the same guard:
+	// ior_on_syscall_exit_impl, which the exit handlers reach through
+	// ior_on_syscall_exit_take_filename and only copies the stashed pointer
+	// out past that check). This is the userspace half of the same guard:
 	// open(2) and openat(2) are both open_event kinds on the same tid, so the
 	// type assertion alone cannot tell them apart - only the trace ID can.
 	t.Run("a pending open of a different syscall is left alone", func(t *testing.T) {

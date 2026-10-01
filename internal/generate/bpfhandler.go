@@ -206,8 +206,10 @@ func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 // the hook fills from its own single enter-state lookup, before it deletes the
 // entry, and only when the entry's enter_trace_id matches (a stale or foreign
 // entry leaves them 0), so the exit costs one map lookup instead of one for
-// the hook plus one per slot (task 0t2). The locals are declared ahead of the
-// clock read so they stay in scope for the fixup after the hook.
+// the hook plus one per slot (task 0t2). The only ordering constraint on the
+// locals is that they are declared before the hook call that fills them; they
+// are emitted ahead of the clock read purely to keep the declarations together
+// at the top of the block (C scoping would reach the fixup either way).
 func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
 	b.WriteString("    __u64 pending_filename;\n")
 	hook := "ior_on_syscall_exit_take_filename"

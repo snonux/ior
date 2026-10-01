@@ -4078,7 +4078,11 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 // this pair, so the pointers are copied only after the enter_trace_id guard
 // (the mismatch branch leaves both outputs at their zero initialisation); they
 // are copied BEFORE the final bpf_map_delete_elem that removes the entry; and
-// the whole hook still does exactly one lookup.
+// the whole hook still does exactly one lookup. The zeroing is measured
+// against that lookup call, not against the guard: the missing-entry return
+// (`if (!state) return ...`) sits between the two, so zeroing placed after it
+// would still precede the guard while leaving a stateless exit's outputs
+// uninitialised.
 func checkExitHookTakesPendingPointers(t *testing.T, filterC string) {
 	t.Helper()
 	start := strings.Index(filterC, "static __always_inline int ior_on_syscall_exit_impl(")
@@ -4094,16 +4098,17 @@ func checkExitHookTakesPendingPointers(t *testing.T, filterC string) {
 	if got := strings.Count(body, "bpf_map_lookup_elem(&syscall_enter_state_map"); got != 1 {
 		t.Errorf("ior_on_syscall_exit_impl does %d enter-state lookups, want exactly 1", got)
 	}
+	lookupAt := strings.Index(body, "bpf_map_lookup_elem(")
 	guardAt := strings.Index(body, "if (state->enter_trace_id != enter_trace_id) {")
 	zeroAt := strings.Index(body, "*pending_filename = 0;")
 	zero2At := strings.Index(body, "*pending_filename2 = 0;")
 	takeAt := strings.Index(body, "*pending_filename = state->pending_filename;")
 	take2At := strings.Index(body, "*pending_filename2 = state->pending_filename2;")
 	deleteAt := strings.LastIndex(body, "bpf_map_delete_elem(&syscall_enter_state_map, &tid);")
-	if guardAt < 0 || zeroAt < 0 || zero2At < 0 || takeAt < 0 || take2At < 0 || deleteAt < 0 {
-		t.Fatalf("ior_on_syscall_exit_impl lacks the guard, the zeroing, the takes or the delete:\n%s", body)
+	if lookupAt < 0 || guardAt < 0 || zeroAt < 0 || zero2At < 0 || takeAt < 0 || take2At < 0 || deleteAt < 0 {
+		t.Fatalf("ior_on_syscall_exit_impl lacks the lookup, the guard, the zeroing, the takes or the delete:\n%s", body)
 	}
-	if zeroAt > guardAt || zero2At > guardAt {
+	if zeroAt > lookupAt || zero2At > lookupAt {
 		t.Error("the pending outputs must be zeroed before the lookup so a stateless exit yields 0")
 	}
 	for _, at := range []int{takeAt, take2At} {
