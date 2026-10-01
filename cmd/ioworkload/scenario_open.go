@@ -282,6 +282,18 @@ const _AT_FDCWD int = -100
 // then opens it via open_by_handle_at. Requires root (CAP_DAC_READ_SEARCH).
 // LockOSThread prevents goroutine migration between the two syscalls so that
 // ior sees the same TID for both and can correlate the path.
+//
+// The descriptor numbers this function frees are load-bearing for
+// TestOpenByHandleAt (tasks j03, k03). ior names the row by probing
+// /proc/<pid>/fd/<fd2> some time after the call, and by then the deferred
+// cleanup (os.RemoveAll) has reopened both numbers closed here: the parent
+// directory, opened with plain O_RDONLY|O_CLOEXEC - the very fixed flags of the
+// handle open - lands on mountFD's number (the lower one), and the temp
+// directory, opened with O_DIRECTORY|O_NOFOLLOW, on fd2's. ior tells only the
+// second apart from the handle by its flags. If a change here (the order of
+// the closes, an extra descriptor) swaps the two, the parent directory names
+// the row and the test turns flaky again until the stash is keyed by handle
+// bytes (k03).
 func openByHandleAt() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

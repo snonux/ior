@@ -26,9 +26,11 @@ const (
 	// same inode, or, when the pathname no longer exists, the same name as
 	// the descriptor's /proc link.
 	handleMatches
-	// handleMismatch: the descriptor is demonstrably not the file the stashed
-	// pathname names, so the handle that was opened is not the one the stash
-	// belongs to.
+	// handleMismatch: the descriptor procfs shows NOW is demonstrably not the
+	// file the stashed pathname names. That alone does not say which handle was
+	// opened: either the stash belongs to a different handle, or the number was
+	// closed and reused since the call returned and procfs describes a later
+	// file. confirmedHandleFd decides which of the two to assume.
 	handleMismatch
 )
 
@@ -91,17 +93,21 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 // Relative stashes (AT_FDCWD with a relative name is stored as given) are
 // compared by link text only: os.Stat would resolve them against ior's working
 // directory, which says nothing about the task's, and procfs links are
-// absolute, so a relative stash is always a mismatch and the row is named
-// from procfs.
+// absolute, so a relative stash is a mismatch whenever the link is readable.
+// The row is then named from procfs if confirmedHandleFd confirms the
+// descriptor, and after the relative stash, as the task spelled it, if not.
 //
 // Mount namespaces: the stash is the string the task passed, procfs is read
 // from ior's own namespace. When ior's namespace has a DIFFERENT file at the
 // stashed path (a container's /etc/passwd), the inodes differ and the verdict
 // is mismatch; when the path is absent, the link text differs from it, also a
-// mismatch. Either way procfs wins, exactly as it does for every other fd row
-// ior resolves, at the price that the stash is left unconsumed (it is
-// overwritten by the thread's next name_to_handle_at or evicted with the
-// task). Only a descriptor procfs cannot describe at all is unverifiable.
+// mismatch. Either way procfs wins as long as confirmedHandleFd confirms the
+// descriptor (the normal case: it is still open with the call's flags),
+// exactly as it does for every other fd row ior resolves, at the price that
+// the stash is left unconsumed (it is overwritten by the thread's next
+// name_to_handle_at or evicted with the task). An unconfirmed descriptor, and
+// one procfs cannot describe at all, leave the row to the stash, which is
+// then consumed.
 //
 // Stalls: os.Stat/Lstat of the stashed path run on the event-loop goroutine,
 // and a stale NFS or FUSE path could block them. open_by_handle_at is the NFS
@@ -168,12 +174,13 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 //     so it is neither used nor consumed (its own open may still come) and
 //     the row is named from procfs.
 //   - mismatch, but that descriptor is gone again or was opened with other
-//     flags than this call's: procfs described a later file under a reused
-//     number, which says nothing about this call. That is the unverifiable
-//     case, so the stashed name is used and consumed. Without this a
-//     short-lived descriptor (open the handle, use it, close it, open the next
-//     file) was named after whatever the task opened next, and the fd table
-//     entry passed that name on to the rows that followed.
+//     flags than this call's: procfs most likely described a later file under
+//     a reused number, which says nothing about this call. That is treated as
+//     the unverifiable case, so the stashed name is used and consumed. Without
+//     this a short-lived descriptor (open the handle, use it, close it, open
+//     the next file) was named after whatever the task opened next, and the fd
+//     table entry passed that name on to the rows that followed. It is a
+//     guess, and confirmedHandleFd names the case in which it is wrong.
 //
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
@@ -202,13 +209,29 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 // confirmedHandleFd returns the procfs-named file for a descriptor whose probe
 // contradicted the stash, provided the descriptor can still be the one the
 // open_by_handle_at returned: its link was readable, its fdinfo still is, and
-// its fixed flags are the ones the call asked for (sameFixedFlags).
+// its fixed flags are the ones the call asked for (sameFixedFlags, over the
+// flags fixedFlagsMask picks for the link text).
 //
-// ok is false when any of that fails, because each failure means the number is
-// changing hands right now or already did, so the contradiction came from
-// another file than the one the call opened: the link or fdinfo vanished
-// between the probe's syscalls (the descriptor it glimpsed was closed within
-// microseconds), or the flags are ones this call cannot have produced.
+// ok is false when any of that fails, and the caller then names the row after
+// the stash and consumes it. The reasoning is a likelihood, not a proof.
+// Differing flags do prove a reuse: the descriptor is not the one this call
+// produced. A link or fdinfo that vanished between the probe's syscalls only
+// says the descriptor the probe glimpsed was closed within microseconds; most
+// likely the number is changing hands and the glimpse was of a later file, but
+// it can just as well have been the call's OWN descriptor, closed by the task
+// at that moment.
+//
+// The losing case is therefore a stash that does not belong to the opened
+// handle (stale, or one of several: a daemon that calls name_to_handle_at only
+// for mount IDs and opens handles it got elsewhere) combined with the call's
+// own descriptor closing mid-probe. Readlink succeeded but fdinfo is gone: the
+// row had the correct procfs name within reach and carries the wrong stash
+// instead. Stat succeeded but readlink failed: the row would have been unnamed
+// and carries the wrong stash. Both times the stash is consumed, so its own
+// open is named from procfs later. That is accepted because the common
+// pattern - take a handle and open it on the same thread - is strictly better
+// off: there the stash IS the opened file, and a vanished descriptor used to
+// cost the row its name or give it a later file's.
 //
 // The name is the probe's link text, not a fresh readlink: the name the
 // verdict was based on is the name the row carries. Only the flags are read
@@ -218,41 +241,75 @@ func confirmedHandleFd(probe handleFdProbe, pid uint32, fd int32, eventFlags int
 		return nil, false
 	}
 	procFile = file.NewFdWithProcName(fd, pid, probe.target)
-	if !sameFixedFlags(procFile.Flags(), eventFlags) {
+	if !sameFixedFlags(procFile.Flags(), eventFlags, fixedFlagsMask(probe.target)) {
 		return nil, false
 	}
 	return procFile, true
 }
 
-// handleFixedFlags are the open flags a descriptor keeps for its whole life:
-// they are set by the open and neither fcntl(F_SETFL) (which changes only
-// O_APPEND, O_ASYNC, O_DIRECT, O_NOATIME and O_NONBLOCK) nor F_SETFD
-// (O_CLOEXEC) can alter them. O_LARGEFILE is left out because the kernel
-// forces it on for 64-bit callers whatever they pass, and the creation flags
-// (O_CREAT, O_EXCL, O_NOCTTY, O_TRUNC) because the kernel does not keep them.
-const handleFixedFlags = syscall.O_ACCMODE | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | unix.O_PATH
+// handleKindFlags are the open flags that say what kind of descriptor an open
+// produced; handleFixedFlags adds the access mode. Both are a chosen subset of
+// the flags a descriptor keeps for its whole life - set by the open and out of
+// reach of fcntl(F_SETFL) (which changes only O_APPEND, O_ASYNC, O_DIRECT,
+// O_NOATIME and O_NONBLOCK) and of F_SETFD (O_CLOEXEC) - not the full list:
+// O_SYNC and O_DSYNC are just as immutable and are left out, because O_SYNC is
+// encoded as O_DSYNC|__O_SYNC and the few bits here already tell the reuses
+// seen in practice apart. O_LARGEFILE is left out because the kernel forces it
+// on for 64-bit callers whatever they pass, and the creation flags (O_CREAT,
+// O_EXCL, O_NOCTTY, O_TRUNC) because the kernel does not keep them.
+const (
+	handleKindFlags  = syscall.O_DIRECTORY | syscall.O_NOFOLLOW | unix.O_PATH
+	handleFixedFlags = syscall.O_ACCMODE | handleKindFlags
+)
+
+// fixedFlagsMask returns the fixed flags a descriptor whose /proc link reads
+// target must share with the open_by_handle_at request to be taken for the
+// call's own.
+//
+// An absolute path is a file on a mounted filesystem, where the kernel stores
+// the access mode exactly as requested, so all of handleFixedFlags count.
+// Anything else ("anon_inode:[pidfd]", "pidfd:[N]", "net:[N]", but also
+// "socket:[N]" or "pipe:[N]") is an object whose filesystem picks the access
+// mode itself: opening a pidfs handle with O_RDONLY yields O_RDWR in fdinfo
+// (O_WRONLY yields 03), so a differing access mode proves nothing there and
+// would hand a genuine pidfd row to an unrelated stash. Only handleKindFlags
+// are compared for those: pidfs refuses O_DIRECTORY, O_NOFOLLOW and O_PATH
+// outright and nsfs keeps a requested O_PATH, so a genuine open still passes.
+// The price is that a number reused by a socket or pipe is no longer told
+// apart by its access mode and names the row, like any other same-flags reuse.
+func fixedFlagsMask(target string) int32 {
+	if filepath.IsAbs(target) {
+		return handleFixedFlags
+	}
+	return handleKindFlags
+}
 
 // sameFixedFlags reports whether a descriptor with procFlags (the flags from
 // /proc/<pid>/fdinfo) can be the one an open_by_handle_at called with the
-// requested flags returned: its fixed flags (handleFixedFlags) are what that
-// call must have produced. Unknown flags (-1, fdinfo unreadable) confirm
-// nothing and report false.
+// requested flags returned: within mask (see fixedFlagsMask) its flags are
+// what that call must have produced.
+//
+// Unknown flags (-1, fdinfo unreadable) confirm nothing and report false. The
+// explicit check is what guarantees that: -1 has every bit set, which the
+// comparison below rejects under handleFixedFlags (no request keeps both
+// O_PATH and an access mode) but would accept under handleKindFlags for a
+// request carrying all three kind flags.
 //
 // It is one-sided evidence. Differing flags prove that the number was closed
 // and reused since the syscall returned; equal flags do not prove the opposite
 // (the task may have reopened the number with the same flags), and nothing
 // short of the handle bytes, which the BPF events do not carry, could tell
 // those apart.
-func sameFixedFlags(procFlags file.Flags, requested int32) bool {
+func sameFixedFlags(procFlags file.Flags, requested, mask int32) bool {
 	if procFlags == file.Flags(-1) {
 		return false
 	}
-	want := requested & handleFixedFlags
+	want := requested & mask
 	if want&unix.O_PATH != 0 {
 		// An O_PATH open ignores the access mode and stores none.
 		want &^= syscall.O_ACCMODE
 	}
-	return int32(procFlags)&handleFixedFlags == want
+	return int32(procFlags)&mask == want
 }
 
 // failedHandleFile returns the file a FAILED open_by_handle_at row reports:

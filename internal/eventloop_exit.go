@@ -625,9 +625,12 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	}
 
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		// The stash is only the thread's LAST name_to_handle_at path; it is
-		// used only if the returned descriptor is not contradicting it (see
-		// openedHandleFile), otherwise the row is named from procfs.
+		// The stash is only the thread's LAST name_to_handle_at path, so it
+		// is checked against what procfs shows under the returned number.
+		// procfs names the row only when it contradicts the stash AND the
+		// descriptor is confirmed as still the call's own; a contradiction
+		// from a descriptor that vanished or has other flags (most likely a
+		// reused number) leaves the row to the stash (see openedHandleFile).
 		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
@@ -643,10 +646,12 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
 	// emit rows carrying a different comm. The full pair filter is the right
 	// checkpoint: ep.File is in every branch exactly the name the row reports
-	// (the verified name_to_handle_at pathname, the /proc/<pid>/fd readlink,
-	// or for a failed call the stashed pathname or an empty one), so filter
-	// and displayed value can never disagree, and unlike the rename kinds
-	// there is no raw match to contradict. Applying -path to a
+	// (the stashed name_to_handle_at pathname - verified, unverifiable, or
+	// contradicted only by a descriptor that could not be confirmed - the
+	// /proc/<pid>/fd readlink, or for a failed call the stashed pathname or
+	// an empty one), so filter and displayed value can never disagree, and
+	// unlike the rename kinds there is no raw match to contradict. Applying
+	// -path to a
 	// procfs-resolved name is also not new: every fd-based kind already does
 	// that (handleFdExit -> fdTracker.resolve -> file.NewFdWithPid, then
 	// finishPair). A failed row carries no descriptor (FD() is -1, as for a

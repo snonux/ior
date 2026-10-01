@@ -1733,20 +1733,42 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     A contradicting descriptor is therefore believed only when
     `confirmedHandleFd` finds it still there (link read, fdinfo readable) with
     the fixed open flags the call asked for (`sameFixedFlags`: `O_ACCMODE`,
-    `O_DIRECTORY`, `O_NOFOLLOW`, `O_PATH`, which neither `F_SETFL` nor
-    `F_SETFD` can change); otherwise the number is changing hands and the
-    stash names the row, as in the unverifiable case. Both halves are needed:
+    `O_DIRECTORY`, `O_NOFOLLOW`, `O_PATH` - a chosen subset of the flags
+    neither `F_SETFL` nor `F_SETFD` can change; `O_SYNC`/`O_DSYNC` are as
+    immutable and deliberately left out); otherwise the number is most likely
+    changing hands and the stash names the row and is consumed, as in the
+    unverifiable case. The access mode counts only for a descriptor whose link
+    is an absolute path (`fixedFlagsMask`): pidfs forces it (a pidfd handle
+    opened `O_RDONLY` shows `O_RDWR` in fdinfo), so for a non-path target
+    (`anon_inode:[pidfd]`, `pidfd:[N]`, `net:[N]`, also `socket:[N]`) only
+    `O_DIRECTORY`/`O_NOFOLLOW`/`O_PATH` are compared - otherwise a pidfd row
+    took an unrelated stash - at the price that a number reused by a socket or
+    pipe is not told apart by its access mode. "Most likely" is meant
+    literally, and there is a losing case: the vanished descriptor can be the
+    call's *own*, closed between the probe's reads. If the stash then belongs
+    to another handle (stale, or a daemon that calls `name_to_handle_at` only
+    for mount IDs and opens handles obtained elsewhere), the row carries the
+    wrong stash where it used to get the correct procfs name (readlink ok,
+    fdinfo gone) or no name (stat ok, readlink failed), and the stash is
+    spent. Accepted because the common pattern - take a handle and open it on
+    the same thread - is strictly better off. Both halves are needed:
     with the flag comparison alone the test still failed 22 of 100 runs,
     because the directory descriptor lives for microseconds: closed again
     between the probe's readlink and the fdinfo read, it left a name but no
     flags to compare. The
     evidence is one-sided: a number reused with the *same* fixed flags and
     still open is taken for the opened handle and names the row; only handle
-    bytes in the BPF events could close that. Pinned by
+    bytes in the BPF events could close that (task k03). The integration
+    test is exposed to exactly that residual and passes thanks to the
+    workload's fd numbering (see the comment in `openByHandleAt`,
+    `cmd/ioworkload/scenario_open.go`). Pinned by
     `TestOpenByHandleAtIgnoresAReusedDescriptorNumber`,
     `TestConfirmedHandleFdRejectsAVanishedDescriptor`,
-    `TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs` and
-    `TestSameFixedFlags` (`internal/eventloop_handle_test.go`).
+    `TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs`,
+    `TestOpenByHandleAtPidfdHandleIsNamedFromProcfs`,
+    `TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber`,
+    `TestFixedFlagsMask` and `TestSameFixedFlags`
+    (`internal/eventloop_handle_test.go`).
   - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
     (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
     checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and

@@ -3,6 +3,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -45,10 +46,18 @@ func (f *handleFeed) nameToHandle(pathname string) {
 	f.el.processRawEvent(exit, f.out)
 }
 
-// openByHandle feeds an open_by_handle_at that returned fd and yields the row.
+// openByHandle feeds an O_RDONLY open_by_handle_at that returned fd and yields
+// the row.
 func (f *handleFeed) openByHandle(fd int) *event.Pair {
 	f.t.Helper()
-	_, enter := makeEnterOpenByHandleAtEvent(f.t, f.time, f.pid, f.pid, syscall.O_RDONLY)
+	return f.openByHandleWithFlags(fd, syscall.O_RDONLY)
+}
+
+// openByHandleWithFlags feeds an open_by_handle_at called with flags that
+// returned fd and yields the row.
+func (f *handleFeed) openByHandleWithFlags(fd int, flags int32) *event.Pair {
+	f.t.Helper()
+	_, enter := makeEnterOpenByHandleAtEvent(f.t, f.time, f.pid, f.pid, flags)
 	_, exit := makeExitRetEvent(f.t, f.time+1, f.pid, f.pid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
 	f.time += 10
 	f.el.processRawEvent(enter, f.out)
@@ -474,9 +483,14 @@ func TestClassifyHandlePath(t *testing.T) {
 
 // TestConfirmedHandleFdRejectsAVanishedDescriptor: the probe contradicted the
 // stash, but the descriptor it glimpsed is gone again - its link was already
-// unreadable, or its fdinfo is by now. The number is changing hands, so the
-// glimpse is not confirmed as the call's descriptor and the caller falls back
-// to the stash.
+// unreadable, or its fdinfo is by now. Most likely the number is changing
+// hands, so the glimpse is not confirmed as the call's descriptor and the
+// caller falls back to the stash.
+//
+// Each sub-case fails for exactly one reason. The unreadable link is paired
+// with a LIVE descriptor whose fdinfo is readable and whose flags are the
+// requested ones, so only the link guard can reject it; the unreadable fdinfo
+// is paired with a readable link.
 func TestConfirmedHandleFdRejectsAVanishedDescriptor(t *testing.T) {
 	dir := tempDir(t)
 	a := writeHandleFile(t, dir, "a")
@@ -486,6 +500,7 @@ func TestConfirmedHandleFdRejectsAVanishedDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := uint32(os.Getpid())
+	liveFd := int32(openHandleFd(t, a))
 	// A fd number nothing has open, so fdinfo is unreadable.
 	const closedFd = 1 << 20
 
@@ -493,7 +508,7 @@ func TestConfirmedHandleFdRejectsAVanishedDescriptor(t *testing.T) {
 	if got := classifyHandlePath(linkGone, b); got != handleMismatch {
 		t.Fatalf("verdict = %d, want mismatch", got)
 	}
-	if got, ok := confirmedHandleFd(linkGone, pid, closedFd, syscall.O_RDONLY); ok {
+	if got, ok := confirmedHandleFd(linkGone, pid, liveFd, syscall.O_RDONLY); ok {
 		t.Errorf("a probe without a link was confirmed as %q", got.Name())
 	}
 	fdinfoGone := handleFdProbe{info: info, target: a}
@@ -601,17 +616,92 @@ func TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs(t *testing.T) {
 
 	feed := newHandleFeed(t)
 	feed.nameToHandle(path)
-	_, enter := makeEnterOpenByHandleAtEvent(t, feed.time, feed.pid, feed.pid,
-		syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW)
-	_, exit := makeExitRetEvent(t, feed.time+1, feed.pid, feed.pid, types.SYS_EXIT_OPEN_BY_HANDLE_AT, int64(fd))
-	feed.el.processRawEvent(enter, feed.out)
-	feed.el.processRawEvent(exit, feed.out)
+	row := feed.openByHandleWithFlags(fd, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW)
 
-	if got := (<-feed.out).File.Name(); got != dir {
+	if got := row.File.Name(); got != dir {
 		t.Fatalf("row named %q, want the directory %q from procfs", got, dir)
 	}
 	if got, ok := feed.el.pendingHandleState().peek(feed.pid); !ok || got != path {
 		t.Fatalf("stash = %q (ok=%v), want %q kept for its own open", got, ok, path)
+	}
+}
+
+// TestOpenByHandleAtPidfdHandleIsNamedFromProcfs: a thread holding a stash for
+// some other file opens a pidfs handle. The kernel forces the access mode of
+// such a descriptor (O_RDONLY and O_RDWR requests both show O_RDWR in fdinfo),
+// so the access mode must not count against a descriptor whose link is not a
+// path: the row is the pidfd's and the stash stays for its own open. With the
+// access mode compared, the row and the fd table entry carried the unrelated
+// stashed path and the stash was consumed.
+func TestOpenByHandleAtPidfdHandleIsNamedFromProcfs(t *testing.T) {
+	pidfd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Skipf("pidfd_open: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(pidfd) })
+	want, err := os.Readlink(filepath.Join("/proc/self/fd", strconv.Itoa(pidfd)))
+	if err != nil || filepath.IsAbs(want) {
+		t.Fatalf("pidfd link = %q (err=%v), want a non-path target", want, err)
+	}
+	path := writeHandleFile(t, tempDir(t), "other.txt")
+
+	for _, flags := range []int32{syscall.O_RDONLY, syscall.O_WRONLY, syscall.O_RDWR} {
+		feed := newHandleFeed(t)
+		feed.nameToHandle(path)
+		if got := feed.openByHandleWithFlags(pidfd, flags).File.Name(); got != want {
+			t.Errorf("flags %#o: row named %q, want the pidfd's %q", flags, got, want)
+		}
+		tracked, ok := feed.el.fdState().get(int32(pidfd), feed.pid)
+		if !ok || tracked.Name() != want {
+			t.Errorf("flags %#o: fd table entry = %v (ok=%v), want %q", flags, tracked, ok, want)
+		}
+		if got, ok := feed.el.pendingHandleState().peek(feed.pid); !ok || got != path {
+			t.Errorf("flags %#o: stash = %q (ok=%v), want %q kept for its own open", flags, got, ok, path)
+		}
+	}
+}
+
+// TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber is the control for
+// the pidfd exemption: on a descriptor whose link IS a path the access mode
+// still counts. An O_RDONLY call cannot have produced an O_RDWR descriptor on
+// a regular file, so the number was reused and the stash names the row.
+func TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber(t *testing.T) {
+	dir := tempDir(t)
+	path := writeHandleFile(t, dir, "handlefile.txt")
+	later := writeHandleFile(t, dir, "later.txt")
+	fd, err := syscall.Open(later, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", later, err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+
+	feed := newHandleFeed(t)
+	feed.nameToHandle(path)
+	if got := feed.openByHandleWithFlags(fd, syscall.O_RDONLY).File.Name(); got != path {
+		t.Fatalf("row named %q, want the stashed %q (O_RDWR is not what the call asked for)", got, path)
+	}
+	if _, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+		t.Fatal("the stash named the row, so it must be consumed")
+	}
+}
+
+func TestFixedFlagsMask(t *testing.T) {
+	tests := []struct {
+		target string
+		want   int32
+	}{
+		{"/tmp/file", handleFixedFlags},
+		{"/tmp/file (deleted)", handleFixedFlags},
+		{"anon_inode:[pidfd]", handleKindFlags},
+		{"pidfd:[1234]", handleKindFlags},
+		{"net:[4026531833]", handleKindFlags},
+		{"socket:[42]", handleKindFlags},
+		{"", handleKindFlags},
+	}
+	for _, tt := range tests {
+		if got := fixedFlagsMask(tt.target); got != tt.want {
+			t.Errorf("fixedFlagsMask(%q) = %#o, want %#o", tt.target, got, tt.want)
+		}
 	}
 }
 
@@ -621,25 +711,36 @@ func TestSameFixedFlags(t *testing.T) {
 		name      string
 		procFlags int32
 		requested int32
+		mask      int32
 		want      bool
 	}{
-		{"same flags", syscall.O_RDONLY, syscall.O_RDONLY, true},
-		{"kernel adds O_LARGEFILE", syscall.O_RDONLY | largefile, syscall.O_RDONLY, true},
-		{"O_CLOEXEC can be changed later", syscall.O_RDWR | syscall.O_CLOEXEC, syscall.O_RDWR, true},
-		{"status flags can be changed later", syscall.O_RDWR | syscall.O_APPEND | syscall.O_NONBLOCK, syscall.O_RDWR, true},
-		{"creation flags are not kept", syscall.O_WRONLY, syscall.O_WRONLY | syscall.O_NOCTTY | syscall.O_TRUNC, true},
-		{"O_PATH drops the access mode", unix.O_PATH, unix.O_PATH | syscall.O_RDWR, true},
-		{"unknown procfs flags confirm nothing", -1, syscall.O_RDONLY, false},
-		{"other access mode", syscall.O_RDWR, syscall.O_RDONLY, false},
-		{"directory flag appeared", syscall.O_RDONLY | syscall.O_DIRECTORY, syscall.O_RDONLY, false},
-		{"directory flag vanished", syscall.O_RDONLY, syscall.O_RDONLY | syscall.O_DIRECTORY, false},
-		{"nofollow flag appeared", syscall.O_RDONLY | syscall.O_NOFOLLOW, syscall.O_RDONLY, false},
-		{"O_PATH appeared", unix.O_PATH, syscall.O_RDONLY, false},
-		{"O_PATH request, ordinary descriptor", syscall.O_RDWR, unix.O_PATH | syscall.O_RDWR, false},
+		{"same flags", syscall.O_RDONLY, syscall.O_RDONLY, handleFixedFlags, true},
+		{"kernel adds O_LARGEFILE", syscall.O_RDONLY | largefile, syscall.O_RDONLY, handleFixedFlags, true},
+		{"O_CLOEXEC can be changed later", syscall.O_RDWR | syscall.O_CLOEXEC, syscall.O_RDWR, handleFixedFlags, true},
+		{"status flags can be changed later", syscall.O_RDWR | syscall.O_APPEND | syscall.O_NONBLOCK, syscall.O_RDWR, handleFixedFlags, true},
+		{"creation flags are not kept", syscall.O_WRONLY, syscall.O_WRONLY | syscall.O_NOCTTY | syscall.O_TRUNC, handleFixedFlags, true},
+		{"O_PATH drops the access mode", unix.O_PATH, unix.O_PATH | syscall.O_RDWR, handleFixedFlags, true},
+		{"O_SYNC is outside the chosen subset", syscall.O_RDONLY | syscall.O_SYNC, syscall.O_RDONLY, handleFixedFlags, true},
+		{"unknown procfs flags confirm nothing", -1, syscall.O_RDONLY, handleFixedFlags, false},
+		{"other access mode", syscall.O_RDWR, syscall.O_RDONLY, handleFixedFlags, false},
+		{"directory flag appeared", syscall.O_RDONLY | syscall.O_DIRECTORY, syscall.O_RDONLY, handleFixedFlags, false},
+		{"directory flag vanished", syscall.O_RDONLY, syscall.O_RDONLY | syscall.O_DIRECTORY, handleFixedFlags, false},
+		{"nofollow flag appeared", syscall.O_RDONLY | syscall.O_NOFOLLOW, syscall.O_RDONLY, handleFixedFlags, false},
+		{"O_PATH appeared", unix.O_PATH, syscall.O_RDONLY, handleFixedFlags, false},
+		{"O_PATH request, ordinary descriptor", syscall.O_RDWR, unix.O_PATH | syscall.O_RDWR, handleFixedFlags, false},
+		// handleKindFlags, the mask of a non-path link (fixedFlagsMask).
+		{"kind mask: forced O_RDWR on a pidfd", syscall.O_RDWR, syscall.O_RDONLY, handleKindFlags, true},
+		{"kind mask: pidfd opened O_WRONLY shows 03", 0o3, syscall.O_WRONLY, handleKindFlags, true},
+		{"kind mask: O_PATH on both sides", unix.O_PATH, unix.O_PATH, handleKindFlags, true},
+		{"kind mask: directory requested, none there", syscall.O_RDWR, syscall.O_RDONLY | syscall.O_DIRECTORY, handleKindFlags, false},
+		{"kind mask: O_PATH requested, none there", syscall.O_RDWR, unix.O_PATH, handleKindFlags, false},
+		// -1 has every bit set: only the explicit unknown-flags check rejects
+		// it for a request that carries all the kind flags.
+		{"kind mask: unknown flags, every kind flag requested", -1, handleKindFlags, handleKindFlags, false},
 	}
 	for _, tt := range tests {
-		if got := sameFixedFlags(file.Flags(tt.procFlags), tt.requested); got != tt.want {
-			t.Errorf("%s: sameFixedFlags(%#o, %#o) = %v, want %v", tt.name, tt.procFlags, tt.requested, got, tt.want)
+		if got := sameFixedFlags(file.Flags(tt.procFlags), tt.requested, tt.mask); got != tt.want {
+			t.Errorf("%s: sameFixedFlags(%#o, %#o, %#o) = %v, want %v", tt.name, tt.procFlags, tt.requested, tt.mask, got, tt.want)
 		}
 	}
 }
