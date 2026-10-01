@@ -99,6 +99,8 @@ Headless `-flamegraph` and `-parquet` check that their output can be written bef
 
 A headless run scoped with `-pid N` (`-plain`, `-flamegraph`, `-parquet`) ends when process N exits, like `strace -p`: ior prints `Traced process N exited, stopping the trace`, then shuts down normally (statistics, recording published, exit status 0) instead of idling until `-duration` and possibly tracing whatever process is handed the recycled pid. It notices the exit from the kernel's process-exit event and, as a fallback that also covers a target dying while ior is still attaching its probes, by checking every 500 ms that the process is still the original one (a reused pid counts as exited). Children the target forked keep running untraced, since ior does not follow forks. The TUI keeps its session open after its target exits.
 
+A headless run scoped with `-tid T` ends when thread T exits, even while the rest of its process runs on: ior prints `Traced thread T exited, stopping the trace` and shuts down the same way. For the main thread (`-tid` equal to the pid) that is when the main thread itself exits (for example `pthread_exit` in `main`), not when its last sibling does. One exception: when another thread of the process calls `execve`, the kernel gives the main thread's id to the new program, which ior keeps tracing under `-tid T` until it exits. A non-main thread T that calls `execve` continues under the process id, which `-tid T` no longer matches, so that run ends. With both `-pid P -tid T` the run follows the thread; the 500 ms fallback check covers the thread too (a reused thread id counts as exited).
+
 The TUI keeps its statistics in memory until you export or start a recording.
 `-tuiExport=false` disables CSV export shortcuts; it does not disable `R` recording. The
 plain CSV schema is deliberately small:
@@ -192,9 +194,11 @@ fails they are appended to the error screen under `Warnings logged during setup:
 rejected program is condensed there to one row: its name plus the last three lines of the
 kernel verifier log (the offending instruction, the reason such as
 `R1 invalid mem access 'scalar'`, and the `processed N insns` statistics) and a
-`... (N more lines)` marker for the rest. Each row is cut to about 512 bytes, at most 8
+`... (N more lines)` marker for the rest. Each row is cut to at most 512 bytes, at most 8
 rows are listed (`... and N more warning(s)` counts the others), and control characters
-are shown escaped; for the complete verifier log rerun the same options with `-plain` and
+are shown escaped. An error text taller than the terminal is cut with a
+`... (N more lines)` row, so the key hint always stays visible. For the complete
+verifier log rerun the same options with `-plain` and
 read stderr. The thousands of INFO/DEBUG lines libbpf prints while loading are
 dropped by default. To see them in a headless run, for example when a BPF program fails to
 load, set `IOR_LIBBPF_DEBUG=1` (`0`, `false`, `no` and `off` keep it off; the TUI ignores it
