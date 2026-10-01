@@ -462,6 +462,13 @@ func TestPathFixupWithoutAPendingEnterIsDropped(t *testing.T) {
 		}
 	})
 
+	// handleOpenNameFixupEvent splices only into a pair that is still pending
+	// for the tid (pairs.pending). Once the exit consumed the pair, a straggling
+	// fixup must neither reach into the already-emitted row, nor create pending
+	// state for the tid, nor leave anything behind that a later syscall of the
+	// same tid could inherit. Without that guard the handler would dereference
+	// a missing pair (panic); the assertions below also fail if a completed pair
+	// were left pending or the late name were applied anywhere.
 	t.Run("a late fixup after the pair completed is dropped", func(t *testing.T) {
 		el := newFilteredEventLoop(t, globalfilter.Filter{})
 		ep := runPairWithFixups(t, el,
@@ -470,14 +477,43 @@ func TestPathFixupWithoutAPendingEnterIsDropped(t *testing.T) {
 		if ep == nil {
 			t.Fatal("the access pair was dropped")
 		}
-		ep.Recycle()
+		defer ep.Recycle()
+		if _, pending := el.pairs.pending(execCommTid); pending {
+			t.Fatal("the completed pair is still pending before the late fixup")
+		}
+
 		out := make(chan *event.Pair, 1)
 		el.processRawEvent(makeSlotFixup(t, types.SYS_ENTER_ACCESS, types.OPEN_NAME_FIXUP_SLOT_FIRST, recovered), out)
+
 		select {
 		case late := <-out:
 			late.Recycle()
 			t.Fatal("a fixup after the pair completed produced a row")
 		default:
+		}
+		if got := ep.File.Name(); got != "" {
+			t.Fatalf("the emitted row's file = %q, a late fixup rewrote it", got)
+		}
+		if enter, ok := ep.EnterEv.(*types.PathEvent); !ok {
+			t.Fatalf("enter event is %T, want *types.PathEvent", ep.EnterEv)
+		} else if got := types.StringValue(enter.Pathname[:]); got != "" {
+			t.Fatalf("the emitted enter event's pathname = %q, a late fixup spliced into it", got)
+		}
+		if _, pending := el.pairs.pending(execCommTid); pending {
+			t.Fatal("the late fixup created pending state for the tid")
+		}
+
+		// Nothing may linger for the tid's next syscall: a second faulted access
+		// whose own fixup never arrives must still come out empty.
+		next := runPairWithFixups(t, el,
+			pathEnterWithStatus(t, types.SYS_ENTER_ACCESS, unix.AT_FDCWD, "", types.PATH_READ_FAILED),
+			types.SYS_EXIT_ACCESS, -int64(unix.ENOENT))
+		if next == nil {
+			t.Fatal("the follow-up access pair was dropped")
+		}
+		defer next.Recycle()
+		if got := next.File.Name(); got != "" {
+			t.Fatalf("follow-up access row file = %q, the late fixup leaked into it", got)
 		}
 	})
 }

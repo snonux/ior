@@ -1496,9 +1496,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   memfd_create/fsopen, and the pathname, fd-pathname and name kinds
   (`KindPathname`/`KindFdPathname`/`KindName`: stat, access, unlink, mkdir,
   inotify_add_watch, rename, link, ...), flagged by `recoversFilename` in
-  `internal/generate/kindregistry.go`; an exit handler learns what its enter
-  captured through `GeneratedTracepoint.EnterKind`, since every `sys_exit_*`
-  format is just `long ret` and so classifies as `KindRet`:
+  `internal/generate/kindregistry.go`. A second flag, `recoversSecondFilename`
+  (set only for `KindName`, the rename/link family), makes the exit handler
+  also recover the newname through its own stash and fixup slot, because either
+  read can fault independently of the other; it implies `recoversFilename`
+  and is what `bpfhandler.go` keys the exit handler's second-slot take/emit
+  calls on. An exit handler learns what its enter captured through
+  `GeneratedTracepoint.EnterKind`, since every `sys_exit_*` format is just
+  `long ret` and so classifies as `KindRet`:
   - enter: `ior_stash_pending_filename(tid, ptr)` when the read fails, parking
     the user pointer in `syscall_enter_state.pending_filename`;
   - exit: `ior_take_pending_filename(tid, SYS_ENTER_X)` **before**
@@ -1580,8 +1585,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   Cost note: each exit of a path-capturing syscall pays one extra
   `syscall_enter_state_map` lookup in `ior_take_pending_filename` (two for the
   rename/link family, which also takes the second slot) besides the one in
-  `ior_on_syscall_exit`; sharing
-  the looked-up state is tracked as task 0t2.
+  `ior_on_syscall_exit`; sharing the looked-up state is tracked as task 0t2.
 
   **The enter gate defers, it does not waive.** `matchRawOpenEvent` used to
   judge the path dimension on the payload filename, so an empty-name open was
