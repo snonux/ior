@@ -55,7 +55,7 @@ func TestShortenWarningVerifierEdgeCases(t *testing.T) {
 		{
 			name: "missing END marker keeps the tail of what there is",
 			in:   "libbpf: prog 'p': " + progLoadLogBegin + "\na\nb\nR1 bad\nprocessed 1 insns\n",
-			want: []string{"verifier: b | R1 bad | processed 1 insns ... (1 more lines)"},
+			want: []string{"verifier: b | R1 bad | processed 1 insns ... (1 more line)"},
 		},
 		{
 			name: "END marker glued to the last log line",
@@ -138,7 +138,7 @@ func TestShortenWarningLeavesOrdinaryWarningsAlone(t *testing.T) {
 		t.Errorf("multi-line CRLF warning = %q", got)
 	}
 	// The marker counts text, not blank lines or a trailing newline.
-	if got := shortenWarning("libbpf: a\n\n  \nb\n", maxRoutedWarningBytes); got != "libbpf: a ... (1 more lines)" {
+	if got := shortenWarning("libbpf: a\n\n  \nb\n", maxRoutedWarningBytes); got != "libbpf: a ... (1 more line)" {
 		t.Errorf("multi-line warning with blank lines = %q", got)
 	}
 	if got := shortenWarning("libbpf: a\n\n", maxRoutedWarningBytes); got != "libbpf: a" {

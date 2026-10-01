@@ -331,7 +331,7 @@ func TestShortenWarning(t *testing.T) {
 		// rune boundary below that is 254 runes.
 		{"long line cut on a rune boundary", long, strings.Repeat("é", 254) + "..."},
 		// ...and the 19-byte marker as well: 490 bytes of text, 245 runes.
-		{"long and multi-line", long + "\nx", strings.Repeat("é", 245) + "... ... (1 more lines)"},
+		{"long and multi-line", long + "\nx", strings.Repeat("é", 245) + "... ... (1 more line)"},
 	}
 	for _, tc := range tests {
 		if got := shortenWarning(tc.in, maxRoutedWarningBytes); got != tc.want {

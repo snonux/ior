@@ -34,9 +34,11 @@ const (
 	verifierSep      = " | "
 	verifierEmptyLog = "(empty log)"
 	// moreLinesPrefix and moreLinesSuffix frame the "... (N more lines)"
-	// marker that says how much of a multi-line warning was left out.
+	// marker that says how much of a multi-line warning was left out;
+	// moreLineSuffix is the singular form, used when exactly one was.
 	moreLinesPrefix = " ... ("
 	moreLinesSuffix = " more lines)"
+	moreLineSuffix  = " more line)"
 	cutEllipsis     = "..."
 )
 
@@ -87,10 +89,14 @@ func fitWithMarker(content, marker string, limit int) string {
 	return cutBytes(content, limit-len(marker)) + marker
 }
 
-// moreLinesMarker renders the " ... (N more lines)" marker; nothing for zero.
+// moreLinesMarker renders the " ... (N more lines)" marker, " ... (1 more
+// line)" for a single one, and nothing for zero.
 func moreLinesMarker(omitted int) string {
-	if omitted <= 0 {
+	switch {
+	case omitted <= 0:
 		return ""
+	case omitted == 1:
+		return moreLinesPrefix + "1" + moreLineSuffix
 	}
 	return fmt.Sprintf("%s%d%s", moreLinesPrefix, omitted, moreLinesSuffix)
 }
@@ -206,37 +212,48 @@ func countNonBlankLines(text string) int {
 	return count
 }
 
-// splitMoreLinesMarker separates a trailing " ... (N more lines)" marker from
-// row, so callers can shorten the content without eating the marker.
+// splitMoreLinesMarker separates a trailing " ... (N more lines)" (or "... (1
+// more line)") marker from row, so callers can shorten the content without
+// eating the marker. Only the exact forms moreLinesMarker renders are
+// recognised: the singular with a count of 1, the plural with any other.
 func splitMoreLinesMarker(row string) (content, marker string) {
-	if !strings.HasSuffix(row, moreLinesSuffix) {
+	suffix := moreLinesSuffix
+	if strings.HasSuffix(row, moreLineSuffix) {
+		suffix = moreLineSuffix
+	} else if !strings.HasSuffix(row, moreLinesSuffix) {
 		return row, ""
 	}
 	at := strings.LastIndex(row, moreLinesPrefix)
 	if at < 0 {
 		return row, ""
 	}
-	count := row[at+len(moreLinesPrefix) : len(row)-len(moreLinesSuffix)]
-	if count == "" || strings.Trim(count, "0123456789") != "" {
+	count := row[at+len(moreLinesPrefix) : len(row)-len(suffix)]
+	if count == "" || strings.Trim(count, "0123456789") != "" || (count == "1") != (suffix == moreLineSuffix) {
 		return row, ""
 	}
 	return row[:at], row[at:]
 }
 
 // cutBytes limits s to at most limit bytes, the "..." that marks a cut
-// included; a limit too small for the ellipsis cuts without one. Text within
-// the limit is returned unchanged, so cutting is idempotent.
+// included; a limit too small for the ellipsis cuts without one, and a limit
+// of zero or less yields "" (checked first: runeCut indexes s at the cut, so
+// it must never see an empty s or a negative cut). Text within the limit is
+// returned unchanged, so cutting is idempotent.
 func cutBytes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	if len(s) <= limit {
 		return s
 	}
 	if limit < len(cutEllipsis) {
-		return s[:runeCut(s, max(limit, 0))]
+		return s[:runeCut(s, limit)]
 	}
 	return s[:runeCut(s, limit-len(cutEllipsis))] + cutEllipsis
 }
 
-// runeCut moves cut (< len(s)) back to the start of the rune it would split.
+// runeCut moves cut (0 <= cut < len(s)) back to the start of the rune it
+// would split; cutBytes guarantees that range.
 // It looks back at most utf8.UTFMax-1 bytes, the most a valid rune can
 // straddle: past that the bytes are not valid UTF-8, nothing can be split,
 // and stepping further would throw away content - a run of 600 stray

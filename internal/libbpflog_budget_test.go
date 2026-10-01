@@ -19,7 +19,7 @@ func TestShortenWarningGivesUnusedBytesToTheLongReason(t *testing.T) {
 		reason := "R1 invalid mem access 'scalar' " + strings.Repeat("r", reasonLen-31)
 		msg := verifierLoadWarning("ior_x", "0: (b7) r0 = 0\n2: (71) r0 = *(u8 *)(r1 +0)\n"+reason+"\nprocessed 2 insns\n")
 		got := shortenWarning(msg, maxRoutedWarningBytes)
-		want := "libbpf: prog 'ior_x': verifier: 2: (71) r0 = *(u8 *)(r1 +0) | " + reason + " | processed 2 insns ... (1 more lines)"
+		want := "libbpf: prog 'ior_x': verifier: 2: (71) r0 = *(u8 *)(r1 +0) | " + reason + " | processed 2 insns ... (1 more line)"
 		if got != want {
 			t.Errorf("reason of %d bytes:\n got %q\nwant %q", reasonLen, got, want)
 		}
@@ -41,10 +41,10 @@ func TestShortenWarningCutsLongLinesWithinTheLimit(t *testing.T) {
 	if len(got) > maxRoutedWarningBytes || len(got) < maxRoutedWarningBytes-2 {
 		t.Fatalf("row is %d bytes, want the %d-byte limit used up (less at most the 2-byte rounding)", len(got), maxRoutedWarningBytes)
 	}
-	if !strings.HasSuffix(got, " ... (1 more lines)") {
+	if !strings.HasSuffix(got, " ... (1 more line)") {
 		t.Fatalf("marker lost: %q", got[len(got)-40:])
 	}
-	_, lines, _ := strings.Cut(strings.TrimSuffix(got, " ... (1 more lines)"), verifierLabel)
+	_, lines, _ := strings.Cut(strings.TrimSuffix(got, " ... (1 more line)"), verifierLabel)
 	parts := strings.Split(lines, verifierSep)
 	if len(parts) != 3 {
 		t.Fatalf("got %d kept lines, want 3: %q", len(parts), got)
@@ -165,5 +165,94 @@ func TestCutBytesKeepsInvalidUTF8Content(t *testing.T) {
 	}
 	if got := cutBytes("short", 5); got != "short" {
 		t.Errorf("text within the limit changed: %q", got)
+	}
+}
+
+// TestCutBytesLooksBackOnlyAcrossOneRune pins both ends of runeCut's
+// look-back window. A 4-byte rune straddling the cut must be dropped whole
+// (the window reaches utf8.UTFMax-1 bytes back), but a lead byte further back
+// than any rune can straddle must not pull the cut back to it: with an
+// unbounded look-back "a" + 600 stray continuation bytes became just "a" plus
+// "..." (or "..." alone), throwing the content away.
+func TestCutBytesLooksBackOnlyAcrossOneRune(t *testing.T) {
+	if got := cutBytes("a😀😀", 7); got != "a"+cutEllipsis {
+		t.Errorf("cutBytes(a + 2 x 4-byte rune, 7) = %q, want %q", got, "a"+cutEllipsis)
+	}
+	stray := "a" + strings.Repeat("\x80", 600)
+	if got, want := cutBytes(stray, 512), stray[:509]+cutEllipsis; got != want {
+		t.Errorf("cutBytes(a + 600 x 0x80, 512) = %d bytes, want %d (the run kept up to the limit)", len(got), len(want))
+	}
+	// Cut at 4: bytes 1..4 are continuation bytes, the window (4..1) holds no
+	// rune start, so the cut stays put; one byte more of look-back would reach
+	// the "a" at 0.
+	if got, want := cutBytes("a"+strings.Repeat("\x80", 10), 7), "a\x80\x80\x80"+cutEllipsis; got != want {
+		t.Errorf("cutBytes(a + 10 x 0x80, 7) = %q, want %q", got, want)
+	}
+}
+
+// TestCutBytesAndShortenWarningSurviveNonPositiveLimits: callers pass a
+// positive bound today, but the helpers document a result within any limit.
+// A negative limit used to index an empty string in runeCut and panic.
+func TestCutBytesAndShortenWarningSurviveNonPositiveLimits(t *testing.T) {
+	inputs := []string{
+		"",
+		"abc",
+		"é",
+		"a\nb\nc",
+		strings.Repeat("z", 50) + " ... (7 more lines)",
+		verifierLoadWarning("ior_x", "0: (b7) r0 = 0\n"+verifierRejection),
+	}
+	for _, limit := range []int{-5, -1, 0} {
+		for _, in := range inputs {
+			if got := cutBytes(in, limit); got != "" {
+				t.Errorf("cutBytes(%q, %d) = %q, want empty", in, limit, got)
+			}
+			if got := shortenWarning(in, limit); got != "" {
+				t.Errorf("shortenWarning(%q, %d) = %q, want empty", in, limit, got)
+			}
+		}
+	}
+	// Small positive limits stay within the bound too.
+	for limit := 1; limit <= 40; limit++ {
+		for _, in := range inputs {
+			if got := shortenWarning(in, limit); len(got) > limit {
+				t.Errorf("shortenWarning(%q, %d) = %d bytes %q", in, limit, len(got), got)
+			}
+		}
+	}
+}
+
+// TestVerifierPrefixCapShrinksWithASmallLimit: below 4 x 96 bytes the program
+// name prefix is capped at a quarter of the limit, so a long name still
+// leaves room for the reason. With the fixed 96-byte cap alone a 100-byte row
+// was all prefix and the final hard cut ate "R1 bad".
+func TestVerifierPrefixCapShrinksWithASmallLimit(t *testing.T) {
+	const limit = 100
+	got := shortenWarning(verifierLoadWarning(strings.Repeat("n", 5000), "R1 bad\n"), limit)
+	prefix := "libbpf: prog '" + strings.Repeat("n", limit/4-len("libbpf: prog '")-len(cutEllipsis)) + cutEllipsis
+	if want := prefix + " verifier: R1 bad"; got != want {
+		t.Fatalf("row =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// TestMoreLinesMarkerIsPluralisedAndStillRecognised: one omitted line reads
+// "(1 more line)", and that singular marker is still split off when a row is
+// shortened again, so it survives the second cut like the plural one.
+func TestMoreLinesMarkerIsPluralisedAndStillRecognised(t *testing.T) {
+	if got := moreLinesMarker(1); got != " ... (1 more line)" {
+		t.Errorf("moreLinesMarker(1) = %q", got)
+	}
+	if got := moreLinesMarker(2); got != " ... (2 more lines)" {
+		t.Errorf("moreLinesMarker(2) = %q", got)
+	}
+	row := strings.Repeat("a", 100) + " ... (1 more line)"
+	if got, want := shortenWarning(row, 30), strings.Repeat("a", 9)+"... ... (1 more line)"; got != want {
+		t.Errorf("re-shortened singular row = %q, want %q", got, want)
+	}
+	// Mismatched number and form are not markers we render: cut as content.
+	for _, odd := range []string{" ... (2 more line)", " ... (1 more lines)"} {
+		if content, marker := splitMoreLinesMarker("x" + odd); marker != "" || content != "x"+odd {
+			t.Errorf("splitMoreLinesMarker(%q) = %q, %q; want no marker", "x"+odd, content, marker)
+		}
 	}
 }

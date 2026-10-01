@@ -123,3 +123,62 @@ func TestFitErrorBody(t *testing.T) {
 		t.Errorf("no-room body = %q, want empty", got)
 	}
 }
+
+// TestErrorScreenFitsNarrowTerminals: the key hint is 13 columns wide (21 for
+// the recoverable "esc  back  •  q  quit") and used to be drawn uncut, so on
+// a narrower terminal its line ran past the right edge; only the height was
+// fitted. Every line must fit at every width from 1 to 24 columns, for both
+// hints, at a tall and a short height, and the hint must still start with its
+// first key. The body is checked too: lipgloss keeps a warning row's "  - "
+// indent whole when wrapping, and a 2-cell rune cannot fit one column.
+func TestErrorScreenFitsNarrowTerminals(t *testing.T) {
+	err := errors.New("failed to load BPF object: permission denied\nWarnings logged during setup:\n  - libbpf: prog 'ior_x': verifier: R1 invalid mem access 'scalar'\n  - open /tmp/漢字")
+	kinds := []struct {
+		kind  errorScreenKind
+		first string
+	}{{errorScreenFatal, "q"}, {errorScreenRecoverable, "e"}}
+	for _, k := range kinds {
+		for width := 1; width <= 24; width++ {
+			for _, height := range []int{40, 3, 1} {
+				m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+				m.router.showDashboard()
+				m.attaching = false
+				m.width, m.height = width, height
+				m.setError(err, k.kind)
+
+				view := ansi.Strip(m.View().Content)
+				lines := strings.Split(view, "\n")
+				if len(lines) > height {
+					t.Fatalf("kind %v width %d height %d: %d lines:\n%s", k.kind, width, height, len(lines), view)
+				}
+				for _, line := range lines {
+					if w := ansi.StringWidth(line); w > width {
+						t.Fatalf("kind %v width %d height %d: line of width %d: %q", k.kind, width, height, w, line)
+					}
+				}
+				hint := strings.TrimSpace(lines[len(lines)-1])
+				if height == 40 {
+					// Placed at the top: the hint is the last non-blank line.
+					for i := len(lines) - 1; i >= 0 && hint == ""; i-- {
+						hint = strings.TrimSpace(lines[i])
+					}
+				}
+				if !strings.HasPrefix(hint, k.first) {
+					t.Fatalf("kind %v width %d height %d: hint line %q lost its first key:\n%s", k.kind, width, height, hint, view)
+				}
+			}
+		}
+	}
+}
+
+// TestClampLinesToWidthWrapsRatherThanCuts: an over-wide line (lipgloss keeps
+// an indent whole) is broken onto further lines, so no text is lost; only a
+// grapheme wider than the terminal itself is cut.
+func TestClampLinesToWidthWrapsRatherThanCuts(t *testing.T) {
+	if got := clampLinesToWidth("  - abc\nx", 2); got != "  \n- \nab\nc\nx" {
+		t.Errorf("clampLinesToWidth(indented, 2) = %q", got)
+	}
+	if got := clampLinesToWidth("漢", 1); ansi.StringWidth(got) > 1 {
+		t.Errorf("clampLinesToWidth(wide rune, 1) = %q, wider than 1", got)
+	}
+}
