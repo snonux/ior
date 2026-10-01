@@ -186,10 +186,16 @@ value is an error.
 ## Troubleshooting
 
 libbpf's own diagnostics are reduced to its warnings: in `-plain`, `-flamegraph` and
-`-parquet` runs they go to stderr (a failed BPF load is explained there). In the TUI they
-appear as setup warnings, but only when setup succeeds: if the BPF load itself fails in the
-TUI, the libbpf explanation is not shown yet (a known limitation), so rerun the same
-options with `-plain` to read it on stderr. The thousands of INFO/DEBUG lines libbpf prints while loading are
+`-parquet` runs they go to stderr, in full (a failed BPF load is explained there). In the
+TUI they appear as setup warnings when setup succeeds, and when the BPF load or attach
+fails they are appended to the error screen under `Warnings logged during setup:`. A
+rejected program is condensed there to one row: its name plus the last three lines of the
+kernel verifier log (the offending instruction, the reason such as
+`R1 invalid mem access 'scalar'`, and the `processed N insns` statistics) and a
+`... (N more lines)` marker for the rest. Each row is cut to about 512 bytes, at most 8
+rows are listed (`... and N more warning(s)` counts the others), and control characters
+are shown escaped; for the complete verifier log rerun the same options with `-plain` and
+read stderr. The thousands of INFO/DEBUG lines libbpf prints while loading are
 dropped by default. To see them in a headless run, for example when a BPF program fails to
 load, set `IOR_LIBBPF_DEBUG=1` (`0`, `false`, `no` and `off` keep it off; the TUI ignores it
 because its screen owns stderr):
