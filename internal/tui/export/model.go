@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	common "ior/internal/tui/common"
-
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -159,7 +157,10 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders a centered modal overlay.
+// View renders the modal box (Box) centred in a width x height view and
+// clipped to its height. Zero or negative sizes fall back to 80x24. The
+// dashboard does not use it: it draws Box over the screen instead of above
+// it (task ns2); View is the stand-alone rendering of the modal.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -170,39 +171,7 @@ func (m Model) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-
-	modalWidth := 48
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 30 {
-			modalWidth = 30
-		}
-	}
-
-	lines := []string{"Export Stream CSV"}
-	for i, label := range optionLabels {
-		prefix := "  "
-		if i == m.selected && !m.exporting {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+label)
-	}
-	if m.livePaused {
-		lines = append(lines, "", PausedNote)
-	}
-	if m.status != "" {
-		// The status echoes the export path and error text; sanitise it.
-		lines = append(lines, "", common.Sanitize(m.status))
-	}
-	if !m.exporting {
-		lines = append(lines, "", "Enter confirm • Esc cancel")
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.Box(width, height))
+	lines := strings.Split(placed, "\n")
+	return strings.Join(lines[:min(len(lines), height)], "\n")
 }

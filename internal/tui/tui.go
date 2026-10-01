@@ -1870,17 +1870,22 @@ func (m *Model) shutdownView() string {
 	return fmt.Sprintf("Detaching BPF probe pairs... %d/%d\n[%s]", completed, m.shutdown.Total, bar)
 }
 
-// viewPickerScreen renders the PID picker screen with optional export overlay.
+// viewPickerScreen renders the PID picker screen with optional export overlay,
+// drawn over the picker (overlayExportModal) so the frame keeps the
+// terminal's size.
 func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 	base := m.pidPicker.View().Content
 	if m.exporter.Visible() {
-		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
+		return altScreenView(overlayExportModal(m.exporter, base, width, height), title)
 	}
 	return altScreenView(placeToViewport(width, height, base), title)
 }
 
 // viewDashboardScreen renders the dashboard screen with the appropriate modal
-// overlay (filter, record, probes, export) if one is active.
+// overlay (filter, record, probes, export) if one is active. The filter,
+// record and probes modals replace the dashboard; the export modal is drawn
+// over it (overlayExportModal), keeping the tab bar and the status line in
+// view where the terminal has the rows (task ns2).
 func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {
@@ -1893,7 +1898,7 @@ func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 		return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 	}
 	if m.exporter.Visible() {
-		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
+		return altScreenView(overlayExportModal(m.exporter, base, width, height), title)
 	}
 	return altScreenView(placeToViewport(width, height, base), title)
 }
@@ -1970,6 +1975,10 @@ func (s lateBoundDashboardSource) Reset() {
 	source.Reset()
 }
 
+// placeToViewport pads content to a width x height frame anchored top-left.
+// It only pads: lipgloss.Place returns content taller or wider than the frame
+// unchanged, so a view must fit the terminal itself (the dashboard's row
+// budget, overlayExportModal's canvas).
 func placeToViewport(width, height int, content string) string {
 	if width <= 0 || height <= 0 {
 		return content
