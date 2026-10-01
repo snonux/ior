@@ -316,7 +316,7 @@ func TestAttachSyscallProbesWithNilLoggerFallsBackToStderr(t *testing.T) {
 // logln and the collected warnings right after it is stored, before the start
 // signal.
 func TestSetupTraceInfraWiresConsoleSinks(t *testing.T) {
-	decl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	bpfDecl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
 	assertCallArguments(t, singleBareCall(t, decl, "setupTraceInfraBPF"),
 		[]string{"parentCtx", "cfg", "hooks", "logln", "warnSetup"})

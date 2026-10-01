@@ -89,7 +89,7 @@ func TestRestrictSamplingToActiveWithARealProbeManager(t *testing.T) {
 // and footers of a run that traced fewer syscalls than it sampled into reports
 // of syscalls that were never measured.
 func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 
 	restrict := callsNamed(decl, "restrictSamplingToActive")
 	if len(restrict) != 1 {

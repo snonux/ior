@@ -202,7 +202,7 @@ func TestTraceInfraSetupsRejectAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 // ordering deterministic even when the tests run as root. Both mode setup
 // paths are required below to delegate to this shared function.
 func TestSharedTraceInfraSetupValidatesFilterBeforeBPFSetup(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	guardIndex, validationCall := exactValidationGuard(t, decl)
 	// setupTraceInfraBPF is where setupBPFModule runs (pinned by
 	// TestTraceSetupPassesSessionHooksExplicitly), so its call site is the
@@ -228,7 +228,7 @@ func TestSharedTraceInfraSetupValidatesFilterBeforeBPFSetup(t *testing.T) {
 // the factory seam that preserves the intentional regular/headless difference.
 // The selected factory must finish successfully before the TUI sees startup.
 func TestSharedTraceInfraSetupBuildsSelectedEventLoopBeforeSignallingStart(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	sequenceIndex, buildCall := exactEventLoopBuildSequence(t, decl)
 	buildCalls := callsNamed(decl, "buildEventLoop")
 	if len(buildCalls) != 1 || buildCalls[0] != buildCall {
@@ -287,7 +287,7 @@ func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
 	assertCallArguments(t, singleBareCall(t, run, "setupTraceInfra"),
 		[]string{"parentCtx", "cfg", "started", "hooks", "logln"})
 
-	shared, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	shared, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	assertCallArguments(t, singleBareCall(t, shared, "setupTraceInfraBPF"),
 		[]string{"parentCtx", "cfg", "hooks", "logln", "warnSetup"})
 
@@ -389,7 +389,7 @@ func TestNewTraceEventLoopRejectsAnUnusableFilter(t *testing.T) {
 // off the last result of every return statement below the signal. The signature
 // check keeps that reading honest if the results are ever rearranged.
 func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	results := decl.Type.Results
 	if results == nil || len(results.List) == 0 {
 		t.Fatal("shared trace setup returns nothing; it must still hand its setup failures back")

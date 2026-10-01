@@ -49,9 +49,11 @@ const (
 //   - headless: stderr, unchanged apart from the filtering;
 //   - TUI: never stderr. While a trace is being set up the lines are handed to
 //     the setup warning collector (see routeWarnings), which replays them as
-//     warning rows in the dashboard (capped, truncated and without the
-//     per-tracepoint skip noise, see libbpfRoute); outside that window they are
-//     dropped because no warning sink exists to receive them.
+//     warning rows in the dashboard when setup succeeds (capped, truncated and
+//     without the per-tracepoint skip noise, see libbpfRoute) and appends them
+//     to the setup error when it fails (setupWarnings.explainFailure); outside
+//     that window they are dropped because no warning sink exists to receive
+//     them.
 type libbpfLogger struct {
 	mu      sync.Mutex
 	out     io.Writer
@@ -128,8 +130,9 @@ func (l *libbpfLogger) configure(tui, verbose bool) {
 // order with ior's own status lines.
 //
 // The routing is scoped to the setup call because the collector is only
-// drained once, when the event loop starts; anything logged later has no
-// consumer and must not be appended to a collector nobody reads.
+// drained once, when the event loop starts or when setup fails (explainFailure);
+// anything logged later has no consumer and must not be appended to a
+// collector nobody reads.
 //
 // Sessions can overlap: a TUI restart cancels the old session without waiting
 // for it, so the next setup may begin while the previous one is still inside

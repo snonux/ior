@@ -46,9 +46,9 @@ func TestStartTUITraceSwitchesLibbpfLoggingToTUIMode(t *testing.T) {
 
 // TestSetupTraceInfraBPFRoutesLibbpfWarningsForTheSetupWindowOnly drives the
 // real setupTraceInfraBPF through the module-loader seam: a libbpf WARN logged
-// while the module loads must reach the setup warning collector (which is
-// replayed only when setup succeeds; delivery of those warnings on a failed
-// load is a known limitation tracked by task bs2), and once setup has returned
+// while the module loads must reach the setup warning collector (replayed when
+// setup succeeds, appended to the error when it fails, see
+// TestSetupTraceInfraFailureCarriesLibbpfWarnings), and once setup has returned
 // the route must be gone so later lines are not appended to a collector nobody
 // drains.
 func TestSetupTraceInfraBPFRoutesLibbpfWarningsForTheSetupWindowOnly(t *testing.T) {

@@ -1079,9 +1079,15 @@ func setupTraceInfra(
 // mode difference: regular traces wire the syscall aggregate source, while
 // headless Parquet wires it only when the run samples (it has no TUI aggregate
 // sink, so nothing else would consume it).
-// The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
-// event-loop build and the start signal stay in this body because the
-// ior_setup_test.go structural tests pin their relative order here.
+//
+// It also owns the setup warning collector, because a failed setup is the one
+// moment the collector would otherwise be lost: the warnings are replayed
+// only when the event loop starts, so on failure runTraceSetup returns early
+// and the libbpf WARN lines that explain the failed load or attach (the
+// returned error is often just "failed to load BPF object: -22") never
+// reached the user, least of all in the TUI where stderr is not available.
+// Every failure therefore leaves through explainFailure, which appends the
+// still-undelivered warnings (bounded and escaped) to the error.
 func setupTraceInfraWithEventLoop(
 	parentCtx context.Context,
 	cfg flags.Config,
@@ -1089,6 +1095,28 @@ func setupTraceInfraWithEventLoop(
 	hooks traceSetupHooks,
 	logln func(...any),
 	buildEventLoop traceEventLoopFactory,
+) (*traceInfra, error) {
+	warnings := &setupWarnings{}
+	infra, err := runTraceSetup(parentCtx, cfg, started, hooks, logln, buildEventLoop, warnings)
+	if err != nil {
+		return nil, warnings.explainFailure(err)
+	}
+	return infra, nil
+}
+
+// runTraceSetup is the setup sequence itself; setupTraceInfraWithEventLoop
+// wraps it to attach the collected warnings to a failure.
+// The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
+// event-loop build and the start signal stay in this body because the
+// ior_setup_test.go structural tests pin their relative order here.
+func runTraceSetup(
+	parentCtx context.Context,
+	cfg flags.Config,
+	started chan<- struct{},
+	hooks traceSetupHooks,
+	logln func(...any),
+	buildEventLoop traceEventLoopFactory,
+	warnings *setupWarnings,
 ) (*traceInfra, error) {
 	// Reject a filter the trace cannot honour before touching the kernel:
 	// newEventLoop below matches comm/path patterns against fixed-size kernel
@@ -1100,8 +1128,8 @@ func setupTraceInfraWithEventLoop(
 	}
 
 	// Non-fatal setup degradations are collected and replayed as event-loop
-	// warnings once output is wired (see setupWarnings).
-	warnings := &setupWarnings{}
+	// warnings once output is wired (see setupWarnings); on failure the caller
+	// appends them to the returned error instead.
 	warnSetup := warnings.add
 
 	infra, bpfModule, err := setupTraceInfraBPF(parentCtx, cfg, hooks, logln, warnSetup)
@@ -1155,8 +1183,9 @@ func setupTraceInfraBPF(
 	logTeardown := newLogger(true)
 	// libbpf's WARN lines explain a failed load or attach. In TUI mode they
 	// join the setup warnings for the duration of the load/attach only (the
-	// collector is drained once, when the event loop starts); headless they
-	// already went to stderr and this is a no-op. The route belongs to this
+	// collector is drained once: when the event loop starts, or into the
+	// error of a failed setup); headless they already went to stderr and
+	// this is a no-op. The route belongs to this
 	// call: ending it never disturbs a newer session's routing.
 	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
 	defer endLibbpfRouting()
