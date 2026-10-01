@@ -140,10 +140,20 @@ func createdBySuffix() string {
 	return " in goroutine " + id
 }
 
-// dumpAll returns the stacks of all goroutines, growing the buffer until the
-// dump fits (runtime.Stack truncates silently when it does not).
-func dumpAll() []byte {
-	buf := make([]byte, 1<<20)
+// initialDumpSize is the first buffer dumpAll tries: 1 MiB holds the dump of
+// a typical test binary (a few thousand goroutines) in one runtime.Stack call.
+const initialDumpSize = 1 << 20
+
+// dumpAll returns the stacks of all goroutines (see dumpAllFrom).
+func dumpAll() []byte { return dumpAllFrom(initialDumpSize) }
+
+// dumpAllFrom returns the stacks of all goroutines, starting with an initial
+// byte buffer and doubling it until the dump fits: runtime.Stack truncates
+// silently when it does not, and a truncated dump could drop the very
+// goroutine being waited for. The size is a parameter only so a test can
+// exercise the growth with a tiny buffer instead of ~20,000 goroutines.
+func dumpAllFrom(initial int) []byte {
+	buf := make([]byte, initial)
 	for {
 		n := runtime.Stack(buf, true)
 		if n < len(buf) {

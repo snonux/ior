@@ -235,7 +235,9 @@ func TestCountIgnoresGoroutinesStartedElsewhere(t *testing.T) {
 
 // fakeDump mirrors a real runtime.Stack(all=true) dump (go1.21+ format, with
 // GODEBUG=tracebackancestors ancestor sections), one goroutine per block.
-// Every block but goroutine 1 is parked with sync.RWMutex.RLock.
+// Goroutines 1 and 40-43 are parked with sync.RWMutex.RLock; 44 and 45 are
+// parked on a channel receive, and 45 mentions sync.RWMutex.RLock only in a
+// file path of its own stack, not in its header.
 const fakeDump = `goroutine 1 [sync.RWMutex.RLock]:
 main.target()
 	/src/main.go:5 +0x10
@@ -282,6 +284,14 @@ main.target(0xc000010000)
 	/src/main.go:11 +0x30
 created by main.spawn in goroutine 35
 	/src/main.go:16 +0x46
+
+goroutine 45 [chan receive]:
+main.waitHelper(...)
+	/src/waits/sync.RWMutex.RLock_helper.go:9
+main.target(0xc000010000)
+	/src/main.go:11 +0x30
+created by main.spawn in goroutine 35
+	/src/main.go:16 +0x46
 `
 
 // TestCountParkedMatchesOwnStackAndExactCreator pins the parsing on a fake
@@ -289,7 +299,9 @@ created by main.spawn in goroutine 35
 // on the right reason. 41 was created by goroutine 350, which must not pass
 // for 35 (it is counted as started elsewhere instead). 42 and 43 only mention
 // main.target in their "created by" line or an ancestor stack, not where they
-// are parked; 44 has the wrong wait reason; 1 has no creator at all.
+// are parked; 44 has the wrong wait reason, and so has 45, whose stack
+// contains the reason text but whose header does not (the reason is matched
+// in the header only); 1 has no creator at all.
 func TestCountParkedMatchesOwnStackAndExactCreator(t *testing.T) {
 	mine, others := countParked([]byte(fakeDump), " in goroutine 35", "main.target", []string{RWMutexRLock})
 	if mine != 1 || others != 1 {
@@ -308,5 +320,27 @@ func TestTimeoutMsgWithoutIgnoredGoroutines(t *testing.T) {
 	want := "stuck (no goroutine started by the calling goroutine parked in pkg.f with reason [sync.Mutex.Lock] beyond the baseline 2 after 1s)"
 	if got := a.timeoutMsg(time.Second, 0); got != want {
 		t.Fatalf("timeoutMsg = %q, want %q", got, want)
+	}
+}
+
+// TestDumpAllFromGrowsATooSmallBuffer pins the growth loop: started with a
+// buffer far smaller than any real dump, dumpAllFrom still returns the whole
+// dump (longer than that buffer, holding the calling goroutine's frames and
+// ending on a complete line) rather than the truncated first fill
+// runtime.Stack leaves.
+func TestDumpAllFromGrowsATooSmallBuffer(t *testing.T) {
+	const initial = 64
+	dump := dumpAllFrom(initial)
+	if len(dump) <= initial {
+		t.Fatalf("dumpAllFrom(%d) returned %d bytes, want the full dump beyond the initial buffer", initial, len(dump))
+	}
+	// The dump includes this goroutine, running this very test function.
+	if !strings.Contains(string(dump), "parkwait.TestDumpAllFromGrowsATooSmallBuffer") {
+		t.Fatalf("dump of %d bytes lacks the calling test's frame:\n%s", len(dump), dump)
+	}
+	// Without the growth the first fill comes back cut off mid-line; a full
+	// dump ends with the last goroutine's final stack line.
+	if !strings.HasSuffix(string(dump), "\n") {
+		t.Fatalf("dump of %d bytes is cut off: %q", len(dump), dump[len(dump)-min(len(dump), 80):])
 	}
 }
