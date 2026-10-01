@@ -839,25 +839,32 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   the first match, so typing `mysql` and pressing Enter picks that process rather
   than the whole system, and a filter without a match selects nothing (the
   `noSelection` state with a "no process matches the filter" notice, "thread" in
-  the TID picker; Enter is a no-op in both, and the notice stays hidden until
-  the first scan result is in, since an empty list before that only means
-  "not loaded yet"). The derived state is recomputed on every
-  keystroke and rescan, so backspacing to an empty filter returns to All. A
-  derived process row keeps its pid across a rescan (`applyScan`,
-  `keepDerivedProcess`): a new process sorting ahead does not take over, and if
-  the highlighted first match left the list the next match is selected with a
-  `pid 30 left the list - selected pid 40 instead` notice (`tid` in the TID
-  picker) instead of silently. Up/Down
-  hands the selection to the user (a process row then follows the process as
-  above); a user who moved back onto the All row and then edits the filter text
-  gets it handed back to the filter, so Enter right after typing never means All
-  unless Up was the last key. Only a change of the text counts (`editFilter`
-  compares the value): cursor keys on the focused input keep the All row, which
-  is also what a thread the TID picker's typed filter hid falls back to (that
+  the TID picker; Enter is a no-op in both). That notice stays hidden while an
+  empty list does not mean "no match": before the first scan result is in (it
+  only means "not loaded yet") and after a failed scan (the scan error line
+  explains it). The derived state is recomputed on every edit of the text and
+  every rescan, so backspacing to an empty filter returns to All. A derived
+  process row keeps its pid across a rescan (`applyScan`, `keepDerivedProcess`):
+  a new process sorting ahead does not take over, and if the highlighted first
+  match left the list the next match is selected with a notice that names both
+  and the reason (`pid 30 exited - selected pid 40 instead`, or `pid 30 no
+  longer matches the filter - ...` when the process still runs; `tid` in the TID
+  picker) instead of silently. Up/Down hands the selection to the user (a
+  process row then follows the process as above); a user who moved back onto
+  the All row and then edits the filter text gets it handed back to the filter,
+  so Enter right after typing never means All unless Up was the last key. Only
+  a change of the text counts (`editFilter` compares the value and rebuilds
+  nothing otherwise): cursor keys, an empty paste or any other message that
+  reaches the focused input leave the selection alone, so a derived pid tracked
+  across a rescan is not reset to row 1 by an unrelated key. The same keeps the
+  All row that a thread the TID picker's typed filter hid falls back to (that
   user-owned All TIDs row stays within the process and is not swapped for
-  another thread; the next real edit hands it to the filter). Startup is unaffected: `-pid`/`-tid` skip the
-  picker (task ur2), and the picker's `PidSelectedMsg` still replaces any
-  startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go`.
+  another thread; the next real edit hands it to the filter). Startup is
+  unaffected: `-pid`/`-tid` skip the picker (task ur2), and the picker's
+  `PidSelectedMsg` still replaces any startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go` and, as
+  a seeded randomized comparison with an independent reference model (Enter
+  emits exactly the highlighted row's pid, pid 0 only for the All row, nothing
+  without a selection), `internal/tui/pidpicker/selection_model_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than

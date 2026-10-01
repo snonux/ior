@@ -1,6 +1,7 @@
 package pidpicker
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -327,7 +328,7 @@ func TestRescanKeepsDerivedFirstMatchByPid(t *testing.T) {
 func TestRescanNoticeWhenDerivedFirstMatchExited(t *testing.T) {
 	m := typeText(t, mysqlModel(t), "mysql")
 	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
-	if m.selectedIndex != 1 || m.notice != "pid 30 left the list - selected pid 40 instead" {
+	if m.selectedIndex != 1 || m.notice != "pid 30 exited - selected pid 40 instead" {
 		t.Fatalf("selectedIndex=%d notice=%q, want the move to pid 40 announced", m.selectedIndex, m.notice)
 	}
 	if view := m.View().Content; !strings.Contains(view, m.notice) {
@@ -344,7 +345,7 @@ func TestRescanNoticeIsModeAware(t *testing.T) {
 	m := typeText(t, tidThreadsModel(t), "work") // derived: tid 101
 	m = loadedModel(t, m, ProcessInfo{Pid: 100, ParentPID: 100, Comm: "main"},
 		ProcessInfo{Pid: 102, ParentPID: 100, Comm: "worker"})
-	if want := "tid 101 left the list - selected tid 102 instead"; m.notice != want {
+	if want := "tid 101 exited - selected tid 102 instead"; m.notice != want {
 		t.Fatalf("notice = %q, want %q", m.notice, want)
 	}
 }
@@ -374,5 +375,102 @@ func TestNoMatchNoticeSaysThreadInTIDMode(t *testing.T) {
 	}
 	if view := m.View().Content; !strings.Contains(view, "no thread matches the filter") {
 		t.Fatalf("view lacks the thread notice:\n%s", view)
+	}
+}
+
+// TestRescanNoticeSaysNoLongerMatchesWhenProcessStillRuns: the derived pid is
+// still in the scan but no longer matches the filter (it changed its comm), so
+// "exited" would be wrong.
+func TestRescanNoticeSaysNoLongerMatchesWhenProcessStillRuns(t *testing.T) {
+	m := typeText(t, mysqlModel(t), "mysql") // derived: pid 30
+	m = loadedModel(t, m, ProcessInfo{Pid: 30, Comm: "renamed"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+	if want := "pid 30 no longer matches the filter - selected pid 40 instead"; m.notice != want {
+		t.Fatalf("notice = %q, want %q", m.notice, want)
+	}
+}
+
+// TestScanErrorOnDerivedSelectionShowsOnlyTheError: the failed scan empties the
+// list, which is not "nothing matches". The no-match notice would mislead, the
+// scan error line already explains the empty list, and Enter stays a no-op.
+func TestScanErrorOnDerivedSelectionShowsOnlyTheError(t *testing.T) {
+	m := typeText(t, mysqlModel(t), "mysql")
+	next, _ := m.Update(processesLoadedMsg{err: errors.New("boom")})
+	m = next.(Model)
+	if m.selectedIndex != noSelection || m.notice != "" {
+		t.Fatalf("selectedIndex=%d notice=%q, want noSelection and no notice after a failed scan", m.selectedIndex, m.notice)
+	}
+	view := m.View().Content
+	if strings.Contains(view, "matches the filter") || !strings.Contains(view, "scan error: boom") {
+		t.Fatalf("view must show the scan error and not the no-match notice:\n%s", view)
+	}
+	if cmd := enterCmd(m); cmd != nil {
+		t.Fatalf("Enter emitted %+v, want a no-op", cmd())
+	}
+	// A later good scan that finds nothing is a real "no match".
+	m = loadedModel(t, m, ProcessInfo{Pid: 10, Comm: "bash"})
+	if m.notice != m.noMatchNotice() {
+		t.Fatalf("notice = %q, want the no-match notice after a successful empty scan", m.notice)
+	}
+}
+
+// nonEditingMessages reach the focused filter input without changing its text.
+func nonEditingMessages() map[string]tea.Msg {
+	return map[string]tea.Msg{
+		"left":          tea.KeyPressMsg{Code: tea.KeyLeft},
+		"right":         tea.KeyPressMsg{Code: tea.KeyRight},
+		"home":          tea.KeyPressMsg{Code: tea.KeyHome},
+		"end":           tea.KeyPressMsg{Code: tea.KeyEnd},
+		"ctrl+a":        tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl},
+		"empty paste":   tea.PasteMsg{Content: ""},
+		"unrelated msg": struct{ unrelated int }{},
+	}
+}
+
+// TestNonEditingMessagesKeepDerivedPidAcrossRescan is the hs2 re-review
+// regression: after a rescan put a new process ahead of the derived first
+// match (pid 30 now on row 2), a message that does not edit the text must not
+// rebuild the list and re-derive row 1 (pid 25), which would change what Enter
+// emits without a word.
+func TestNonEditingMessagesKeepDerivedPidAcrossRescan(t *testing.T) {
+	for name, msg := range nonEditingMessages() {
+		t.Run(name, func(t *testing.T) {
+			m := typeText(t, mysqlModel(t), "mysql") // derived: pid 30
+			m = loadedModel(t, m, ProcessInfo{Pid: 25, Comm: "mysqlx"},
+				ProcessInfo{Pid: 30, Comm: "mysqld"}, ProcessInfo{Pid: 40, Comm: "mysql-proxy"})
+			if m.selectedIndex != 2 {
+				t.Fatalf("setup: selectedIndex = %d, want pid 30 kept on row 2", m.selectedIndex)
+			}
+			next, _ := m.Update(msg)
+			m = next.(Model)
+			if m.selectedIndex != 2 {
+				t.Fatalf("selectedIndex = %d after %s, want pid 30 still on row 2", m.selectedIndex, name)
+			}
+			wantPid(t, m, 30)
+
+			// A real edit afterwards re-derives the first match from the
+			// scan: "mysqld" matches pid 30 only, and deleting the "d"
+			// again puts the new pid 25 first. (End: Left and Home moved
+			// the cursor, and a typed rune inserts at the cursor.)
+			m = typeText(t, pressKey(t, m, tea.KeyEnd), "d")
+			wantPid(t, m, 30)
+			m = pressKey(t, m, tea.KeyBackspace)
+			wantPid(t, m, 25)
+		})
+	}
+}
+
+// TestNonEditingMessagesKeepNoMatchDerivation: with nothing selected by the
+// derived no-match state, a non-editing message changes neither state nor
+// notice.
+func TestNonEditingMessagesKeepNoMatchDerivation(t *testing.T) {
+	for name, msg := range nonEditingMessages() {
+		t.Run(name, func(t *testing.T) {
+			m := typeText(t, mysqlModel(t), "zz")
+			next, _ := m.Update(msg)
+			got := next.(Model)
+			if got.selectedIndex != noSelection || got.notice != m.noMatchNotice() {
+				t.Fatalf("selectedIndex=%d notice=%q after %s, want the unchanged no-match state", got.selectedIndex, got.notice, name)
+			}
+		})
 	}
 }

@@ -76,7 +76,8 @@ type Model struct {
 	implicit bool
 	// scanned is true once the first scan result (even a failed or empty one)
 	// has arrived. Until then an empty list means "not loaded yet", so a typed
-	// filter must not claim that nothing matches (see followFilter).
+	// filter must not claim that nothing matches (see followFilter); a failed
+	// scan is no "no match" either (lastErr).
 	scanned bool
 	// notice is the one-line explanation under the list: why selectedIndex is
 	// noSelection, or that a rescan moved a derived selection (see

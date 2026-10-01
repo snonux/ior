@@ -50,28 +50,36 @@ func (m Model) moveSelection(delta int) Model {
 	return m
 }
 
-// editFilter feeds msg to the filter input and rebuilds the list. When the
-// text really changed while the All row is highlighted, the highlight is
-// handed back to the filter (implicit true): typing "mysql" and pressing Enter
-// then means the first mysql process, not the whole system, which is what the
-// untouched All row meant before task hs2. A highlighted process row keeps
-// its process (applyFilter -> relocateSelection) and a lost-selection
-// noSelection stays sticky, so only the All row is handed back, and the user
-// can return to it with Up at any time.
+// editFilter feeds msg to the filter input and, only when the text really
+// changed, rebuilds the list. When the edit happens while the All row is
+// highlighted, the highlight is handed back to the filter (implicit true):
+// typing "mysql" and pressing Enter then means the first mysql process, not the
+// whole system, which is what the untouched All row meant before task hs2. A
+// highlighted process row keeps its process (applyFilter ->
+// relocateSelection) and a lost-selection noSelection stays sticky, so only the
+// All row is handed back, and the user can return to it with Up at any time.
 //
-// The "text really changed" test matters: a focused input also receives
-// non-editing keys (Left, Home, ctrl+a, an empty paste) and those must not hand
-// the All row back. The reachable case is the TID picker, where a thread the
-// user moved onto and a typed filter then hid falls back to the All TIDs row
-// (relocateUserSelection) with the input focused by that typing. That All row
-// is the user's own (harmless: it stays in the process, and the user's pick must
-// not silently turn into another thread), so cursor movement keeps it, and only
+// The "text really changed" test matters twice over. A focused input also
+// receives messages that do not edit it (Left, Right, Home, End, ctrl+a, an
+// empty paste, cursor blinks and any other message the parent forwards), and
+// for those the list is not rebuilt at all: rebuilding would re-derive a
+// derived selection (followFilter picks row 1) and thereby discard the pid
+// tracked across a rescan (applyScan keeps a derived row by pid, which may sit
+// on row 2 after a new process sorted ahead of it), so Enter would silently
+// emit another pid. And the TID picker can hold a user-owned All row with a
+// focused input: a thread the user moved onto and a typed filter then hid
+// falls back to All TIDs (relocateUserSelection). That All row is the user's
+// own (harmless: it stays in the process, and the user's pick must not
+// silently turn into another thread), so cursor movement keeps it, and only
 // the next real edit of the text hands it to the filter.
 func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 	before := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	if m.input.Value() != before && m.selectedIndex == 0 {
+	if m.input.Value() == before {
+		return m, cmd
+	}
+	if m.selectedIndex == 0 {
 		m.implicit = true
 	}
 	return m.applyFilter(), cmd
@@ -139,11 +147,13 @@ func (m Model) relocateSelection(pid int, hadSelection, queryEmpty bool) Model {
 //   - matches exist: the first match, row 1. Leaving the All row highlighted
 //     would make Enter right after typing a whole-system trace
 //     (selectedPIDFilter(0) == -1), the task hs2 bug.
-//   - no match: noSelection plus a notice (worded for the picker mode, and
-//     only once the first scan arrived: before that the list is empty because
-//     nothing is loaded, not because nothing matches). Falling back to the All row would
-//     again make a reflexive Enter trace everything, now for a filter that
-//     found nothing. Backspacing to a filter with matches re-derives row 1,
+//   - no match: noSelection, which makes Enter a no-op. Falling back to the
+//     All row would again make a reflexive Enter trace everything, now for a
+//     filter that found nothing. A notice explains it, worded for the picker
+//     mode, but only when the empty list really means "nothing matches": not
+//     before the first scan arrived (nothing is loaded yet) and not after a
+//     failed scan (the list is empty because of the error, which the view
+//     shows by itself). Backspacing to a filter with matches re-derives row 1,
 //     and Up/Down still reach the All row deliberately.
 //
 // The derived state is never sticky: every rebuild of the list recomputes it,
@@ -158,7 +168,7 @@ func (m Model) followFilter(queryEmpty bool) Model {
 		m.selectedIndex = 1
 	default:
 		m.selectedIndex = noSelection
-		if m.scanned {
+		if m.scanned && m.lastErr == nil {
 			m.notice = m.noMatchNotice()
 		}
 	}
@@ -188,9 +198,10 @@ func (m Model) applyScan(msg processesLoadedMsg) Model {
 // keepDerivedProcess is applyScan's second half for a derived process row on
 // prevPid (applyFilter already re-derived the first match). If prevPid is still
 // listed it keeps the selection, wherever the rescan put it; if it left the
-// list and the selection moved to another process, a notice names both so the
-// change is not silent. An empty result (noSelection plus its own notice) needs
-// nothing here. The notice stays until Up/Down or the next recompute.
+// list and the selection moved to another process, a notice names both and
+// says why prevPid is gone (goneReason) so the change is not silent. An empty
+// result (noSelection plus its own notice) needs nothing here. The notice stays
+// until Up/Down or the next recompute.
 func (m Model) keepDerivedProcess(prevPid int) Model {
 	if m.selectedIndex < 1 || m.filtered[m.selectedIndex-1].Pid == prevPid {
 		return m
@@ -202,8 +213,8 @@ func (m Model) keepDerivedProcess(prevPid int) Model {
 		}
 	}
 	_, id := m.idNoun()
-	m.notice = fmt.Sprintf("%s %d left the list - selected %s %d instead",
-		id, prevPid, id, m.filtered[m.selectedIndex-1].Pid)
+	m.notice = fmt.Sprintf("%s %d %s - selected %s %d instead",
+		id, prevPid, m.goneReason(prevPid), id, m.filtered[m.selectedIndex-1].Pid)
 	return m
 }
 
@@ -243,14 +254,20 @@ func (m Model) relocateUserSelection(pid int, hadSelection bool) Model {
 	return m
 }
 
-// lostSelectionNotice words why pid left the list: a process still present in
-// the latest scan but filtered out stopped matching the query, anything else
-// exited.
+// lostSelectionNotice words why pid left the list, see goneReason.
 func (m Model) lostSelectionNotice(pid int) string {
+	return fmt.Sprintf("pid %d %s - pick a process", pid, m.goneReason(pid))
+}
+
+// goneReason says why pid is not in the filtered list: a process still present
+// in the latest scan but filtered out stopped matching the query, anything else
+// exited. (It is no longer listed either way, but only the second case means
+// the process is gone.)
+func (m Model) goneReason(pid int) string {
 	for _, process := range m.processes {
 		if process.Pid == pid {
-			return fmt.Sprintf("pid %d no longer matches the filter - pick a process", pid)
+			return "no longer matches the filter"
 		}
 	}
-	return fmt.Sprintf("pid %d exited - pick a process", pid)
+	return "exited"
 }
