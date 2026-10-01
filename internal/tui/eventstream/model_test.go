@@ -1012,7 +1012,9 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 
 // pressTea sends one real key message through HandleTeaKey, the path the
 // dashboard uses, so the export modal's text input sees the same messages as
-// in the running TUI (a backspace or arrow key, not a key name typed as text).
+// in the running TUI: the key press itself, modifiers included (ctrl+left
+// moves by word rather than arriving as a bare left), and never the name of
+// a key the input does not bind typed in as text.
 func pressTea(t *testing.T, m *Model, msg tea.KeyPressMsg) {
 	t.Helper()
 	if handled, cmd := m.HandleTeaKey(msg); !handled || cmd != nil {

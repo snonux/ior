@@ -66,8 +66,9 @@ func buildNamedKeyCodes() map[string]rune {
 // typed into the search and export inputs. Anything else is not a key here,
 // and the caller ignores it: a real key name namedKeyCodes leaves out ("f13",
 // "capslock"), a string naming no key ("abc", "ctrl+foo"), a modifier on
-// either, or a multi-rune string, which is not a single key's name. Composed multi-rune text reaches the modals as the
-// original key press through HandleTeaKey, or through HandlePaste.
+// either, or a multi-rune string, which is not a single key's name.
+// Composed multi-rune text reaches the modals as the original key press
+// through HandleTeaKey, or through HandlePaste.
 func keyMsgFromString(keyStr string) (tea.KeyPressMsg, bool) {
 	if code, ok := namedKeyCodes[keyStr]; ok {
 		return namedKeyPress(code, 0), true
