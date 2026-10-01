@@ -27,11 +27,15 @@ const (
 	// recording asks for: 65536 slots, ~14 MiB of slot array up front, ~75 ms
 	// of a 870k rows/s burst. The slots are not the whole cost: a queued row
 	// also pins its heap strings (FileName, OldName, Comm). Kernel-captured
-	// names are capped at MAX_FILENAME_LENGTH = 256 bytes (comm at 16) and a
-	// row carries at most two of them (rename/link rows: FileName + OldName),
-	// so kernel-sourced strings add at most 65536 x 512 bytes = 32 MiB for a
-	// completely full queue; typically a few MiB, since most rows carry one
-	// short path and rows of one file share the cached string. Names the
+	// names are capped at MAX_FILENAME_LENGTH = 256 bytes (Comm at 16) and a
+	// row carries at most two of them (rename/link rows: FileName + OldName)
+	// plus its Comm, so kernel-sourced strings add at most 65536 x (512 + 16)
+	// bytes, about 33 MiB, for a completely full queue. That is a loose upper
+	// bound; typically it is a few MiB, since most rows carry one short path
+	// and fd-based rows (read, write, ... on an open descriptor) share the
+	// name string cached in the fd table. Path-based rows (openat, stat, ...)
+	// convert their captured path into a fresh string each, so a burst of
+	// them pins one copy per row, still within the bound above. Names the
 	// event loop resolves itself (/proc/<pid>/fd readlinks, dirfd-joined
 	// paths) can be longer, up to PATH_MAX = 4096 bytes and a little more
 	// when joined, but only for distinct deep paths, which is not a

@@ -41,7 +41,10 @@ import (
 const (
 	MutexLock    = "sync.Mutex.Lock"
 	RWMutexRLock = "sync.RWMutex.RLock"
-	Semacquire   = "semacquire"
+	// RWMutexLock is a writer waiting for readers to leave (the uncontended
+	// writer mutex is taken first, so a lone writer parks with this reason).
+	RWMutexLock = "sync.RWMutex.Lock"
+	Semacquire  = "semacquire"
 )
 
 // defaultTimeout bounds a failing Await. It is not a synchronisation guess:

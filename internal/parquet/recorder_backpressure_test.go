@@ -2,11 +2,14 @@ package parquet
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"ior/internal/parkwait"
 )
 
 // gateWriter blocks every WriteRows until release is closed, then counts the
@@ -367,8 +370,9 @@ func TestHeadlessRecorderQueueHoldsItsCapacityThenBlocks(t *testing.T) {
 // started waiting when Stop runs and the writer frees the queue; the producer
 // then sees both "room" and "stopped" and may enqueue. Stop must not finish
 // until that producer is done, so a row Record accepted is never stranded in
-// a queue that nobody drains any more. Without awaitSenders about half of the
-// trials lose the accepted row.
+// a queue that nobody drains any more. Without awaitSenders every trial fails
+// (Stop returns before the session parks in the barrier); the trials repeat
+// so the producer's later choice between room and stop varies.
 func TestRecorderStopWaitsForRegisteredWaiter(t *testing.T) {
 	t.Cleanup(func() { waiterRegisteredHook = nil })
 	for trial := 0; trial < 40; trial++ {
@@ -399,11 +403,7 @@ func runWaiterBarrierTrial(t *testing.T, trial int) {
 
 	result := recordAsync(r, 3)
 	<-registered
-	stopped := make(chan error, 1)
-	go func() { stopped <- r.Stop() }()
-	time.Sleep(2 * time.Millisecond) // Stop has closed stopC by now
-	w.open()                         // the writer drains: room appears
-	time.Sleep(5 * time.Millisecond) // a barrier-less Stop would finish here
+	stopped := stopPastRegisteredWaiter(t, trial, r, w)
 	waiterRegisteredHook = nil
 	letProceed()
 
@@ -419,6 +419,48 @@ func runWaiterBarrierTrial(t *testing.T, trial int) {
 	if got := w.written.Load(); got != accepted {
 		t.Fatalf("trial %d: writer got %d rows but %d were accepted: an accepted row was lost", trial, got, accepted)
 	}
+}
+
+// stopPastRegisteredWaiter starts Stop while a producer is parked in
+// waiterRegisteredHook, frees queue room once Stop has closed stopC, and then
+// proves the senders barrier holds: the session goroutine parks in
+// awaitSenders instead of Stop returning. It returns Stop's pending result.
+// Both waits observe state instead of sleeping, so a slow host cannot weaken
+// the trial: without the barrier it fails on the first trial.
+func stopPastRegisteredWaiter(t *testing.T, trial int, r *Recorder, w *gateWriter) <-chan error {
+	t.Helper()
+	stopped, stopDone := stopAsync(r)
+	// The session goroutine is still stuck in the stalled write, so the
+	// session stays active until Stop has closed stopC.
+	if !awaitCondition(func() bool { return stopRequested(r) }) {
+		t.Fatalf("trial %d: Stop never closed stopC", trial)
+	}
+	w.open() // the writer drains: room appears
+	// With the barrier the session goroutine now parks in awaitSenders until
+	// the registered producer is done; a barrier-less Stop instead drains,
+	// closes the file and returns, which closes stopDone and fails here.
+	parkwait.Await{
+		Frame:   "(*recordingSession).awaitSenders",
+		Reasons: []string{parkwait.RWMutexLock, parkwait.Semacquire},
+		// Every earlier trial's session finished (or the test failed), so no
+		// goroutine of this test is parked there yet.
+		Baseline: 0,
+		Done:     stopDone,
+		DoneMsg:  fmt.Sprintf("trial %d: Stop finished while a registered producer was still pending (no senders barrier)", trial),
+	}.Run(t)
+	return stopped
+}
+
+// stopAsync runs Stop in the background. stopped delivers its result; done
+// closes right after, so a select or parkwait.Await can notice that Stop
+// returned without consuming the result.
+func stopAsync(r *Recorder) (stopped <-chan error, done <-chan struct{}) {
+	result, finished := make(chan error, 1), make(chan struct{})
+	go func() {
+		result <- r.Stop()
+		close(finished)
+	}()
+	return result, finished
 }
 
 // raceOrder names one way the writer's death and Stop can interleave. The test
@@ -480,11 +522,17 @@ func awaitCondition(cond func() bool) bool {
 }
 
 // stopWithWriterFailure ends the recording through Stop while the stalled
-// write fails in the given order, and returns Stop's result.
-func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceOrder) <-chan error {
+// write fails in the given order. It returns Stop's result and forced, which
+// reports whether the order really happened; read it only after Stop's result
+// arrived. The first two orders are checked here on the test goroutine, so
+// forced is always true for them. deathInStopWindow waits inside the hook on
+// Stop's goroutine, where t.Fatal must not be called: a failure that is never
+// published there would let Stop go on and silently test a different order,
+// so the hook records the outcome and the caller fails on it instead.
+func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceOrder) (stopped <-chan error, forced func() bool) {
 	t.Helper()
-	stopped := make(chan error, 1)
-	stop := func() { stopped <- r.Stop() }
+	result := make(chan error, 1)
+	stop := func() { result <- r.Stop() }
 	switch order {
 	case deathBeforeStop:
 		w.open()
@@ -499,14 +547,16 @@ func stopWithWriterFailure(t *testing.T, r *Recorder, w *gateWriter, order raceO
 		}
 		w.open()
 	case deathInStopWindow:
+		var published atomic.Bool
 		// Runs on Stop's goroutine, after it released r.mu: Status is safe.
 		stopUnlockedHook = func() {
 			w.open()
-			awaitCondition(func() bool { return sessionDead(r) })
+			published.Store(awaitCondition(func() bool { return sessionDead(r) }))
 		}
 		go stop()
+		return result, published.Load
 	}
-	return stopped
+	return result, func() bool { return true }
 }
 
 // TestRecorderWriterDeathRacingStopWithBlockedProducers kills the writer and
@@ -544,7 +594,7 @@ func runDeathRaceTrial(t *testing.T, trial int, order raceOrder, producers int, 
 		<-registered
 	}
 
-	stopped := stopWithWriterFailure(t, r, w, order)
+	stopped, forced := stopWithWriterFailure(t, r, w, order)
 	for p := 0; p < producers; p++ {
 		select {
 		case err := <-results:
@@ -555,7 +605,12 @@ func runDeathRaceTrial(t *testing.T, trial int, order raceOrder, producers int, 
 			t.Fatalf("trial %d (%v): a producer is stuck after the writer died and Stop ran", trial, order)
 		}
 	}
+	// assertFailureReportedOnce receives Stop's result first, so the hook
+	// (which runs inside Stop) has finished before forced is read.
 	assertFailureReportedOnce(t, trial, order, r, stopped, writeErr)
+	if !forced() {
+		t.Fatalf("trial %d (%v): the writer failure was not published inside Stop's window, so this order was never tested", trial, order)
+	}
 	stopUnlockedHook = nil // do not leak this trial's hook into the next one
 }
 
