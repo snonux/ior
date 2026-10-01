@@ -133,6 +133,11 @@ type eventLoop struct {
 	// dropSrc reads the kernel-side ring-buffer drop counter. nil disables
 	// drop monitoring (tests and any path without a BPF module).
 	dropSrc ringbufDropSource
+	// dropMonitor is the running drop monitor, published and cleared by
+	// startRingbufDropMonitor like aggregateDrainer, so a TUI recording edge
+	// can read the drop counter now (flushRecordingCounters). nil while no
+	// monitor runs.
+	dropMonitor atomic.Pointer[ringbufDropMonitor]
 
 	// Statistics
 	numTracepoints          uint

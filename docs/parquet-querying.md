@@ -238,32 +238,42 @@ percentiles: those stay sampled. Read the footer with, for example,
 #### TUI `R` recordings
 
 A TUI recording (`ior.mode` = `tui`) carries the same two keys, in the same format, whenever
-the trace samples. Unlike the raw modes, the TUI samples by default: `futex`, `futex_wait`,
+a sampled syscall's probe is attached when you press `R`. In the TUI, `futex`, `futex_wait`,
 `futex_wake`, `futex_requeue`, `futex_waitv` and `clock_gettime` are aggregate-only (rate 0)
-unless you pass a rate for them, so they never have a row in a TUI recording, and a default
-TUI recording is marked `clock_gettime=0,futex=0,futex_requeue=0,...`. Their true counts are
-in `ior.sampling.totals`. Pass `-syscall-sampling-syscalls futex=1,...` to record them as
-rows; with every rate at 1 the file is unmarked. What the keys mean for a TUI recording:
+unless you pass a rate for them, so they never have a row in a TUI recording. They belong to
+the IPC and Time families, though, and the TUI attaches only the FS family by default
+(`-trace-families`), so a default TUI recording traces none of them and carries neither key.
+Attach them (for example `-trace-families FS,IPC,Time`, `-trace-syscalls`, or the probes
+modal) and the recording is marked `clock_gettime=0,futex=0,futex_requeue=0,...`, with their
+true counts in `ior.sampling.totals`. Pass `-syscall-sampling-syscalls futex=1,...` to record
+them as rows; a recording whose attached syscalls all have rate 1 is unmarked. What the keys
+mean for a TUI recording:
 
 - `ior.sampling` lists the sampled syscalls whose probe is attached when the recording starts
   (`R` pressed). The rates themselves cannot change while ior runs, so they hold for the whole
   file. A sampled syscall whose probe you attach later in the probes modal (`o`) is not in
   this key but appears in `ior.sampling.totals`, with its `rate`, once it was invoked.
-- `ior.sampling.totals` covers exactly this recording: the rows it holds (`traced` is the
+- `ior.sampling.totals` covers this recording only: the rows it holds (`traced` is the
   number of rows in the file here, since it is counted where the rows are written) plus the
   invocations the kernel counted while it ran. Each `R` recording starts from zero, so two
-  recordings of one trace do not share counts, and the kernel counters are flushed when the
-  recording starts and stops (and before a filter change restarts the trace), so no
-  invocation from before the start or after the stop is attributed to it. The dashboard's
-  auto-reset (`I`, 30s by default) and the `r` key do not affect it.
+  recordings of one trace do not share counts, and the kernel counters and the ring-buffer
+  drop counter are read when the recording starts and stops (and before a filter change
+  restarts the trace), so no invocation or drop from before the start or after the stop is
+  attributed to it. The dashboard's auto-reset (`I`, 30s by default) and the `r` key do not
+  affect it. Rows still in flight between the kernel and the recorder at the start or stop
+  are attributed by when they reach the recorder, like any row of the file.
 - The elements carry `"lower_bound":true` when events were lost while recording: ring-buffer
-  drops, or rows shed by the recorder's full queue (the status line then shows
-  `rec: ... (dropped N)`).
+  drops (including those of the last moments before the stop), rows shed by the recorder's
+  full queue (the status line then shows `rec: ... (dropped N)`), or a filter change that
+  restarts the trace while its event loop is still running: the old trace's rows that had
+  not reached the recorder yet are discarded with it, as the raw modes' `records discarded
+  at stop` are.
 - The value is `unavailable` when kernel counts arrived during the recording while a filter
   was active that the syscall-keyed kernel counters cannot apply (anything besides syscall, family, and
   the PID/TID the trace was started with: comm, file, latency, ...), or a read of the
-  counters failed. The rows then follow the filter but the kernel-only invocations could not
-  be counted under it.
+  counters failed, including the one right before the recording starts (counts from before
+  the start could then end up in the totals). The rows then follow the filter but the
+  kernel-only invocations could not be counted under it.
 
 `time_ns` is a boot-relative clock, so join it to wall time only if you have an independent
 boot-time reference.

@@ -15,13 +15,19 @@ type RecordingSampling interface {
 	// whole ior process (they come from the -syscall-sampling-* flags and
 	// their defaults), so every session reports the same list.
 	SampledSyscalls() []sampling.Entry
-	// FlushAggregates drains the kernel aggregate counters now and hands the
-	// counts to their sinks, the active recording included. The TUI calls it
-	// right before a recording starts (so counts from before the start go to
-	// no recording) and right before it stops or the session retires (so the
-	// last partial drain interval is not lost). Safe from any goroutine; a
-	// no-op once the session's drain loop has stopped.
-	FlushAggregates()
+	// FlushCounters drains the kernel aggregate counters and reads the
+	// ring-buffer drop counter now, handing both to their sinks, the active
+	// recording included (counts, and a loss as a lower bound). The TUI calls
+	// it right before a recording starts (so counts and drops from before the
+	// start go to no recording) and right before it stops or the session
+	// retires (so the last partial poll interval is not lost). Safe from any
+	// goroutine; a no-op once the session's poll loops have stopped.
+	//
+	// It reports false when the aggregate drain failed. A failed drain leaves
+	// some deltas in the kernel map, so at a recording's start the next
+	// successful drain may carry pre-start counts into the recording: the
+	// TUI then marks the new recording's totals unavailable.
+	FlushCounters() (complete bool)
 }
 
 // RecordingSamplingPublisher is the optional capability of a RuntimePublisher
@@ -41,7 +47,8 @@ type RecordingSamplingPublisher interface {
 type RecordingSamplingCounter interface {
 	// CountKernelOnly adds n kernel-counted invocations of syscall (no row).
 	CountKernelOnly(syscall string, n uint64)
-	// MarkSamplingLowerBound records lost events (ring-buffer drops).
+	// MarkSamplingLowerBound records lost events (ring-buffer drops, rows a
+	// retired session may still deliver).
 	MarkSamplingLowerBound()
 	// MarkSamplingUnavailable records why the kernel counts are incomplete.
 	MarkSamplingUnavailable(reason string)

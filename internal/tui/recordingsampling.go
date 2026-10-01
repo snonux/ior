@@ -11,22 +11,28 @@ import (
 //
 //   - Rates: the sampled syscalls of the trace (effective rate other than 1,
 //     including the aggregate-only defaults futex*, clock_gettime, ...) whose
-//     probe is attached when the recording starts. The rates themselves never
-//     change while ior runs - they come from the command line and are loaded
-//     into the BPF program once per session with the same values - so there
-//     is nothing to flag for a mid-recording rate change. The attached probes
-//     can change (the probes modal); a sampled syscall attached later still
-//     appears in the totals, with its rate, once it was invoked.
+//     probe is attached when the recording starts. With the default
+//     -trace-families (FS only) none of those defaults is attached, so a
+//     default recording carries neither key; they appear once their probes
+//     are (-trace-families IPC,Time, the probes modal). The rates themselves
+//     never change while ior runs - they come from the command line and are
+//     loaded into the BPF program once per session with the same values - so
+//     there is nothing to flag for a mid-recording rate change. The attached
+//     probes can change (the probes modal); a sampled syscall attached later
+//     still appears in the totals, with its rate, once it was invoked.
 //   - Totals: the recording's own window only. Each recording starts a fresh
 //     sampling.Tally; rows are counted as the recorder writes them and kernel
-//     counts are added only while it is active, with the drain loop flushed at
-//     the start, at the stop and before a session retires (a filter restart
-//     during the recording), so a second recording never inherits the first's
-//     counts and no drain period is lost or borrowed at the edges.
+//     counts and ring-buffer drops are added only while it is active, with
+//     the drain loop and the drop monitor flushed at the start, at the stop
+//     and before a session retires (a filter restart during the recording),
+//     so a second recording never inherits the first's counts or drops and no
+//     poll period is lost or borrowed at the edges.
 //   - Totals are "unavailable" when the kernel counts of the window are
-//     incomplete (a filter they cannot honour, a failed drain), and a lower
-//     bound when events were lost (ring-buffer drops, rows shed by the
-//     recorder's full queue).
+//     incomplete (a filter they cannot honour, a failed drain - including
+//     the one right before the start, which could leak pre-start counts into
+//     the window), and a lower bound when events were lost (ring-buffer drops,
+//     rows shed by the recorder's full queue, or a session retired while its
+//     event loop may still deliver rows, which the session gate then drops).
 //
 // The stats engine is deliberately not the source: it is reset every 30s by
 // default and on every live filter swap, and replaced by every trace restart.
@@ -34,27 +40,37 @@ import (
 // recordingSampler is what recorderStart/recorderStop need for that marking;
 // *runtimeBindings implements it. Nil means "no marking" (tests, no runtime).
 type recordingSampler interface {
-	// beginRecordingSampling flushes the kernel counters (so earlier counts go
-	// to no recording) and returns a fresh tally for the new recording, nil
-	// when the trace samples nothing.
+	// beginRecordingSampling flushes the kernel counters and the drop counter
+	// (so earlier counts and drops go to no recording) and returns a fresh
+	// tally for the new recording, nil when the trace samples nothing.
 	beginRecordingSampling() *sampling.Tally
-	// flushRecordingAggregates drains the kernel counters into the active
-	// recording right before it stops.
-	flushRecordingAggregates()
+	// flushRecordingCounters drains the kernel counters and the drop counter
+	// into the active recording right before it stops.
+	flushRecordingCounters()
 }
 
 var _ recordingSampler = (*runtimeBindings)(nil)
 
-// flushRecordingSampling is flushRecordingAggregates for an optional sampler.
+// flushRecordingSampling is flushRecordingCounters for an optional sampler.
 func flushRecordingSampling(sampler recordingSampler) {
 	if sampler != nil {
-		sampler.flushRecordingAggregates()
+		sampler.flushRecordingCounters()
 	}
 }
+
+// drainFailedReason is the unavailable reason of a recording whose kernel
+// counts could not be read, the words the trace core uses for a failed drain
+// during a recording (forwardAggregatesToRecording).
+const drainFailedReason = "reading the kernel counters failed"
 
 // beginRecordingSampling implements recordingSampler. The tally restricts the
 // announced rates to the probes attached now (as the raw modes do); without a
 // probe manager (between sessions) every sampled syscall is announced.
+//
+// The flush runs before the recording starts, so a drain failure it reports
+// reaches no recording through the trace core; it is put on the new tally
+// instead: the deltas the failed drain did not reach are still in the kernel
+// map and the first successful drain would add them to this window.
 func (r *runtimeBindings) beginRecordingSampling() *sampling.Tally {
 	if r == nil {
 		return nil
@@ -67,14 +83,17 @@ func (r *runtimeBindings) beginRecordingSampling() *sampling.Tally {
 	if len(entries) == 0 {
 		return nil
 	}
-	if source != nil {
-		source.FlushAggregates()
+	complete := source == nil || source.FlushCounters()
+	tally := sampling.NewTally(entries, attachedProbes(manager))
+	if !complete {
+		tally.MarkUnavailable(drainFailedReason)
 	}
-	return sampling.NewTally(entries, attachedProbes(manager))
+	return tally
 }
 
-// flushRecordingAggregates implements recordingSampler.
-func (r *runtimeBindings) flushRecordingAggregates() {
+// flushRecordingCounters implements recordingSampler. A failed drain needs no
+// handling here: the recording is active, so the trace core marks it.
+func (r *runtimeBindings) flushRecordingCounters() {
 	if r == nil {
 		return
 	}
@@ -82,24 +101,42 @@ func (r *runtimeBindings) flushRecordingAggregates() {
 	source := r.recordingSampling
 	r.mu.RUnlock()
 	if source != nil {
-		source.FlushAggregates()
+		source.FlushCounters()
 	}
 }
 
-// flushSessionForRecording drains session's kernel counters into the active
-// recording while session is still current, just before it is retired. It
-// must run without r.mu held: the drained counts reach the recorder through
-// the session gate, which takes the read lock.
+// flushSessionForRecording drains session's kernel counters and drop counter
+// into the active recording while session is still current, just before it is
+// retired. It must run without r.mu held: the drained counts reach the
+// recorder through the session gate, which takes the read lock.
+//
+// A session whose event loop may still run (its live-filter setter is still
+// registered: the trace core registers it before the loop starts and removes
+// it only after the loop returned, i.e. after its last row, drain and drop
+// read) can deliver rows, kernel counts and drops after the flush, which the
+// retired session's gate then drops: invocations of the window that are in
+// neither the file nor the totals. The restart does not wait for the old
+// session (traceLifecycle.beginCmd), so instead of draining that backlog the
+// recording's totals become a lower bound. A session whose loop has returned
+// (or never started) delivered everything while it was current, and its
+// recording stays exact.
 func (r *runtimeBindings) flushSessionForRecording(session uint64) {
 	r.mu.RLock()
 	current := r.session == session
 	source := r.recordingSampling
 	recorder := r.recorder
+	loopMayRun := r.liveFilterSetter != nil
 	r.mu.RUnlock()
 	if !current || source == nil || !recorderActive(recorder) {
 		return
 	}
-	source.FlushAggregates()
+	source.FlushCounters()
+	if !loopMayRun {
+		return
+	}
+	if counter, ok := recorder.(runtime.RecordingSamplingCounter); ok {
+		counter.MarkSamplingLowerBound()
+	}
 }
 
 // attachedProbes turns the probe manager's states into the attached-probe

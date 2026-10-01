@@ -113,11 +113,15 @@ func (d *aggregateDrainer) withheldReason(rows []statsengine.SyscallAggregate) s
 // Flush drains the aggregate map now and hands the result to the sink, under
 // the same lock as the poll ticks; a no-op before Start and once the drainer
 // retired (see pollCycle), so it never touches a closed map. The TUI calls it
-// at the boundaries of a Parquet recording (runtime.RecordingSampling).
-func (d *aggregateDrainer) Flush() {
+// at the boundaries of a Parquet recording (runtime.RecordingSampling). It
+// reports whether the drain succeeded (true when there was nothing to drain):
+// a failed drain leaves the deltas it did not reach in the map, so the caller
+// at a recording's start must know that later drains may carry pre-start
+// counts.
+func (d *aggregateDrainer) Flush() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.flushLocked()
+	return d.flushLocked()
 }
 
 // Start polls the aggregate map every `every` until ctx is cancelled or the
@@ -155,10 +159,15 @@ func (d *aggregateDrainer) pollCycle() {
 	}
 }
 
-func (d *aggregateDrainer) flushLocked() {
-	if d.handle != nil {
-		d.handle(d.Tick())
+// flushLocked drains once into the sink (nothing before Start or once
+// retired) and reports false only when the drain failed.
+func (d *aggregateDrainer) flushLocked() bool {
+	if d.handle == nil {
+		return true
 	}
+	result := d.Tick()
+	d.handle(result)
+	return result.warning == ""
 }
 
 // SwapFilter drains the kernel aggregate map under the outgoing filter, hands

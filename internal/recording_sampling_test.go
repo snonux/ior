@@ -2,10 +2,12 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
@@ -14,9 +16,11 @@ import (
 	"ior/internal/types"
 )
 
-// A default TUI trace samples the built-in aggregate-only syscalls (futex*,
-// clock_gettime at rate 0): those are absent from every TUI recording, and
-// the list the TUI marks its recordings with must say so.
+// The TUI's sampled-syscall list holds the built-in aggregate-only syscalls
+// (futex*, clock_gettime at rate 0): whenever their probes are attached they
+// have no row in a TUI recording, and the recording's rates must say so. With
+// the default -trace-families (FS only) they are not attached, and
+// sampling.Tally.Plan leaves them out (a default recording is unmarked).
 func TestTUISampledSyscallsIncludeTheAggregateOnlyDefaults(t *testing.T) {
 	entries := tuiSampledSyscalls(mustParseArgs(t))
 	got := make(map[string]uint32, len(entries))
@@ -81,12 +85,17 @@ func (b *samplingRecordingBindings) SetRecordingSampling(source runtime.Recordin
 	b.published = source
 }
 
-// End to end through the TUI configurer, the aggregate drainer and a real
-// recorder: a recording's footer carries the rates and exactly its own window
-// - the rows recorded while it ran plus the kernel counts drained while it ran
-// - with the counts of before the start flushed to no recording.
-func TestTUIRecordingGetsTheTotalsOfItsOwnWindow(t *testing.T) {
-	cfg := mustParseArgs(t, "-syscall-sampling-syscalls", "openat=5")
+// tuiRecordingHarness is a TUI trace session as the R key sees it, end to end
+// through the TUI configurer, the aggregate drainer, the drop monitor and a
+// real recorder: both poll loops run with an hour's period, so only the flushes
+// of the recording edges read the stub sources.
+type tuiRecordingHarness struct {
+	bindings *samplingRecordingBindings
+	el       *eventLoop
+}
+
+func newTUIRecordingHarness(t *testing.T, cfg flags.Config, source syscallAggregateSource, drops ringbufDropSource) *tuiRecordingHarness {
+	t.Helper()
 	bindings := &samplingRecordingBindings{
 		fakeRuntimeBindings: &fakeRuntimeBindings{sink: &fakeEventSink{}, seq: &fakeSequencer{}},
 		recorder:            parquet.NewRecorder(parquet.RecorderConfig{}),
@@ -97,44 +106,101 @@ func TestTUIRecordingGetsTheTotalsOfItsOwnWindow(t *testing.T) {
 	}
 	configure, unregister := makeTUIEventLoopConfigurer(cfg, rt, bindings)
 	t.Cleanup(unregister)
-	source := &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{
-		{{TraceID: types.SYS_ENTER_OPENAT, Count: 100}, {TraceID: types.SYS_ENTER_FUTEX, Count: 7}}, // before the recording
-		{{TraceID: types.SYS_ENTER_OPENAT, Count: 40}},                                              // during it
-	}}
 	el := &eventLoop{
 		cfg:          eventLoopConfig{aggregateDrainEvery: time.Hour, aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg)},
 		aggregateSrc: source,
+		dropSrc:      drops,
 	}
+	el.SetWarningCallback(func(string) {})
 	configure(el)
-	stopDrain := el.startAggregateDrainLoop(context.Background())
-	t.Cleanup(stopDrain)
+	t.Cleanup(el.startAggregateDrainLoop(context.Background()))
+	t.Cleanup(el.startRingbufDropMonitor(context.Background()))
 	if bindings.published == nil {
 		t.Fatal("the configurer published no RecordingSampling")
 	}
+	return &tuiRecordingHarness{bindings: bindings, el: el}
+}
 
-	// What the TUI's recorderStart does: flush, then start with a fresh tally.
-	tally := sampling.NewTally(bindings.published.SampledSyscalls(), nil)
-	bindings.published.FlushAggregates()
-	path := filepath.Join(t.TempDir(), "rec.parquet")
-	if err := bindings.recorder.Start(path, parquet.StartOptions{
+// record does what the TUI's recorderStart and recorderStop do around during:
+// flush the counters, start with a fresh tally, ..., flush again, stop. It
+// returns the file and what the start flush reported.
+func (h *tuiRecordingHarness) record(t *testing.T, during func()) (path string, startComplete bool) {
+	t.Helper()
+	published := h.bindings.published
+	tally := sampling.NewTally(published.SampledSyscalls(), nil)
+	startComplete = published.FlushCounters()
+	path = filepath.Join(t.TempDir(), "rec.parquet")
+	if err := h.bindings.recorder.Start(path, parquet.StartOptions{
 		Metadata: parquet.FileMetadata{Mode: "tui", Sampling: tally.Plan()}, SamplingTally: tally,
 	}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	el.printCb(testTracePair(1, "a"))
-	el.printCb(testTracePair(2, "b"))
-	// And recorderStop: flush, then stop.
-	bindings.published.FlushAggregates()
-	if err := bindings.recorder.Stop(); err != nil {
+	during()
+	published.FlushCounters()
+	if err := h.bindings.recorder.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+	return path, startComplete
+}
 
+// A recording's footer carries the rates and exactly its own window - the rows
+// recorded while it ran plus the kernel counts drained while it ran - with the
+// counts of before the start flushed to no recording.
+func TestTUIRecordingGetsTheTotalsOfItsOwnWindow(t *testing.T) {
+	source := &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{
+		{{TraceID: types.SYS_ENTER_OPENAT, Count: 100}, {TraceID: types.SYS_ENTER_FUTEX, Count: 7}}, // before the recording
+		{{TraceID: types.SYS_ENTER_OPENAT, Count: 40}},                                              // during it
+	}}
+	h := newTUIRecordingHarness(t, mustParseArgs(t, "-syscall-sampling-syscalls", "openat=5"), source, nil)
+	path, _ := h.record(t, func() {
+		h.el.printCb(testTracePair(1, "a"))
+		h.el.printCb(testTracePair(2, "b"))
+	})
 	if got, _ := parquetFooter(t, path, parquet.KeySampling); got != "clock_gettime=0,futex=0,futex_requeue=0,futex_wait=0,futex_waitv=0,futex_wake=0,openat=5" {
 		t.Fatalf("%s = %q", parquet.KeySampling, got)
 	}
 	want := `[{"syscall":"openat","rate":5,"traced":2,"counted_only":40,"total":42}]`
 	if got, _ := parquetFooter(t, path, parquet.KeySamplingTotals); got != want {
 		t.Fatalf("%s = %s\nwant %s", parquet.KeySamplingTotals, got, want)
+	}
+}
+
+// Ring-buffer drops are read at the recording edges too (the drop monitor
+// polls only once a second): drops of the last moments before the stop make
+// the totals a lower bound before the footer is written, and drops of before
+// the start are consumed by the start flush and do not mark the recording.
+func TestTUIRecordingDropsAreReadAtItsEdges(t *testing.T) {
+	cfg := mustParseArgs(t, "-syscall-sampling-syscalls", "openat=5")
+	for _, tc := range []struct {
+		name   string
+		totals []uint64 // the drop counter at the start flush, then at the stop flush
+		want   string
+	}{
+		{"drops before the start", []uint64{5, 5}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1}]`},
+		{"drops before the stop", []uint64{5, 8}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1,"lower_bound":true}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTUIRecordingHarness(t, cfg, &aggregateSourceStub{}, &ringbufDropSourceStub{totals: tc.totals})
+			path, _ := h.record(t, func() { h.el.printCb(testTracePair(1, "a")) })
+			if got, _ := parquetFooter(t, path, parquet.KeySamplingTotals); got != tc.want {
+				t.Fatalf("totals = %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A drain that fails at the start flush reaches no recording through the trace
+// core, so FlushCounters must report it (the TUI then marks the new recording
+// unavailable: the deltas the drain did not reach would leak into the window).
+func TestTUIRecordingStartFlushReportsAFailedDrain(t *testing.T) {
+	cfg := mustParseArgs(t, "-syscall-sampling-syscalls", "openat=5")
+	h := newTUIRecordingHarness(t, cfg, &aggregateSourceStub{err: errors.New("map gone")}, nil)
+	if _, complete := h.record(t, func() {}); complete {
+		t.Fatal("FlushCounters reported a failed drain as complete")
+	}
+	h = newTUIRecordingHarness(t, cfg, &aggregateSourceStub{}, nil)
+	if _, complete := h.record(t, func() {}); !complete {
+		t.Fatal("FlushCounters reported a successful drain as failed")
 	}
 }
 
@@ -238,19 +304,46 @@ func TestAggregateDrainerFlushStopsOnceRetired(t *testing.T) {
 		aggregateSink: sink,
 	}
 	el.SetFilter(globalfilter.Filter{})
-	el.flushAggregates() // no drain loop yet: nothing
+	el.flushRecordingCounters() // no drain loop yet: nothing
 	stop := el.startAggregateDrainLoop(context.Background())
-	el.flushAggregates()
+	el.flushRecordingCounters()
 	sink.mu.Lock()
 	if len(sink.rows) != 1 || sink.rows[0].Count != 1 {
 		t.Fatalf("after a flush the sink has %+v, want the first batch", sink.rows)
 	}
 	sink.mu.Unlock()
 	stop() // the final drain takes the second batch and retires the drainer
-	el.flushAggregates()
+	el.flushRecordingCounters()
 	source.mu.Lock()
 	defer source.mu.Unlock()
 	if len(source.rows) != 0 {
 		t.Fatalf("source still holds %d batches, want the final drain to have taken them", len(source.rows))
+	}
+}
+
+// The drop monitor is flushable like the drainer: a flush reads the counter
+// while the monitor runs, and none reads it once the final read retired it
+// (the drop map may be closed by then), not even through a pointer loaded
+// before the stop unpublished it.
+func TestRingbufDropMonitorFlushStopsOnceRetired(t *testing.T) {
+	source := &ringbufDropSourceStub{totals: []uint64{2}}
+	counter := &samplingCounterStub{}
+	el := &eventLoop{cfg: eventLoopConfig{aggregateDrainEvery: time.Hour}, dropSrc: source}
+	el.SetRecordingSamplingCounter(counter)
+	el.SetWarningCallback(func(string) {})
+	el.flushRecordingCounters() // no monitor yet: nothing
+	stop := el.startRingbufDropMonitor(context.Background())
+	el.flushRecordingCounters()
+	if counter.lowerBound != 1 {
+		t.Fatalf("lower-bound marks after a flush = %d, want 1 (2 drops)", counter.lowerBound)
+	}
+	monitor := el.dropMonitor.Load() // a flush that loaded it before the stop
+	stop()                           // the final read retires the monitor
+	el.flushRecordingCounters()
+	monitor.Flush()
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.callCnt != 2 {
+		t.Fatalf("drop counter read %d times, want 2 (the flush and the final read)", source.callCnt)
 	}
 }

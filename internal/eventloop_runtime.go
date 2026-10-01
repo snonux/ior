@@ -104,12 +104,22 @@ func (e *eventLoop) startAggregateDrainLoop(ctx context.Context) func() {
 // the lifetime of the run. Both stop paths (ctx cancellation and the deferred
 // stop) take a final reading before stats() is unblocked by close(e.done), so
 // the reported total covers the whole run.
+//
+// The monitor is published (e.dropMonitor) so the TUI can read it on demand at
+// the edges of a Parquet recording (flushRecordingCounters); like the
+// aggregate drainer it is unpublished only after the final read, which also
+// retired it, so a flush holding the pointer past that reads nothing.
 func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
 	if e.dropSrc == nil {
 		return func() {}
 	}
 	monitor := newRingbufDropMonitor(e.dropSrc)
-	return monitor.Start(ctx, e.cfg.aggregateDrainEvery, e.handleRingbufDropResult)
+	stop := monitor.Start(ctx, e.cfg.aggregateDrainEvery, e.handleRingbufDropResult)
+	e.dropMonitor.Store(monitor)
+	return func() {
+		stop()
+		e.dropMonitor.Store(nil)
+	}
 }
 
 // handleRingbufDropResult records the running drop total and raises a warning

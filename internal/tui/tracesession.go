@@ -101,9 +101,12 @@ func (r *runtimeBindings) beginSession() traceSessionBindings {
 // nothing it publishes or emits from now on reaches the TUI. Retiring an
 // already superseded session is a no-op: it must not disturb the newer one.
 func (r *runtimeBindings) endSession(session uint64) {
-	// Drain the retiring session's kernel counters into an active recording
-	// first: once the session is retired, its final drain is gated away, and
-	// the last partial interval would be missing from the recording's totals.
+	// Drain the retiring session's kernel counters and drop counter into an
+	// active recording first: once the session is retired, its final drain
+	// and drop read are gated away, and the last partial interval would be
+	// missing from the recording's totals. A session whose event loop may
+	// still deliver rows marks the recording a lower bound there as well
+	// (flushSessionForRecording).
 	r.flushSessionForRecording(session)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -118,9 +121,9 @@ func (r *runtimeBindings) endSession(session uint64) {
 // that is about to close, and a filter edit made before the next session is up
 // must take the restart path (so that session picks it up) rather than go to
 // the dying event loop. Its recording-sampling flush goes for the same reason
-// (the last published sampled-syscall list stays, see sampledSyscalls). The dashboard sources are kept so the screen keeps its
-// last data until the next session publishes its own. The caller must hold
-// r.mu for writing.
+// (the last published sampled-syscall list stays, see sampledSyscalls). The
+// dashboard sources are kept so the screen keeps its last data until the next
+// session publishes its own. The caller must hold r.mu for writing.
 func (r *runtimeBindings) endSessionLocked() {
 	r.session++
 	r.probeManager = nil

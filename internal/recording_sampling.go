@@ -24,10 +24,10 @@ import (
 //     here to the active recording (runtime.RecordingSamplingCounter, through
 //     the session-gated recorder view, so a retired session reports nothing).
 //
-// The TUI flushes the drain loop at the recording's start and stop and before
-// a session retires (runtime.RecordingSampling.FlushAggregates), so a
-// recording's kernel counts are its own window's, not up to one drain period
-// off at either end.
+// The TUI flushes the drain loop and the ring-buffer drop monitor at the
+// recording's start and stop and before a session retires
+// (runtime.RecordingSampling.FlushCounters), so a recording's kernel counts and
+// drops are its own window's, not up to one poll period off at either end.
 
 // recordingSamplingSource is one TUI session's runtime.RecordingSampling.
 type recordingSamplingSource struct {
@@ -42,16 +42,23 @@ func (s recordingSamplingSource) SampledSyscalls() []sampling.Entry {
 	return slices.Clone(s.entries)
 }
 
-// FlushAggregates drains the session's kernel aggregate map now.
-func (s recordingSamplingSource) FlushAggregates() {
-	s.el.flushAggregates()
+// FlushCounters drains the session's kernel aggregate map and reads its drop
+// counter now (see runtime.RecordingSampling).
+func (s recordingSamplingSource) FlushCounters() bool {
+	return s.el.flushRecordingCounters()
 }
 
 // tuiSampledSyscalls lists every syscall a TUI session samples, with its
 // effective rate and family attribution, sorted by name; nil when it samples
 // none. In the TUI the built-in aggregate-only defaults (futex*,
-// clock_gettime, ...) stay at 0, so a default TUI session always samples
-// those; a family's 0 is not promoted either (that only happens in raw modes).
+// clock_gettime, ...) stay at 0, so they are always on this list; a family's
+// 0 is not promoted either (that only happens in raw modes). The list holds
+// rates, not attached probes: a recording announces only the sampled syscalls
+// whose probe is attached when it starts (sampling.Tally.Plan), and the
+// default -trace-families attaches the FS family only, so a default TUI
+// recording carries no sampling keys at all. futex* (IPC) and clock_gettime
+// (Time) mark a recording only when their probes are attached (for example
+// -trace-families FS,IPC,Time or the probes modal).
 func tuiSampledSyscalls(cfg flags.Config) []sampling.Entry {
 	rates := sampledSyscallRates(cfg)
 	if len(rates) == 0 {
@@ -66,12 +73,23 @@ func tuiSampledSyscalls(cfg flags.Config) []sampling.Entry {
 	return entries
 }
 
-// flushAggregates drains the kernel aggregate map now through the running
-// drainer (aggregateDrainer.Flush), or does nothing while no drain loop runs.
-func (e *eventLoop) flushAggregates() {
+// flushRecordingCounters drains the kernel aggregate map through the running
+// drainer (aggregateDrainer.Flush) and reads the ring-buffer drop counter
+// through the running drop monitor (ringbufDropMonitor.Flush), handing both
+// to their sinks now; whichever loop is not running is skipped. It reports
+// false only when the aggregate drain failed. The drop counter is read after
+// the drain, so a drop that happened while draining still reaches a recording
+// that is about to stop; at a recording's start the read consumes the drops
+// of before the start, so they cannot mark the new recording.
+func (e *eventLoop) flushRecordingCounters() bool {
+	complete := true
 	if d := e.aggregateDrainer.Load(); d != nil {
-		d.Flush()
+		complete = d.Flush()
 	}
+	if m := e.dropMonitor.Load(); m != nil {
+		m.Flush()
+	}
+	return complete
 }
 
 // SetRecordingSamplingCounter wires the receiver of the kernel counts and
@@ -86,7 +104,9 @@ func (e *eventLoop) SetRecordingSamplingCounter(counter runtime.RecordingSamplin
 // engine gets, so the live filter applies to both alike), a failed drain or
 // counts the filter withheld as the reason its totals are unavailable. A
 // failed drain is not caught up later as far as the recording is concerned:
-// the next successful drain's delta could straddle the recording's start.
+// the next successful drain's delta could straddle the recording's start. A
+// failure of the flush right before a recording starts reaches no recording
+// here, so FlushCounters reports it and the TUI marks the new recording.
 func (e *eventLoop) forwardAggregatesToRecording(result aggregateDrainResult) {
 	counter := e.recordingCounter
 	if counter == nil {

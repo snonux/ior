@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
@@ -17,22 +18,28 @@ import (
 
 // fakeRecordingSampling stands in for a trace session's sampling side: it
 // accrues "kernel counts" that a flush hands to the session's gated recorder,
-// the way the real drain loop does.
+// the way the real drain loop does. failFlush makes the next flushes report a
+// failed drain (and hand nothing over).
 type fakeRecordingSampling struct {
-	entries []sampling.Entry
-	counter runtime.RecordingSamplingCounter
-	pending map[string]uint64
-	flushes int
+	entries   []sampling.Entry
+	counter   runtime.RecordingSamplingCounter
+	pending   map[string]uint64
+	flushes   int
+	failFlush bool
 }
 
 func (f *fakeRecordingSampling) SampledSyscalls() []sampling.Entry { return f.entries }
 
-func (f *fakeRecordingSampling) FlushAggregates() {
+func (f *fakeRecordingSampling) FlushCounters() bool {
 	f.flushes++
+	if f.failFlush {
+		return false
+	}
 	for syscall, n := range f.pending {
 		f.counter.CountKernelOnly(syscall, n)
 	}
 	clear(f.pending)
+	return true
 }
 
 func (f *fakeRecordingSampling) accrue(syscall string, n uint64) { f.pending[syscall] += n }
@@ -141,7 +148,9 @@ func TestRRecordingsCarryRatesAndPerRecordingTotals(t *testing.T) {
 
 // A session retired while a recording runs (a filter change that restarts the
 // trace) gets its counters flushed into the recording first; whatever it still
-// reports afterwards is dropped, and the next session's counts are added.
+// reports afterwards is dropped, and the next session's counts are added. Its
+// event loop had not started or had already returned (no live-filter setter
+// registered), so it cannot deliver anything late and the totals stay exact.
 func TestSessionRestartDuringARecordingKeepsItsCounts(t *testing.T) {
 	m := recordingModel()
 	old, oldFake := publishFakeSampling(t, m)
@@ -222,6 +231,58 @@ func TestQuitFlushesTheCountersIntoTheRecording(t *testing.T) {
 		t.Fatalf("stopRecordingAtQuit: %v", err)
 	}
 	want := `[{"syscall":"futex","rate":0,"traced":0,"counted_only":4,"total":4}]`
+	if got, _ := footer(t, path, parquet.KeySamplingTotals); got != want {
+		t.Fatalf("totals = %s\nwant %s", got, want)
+	}
+}
+
+// A session retired while its event loop may still run (its live-filter setter
+// is registered) can deliver rows, counts and drops after the flush, which the
+// gate drops: the recording's totals become a lower bound, not silently short.
+func TestRestartWhileTheLoopRunsMakesTheRecordingALowerBound(t *testing.T) {
+	m := recordingModel()
+	old, oldFake := publishFakeSampling(t, m)
+	unregister := old.SetLiveFilterSetter(func(globalfilter.Filter) {})
+	path := recordWindow(t, m, "restart-live.parquet", func() {
+		oldFake.accrue("futex", 5)
+		old.end()
+		unregister()
+		publishFakeSampling(t, m)
+	})
+	want := `[{"syscall":"futex","rate":0,"traced":0,"counted_only":5,"total":5,"lower_bound":true}]`
+	if got, _ := footer(t, path, parquet.KeySamplingTotals); got != want {
+		t.Fatalf("totals = %s\nwant %s", got, want)
+	}
+}
+
+// A drain that fails at the start flush is forwarded while no recording is
+// active, so it would mark nothing, and the deltas it did not reach would leak
+// pre-start counts into the window: the new recording is marked unavailable.
+func TestFailedStartFlushMakesTheRecordingUnavailable(t *testing.T) {
+	m := recordingModel()
+	_, fake := publishFakeSampling(t, m)
+	fake.failFlush = true
+	path := recordWindow(t, m, "failed-start.parquet", func() { fake.failFlush = false })
+	if got, _ := footer(t, path, parquet.KeySamplingTotals); got != "unavailable" {
+		t.Fatalf("totals = %s, want unavailable", got)
+	}
+}
+
+// The signal watcher finalises a running recording off the event-loop
+// goroutine (modelRecordingPublisher); it must flush the counters first too,
+// or a SIGTERM'd recording would miss its last poll interval.
+func TestSignalWatcherFlushesTheCountersIntoTheRecording(t *testing.T) {
+	m := recordingModel()
+	_, fake := publishFakeSampling(t, m)
+	path := filepath.Join(t.TempDir(), "signal.parquet")
+	if err := m.startRecording(path); err != nil {
+		t.Fatalf("startRecording: %v", err)
+	}
+	fake.accrue("futex", 6)
+	if err := modelRecordingPublisher(m)(); err != nil {
+		t.Fatalf("publishRecording: %v", err)
+	}
+	want := `[{"syscall":"futex","rate":0,"traced":0,"counted_only":6,"total":6}]`
 	if got, _ := footer(t, path, parquet.KeySamplingTotals); got != want {
 		t.Fatalf("totals = %s\nwant %s", got, want)
 	}
