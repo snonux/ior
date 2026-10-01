@@ -26,21 +26,23 @@ const (
 	// threadCommRenamedName is the name the threads of threadCommRenamed give
 	// themselves; it differs from the inherited "ioworkload".
 	threadCommRenamedName = "iorworker"
-	// threadCommRenameSettle is how long a renamed thread waits after its
-	// warm-up syscall before the measured ones, so the /proc read the warm-up
-	// queued has landed. Generous: the threads sleep concurrently, so it costs
-	// the scenario wall time once, not per thread. It is also the effective
-	// bound on how far ior's event loop may lag for the renamed-thread tests to
-	// hold: past it (measured with ior SIGSTOPped for 0.8-1.4s just after the
-	// threads were created) the warm-up and measured rows are already queued in
-	// the ring buffer and are handled back to back, faster than the async
-	// /proc/<tid>/comm read lands, so the measured rows keep "ioworkload".
+	// threadCommRenameSettle is how long a thread pauses between two phases of
+	// a scenario. Since task lr2 a rename is reported by the task:task_rename
+	// record, in ring-buffer order with the thread's syscalls, so the label of
+	// a row no longer depends on how far ior's event loop trails the workload
+	// (before it, the renamed name was learned from one asynchronous
+	// /proc/<tid>/comm read that had to land before the measured rows). The
+	// pause stays for threadCommLateRename, which holds the phase *before* a
+	// rename to the old name: there it keeps that asynchronous read - ior
+	// queues one for every new tid - from returning the new name. Generous: the
+	// threads sleep concurrently, so it costs the scenario wall time once, not
+	// per thread.
 	threadCommRenameSettle = 500 * time.Millisecond
 	// threadCommLinger is how long every thread, and with it the process, stays
 	// alive after the last syscall of the scenario. ior resolves things it was
-	// not told by the kernel - a renamed thread's comm (/proc/<tid>/comm), a
-	// path whose open it did not trace (/proc/<pid>/fd/<fd>) - lazily, when the
-	// event loop reaches the row. The loop can trail the workload by a while on
+	// not told by the kernel - a path whose open it did not trace
+	// (/proc/<pid>/fd/<fd>), the comm of a thread whose records were lost
+	// (/proc/<tid>/comm) - lazily, when the event loop reaches the row. The loop can trail the workload by a while on
 	// a busy machine, and a lookup for a task that has already exited finds
 	// nothing, so the scenario must not vanish the instant its work is done.
 	// The harness has no way to know when ior has caught up, so this is a
@@ -94,23 +96,21 @@ func threadCommShortLived() error {
 // threadCommRenamed is the thread-pool shape threadCommShortLived leaves out:
 // each fresh thread renames itself (prctl(PR_SET_NAME), what pthread_setname_np
 // does - tokio, Java, Chrome and Bun worker pools) before doing its work, so its
-// name is no longer the one it inherited from this process and no tracepoint
-// says so. It issues one pwrite64 (the warm-up), sleeps threadCommRenameSettle,
-// then threadCommPreads pread64 calls (the measured ones).
+// name is no longer the one it inherited from this process. It issues one
+// pwrite64 (the warm-up), sleeps threadCommRenameSettle, then threadCommPreads
+// pread64 calls (the measured ones).
 //
-// The task_newtask record can only name the thread "ioworkload"; the name the
-// thread has by the time it works is learned from the one /proc read that the
-// record's provisional seed allows (task fr2 review). The warm-up syscall is
-// what makes that read land: it is the first use of the tid that queues it, and
-// its row may still carry the inherited name (or, under -comm <renamed>, be
-// dropped). The two phases differ by syscall rather than by file so that tests
-// can tell them apart without a path: a path ior did not see opened is resolved
-// lazily from /proc/<pid>/fd, which only works while the process is alive.
-// Every thread stays alive for threadCommLinger after its work (see
-// runOnFreshThreads) so the /proc read finds it even when ior's event loop
-// lags. The phases are only told apart reliably while that lag stays under
-// threadCommRenameSettle; a longer stall makes the measured rows keep the
-// inherited name.
+// The task_newtask record can only name the thread "ioworkload"; the rename is
+// reported by the task:task_rename record (task lr2), which reaches ior in
+// ring-buffer order right after it, so every row of the thread - the warm-up
+// included - carries the new name. The two phases are kept apart by syscall
+// rather than by file so that tests can tell them apart without a path: a path
+// ior did not see opened is resolved lazily from /proc/<pid>/fd, which only
+// works while the process is alive, so every thread stays alive for
+// threadCommLinger after its work (see runOnFreshThreads). Before task lr2 the
+// new name was learned from one asynchronous /proc read queued by the warm-up
+// row, which is why the warm-up row could carry the inherited name and the
+// measured rows depended on the pause.
 func threadCommRenamed() error {
 	dir, cleanup, err := makeTempDir("thread-comm-renamed")
 	if err != nil {

@@ -130,6 +130,7 @@ const EXIT_TWO_FD_NAMES_EVENT = 59
 const ENTER_EVENTFD_NAME_EVENT = 60
 const EXIT_EVENTFD_NAME_EVENT = 61
 const TASK_NEWTASK_EVENT = 62
+const TASK_RENAME_EVENT = 63
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -3394,4 +3395,72 @@ func (t *TaskNewtaskEvent) Bytes() ([]byte, error) {
 
 func (t *TaskNewtaskEvent) Recycle() {
 	poolOfTaskNewtaskEvents.Put(t)
+}
+
+type TaskRenameEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Comm      [MAX_PROGNAME_LENGTH]byte
+}
+
+func (t TaskRenameEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]))
+}
+
+func (t TaskRenameEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*TaskRenameEvent)
+	if !ok {
+		return false
+	}
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm
+}
+
+func (t *TaskRenameEvent) GetEventType() EventType {
+	return t.EventType
+}
+
+func (t *TaskRenameEvent) GetTraceId() TraceId {
+	return t.TraceId
+}
+
+func (t *TaskRenameEvent) GetPid() uint32 {
+	return t.Pid
+}
+
+func (t *TaskRenameEvent) GetTid() uint32 {
+	return t.Tid
+}
+
+func (t *TaskRenameEvent) GetTime() uint64 {
+	return t.Time
+}
+
+var poolOfTaskRenameEvents = sync.Pool{
+	New: func() any { return &TaskRenameEvent{} },
+}
+
+func NewTaskRenameEvent(raw []byte) *TaskRenameEvent {
+	t := poolOfTaskRenameEvents.Get().(*TaskRenameEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, t); err != nil {
+		*t = TaskRenameEvent{}
+		poolOfTaskRenameEvents.Put(t)
+		return nil
+	}
+	return t
+}
+
+func (t *TaskRenameEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, t)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (t *TaskRenameEvent) Recycle() {
+	poolOfTaskRenameEvents.Put(t)
 }

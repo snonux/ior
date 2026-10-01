@@ -188,6 +188,12 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// owner of a recycled tid left behind (internal/eventloop_newtask.go).
 		controlRaw(types.TASK_NEWTASK_EVENT, rawDecoder[types.TaskNewtaskEvent](types.NewTaskNewtaskEventFast),
 			typedRuntimeControl((*eventLoop).handleTaskNewtaskEvent)),
+		// task:task_rename fires whenever a task's comm changes (prctl
+		// PR_SET_NAME, pthread_setname_np, the exec's own rename) and applies
+		// the new name to the cache, which no other record reports for a task
+		// that does not exec (internal/eventloop_taskrename.go).
+		controlRaw(types.TASK_RENAME_EVENT, rawDecoder[types.TaskRenameEvent](types.NewTaskRenameEventFast),
+			typedRuntimeControl((*eventLoop).handleTaskRenameEvent)),
 		// The open-name fixup carries only the pending enter's identity and the
 		// filename re-read at sys_exit once the kernel had faulted the page in.
 		// Its dedicated decoder keeps the compact control record separate from

@@ -483,6 +483,57 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("task_newtask decode mismatch")
 		}
 	})
+
+	// TaskRenameEvent is the control record of task:task_rename that renames a
+	// tid in the comm cache; same table membership rationale as above.
+	t.Run("TaskRenameEvent", func(t *testing.T) {
+		ev := &TaskRenameEvent{EventType: TASK_RENAME_EVENT, Time: 1, Pid: 2, Tid: 3}
+		copy(ev.Comm[:], "renamed")
+		raw := rawBytes(t, ev)
+
+		slow := NewTaskRenameEvent(raw)
+		fast := NewTaskRenameEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("task_rename decode mismatch")
+		}
+	})
+}
+
+// TestNewTaskRenameEventFastKernelLayout pins the byte offsets of struct
+// task_rename_event as the BPF handler writes them (pid at 16, tid at 20, comm
+// at 24..40) and the wire size against what encoding/binary makes of the
+// generated Go struct, so a padding change on either side is caught here
+// rather than as a silently misattributed rename. Records shorter than the
+// layout fail closed; a longer one decodes by its prefix.
+func TestNewTaskRenameEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(TaskRenameEvent{}); got != taskRenameEventSize {
+		t.Fatalf("binary.Size(TaskRenameEvent) = %d, want %d", got, taskRenameEventSize)
+	}
+	raw := make([]byte, taskRenameEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], TASK_RENAME_EVENT)
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 101)
+	copy(raw[24:40], "wk-renamed")
+
+	ev := NewTaskRenameEventFast(append(raw, 0xff, 0xff))
+	if ev == nil {
+		t.Fatal("kernel layout payload (with a longer tail) rejected")
+	}
+	defer ev.Recycle()
+	if ev.EventType != TASK_RENAME_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected task_rename decode: %#v", ev)
+	}
+	if got := StringValue(ev.Comm[:]); got != "wk-renamed" {
+		t.Fatalf("comm = %q, want wk-renamed", got)
+	}
+	for _, n := range []int{0, 1, taskRenameEventSize - 1} {
+		if short := NewTaskRenameEventFast(raw[:n]); short != nil {
+			t.Fatalf("%d-byte record decoded as %#v, want nil", n, short)
+		}
+	}
 }
 
 // TestNewTaskNewtaskEventFastKernelLayout pins the byte offsets of struct

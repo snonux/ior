@@ -11,8 +11,9 @@ import (
 
 // A task_newtask record carries the name the child inherited, which is the
 // creator's. A thread that renames itself first thing (prctl(PR_SET_NAME),
-// pthread_setname_np - tokio, Java, Chrome and Bun worker pools) is not
-// reported by any tracepoint, so the seed must stay correctable by the one
+// pthread_setname_np - tokio, Java, Chrome and Bun worker pools) is reported by
+// the task_rename record (eventloop_taskrename_test.go), but that record can be
+// lost or its probe may not attach, so the seed must stay correctable by the one
 // procfs read that its first use queues, without ever overriding a fresher
 // kernel-reported name. These tests use a resolver whose /proc read is held on
 // a gate, so the order "seed, first row, read lands" is fixed rather than a

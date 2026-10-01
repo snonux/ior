@@ -41,7 +41,7 @@ var structsWithComm = map[string]bool{"open_event": true, "exec_event": true}
 // handWrittenStringStructs are the structs with a string field that only
 // hand-written BPF code fills; TestHandWrittenBPFStringCapturesNeedNoMemset
 // covers them.
-var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true}
+var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true, "task_rename_event": true}
 
 var handlerStructRE = regexp.MustCompile(`(?m)^/// \S+ is a struct (\w+)`)
 
@@ -262,7 +262,11 @@ func TestStringFieldListsMatchTypesH(t *testing.T) {
 // on older kernels (strlcpy leaves stale bytes after the NUL), and copying it out
 // of the context needs pointer arithmetic old verifiers reject. Userspace cuts
 // at the first NUL (types.StringValue), so either would be safe to read, but only
-// the helper needs no assumption at all.
+// the helper needs no assumption at all. task_rename cannot use that helper (the
+// tracepoint fires before the kernel stores the new name, and the renamed task
+// need not be the current one), so it reads the name from the raw tracepoint's
+// comm argument with bpf_probe_read_kernel_str and discards the record when that
+// read fails.
 func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	filterC, err := readCSource("filter.c")
 	if err != nil {
@@ -314,6 +318,25 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	// checks the compiled object, this one catches the source pattern early.
 	if strings.Contains(newtask, "ctx->comm") {
 		t.Error("handle_task_newtask must not read the tracepoint's comm array out of the context")
+	}
+
+	// task_rename's name is copied out of the kernel buffer the raw tracepoint
+	// hands over. The helper terminates it on success and the record is
+	// discarded on failure, so an unterminated string never reaches userspace.
+	rename := regexp.MustCompile(`(?s)int handle_task_rename\(.*?\n\}\n`).FindString(execC)
+	if rename == "" {
+		t.Fatal("handle_task_rename not found in exec.c")
+	}
+	if strings.Contains(rename, "__builtin_memset") {
+		t.Error("handle_task_rename memsets comm")
+	}
+	const renameCommRead = "    if (bpf_probe_read_kernel_str(ev->comm, sizeof(ev->comm), args->comm) < 0) {\n" +
+		"        bpf_ringbuf_discard(ev, 0);\n        return 0;\n    }\n"
+	if !strings.Contains(rename, renameCommRead) {
+		t.Error("handle_task_rename must discard a record whose comm read failed; only a successful read is terminated")
+	}
+	if strings.Contains(rename, "ctx->newcomm") {
+		t.Error("handle_task_rename must not read the classic tracepoint's newcomm array out of the context")
 	}
 }
 

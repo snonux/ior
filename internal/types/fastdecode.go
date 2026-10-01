@@ -102,6 +102,10 @@ const (
 	// one size. The legacy 48-byte record (task fr2) predates creator_pid.
 	taskNewtaskEventSize       = 56
 	taskNewtaskEventLegacySize = 48
+	// task_rename_event is the control record emitted by task:task_rename.
+	// 4+4+8+4+4+16(comm) = 40 bytes with no padding, so kernel and
+	// binary.Write payloads share one size. It has no legacy layout: it is new.
+	taskRenameEventSize = 40
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -1025,6 +1029,27 @@ func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
 		p.CreatorPid = binary.LittleEndian.Uint32(raw[48:52])
 		p.ScopeFlags = binary.LittleEndian.Uint32(raw[52:56])
 	}
+	return p
+}
+
+// NewTaskRenameEventFast decodes the task:task_rename control record: the
+// renamed task's tgid (Pid) and tid and the name it now has.
+//
+// Accepted sizes: the current 40-byte layout and anything longer (its prefix is
+// decoded, so a newer object that appends fields stays readable). Every
+// shorter size fails closed with nil rather than decoding fields at wrong
+// offsets.
+func NewTaskRenameEventFast(raw []byte) *TaskRenameEvent {
+	if len(raw) < taskRenameEventSize {
+		return nil
+	}
+	p := poolOfTaskRenameEvents.Get().(*TaskRenameEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	copy(p.Comm[:], raw[24:40])
 	return p
 }
 

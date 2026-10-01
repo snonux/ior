@@ -23,6 +23,12 @@ func (p libbpfTracepointProgram) AttachTracepoint(category, name string) (probem
 	return p.prog.AttachTracepoint(category, name)
 }
 
+// AttachRawTracepoint makes libbpfTracepointProgram a
+// probemanager.RawTracepointProgram.
+func (p libbpfTracepointProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
+	return p.prog.AttachRawTracepoint(name)
+}
+
 // libbpfTracepointModule wraps a libbpf BPF module as a probemanager.Module.
 type libbpfTracepointModule struct {
 	module *bpf.Module
@@ -187,8 +193,9 @@ func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Mod
 // the ones attached first. Any task that execs in that window would otherwise
 // produce syscall rows with no preceding comm record, which is exactly the
 // stale/empty label the exec probe exists to prevent; the same goes for a task
-// created in that window and the newtask probe. The exit probe has no ordering
-// requirement but costs nothing to attach here.
+// created in that window and the newtask probe, and a thread that renamed itself
+// in that window and the rename probe. The exit probe has no ordering requirement
+// but costs nothing to attach here.
 //
 // Cancellation: shouldAttach is wrapped so that once ctx is done every
 // remaining tracepoint is skipped instead of attached, which ends the long
@@ -202,7 +209,8 @@ func attachTraceProbes(ctx context.Context, attacher probemanager.Attacher, shou
 	releaseExecProbe := attachProcessExecProbe(attacher, log)
 	releaseExitProbe := attachProcessExitProbe(attacher, log)
 	releaseNewtaskProbe := attachTaskNewtaskProbe(attacher, log)
-	releaseSchedProbes := releaseConcurrently(releaseExecProbe, releaseExitProbe, releaseNewtaskProbe)
+	releaseRenameProbe := attachTaskRenameProbe(attacher, log)
+	releaseSchedProbes := releaseConcurrently(releaseExecProbe, releaseExitProbe, releaseNewtaskProbe, releaseRenameProbe)
 
 	attachUnlessCancelled := func(name string) bool {
 		if ctx.Err() != nil {
@@ -407,14 +415,49 @@ func attachTaskNewtaskProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 	return attachHandTracepoint(attacher, taskNewtaskProgName, "task", "task_newtask", log)
 }
 
+// taskRenameProgName is the BPF program in internal/c/exec.c that reports a
+// task's new comm, so a thread that renames itself (prctl PR_SET_NAME,
+// pthread_setname_np) is relabelled instead of keeping its old cached name.
+const taskRenameProgName = "handle_task_rename"
+
+// attachTaskRenameProbe attaches the task_rename raw tracepoint, whose records
+// update a renamed task's cached comm (see internal/c/exec.c and
+// eventLoop.handleTaskRenameEvent). Same attach policy as the exec, exit and
+// newtask probes: direct attach, whole run, independent of -trace-* selection.
+// Without it a renamed thread keeps its old name until another record corrects
+// it. It attaches as a raw tracepoint (not a classic one) for the verifier
+// reasons given in exec.c, which is why it has its own attach path.
+func attachTaskRenameProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	return attachHandProbe(attacher, taskRenameProgName, "task_rename", log,
+		func(prog probemanager.Program) (probemanager.Link, error) {
+			raw, ok := prog.(probemanager.RawTracepointProgram)
+			if !ok {
+				return nil, errors.New("program cannot attach as a raw tracepoint")
+			}
+			return raw.AttachRawTracepoint("task_rename")
+		})
+}
+
 // attachHandTracepoint attaches one hand-written (non-syscall) tracepoint
 // program from internal/c/exec.c, subsystem/tracepointName being the tracepoint
-// it hooks (sched/sched_process_exec, task/task_newtask, ...).
+// it hooks (sched/sched_process_exec, task/task_newtask, ...). The policy is
+// documented on attachHandProbe.
+func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, tracepointName string, log bpfSetupLog) func() {
+	return attachHandProbe(attacher, progName, tracepointName, log,
+		func(prog probemanager.Program) (probemanager.Link, error) {
+			return prog.AttachTracepoint(subsystem, tracepointName)
+		})
+}
+
+// attachHandProbe attaches one hand-written (non-syscall) BPF program from
+// internal/c/exec.c through attach, which picks the attach flavor (classic
+// tracepoint or raw tracepoint) for the tracepoint named probeName.
 //
 // Failure is deliberately non-fatal and mirrors the per-syscall attach policy:
-// without the exec or newtask probe comms fall back to the asynchronous procfs
-// resolver, and without the exit probe the fd table falls back to LRU eviction
-// - all exactly the pre-fix behaviour: degraded, not a broken trace.
+// without the exec, newtask or rename probe comms fall back to the asynchronous
+// procfs resolver (or keep an outdated name), and without the exit probe the fd
+// table falls back to LRU eviction - all exactly the pre-fix behaviour:
+// degraded, not a broken trace.
 //
 // It takes the same probemanager.Attacher seam the syscall probes use rather
 // than a *bpf.Module, so both non-fatal failure paths and the detach path are
@@ -426,7 +469,8 @@ func attachTaskNewtaskProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
 // goes to log.teardown, which stays visible in every mode.
-func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, tracepointName string, log bpfSetupLog) func() {
+func attachHandProbe(attacher probemanager.Attacher, progName, probeName string, log bpfSetupLog,
+	attach func(probemanager.Program) (probemanager.Link, error)) func() {
 	noop := func() {}
 	if attacher == nil {
 		return noop
@@ -434,19 +478,19 @@ func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, t
 	log = log.withDefaults()
 	prog, err := attacher.GetProgram(progName)
 	if err != nil {
-		log.warn(fmt.Sprintf("skipping %s probe: get program %s: %v", tracepointName, progName, err))
+		log.warn(fmt.Sprintf("skipping %s probe: get program %s: %v", probeName, progName, err))
 		return noop
 	}
-	link, err := prog.AttachTracepoint(subsystem, tracepointName)
+	link, err := attach(prog)
 	if err != nil {
-		log.warn(fmt.Sprintf("skipping %s probe: %v", tracepointName, err))
+		log.warn(fmt.Sprintf("skipping %s probe: %v", probeName, err))
 		return noop
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			if err := link.Destroy(); err != nil {
-				log.teardown(fmt.Sprintf("ior: %s probe detach error: %v", tracepointName, err))
+				log.teardown(fmt.Sprintf("ior: %s probe detach error: %v", probeName, err))
 			}
 		})
 	}

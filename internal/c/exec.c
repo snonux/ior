@@ -2,7 +2,8 @@
 
 /**
  * exec.c holds the hand-written tracepoint handlers that are not syscall
- * tracepoints: sched_process_exec, sched_process_exit and task_newtask.
+ * tracepoints: sched_process_exec, sched_process_exit, task_newtask and
+ * task_rename.
  *
  * Why sched_process_exec exists: the comm shown for a syscall used to come from an
  * asynchronous /proc/<tid>/comm read (internal/eventloop_comm.go). A task that
@@ -310,10 +311,10 @@ int handle_sched_process_exit(void *ctx) {
 // be out of date by the child's first syscall: a fork()ed process that then
 // execve()s is renamed by the sched_process_exec record, and a thread that
 // renames itself (prctl(PR_SET_NAME)/pthread_setname_np: tokio, Java, Chrome
-// and Bun worker pools do so as their first act) is not reported by any
-// tracepoint. Userspace therefore treats the seed as provisional and re-reads
-// /proc once (setCachedProvisional); a rename after the first traced syscall
-// is still not seen (task lr2).
+// and Bun worker pools do so as their first act) is reported by the task_rename
+// record below. That record can still be missing (lost under ring-buffer
+// backpressure, or its probe failed to attach), so userspace treats the seed as
+// provisional and re-reads /proc once (setCachedProvisional).
 //
 // The record also carries the raw clone_flags and the creator's tgid, the inputs
 // userspace needs to tell a thread from a process and to model the fd table the
@@ -347,15 +348,17 @@ int handle_sched_process_exit(void *ctx) {
 // that ignores the field reads "child in scope".
 #define IOR_NEWTASK_CHILD_OUT_OF_SCOPE 0x1U
 
-// ior_newtask_in_scope is filter() applied to the *child*. The handler runs in
-// the parent's context, so filter() itself would judge the parent, but what
-// decides whether the child's syscalls are traced is the child's own tgid and
-// tid: a fork() child of a -pid target has a different tgid and is out of scope,
-// a new thread of a -pid target is in scope. ior itself stays excluded - by the
-// child's tgid, so its own threads produce no records, while a subprocess it
+// ior_task_in_scope is filter() applied to an explicitly named task rather than
+// to the current one. The task_newtask handler runs in the parent's context, so
+// filter() itself would judge the parent, but what decides whether the child's
+// syscalls are traced is the child's own tgid and tid: a fork() child of a -pid
+// target has a different tgid and is out of scope, a new thread of a -pid target
+// is in scope. The task_rename handler judges the renamed task the same way
+// (it can run in a sibling thread's context). ior itself stays excluded - by the
+// task's tgid, so its own threads produce no records, while a subprocess it
 // spawns (a new tgid) is judged like any other process.
 static __always_inline int
-ior_newtask_in_scope(__u32 child_pid, __u32 child_tid) {
+ior_task_in_scope(__u32 child_pid, __u32 child_tid) {
     if (child_pid == IOR_PID_FILTER)
         return 0;
     if (-1 != PID_FILTER && child_pid != PID_FILTER)
@@ -400,7 +403,7 @@ int handle_task_newtask(void *raw_ctx) {
 
     __u32 scope_flags = 0;
 
-    if (!ior_newtask_in_scope(child_pid, child_tid)) {
+    if (!ior_task_in_scope(child_pid, child_tid)) {
         // Out of scope: silent, except for a CLONE_FILES process child of an
         // in-scope creator, whose hidden table writes hit the creator's table.
         // A new thread (CLONE_THREAD) is excluded: it is not a separate
@@ -408,7 +411,7 @@ int handle_task_newtask(void *raw_ctx) {
         // documented in AGENTS.md, not something this record can fix.
         if (!(clone_flags & IOR_CLONE_FILES) || (clone_flags & IOR_CLONE_THREAD))
             return 0;
-        if (!ior_newtask_in_scope(creator_pid, creator_tid))
+        if (!ior_task_in_scope(creator_pid, creator_tid))
             return 0;
         scope_flags = IOR_NEWTASK_CHILD_OUT_OF_SCOPE;
     }
@@ -449,6 +452,96 @@ int handle_task_newtask(void *raw_ctx) {
     // Ring-buffer memory is not zeroed, so scope_flags must always be written.
     ev->creator_pid = creator_pid;
     ev->scope_flags = scope_flags;
+
+    bpf_ringbuf_submit(ev, 0);
+    return 0;
+}
+
+// Why task_rename exists: nothing else reports a task renaming itself. A thread
+// calls prctl(PR_SET_NAME) or pthread_setname_np() (which writes
+// /proc/self/task/<tid>/comm), and the kernel changes task->comm without any
+// syscall record, exec record or open payload telling userspace; the tid->comm
+// cache then kept serving the old name for the rest of the thread's life (until
+// an open event's payload comm happened to heal it). The visible damage was a
+// wrong label on every later row and, under -comm, an inverted filter:
+// -comm <new name> dropped the renamed thread's rows while -comm <old name> kept
+// admitting them, and an openat dropped at the enter-side gate (no cached name
+// match) could not heal the cache either.
+//
+// task:task_rename fires from __set_task_comm() for every change of task->comm:
+// prctl, a /proc/<tid>/comm write (also by a sibling thread) and the exec's own
+// rename in begin_new_exec (which merely repeats the sched_process_exec record's
+// name). Emitting it as a control record into the syscall ring buffer gives
+// userspace an ordered "this tid is now called X" notice, like the exec record:
+// the buffer hands records out in reservation order to the single event-loop
+// goroutine, so the rename is applied after the renaming task's earlier rows and
+// before its later ones (handleTaskRenameEvent).
+//
+// It is attached as a RAW tracepoint (SEC raw_tracepoint, args = the
+// TP_PROTO of the tracepoint: the task and the new name). The classic
+// tracepoint's context carries the same name in a char[16] member, but, exactly
+// as for task_newtask above, copying a context array compiles to ctx pointer
+// arithmetic that the 4.18/5.14 verifiers reject - and one rejected program
+// fails the load of the whole object. A raw tracepoint's args are plain u64
+// loads at constant offsets. The name cannot be taken from the current task
+// instead (bpf_get_current_comm): the tracepoint fires before the kernel stores
+// the new name, and the renamed task need not be the current one.
+//
+// The renamed task is scoped like filter() but is named explicitly
+// (ior_task_in_scope), because a /proc/<tid>/comm write renames a *sibling*
+// thread: only the thread-group check in the kernel (same_thread_group) ties it
+// to the writer, so the record's tgid is read from the renamed task itself.
+//
+// Cost: one 40-byte record per rename. Renames are rare (worker pools rename each
+// thread once at start; exec renames once per exec), so this is far below the
+// per-exec and per-newtask records in volume.
+
+// ior_task_rename_args are the arguments of the task_rename raw tracepoint,
+// TP_PROTO(struct task_struct *task, const char *comm). Declared as a struct
+// rather than indexed ad hoc so each handler line names what it reads.
+struct ior_task_rename_args {
+    struct task_struct *task;
+    const char *comm;
+};
+
+SEC("raw_tracepoint/task_rename")
+// ctx is void *, cast straight to the argument struct: reaching the arguments
+// through vmlinux.h's struct bpf_raw_tracepoint_args::args would add a CO-RE
+// relocation (vmlinux.h types carry preserve_access_index) and so ctx pointer
+// arithmetic, exactly what the plain loads at offsets 0 and 8 avoid.
+int handle_task_rename(void *ctx) {
+    struct ior_task_rename_args *args = ctx;
+    struct task_struct *task = args->task;
+    struct task_rename_event *ev;
+    __u32 pid = (__u32)BPF_CORE_READ(task, tgid);
+    __u32 tid = (__u32)BPF_CORE_READ(task, pid);
+
+    if (!ior_task_in_scope(pid, tid))
+        return 0;
+
+    ev = bpf_ringbuf_reserve(&event_map, sizeof(struct task_rename_event), 0);
+    if (!ev) {
+        ior_count_ringbuf_drop();
+        return 0;
+    }
+
+    // The name is read from the kernel buffer the tracepoint was handed
+    // (a stack array of the caller for prctl and /proc writes, the basename of
+    // the executable for exec); it is NUL-terminated by the helper on success.
+    // A failed read leaves no usable name, so the record is dropped rather than
+    // sent with an unterminated one; see "String fields in ring-buffer records"
+    // in filter.c.
+    if (bpf_probe_read_kernel_str(ev->comm, sizeof(ev->comm), args->comm) < 0) {
+        bpf_ringbuf_discard(ev, 0);
+        return 0;
+    }
+
+    ev->event_type = TASK_RENAME_EVENT;
+    // Not a syscall tracepoint: there is no enter/exit trace id to report.
+    ev->trace_id = 0;
+    ev->pid = pid;
+    ev->tid = tid;
+    ev->time = bpf_ktime_get_boot_ns();
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

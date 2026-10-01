@@ -30,6 +30,10 @@ func (p syscallFailingProgram) AttachTracepoint(category, name string) (probeman
 	return recordingProgram{attacher: &p.attacher.recordingAttacher}.AttachTracepoint(category, name)
 }
 
+func (p syscallFailingProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
+	return recordingProgram{attacher: &p.attacher.recordingAttacher}.AttachRawTracepoint(name)
+}
+
 func matchNothing(string) bool { return false }
 
 // TestAttachRequiredTraceProbesHeadlessFailsWhenSelectionMatchesNothing is the

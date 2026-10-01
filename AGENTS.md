@@ -978,8 +978,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   ring-buffer order before the child's first pair, as a *provisional* name
   (`setCachedProvisional`): the inherited name is the creator's, and a new
   thread often renames itself at once (`prctl(PR_SET_NAME)`,
-  `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which no tracepoint
-  reports. A provisional entry does not bump the tid's rename epoch and is
+  `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which the
+  `task:task_rename` record (task lr2, below) reports. A provisional entry does not bump the tid's rename epoch and is
   flagged stale, so the first use of the tid queues exactly one
   `/proc/<tid>/comm` read whose result replaces it (a read of an already-gone
   thread comes back empty and leaves the seed). Seeding as authoritative
@@ -988,18 +988,64 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   rows from `-comm <renamed>`; exec and open records are still authoritative
   and outrank an in-flight read. Rows emitted before that read lands carry the
   inherited name (and are matched against it under `-comm`), as the first rows
-  did before any name was known. A rename *after* the first traced syscall is
-  still unseen (task lr2). The record also retires the per-tid state of a dead
+  did before any name was known (the `task_rename` record normally makes even
+  those rows right). The record also retires the per-tid state of a dead
   previous owner whose exit record was lost (`retireRecycledTid`: cached comm
   and in-flight lookup, parked enter, `-gap` baseline, pending
   name_to_handle_at path), the same set the exit record clears. The child's
   tgid is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid)
   rather than read from the task struct, and the record is scoped like
-  `filter()` but applied to the *child* (`ior_newtask_in_scope`): a thread of a
+  `filter()` but applied to the *child* (`ior_task_in_scope`): a thread of a
   `-pid` target is in scope, its `fork()` child is not, ior's own threads are
   excluded. A fork that execs is renamed by the exec record that follows. A lost
   record (`ringbuf_drop_map`), a failed attach or an older `IOR_BPF_OBJECT`
   without the program degrade to the old procfs lookup.
+
+  **A rename is reported by a record too (task lr2).** Nothing reported a task
+  changing its own name: `prctl(PR_SET_NAME)` and `pthread_setname_np` (a write to
+  `/proc/self/task/<tid>/comm`, also possible from a sibling thread) change
+  `task->comm` with no syscall record, exec record or open payload to say so, so
+  the cache kept serving the old name until an `openat` of that thread happened to
+  heal it. Every later row carried the wrong comm and `-comm` inverted:
+  `-comm <new>` dropped the renamed thread's rows, `-comm <old>` kept admitting
+  them, and an `openat` dropped at the enter-side gate could not heal the cache
+  either (the next `close` row was `E:name`). The hand-written
+  `task_rename` handler in `internal/c/exec.c` (`handle_task_rename`, attached by
+  `attachTaskRenameProbe` with the other sched probes, regardless of `-trace-*`)
+  emits a 40-byte `TASK_RENAME_EVENT` control record (renamed task's tgid and
+  tid, the new comm) for every `__set_task_comm()` - including the exec's own
+  rename, which merely repeats the exec record's name. `handleTaskRenameEvent`
+  (`internal/eventloop_taskrename.go`) writes it through
+  `setCachedCommFromKernel`: authoritative, so an in-flight procfs lookup that
+  read the old name cannot undo it, and it settles a provisional newtask seed
+  (the corrective `/proc` read becomes unnecessary). The record is ordered with
+  the task's syscall records, so rows before the rename keep the old name and
+  rows after it (the `prctl` row itself pairs after the record) carry the new one.
+  Two details differ from the other hand-written handlers. It is a **raw**
+  tracepoint (`SEC("raw_tracepoint/task_rename")`, attached through
+  `probemanager.RawTracepointProgram`, a separate interface so the syscall probe
+  manager's `Program` stays small): the classic tracepoint's context holds the new
+  name in a `char newcomm[16]` member, and copying a context array needs the ctx
+  pointer arithmetic the 4.18/5.14 verifiers reject (one rejected program fails
+  the whole object, as for `task_newtask`); the raw arguments (task, comm
+  pointer) are plain u64 loads at offsets 0 and 8, and the name is read from the
+  kernel buffer with `bpf_probe_read_kernel_str`. It cannot use
+  `bpf_get_current_comm` instead: the tracepoint fires *before* the kernel stores
+  the name, and the renamed task need not be the current one. Scope is therefore
+  judged on the renamed task's own tgid and tid (read from the task struct),
+  with the same predicate as the newtask handler (`ior_task_in_scope`). A failed
+  name read drops the record (`bpf_ringbuf_discard`) rather than sending an
+  unterminated string. A lost record (`ringbuf_drop_map`), a failed attach or an
+  older `IOR_BPF_OBJECT` degrade to the old behaviour (stale name until another
+  record corrects it). Pinned by `TestTaskRename*`
+  (`internal/eventloop_taskrename_test.go`, with the negative fixture without a
+  record), the attach tests in `internal/ior_bpfsetup_execprobe_test.go`, the
+  decoder layout test, the buildgate test that the handler has no ctx
+  relocation, and end to end by `TestRenamedTasksAreRelabelledByTheRenameRecord`
+  and the two `-comm` tests in `integrationtests/taskrename_test.go` (scenario
+  `thread-comm-late-rename`: the main thread and workers renamed by
+  `prctl`, by a write to their own procfs comm and by a write from another
+  thread).
 
   **A forked child inherits its creator's fd-table entries (task gr2).** The fd
   table is keyed by tgid and nothing modelled fork, so a new process started

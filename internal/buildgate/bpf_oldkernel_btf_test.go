@@ -231,6 +231,45 @@ func TestTaskNewtaskHandlerHasNoContextPointerArithmetic(t *testing.T) {
 	}
 }
 
+// TestTaskRenameHandlerReadsItsArgumentsWithoutCoreRelocation pins the
+// verifier-facing property of the raw-tracepoint handler (task lr2): its
+// context is the tracepoint's TP_PROTO arguments, read as plain u64 loads at
+// fixed offsets 0 and 8. Going through vmlinux.h's struct
+// bpf_raw_tracepoint_args::args instead compiles to a CO-RE-relocated offset
+// added to the context register, i.e. context pointer arithmetic, which is the
+// shape old verifiers reject (see TestTaskNewtaskHandlerHasNoContextPointerArithmetic).
+// The only relocations the handler may carry are the task_struct offsets it
+// probe-reads from kernel memory.
+func TestTaskRenameHandlerReadsItsArgumentsWithoutCoreRelocation(t *testing.T) {
+	objdump, err := exec.LookPath("llvm-objdump")
+	if err != nil {
+		t.Skipf("llvm-objdump not installed: %v", err)
+	}
+	clang, includeDir, srcDir := bpfBuildInputs(t)
+	obj := filepath.Join(t.TempDir(), "ior.bpf.o")
+	if out, err := compileBPF(clang, includeDir, filepath.Join(srcDir, "ior.bpf.c"), obj); err != nil {
+		t.Fatalf("compile: %v\n%s", err, out)
+	}
+	out, err := exec.Command(objdump, "-dr", "--no-show-raw-insn",
+		"--section=raw_tracepoint/task_rename", obj).CombinedOutput()
+	if err != nil {
+		t.Fatalf("llvm-objdump: %v\n%s", err, out)
+	}
+	if !bytes.Contains(out, []byte("struct task_struct::tgid")) || !bytes.Contains(out, []byte("struct task_struct::pid")) {
+		t.Fatalf("handle_task_rename carries no task_struct pid/tgid relocations; the disassembly parser or the "+
+			"section name is broken:\n%s", out)
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if bytes.Contains(line, []byte("CO-RE")) && bytes.Contains(line, []byte("bpf_raw_tracepoint_args")) {
+			t.Errorf("handle_task_rename relocates its context access: %q", line)
+		}
+	}
+	if !regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x0\)`).Match(out) ||
+		!regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x8\)`).Match(out) {
+		t.Errorf("handle_task_rename does not load both tracepoint arguments at offsets 0 and 8:\n%s", out)
+	}
+}
+
 // coreRelocatedInstructions returns, from llvm-objdump -dr output, the
 // instruction line that precedes each CO-RE relocation line.
 func coreRelocatedInstructions(dump string) []string {

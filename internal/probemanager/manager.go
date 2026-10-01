@@ -19,6 +19,18 @@ type Program interface {
 	AttachTracepoint(category, name string) (Link, error)
 }
 
+// RawTracepointProgram is implemented by programs that can also attach as a
+// raw_tracepoint (SEC "raw_tracepoint/<name>"), whose context is the
+// tracepoint's TP_PROTO arguments rather than the formatted record.
+//
+// It is a separate interface, not a second method of Program, because only the
+// hand-written probes need it: the syscall probe manager attaches classic
+// tracepoints only, and widening Program would force every implementation of
+// it to carry a method it never calls.
+type RawTracepointProgram interface {
+	AttachRawTracepoint(name string) (Link, error)
+}
+
 // Attacher resolves BPF programs by name.
 type Attacher interface {
 	GetProgram(name string) (Program, error)

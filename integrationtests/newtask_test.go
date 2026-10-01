@@ -136,30 +136,23 @@ const (
 // tokio, Java, Chrome and Bun worker pools) kept the parent's comm for good,
 // because the seed from the task_newtask record was authoritative and retired
 // the procfs read that would have found the new name. The scenario's threads
-// issue one pwrite64 (warm-up), pause, then four pread64 calls (measured);
-// every pread64 row must carry the renamed comm, not "ioworkload".
+// issue one pwrite64 (warm-up), pause, then four pread64 calls (measured).
 //
-// What is and is not deterministic: the warm-up row may carry the inherited
-// name - the one /proc read that finds the new name is queued by that very row,
-// so nothing can name it earlier - which is why the phases are told apart by
-// syscall and only the measured ones are held to the renamed comm. The measured
-// rows depend on the read having landed by the time the event loop reaches
-// them. The scenario makes that true for an event-loop lag under about
-// threadCommRenameSettle (500ms in the workload): the pause keeps the measured
-// rows away from the warm-up. Past that (measured: ior stalled 0.8-1.4s right
-// after the threads were created) the warm-up and measured rows are already
-// queued in the ring buffer and are processed back to back, faster than the
-// async read lands, so the measured rows legitimately keep "ioworkload" and
-// this test fails. The linger (threadCommLinger) does not widen that bound: it
-// only keeps the threads alive so a late read still finds them. The row count
-// is only bounded, see threadCommMinKeptPercent.
+// Since task lr2 the rename is reported by the task:task_rename record, in
+// ring-buffer order with the thread's syscalls, so every row of a thread - the
+// warm-up too - carries the new name, whatever the lag of the event loop. (The
+// fr2 mechanism, one /proc read queued by the first row, left the warm-up row
+// with the inherited name and made the measured rows depend on the pause.) The
+// row counts are only bounded, see threadCommMinKeptPercent.
 func TestRenamedThreadsKeepTheirNewName(t *testing.T) {
 	rows, _ := runParquetScenarioRowsAllowingComms(t, threadCommRenamedScenario, defaultDuration,
 		[]string{"-trace-syscalls", "pwrite64,pread64"}, nil, "ioworkload", renamedThreadComm)
 	warm := rowsBySyscall(rows, "pwrite64")
-	if len(warm) > threadCommRows/4 || len(warm) < minKept(threadCommRows/4) {
-		t.Errorf("captured %d warm-up pwrite64 rows, want between %d and %d",
-			len(warm), minKept(threadCommRows/4), threadCommRows/4)
+	requireRowCount(t, "warm-up pwrite64 rows", len(warm), threadCommRows/4)
+	for _, row := range warm {
+		if row.Comm != renamedThreadComm {
+			t.Errorf("warm-up row comm = %q, want the thread's own %q: %+v", row.Comm, renamedThreadComm, row)
+		}
 	}
 	measured := rowsBySyscall(rows, "pread64")
 	for _, row := range measured {
@@ -176,11 +169,10 @@ func TestRenamedThreadsKeepTheirNewName(t *testing.T) {
 }
 
 // TestRenamedThreadsSurviveTheRenamedCommFilter: -comm <renamed> must keep the
-// rows of the renamed threads (0 of them survived before the fix). Only the
-// measured pread64 rows are counted: the warm-up pwrite64 is judged against the
-// still-provisional inherited name, exactly like before any name was known, so
-// the exit-side comm filter may drop it. Same timing caveat as the test above:
-// an event-loop stall beyond ~500ms can fail it, and the count is only bounded.
+// rows of the renamed threads (0 of them survived before the fix). The warm-up
+// pwrite64 is judged against the renamed name too since task lr2 (before it the
+// provisional inherited name was all the filter knew at that point), so the
+// counts below cover both syscalls. The count is only bounded.
 func TestRenamedThreadsSurviveTheRenamedCommFilter(t *testing.T) {
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
@@ -192,6 +184,8 @@ func TestRenamedThreadsSurviveTheRenamedCommFilter(t *testing.T) {
 	AssertNoUnexpectedPID(t, result, pid)
 	total := countCollapsed(t, result, "pread64", renamedThreadComm)
 	requireRowCount(t, "measured pread64 rows kept by -comm "+renamedThreadComm, total, threadCommRows)
+	warm := countCollapsed(t, result, "pwrite64", renamedThreadComm)
+	requireRowCount(t, "warm-up pwrite64 rows kept by -comm "+renamedThreadComm, warm, threadCommRows/4)
 }
 
 const threadCommFdTableScenario = "thread-comm-fdtable"

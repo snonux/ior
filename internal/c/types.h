@@ -70,6 +70,8 @@
 #define EXIT_EVENTFD_NAME_EVENT 61
 // Control record of the hand-written task:task_newtask handler (exec.c).
 #define TASK_NEWTASK_EVENT 62
+// Control record of the hand-written task:task_rename handler (exec.c).
+#define TASK_RENAME_EVENT 63
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -640,4 +642,26 @@ struct task_newtask_event {
     __u64 clone_flags;
     __u32 creator_pid;
     __u32 scope_flags;
+};
+
+// task_rename_event is a control record, not a syscall event: the hand-written
+// task:task_rename handler in exec.c emits it whenever the kernel changes a
+// task's comm (prctl(PR_SET_NAME), pthread_setname_np, a /proc/<tid>/comm
+// write, and the exec's own rename). Userspace applies it to the tid->comm
+// cache (handleTaskRenameEvent); it is never rendered as a row.
+//
+// pid is the renamed task's thread-group id and tid its task id - the
+// *renamed* task, which a /proc/<tid>/comm write makes different from the
+// task that emitted the record. comm is the new name, NUL-terminated by the
+// handler (bytes after the NUL are stale ring-buffer memory, see "String
+// fields in ring-buffer records" in filter.c). The layout has no implicit
+// padding, so the kernel record and a binary.Write payload share one size,
+// 40 bytes.
+struct task_rename_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    char comm[MAX_PROGNAME_LENGTH];
 };

@@ -143,7 +143,7 @@ func stringBearingEvents() []fmt.Stringer {
 	return []fmt.Stringer{
 		&OpenEvent{}, &OpenNameFixupEvent{}, &ExecEvent{}, &NameEvent{}, &PathEvent{},
 		&FdPathEvent{}, &EventfdEvent{}, &EventfdNameEvent{}, &TwoFdEvent{},
-		&TwoFdNamesEvent{}, &ProcessExecEvent{}, &TaskNewtaskEvent{},
+		&TwoFdNamesEvent{}, &ProcessExecEvent{}, &TaskNewtaskEvent{}, &TaskRenameEvent{},
 	}
 }
 

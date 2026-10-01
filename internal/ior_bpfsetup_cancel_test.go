@@ -27,6 +27,17 @@ func (a *recordingAttacher) GetProgram(string) (probemanager.Program, error) {
 }
 
 func (p recordingProgram) AttachTracepoint(string, string) (probemanager.Link, error) {
+	return p.attachLink()
+}
+
+// AttachRawTracepoint hands out a link like AttachTracepoint does: the rename
+// probe is the one hand-written probe attached as a raw tracepoint, and it
+// counts as a sched probe link (schedProbeLinks).
+func (p recordingProgram) AttachRawTracepoint(string) (probemanager.Link, error) {
+	return p.attachLink()
+}
+
+func (p recordingProgram) attachLink() (probemanager.Link, error) {
 	a := p.attacher
 	a.mu.Lock()
 	link := &fakeProbeLink{}
@@ -53,9 +64,9 @@ func (a *recordingAttacher) attached() (total, live int) {
 }
 
 // schedProbeLinks is the number of links attachTraceProbes creates before the
-// syscall walk: the sched_process_exec, sched_process_exit and task_newtask
-// probes.
-const schedProbeLinks = 3
+// syscall walk: the sched_process_exec, sched_process_exit, task_newtask and
+// task_rename probes.
+const schedProbeLinks = 4
 
 // TestAttachTraceProbesStopsAndDetachesWhenCancelledDuringAttach is the
 // regression test for a restart during "Attaching tracepoints...": the old

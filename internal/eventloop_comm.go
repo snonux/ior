@@ -29,8 +29,9 @@ const resolveCommTimeout = time.Second
 // honest across execve.
 //
 // epoch counts the authoritative kernel-sourced names userspace has installed
-// for the tid - a sched_process_exec control record, an open event's payload
-// comm, a failed execve's payload comm (setCachedFromKernel). A lookup worker
+// for the tid - a sched_process_exec control record, a task_rename control
+// record, an open event's payload comm, a failed execve's payload comm
+// (setCachedFromKernel). A lookup worker
 // samples it *before* reading /proc and discards its result when the epoch
 // moved on in the meantime: without that guard a worker descheduled between the
 // procfs read and the cache write can overwrite an exact, kernel-reported name
@@ -489,13 +490,14 @@ func (r *commResolver) setCommLocked(tid uint32, comm string) {
 // was already in flight for that tid (see storeLookupResult).
 //
 // Every authoritative kernel-sourced write takes this path, not just the
-// sched_process_exec record: an open event's payload comm and a failed
-// execve's payload comm are read by BPF from task->comm at event time, so they
-// are exact for that moment, whereas a resolver worker's /proc read is
-// unordered with respect to them. Bumping only on exec left those two writes
+// sched_process_exec record: a task_rename record (a task renaming itself with
+// prctl(PR_SET_NAME) or pthread_setname_np, handleTaskRenameEvent), an open
+// event's payload comm and a failed execve's payload comm are exact for the
+// moment the kernel produced them, whereas a resolver worker's /proc read is
+// unordered with respect to them. Bumping only on exec left those writes
 // clobberable by a descheduled worker holding an older name - reachable
-// whenever the exec record was dropped, and also with no execve at all via
-// prctl(PR_SET_NAME).
+// whenever the exec record was dropped, and also with no execve at all through
+// a rename.
 func (r *commResolver) setCachedFromKernel(tid uint32, comm string) {
 	if comm == "" {
 		return
@@ -514,9 +516,11 @@ func (r *commResolver) setCachedFromKernel(tid uint32, comm string) {
 // It is the write for a name that is known to be *inherited* rather than
 // current: the comm a task_newtask record reports is the creator's, and a new
 // thread commonly renames itself (prctl(PR_SET_NAME), pthread_setname_np) as
-// its very first act - tokio, Java, Chrome and Bun worker pools all do - with
-// no tracepoint to say so. Two properties follow from that, and each is the
-// opposite of setCachedFromKernel:
+// its very first act - tokio, Java, Chrome and Bun worker pools all do. The
+// task_rename record reports that rename, but it can be lost (ring-buffer
+// backpressure) or its probe can fail to attach, and the one /proc read below
+// is the fallback for those cases. Two properties follow from that, and each is
+// the opposite of setCachedFromKernel:
 //   - The epoch is not bumped, so a procfs result may overwrite the guess
 //     (storeLookupResult only discards results that predate an authoritative
 //     write). Bumping it would pin the parent's name for the thread's life.

@@ -35,18 +35,19 @@ const (
 // The seeded name is provisional, not authoritative (setCachedProvisional). It
 // is the *creator's* name, and a new thread very often renames itself at once
 // (prctl(PR_SET_NAME), pthread_setname_np: tokio, Java, Chrome and Bun worker
-// pools), which no tracepoint reports. Writing it as authoritative bumped the
-// tid's rename generation and so discarded every later procfs result, pinning
-// the parent's name on such a thread for good - and hiding its rows from
-// -comm <renamed>. As a provisional entry it is flagged stale instead: the
-// first use of the tid queues one /proc/<tid>/comm read whose result replaces
-// it, so a thread that renamed itself before its first traced syscall is
-// labelled with its own name from then on. Rows emitted before that read lands
-// still carry the inherited name (and under -comm are matched against it), which
-// is what the base behaviour had too: it had no name at all until the read
-// landed. An exec or open record that arrives meanwhile is authoritative and
-// still outranks the read. A rename that happens later than the first traced
-// syscall is not observed by anything (task lr2).
+// pools). The task_rename record (handleTaskRenameEvent, task lr2) reports such
+// a rename authoritatively and in ring-buffer order, which is what normally
+// names the thread correctly from its first row. The seed still has to be
+// correctable without it, because that record can be lost or its probe may not
+// have attached, and writing the seed as authoritative would bump the tid's
+// rename generation, discard every later procfs result and pin the parent's
+// name on such a thread for good - hiding its rows from -comm <renamed>. As a
+// provisional entry it is flagged stale instead: the first use of the tid
+// queues one /proc/<tid>/comm read whose result replaces it. Rows emitted before
+// that read lands still carry the inherited name (and under -comm are matched
+// against it), which is what the base behaviour had too: it had no name at all
+// until the read landed. An exec, rename or open record that arrives meanwhile
+// is authoritative and still outranks the read.
 //
 // A fork that then execve()s is renamed by the sched_process_exec record, which
 // arrives after this one and needs no read at all.
@@ -132,7 +133,7 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 // previous owner of its tgid are dropped in every non-thread case.
 //
 // Scope: a record is emitted for a child that is in scope (see
-// ior_newtask_in_scope), so under -pid the fork()ed children of the target, which
+// ior_task_in_scope), so under -pid the fork()ed children of the target, which
 // are not traced, cost nothing here. The one record for an out-of-scope child
 // (ChildOutOfScope) never reaches this function: handleTaskNewtaskEvent turns it
 // into fdTracker.markBlind on the creator.
