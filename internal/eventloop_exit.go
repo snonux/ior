@@ -627,10 +627,14 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		// The stash is only the thread's LAST name_to_handle_at path, so it
 		// is checked against what procfs shows under the returned number.
-		// procfs names the row only when it contradicts the stash AND the
-		// descriptor is confirmed as still the call's own; a contradiction
-		// from a descriptor that vanished or has other flags (most likely a
-		// reused number) leaves the row to the stash (see openedHandleFile).
+		// procfs names the row when there is no stash (or an empty one), and
+		// when it contradicts the stash AND the descriptor it shows can still
+		// be the call's own (confirmedHandleFd: still open, of a kind a
+		// handle can open, with the call's fixed flags - plausible, not
+		// proven). A contradiction from a descriptor that vanished, is a
+		// socket, pipe or other anonymous inode, or has other flags (a reused
+		// number, certainly or most likely) leaves the row to the stash (see
+		// openedHandleFile).
 		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile

@@ -1740,10 +1740,21 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     unverifiable case. The access mode counts only for a descriptor whose link
     is an absolute path (`fixedFlagsMask`): pidfs forces it (a pidfd handle
     opened `O_RDONLY` shows `O_RDWR` in fdinfo), so for a non-path target
-    (`anon_inode:[pidfd]`, `pidfd:[N]`, `net:[N]`, also `socket:[N]`) only
-    `O_DIRECTORY`/`O_NOFOLLOW`/`O_PATH` are compared - otherwise a pidfd row
-    took an unrelated stash - at the price that a number reused by a socket or
-    pipe is not told apart by its access mode. "Most likely" is meant
+    that a handle can open (`anon_inode:[pidfd]`, nsfs links such as
+    `net:[N]`) only `O_DIRECTORY`/`O_NOFOLLOW`/`O_PATH` are compared -
+    otherwise a pidfd row took an unrelated stash. A non-path target that no
+    handle can open is never believed (`reachableByHandle`, a deny list:
+    `socket:[`, `pipe:[`, and `anon_inode:` other than `anon_inode:[pidfd]`):
+    sockfs, pipefs and the generic anon-inode fs have no export operations
+    (kernel knowledge; on 7.2.5 `name_to_handle_at(fd, "", AT_EMPTY_PATH)`
+    answers `EOPNOTSUPP` for socket, pipe, eventfd, epoll, timerfd, signalfd
+    and inotify descriptors and succeeds for a pidfd and every
+    `/proc/self/ns/*`), so such a link under the returned number proves the
+    number was reused - without it an `O_RDONLY` call whose number went to an
+    `O_RDWR` socket/eventfd/epoll descriptor was named after that descriptor,
+    because the kind mask does not look at the access mode. What the kind
+    mask still costs: a number reused by a pidfd or a namespace descriptor is
+    believed unless the request carried a kind flag. "Most likely" is meant
     literally, and there is a losing case: the vanished descriptor can be the
     call's *own*, closed between the probe's reads. If the stash then belongs
     to another handle (stale, or a daemon that calls `name_to_handle_at` only
@@ -1757,7 +1768,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     between the probe's readlink and the fdinfo read, it left a name but no
     flags to compare. The
     evidence is one-sided: a number reused with the *same* fixed flags and
-    still open is taken for the opened handle and names the row; only handle
+    still open - by a path, or under the kind mask by a pidfd or namespace
+    descriptor - is taken for the opened handle and names the row; only handle
     bytes in the BPF events could close that (task k03). The integration
     test is exposed to exactly that residual and passes thanks to the
     workload's fd numbering (see the comment in `openByHandleAt`,
@@ -1766,6 +1778,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `TestConfirmedHandleFdRejectsAVanishedDescriptor`,
     `TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs`,
     `TestOpenByHandleAtPidfdHandleIsNamedFromProcfs`,
+    `TestOpenByHandleAtIgnoresANumberReusedByAHandleLessDescriptor`,
+    `TestOpenByHandleAtPidfdStashMatchesAPidfd`, `TestReachableByHandle`,
     `TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber`,
     `TestFixedFlagsMask` and `TestSameFixedFlags`
     (`internal/eventloop_handle_test.go`).

@@ -49,9 +49,10 @@ const deletedSuffix = " (deleted)"
 // descriptor still (there is no pidfd_getfd in this path). The same holds, on
 // a far smaller scale, between the two syscalls of the probe itself. So a
 // probe that contradicts the stash is believed only when confirmedHandleFd
-// finds the descriptor still there with the flags the call asked for; a reuse
-// that check cannot see (same flags) names the row after the newer file - the
-// exposure every procfs-resolved fd row has anyway.
+// finds the descriptor still there, of a kind a handle can open, with the
+// flags the call asked for; a reuse that check cannot see (a path, pidfd or
+// namespace descriptor with the same flags) names the row after the newer
+// file - the exposure every procfs-resolved fd row has anyway.
 type handleFdProbe struct {
 	info    os.FileInfo
 	statErr error
@@ -90,12 +91,24 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 //     whose own name ends in " (deleted)" is indistinguishable from an
 //     unlinked one here, but such a file is stat-able and takes path 1.
 //
-// Relative stashes (AT_FDCWD with a relative name is stored as given) are
-// compared by link text only: os.Stat would resolve them against ior's working
-// directory, which says nothing about the task's, and procfs links are
-// absolute, so a relative stash is a mismatch whenever the link is readable.
-// The row is then named from procfs if confirmedHandleFd confirms the
-// descriptor, and after the relative stash, as the task spelled it, if not.
+// Stashes that are not absolute are compared by link text only, and there are
+// two kinds of them:
+//
+//   - A relative PATH (AT_FDCWD with a relative name is stored as given).
+//     os.Stat would resolve it against ior's working directory, which says
+//     nothing about the task's, and the link of a file on a mounted filesystem
+//     is an absolute path, so a relative path stash is a mismatch whenever the
+//     link is readable. The row is then named from procfs if confirmedHandleFd
+//     confirms the descriptor, and after the relative stash, as the task
+//     spelled it, if not.
+//   - A non-path name resolved from a descriptor: name_to_handle_at(pidfd, "",
+//     AT_EMPTY_PATH), the normal way to take a pidfs handle, stashes the
+//     pidfd's own link text "anon_inode:[pidfd]", and a namespace descriptor
+//     stashes "net:[N]" and the like. Such a stash CAN match: it equals the
+//     link text of the descriptor its handle opens (every pidfd reads
+//     "anon_inode:[pidfd]", so it matches any pidfd, not only its own
+//     process's), and the stashed name is then used and consumed like any
+//     other match.
 //
 // Mount namespaces: the stash is the string the task passed, procfs is read
 // from ior's own namespace. When ior's namespace has a DIFFERENT file at the
@@ -173,14 +186,16 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 //     returned (confirmedHandleFd): the stash belongs to a different handle,
 //     so it is neither used nor consumed (its own open may still come) and
 //     the row is named from procfs.
-//   - mismatch, but that descriptor is gone again or was opened with other
-//     flags than this call's: procfs most likely described a later file under
-//     a reused number, which says nothing about this call. That is treated as
-//     the unverifiable case, so the stashed name is used and consumed. Without
-//     this a short-lived descriptor (open the handle, use it, close it, open
-//     the next file) was named after whatever the task opened next, and the fd
-//     table entry passed that name on to the rows that followed. It is a
-//     guess, and confirmedHandleFd names the case in which it is wrong.
+//   - mismatch, but that descriptor is gone again, is of a kind no handle can
+//     open (a socket, a pipe, an eventfd: see reachableByHandle) or was opened
+//     with other flags than this call's: procfs described, or most likely
+//     described, a later file under a reused number, which says nothing about
+//     this call. That is treated as the unverifiable case, so the stashed name
+//     is used and consumed. Without this a short-lived descriptor (open the
+//     handle, use it, close it, open the next file) was named after whatever
+//     the task opened next, and the fd table entry passed that name on to the
+//     rows that followed. It is a guess, and confirmedHandleFd names the case
+//     in which it is wrong.
 //
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
@@ -208,18 +223,19 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 
 // confirmedHandleFd returns the procfs-named file for a descriptor whose probe
 // contradicted the stash, provided the descriptor can still be the one the
-// open_by_handle_at returned: its link was readable, its fdinfo still is, and
-// its fixed flags are the ones the call asked for (sameFixedFlags, over the
-// flags fixedFlagsMask picks for the link text).
+// open_by_handle_at returned: its link was readable and names an object a file
+// handle can open at all (reachableByHandle), its fdinfo still is readable,
+// and its fixed flags are the ones the call asked for (sameFixedFlags, over
+// the flags fixedFlagsMask picks for the link text).
 //
 // ok is false when any of that fails, and the caller then names the row after
-// the stash and consumes it. The reasoning is a likelihood, not a proof.
-// Differing flags do prove a reuse: the descriptor is not the one this call
-// produced. A link or fdinfo that vanished between the probe's syscalls only
-// says the descriptor the probe glimpsed was closed within microseconds; most
-// likely the number is changing hands and the glimpse was of a later file, but
-// it can just as well have been the call's OWN descriptor, closed by the task
-// at that moment.
+// the stash and consumes it. The reasoning is a likelihood, not a proof. A
+// link no handle can produce and differing flags do prove a reuse: the
+// descriptor is not the one this call produced. A link or fdinfo that vanished
+// between the probe's syscalls only says the descriptor the probe glimpsed was
+// closed within microseconds; most likely the number is changing hands and the
+// glimpse was of a later file, but it can just as well have been the call's
+// OWN descriptor, closed by the task at that moment.
 //
 // The losing case is therefore a stash that does not belong to the opened
 // handle (stale, or one of several: a daemon that calls name_to_handle_at only
@@ -237,7 +253,7 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 // verdict was based on is the name the row carries. Only the flags are read
 // now, from fdinfo.
 func confirmedHandleFd(probe handleFdProbe, pid uint32, fd int32, eventFlags int32) (procFile *file.FdFile, ok bool) {
-	if probe.linkErr != nil {
+	if probe.linkErr != nil || !reachableByHandle(probe.target) {
 		return nil, false
 	}
 	procFile = file.NewFdWithProcName(fd, pid, probe.target)
@@ -262,21 +278,75 @@ const (
 	handleFixedFlags = syscall.O_ACCMODE | handleKindFlags
 )
 
+// pidfdLinkText is the /proc/<pid>/fd link text of a pidfd. It reads like one
+// of the kernel's generic anonymous inodes but lives on pidfs, which has
+// export operations, so it is the one "anon_inode:" target a file handle can
+// open.
+const pidfdLinkText = "anon_inode:[pidfd]"
+
+// handleLessLinkPrefixes are the /proc/<pid>/fd link texts of descriptors that
+// no open_by_handle_at can have returned: sockets ("socket:[N]", sockfs),
+// pipes ("pipe:[N]", pipefs) and the kernel's generic anonymous inodes
+// ("anon_inode:[eventfd]", "anon_inode:[eventpoll]", "anon_inode:inotify",
+// ...). pidfdLinkText shares the last prefix and is exempted by
+// reachableByHandle.
+var handleLessLinkPrefixes = []string{"socket:[", "pipe:[", "anon_inode:"}
+
+// reachableByHandle reports whether a descriptor whose /proc link reads target
+// can be the result of an open_by_handle_at at all.
+//
+// A file handle can only be decoded on a filesystem with export operations,
+// and sockfs, pipefs and the generic anonymous-inode filesystem have none. So
+// a link of one of those kinds under the returned number is proof that the
+// number was closed and reused, whatever its flags say: without this rule a
+// plain O_RDONLY call whose number went to a socket, eventfd or epoll
+// descriptor (all O_RDWR, which the kind-flag mask of a non-path target does
+// not look at) had its row and fd table entry named "socket:[N]" or
+// "anon_inode:[eventfd]" and left the stash unconsumed.
+//
+// It is a deny list: every other link text - an absolute path, a pidfd, a
+// namespace ("net:[N]", "mnt:[N]", "ipc:[N]", "uts:[N]", "pid:[N]",
+// "user:[N]", "cgroup:[N]", "time:[N]"; nsfs has export operations) and
+// anything a future kernel may add - stays eligible and is judged by its
+// flags, so a new exportable object is at worst believed too readily, never
+// denied its row.
+//
+// That those three filesystems have no export operations is kernel knowledge,
+// not something ior can ask at run time. It was checked on Linux 7.2.5
+// (x86_64) with name_to_handle_at(fd, "", AT_EMPTY_PATH): EOPNOTSUPP for a
+// socket, both ends of a pipe, eventfd, epoll, timerfd, signalfd and inotify;
+// success for a pidfd and for every /proc/self/ns/* descriptor.
+func reachableByHandle(target string) bool {
+	if target == pidfdLinkText {
+		return true
+	}
+	for _, prefix := range handleLessLinkPrefixes {
+		if strings.HasPrefix(target, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 // fixedFlagsMask returns the fixed flags a descriptor whose /proc link reads
 // target must share with the open_by_handle_at request to be taken for the
-// call's own.
+// call's own. It is only asked about targets reachableByHandle lets through.
 //
 // An absolute path is a file on a mounted filesystem, where the kernel stores
 // the access mode exactly as requested, so all of handleFixedFlags count.
-// Anything else ("anon_inode:[pidfd]", "pidfd:[N]", "net:[N]", but also
-// "socket:[N]" or "pipe:[N]") is an object whose filesystem picks the access
-// mode itself: opening a pidfs handle with O_RDONLY yields O_RDWR in fdinfo
+// Anything else that a handle can open ("anon_inode:[pidfd]", "net:[N]" and
+// the other namespaces) is an object whose filesystem picks the access mode
+// itself: opening a pidfs handle with O_RDONLY yields O_RDWR in fdinfo
 // (O_WRONLY yields 03), so a differing access mode proves nothing there and
 // would hand a genuine pidfd row to an unrelated stash. Only handleKindFlags
 // are compared for those: pidfs refuses O_DIRECTORY, O_NOFOLLOW and O_PATH
 // outright and nsfs keeps a requested O_PATH, so a genuine open still passes.
-// The price is that a number reused by a socket or pipe is no longer told
-// apart by its access mode and names the row, like any other same-flags reuse.
+//
+// The price is narrow: a number reused by a pidfd or a namespace descriptor is
+// not told apart by its access mode, only by a kind flag the request carried
+// (usually none), so such a reuse is believed and names the row. Sockets,
+// pipes and the other anonymous inodes, the reuses that matter in practice,
+// never get this far.
 func fixedFlagsMask(target string) int32 {
 	if filepath.IsAbs(target) {
 		return handleFixedFlags
@@ -297,9 +367,10 @@ func fixedFlagsMask(target string) int32 {
 //
 // It is one-sided evidence. Differing flags prove that the number was closed
 // and reused since the syscall returned; equal flags do not prove the opposite
-// (the task may have reopened the number with the same flags), and nothing
-// short of the handle bytes, which the BPF events do not carry, could tell
-// those apart.
+// (the task may have reopened the number with the same flags - as a path, or
+// under the kind mask as a pidfd or namespace descriptor), and nothing short
+// of the handle bytes, which the BPF events do not carry, could tell those
+// apart.
 func sameFixedFlags(procFlags file.Flags, requested, mask int32) bool {
 	if procFlags == file.Flags(-1) {
 		return false

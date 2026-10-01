@@ -661,6 +661,95 @@ func TestOpenByHandleAtPidfdHandleIsNamedFromProcfs(t *testing.T) {
 	}
 }
 
+// handleLessFds opens one descriptor of each kind no file handle can open,
+// keyed by a label: a socket, an eventfd and an epoll instance (all O_RDWR in
+// fdinfo) and the write end of a pipe (O_WRONLY).
+func handleLessFds(t *testing.T) map[string]int {
+	t.Helper()
+	sock, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("socket: %v", err)
+	}
+	eventFd, err := unix.Eventfd(0, unix.EFD_CLOEXEC)
+	if err != nil {
+		t.Fatalf("eventfd: %v", err)
+	}
+	epollFd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	if err != nil {
+		t.Fatalf("epoll_create1: %v", err)
+	}
+	var pipeFds [2]int
+	if err := unix.Pipe2(pipeFds[:], unix.O_CLOEXEC); err != nil {
+		t.Fatalf("pipe2: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, fd := range []int{sock, eventFd, epollFd, pipeFds[0], pipeFds[1]} {
+			_ = unix.Close(fd)
+		}
+	})
+	return map[string]int{"socket": sock, "eventfd": eventFd, "epoll": epollFd, "pipe write end": pipeFds[1]}
+}
+
+// TestOpenByHandleAtIgnoresANumberReusedByAHandleLessDescriptor: the thread
+// took a handle of a file, opened it O_RDONLY and closed it, and the number
+// went to a socket, an eventfd, an epoll instance or a pipe. None of those can
+// come out of an open_by_handle_at (their filesystems have no export
+// operations), so the link text alone proves the reuse and the row must be
+// named after the stash, which is consumed - the unconfirmed case. The flags
+// cannot show it: the request carries no kind flag, and the access mode of a
+// non-path target is not compared (see the pidfd test above), so before
+// reachableByHandle the row and the fd table entry read "socket:[N]" or
+// "anon_inode:[eventfd]" and the stash was left behind.
+func TestOpenByHandleAtIgnoresANumberReusedByAHandleLessDescriptor(t *testing.T) {
+	path := writeHandleFile(t, tempDir(t), "handlefile.txt")
+	for kind, fd := range handleLessFds(t) {
+		t.Run(kind, func(t *testing.T) {
+			feed := newHandleFeed(t)
+			feed.nameToHandle(path)
+			if got := feed.openByHandle(fd).File.Name(); got != path {
+				t.Fatalf("row named %q, want the stashed %q (no handle opens a %s)", got, path, kind)
+			}
+			tracked, ok := feed.el.fdState().get(int32(fd), feed.pid)
+			if !ok || tracked.Name() != path {
+				t.Fatalf("fd table entry = %v (ok=%v), want %q", tracked, ok, path)
+			}
+			if _, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+				t.Fatal("the stash named the row, so it must be consumed")
+			}
+		})
+	}
+}
+
+// TestOpenByHandleAtPidfdStashMatchesAPidfd pins that a stash need not be an
+// absolute path to match: name_to_handle_at(pidfd, "", AT_EMPTY_PATH), the
+// normal way to take a pidfs handle, stashes the pidfd's link text, and the
+// descriptor its handle opens has the same link text. The stashed name is
+// used and consumed like any other match.
+func TestOpenByHandleAtPidfdStashMatchesAPidfd(t *testing.T) {
+	source, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Skipf("pidfd_open: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(source) })
+	opened, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatalf("pidfd_open: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Close(opened) })
+
+	feed := newHandleFeed(t)
+	feed.nameToHandleEmptyPath(source)
+	if got, ok := feed.el.pendingHandleState().peek(feed.pid); !ok || got != pidfdLinkText {
+		t.Fatalf("AT_EMPTY_PATH stash of a pidfd = %q (ok=%v), want %q", got, ok, pidfdLinkText)
+	}
+	if got := feed.openByHandle(opened).File.Name(); got != pidfdLinkText {
+		t.Fatalf("row named %q, want %q", got, pidfdLinkText)
+	}
+	if _, ok := feed.el.pendingHandleState().peek(feed.pid); ok {
+		t.Fatal("a matching pidfd stash must be consumed")
+	}
+}
+
 // TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber is the control for
 // the pidfd exemption: on a descriptor whose link IS a path the access mode
 // still counts. An O_RDONLY call cannot have produced an O_RDWR descriptor on
@@ -693,14 +782,46 @@ func TestFixedFlagsMask(t *testing.T) {
 		{"/tmp/file", handleFixedFlags},
 		{"/tmp/file (deleted)", handleFixedFlags},
 		{"anon_inode:[pidfd]", handleKindFlags},
-		{"pidfd:[1234]", handleKindFlags},
 		{"net:[4026531833]", handleKindFlags},
-		{"socket:[42]", handleKindFlags},
+		{"mnt:[4026531832]", handleKindFlags},
 		{"", handleKindFlags},
 	}
 	for _, tt := range tests {
 		if got := fixedFlagsMask(tt.target); got != tt.want {
 			t.Errorf("fixedFlagsMask(%q) = %#o, want %#o", tt.target, got, tt.want)
+		}
+	}
+}
+
+// TestReachableByHandle pins the deny list: sockets, pipes and the generic
+// anonymous inodes cannot be opened by a handle; paths, the pidfd and the
+// namespace links can, and an unknown kind of link stays eligible.
+func TestReachableByHandle(t *testing.T) {
+	tests := []struct {
+		target string
+		want   bool
+	}{
+		{"/tmp/file", true},
+		{"/tmp/file (deleted)", true},
+		{"/memfd:name (deleted)", true},
+		{"/tmp/socket:[42]", true},
+		{"anon_inode:[pidfd]", true},
+		{"net:[4026531833]", true},
+		{"mnt:[4026531832]", true},
+		{"cgroup:[4026531835]", true},
+		{"time:[4026531834]", true},
+		{"unknown:[1]", true},
+		{"", true},
+		{"socket:[42]", false},
+		{"pipe:[42]", false},
+		{"anon_inode:[eventfd]", false},
+		{"anon_inode:[eventpoll]", false},
+		{"anon_inode:[timerfd]", false},
+		{"anon_inode:inotify", false},
+	}
+	for _, tt := range tests {
+		if got := reachableByHandle(tt.target); got != tt.want {
+			t.Errorf("reachableByHandle(%q) = %v, want %v", tt.target, got, tt.want)
 		}
 	}
 }
