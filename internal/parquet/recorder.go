@@ -381,13 +381,36 @@ func (r *Recorder) TakeFailure() error {
 	if r == nil {
 		return nil
 	}
+	// The common answer is nil (no failure, or one already taken), and the
+	// caller asks on every event of a dead recording: decide that under the
+	// shared lock and take the exclusive one only to claim a failure, so the
+	// per-event cost does not serialise with Record's RLock (task 5z2). The
+	// claim re-checks under the exclusive lock, since another caller may have
+	// taken the failure between the two locks.
+	if !r.failureClaimable() {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.active != nil || r.status.LastError == nil || r.failureTaken {
+	if !r.claimableLocked() {
 		return nil
 	}
 	r.failureTaken = true
 	return r.status.LastError
+}
+
+// failureClaimable reports under the shared lock whether a failure is waiting
+// to be taken.
+func (r *Recorder) failureClaimable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.claimableLocked()
+}
+
+// claimableLocked is TakeFailure's condition; the caller holds r.mu (shared
+// or exclusive).
+func (r *Recorder) claimableLocked() bool {
+	return r.active == nil && r.status.LastError != nil && !r.failureTaken
 }
 
 // Status returns a snapshot of the recorder state.

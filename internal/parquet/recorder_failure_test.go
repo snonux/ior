@@ -2,6 +2,8 @@ package parquet
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -432,4 +434,59 @@ func waitStopRequested(t *testing.T, session *recordingSession) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// TestRecorderTakeFailureConcurrentCallersClaimItOnce (task 5z2): TakeFailure
+// decides under the shared lock and claims under the exclusive one, so many
+// goroutines asking at once - which is what a per-event caller of a dead
+// recording does - must still see the failure exactly once between them.
+func TestRecorderTakeFailureConcurrentCallersClaimItOnce(t *testing.T) {
+	writeErr := errors.New("disk full")
+	r := newFailingRecorder(writeErr, 1)
+	failRecording(t, r)
+
+	const callers = 64
+	var wg sync.WaitGroup
+	var claimed atomic.Int32
+	start := make(chan struct{})
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := r.TakeFailure(); err != nil {
+				if !errors.Is(err, writeErr) {
+					t.Errorf("TakeFailure() = %v, want %v", err, writeErr)
+				}
+				claimed.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := claimed.Load(); got != 1 {
+		t.Fatalf("%d callers took the failure, want exactly 1", got)
+	}
+}
+
+// BenchmarkTakeFailureAfterTheFailureWasTaken is the per-event cost of asking a
+// dead recording whose failure is already taken (the steady state of a failed
+// recording), from parallel callers.
+func BenchmarkTakeFailureAfterTheFailureWasTaken(b *testing.B) {
+	writeErr := errors.New("disk full")
+	r := newFailingRecorder(writeErr, 1)
+	if err := r.Start("ignored", StartOptions{}); err != nil {
+		b.Fatal(err)
+	}
+	_ = r.Record(testStreamRow(1, "read", false), 0)
+	for st := r.Status(); st.Active || st.LastError == nil; st = r.Status() {
+		time.Sleep(time.Millisecond)
+	}
+	_ = r.TakeFailure()
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = r.TakeFailure()
+		}
+	})
 }
