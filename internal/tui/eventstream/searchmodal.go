@@ -5,6 +5,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+
+	"ior/internal/tui/common"
 )
 
 // SearchDirection is which way the stream search scans from the current
@@ -81,8 +83,9 @@ func (m SearchModal) Close() SearchModal {
 }
 
 // Update returns updated modal, submitted term, and whether submit occurred.
-// Every other message goes to the text input, an Alt+D on the last rune as
-// Delete (guardDeleteWordForward: bubbles' delete-word-forward panics there).
+// Every other message goes to the text input through common.UpdateTextInput,
+// which turns an Alt+D on the last rune into Delete (bubbles'
+// delete-word-forward panics there).
 func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	if !m.visible {
 		return m, "", false
@@ -101,7 +104,7 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 		}
 	}
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(guardDeleteWordForward(m.textInput, msg))
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd
 	// Keep the window the user saw unless the edit moved the cursor out of
 	// it (fitModalInput), at the width the last Resize stored.

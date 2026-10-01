@@ -161,13 +161,16 @@ func (m Model) updatePaste(msg tea.PasteMsg) Model {
 		return m
 	}
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd // only ever a cursor-blink command, which nothing routes back
 	return m
 }
 
 // updateEditing handles key presses while the user is typing into the text
 // input for the active field. Esc commits and closes; Enter confirms the value.
+// Every other key edits the field through common.UpdateTextInput (as
+// updatePaste does), which keeps Alt+D on the last rune from panicking
+// bubbles (task kz2).
 func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 	switch keyMsg.String() {
 	case "esc":
@@ -181,7 +184,7 @@ func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 		return m.commitEdit()
 	}
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(keyMsg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, keyMsg)
 	_ = cmd
 	return m
 }

@@ -85,8 +85,10 @@ func (m recordingModal) Update(msg tea.Msg) (recordingModal, string, bool) {
 			return m, path, true
 		}
 	}
+	// Every other message edits the path. common.UpdateTextInput, not
+	// textInput.Update: bubbles panics on Alt+D on the last rune (task kz2).
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd
 	return m, "", false
 }

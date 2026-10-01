@@ -159,8 +159,9 @@ var streamInputModals = []streamInputModal{
 // typed into the input through both entry points, and HandleTeaKey sent
 // Ctrl+Left/Right to HandleKey("left"/"right"), dropping the modifier (the
 // HandleKey entry already moved by word for those names). The alt+d and
-// alt+delete cases on the last rune pin the guardDeleteWordForward fix of a
-// panic that both entry points already hit before task 9z2.
+// alt+delete cases on the last rune pin the delete-word-forward guard
+// (common.UpdateTextInput since task kz2) fixing a panic that both entry
+// points already hit before task 9z2.
 var modalEditKeyCases = []struct {
 	name  string
 	keys  []string
@@ -193,8 +194,8 @@ var modalEditKeyCases = []struct {
 	{name: "alt+backspace", keys: []string{"alt+backspace"}, value: "foo bar ", pos: 8},
 	{name: "alt+d mid-value", keys: []string{"home", "alt+d"}, value: " bar baz", pos: 0},
 	// changed: bubbles v2.0.0 panics on a delete-word-forward from the
-	// last rune (task kz2), and did so here before task 9z2 too; the
-	// modals now turn it into Delete (guardDeleteWordForward).
+	// last rune, and did so here before task 9z2 too; the modals now
+	// turn it into Delete (common.UpdateTextInput, task kz2).
 	{name: "alt+d on the last rune", keys: []string{"left", "alt+d"}, value: "foo bar ba", pos: 10},
 	{name: "alt+delete on the last rune", keys: []string{"left", "alt+delete"}, value: "foo bar ba", pos: 10},
 	{name: "alt+d at the end", keys: []string{"alt+d"}, value: "foo bar baz", pos: 11},

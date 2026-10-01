@@ -850,6 +850,25 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   A new text input must accept `tea.PasteMsg` as well as keys.
   Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
 
+  **Every textinput is fed through `common.UpdateTextInput`** (task kz2,
+  `internal/tui/common/textinput.go`), never `textinput.Model.Update`
+  directly. bubbles' `textinput.deleteWordForward` (v2.0.0, still in v2.2.1,
+  so a version bump does not help) steps past the last rune and reads one
+  past the value: Alt+D / Alt+Delete with the cursor on the last rune
+  panicked the whole TUI in the PID picker, flame search, probes search,
+  record modal, filter modal and (until 9z2) the stream search/export
+  modals. `UpdateTextInput` turns exactly that press into a plain Delete,
+  which removes the same rune (also for masked inputs, where bubbles
+  deletes after the cursor); every other cursor position and message passes
+  through. Pinned by `common/textinput_test.go` (values, wide runes, masked,
+  negative controls, and `TestBubblesDeleteWordForwardStillPanicsOnTheLastRune`,
+  which fails once an upgraded bubbles fixes the bug so the guard can go),
+  `internal/tui/textinput_deleteword_test.go` (every host end to end through
+  `Model.Update`) and `common/textinput_hosts_test.go`, an AST scan of
+  `internal/tui` that fails when a non-test file calls `Update` on a
+  `textinput.Model` (field, variable, parameter or `textinput.New()` result)
+  outside the allow-list (`common/textinput.go` only).
+
   **The stream search/export modals get the real key press** (task 9z2).
   `eventstream.Model.HandleTeaKey` hands an open modal the `tea.KeyPressMsg`
   itself instead of round-tripping it through its name, and the `textinput`
@@ -868,9 +887,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   as no key, which an open modal consumes and ignores. Alt+D/Alt+Delete on the
   last rune already panicked in both modals before task 9z2 (bubbles v2.0.0
   `deleteWordForward` indexes past the value); their `Update` now turns it
-  into Delete there (`guardDeleteWordForward`; the other textinputs are task
-  kz2). Pinned by `eventstream/modalkeys_test.go` (both modals, both entry
-  points; comments mark which cases pin changed behaviour) and
+  into Delete there (`common.UpdateTextInput`, which since task kz2 guards
+  every textinput, see above). Pinned by `eventstream/modalkeys_test.go`
+  (both modals, both entry points; comments mark which cases pin changed
+  behaviour) and
   `dashboard/streammodalkeys_test.go` (end to end through `dashboard.Update`
   with presses built as Bubble Tea delivers them).
 - **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).

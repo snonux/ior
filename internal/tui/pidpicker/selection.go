@@ -3,6 +3,7 @@ package pidpicker
 import (
 	"fmt"
 
+	common "ior/internal/tui/common"
 	"ior/internal/tui/messages"
 
 	tea "charm.land/bubbletea/v2"
@@ -59,8 +60,9 @@ func (m Model) moveSelection(delta int) Model {
 	return m
 }
 
-// editFilter feeds msg to the filter input and, only when the text really
-// changed, rebuilds the list. When the edit happens while the All row is
+// editFilter feeds msg to the filter input (through common.UpdateTextInput,
+// which keeps Alt+D on the last rune from panicking bubbles, task kz2) and,
+// only when the text really changed, rebuilds the list. When the edit happens while the All row is
 // highlighted, the highlight is handed back to the filter (implicit true):
 // typing "mysql" and pressing Enter then means the first mysql process, not the
 // whole system, which is what the untouched All row meant before task hs2. A
@@ -84,7 +86,7 @@ func (m Model) moveSelection(delta int) Model {
 func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 	before := m.input.Value()
 	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	m.input, cmd = common.UpdateTextInput(m.input, msg)
 	if m.input.Value() == before {
 		return m, cmd
 	}

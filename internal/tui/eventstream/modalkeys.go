@@ -4,8 +4,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -115,24 +113,4 @@ func namedKeyPress(code rune, mod tea.KeyMod) tea.KeyPressMsg {
 		msg.Text = " "
 	}
 	return msg
-}
-
-// guardDeleteWordForward returns msg for ti, except that a delete-word-forward
-// press (Alt+D, Alt+Delete) with the cursor on the value's last rune becomes
-// a plain Delete, which removes the same rune. bubbles v2.0.0's
-// textinput.deleteWordForward indexes one past the value there and panics
-// (task kz2 fixes this for every textinput). This crash predates task 9z2:
-// the old name route made Alt+D a press with Text "alt+d", which matches the
-// binding just as the real press does, so "foo", Left, Alt+D panicked in both
-// modals. Task 9z2 added this guard to fix that existing crash here; kz2
-// still covers the other textinputs.
-func guardDeleteWordForward(ti textinput.Model, msg tea.Msg) tea.Msg {
-	press, ok := msg.(tea.KeyPressMsg)
-	if !ok || !key.Matches(press, ti.KeyMap.DeleteWordForward) {
-		return msg
-	}
-	if ti.Position() != utf8.RuneCountInString(ti.Value())-1 {
-		return msg
-	}
-	return tea.KeyPressMsg{Code: tea.KeyDelete}
 }

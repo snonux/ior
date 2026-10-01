@@ -5,6 +5,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+
+	"ior/internal/tui/common"
 )
 
 // ExportModal is the stream tab's filename-entry modal for CSV export.
@@ -82,8 +84,9 @@ func (m ExportModal) Reject(filename string, err error) ExportModal {
 }
 
 // Update returns updated modal, submitted filename, and whether submit occurred.
-// Every other message goes to the text input, an Alt+D on the last rune as
-// Delete (guardDeleteWordForward: bubbles' delete-word-forward panics there).
+// Every other message goes to the text input through common.UpdateTextInput,
+// which turns an Alt+D on the last rune into Delete (bubbles'
+// delete-word-forward panics there).
 //
 // An error (the empty-name message here, or the reason a Reject gave) stays
 // until the user edits the text: it describes the name that was submitted, so
@@ -108,7 +111,7 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	}
 	before := m.textInput.Value()
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(guardDeleteWordForward(m.textInput, msg))
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd
 	// Keep the window the user saw unless the edit moved the cursor out of
 	// it (fitModalInput), at the width the last Resize stored.

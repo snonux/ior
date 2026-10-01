@@ -350,10 +350,12 @@ func (m Model) updateSearch(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 // typeIntoSearch feeds a typed key or a pasted text to the search input and
-// re-applies the live filter from its value.
+// re-applies the live filter from its value. It goes through
+// common.UpdateTextInput, which keeps Alt+D on the last rune from panicking
+// bubbles (task kz2).
 func (m Model) typeIntoSearch(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	m.search = strings.TrimSpace(m.textInput.Value())
 	m = m.clampCursor()
 	return m, cmd

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	common "ior/internal/tui/common"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
@@ -153,10 +155,12 @@ func (sc *SearchController) handlePaste(msg tea.PasteMsg) {
 }
 
 // typeIntoInput feeds a key press or paste to the text input and drops the
-// command it returns (see handleInput for why).
+// command it returns (see handleInput for why). It goes through
+// common.UpdateTextInput, which keeps Alt+D on the last rune from panicking
+// bubbles (task kz2).
 func (sc *SearchController) typeIntoInput(msg tea.Msg) {
 	var cmd tea.Cmd
-	sc.searchInput, cmd = sc.searchInput.Update(msg)
+	sc.searchInput, cmd = common.UpdateTextInput(sc.searchInput, msg)
 	_ = cmd
 }
 
