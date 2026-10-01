@@ -18,9 +18,10 @@ struct {
 // in, and the output buffer of getcwd (outputPathSyscalls in
 // internal/generate/classify.go), whose path the kernel only writes during the
 // call. pending_filename2 is the same for the second path of the rename/link
-// family (newname); rename(old, new) can fault either, both or neither. 0
-// means "nothing to read" and is the state ior_on_syscall_enter leaves behind
-// for every other syscall (the struct is zero-initialised there).
+// family (newname) and of move_mount (to_pathname); either of the two reads
+// can fault, both or neither. 0 means "nothing to read" and is the state
+// ior_on_syscall_enter leaves behind for every other syscall (the struct is
+// zero-initialised there).
 struct syscall_enter_state {
     __u64 start_ns;
     __u64 pending_filename;

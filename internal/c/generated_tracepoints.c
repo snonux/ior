@@ -8602,6 +8602,7 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->oldname, sizeof(ev->oldname), (void*)ctx->args[1]) < 0) {
             ev->oldname_status = PATH_READ_FAILED;
             ev->oldname[0] = 0;
+            ior_stash_pending_filename(tid, ctx->args[1]);
         }
     }
     if (ctx->args[3] == 0) {
@@ -8612,6 +8613,7 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
         if (bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3]) < 0) {
             ev->newname_status = PATH_READ_FAILED;
             ev->newname[0] = 0;
+            ior_stash_pending_filename2(tid, ctx->args[3]);
         }
     }
     ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;
@@ -8627,9 +8629,15 @@ int handle_sys_exit_move_mount(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_MOVE_MOUNT);
+    __u64 pending_filename2 = ior_take_pending_filename2(tid, SYS_ENTER_MOVE_MOUNT);
+
     __u64 now = bpf_ktime_get_boot_ns();
     if (!ior_on_syscall_exit(tid, SYS_ENTER_MOVE_MOUNT, ctx->ret, now))
         return 0;
+
+    ior_emit_open_name_fixup(tid, SYS_ENTER_MOVE_MOUNT, pending_filename);
+    ior_emit_second_name_fixup(tid, SYS_ENTER_MOVE_MOUNT, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {

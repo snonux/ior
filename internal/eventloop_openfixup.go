@@ -7,7 +7,8 @@ import (
 // handleOpenNameFixupEvent splices a recovered path into the enter event that
 // is still waiting for its exit: the filename of an open, the pathname of a
 // stat/access/unlink/inotify_add_watch, or the oldname/newname of a
-// rename/link (the record's slot says which).
+// rename/link or the from/to pathname of a move_mount (the record's slot says
+// which).
 //
 // Why the name can be missing in the first place: bpf_probe_read_user_str() is
 // a nofault read, so at sys_enter it returns -EFAULT and the handler leaves an
@@ -70,6 +71,8 @@ func applyRecoveredFilename(enterEv any, fixup *types.OpenNameFixupEvent) {
 		}
 	case *types.NameEvent:
 		applyRecoveredNameEvent(typed, fixup)
+	case *types.TwoFdEvent:
+		applyRecoveredTwoFdNames(typed, fixup)
 	}
 }
 
@@ -98,6 +101,22 @@ func applyRecoveredNameEvent(nameEv *types.NameEvent, ev *types.OpenNameFixupEve
 		spliceRecoveredPath(nameEv.GetTraceId(), &nameEv.Oldname, &nameEv.OldnameStatus, ev)
 	case types.OPEN_NAME_FIXUP_SLOT_SECOND:
 		spliceRecoveredPath(nameEv.GetTraceId(), &nameEv.Newname, &nameEv.NewnameStatus, ev)
+	}
+}
+
+// applyRecoveredTwoFdNames is applyRecoveredNameEvent for move_mount, whose
+// two_fd_names_event decodes into a types.TwoFdEvent (decodeTwoFdNamesEvent)
+// carrying from_pathname as Oldname and to_pathname as Newname. The lean
+// two_fd_event of close_range and kcmp decodes into the same Go type with
+// zeroed names and statuses; it never stashes a pointer, and a stray record
+// for one is still refused by spliceRecoveredPath's trace-ID and
+// PATH_READ_FAILED guards, so the type switch needs no extra kind check.
+func applyRecoveredTwoFdNames(twoFdEv *types.TwoFdEvent, ev *types.OpenNameFixupEvent) {
+	switch ev.Slot {
+	case types.OPEN_NAME_FIXUP_SLOT_FIRST:
+		spliceRecoveredPath(twoFdEv.GetTraceId(), &twoFdEv.Oldname, &twoFdEv.OldnameStatus, ev)
+	case types.OPEN_NAME_FIXUP_SLOT_SECOND:
+		spliceRecoveredPath(twoFdEv.GetTraceId(), &twoFdEv.Newname, &twoFdEv.NewnameStatus, ev)
 	}
 }
 

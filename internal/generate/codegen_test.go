@@ -2683,6 +2683,27 @@ func TestGenerateMoveMountCapturesBothPaths(t *testing.T) {
 	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
 }
 
+// TestGenerateMoveMountRecoversBothFaultedPaths pins move_mount's share of the
+// sys_exit path recovery (task vs2): its from/to pathnames are nofault reads
+// like the rename/link names, so each failed read stashes exactly the pointer
+// it read - from_pathname (args[1]) into the first slot, to_pathname (args[3])
+// into the second - and the exit takes and emits both slots in the window
+// between ior_on_syscall_exit and its own record.
+func TestGenerateMoveMountRecoversBothFaultedPaths(t *testing.T) {
+	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
+	enterBody := handlerBody(t, output, "sys_enter_move_mount")
+	requireContains(t, enterBody, "            ev->oldname[0] = 0;\n            ior_stash_pending_filename(tid, ctx->args[1]);\n")
+	requireContains(t, enterBody, "            ev->newname[0] = 0;\n            ior_stash_pending_filename2(tid, ctx->args[3]);\n")
+	if got := strings.Count(enterBody, "ior_stash_pending_filename"); got != 2 {
+		t.Errorf("sys_enter_move_mount has %d stash calls, want one per path:\n%s", got, enterBody)
+	}
+
+	exitBody := handlerBody(t, output, "sys_exit_move_mount")
+	const enterConst = "SYS_ENTER_MOVE_MOUNT"
+	checkRecoveryOrdering(t, "sys_exit_move_mount", exitBody, openNameTakeLine(enterConst), openNameEmitLine(enterConst))
+	checkRecoveryOrdering(t, "sys_exit_move_mount", exitBody, openNameTakeLine2(enterConst), openNameEmitLine2(enterConst))
+}
+
 func TestGenerateBpfCapturesCommand(t *testing.T) {
 	output := GenerateTracepointsC(mustParseAll(t, syntheticPair("bpf")))
 	requireContains(t, output, "struct bpf_event *ev")
@@ -3435,8 +3456,8 @@ func openNameEmitLine(enterConst string) string {
 	return "    ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
 }
 
-// openNameTakeLine2 / openNameEmitLine2 are the newname slot of the
-// rename/link family.
+// openNameTakeLine2 / openNameEmitLine2 are the second-path slot of the
+// rename/link family (newname) and of move_mount (to_pathname).
 func openNameTakeLine2(enterConst string) string {
 	return "    __u64 pending_filename2 = ior_take_pending_filename2(tid, " + enterConst + ");\n"
 }
@@ -3648,8 +3669,8 @@ func TestGenerateGetcwdCapturesItsOutputBuffer(t *testing.T) {
 // TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
 // to the committed internal/c/generated_tracepoints.c. `mage generate` needs
 // root, so a hand-spliced artifact is possible; this test is what keeps the
-// committed one honest and complete across every open, path, name and
-// named-eventfd syscall that recovers a string.
+// committed one honest and complete across every open, path, name, move_mount
+// and named-eventfd syscall that recovers a string.
 func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 	artifact, err := readGeneratedTracepointsC()
 	if err != nil {
@@ -3679,21 +3700,25 @@ func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 		checkPathFilenameRecovery(t, artifact, enter, false)
 	}
 	namePairs := artifactEnters(t, artifact, `name_event \(kind=name\)`)
-	for _, enter := range namePairs {
+	// move_mount's from/to pathnames use the same two slots as oldname/newname.
+	twoFdNamePairs := artifactEnters(t, artifact, `two_fd_names_event \(kind=two-fd\)`)
+	twoPath := append(namePairs, twoFdNamePairs...)
+	for _, enter := range twoPath {
 		checkPathFilenameRecovery(t, artifact, enter, true)
 	}
 
 	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
 	// make every exit handler pay extra map operations. Every recovering handler
-	// uses the first slot; only the rename/link family also uses the second.
-	firstSlot := len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls) + len(singlePath) + len(namePairs)
+	// uses the first slot; only the two-path kinds (rename/link, move_mount)
+	// also use the second.
+	firstSlot := len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls) + len(singlePath) + len(twoPath)
 	for helper, want := range map[string]int{
 		"ior_take_pending_filename(":   firstSlot,
 		"ior_emit_open_name_fixup(":    firstSlot,
 		"ior_stash_pending_filename(":  firstSlot,
-		"ior_take_pending_filename2(":  len(namePairs),
-		"ior_emit_second_name_fixup(":  len(namePairs),
-		"ior_stash_pending_filename2(": len(namePairs),
+		"ior_take_pending_filename2(":  len(twoPath),
+		"ior_emit_second_name_fixup(":  len(twoPath),
+		"ior_stash_pending_filename2(": len(twoPath),
 	} {
 		if got := strings.Count(artifact, helper); got != want {
 			t.Errorf("%d %s) call sites, want %d", got, helper, want)
@@ -3718,7 +3743,8 @@ func artifactEnters(t *testing.T, artifact, structKind string) []string {
 }
 
 // checkPathFilenameRecovery asserts the stash/take/fixup splice of a
-// pathname, fd-pathname or name (rename/link) syscall: every nofault path read
+// pathname, fd-pathname, name (rename/link) or two-fd-names (move_mount,
+// whose from/to pathnames are its oldname/newname) syscall: every nofault path read
 // stashes exactly the pointer it read - into the first slot, or for newname
 // into the second - inside its failure branch, and the exit takes and emits
 // each slot ahead of its own record. second says the syscall has a newname.

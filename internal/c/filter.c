@@ -458,19 +458,22 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
 //
 // Every kind that captures a path does this: the open kinds and named
 // descriptor creators (memfd_create/fsopen), where a lost name also propagates
-// past the row into the fd table, and the pathname, fd-pathname and name
-// (rename/link) kinds - stat, access, unlink, inotify_add_watch, rename, ...
-// - where a lost name leaves the row with an empty file so -path cannot match
-// it and the Files tab attributes it to ''. The exit-side kernel read only
-// fails again when the kernel never copied the path in (the syscall bailed out
-// before getname(), e.g. on a bad flags word or descriptor); that read is then
-// discarded and the row keeps its empty name, exactly as before.
+// past the row into the fd table, and the pathname, fd-pathname, name
+// (rename/link) and two-fd-names (move_mount) kinds - stat, access, unlink,
+// inotify_add_watch, rename, move_mount, ... - where a lost name leaves the
+// row with an empty file so -path cannot match it and the Files tab attributes
+// it to ''. exec alone does not recover: a successful exec replaces the
+// address space the stashed pointer belonged to. The exit-side kernel read
+// only fails again when the kernel never copied the path in (the syscall
+// bailed out before getname(), e.g. on a bad flags word or descriptor); that
+// read is then discarded and the row keeps its empty name, exactly as before.
 // The control event keeps its original open-oriented name for wire/runtime
 // compatibility, but the recovery mechanism itself is intentionally shared.
 //
-// The rename/link family captures two paths. Each has its own stash slot
-// (pending_filename / pending_filename2 in syscall_enter_state) and its fixup
-// record says which it belongs to (open_name_fixup_event.slot), because
+// The rename/link family and move_mount capture two paths (oldname/newname,
+// from_pathname/to_pathname). Each has its own stash slot (pending_filename /
+// pending_filename2 in syscall_enter_state) and its fixup record says which
+// it belongs to (open_name_fixup_event.slot), because
 // either, both or neither read can fault and the two recoveries are
 // independent: the first being recovered must never be spliced over the second.
 //
@@ -504,12 +507,13 @@ static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename
 //
 // Cost trade-off: every exit of a path-capturing syscall (open, stat, access,
 // unlink, ...) therefore does one extra syscall_enter_state_map lookup on top
-// of the one inside ior_on_syscall_exit, and the rename/link family does one
-// more for the second slot (three lookups in total). Handing the
-// already-looked-up state pointer to ior_on_syscall_exit would remove them,
-// but it changes the exit hook's signature and the generated prologue order
-// that the generator tests pin for nearly all path kinds, so it is
-// deliberately not bundled with the recovery fix; it is tracked as task 0t2.
+// of the one inside ior_on_syscall_exit, and the two-path kinds (rename/link,
+// move_mount) do one more for the second slot (three lookups in total).
+// Handing the already-looked-up state pointer to ior_on_syscall_exit would
+// remove them, but it changes the exit hook's signature and the generated
+// prologue order that the generator tests pin for nearly all path kinds, so it
+// is deliberately not bundled with the recovery fix; it is tracked as task
+// 0t2.
 static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 
@@ -519,8 +523,8 @@ static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_tr
 }
 
 // ior_stash_pending_filename2 / ior_take_pending_filename2 are the second-path
-// slot of the rename/link family (newname), with the same contract as the
-// first-slot helpers above.
+// slot of the two-path kinds (rename/link newname, move_mount to_pathname),
+// with the same contract as the first-slot helpers above.
 static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 
@@ -614,15 +618,17 @@ static __always_inline void ior_emit_name_fixup(__u32 tid, __u32 enter_trace_id,
 }
 
 // ior_emit_open_name_fixup publishes the fixup of the first (or only) path of
-// an enter event: filename, pathname or oldname. Despite the name it serves
-// every recovering kind, not just open.
+// an enter event: filename, pathname or oldname (move_mount's from_pathname
+// is its oldname). Despite the name it serves every recovering kind, not just
+// open.
 static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,
                                                      __u64 filename_ptr) {
     ior_emit_name_fixup(tid, enter_trace_id, filename_ptr, OPEN_NAME_FIXUP_SLOT_FIRST);
 }
 
-// ior_emit_second_name_fixup publishes the fixup of the newname of the
-// rename/link family (see "Recovering a path whose sys_enter read faulted").
+// ior_emit_second_name_fixup publishes the fixup of the second path of the
+// two-path kinds - the rename/link newname, move_mount's to_pathname (see
+// "Recovering a path whose sys_enter read faulted").
 static __always_inline void ior_emit_second_name_fixup(__u32 tid, __u32 enter_trace_id,
                                                        __u64 filename_ptr) {
     ior_emit_name_fixup(tid, enter_trace_id, filename_ptr, OPEN_NAME_FIXUP_SLOT_SECOND);

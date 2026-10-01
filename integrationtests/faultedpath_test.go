@@ -41,16 +41,19 @@ func TestFaultedRenameNamesAreRecoveredIndependently(t *testing.T) {
 		{"faulted-oldonly-old", "touched-oldonly-new"},
 		{"touched-newonly-old", "faulted-newonly-new"},
 	} {
-		if !hasRenameRow(rows, want.oldBase, want.newBase) {
+		if !hasTwoPathRow(rows, "rename", want.oldBase, want.newBase) {
 			t.Errorf("no rename row with old_file ending %q and file ending %q", want.oldBase, want.newBase)
 			logRowSummary(t, rows)
 		}
 	}
 }
 
-func hasRenameRow(rows []iorparquet.Record, oldBase, newBase string) bool {
+// hasTwoPathRow reports whether rows hold a syscall row whose old_file ends in
+// oldBase and whose file ends in newBase (rename's old/new names, move_mount's
+// from/to pathnames).
+func hasTwoPathRow(rows []iorparquet.Record, syscallName, oldBase, newBase string) bool {
 	for _, row := range rows {
-		if row.Syscall == "rename" && strings.HasSuffix(row.OldFile, "/"+oldBase) && strings.HasSuffix(row.File, "/"+newBase) {
+		if row.Syscall == syscallName && strings.HasSuffix(row.OldFile, "/"+oldBase) && strings.HasSuffix(row.File, "/"+newBase) {
 			return true
 		}
 	}
@@ -69,5 +72,41 @@ func TestPathFilterMatchesFaultedNamesAfterRecovery(t *testing.T) {
 		{PathContains: "faulted-access-missing"},
 		{PathContains: "faulted-stat-missing"},
 		{PathContains: "faulted-both-new"},
+	})
+}
+
+// The "path-faulted-move-mount" scenario is the move_mount counterpart (task
+// vs2): its from/to pathnames are recovered through the same two independent
+// slots as rename's names, so each faulted combination must keep its own
+// old_file (from_pathname) / file (to_pathname) pair. Every call fails with
+// EINVAL after both lookups, so only the names show the capture worked.
+var faultedMoveMountTraceArgs = []string{"-trace-syscalls", "move_mount"}
+
+func TestFaultedMoveMountPathsAreRecoveredIndependently(t *testing.T) {
+	requireSyscalls(t, "move_mount")
+	rows, _ := runParquetScenarioRows(t, "path-faulted-move-mount", defaultDuration, faultedMoveMountTraceArgs, nil)
+	for _, want := range []struct{ fromBase, toBase string }{
+		{"faulted-mm-both-from", "faulted-mm-both-to"},
+		{"faulted-mm-fromonly-from", "touched-mm-fromonly-to"},
+		{"touched-mm-toonly-from", "faulted-mm-toonly-to"},
+	} {
+		if !hasTwoPathRow(rows, "move_mount", want.fromBase, want.toBase) {
+			t.Errorf("no move_mount row with old_file ending %q and file ending %q", want.fromBase, want.toBase)
+			logRowSummary(t, rows)
+		}
+	}
+}
+
+// -path must match a move_mount whose to_pathname only the exit-side re-read
+// supplied, and drop the other faulted move_mounts.
+func TestPathFilterMatchesFaultedMoveMountAfterRecovery(t *testing.T) {
+	requireSyscalls(t, "move_mount")
+	args := append([]string{"-path", "faulted-mm-toonly-to"}, faultedMoveMountTraceArgs...)
+	result, _ := runScenarioResultWithIorArgs(t, "path-faulted-move-mount", []ExpectedEvent{
+		{PathContains: "faulted-mm-toonly-to", Tracepoint: "enter_move_mount", Comm: "ioworkload", MinCount: 1},
+	}, args)
+	AssertEventsAbsent(t, result, []ExpectedEvent{
+		{PathContains: "faulted-mm-both-to"},
+		{PathContains: "touched-mm-fromonly-to"},
 	})
 }

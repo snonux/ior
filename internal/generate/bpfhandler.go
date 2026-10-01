@@ -47,7 +47,8 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		// "long ret", so the exit's own classification cannot tell us that -
 		// EnterKind carries it across (see codegen.go).
 		recoverFilename: !isEnter && kindRecoversFilename(tp.EnterKind),
-		// The rename/link family has a second path with its own slot.
+		// The two-path kinds (rename/link, move_mount) have a second path
+		// with its own slot.
 		recoverSecondFilename: !isEnter && kindRecoversSecondFilename(tp.EnterKind),
 		outputPathArg:         outputPathArgForHandler(f.Name),
 	})
@@ -91,8 +92,9 @@ type handlerSpec struct {
 	noreturn        bool
 	enterName       string
 	recoverFilename bool
-	// recoverSecondFilename adds the newname slot of the rename/link family to
-	// recoverFilename: a second stashed pointer and a second fixup record.
+	// recoverSecondFilename adds the second-path slot of the two-path kinds
+	// (rename/link newname, move_mount to_pathname) to recoverFilename: a
+	// second stashed pointer and a second fixup record.
 	recoverSecondFilename bool
 	// outputPathArg is the argument index of an output path buffer the exit
 	// handler captures (outputPathSyscalls), or -1 for every other syscall.
@@ -121,7 +123,7 @@ func enterConstForHandler(name string, isEnter bool) string {
 // renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
 // scope gate, the per-tid enter/exit hook, and - for the path-capturing kinds
 // and the output-path syscalls (outputPathSyscalls) only - the stash/take/emit
-// of a user pointer (two for the rename/link family) carried on the enter
+// of a user pointer (two for rename/link and move_mount) carried on the enter
 // state. Those lines are position-critical,
 // which is why they live here rather than in the kind emitters: the enter-side
 // stash must follow ior_on_syscall_enter (which creates this tid's enter-state
@@ -687,8 +689,9 @@ func writeArgumentCapture(b *strings.Builder, f *Format, eventField string, form
 // if guard so the independent syscall-semantics oracle can verify its source
 // argument and destination. The NULL and failed-read branches each write the
 // string's terminator (writeStringTerminator); a successful read terminates it
-// itself. This variant is for the kinds whose failed read is NOT retried at
-// sys_exit (exec, move_mount); see writeRecoverablePathCapture for the rest.
+// itself. This variant is for the one kind whose failed read is NOT retried at
+// sys_exit (exec, whose successful call replaces the address space the pointer
+// belonged to); see writeRecoverablePathCapture for the rest.
 func writePathReadCapture(b *strings.Builder, eventField, statusField string, argIdx int) {
 	writePathCapture(b, eventField, statusField, argIdx, "(void*)", "")
 }
@@ -697,7 +700,7 @@ func writePathReadCapture(b *strings.Builder, eventField, statusField string, ar
 // the kinds whose failed enter-side read is retried at sys_exit: the failed
 // branch also stashes the user pointer with stashFn
 // (ior_stash_pending_filename for the first path, ior_stash_pending_filename2
-// for the newname of the rename/link family).
+// for the newname of the rename/link family and move_mount's to_pathname).
 func writeRecoverablePathCapture(b *strings.Builder, eventField, statusField string, argIdx int, stashFn string) {
 	writePathCapture(b, eventField, statusField, argIdx, "(void*)", stashFn)
 }
@@ -1014,12 +1017,16 @@ func generateExtraTwoFd(name string) string {
 }
 
 // generateExtraTwoFdNames emits the two_fd_names_event body of move_mount:
-// the two-fd capture plus its from/to pathnames (args[1] and args[3]).
+// the two-fd capture plus its from/to pathnames (args[1] and args[3]). Like
+// the rename/link names, each path has its own stash slot (from_pathname the
+// first, to_pathname the second): either nofault read can fail on its own,
+// and the exit handler re-reads each one after the kernel's getname() has
+// faulted its page in.
 func generateExtraTwoFdNames(name string) string {
 	var b strings.Builder
 	writeTwoFdCapture(&b, name)
-	writePathReadCapture(&b, "oldname", "oldname_status", 1)
-	writePathReadCapture(&b, "newname", "newname_status", 3)
+	writeRecoverablePathCapture(&b, "oldname", "oldname_status", 1, "ior_stash_pending_filename")
+	writeRecoverablePathCapture(&b, "newname", "newname_status", 3, "ior_stash_pending_filename2")
 	b.WriteString("    ev->schema_version = TWO_FD_EVENT_SCHEMA_VERSION;\n")
 	return b.String()
 }

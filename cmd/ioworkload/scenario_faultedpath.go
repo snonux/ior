@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // faultedPathNames issues path-taking syscalls whose path strings live on
@@ -97,6 +99,64 @@ func faultedRenames(dir string, pages *faultedPages) error {
 		if _, _, errno := syscall.Syscall(syscall.SYS_RENAME, oldPtr, newPtr, 0); errno != 0 {
 			return fmt.Errorf("rename(%s): %w", tc.name, errno)
 		}
+	}
+	return nil
+}
+
+// faultedMoveMounts covers move_mount (task vs2), whose from/to pathnames are
+// the two-path counterpart of rename's old/new names with their own recovery
+// slots: each combination of a faulted from_pathname and/or to_pathname runs
+// once. Both paths name existing plain directories, so both lookups succeed
+// (the kernel copies both strings in, faulting their pages, whatever order it
+// resolves them in) and the call then fails with EINVAL because the source is
+// not the root of a mount. Nothing is ever moved. The kernel checks
+// CAP_SYS_ADMIN before reading either path, so the scenario needs root, like
+// the integration suite that runs it; anything but EINVAL fails it loudly.
+func faultedMoveMounts() error {
+	dir, cleanup, err := makeTempDir("faulted-move-mount")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	pages := &faultedPages{dir: dir}
+	defer pages.release()
+
+	for _, tc := range []struct {
+		name               string
+		faultFrom, faultTo bool
+		fromBase, toBase   string
+	}{
+		{"both", true, true, "faulted-mm-both-from", "faulted-mm-both-to"},
+		{"from only", true, false, "faulted-mm-fromonly-from", "touched-mm-fromonly-to"},
+		{"to only", false, true, "touched-mm-toonly-from", "faulted-mm-toonly-to"},
+	} {
+		if err := faultedMoveMount(dir, pages, tc.name, tc.faultFrom, tc.faultTo, tc.fromBase, tc.toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// faultedMoveMount creates the two directories and issues one
+// move_mount(AT_FDCWD, from, AT_FDCWD, to, 0) on them.
+func faultedMoveMount(dir string, pages *faultedPages, name string, faultFrom, faultTo bool, fromBase, toBase string) error {
+	fromPath, toPath := filepath.Join(dir, fromBase), filepath.Join(dir, toBase)
+	for _, d := range []string{fromPath, toPath} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", d, err)
+		}
+	}
+	fromPtr, err := pages.pointer(fromPath, faultFrom)
+	if err != nil {
+		return err
+	}
+	toPtr, err := pages.pointer(toPath, faultTo)
+	if err != nil {
+		return err
+	}
+	_, _, errno := syscall.Syscall6(unix.SYS_MOVE_MOUNT, atFDCWD, fromPtr, atFDCWD, toPtr, 0, 0)
+	if errno != syscall.EINVAL {
+		return fmt.Errorf("move_mount(%s): errno %v, want EINVAL", name, errno)
 	}
 	return nil
 }

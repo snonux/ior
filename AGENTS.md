@@ -1775,13 +1775,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   identical read succeeds. The generator therefore emits, for every kind that
   captures a path — the open kinds
   (`KindOpen`/`KindMqOpen`/`KindOpenTree`), the named eventfd creators
-  memfd_create/fsopen, and the pathname, fd-pathname and name kinds
-  (`KindPathname`/`KindFdPathname`/`KindName`: stat, access, unlink, mkdir,
-  inotify_add_watch, rename, link, ...), flagged by `recoversFilename` in
-  `internal/generate/kindregistry.go`. A second flag, `recoversSecondFilename`
-  (set only for `KindName`, the rename/link family), makes the exit handler
-  also recover the newname through its own stash and fixup slot, because either
-  read can fault independently of the other; it implies `recoversFilename`
+  memfd_create/fsopen, and the pathname, fd-pathname, name and two-fd-names
+  kinds (`KindPathname`/`KindFdPathname`/`KindName`/`KindTwoFdNames`: stat,
+  access, unlink, mkdir, inotify_add_watch, rename, link, move_mount, ...),
+  flagged by `recoversFilename` in `internal/generate/kindregistry.go`. A
+  second flag, `recoversSecondFilename` (set for the two-path kinds: `KindName`,
+  the rename/link family, and `KindTwoFdNames`, move_mount), makes the exit
+  handler also recover the second path (newname, to_pathname) through its own
+  stash and fixup slot, because either read can fault independently of the
+  other; it implies `recoversFilename`
   and is what `bpfhandler.go` keys the exit handler's second-slot take/emit
   calls on. An exit handler learns what its enter captured through
   `GeneratedTracepoint.EnterKind`, since every `sys_exit_*` format is just
@@ -1804,19 +1806,28 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   rows all had an empty file before the change and all named their path after
   it, and `-path no-such-unlink` went from 0 matched rows to 1. The mechanism
   is the same shared one; two details are specific to the new kinds:
-  - **Two names, two slots.** rename/link/symlink carry two paths and either,
-    both or neither read can fault. The second name has its own stash
+  - **Two names, two slots.** rename/link/symlink carry two paths, and so
+    does move_mount (from_pathname/to_pathname, carried as the
+    `two_fd_names_event` oldname/newname), and either, both or neither read
+    can fault. The second name has its own stash
     (`syscall_enter_state.pending_filename2`, `ior_stash_pending_filename2` /
     `ior_take_pending_filename2`) and its own fixup call
     (`ior_emit_second_name_fixup`), and the record says which name it is for:
     `open_name_fixup_event.slot` (`OPEN_NAME_FIXUP_SLOT_FIRST` = filename,
-    pathname or oldname; `_SECOND` = newname). Without the slot a recovered
-    newname would land on a still-empty oldname. `ior_emit_open_name_fixup`
+    pathname or oldname/from_pathname; `_SECOND` = newname/to_pathname).
+    Without the slot a recovered newname would land on a still-empty oldname. `ior_emit_open_name_fixup`
     and `ior_emit_second_name_fixup` are thin wrappers over
     `ior_emit_name_fixup(tid, id, ptr, slot)`.
-  - **Gaps kept on purpose.** `exec` does not retry (a successful exec
-    replaces the address space the pointer belonged to) and `move_mount`
-    (`KindTwoFdNames`, two paths) is not covered yet.
+  - **Gap kept on purpose.** `exec` does not retry (a successful exec
+    replaces the address space the pointer belonged to). `move_mount`
+    (`KindTwoFdNames`) used to be a second gap and recovers both paths since
+    task vs2; its enter has no raw-enter gate (`enterRaw(..., nil)`), so
+    nothing judges a faulted name before the fixup lands, and
+    `applyRecoveredTwoFdNames` splices into the `types.TwoFdEvent` that
+    `decodeTwoFdNamesEvent` builds. Verified with
+    `integrationtests/faultedpath_test.go` (`path-faulted-move-mount`: every
+    combination of a faulted from/to path; on the previous BPF object every
+    faulted path came out empty).
 
   **getcwd reuses the same three helpers for an output buffer.** Its path only
   exists once the call has returned, so `outputPathSyscalls`
@@ -1866,8 +1877,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
 
   Cost note: each exit of a path-capturing syscall pays one extra
   `syscall_enter_state_map` lookup in `ior_take_pending_filename` (two for the
-  rename/link family, which also takes the second slot) besides the one in
-  `ior_on_syscall_exit`; sharing the looked-up state is tracked as task 0t2.
+  rename/link family and move_mount, which also take the second slot) besides
+  the one in `ior_on_syscall_exit`; sharing the looked-up state is tracked as task 0t2.
 
   **The enter gate defers, it does not waive.** `matchRawOpenEvent` used to
   judge the path dimension on the payload filename, so an empty-name open was
@@ -1877,10 +1888,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   at enter, and the full pair filter applies at the exit checkpoint, where
   `handleOpenExit` ends in `finishPair` (see above). `matchRawPathEvent` and
   `matchRawNameEvent` defer the same way for a `PATH_READ_FAILED` name (the
-  fd-pathname kind has no enter gate; its pair is filtered at exit). Nothing
-  leaks: an unrecovered name reaches `finishPair` empty, and no non-empty
-  `-path` pattern matches the empty string, so the row is dropped there
-  instead of here.
+  fd-pathname and two-fd-names kinds have no enter gate; their pairs are
+  filtered at exit). Nothing leaks: an unrecovered name reaches `finishPair`
+  empty, and no non-empty `-path` pattern matches the empty string, so the row
+  is dropped there instead of here.
   Evidence, identical 4s fork/exec workload: `E:name` rows 6153/41063 (14.98%)
   → 0/39617 (0.00%), and `-path locale-archive` — the path those opens were
   actually taking — went from 0 matched rows to 6211.

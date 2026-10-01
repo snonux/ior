@@ -15,16 +15,16 @@ type kindMeta struct {
 	// (see internal/c/filter.c). Every kind that captures a path does: the open
 	// kinds and named descriptor creators, where a lost name also poisons the
 	// fd table for every later read/write/close on the descriptor, and the
-	// pathname, fd-pathname and name kinds (stat, access, unlink, inotify,
-	// rename, ...), where a lost name leaves the row's file empty so -path
-	// cannot match it. Kinds that capture a path but are not listed (exec,
-	// which replaces the address space the pointer belonged to, and move_mount)
-	// are deliberate or known gaps, see the notes on those kinds.
+	// pathname, fd-pathname, name and two-fd-names kinds (stat, access,
+	// unlink, inotify, rename, move_mount, ...), where a lost name leaves the
+	// row's file empty so -path cannot match it. The one kind that captures a
+	// path but is not listed is exec, deliberately: a successful exec replaces
+	// the address space the stashed pointer belonged to.
 	recoversFilename bool
 	// recoversSecondFilename reports whether the kind also recovers a second
-	// path (the newname of the rename/link family). It implies recoversFilename
-	// and uses its own stash slot and fixup slot, because either read can fault
-	// independently of the other.
+	// path (the newname of the rename/link family, move_mount's to_pathname).
+	// It implies recoversFilename and uses its own stash slot and fixup slot,
+	// because either read can fault independently of the other.
 	recoversSecondFilename bool
 }
 
@@ -56,7 +56,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindPidfd:          {structName: "eventfd_event", enterAccepted: true},
 	KindEpollCtl:       {structName: "epoll_ctl_event", enterAccepted: true},
 	KindTwoFd:          {structName: "two_fd_event", enterAccepted: true},
-	KindTwoFdNames:     {structName: "two_fd_names_event", enterAccepted: true},
+	KindTwoFdNames:     {structName: "two_fd_names_event", enterAccepted: true, recoversFilename: true, recoversSecondFilename: true},
 	KindPoll:           {structName: "poll_event", enterAccepted: true},
 	KindMem:            {structName: "mem_event", enterAccepted: true},
 	KindMmap:           {structName: "mmap_event", enterAccepted: true},
