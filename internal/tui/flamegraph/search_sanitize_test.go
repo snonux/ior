@@ -9,9 +9,9 @@ import (
 // textinput drops only control runes, so these reach the renderer. fmt's %q
 // escapes some (NBSP, bidi override) but prints U+2800 and U+FFFC as is, so the
 // status line has to sanitise the query itself (task ms2).
-var hostileQueries = []string{"a⠀b", "a b", "a‮b", "a￼b"}
+var hostileQueries = []string{"a\u2800b", "a\u00a0b", "a\u202eb", "a\ufffcb"}
 
-const hostileRunes = "⠀ ‮￼"
+const hostileRunes = "\u2800\u00a0\u202e\ufffc"
 
 func assertNoHostileRunes(t *testing.T, label, out string) {
 	t.Helper()

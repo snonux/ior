@@ -36,8 +36,10 @@ import "unicode"
 // The Go unicode tables are Unicode 15.0, so code points that later Unicode
 // versions add to Cf, Zs or the lists above (for example U+113D0, which is
 // unassigned for Go) pass as Safe until Go updates its tables. A Go update
-// then covers a new space automatically (it is matched through the Zs table),
-// but a new blank-rendering symbol outside Zs/Cf is never detected: nothing
+// then covers a new space inside the bounds below (it is matched through the Zs
+// table; a new Zs rune outside them makes TestBlankLookalikeBounds fail, so the
+// bounds get adjusted by hand), but a new blank-rendering symbol outside Zs/Cf
+// is never detected: nothing
 // scans the tables for such runes, so it has to be added to this list by hand
 // after reading the Unicode release notes.
 //
