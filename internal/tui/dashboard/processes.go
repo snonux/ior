@@ -37,16 +37,40 @@ func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, 
 		return fitTableLine("Processes: no data", width)
 	}
 
-	out := renderSelectableTable(processTableSpec(), rows, width, height, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
-	if pidFilter > 0 {
+	noteRows := processFilterNoteRows(pidFilter, height)
+	out := renderSelectableTable(processTableSpec(), rows, width, height-noteRows, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
+	if noteRows > 0 {
 		// Use a Builder to avoid an extra allocation for the PID-filter note suffix.
 		var b strings.Builder
 		b.WriteString(out)
 		b.WriteString("\n")
-		b.WriteString(fitTableLine("Note: this tab is most useful with All PIDs.", width))
+		b.WriteString(fitTableLine(processFilterNote, width))
 		return b.String()
 	}
 	return out
+}
+
+// processFilterNote is the line under the Processes table while a PID filter
+// is active.
+const processFilterNote = "Note: this tab is most useful with All PIDs."
+
+// processFilterNoteMinHeight is the smallest body height that still has a row
+// for the note: the table keeps its header, a row and its hint above it.
+const processFilterNoteMinHeight = 5
+
+// processFilterNoteRows is how many rows of a height-row body the PID-filter
+// note takes: one while a PID filter is active and the body can spare it, else
+// 0 (the note is dropped, never cut by the body clip, task 503). The table is
+// laid out for the rest, and the paging step is derived from the same number
+// (Model.activeTableHeight), so the table never draws a row the budget does
+// not have.
+func processFilterNoteRows(pidFilter, height int) int {
+	// A non-positive height is the renderer's default body (renderSelectableTable
+	// draws 10 rows then), which has room.
+	if pidFilter > 0 && (height <= 0 || height >= processFilterNoteMinHeight) {
+		return 1
+	}
+	return 0
 }
 
 // processColumns returns the logical Processes columns at their natural

@@ -1298,6 +1298,10 @@ func (m *Model) renderActiveContent(width, activeHeight int, streamModel *events
 // table page step.
 func (m *Model) activeTableHeight() int {
 	_, activeHeight := m.contentViewport(m.activeTab, m.width, m.height)
+	if m.activeTab == TabProcesses && m.processesTab.mode == tabVizModeTable {
+		// The PID-filter note takes a row under the table (task 503).
+		activeHeight -= processFilterNoteRows(m.pidFilter, activeHeight)
+	}
 	return activeHeight
 }
 

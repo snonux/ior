@@ -53,10 +53,13 @@ type fitCase struct {
 	// paused freezes the stream, which turns its selection footer on
 	// whether or not the help bar is expanded.
 	paused bool
+	// pidFilter scopes the dashboard to one PID, which adds the Processes
+	// table's "most useful with All PIDs" note row (task 503).
+	pidFilter bool
 }
 
 func (c fitCase) String() string {
-	return fmt.Sprintf("%s/mode=%d/grouped=%v/paused=%v", c.tab, c.mode, c.grouped, c.paused)
+	return fmt.Sprintf("%s/mode=%d/grouped=%v/paused=%v/pid=%v", c.tab, c.mode, c.grouped, c.paused, c.pidFilter)
 }
 
 // fitCases lists every tab in every visualization mode it offers, so the
@@ -74,6 +77,9 @@ func fitCases() []fitCase {
 			}
 			if tab == TabStream {
 				cases = append(cases, fitCase{tab: tab, mode: mode, paused: true})
+			}
+			if tab == TabProcesses {
+				cases = append(cases, fitCase{tab: tab, mode: mode, pidFilter: true})
 			}
 		}
 	}
@@ -155,6 +161,9 @@ func newFitModel(t *testing.T, c fitCase, help bool, width, height int) *Model {
 	m := NewModelWithConfig(nil, rb, 250, 200, common.DefaultKeyMap())
 	m.activeTab = c.tab
 	m.filesDirGrouped = c.grouped
+	if c.pidFilter {
+		m.pidFilter = 1234
+	}
 	m.setTabVizMode(c.tab, c.mode)
 	m.SetLiveTrie(liveTrie)
 	m.streamModel.SetSource(rb)
@@ -1284,5 +1293,41 @@ func TestViewDegradesBodyThenTabBarKeepingTheStatusLine(t *testing.T) {
 		if got := strings.Contains(out, "Syscall "); got != tc.tbl {
 			t.Errorf("height %d: table shown = %v, want %v:\n%s", tc.height, got, tc.tbl, out)
 		}
+	}
+}
+
+// TestProcessesPIDFilterNoteIsShownWhenThereIsARowForIt pins task 503: the
+// "most useful with All PIDs" note under the Processes table used to be
+// appended to a table laid out for the whole body, so the body clip always cut
+// it. It now takes a row of its own from the table (processFilterNoteRows),
+// and the paging step shrinks with it; below the smallest body that can spare
+// the row it is dropped instead.
+func TestProcessesPIDFilterNoteIsShownWhenThereIsARowForIt(t *testing.T) {
+	snap := tallSnapshot()
+	for height := 1; height <= 30; height++ {
+		out := renderProcessesWithSort(snap, 100, height, 0, 0, 1234, tableSortState[processSortKey]{})
+		hasNote := strings.Contains(out, processFilterNote)
+		if want := height >= processFilterNoteMinHeight; hasNote != want {
+			t.Fatalf("height %d: note shown = %v, want %v:\n%s", height, hasNote, want, out)
+		}
+		// The table renderer itself needs three rows; the body clip cuts
+		// anything below that (renderBody), so only the note's own contract is
+		// held at the smallest heights.
+		if lines := strings.Count(out, "\n") + 1; height >= 3 && lines > height {
+			t.Fatalf("height %d: table plus note is %d lines:\n%s", height, lines, out)
+		}
+		if plain := renderProcessesWithSort(snap, 100, height, 0, 0, -1, tableSortState[processSortKey]{}); strings.Contains(plain, processFilterNote) {
+			t.Fatalf("height %d: the note shows without a PID filter", height)
+		}
+	}
+}
+
+func TestProcessesPageStepFollowsTheNoteRow(t *testing.T) {
+	c := fitCase{tab: TabProcesses, mode: tabVizModeTable}
+	plain := newFitModel(t, c, false, 100, 24)
+	c.pidFilter = true
+	filtered := newFitModel(t, c, false, 100, 24)
+	if got, want := filtered.activeTableHeight(), plain.activeTableHeight()-1; got != want {
+		t.Fatalf("activeTableHeight with a PID filter = %d, want %d (one row for the note)", got, want)
 	}
 }

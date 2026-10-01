@@ -152,7 +152,11 @@ func TestTablesFitTheTerminalWidth(t *testing.T) {
 						if snap == nil || r.rows(snap) == 0 {
 							continue
 						}
-						assertTableLayout(t, label, cutNote(t, label, out, r.note, width), spec, r.rows(snap), width, height, col)
+						note := r.note
+						if height > 0 && height < processFilterNoteMinHeight {
+							note = "" // too short a body: the note is dropped (task 503)
+						}
+						assertTableLayout(t, label, cutNote(t, label, out, note, width), spec, r.rows(snap), width, height, col)
 					}
 				}
 			}
