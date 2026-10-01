@@ -335,8 +335,9 @@ func (e *Pair) CSVRow(escape func(string) string) string {
 // escape, when non-nil, is applied to each free-text column before quoting.
 // -plain passes textsafe.Escape when stdout is a terminal, because comm and
 // file names are attacker-controlled and could otherwise carry ESC/BEL/C1
-// sequences (spoofed OSC 8 links, hidden SGR text, bidi overrides) into the
-// operator's terminal. Escaping first keeps the row valid CSV: the escape
+// sequences (spoofed OSC 8 links, hidden SGR text, bidi overrides) or
+// blank-rendering lookalikes of a space (no-break space, Braille blank) into
+// the operator's terminal. Escaping first keeps the row valid CSV: the escape
 // notation adds no delimiter, quote or line break. A nil escape keeps the
 // exact bytes for machine consumers.
 //

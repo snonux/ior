@@ -46,8 +46,9 @@ type Config struct {
 
 	// PlainMode disables the TUI and writes CSV rows to stdout.
 	PlainMode bool
-	// EscapeMode (-escape) decides when -plain escapes control and
-	// invisible characters in traced text: auto (only when stdout is a
+	// EscapeMode (-escape) decides when -plain escapes control characters,
+	// invisible characters and blank-rendering spaces (no-break space,
+	// ideographic space, ...) in traced text: auto (only when stdout is a
 	// terminal), always (also through pipes such as `| less -R`) or never.
 	EscapeMode textsafe.EscapeMode
 	// FlamegraphOutput writes aggregated .ior.zst output for offline workflows.
@@ -318,8 +319,8 @@ func registerTraceSelectionFlags(fs *flag.FlagSet, validFamilies []string) (tpsA
 // registerOutputFlags binds the output-mode flags (plain CSV, flamegraph,
 // parquet, synthetic flame test modes) and the TUI timing/export settings.
 func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
-	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); control and invisible characters in traced text are escaped (\\x1b, \\u202e) as selected by -escape")
-	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control and invisible characters in traced text (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
+	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); control, invisible and blank-rendering space characters in traced text are escaped (\\x1b, \\u202e, \\u00a0) as selected by -escape")
+	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control, invisible and blank-rendering space characters in traced text (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode, replacing an existing file at that path (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name (no '/') for .ior.zst trace output files, written to the working directory as <hostname>-<name>-<timestamp>.ior.zst")

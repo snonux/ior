@@ -41,8 +41,8 @@ const (
 // boundaryNeighbours holds visible code points right next to replaced
 // ranges: U+00AC/00AE around the soft hyphen, U+0606 after U+0600..0605,
 // U+2027/2030 around U+2028..202E, U+205E before U+2060, U+2070 after
-// U+206F and U+FFFD after U+FFF9..FFFB. (U+FFFC, the former neighbour there,
-// is a blank lookalike since task ms2; see sanitize_blank_test.go.)
+// U+206F and U+FFFD, which follows U+FFFC (itself a blank lookalike since
+// task ms2, see sanitize_blank_test.go) and so no longer touches U+FFF9..FFFB.
 const boundaryNeighbours = "\u00ac\u00ae\u0606\u2027\u2030\u205e\u2070\ufffd"
 
 // invisibleFormatCases lists one payload per neutralised rune class and the

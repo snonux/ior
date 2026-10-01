@@ -19,6 +19,9 @@ var blankLookalikeCases = []struct{ name, in, want string }{
 	{"object replacement", "a￼b", "a?b"},
 	{"Khitan filler", "a\U00016FE4b", "a?b"},
 	{"musical null notehead", "a\U0001D159b", "a?b"},
+	{"ideographic half fill space", "a\u303fb", "a?b"},
+	{"hieroglyph full blank", "a\U00013441b", "a?b"},
+	{"hieroglyph half blank", "a\U00013442b", "a?b"},
 	{"ASCII space kept", "etc passwd", "etc passwd"},
 	{"Braille dots kept", "⠁⣿", "⠁⣿"},
 	{"CJK and emoji kept", "日本語 \U0001F600", "日本語 \U0001F600"},
@@ -46,3 +49,28 @@ func TestSanitizeReplacesBlankLookalikes(t *testing.T) {
 		})
 	}
 }
+
+// Scripts for the clean-text Sanitize benchmarks. Each string is plain text
+// without a single rune that Sanitize replaces, so the benchmark measures the
+// per-rune cost of the "is it safe?" scan for that script: Latin-1 letters
+// sit at U+00C0..U+00FF, Cyrillic at U+0400..U+04FF and CJK at U+4E00..U+9FFF,
+// which are the ranges the IsBlankLookalike early returns skip or scan.
+const (
+	benchLatin1   = "Größe_übersicht_café_à_la_crème_ñoño_ångström.txt"
+	benchCyrillic = "Документы/Отчёт_за_год_2024.pdf"
+	benchCJK      = "文档/日本語のファイル/中文报告_最终版.txt"
+)
+
+func benchmarkSanitize(b *testing.B, s string) {
+	if Sanitize(s) != s {
+		b.Fatalf("benchmark input %q is not clean", s)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Sanitize(s)
+	}
+}
+
+func BenchmarkSanitizeLatin1(b *testing.B)   { benchmarkSanitize(b, benchLatin1) }
+func BenchmarkSanitizeCyrillic(b *testing.B) { benchmarkSanitize(b, benchCyrillic) }
+func BenchmarkSanitizeCJK(b *testing.B)      { benchmarkSanitize(b, benchCJK) }

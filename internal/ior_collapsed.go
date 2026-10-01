@@ -29,10 +29,10 @@ import (
 // records are omitted.
 //
 // With the default -escape=auto the frames are escaped with textsafe.Escape
-// (control and invisible runes shown as \x1b, \u202e, ...) when w is a
-// terminal, and piped or redirected output keeps the raw bytes;
-// -escape=always also escapes into pipes (| less -R), -escape=never never
-// escapes. An invalid -escape value is a flag parse error. Whatever the
+// (control, invisible and blank-rendering space runes shown as \x1b, \u202e,
+// \u00a0, ...) when w is a terminal, and piped or redirected output keeps the
+// raw bytes; -escape=always also escapes into pipes (| less -R), -escape=never
+// never escapes. An invalid -escape value is a flag parse error. Whatever the
 // mode, a line break inside a frame is always written as \x0a / \x0d so a
 // traced path cannot forge extra collapsed-stack lines (see
 // flamegraph.WriteCollapsedStacks).
@@ -46,7 +46,7 @@ func RunCollapsedConverter(args []string, w io.Writer) error {
 		"counter metric used as the sample weight (one of: "+strings.Join(collapse.ValidCountFields(), ",")+")")
 	escapeMode := textsafe.EscapeAuto
 	fs.Var(&escapeMode, "escape",
-		"when to escape control and invisible characters in frames (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R gets raw bytes), always, or never")
+		"when to escape control, invisible and blank-rendering space characters in frames (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R gets raw bytes), always, or never")
 
 	if err := fs.Parse(args); err != nil {
 		// -h/-help: print the converter usage and exit cleanly instead of

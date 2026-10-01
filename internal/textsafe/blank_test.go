@@ -22,7 +22,10 @@ var namedBlanks = []struct {
 	{"HAIR SPACE", 0x200A},
 	{"NARROW NO-BREAK SPACE", 0x202F},
 	{"MEDIUM MATHEMATICAL SPACE", 0x205F},
+	{"IDEOGRAPHIC HALF FILL SPACE", 0x303F},
 	{"OBJECT REPLACEMENT CHARACTER", 0xFFFC},
+	{"EGYPTIAN HIEROGLYPH FULL BLANK", 0x13441},
+	{"EGYPTIAN HIEROGLYPH HALF BLANK", 0x13442},
 	{"KHITAN SMALL SCRIPT FILLER", 0x16FE4},
 	{"MUSICAL SYMBOL NULL NOTEHEAD", 0x1D159},
 }
@@ -41,6 +44,70 @@ func TestBlankLookalikeMatchesTables(t *testing.T) {
 		if got := IsBlankLookalike(r); got != want {
 			t.Fatalf("IsBlankLookalike(%U) = %v, want %v", r, got, want)
 		}
+	}
+}
+
+// slowBlankLookalike is the definition of IsBlankLookalike without any early
+// return: the Zs class minus the ASCII space plus the pinned list.
+func slowBlankLookalike(r rune) bool {
+	if unicode.Is(unicode.Zs, r) && r != ' ' {
+		return true
+	}
+	for _, blank := range blankSymbols {
+		if r == blank {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBlankLookalikeBounds derives the bounds of the early returns in
+// IsBlankLookalike from the sets themselves and checks every code point
+// against the slow reference: U+00A0 must be the only match below
+// firstWideZs, firstWideZs must be the smallest match above it, and lastZs
+// must be the largest Zs rune, so the cheap comparisons cannot skip a match
+// when Go updates its tables. Nothing below U+00A0 may match either (the
+// ASCII fast path of ClassAt relies on that).
+func TestBlankLookalikeBounds(t *testing.T) {
+	smallestAbove, largestZs := rune(-1), rune(-1)
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		slow := slowBlankLookalike(r)
+		if got := IsBlankLookalike(r); got != slow {
+			t.Fatalf("IsBlankLookalike(%U) = %v, reference says %v", r, got, slow)
+		}
+		if slow && r > noBreakSpace && smallestAbove < 0 {
+			smallestAbove = r
+		}
+		if unicode.Is(unicode.Zs, r) && r != ' ' {
+			largestZs = r
+		}
+		if slow && r < noBreakSpace {
+			t.Errorf("%U below U+00A0 is a blank lookalike", r)
+		}
+	}
+	if smallestAbove != firstWideZs {
+		t.Errorf("smallest blank lookalike above U+00A0 is %U, firstWideZs = %U", smallestAbove, rune(firstWideZs))
+	}
+	if largestZs != lastZs {
+		t.Errorf("largest Zs rune is %U, lastZs = %U", largestZs, rune(lastZs))
+	}
+	if !unicode.Is(unicode.Zs, noBreakSpace) {
+		t.Errorf("noBreakSpace %U is not Zs", rune(noBreakSpace))
+	}
+}
+
+// BenchmarkIsBlankLookalike compares the runes of the common scripts; the
+// Latin-1, Cyrillic and CJK cases are the ones the early returns serve.
+func BenchmarkIsBlankLookalike(b *testing.B) {
+	for _, c := range []struct {
+		name string
+		r    rune
+	}{{"Latin1", 'é'}, {"Cyrillic", 'д'}, {"CJK", '日'}, {"emoji", 0x1F600}, {"NBSP", 0xA0}} {
+		b.Run(c.name, func(b *testing.B) {
+			for b.Loop() {
+				_ = IsBlankLookalike(c.r)
+			}
+		})
 	}
 }
 
