@@ -18,17 +18,17 @@ const (
 	// cmd/ioworkload/scenario_threadcomm.go).
 	threadCommRows = 40 * 4
 	// threadCommMinKeptPercent is the share of the expected rows (and of the
-	// expected threads) a test requires, instead of an exact total. ior
-	// occasionally loses a thread's whole set of pread64/pwrite64 ENTER records
-	// while the EXIT records still arrive, at ~1.5-2% of runs, with the
-	// ring-buffer drop counter at 0 (seen 152/160, 144/160 and 38/40 rows; it
-	// also happens with an ior built before task fr2, so it is not what these
-	// tests are about - see the follow-up task filed for it). What the tests
-	// pin is which comm the rows that do arrive carry, so they require a large
-	// fraction and forbid extras, never equality. A missing newtask seed loses
-	// or mislabels nearly everything (11/160 rows under -comm, empty comm
-	// otherwise), far below this bar.
-	threadCommMinKeptPercent = 80
+	// expected threads) a test requires. It is 100: exact totals. Until task is2
+	// it was 80, because ior occasionally lost a thread's whole set of
+	// pread64/pwrite64 ENTER records while the EXIT records still arrived, at
+	// ~1.5-2% of runs with the ring-buffer drop counter at 0 (seen 152/160,
+	// 144/160 and 38/40 rows). is2 could not reproduce it any more at HEAD: 0
+	// losses in 370 exact-count runs of thread-comm-renamed (about 6 expected at
+	// the old rate), so the exact bars are back; the constant stays so a
+	// recurrence can be tolerated again in one place. A missing newtask seed
+	// loses or mislabels nearly everything (11/160 rows under -comm, empty comm
+	// otherwise), far below any bar.
+	threadCommMinKeptPercent = 100
 )
 
 // minKept is the smallest count a test accepts when it expects want rows or
