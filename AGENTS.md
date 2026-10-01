@@ -825,6 +825,20 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   All row, so tracing everything stays one deliberate keypress away). The TID
   picker keeps the plain fallback to "All TIDs", which stays inside the process.
   Pinned by `internal/tui/pidpicker/selection_test.go`.
+  A selection the user has not made is derived from the filter instead (task
+  hs2, `selection.go`: `Model.implicit`, `followFilter`): no filter text selects
+  the All row (a bare Enter still means all PIDs), a filter with matches selects
+  the first match, so typing `mysql` and pressing Enter picks that process rather
+  than the whole system, and a filter without a match selects nothing (the
+  `noSelection` state with a "no process matches the filter" notice, Enter is a
+  no-op, also in the TID picker). The derived state is recomputed on every
+  keystroke and rescan, so backspacing to an empty filter returns to All. Up/Down
+  hands the selection to the user (a process row then follows the process as
+  above); a user who moved back onto the All row and then edits the filter text
+  gets it handed back to the filter, so Enter right after typing never means All
+  unless Up was the last key. Startup is unaffected: `-pid`/`-tid` skip the
+  picker (task ur2), and the picker's `PidSelectedMsg` still replaces any
+  startup tid. Pinned by `internal/tui/pidpicker/filterselect_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than

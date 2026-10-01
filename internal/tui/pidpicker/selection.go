@@ -1,0 +1,188 @@
+package pidpicker
+
+import (
+	"fmt"
+
+	"ior/internal/tui/messages"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// noSelection is the selectedIndex of a picker that deliberately highlights
+// nothing, and Enter does nothing there. It has two sources: the selected
+// process vanished in PID mode (relocateSelection, sticky until the user
+// moves), or a typed filter that matches no process (followFilter, derived).
+const noSelection = -1
+
+// noMatchNotice explains the second noSelection source.
+const noMatchNotice = "no process matches the filter"
+
+// moveSelection moves the highlight by delta (-1 up, +1 down), blurs the
+// filter input and clears the notice. From noSelection either direction lands
+// on the "All" row, so the user then has to either press Enter on All
+// deliberately or keep moving to a process; the move is what acknowledges the
+// notice, even when it is clamped at the list edge.
+//
+// Any move makes the selection the user's own (implicit false): from then on
+// it is no longer re-derived from the typed filter (followFilter) until an
+// edit of the filter text finds it back on the All row (editFilter).
+func (m Model) moveSelection(delta int) Model {
+	if m.selectedIndex == noSelection {
+		m.selectedIndex = 0
+	} else {
+		m.selectedIndex = clamp(m.selectedIndex+delta, 0, len(m.filtered))
+	}
+	m.notice = ""
+	m.implicit = false
+	m.input.Blur()
+	return m
+}
+
+// editFilter feeds msg to the filter input and rebuilds the list. When the
+// text really changed while the All row is highlighted, the highlight is
+// handed back to the filter (implicit true): typing "mysql" and pressing Enter
+// then means the first mysql process, not the whole system, which is what the
+// untouched All row meant before task hs2. A highlighted process row keeps
+// its process (applyFilter -> relocateSelection) and a lost-selection
+// noSelection stays sticky, so only the All row is handed back, and the user
+// can return to it with Up at any time.
+func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
+	before := m.input.Value()
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() != before && m.selectedIndex == 0 {
+		m.implicit = true
+	}
+	return m.applyFilter(), cmd
+}
+
+// emitSelection returns the command announcing the highlighted row. With
+// noSelection it returns nil: Enter must not trace anything (in particular not
+// the whole system, which the All row means in PID mode) while the picker is
+// telling the user that their process is gone or that nothing matches.
+func (m Model) emitSelection() tea.Cmd {
+	if m.selectedIndex == noSelection {
+		return nil
+	}
+	process, onProcess := m.highlightedProcess()
+	if m.mode == PickerModeTID {
+		// The zero message is the All TIDs row.
+		msg := messages.TidSelectedMsg{}
+		if onProcess {
+			msg = messages.TidSelectedMsg{Pid: process.ParentPID, Tid: process.Pid}
+		}
+		return func() tea.Msg { return msg }
+	}
+	// The zero message is the All PIDs row: a whole-system trace.
+	msg := messages.PidSelectedMsg{}
+	if onProcess {
+		msg = messages.PidSelectedMsg{Pid: process.Pid}
+	}
+	return func() tea.Msg { return msg }
+}
+
+// highlightedProcess returns the process row selectedIndex points at. ok is
+// false for the "All" row, noSelection and an index outside filtered (e.g.
+// before the first scan), none of which has a process identity.
+func (m Model) highlightedProcess() (process ProcessInfo, ok bool) {
+	idx := m.selectedIndex - 1
+	if idx < 0 || idx >= len(m.filtered) {
+		return ProcessInfo{}, false
+	}
+	return m.filtered[idx], true
+}
+
+// selectedProcessPid returns the Pid (the tid in TID mode; ProcessInfo.Pid is
+// the thread id there) of the process row currently highlighted in filtered.
+// ok is false when there is no process row to track, see highlightedProcess.
+func (m Model) selectedProcessPid() (pid int, ok bool) {
+	process, ok := m.highlightedProcess()
+	return process.Pid, ok
+}
+
+// relocateSelection re-establishes selectedIndex after filtered was rebuilt;
+// queryEmpty tells whether the filter text is empty. A selection the filter
+// derives (m.implicit) follows the filter, see followFilter; one the user made
+// follows the process, see relocateUserSelection.
+func (m Model) relocateSelection(pid int, hadSelection, queryEmpty bool) Model {
+	if m.implicit {
+		return m.followFilter(queryEmpty)
+	}
+	return m.relocateUserSelection(pid, hadSelection)
+}
+
+// followFilter derives the selection from the filter text alone, for a
+// selection the user has not made (initial state, or the All row handed back
+// by editFilter):
+//   - empty filter: the All row, the initial selection.
+//   - matches exist: the first match, row 1. Leaving the All row highlighted
+//     would make Enter right after typing a whole-system trace
+//     (selectedPIDFilter(0) == -1), the task hs2 bug.
+//   - no match: noSelection plus a notice. Falling back to the All row would
+//     again make a reflexive Enter trace everything, now for a filter that
+//     found nothing. Backspacing to a filter with matches re-derives row 1,
+//     and Up/Down still reach the All row deliberately.
+//
+// The derived state is never sticky: every rebuild of the list recomputes it,
+// so a rescan that brings the first process of a typed filter selects it.
+func (m Model) followFilter(queryEmpty bool) Model {
+	m.notice = ""
+	switch {
+	case queryEmpty:
+		m.selectedIndex = 0
+	case len(m.filtered) > 0:
+		m.selectedIndex = 1
+	default:
+		m.selectedIndex = noSelection
+		m.notice = noMatchNotice
+	}
+	return m
+}
+
+// relocateUserSelection points selectedIndex at the row of pid in the rebuilt
+// filtered list. If the process is gone (it exited, or the new query no longer
+// matches it) a neighbouring process must not take over, and neither should the
+// "All" row silently: in PID mode All means "trace the whole system", so a
+// reflexive Enter after the list changed under the user would start a
+// system-wide trace without explanation. Instead the picker enters the
+// noSelection state (no highlight, Enter is a no-op) and shows a notice until
+// the user presses Up/Down. TID mode keeps the plain fallback to the All row:
+// "All TIDs" stays within the process (handleTidSelected keeps the current
+// pid), so it is never a surprise. When there was no process selected
+// (hadSelection false: the user moved onto the All row) the index is only
+// clamped into range; an existing noSelection state is sticky across rescans
+// and edits until the user moves.
+func (m Model) relocateUserSelection(pid int, hadSelection bool) Model {
+	if m.selectedIndex == noSelection {
+		return m
+	}
+	if !hadSelection {
+		m.selectedIndex = clamp(m.selectedIndex, 0, len(m.filtered))
+		return m
+	}
+	for i, process := range m.filtered {
+		if process.Pid == pid {
+			m.selectedIndex = i + 1
+			return m
+		}
+	}
+	if m.mode == PickerModeTID {
+		m.selectedIndex = 0
+		return m
+	}
+	m.selectedIndex = noSelection
+	m.notice = m.lostSelectionNotice(pid)
+	return m
+}
+
+// lostSelectionNotice words why pid left the list: a process still present in
+// the latest scan but filtered out stopped matching the query, anything else
+// exited.
+func (m Model) lostSelectionNotice(pid int) string {
+	for _, process := range m.processes {
+		if process.Pid == pid {
+			return fmt.Sprintf("pid %d no longer matches the filter - pick a process", pid)
+		}
+	}
+	return fmt.Sprintf("pid %d exited - pick a process", pid)
+}
