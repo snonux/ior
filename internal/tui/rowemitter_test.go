@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ior/internal/globalfilter"
+	"ior/internal/parkwait"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
@@ -219,6 +220,12 @@ func TestEndSessionWaitsForAnInFlightEmit(t *testing.T) {
 // recorded row must carry the advanced epoch. An implementation that read the
 // epoch before taking the read lock would stamp the older value. (The older
 // stamp would not be wrong, merely staler; this test guards the freshness.)
+//
+// The epoch advances only once the emitting goroutine is proven parked in
+// RLock inside EmitRow (parkwait reads the runtime's goroutine dump). A fixed
+// sleep there let a starved host advance the epoch before the goroutine even
+// ran, so an early-reading mutant read the advanced value too and passed.
+// Parked in RLock means any read before the gate has already happened.
 func TestSessionEmitRowStampsTheEpochReadInsideTheGate(t *testing.T) {
 	r := newRuntimeBindings()
 	recorder := &countingRecorder{RecordingController: parquet.NewRecorder(parquet.RecorderConfig{})}
@@ -226,24 +233,38 @@ func TestSessionEmitRowStampsTheEpochReadInsideTheGate(t *testing.T) {
 	emitter := r.beginSession().RowEmitter()
 
 	r.mu.Lock() // park the emit on the gate
+	unlock := sync.OnceFunc(r.mu.Unlock)
+	t.Cleanup(unlock) // a failing wait must not leave the emitter parked
+	baseline := parkwait.Count(emitRowFrame, gateReadReasons...)
 	emitted := make(chan struct{})
 	go func() {
 		defer close(emitted)
 		emitRows(emitter, 1)
 	}()
-	select {
-	case <-emitted:
-		t.Fatal("EmitRow returned while the gate was write-locked")
-	case <-time.After(50 * time.Millisecond): // long enough to reach the gate (and any early epoch read)
-	}
+	parkwait.Await{
+		Frame:      emitRowFrame,
+		Reasons:    gateReadReasons,
+		Baseline:   baseline,
+		Done:       emitted,
+		DoneMsg:    "EmitRow returned while the gate was write-locked",
+		TimeoutMsg: "EmitRow never parked on the gate's read lock",
+	}.Run(t)
 	r.advanceFilterEpoch()
-	r.mu.Unlock()
+	unlock()
 	<-emitted
 
 	if recorder.rows != 1 || recorder.epochs[0] != 1 {
 		t.Fatalf("recorder got %d rows at epochs %v, want 1 row at epoch 1 (the epoch current inside the gate)", recorder.rows, recorder.epochs)
 	}
 }
+
+// emitRowFrame and gateReadReasons identify a goroutine parked on the
+// session gate's read lock inside sessionRowEmitter.EmitRow in the goroutine
+// dump: "sync.RWMutex.RLock" in the header on current toolchains,
+// "semacquire" on older ones.
+const emitRowFrame = "tui.sessionRowEmitter.EmitRow"
+
+var gateReadReasons = []string{parkwait.RWMutexRLock, parkwait.Semacquire}
 
 // TestSessionEmitRowRacesWithRetirement hammers the gate from several
 // emitters while the session is retired and restarted: whatever interleaving

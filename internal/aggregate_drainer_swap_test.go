@@ -2,8 +2,6 @@ package internal
 
 import (
 	"context"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +9,7 @@ import (
 
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
+	"ior/internal/parkwait"
 	"ior/internal/statsengine"
 	"ior/internal/types"
 )
@@ -179,32 +178,21 @@ func (s *gatedAggregateSource) Drain() ([]statsengine.SyscallAggregate, error) {
 	return s.pendingAggregateSource.Drain()
 }
 
+// swapFilterFrame and swapFilterReasons identify a goroutine parked on the
+// drainer mutex inside aggregateDrainer.SwapFilter in the runtime's goroutine
+// dump (see package parkwait): "sync.Mutex.Lock" in the header on current
+// toolchains, "semacquire" on older ones.
+const swapFilterFrame = "(*aggregateDrainer).SwapFilter"
+
+var swapFilterReasons = []string{parkwait.MutexLock, parkwait.Semacquire}
+
 // blockedInSwapFilter counts goroutines currently parked on a mutex inside
-// aggregateDrainer.SwapFilter, read from the runtime's own goroutine dump. It
-// is the only way to observe "this goroutine reached the lock and is waiting
-// for it" without a test seam in production code: a goroutine that merely
-// started, or that is still spinning before it parks, does not count. A parked
-// mutex waiter shows a header like "goroutine 7 [sync.Mutex.Lock]:" (older
-// toolchains print "[semacquire]") above its frames.
+// aggregateDrainer.SwapFilter. It is the only way to observe "this goroutine
+// reached the lock and is waiting for it" without a test seam in production
+// code: a goroutine that merely started, or that is still spinning before it
+// parks, does not count.
 func blockedInSwapFilter() int {
-	buf := make([]byte, 1<<20)
-	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			buf = buf[:n]
-			break
-		}
-		buf = make([]byte, 2*len(buf))
-	}
-	count := 0
-	for _, g := range strings.Split(string(buf), "\n\n") {
-		header, _, _ := strings.Cut(g, "\n")
-		parkedOnMutex := strings.Contains(header, "sync.Mutex.Lock") || strings.Contains(header, "semacquire")
-		if parkedOnMutex && strings.Contains(g, "(*aggregateDrainer).SwapFilter") {
-			count++
-		}
-	}
-	return count
+	return parkwait.Count(swapFilterFrame, swapFilterReasons...)
 }
 
 // awaitSwapFilterBlocked returns once a goroutine beyond the baseline count is
@@ -213,24 +201,19 @@ func blockedInSwapFilter() int {
 // hoped the swapping goroutine had been scheduled by then: on a loaded host the
 // goroutine could reach the lock after the drain finished, so the test would
 // take the uncontended "already retired" path and pass vacuously. The polling
-// below waits on that condition, not on elapsed time; the deadline only bounds
-// a failing run. If the swap instead returns early (done closed), it never
+// waits on that condition, not on elapsed time; the deadline only bounds a
+// failing run. If the swap instead returns early (done closed), it never
 // waited for the lock - the regression these tests pin - and the test fails.
 func awaitSwapFilterBlocked(t *testing.T, baseline int, done <-chan struct{}) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for blockedInSwapFilter() <= baseline {
-		select {
-		case <-done:
-			t.Fatal("swap returned while the final drain held the drainer lock; it must wait for the lock")
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("swap never blocked on the drainer lock inside SwapFilter")
-		}
-		runtime.Gosched()
-		time.Sleep(200 * time.Microsecond) // poll interval, not a synchronisation guess
-	}
+	parkwait.Await{
+		Frame:      swapFilterFrame,
+		Reasons:    swapFilterReasons,
+		Baseline:   baseline,
+		Done:       done,
+		DoneMsg:    "swap returned while the final drain held the drainer lock; it must wait for the lock",
+		TimeoutMsg: "swap never blocked on the drainer lock inside SwapFilter",
+	}.Run(t)
 }
 
 // releaseOnce returns an idempotent closer for release that is also
