@@ -16,8 +16,8 @@ func readUnderLock(mu *sync.RWMutex) {
 }
 
 // TestAwaitReturnsOnceTheGoroutineParks is the positive case: a reader held
-// off by the write lock is observed parked inside readUnderLock, and not
-// before it is started.
+// off by the write lock is observed parked inside readUnderLock, and drops
+// out of the count again once the lock is released and it returns.
 func TestAwaitReturnsOnceTheGoroutineParks(t *testing.T) {
 	const frame = "parkwait.readUnderLock"
 	var mu sync.RWMutex
@@ -40,10 +40,10 @@ func TestAwaitReturnsOnceTheGoroutineParks(t *testing.T) {
 	}
 }
 
-// TestCountIgnoresRunnableGoroutinesAndOtherReasons checks the negative
-// cases: a goroutine inside the frame but parked for another reason (here a
-// channel receive) does not count, nor does a reason that is not asked for.
-func TestCountIgnoresRunnableGoroutinesAndOtherReasons(t *testing.T) {
+// TestCountIgnoresOtherWaitReasons checks the negative case: a goroutine
+// inside the frame but parked for a reason not asked for (here a channel
+// receive) does not count as parked on a lock.
+func TestCountIgnoresOtherWaitReasons(t *testing.T) {
 	const frame = "parkwait.waitOnChannel"
 	release := make(chan struct{})
 	done := make(chan struct{})

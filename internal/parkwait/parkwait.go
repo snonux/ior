@@ -28,7 +28,6 @@ import (
 const (
 	MutexLock    = "sync.Mutex.Lock"
 	RWMutexRLock = "sync.RWMutex.RLock"
-	RWMutexLock  = "sync.RWMutex.Lock"
 	Semacquire   = "semacquire"
 )
 
