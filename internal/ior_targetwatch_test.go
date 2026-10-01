@@ -311,3 +311,14 @@ func TestTargetExitRecordHookIsExactlyOne(t *testing.T) {
 		}
 	}
 }
+
+// TestTargetWatchHookIsExactlyOne: the same contract for the hook that keeps
+// the liveness watcher from starting (task os2).
+func TestTargetWatchHookIsExactlyOne(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false, "yes": false, "11": false} {
+		t.Setenv(disableTargetWatchEnv, value)
+		if got := targetWatchDisabled(); got != want {
+			t.Errorf("%s=%q: targetWatchDisabled() = %v, want %v", disableTargetWatchEnv, value, got, want)
+		}
+	}
+}

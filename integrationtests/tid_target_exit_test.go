@@ -2,7 +2,6 @@ package integrationtests
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,29 +34,29 @@ func workerTidTarget(h *TestHarness) signalTarget {
 	}
 }
 
+// triggerCases are the ways a headless run can learn that its target ended,
+// each tested alone: the target's exit record with the liveness watcher off,
+// and the watcher with the record trigger off. Both print the same status
+// line, so only switching the other one off proves a trigger works.
+var triggerCases = []struct {
+	name string
+	env  []string
+}{
+	{"exit record only", []string{testDisableTargetWatchEnv + "=1"}},
+	{"liveness watcher only", []string{testDisableTargetExitRecordEnv + "=1"}},
+}
+
 // TestHeadlessTidRunEndsWhenItsThreadExits: -tid <worker> ends shortly after
 // the worker thread exits although the process is still alive (non-leader
-// semantics), says so on stderr and keeps the worker's rows. The second case
-// disables the exit-record trigger, so the liveness watcher alone has to end
-// the run.
+// semantics), says so on stderr and keeps the worker's rows; once through the
+// exit record alone and once through the liveness watcher alone.
 func TestHeadlessTidRunEndsWhenItsThreadExits(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		env  []string
-	}{
-		{"exit record", nil},
-		{"liveness watcher only", []string{testDisableTargetExitRecordEnv + "=1"}},
-	} {
+	for _, tc := range triggerCases {
 		t.Run(tc.name, func(t *testing.T) {
 			enableParallelIfRequested(t)
 			h := newTestHarness(t)
 			target := workerTidTarget(&h)
-			newCmd := func(iorArgs []string) *exec.Cmd {
-				cmd := exec.Command(h.IorBinary, iorArgs...)
-				cmd.Env = append(os.Environ(), tc.env...)
-				return cmd
-			}
-			run := startTargetRun(t, h, target, modeArgs("plain", h.OutputDir), shutdownRunDuration, newCmd)
+			run := startTargetRun(t, h, target, modeArgs("plain", h.OutputDir), shutdownRunDuration, iorCmdWithEnv(h, tc.env...))
 
 			// Far below -duration: only the thread's exit can have ended it.
 			run.requireCleanExit(t, iorShutdownGrace)
@@ -76,36 +75,84 @@ func TestHeadlessTidRunEndsWhenItsThreadExits(t *testing.T) {
 	}
 }
 
-// TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader traces the leader
-// thread (-tid <pid>) of thread-exit-keeps-fd: a sibling thread exits while
-// the leader runs on (the negative case: another task's exit must not end the
-// run), and the run ends only when the leader itself exits with the process.
-func TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader(t *testing.T) {
-	enableParallelIfRequested(t)
-	h := newTestHarness(t)
-	target := signalTarget{
-		scenario: threadExitScenario,
-		scope:    func(pid int) ([]string, error) { return []string{"-tid", strconv.Itoa(pid)}, nil },
-	}
-	run := startTargetRun(t, h, target, modeArgs("plain", h.OutputDir), shutdownRunDuration, func(iorArgs []string) *exec.Cmd {
-		return exec.Command(h.IorBinary, iorArgs...)
-	})
-	// The sibling thread exits right after the workload starts; give the
-	// record time to travel, then require ior to be running still.
+// requireStillRunning fails if ior has already ended, after giving the
+// workload's earlier records time to travel through the ring buffer.
+func requireStillRunning(t *testing.T, run *signalRun, why string) {
+	t.Helper()
 	time.Sleep(2 * shutdownDrainDelay)
 	select {
 	case err := <-run.done:
-		t.Fatalf("ior ended although the traced thread was alive (a sibling exited; wait: %v)", err)
+		t.Fatalf("ior ended although %s (wait: %v)", why, err)
 	default:
 	}
+}
 
+// requireLeaderEnd releases the workload and requires the run to end, naming
+// the leader thread, with wantRow in the plain output.
+func requireLeaderEnd(t *testing.T, run *signalRun, wantRow string) {
+	t.Helper()
 	run.releaseTarget(t)
 	run.requireCleanExit(t, iorShutdownGrace)
 	stdout, stderr := run.text()
 	if !strings.Contains(stderr, "Traced thread "+strconv.Itoa(run.workload.Process.Pid)+" exited, stopping the trace") {
 		t.Fatalf("stderr does not announce the leader thread's exit:\n%s", stderr)
 	}
-	if !strings.Contains(stdout, "write") {
-		t.Fatalf("plain output lost the leader's rows:\n%s", stdout)
+	if !strings.Contains(stdout, wantRow) {
+		t.Fatalf("plain output lacks the leader's %q rows:\n%s", wantRow, stdout)
 	}
 }
+
+// leaderTidScope traces the workload's leader thread: -tid <pid>.
+func leaderTidScope(pid int) ([]string, error) {
+	return []string{"-tid", strconv.Itoa(pid)}, nil
+}
+
+// TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader traces the leader
+// thread (-tid <pid>) of thread-exit-keeps-fd: a sibling thread exits while
+// the leader runs on (the negative case: another task's exit must not end the
+// run), and the run ends only when the leader itself exits with the process,
+// through either trigger alone.
+func TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader(t *testing.T) {
+	for _, tc := range triggerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			enableParallelIfRequested(t)
+			h := newTestHarness(t)
+			target := signalTarget{scenario: threadExitScenario, scope: leaderTidScope}
+			run := startTargetRun(t, h, target, modeArgs("plain", h.OutputDir), shutdownRunDuration, iorCmdWithEnv(h, tc.env...))
+			// The sibling thread exits right after the workload starts.
+			requireStillRunning(t, run, "the traced thread was alive (a sibling exited)")
+			requireLeaderEnd(t, run, "write")
+		})
+	}
+}
+
+// TestHeadlessTidLeaderRunSurvivesANonLeaderExec pins the decided -tid <leader>
+// semantics for an execve from a non-leader thread (task os2). de_thread()
+// kills the old leader, whose exit record carries the traced tid, then hands
+// that tid to the exec'ing thread, which runs on as the new program (here the
+// workload re-executed as open-basic). The BPF tid filter keeps tracing it,
+// so the run must survive the old leader's record (flagged
+// IOR_EXIT_TID_INHERITED) and the watcher's brief zombie, record the new
+// program's open of testfile.txt, and end when the new program exits. Run
+// with both triggers and with each alone: without the flag the record ended
+// the run at the exec while the watcher never noticed anything.
+func TestHeadlessTidLeaderRunSurvivesANonLeaderExec(t *testing.T) {
+	cases := append([]struct {
+		name string
+		env  []string
+	}{{"both triggers", nil}}, triggerCases...)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enableParallelIfRequested(t)
+			h := newTestHarness(t)
+			target := signalTarget{scenario: nonLeaderExecIntoOpenScenario, scope: leaderTidScope}
+			run := startTargetRun(t, h, target, modeArgs("plain", h.OutputDir), shutdownRunDuration, iorCmdWithEnv(h, tc.env...))
+			// The exec happens right after the workload is released.
+			requireStillRunning(t, run, "the traced tid lives on in the exec'd program")
+			requireLeaderEnd(t, run, "testfile.txt")
+		})
+	}
+}
+
+// nonLeaderExecIntoOpenScenario is ioworkload's exec-non-leader-into-open.
+const nonLeaderExecIntoOpenScenario = "exec-non-leader-into-open"

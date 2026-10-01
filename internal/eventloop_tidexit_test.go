@@ -2,7 +2,10 @@ package internal
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"ior/internal/event"
+	"ior/internal/types"
 
 	"golang.org/x/sys/unix"
 )
@@ -53,6 +57,12 @@ func TestTidTargetExitStopsTheTrace(t *testing.T) {
 		}},
 		{"with -pid of the same process", crossPidA, workerTid, func(t *testing.T, tid uint32) []byte {
 			return makeThreadExitEvent(t, defaulTime, crossPidA, tid)
+		}},
+		{"leader target, its process dies from another thread (group-dead)", -1, crossPidA, func(t *testing.T, tid uint32) []byte {
+			// E.g. the thread that inherited the leader tid in an execve was
+			// killed in de_thread: no unflagged record of the tid comes, but
+			// a group-dead record of tgid == -tid means the tid is gone.
+			return makeProcessExitEvent(t, defaulTime, tid, siblingTid)
 		}},
 	}
 	for _, tt := range tests {
@@ -109,6 +119,44 @@ func TestTidTargetExitIgnoresEveryOtherExit(t *testing.T) {
 				t.Fatalf("stopTrace calls = %d, status = %q, want none", *stops, *status)
 			}
 		})
+	}
+}
+
+// makeTidInheritedExitEvent is the exit record of leader pid killed by another
+// thread's execve (de_thread): a thread exit flagged IOR_EXIT_TID_INHERITED,
+// because the exec'ing thread takes over the tid.
+func makeTidInheritedExitEvent(t *testing.T, time uint64, pid uint32) []byte {
+	t.Helper()
+	raw := makeThreadExitEvent(t, time, pid, pid)
+	binary.LittleEndian.PutUint32(raw[28:32], types.ProcessExitTidInherited)
+	return raw
+}
+
+// TestTidLeaderSurvivesANonLeaderExec pins the decided semantics for
+// -tid <leader> when another thread of the process calls execve (task os2):
+// the old leader's exit record (flagged TidInherited) does not end the run,
+// because the exec'ing thread now holds the traced tid and the BPF filter
+// keeps tracing the new program; that program's own exit later does end it.
+// The flag is ignored for any other tid, so it cannot shield a non-leader.
+func TestTidLeaderSurvivesANonLeaderExec(t *testing.T) {
+	el, stops, status := targetExitLoopTid(t, -1, int(crossPidA), true)
+	feedExit(el, makeTidInheritedExitEvent(t, defaulTime, crossPidA))
+	if *stops != 0 || len(*status) != 0 {
+		t.Fatalf("the inherited-tid exit of the old leader ended the run: stops = %d, status = %q", *stops, *status)
+	}
+	// The exec'd program, now the leader under the same tid, exits.
+	feedExit(el, makeThreadExitEvent(t, defaulTime+1_000, crossPidA, crossPidA))
+	want := "Traced thread " + strconv.Itoa(int(crossPidA)) + " exited, stopping the trace"
+	if *stops != 1 || len(*status) != 1 || (*status)[0] != want {
+		t.Fatalf("the exec'd program's exit: stops = %d, status = %q, want 1 and [%q]", *stops, *status, want)
+	}
+
+	// -pid P with -tid P: the -pid rule only acts on group-dead records, so
+	// the flagged record ends nothing there either.
+	el, stops, _ = targetExitLoopTid(t, int(crossPidA), int(crossPidA), true)
+	feedExit(el, makeTidInheritedExitEvent(t, defaulTime, crossPidA))
+	if *stops != 0 {
+		t.Fatal("the inherited-tid exit ended a -pid P -tid P run")
 	}
 }
 
@@ -234,8 +282,8 @@ func TestHeadlessTidRunSurvivesOtherExits(t *testing.T) {
 }
 
 // TestHeadlessTidRunEndsWithoutTheExitRecord: with no exit record at all (a
-// ring-buffer drop) the liveness watcher ends a -tid run, and only a headless
-// one.
+// ring-buffer drop) the liveness watcher ends a -tid run, only a headless one,
+// and not under the IOR_TEST_DISABLE_TARGET_WATCH test hook.
 func TestHeadlessTidRunEndsWithoutTheExitRecord(t *testing.T) {
 	run := func(verbose bool, wait time.Duration) bool {
 		infra, rawCh, _, _ := plainTraceInfra(t)
@@ -265,63 +313,166 @@ func TestHeadlessTidRunEndsWithoutTheExitRecord(t *testing.T) {
 	if run(false, 500*time.Millisecond) {
 		t.Fatal("the liveness watcher ended a non-headless (TUI) -tid trace")
 	}
+	// The integration tests' record-only runs rely on this hook keeping the
+	// watcher off.
+	t.Setenv(disableTargetWatchEnv, "1")
+	if run(true, 500*time.Millisecond) {
+		t.Fatal("the liveness watcher ran although " + disableTargetWatchEnv + "=1")
+	}
 }
 
 // TestThreadWatchFromProcfs covers the -tid specifics of the procfs
 // mechanism: a zombie thread is gone even though its siblings run (a zombie
 // process leader with live threads is not, for -pid), a recycled tid has
-// another start time, and a live thread is alive.
+// another start time, and a live thread is alive. A thread's zombie state is
+// only trusted on the second poll in a row (confirm); a missing or recycled
+// entry is final at once.
 func TestThreadWatchFromProcfs(t *testing.T) {
 	const id = 4242
 	tests := []struct {
-		name   string
-		thread bool
-		stat   string
-		tasks  []int
-		want   bool
+		name    string
+		thread  bool
+		stat    string
+		tasks   []int
+		want    bool
+		confirm bool // the first gone() must say false, the second want
 	}{
-		{"live thread", true, statLine(id, "S", "100"), []int{id, id + 1}, false},
-		{"zombie thread, siblings run", true, statLine(id, "Z", "100"), []int{id, id + 1}, true},
-		{"dead-state thread", true, statLine(id, "X", "100"), []int{id}, true},
-		{"recycled tid", true, statLine(id, "S", "999"), []int{id}, true},
-		{"zombie leader with threads, process target", false, statLine(id, "Z", "100"), []int{id, id + 1}, false},
+		{"live thread", true, statLine(id, "S", "100"), []int{id, id + 1}, false, false},
+		{"zombie thread, siblings run", true, statLine(id, "Z", "100"), []int{id, id + 1}, true, true},
+		{"dead-state thread", true, statLine(id, "X", "100"), []int{id}, true, true},
+		{"recycled tid", true, statLine(id, "S", "999"), []int{id}, true, false},
+		{"zombie leader with threads, process target", false, statLine(id, "Z", "100"), []int{id, id + 1}, false, false},
+		{"zombie leader alone, process target", false, statLine(id, "Z", "100"), []int{id}, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := fakeProcStat(t, id, tt.stat, tt.tasks...)
 			w := &targetWatch{target: traceTarget{id: id, thread: tt.thread}, root: root, pidfd: -1, startTime: "100"}
+			if tt.confirm && w.gone() {
+				t.Fatal("first gone() = true, want the exit confirmed by a second poll")
+			}
 			if got := w.gone(); got != tt.want {
 				t.Fatalf("gone() = %v, want %v", got, tt.want)
 			}
 		})
 	}
+	// A thread with no /proc entry at all is gone at the first poll.
+	w := &targetWatch{target: traceTarget{id: id, thread: true}, root: t.TempDir(), pidfd: -1, startTime: "100"}
+	if !w.gone() {
+		t.Fatal("a thread without a /proc entry was not gone at once")
+	}
+}
+
+// TestThreadWatchIgnoresTheExecHandoverZombie pins why a thread's exit needs
+// two polls (task os2): when a non-leader thread execs, the old leader is a
+// zombie for an instant before the exec'ing thread takes over its tid and
+// start time. A -tid <leader> watch that polls in that instant and then sees
+// the live program must not end the run; a zombie seen once, then live, then
+// a zombie again needs two fresh polls.
+func TestThreadWatchIgnoresTheExecHandoverZombie(t *testing.T) {
+	const id = 4343
+	root := fakeProcStat(t, id, statLine(id, "Z", "100"), id, id+1)
+	stat := filepath.Join(root, strconv.Itoa(id), "stat")
+	setState := func(state string) {
+		t.Helper()
+		if err := os.WriteFile(stat, []byte(statLine(id, state, "100")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &targetWatch{target: traceTarget{id: id, thread: true}, root: root, pidfd: -1, startTime: "100"}
+	if w.gone() {
+		t.Fatal("a zombie seen once ended the watch")
+	}
+	setState("S") // the exec'd program now holds the tid, same start time
+	if w.gone() {
+		t.Fatal("the exec'd program holding the tid was reported gone")
+	}
+	setState("Z")
+	if w.gone() {
+		t.Fatal("a zombie after a live poll was trusted without confirmation")
+	}
+	if !w.gone() {
+		t.Fatal("a zombie seen on two polls in a row was not gone")
+	}
+}
+
+// kernelHasPidfdThread reports whether the running kernel is Linux 6.9 or
+// newer, the release that added PIDFD_THREAD (pidfd_open of a non-leader).
+func kernelHasPidfdThread(t *testing.T) bool {
+	t.Helper()
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		t.Fatalf("uname: %v", err)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(unix.ByteSliceToString(uts.Release[:]), "%d.%d", &major, &minor); err != nil {
+		t.Fatalf("parse kernel release %q: %v", unix.ByteSliceToString(uts.Release[:]), err)
+	}
+	return major > 6 || (major == 6 && minor >= 9)
+}
+
+// startNonLeaderThread parks a goroutine locked to an OS thread that is not
+// the thread-group leader and returns that thread's tid; closing exit makes
+// the goroutine return, which terminates the thread. A new goroutine can land
+// on the main thread (the test binary does not pin its main goroutine; while
+// the caller blocks on the handoff, the scheduler readily runs the new
+// goroutine on the caller's own thread, which may be the main one), where
+// returning while locked would not end the thread. The caller's goroutine is
+// therefore locked to its thread while spawning, so the worker cannot take
+// it, and a draw that still lands on the main thread is unlocked and retried.
+func startNonLeaderThread(t *testing.T) (tid int, exit chan struct{}) {
+	t.Helper()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	exit = make(chan struct{})
+	for range 100 {
+		tidCh := make(chan int)
+		go func() {
+			runtime.LockOSThread()
+			id := unix.Gettid()
+			tidCh <- id
+			if id == os.Getpid() {
+				runtime.UnlockOSThread()
+				return
+			}
+			// Locked and never unlocked: returning terminates this thread.
+			<-exit
+		}()
+		if id := <-tidCh; id != os.Getpid() {
+			return id, exit
+		}
+	}
+	t.Fatal("could not get a goroutine onto a non-leader OS thread")
+	return 0, nil
 }
 
 // TestTargetWatchRealThread drives the watch against a real non-leader
 // thread: alive while it runs while the process (this test) lives on, gone
-// once it exited, through the pidfd where the kernel has PIDFD_THREAD and
-// through procfs alone either way.
+// once it exited, through the PIDFD_THREAD pidfd alone (procfs pointed at a
+// fake entry that always says "alive", so only the pidfd can tell) and
+// through procfs alone. On a kernel with PIDFD_THREAD (6.9+) the pidfd must
+// open; a pidfdThread of 0 makes pidfd_open refuse the non-leader (EINVAL)
+// and fails here.
 func TestTargetWatchRealThread(t *testing.T) {
-	tidCh := make(chan int)
-	exit := make(chan struct{})
-	go func() {
-		// Locked and never unlocked: returning terminates this OS thread.
-		runtime.LockOSThread()
-		tidCh <- unix.Gettid()
-		<-exit
-	}()
-	tid := <-tidCh
+	tid, exit := startNonLeaderThread(t)
 
 	w := openTargetWatch(procRoot, traceTarget{id: tid, thread: true})
 	defer w.Close()
-	procfsOnly := &targetWatch{target: w.target, root: procRoot, pidfd: -1, startTime: w.startTime}
 	if w.startTime == "" {
 		t.Fatal("the start time of a live thread was not captured")
 	}
-	if w.pidfd < 0 {
-		t.Log("pidfd_open(PIDFD_THREAD) unavailable on this kernel: procfs mechanism only")
+	procfsOnly := &targetWatch{target: w.target, root: procRoot, pidfd: -1, startTime: w.startTime}
+	var pidfdOnly *targetWatch
+	switch {
+	case w.pidfd >= 0:
+		alive := fakeProcStat(t, tid, statLine(tid, "S", w.startTime), tid)
+		pidfdOnly = &targetWatch{target: w.target, root: alive, pidfd: w.pidfd, startTime: w.startTime}
+	case kernelHasPidfdThread(t):
+		t.Fatal("pidfd_open(PIDFD_THREAD) of a live non-leader failed on a kernel that has PIDFD_THREAD (6.9+)")
+	default:
+		t.Log("kernel older than 6.9 has no PIDFD_THREAD: the pidfd-only check is skipped, procfs only")
 	}
-	if w.gone() || procfsOnly.gone() {
+	if w.gone() || procfsOnly.gone() || (pidfdOnly != nil && pidfdOnly.gone()) {
 		t.Fatal("a live thread reported gone")
 	}
 	// The thread's process (this test) lives on; its leader must stay alive.
@@ -329,12 +480,20 @@ func TestTargetWatchRealThread(t *testing.T) {
 	defer leader.Close()
 
 	close(exit)
-	deadline := time.Now().Add(5 * time.Second)
-	for !(w.gone() && procfsOnly.gone()) {
-		if time.Now().After(deadline) {
-			t.Fatalf("exited thread not reported gone (pidfd watch: %v, procfs only: %v)", w.gone(), procfsOnly.gone())
+	waitGone := func(name string, watch *targetWatch) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !watch.gone() {
+			if time.Now().After(deadline) {
+				t.Fatalf("exited thread not reported gone by the %s watch", name)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(5 * time.Millisecond)
+	}
+	waitGone("combined", w)
+	waitGone("procfs-only", procfsOnly)
+	if pidfdOnly != nil {
+		waitGone("pidfd-only", pidfdOnly)
 	}
 	if leader.gone() {
 		t.Fatal("the process was reported gone when only one of its threads exited")

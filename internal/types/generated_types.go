@@ -3264,11 +3264,11 @@ type ProcessExitEvent struct {
 	Pid       uint32
 	Tid       uint32
 	GroupDead uint32
-	Reserved  uint32
+	ExitFlags uint32
 }
 
 func (p ProcessExitEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v GroupDead:%v Reserved:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.GroupDead, p.Reserved)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v GroupDead:%v ExitFlags:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.GroupDead, p.ExitFlags)
 }
 
 func (p ProcessExitEvent) Equals(other any) bool {
@@ -3276,7 +3276,7 @@ func (p ProcessExitEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.GroupDead == otherConcrete.GroupDead && p.Reserved == otherConcrete.Reserved
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.GroupDead == otherConcrete.GroupDead && p.ExitFlags == otherConcrete.ExitFlags
 }
 
 func (p *ProcessExitEvent) GetEventType() EventType {

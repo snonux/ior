@@ -72,6 +72,7 @@ var scenarios = map[string]func() error{
 	"process-exec-lifecycle":        processExecLifecycle,
 	"exec-non-leader-thread":        execNonLeaderThread,
 	"exec-non-leader-thread-tid":    execNonLeaderThreadTid,
+	"exec-non-leader-into-open":     execNonLeaderIntoOpen,
 	"process-kcmp-file":             processKcmpFile,
 	"process-kcmp-vm":               processKcmpVM,
 	"family-mixed":                  familyMixed,

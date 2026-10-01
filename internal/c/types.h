@@ -587,8 +587,13 @@ struct process_exec_event {
 // group_dead is set, i.e. when the last thread of the group has exited - a
 // sibling thread's exit must not discard descriptors the process still holds.
 // group_dead is a __u32 (0 or 1) because the Go type generator maps only
-// 32/64-bit integers; the explicit reserved word keeps the layout at 32 bytes
+// 32/64-bit integers; the explicit exit_flags word keeps the layout at 32 bytes
 // with no implicit padding, so kernel and binary.Write payloads share one size.
+// exit_flags bit 0 (IOR_EXIT_TID_INHERITED, exec.c) marks the exit of a
+// thread-group leader that another thread's execve killed in de_thread(): the
+// exec'ing thread takes over the leader's tid (and start time), so the tid
+// lives on in the new program although this task died. The word was the
+// always-zero "reserved" before, so an older object reads as "tid gone".
 // Like process_exec_event's siblings it carries no comm: the only payload
 // userspace needs is the identity of the task and whether its process died.
 struct process_exit_event {
@@ -598,7 +603,7 @@ struct process_exit_event {
     __u32 pid;
     __u32 tid;
     __u32 group_dead;
-    __u32 reserved;
+    __u32 exit_flags;
 };
 
 // task_newtask_event is not a syscall tracepoint event: it is emitted by the

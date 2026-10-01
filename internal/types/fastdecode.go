@@ -1071,7 +1071,7 @@ const processExitGroupDeadUnknown = ^uint32(0)
 // prefix is decoded, so a newer object that appends fields stays readable);
 // and exactly the legacy 24-byte record of a pre-group_dead IOR_BPF_OBJECT
 // override. That record cannot tell a thread exit from a process exit, so it
-// is decoded as "group-dead unknown" (IsGroupDeadKnown false, Reserved 0);
+// is decoded as "group-dead unknown" (IsGroupDeadKnown false, ExitFlags 0);
 // see handleProcessExitEvent for how that is consumed. Every other size fails
 // closed with nil rather than decoding fields at wrong offsets.
 func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
@@ -1086,12 +1086,28 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	p.GroupDead = processExitGroupDeadUnknown
-	p.Reserved = 0
+	p.ExitFlags = 0
 	if !legacy {
 		p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
-		p.Reserved = binary.LittleEndian.Uint32(raw[28:32])
+		p.ExitFlags = binary.LittleEndian.Uint32(raw[28:32])
 	}
 	return p
+}
+
+// ProcessExitTidInherited is the ExitFlags bit of a sched_process_exit record
+// whose task is a thread-group leader killed by another thread's execve
+// (IOR_EXIT_TID_INHERITED in internal/c/exec.c): the exec'ing thread takes
+// over the leader's tid, so the tid lives on in the new program. The value is
+// a hand-kept copy of the define; TestProcessExitTidInheritedMatchesTheBPFDefine
+// fails when the two drift apart.
+const ProcessExitTidInherited = 0x1
+
+// TidInherited reports whether the exited task's tid lives on in the thread
+// that exec'd (see ProcessExitTidInherited): this record ends the old
+// leader's task, not the tid. A record of an older object (or the legacy
+// layout) carries 0 here: "the tid is gone with the task".
+func (p *ProcessExitEvent) TidInherited() bool {
+	return p.ExitFlags&ProcessExitTidInherited != 0
 }
 
 // IsGroupDead reports whether the record says the exited task was the last

@@ -798,7 +798,7 @@ func TestNewProcessExitEventFastKernelLayout(t *testing.T) {
 // TestNewProcessExitEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
 // compatibility path: the 24-byte record of an object built before group_dead
 // cannot tell a thread exit from a process exit, so it must decode as
-// "group-dead unknown" (Reserved 0) rather than be dropped as malformed or
+// "group-dead unknown" (ExitFlags 0) rather than be dropped as malformed or
 // read as either a thread exit or a confirmed process exit. The pooled event
 // is dirtied with a confirmed group-dead record first, so neither the flag nor
 // the unknown marker can come from a zeroed allocation.
@@ -812,9 +812,9 @@ func TestNewProcessExitEventFastDecodesLegacyRecord(t *testing.T) {
 	if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
 		t.Fatalf("unexpected legacy process exit decode: %#v", ev)
 	}
-	if ev.IsGroupDeadKnown() || ev.IsGroupDead() || ev.Reserved != 0 {
-		t.Fatalf("legacy record known=%v dead=%v Reserved=%d, want false, false, 0",
-			ev.IsGroupDeadKnown(), ev.IsGroupDead(), ev.Reserved)
+	if ev.IsGroupDeadKnown() || ev.IsGroupDead() || ev.ExitFlags != 0 || ev.TidInherited() {
+		t.Fatalf("legacy record known=%v dead=%v ExitFlags=%d, want false, false, 0",
+			ev.IsGroupDeadKnown(), ev.IsGroupDead(), ev.ExitFlags)
 	}
 	ev.Recycle()
 
@@ -828,9 +828,9 @@ func TestNewProcessExitEventFastDecodesLegacyRecord(t *testing.T) {
 }
 
 // processExitRaw builds an n-byte exit record for pid 100 / tid 101 whose
-// group_dead and reserved words are set when n reaches them; bytes past the
+// group_dead and exit_flags words are set when n reaches them; bytes past the
 // current layout are 0xff so an oversized decode cannot read them unnoticed.
-func processExitRaw(n int, groupDead, reserved uint32) []byte {
+func processExitRaw(n int, groupDead, exitFlags uint32) []byte {
 	raw := make([]byte, n)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
 	binary.LittleEndian.PutUint64(raw[8:16], 7)
@@ -838,12 +838,30 @@ func processExitRaw(n int, groupDead, reserved uint32) []byte {
 	binary.LittleEndian.PutUint32(raw[20:24], 101)
 	if n >= processExitEventSize {
 		binary.LittleEndian.PutUint32(raw[24:28], groupDead)
-		binary.LittleEndian.PutUint32(raw[28:32], reserved)
+		binary.LittleEndian.PutUint32(raw[28:32], exitFlags)
 		for i := processExitEventSize; i < n; i++ {
 			raw[i] = 0xff
 		}
 	}
 	return raw
+}
+
+// TestNewProcessExitEventFastDecodesTidInherited pins the exit_flags word (task
+// os2): a leader killed by another thread's execve carries
+// IOR_EXIT_TID_INHERITED, which TidInherited reports, and an unflagged record
+// following it from the pool does not inherit the flag.
+func TestNewProcessExitEventFastDecodesTidInherited(t *testing.T) {
+	ev := NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, ProcessExitTidInherited))
+	if ev == nil || !ev.TidInherited() || ev.IsGroupDead() || !ev.IsGroupDeadKnown() {
+		t.Fatalf("flagged leader exit decoded as %#v, want TidInherited and a known thread exit", ev)
+	}
+	ev.Recycle()
+
+	ev = NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, 0))
+	defer ev.Recycle()
+	if ev.TidInherited() {
+		t.Fatalf("unflagged record after a flagged one reports TidInherited: %#v", ev)
+	}
 }
 
 // TestNewProcessExitEventFastRejectsOtherSizes pins the negative path: below
@@ -869,7 +887,7 @@ func TestNewProcessExitEventFastDecodesOversizedPrefix(t *testing.T) {
 		if ev == nil {
 			t.Fatalf("NewProcessExitEventFast(%d bytes) rejected, want prefix decoded", processExitEventSize+extra)
 		}
-		if ev.Tid != 101 || !ev.IsGroupDeadKnown() || !ev.IsGroupDead() || ev.Reserved != 0 {
+		if ev.Tid != 101 || !ev.IsGroupDeadKnown() || !ev.IsGroupDead() || ev.ExitFlags != 0 {
 			t.Fatalf("unexpected oversized process exit decode: %#v", ev)
 		}
 		ev.Recycle()
@@ -2144,5 +2162,27 @@ func TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine(t *testing.T) {
 	}
 	if uint64(TaskNewtaskChildOutOfScope) != want {
 		t.Errorf("TaskNewtaskChildOutOfScope = %#x, BPF IOR_NEWTASK_CHILD_OUT_OF_SCOPE = %#x", TaskNewtaskChildOutOfScope, want)
+	}
+}
+
+// TestProcessExitTidInheritedMatchesTheBPFDefine ties ProcessExitTidInherited
+// to IOR_EXIT_TID_INHERITED in internal/c/exec.c, for the same reason as the
+// task_newtask scope flag above: a drift would make every inherited-tid exit
+// read as the traced thread's end (or the reverse) without a compile error.
+func TestProcessExitTidInheritedMatchesTheBPFDefine(t *testing.T) {
+	src, err := os.ReadFile("../c/exec.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^#define\s+IOR_EXIT_TID_INHERITED\s+(\S+)`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("IOR_EXIT_TID_INHERITED is no longer #defined in internal/c/exec.c; update this test and the Go constant together")
+	}
+	want, err := strconv.ParseUint(strings.TrimRight(string(m[1]), "uUlL"), 0, 32)
+	if err != nil {
+		t.Fatalf("cannot parse the define's value %q: %v", m[1], err)
+	}
+	if uint64(ProcessExitTidInherited) != want {
+		t.Errorf("ProcessExitTidInherited = %#x, BPF IOR_EXIT_TID_INHERITED = %#x", ProcessExitTidInherited, want)
 	}
 }

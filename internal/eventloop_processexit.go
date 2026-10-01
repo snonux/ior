@@ -94,6 +94,15 @@ import (
 // PID gets a row and label of its own. A thread exit does not, for the same
 // reason it does not evict fds.
 //
+// The traced target (tasks vr2, os2): in a headless run the record can also
+// end the trace. Last of all, once every tid-keyed piece above is retired,
+// endTraceOnTargetThreadExit ends a -tid trace on the traced thread's own
+// exit record, or on the group-dead record of the process whose leader tid is
+// traced, unless the BPF side flagged the tid as inherited by a sibling's
+// execve (TidInherited: the exec'd program runs on under the traced tid). The
+// -pid process's group-dead record ends the trace from applyProcessDeath. The
+// TUI is never ended this way.
+//
 // A legacy record from a pre-group_dead IOR_BPF_OBJECT override does not say
 // whether the process died (ev.IsGroupDeadKnown is false); see
 // applyProcessDeath for how the two halves treat it.
@@ -123,7 +132,9 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	e.pendingHandleState().delete(ev.Tid)
 	// Last: every piece of state the exit retires is gone before a -tid trace
 	// is told to end, so the shutdown statistics see the final picture (the
-	// -pid half does the same at the end of applyProcessDeath).
+	// -pid half does the same at the end of applyProcessDeath). An inherited
+	// tid (a sibling's execve took it over) ends nothing; see
+	// endTraceOnTargetThreadExit.
 	e.endTraceOnTargetThreadExit(ev)
 }
 

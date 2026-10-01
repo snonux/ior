@@ -7,7 +7,7 @@ import (
 	"ior/internal/types"
 )
 
-// targetWatchInterval is how often the liveness watcher checks the -pid
+// targetWatchInterval is how often the liveness watcher checks the -pid / -tid
 // target: short enough that a dead target ends the run promptly, long enough
 // that a pidfd poll or one /proc/<pid>/stat read is free.
 const targetWatchInterval = 500 * time.Millisecond
@@ -70,15 +70,13 @@ func (e *eventLoop) endTraceOnTargetExit(ev *types.ProcessExitEvent) {
 // to -duration, and a recycled tid or pid was then traced under the old
 // filter.
 //
-// The trigger is any sched_process_exit record whose tid is the -tid filter,
+// The trigger is a sched_process_exit record whose tid is the -tid filter,
 // whatever its group_dead flag says (including the legacy record with an
 // unknown flag, which still carries the tid): the record is the thread's own
 // do_exit, so after it the thread can never issue another syscall. The BPF
-// side forwards exactly these records (filter() admits the traced tid), so no
-// BPF change is needed. A match cannot be a recycled tid: a recycled tid can
-// only exist after the original exited, and that exit already ended the run
-// (the liveness watcher's start-time snapshot covers a death before the probes
-// attached).
+// side forwards exactly these records (filter() admits the traced tid). The
+// one exception is a record flagged TidInherited (see below): its task died,
+// but its tid did not.
 //
 // Kernel semantics decided here:
 //   - A non-leader thread: the run ends when that thread exits, while its
@@ -91,22 +89,46 @@ func (e *eventLoop) endTraceOnTargetExit(ev *types.ProcessExitEvent) {
 //     scope. strace -p LEADER waits for the whole group; ior does not, because
 //     the events it traces for the leader stop at that point.
 //   - Whole-process death (exit_group, a fatal signal): every thread runs
-//     do_exit, the traced one included, so its record ends the run too. The
-//     group-dead record that the -tid bypass forwards from another thread
-//     (ior_process_exit_in_scope) is not needed as a trigger and is not used.
-//   - An execve in a non-leader thread renames it to the leader's tid and
-//     reaps the old leader; the original tid then has no record, and the
-//     liveness watcher (its /proc entry vanished) ends the run instead.
+//     do_exit, the traced one included, so its record ends the run too.
+//   - A non-leader thread of a -tid <leader> process calls execve: de_thread
+//     kills the old leader, whose record carries the leader's tid, but the
+//     exec'ing thread then takes over that tid and its start time and runs on
+//     as the new program. The BPF tid filter keeps tracing it, the liveness
+//     watch follows it too (the pidfd and /proc/<tid> refer to the inheriting
+//     task, the start time matches), and strace -p keeps tracing it, so the
+//     run continues and ends when the new program exits. The BPF handler
+//     marks that record (IOR_EXIT_TID_INHERITED, from signal->group_exec_task
+//     being another thread) and it is skipped here. Should the exec'ing
+//     thread be killed in de_thread instead, the whole process dies and the
+//     group-dead record of the leader's process (forwarded by the -tid
+//     bypass, ior_process_exit_in_scope) ends the run: for a leader target a
+//     group-dead record of tgid == -tid means whichever task held the tid is
+//     gone. For a non-leader target no tgid equals the tid, so that record
+//     never matches; its own record precedes it anyway.
+//   - -tid <non-leader> when that thread calls execve: it takes the leader's
+//     tid and its own tid ends without a record of its own; the liveness
+//     watcher (the /proc entry vanished, the pidfd turned readable) ends the
+//     run, since the BPF filter no longer matches the program's new tid.
+//
+// Tid reuse: a matching record cannot be a recycled tid. A recycled tid only
+// exists once the original task is gone, and that end already stopped the
+// run: through its own record, through the group-dead record above, or
+// through the liveness watch, whose start-time snapshot also catches a death
+// (and reuse) before the probes attached. A flagged record does not free the
+// tid (the exec'ing task holds it), so skipping it opens no reuse window.
 //
 // Runs on the event-loop goroutine only, after the exit's state was retired.
 func (e *eventLoop) endTraceOnTargetThreadExit(ev *types.ProcessExitEvent) {
-	if !e.stopOnTargetExit {
+	if !e.stopOnTargetExit || e.cfg.tidFilter <= 0 {
 		return
 	}
-	if e.cfg.tidFilter <= 0 || ev.Tid != uint32(e.cfg.tidFilter) {
+	tid := uint32(e.cfg.tidFilter)
+	ownExit := ev.Tid == tid && !ev.TidInherited()
+	leaderProcessDied := ev.Pid == tid && ev.IsGroupDead()
+	if !ownExit && !leaderProcessDied {
 		return
 	}
-	e.targetExited(traceTarget{id: int(ev.Tid), thread: true})
+	e.targetExited(traceTarget{id: e.cfg.tidFilter, thread: true})
 }
 
 // targetExited stops the trace because the target is gone, announcing it on

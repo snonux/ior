@@ -254,6 +254,80 @@ ior_process_exit_in_scope(void *ctx,
     return *group_dead;
 }
 
+// IOR_EXIT_TID_INHERITED is the exit_flags bit of a process_exit_event whose
+// task is a thread-group leader killed by another thread's execve (see
+// ior_exit_tid_inherited); every other record carries 0 there, exactly like
+// the always-zero reserved word it replaced, so an older object or a consumer
+// that ignores the field reads "the tid is gone".
+#define IOR_EXIT_TID_INHERITED 0x1U
+
+// signal_struct___ior_exec and signal_struct___ior_exit are CO-RE flavors of
+// struct signal_struct naming the one member ior_exit_tid_inherited reads,
+// under its two kernel spellings: group_exec_task (Linux 5.16+) and
+// group_exit_task (older kernels, RHEL/Rocky 8 and 9 included). Both point at
+// the thread running de_thread() for an execve while it kills its siblings.
+// Flavors, not vmlinux.h's struct, because vmlinux.h is dumped from the build
+// host's kernel and carries only one of the two names.
+struct signal_struct___ior_exec {
+    struct task_struct *group_exec_task;
+} __attribute__((preserve_access_index));
+
+struct signal_struct___ior_exit {
+    struct task_struct *group_exit_task;
+} __attribute__((preserve_access_index));
+
+// ior_exit_tid_inherited returns IOR_EXIT_TID_INHERITED when the exiting
+// current task is its thread-group leader (pid == tid) and another thread of
+// the group is exec'ing (signal->group_exec_task set and not the current
+// task), else 0.
+//
+// Why: when a non-leader thread calls execve, de_thread() kills every other
+// thread, the leader included. The leader runs do_exit() and fires
+// sched_process_exit (tid == tgid, group_dead 0, since the exec'ing thread is
+// still live), but then the exec'ing thread takes over the leader's tid and
+// start time (exchange_tids) and continues as the new program. Under
+// `-tid <leader>` the BPF tid filter keeps tracing that program, a
+// PIDFD_THREAD pidfd and /proc/<tid> follow it too (observed on 7.2 with
+// bpftrace: the old leader's record shows group_exec_task = the exec'ing
+// thread, and the pidfd stays unreadable across the exec), so userspace must
+// not treat this record as the traced tid's end (endTraceOnTargetThreadExit).
+//
+// A non-leader killed by the same de_thread() is really gone (its tid is not
+// inherited), so it gets no flag. The leader exiting on its own just as
+// another thread starts an exec is still flagged, and rightly: de_thread()
+// waits for the leader to become a zombie and takes its tid all the same. If
+// the exec'ing thread is killed instead (a fatal signal during de_thread()),
+// the whole group dies; userspace then ends on the group-dead record.
+//
+// Verification status: the group_exec_task path is exercised by the
+// integration test TestHeadlessTidLeaderRunSurvivesANonLeaderExec on the 7.2
+// development host; the group_exit_task path compiles to a valid CO-RE
+// relocation but has not been run on an old kernel.
+static __always_inline __u32
+ior_exit_tid_inherited(__u32 pid, __u32 tid) {
+    struct task_struct *task;
+    struct task_struct *exec_task = NULL;
+    struct signal_struct___ior_exec *sig_exec;
+    struct signal_struct___ior_exit *sig_exit;
+
+    if (pid != tid)
+        return 0;
+    task = (struct task_struct *)bpf_get_current_task();
+    sig_exec = (struct signal_struct___ior_exec *)BPF_CORE_READ(task, signal);
+    if (!sig_exec)
+        return 0;
+    if (bpf_core_field_exists(sig_exec->group_exec_task)) {
+        exec_task = BPF_CORE_READ(sig_exec, group_exec_task);
+    } else {
+        sig_exit = (struct signal_struct___ior_exit *)sig_exec;
+        if (bpf_core_field_exists(sig_exit->group_exit_task))
+            exec_task = BPF_CORE_READ(sig_exit, group_exit_task);
+    }
+    if (!exec_task || exec_task == task)
+        return 0;
+    return IOR_EXIT_TID_INHERITED;
+}
+
 SEC("tracepoint/sched/sched_process_exit")
 // ctx is void *: the tracepoint's context struct has a different name (and
 // layout) per kernel generation and the handler only needs its address.
@@ -280,8 +354,9 @@ int handle_sched_process_exit(void *ctx) {
     ev->tid = tid;
     ev->time = bpf_ktime_get_boot_ns();
     ev->group_dead = group_dead;
-    // Zero the explicit tail pad so no stale ring-buffer bytes reach userspace.
-    ev->reserved = 0;
+    // Always written (0 or the flag), so no stale ring-buffer bytes reach
+    // userspace through the former tail pad.
+    ev->exit_flags = ior_exit_tid_inherited(pid, tid);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

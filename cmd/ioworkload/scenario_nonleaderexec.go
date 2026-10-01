@@ -63,6 +63,34 @@ func execNonLeaderThreadTid() error {
 	return <-execWorker.done
 }
 
+// execNonLeaderIntoOpen re-executes this workload from a non-main OS thread as
+// the open-basic scenario (task os2). de_thread() kills the old leader, whose
+// sched_process_exit record carries the leader's tid, and then hands that tid
+// to the exec'ing thread: the new program runs under the leader tid (== pid)
+// with the leader's start time. An ior traced with -tid <pid> must keep
+// tracing it (its open of testfile.txt shows up) and end only when the new
+// program exits. The new program inherits the environment, so its startup
+// wait returns at once (the startup file already exists) and it holds on
+// $IOR_WORKLOAD_HOLD_FILE like the original would have. On success this never
+// returns.
+func execNonLeaderIntoOpen() error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve own executable: %w", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		if unix.Gettid() == os.Getpid() {
+			result <- errors.New("exec goroutine ran on the main thread; main.go init() must pin it")
+			return
+		}
+		err := syscall.Exec(self, []string{"ioworkload", "--scenario=open-basic"}, os.Environ())
+		result <- fmt.Errorf("execve %s: %w", self, err)
+	}()
+	return <-result
+}
+
 // execFromThisThread publishes the calling thread's tid and execs target. It
 // returns only on failure.
 func execFromThisThread(target string) error {

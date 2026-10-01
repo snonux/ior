@@ -138,11 +138,32 @@ func startSignalRunWith(t *testing.T, h TestHarness, modeArgs []string, duration
 }
 
 // startTargetRun is startSignalRunWith for any signalTarget: the workload
-// runs the target's scenario and ior traces it with the target's scope.
+// runs the target's scenario and ior traces it with the target's scope. It is
+// split into the three phases of a run's start: the held workload
+// (startTargetWorkload), ior with drained pipes (startIor) and the readiness
+// handshake that lets the workload begin its I/O (awaitIorReady).
 func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs []string, duration int, newCmd func(iorArgs []string) *exec.Cmd) *signalRun {
 	t.Helper()
+	run, startupFile, pid := startTargetWorkload(t, h, target)
+	scope, err := target.scopeArgs(pid)
+	if err != nil {
+		t.Fatalf("scope ior to the workload: %v", err)
+	}
+	args := append(append(scope, "-duration", strconv.Itoa(duration)), modeArgs...)
+	ready, readers := startIor(t, h, run, newCmd(args))
+	awaitIorReady(t, run, ready, readers, startupFile)
+	return run
+}
+
+// startTargetWorkload starts the target's scenario, parked on its startup file
+// and held alive after its scenario by the hold file (see holdFileEnv). It
+// returns the run holding just the workload, the startup file whose creation
+// lets the scenario begin, and the pid the workload announced. The workload is
+// killed at cleanup.
+func startTargetWorkload(t *testing.T, h TestHarness, target signalTarget) (run *signalRun, startupFile string, pid int) {
+	t.Helper()
 	scenario := target.scenarioName()
-	startupFile := h.workloadStartupFile(scenario)
+	startupFile = h.workloadStartupFile(scenario)
 	holdFile := filepath.Join(h.OutputDir, scenario+".hold")
 	h.WorkloadEnv = append(slices.Clone(h.WorkloadEnv), holdFileEnv+"="+holdFile)
 	workloadCmd, pid, _, err := h.startWorkload(scenario, startupFile)
@@ -150,12 +171,15 @@ func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs [
 		t.Fatalf("start workload: %v", err)
 	}
 	t.Cleanup(func() { killAndWait(workloadCmd) })
-	scope, err := target.scopeArgs(pid)
-	if err != nil {
-		t.Fatalf("scope ior to the workload: %v", err)
-	}
-	args := append(append(scope, "-duration", strconv.Itoa(duration)), modeArgs...)
-	cmd := newCmd(args)
+	return &signalRun{workload: workloadCmd, holdFile: holdFile}, startupFile, pid
+}
+
+// startIor starts cmd (ior, or a wrapper that runs it) in the output
+// directory and drains both of its pipes into run's buffers. ready closes
+// when ior's readiness line appears on stderr; readers is done once both
+// pipes hit EOF (or the test closed them). ior is killed at cleanup.
+func startIor(t *testing.T, h TestHarness, run *signalRun, cmd *exec.Cmd) (ready chan struct{}, readers *sync.WaitGroup) {
+	t.Helper()
 	cmd.Dir = h.OutputDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -166,16 +190,14 @@ func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs [
 		t.Fatalf("ior stderr pipe: %v", err)
 	}
 	if err := cmd.Start(); err != nil {
-		killAndWait(workloadCmd)
+		killAndWait(run.workload)
 		t.Fatalf("start ior: %v", err)
 	}
 	t.Cleanup(func() { killAndWait(cmd) })
+	run.ior, run.stdout, run.stderr = cmd, stdout, stderr
 
-	run := &signalRun{ior: cmd, stdout: stdout, stderr: stderr, workload: workloadCmd, holdFile: holdFile}
-	ready := make(chan struct{})
-	// Wait closes the pipes' read ends, discarding unread bytes, so it runs
-	// only after both readers hit EOF (or the test closed the pipes).
-	var readers sync.WaitGroup
+	ready = make(chan struct{})
+	readers = new(sync.WaitGroup)
 	readers.Add(2)
 	go func() {
 		defer readers.Done()
@@ -185,10 +207,18 @@ func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs [
 		defer readers.Done()
 		scanUntilReady(io.TeeReader(stderr, lockedWriter{&run.mu, &run.stderrBuf}), ready)
 	}()
+	return ready, readers
+}
+
+// awaitIorReady waits for ior's readiness line, lets the probes settle,
+// releases the workload's scenario through its startup file and arms
+// run.done with ior's Wait result.
+func awaitIorReady(t *testing.T, run *signalRun, ready <-chan struct{}, readers *sync.WaitGroup, startupFile string) {
+	t.Helper()
 	select {
 	case <-ready:
 	case <-time.After(iorReadyTimeout):
-		killAndWait(workloadCmd)
+		killAndWait(run.workload)
 		t.Fatalf("ior did not become ready")
 	}
 	time.Sleep(iorReadySettleDelay)
@@ -197,10 +227,11 @@ func startTargetRun(t *testing.T, h TestHarness, target signalTarget, modeArgs [
 	}
 	run.done = make(chan error, 1)
 	go func() {
+		// Wait closes the pipes' read ends, discarding unread bytes, so it
+		// runs only after both readers hit EOF (or the test closed the pipes).
 		readers.Wait()
-		run.done <- cmd.Wait()
+		run.done <- run.ior.Wait()
 	}()
-	return run
 }
 
 // scanUntilReady closes ready when ior's readiness line shows up, and keeps
@@ -360,13 +391,16 @@ func TestHeadlessRecordingKeepsInheritedSIGHUPIgnore(t *testing.T) {
 // used to keep probing after its target died, and traced whatever process was
 // handed the recycled pid. It must now end by itself shortly after the target
 // exits (nothing signals ior), say so on stderr, and still publish everything
-// the target did.
+// the target did. The liveness watcher is off (testDisableTargetWatchEnv), so
+// the group-dead exit record alone has to end the run; the watcher has its
+// own test below.
 func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
 	for _, mode := range []string{"flamegraph", "parquet", "plain"} {
 		t.Run(mode, func(t *testing.T) {
 			enableParallelIfRequested(t)
 			h := newTestHarness(t)
-			run := startSignalRun(t, h, modeArgs(mode, h.OutputDir), shutdownRunDuration)
+			run := startSignalRunWith(t, h, modeArgs(mode, h.OutputDir), shutdownRunDuration,
+				iorCmdWithEnv(h, testDisableTargetWatchEnv+"=1"))
 			time.Sleep(shutdownDrainDelay)
 			select {
 			case err := <-run.done:
@@ -400,6 +434,23 @@ func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
 // exactly "1", other values leave the trigger on), leaving
 // the liveness watcher as the only thing that can end a run with its target.
 const testDisableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
+
+// testDisableTargetWatchEnv is the opposite hook (internal.disableTargetWatchEnv,
+// also exactly "1"): the liveness watcher does not start, leaving the exit
+// records as the only thing that can end a run with its target. Both triggers
+// print the same status line, so a test of the record path needs it: with the
+// 500 ms watcher running, a broken record trigger would still pass.
+const testDisableTargetWatchEnv = "IOR_TEST_DISABLE_TARGET_WATCH"
+
+// iorCmdWithEnv returns a newCmd for startSignalRunWith / startTargetRun that
+// runs ior with env added to the test's environment.
+func iorCmdWithEnv(h TestHarness, env ...string) func(iorArgs []string) *exec.Cmd {
+	return func(iorArgs []string) *exec.Cmd {
+		cmd := exec.Command(h.IorBinary, iorArgs...)
+		cmd.Env = append(os.Environ(), env...)
+		return cmd
+	}
+}
 
 // TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord covers the
 // fallback of the vr2 fix: when the target's group-dead record is lost (ring

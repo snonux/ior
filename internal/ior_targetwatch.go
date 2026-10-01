@@ -26,10 +26,13 @@ const pidfdThread = unix.O_EXCL
 // Two mechanisms, strongest first:
 //
 //   - a pidfd (pidfd_open, Linux 5.3+; PIDFD_THREAD, 6.9+, for a -tid thread)
-//     refers to that one process or thread for good; it becomes readable when
-//     the process exits (a thread pidfd: when the thread is reaped), and a
-//     recycled id cannot fool it. A kernel without PIDFD_THREAD answers EINVAL
-//     and leaves a -tid watch with the procfs mechanism alone.
+//     refers to that one process or thread for good, and a recycled id cannot
+//     fool it. A process pidfd becomes readable when the whole process has
+//     exited (its leader is a zombie with no thread left); a PIDFD_THREAD
+//     pidfd as soon as that thread has exited (exit_state set: a zombie
+//     counts, it need not be reaped), which for a leader whose siblings run
+//     on is long before the process ends. A kernel without PIDFD_THREAD
+//     answers EINVAL and leaves a -tid watch with the procfs mechanism alone.
 //   - the start time (field 22 of /proc/<id>/stat, in clock ticks since
 //     boot) captured at open: a different value later means the id belongs to
 //     another task now, and a missing /proc entry means it is gone. This
@@ -41,11 +44,25 @@ const pidfdThread = unix.O_EXCL
 // reaped it. For a process that needs its leader to be the last task (a zombie
 // leader whose threads still run is alive); for a -tid target the zombie task
 // itself is what ended, whatever its siblings do.
+//
+// A -tid target's exit (readable pidfd, zombie state) is only trusted once two
+// consecutive polls saw it, unless its /proc entry is gone or its start time
+// changed (those are final at once). Reason: when a non-leader thread calls
+// execve, de_thread() lets the old leader die and become a zombie, then hands
+// its tid and start time to the exec'ing thread, which runs on as the new
+// program under the same tid (task os2). For those microseconds a -tid
+// <leader> watch sees an exited leader, though the tid it traces lives on;
+// the next poll sees the live program. A leader that really exited stays a
+// zombie, so it is confirmed one interval (targetWatchInterval) later, and a
+// non-leader is reaped at once, which the missing /proc entry reports.
 type targetWatch struct {
 	target    traceTarget
 	root      string // procfs mount (procRoot in production)
 	pidfd     int    // -1 when pidfd_open failed
 	startTime string // field 22 of /proc/<id>/stat at open; "" when unknown
+	// exitSeen is set when the previous gone() poll of a -tid target saw an
+	// unconfirmed exit (see above). Only the watcher goroutine calls gone().
+	exitSeen bool
 }
 
 // openTargetWatch starts watching target. It never fails: a target that is
@@ -77,27 +94,50 @@ func (w *targetWatch) Close() {
 
 // gone reports whether the watched process or thread has exited or its id now
 // belongs to another task. Anything it cannot determine (a stat error other than
-// "no such file") counts as alive: ending a trace on a guess would lose data,
-// while a missed death only costs the fallback's latency (the record path, and
-// -duration, still apply).
+// "no such file") counts as alive unless the pidfd says otherwise: ending a
+// trace on a guess would lose data, while a missed death only costs the
+// fallback's latency (the record path, and -duration, still apply). A -tid
+// target's exit must be seen by two consecutive calls (see targetWatch).
 func (w *targetWatch) gone() bool {
-	if w.pidfd >= 0 {
-		fds := []unix.PollFd{{Fd: int32(w.pidfd), Events: unix.POLLIN}}
-		if n, err := unix.Poll(fds, 0); err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0 {
-			return true
-		}
-	}
+	exited := w.pidfdReadable()
 	fields, err := w.statFields()
 	if os.IsNotExist(err) {
 		return true
 	}
-	if err != nil {
+	if err == nil {
+		if pidRecycled(w.startTime, startTimeOf(fields)) {
+			return true
+		}
+		exited = exited || w.exitedZombie(fields)
+	}
+	return w.confirmExit(exited)
+}
+
+// pidfdReadable reports whether the pidfd signals the target's exit (see
+// targetWatch for when each kind of pidfd becomes readable).
+func (w *targetWatch) pidfdReadable() bool {
+	if w.pidfd < 0 {
 		return false
 	}
-	if pidRecycled(w.startTime, startTimeOf(fields)) {
+	fds := []unix.PollFd{{Fd: int32(w.pidfd), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, 0)
+	return err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0
+}
+
+// confirmExit turns this poll's exit observation into the answer of gone: a
+// process target's exit counts at once; a thread target's only when the
+// previous poll saw it too, so the brief zombie of a leader whose tid an
+// exec'ing sibling inherits is not mistaken for the traced tid's end.
+func (w *targetWatch) confirmExit(exited bool) bool {
+	if !exited || !w.target.thread {
+		w.exitSeen = false
+		return exited
+	}
+	if w.exitSeen {
 		return true
 	}
-	return w.exitedZombie(fields)
+	w.exitSeen = true
+	return false
 }
 
 // exitedZombie reports whether the stat fields describe a task that has
@@ -197,4 +237,17 @@ const disableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 // targetExitRecordDisabled reports the test hook above.
 func targetExitRecordDisabled() bool {
 	return os.Getenv(disableTargetExitRecordEnv) == "1"
+}
+
+// disableTargetWatchEnv is the opposite test hook: exactly "1" keeps the
+// liveness watcher (startTargetLivenessWatcher) from starting, so an
+// integration test can prove the exit-record trigger alone ends a run. Both
+// triggers print the same status line, and the watcher polls every 500 ms, so
+// without this a broken record trigger would go unnoticed at integration
+// level. Not documented for users either.
+const disableTargetWatchEnv = "IOR_TEST_DISABLE_TARGET_WATCH"
+
+// targetWatchDisabled reports the test hook above.
+func targetWatchDisabled() bool {
+	return os.Getenv(disableTargetWatchEnv) == "1"
 }

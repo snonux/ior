@@ -856,10 +856,12 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 // runTraceWithContext set up before the probes attached, so a target whose
 // exit record never reaches the loop (ring-buffer drop, death during the
 // attach) still ends the run. Nothing starts for the TUI or without a
-// liveness function. The returned func stops the watcher and waits for it, so
-// no goroutine outlives runTraceLoop; call it once the event loop returned.
+// liveness function, nor under the IOR_TEST_DISABLE_TARGET_WATCH test hook
+// (targetWatchDisabled). The returned func stops the watcher and waits for
+// it, so no goroutine outlives runTraceLoop; call it once the event loop
+// returned.
 func startTargetLivenessWatcher(infra *traceInfra, verbose bool) (stop func()) {
-	if !verbose || infra.targetGone == nil {
+	if !verbose || infra.targetGone == nil || targetWatchDisabled() {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(infra.ctx)
