@@ -279,7 +279,7 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 				return
 			}
 			e.consumeRaw(raw, pairs, flush)
-			if !e.consumeReadyRaw(rawCh, pairs, flush) {
+			if !e.consumeReadyRaw(ctx, rawCh, pairs, flush) {
 				e.releaseAllHeldRestarts(pairs)
 				return
 			}
@@ -305,12 +305,18 @@ const maxReadyBatch = 256
 // record (selectgo over the flush timer, rawCh and ctx) cost ~17% of ior's CPU
 // in -flamegraph mode and ~8% in -plain mode, next to the channel send on the
 // poll side (task 5s2); a plain non-blocking receive is far cheaper. The bound
-// keeps the flush timer and a cancelled ctx waiting at most one batch (256
-// records, microseconds of decoding), so a -plain row still leaves within
-// plainFlushInterval plus that. It reports false when rawCh was closed, which
-// ends the loop exactly as the select case does.
-func (e *eventLoop) consumeReadyRaw(rawCh <-chan []byte, pairs chan *event.Pair, flush *flushTimer) bool {
+// keeps the flush timer waiting at most one batch (256 records, microseconds of
+// decoding), so a -plain row still leaves within plainFlushInterval plus that.
+// ctx is checked before every record (one atomic load): a cancelled run must
+// stop at once and hand over to drainBacklogAtStop, whose time budget exists
+// for a slow consumer, instead of finishing a whole batch first
+// (TestRunCountsBacklogItCannotDrainInTime). It reports false when rawCh was
+// closed, which ends the loop exactly as the select case does.
+func (e *eventLoop) consumeReadyRaw(ctx context.Context, rawCh <-chan []byte, pairs chan *event.Pair, flush *flushTimer) bool {
 	for range maxReadyBatch {
+		if ctx.Err() != nil {
+			return true
+		}
 		select {
 		case raw, ok := <-rawCh:
 			if !ok {

@@ -647,15 +647,14 @@ func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
 // every tab (task 1r2): while TabFlame is active the dashboard intercepts the
 // key (flamegraph.Model.WantsBaselineReset) and runs resetBaselineCmd, which
 // clears the live trie AND the stats engine and bumps the stats generation;
-// the flame then drops its cached view state (ClearBaseline). So the reset is
-// observable on two tabs: the flame falls back to its empty state and the
-// Syscalls table loses its seeded rows.
-//
-// The static test-flames fixture is seeded exactly once, at starter time
-// (tuiTestFlamesStarter -> buildTestFlamesRuntime); nothing refills the trie
-// or the engine afterwards. So a working reset empties both for good: the flame
-// shows "... has no visible frames" + "sel:none" (the seeded breadcrumb
-// "view:root" disappears) and the Syscalls tab renders "Syscalls: no data".
+// the flame then drops its cached view state (ClearBaseline). The static
+// test-flames fixture is seeded once at starter time (tuiTestFlamesStarter ->
+// buildTestFlamesRuntime) and nothing refills the trie afterwards, so a working
+// reset empties the flame for good: it shows "... has no visible frames" +
+// "sel:none" (the seeded breadcrumb "view:root" disappears). The synthetic stats
+// engine, in contrast, reseeds itself on Reset (task xs2, reseedingEngine),
+// because nothing else would ever feed it: the Syscalls tab must stay
+// populated, not fall to "Syscalls: no data".
 //
 // Observing that state has to be forced: teatest's screen() replays only the
 // bytes produced so far and the cursed renderer flushes asynchronously, so a
@@ -663,20 +662,22 @@ func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
 // previous version of this test pass even with the reset broken). Following the
 // pattern of TestTUIIntegration_Global_ResetClearsCounts, round-trip through
 // another tab after pressing "r". The Syscalls tab was never visited before the
-// reset, so its "no data" placeholder can only be the post-reset state (the
-// stats snapshot is rebuilt off the UI goroutine, so the fence polls until that
-// snapshot has been delivered rather than assuming the keypress order alone).
+// reset, so any frame it shows is the post-reset state (the stats snapshot is
+// rebuilt off the UI goroutine, so the fence polls until that snapshot has been
+// delivered rather than assuming the keypress order alone).
 func TestTUIIntegration_Flame_ResetBaseline(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root", "Selected: root", "total(events):")
 
 	// "r" resets the shared baseline; the one-shot fixture is never re-seeded.
 	s.press('r')
-	// Hop to the Syscalls tab: the stats engine was reset too, so the seeded
-	// table is gone. This proves the reset reached beyond the flame model and
-	// that the "3" keypress - queued after "r" - repainted over the old frame.
+	// Hop to the Syscalls tab: the stats engine was reset too and reseeded
+	// itself (task xs2), so the table is still populated and never shows the
+	// "no data" placeholder; the "3" keypress - queued after "r" - repainted
+	// over the old frame.
 	s.typeStr("3")
-	s.waitFor("Syscalls: no data")
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+	s.waitForAbsent("Syscalls: no data")
 	// Back on the flame tab, the repaint is provably post-reset: the flame must
 	// now be empty.
 	s.typeStr("1")
@@ -2177,11 +2178,13 @@ func TestTUIIntegration_TidPicker_EscReturnsToDashboard(t *testing.T) {
 // baseline status is "auto-reset: .../30s".
 
 // TestTUIIntegration_Global_ResetClearsCounts presses "r" and asserts the stats
-// baseline is really cleared. The static test-flames fixture is seeded exactly
-// once, at starter time (tuiTestFlamesStarter -> buildTestFlamesRuntime), so the
-// aggregates never come back: after the reset the Syscalls tab must lose its
-// seeded rows and render the "Syscalls: no data" placeholder, while the
-// persistent chrome (the tab bar) survives.
+// baseline reset leaves the test-flames session usable. The synthetic engine is
+// seeded at starter time and, because nothing else feeds it, reseeds itself on
+// every Reset (task xs2, reseedingEngine): after the reset the Syscalls tab must
+// still render its seeded rows and never the "Syscalls: no data" placeholder
+// (before xs2 the first reset emptied the tab for the rest of the session),
+// while the persistent chrome (the tab bar) survives. That the reset itself
+// reaches the engine is pinned in testflames_reset_test.go.
 //
 // The assertion has to be forced onto a post-reset frame: teatest's screen()
 // replays only the bytes produced so far and the cursed renderer flushes
@@ -2205,7 +2208,8 @@ func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
 	s.typeStr("7")
 	s.waitFor("buffer:")
 	s.typeStr("3")
-	s.waitForAbsent("epoll_wait", "Syscalls: no data", tuiChrome)
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+	s.waitForAbsent("Syscalls: no data")
 }
 
 // TestTUIIntegration_Global_ResetKeepsStreamRows locks the documented stream
