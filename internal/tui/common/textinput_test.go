@@ -100,3 +100,29 @@ func TestBubblesDeleteWordForwardStillPanicsOnTheLastRune(t *testing.T) {
 	ti := focusedInput("ab", 1)
 	_, _ = ti.Update(altD)
 }
+
+// TestUpdateTextInputSwallowsTheClipboardPasteKey (task uz2): Ctrl+V used to
+// make bubbles return a clipboard-read command that every host dropped, so the
+// key did nothing and still ran a read. It is now swallowed up front - no
+// command, no change - while terminal paste (tea.PasteMsg) and every other key
+// keep working.
+func TestUpdateTextInputSwallowsTheClipboardPasteKey(t *testing.T) {
+	ti := focusedInput("abc", 3)
+	ctrlV := tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl}
+	if _, cmd := ti.Update(ctrlV); cmd == nil {
+		t.Fatal("setup: bubbles no longer answers Ctrl+V with a clipboard command; revisit isClipboardPaste")
+	}
+	got, cmd := UpdateTextInput(ti, ctrlV)
+	if cmd != nil || got.Value() != "abc" || got.Position() != 3 {
+		t.Fatalf("Ctrl+V: value %q pos %d cmd %v, want the input untouched and no command", got.Value(), got.Position(), cmd != nil)
+	}
+
+	pasted, _ := UpdateTextInput(ti, tea.PasteMsg{Content: "XY"})
+	if pasted.Value() != "abcXY" {
+		t.Fatalf("bracketed paste gave %q, want abcXY", pasted.Value())
+	}
+	typed, _ := UpdateTextInput(ti, tea.KeyPressMsg{Code: 'z', Text: "z"})
+	if typed.Value() != "abcz" {
+		t.Fatalf("typing gave %q, want abcz", typed.Value())
+	}
+}

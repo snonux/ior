@@ -14,7 +14,24 @@ import (
 // internal/tui/common/textinput_hosts_test.go enforces for every textinput
 // host under internal/tui (task kz2).
 func UpdateTextInput(ti textinput.Model, msg tea.Msg) (textinput.Model, tea.Cmd) {
+	if isClipboardPaste(ti, msg) {
+		return ti, nil
+	}
 	return ti.Update(guardDeleteWordForward(ti, msg))
+}
+
+// isClipboardPaste reports whether msg is the textinput's own paste key
+// (KeyMap.Paste, Ctrl+V). bubbles answers it with a command that reads the
+// system clipboard and a message only the textinput itself can unwrap, and
+// every host used to drop that command, so the key silently did nothing (task
+// uz2). ior also runs as root, often over SSH, where the system clipboard is
+// usually unreachable, so reading it is not an option worth wiring up: the key
+// is swallowed here, once for every input, and pasting is the terminal's own
+// paste (bracketed paste arrives as tea.PasteMsg, which the textinput handles
+// and which is not touched).
+func isClipboardPaste(ti textinput.Model, msg tea.Msg) bool {
+	press, ok := msg.(tea.KeyPressMsg)
+	return ok && key.Matches(press, ti.KeyMap.Paste)
 }
 
 // guardDeleteWordForward returns msg for ti, except that a
