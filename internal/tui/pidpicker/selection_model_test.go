@@ -43,10 +43,14 @@ type refPicker struct {
 	procs   []ProcessInfo
 	sel     refSel
 	derived bool
-	held    int  // derived pid a failed scan emptied out, for the next scan
-	scanned bool // a scan result (good or failed) has arrived
-	failed  bool // the latest scan failed
-	notice  string
+	held    int // derived pid a failed scan emptied out, for the next scan
+	// heldUser is held for a user-picked process (tasks fz2, hz2): a failed
+	// scan only says the list is empty, so the pick is restored by the next
+	// good scan if its process is listed again.
+	heldUser int
+	scanned  bool // a scan result (good or failed) has arrived
+	failed   bool // the latest scan failed
+	notice   string
 }
 
 // visible lists the processes matching text, in scan order.
@@ -108,7 +112,8 @@ func (r *refPicker) derive(text string) {
 
 // loseUserPick handles a user-picked process that left the visible list: the
 // TID picker falls back to All TIDs quietly, the PID picker selects nothing
-// and says why.
+// and says why - except after a failed scan, whose empty list says nothing
+// about the process (the scan error line explains it).
 func (r *refPicker) loseUserPick(text string) {
 	if r.sel.kind != refProcess || contains(r.visible(text), r.sel.pid) {
 		return
@@ -119,7 +124,9 @@ func (r *refPicker) loseUserPick(text string) {
 		return
 	}
 	r.sel = refSel{kind: refNone}
-	r.notice = fmt.Sprintf("pid %d %s - pick a process", pid, r.reason(pid))
+	if !r.failed {
+		r.notice = fmt.Sprintf("pid %d %s - pick a process", pid, r.reason(pid))
+	}
 }
 
 // rescan applies a scan result (failed: no processes) under the unchanged text.
@@ -131,9 +138,16 @@ func (r *refPicker) rescan(procs []ProcessInfo, failed bool, text string) {
 	case r.derived:
 		tracked = r.held
 	}
-	r.procs, r.scanned, r.failed, r.held = procs, true, failed, 0
+	userTracked := 0
+	if !r.derived && r.sel.kind == refProcess {
+		userTracked = r.sel.pid
+	} else if !r.derived {
+		userTracked = r.heldUser
+	}
+	r.procs, r.scanned, r.failed, r.held, r.heldUser = procs, true, failed, 0, 0
 	if !r.derived {
 		r.loseUserPick(text)
+		r.restoreUserPick(userTracked, text)
 		return
 	}
 	if tracked != 0 && contains(r.visible(text), tracked) {
@@ -152,9 +166,30 @@ func (r *refPicker) rescan(procs []ProcessInfo, failed bool, text string) {
 	}
 }
 
+// restoreUserPick is the rescan's second half for a user pick on pid: a failed
+// scan holds it, the next good scan restores it when it is listed again, else
+// the PID picker words its loss.
+func (r *refPicker) restoreUserPick(pid int, text string) {
+	if pid == 0 {
+		return
+	}
+	if r.failed {
+		r.heldUser = pid
+		return
+	}
+	if contains(r.visible(text), pid) {
+		r.sel, r.notice = refSel{kind: refProcess, pid: pid}, ""
+		return
+	}
+	if !r.tid {
+		r.sel = refSel{kind: refNone}
+		r.notice = fmt.Sprintf("pid %d %s - pick a process", pid, r.reason(pid))
+	}
+}
+
 // edited applies a change of the filter text.
 func (r *refPicker) edited(text string) {
-	r.held = 0
+	r.held, r.heldUser = 0, 0
 	if r.derived || r.sel.kind == refAll {
 		r.derived = true
 		r.derive(text)
@@ -177,7 +212,7 @@ func (r *refPicker) move(delta int, text string) {
 		cur += delta
 	}
 	cur = clamp(cur, 0, len(rows)-1)
-	r.sel, r.derived, r.held, r.notice = rows[cur], false, 0, ""
+	r.sel, r.derived, r.held, r.heldUser, r.notice = rows[cur], false, 0, 0, ""
 }
 
 // wantEnter is what Enter must emit: nil for nothing, else the mode's zero

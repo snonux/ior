@@ -88,6 +88,14 @@ type Model struct {
 	// text derives a new selection, and after Up/Down it is ignored until such
 	// an edit makes the selection derived again.
 	heldPid int
+	// heldUserPid is heldPid for a row the USER picked (task fz2/hz2): the pid
+	// of the process (the thread in the TID picker) that a failed scan emptied
+	// out of the list (0: none). The scan error says why the list is empty, not
+	// that the process exited, so the next successful scan restores the pick by
+	// this pid (restoreUserSelection) and only then decides whether it is
+	// really gone. Up/Down and a real edit of the filter text drop it: the user
+	// then chose something else.
+	heldUserPid int
 	// notice is the one-line explanation under the list: why selectedIndex is
 	// noSelection, or that a rescan moved a derived selection (see
 	// keepDerivedProcess). It is cleared by Up/Down and by every recompute of

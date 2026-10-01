@@ -577,8 +577,9 @@ func failScanOnUserOwnedAllRow(t *testing.T, m Model, filter string) Model {
 //     picker);
 //   - a thread the user picked in the TID picker falls back to All TIDs, which
 //     stays inside the process;
-//   - a process the user picked in the PID picker is lost (noSelection, Enter a
-//     no-op) like one that exited.
+//   - a process the user picked in the PID picker is not selected while the list
+//     is empty (noSelection, Enter a no-op), without an "exited" notice; the
+//     next good scan restores it (userpick_failedscan_test.go).
 //
 // The derived-row-with-a-filter case is TestScanErrorOnDerivedSelectionShowsOnlyTheError.
 func TestFailedScanOutcomeDependsOnTheSelection(t *testing.T) {

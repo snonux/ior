@@ -12,7 +12,9 @@ import (
 // noSelection is the selectedIndex of a picker that deliberately highlights
 // nothing, and Enter does nothing there. It has two sources: the process the
 // user selected vanished in PID mode (relocateUserSelection, with a notice,
-// sticky until the user moves), or a selection derived from a non-empty filter
+// sticky until the user moves; after a FAILED scan the same state without the
+// notice, since the process is not known to be gone, and the pick is held for
+// the next good scan, see heldUserPid), or a selection derived from a non-empty filter
 // found the list empty (followFilter's no-match branch, recomputed on every
 // rebuild). The latter covers three cases: a filter that matches no process,
 // shown with the no-match notice; a failed scan that emptied the list, shown
@@ -56,6 +58,7 @@ func (m Model) moveSelection(delta int) Model {
 	}
 	m.notice = ""
 	m.implicit = false
+	m.heldUserPid = 0
 	m.input.Blur()
 	return m
 }
@@ -94,6 +97,7 @@ func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 	// New text derives a new selection, so a pid held across a failed scan
 	// (applyScan) no longer describes what Enter would mean.
 	m.heldPid = 0
+	m.heldUserPid = 0
 	if m.selectedIndex == 0 {
 		m.implicit = true
 	}
@@ -212,19 +216,71 @@ func (m Model) followFilter(queryEmpty bool) Model {
 // list in between would make that scan see no previous selection, and if the
 // pid exited meanwhile the new first match would take over without the notice
 // an uninterrupted rescan gives.
+//
+// A process the USER picked is held across a failed scan the same way
+// (heldUserPid, tasks fz2 and hz2): the failed scan shows it as not selected
+// (PID mode: noSelection, Enter a no-op, no "exited" notice - nothing is known
+// to have exited and the scan error line is the explanation; TID mode: the All
+// TIDs row), and the next successful scan puts the pick back
+// (restoreUserSelection) if the process is still listed.
 func (m Model) applyScan(msg processesLoadedMsg) Model {
 	prevPid, tracked := m.trackedDerivedPid()
+	userPid, userTracked := m.trackedUserPid()
 	m.processes = msg.processes
 	m.lastErr = msg.err
 	m.scanned = true
 	m.heldPid = 0
+	m.heldUserPid = 0
 	m = m.applyFilter()
 	switch {
 	case tracked && msg.err != nil:
 		m.heldPid = prevPid
 	case tracked:
 		m = m.keepDerivedProcess(prevPid)
+	case userTracked && msg.err != nil:
+		m.heldUserPid = userPid
+	case userTracked:
+		m = m.restoreUserSelection(userPid)
 	}
+	return m
+}
+
+// trackedUserPid returns the pid of the process row the user picked, which a
+// scan must keep by identity: the highlighted one, or the one an earlier
+// failed scan held (heldUserPid). ok is false for a derived selection (see
+// trackedDerivedPid) and for the All row or no selection (no process).
+func (m Model) trackedUserPid() (pid int, ok bool) {
+	if m.implicit {
+		return 0, false
+	}
+	if pid, ok := m.selectedProcessPid(); ok {
+		return pid, true
+	}
+	return m.heldUserPid, m.heldUserPid != 0
+}
+
+// restoreUserSelection is applyScan's second half for a user pick that a
+// failed scan held on pid: if pid is listed again the pick is restored (and
+// the failed scan's lack of a notice stays), if it is not, the process really
+// left, which the notice says like it does for an uninterrupted rescan
+// (relocateUserSelection). A selection that is no longer the failed scan's
+// leftover (the user moved) is left alone.
+func (m Model) restoreUserSelection(pid int) Model {
+	if m.heldUserPid != 0 || m.implicit {
+		return m
+	}
+	for i, process := range m.filtered {
+		if process.Pid == pid {
+			m.selectedIndex = i + 1
+			m.notice = ""
+			return m
+		}
+	}
+	if m.mode == PickerModeTID {
+		return m
+	}
+	m.selectedIndex = noSelection
+	m.notice = m.lostSelectionNotice(pid)
 	return m
 }
 
@@ -297,7 +353,12 @@ func (m Model) relocateUserSelection(pid int, hadSelection bool) Model {
 		return m
 	}
 	m.selectedIndex = noSelection
-	m.notice = m.lostSelectionNotice(pid)
+	if m.lastErr == nil {
+		// After a failed scan the list is empty because of the error, not
+		// because the process left: the scan error line explains it and
+		// applyScan holds the pick for the next successful scan.
+		m.notice = m.lostSelectionNotice(pid)
+	}
 	return m
 }
 
