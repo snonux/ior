@@ -146,15 +146,20 @@ func (r *fileRanker) addBytes(stats *fileRankStats, pair *event.Pair) {
 
 // rankablePath returns the file path a pair is ranked under in the Files
 // views (per file and per directory), and false when it has none. A pair
-// without a file, a nameless file or one whose name is the no-file
-// placeholder has no path the Files tab could filter on (see
-// event.NoFileName), so it is not ranked.
+// without a file (File == nil) or with a nameless file (a name that was never
+// resolved) has no path the Files tab could filter on, so it is not ranked.
+//
+// The decision deliberately does not compare the name with event.NoFileName:
+// that placeholder is only what Pair.FileName renders for File == nil, never
+// a name a File object carries, so a File named "N:file" is a real file. It
+// is ranked, and the row's Enter filter (^N:file$) matches it because the
+// global filter reads such a pair's file by its real name (Pair.FileValue).
 func rankablePath(pair *event.Pair) (string, bool) {
 	if pair.File == nil {
 		return "", false
 	}
 	path := pair.File.Name()
-	if path == "" || path == event.NoFileName {
+	if path == "" {
 		return "", false
 	}
 	return path, true

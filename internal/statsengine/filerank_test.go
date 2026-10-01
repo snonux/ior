@@ -87,6 +87,24 @@ func TestFileRankerIgnoresInvalidFileData(t *testing.T) {
 	}
 }
 
+// event.NoFileName is what a pair without a file renders, not a name a File
+// carries: the fileless pair (File == nil) stays unranked while a real file
+// literally named "N:file" is ranked under that name (task ks2).
+func TestFileRankerRanksRealFileNamedLikeThePlaceholder(t *testing.T) {
+	r := newFileRankerWithConfig(3)
+
+	r.Add(&event.Pair{Duration: 10, Bytes: 1, ExitEv: &types.RetEvent{RetType: types.READ_CLASSIFIED}})
+	r.Add(newFilePair(event.NoFileName, 20, 4, types.READ_CLASSIFIED))
+
+	snap := r.Snapshot()
+	if len(snap) != 1 || snap[0].Path != event.NoFileName {
+		t.Fatalf("want exactly the real %q file ranked, got %+v", event.NoFileName, snap)
+	}
+	if snap[0].Accesses != 1 || snap[0].BytesRead != 4 || snap[0].MaxLatencyNs != 20 {
+		t.Fatalf("the fileless pair must not leak into the real file's stats: %+v", snap[0])
+	}
+}
+
 func TestFileRankerCompactsHighCardinality(t *testing.T) {
 	r := newFileRankerWithLimits(3, 5)
 

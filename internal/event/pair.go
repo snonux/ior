@@ -23,9 +23,9 @@ import (
 // pairCandidate.FileValue, streamrow Row.FileValue, which keys off the row's
 // explicit NoFile flag rather than this text). A real file literally named
 // "N:file" therefore still filters and persists by its real name on both
-// paths. Only consumers that see just the rendered text or a bare path (the
-// Files tab ranking, rankablePath) cannot tell the two apart and treat the
-// text as a blank value.
+// paths. The Files tab ranking (statsengine rankablePath) decides the same
+// way, on File == nil rather than on the text, so it ranks a real "N:file"
+// too (task ks2).
 const NoFileName = "N:file"
 
 // Pair represents a matched syscall enter/exit pair together with derived metadata.

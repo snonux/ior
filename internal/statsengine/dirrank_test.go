@@ -264,11 +264,24 @@ func TestDirRankerIgnoresUnrankablePairsLikeTheFileRanker(t *testing.T) {
 	r.Add(nil)
 	r.Add(&event.Pair{})
 	r.Add(&event.Pair{File: file.NewFd(1, "", -1), Duration: 10})
-	r.Add(&event.Pair{File: file.NewFd(1, event.NoFileName, -1), Duration: 10})
 
 	rows, other := buildDirs(t, r, 3)
 	if len(rows) != 0 || other.IsRemainder() {
 		t.Fatalf("unrankable pairs must not appear: rows=%+v other=%+v", rows, other)
+	}
+}
+
+// A real file literally named like the no-file placeholder is ranked (task
+// ks2) next to a truly fileless pair, which is still skipped. The name has no
+// separator, so the file lands in the no-directory group.
+func TestDirRankerRanksRealFileNamedLikeThePlaceholder(t *testing.T) {
+	r := newDirRankerWithConfig(3)
+	r.Add(&event.Pair{Duration: 10})
+	r.Add(newFilePair(event.NoFileName, 10, 1, types.READ_CLASSIFIED))
+
+	rows, other := buildDirs(t, r, 3)
+	if len(rows) != 1 || rows[0].Dir != NoDirGroup || rows[0].Accesses != 1 || rows[0].FileCount != 1 || other.IsRemainder() {
+		t.Fatalf("want one no-dir row for the real %q file only: rows=%+v other=%+v", event.NoFileName, rows, other)
 	}
 }
 
