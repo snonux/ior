@@ -447,20 +447,59 @@ func (s *sequencedProcfs) resolve(ctx context.Context, tid uint32) (string, erro
 	}
 }
 
-// answerNextRead waits for the next read of newTaskTid to start and answers
-// it with name.
-func (s *sequencedProcfs) answerNextRead(t *testing.T, name string) {
+// awaitReadStart waits for the next read of newTaskTid to start; the worker has
+// sampled the epoch by the time it signals.
+func (s *sequencedProcfs) awaitReadStart(t *testing.T) {
 	t.Helper()
 	select {
 	case <-s.entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for a procfs read to start")
 	}
+}
+
+// answer hands the read in flight (see awaitReadStart) its answer name.
+func (s *sequencedProcfs) answer(t *testing.T, name string) {
+	t.Helper()
 	select {
 	case s.answers <- name:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out handing the procfs read its answer")
 	}
+}
+
+// answerNextRead waits for the next read of newTaskTid to start and answers
+// it with name.
+func (s *sequencedProcfs) answerNextRead(t *testing.T, name string) {
+	t.Helper()
+	s.awaitReadStart(t)
+	s.answer(t, name)
+}
+
+// newSequencedNewTaskLoop builds an event loop whose comm reads of newTaskTid
+// are answered through the returned sequencedProcfs, and seeds newTaskTid as a
+// fresh task_newtask child named parentComm (stale flag set).
+func newSequencedNewTaskLoop(t *testing.T, parentComm string) (*eventLoop, *sequencedProcfs) {
+	t.Helper()
+	s := newSequencedProcfs()
+	resolver := newCommResolver(nil)
+	resolver.resolveFn = s.resolve
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: resolver})
+	t.Cleanup(resolver.shutdown)
+	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, parentComm, 0),
+		make(chan *event.Pair, 1))
+	return el, s
+}
+
+// emitNewTaskRow feeds one syscall of newTaskTid and recycles its row; what
+// names the row in the failure message when none was emitted.
+func emitNewTaskRow(t *testing.T, el *eventLoop, what string) {
+	t.Helper()
+	ep := feedNewTaskSyscall(t, el)
+	if ep == nil {
+		t.Fatalf("the %s row was not emitted", what)
+	}
+	ep.Recycle()
 }
 
 // TestExecEnterRetiresAPreExecReadInFlight pins that the exec enter's write
@@ -478,42 +517,24 @@ func TestExecEnterRetiresAPreExecReadInFlight(t *testing.T) {
 		parentComm = "bash"
 		execComm   = "cat"
 	)
-	s := newSequencedProcfs()
-	resolver := newCommResolver(nil)
-	resolver.resolveFn = s.resolve
-	el := mustNewEventLoop(t, eventLoopConfig{commResolver: resolver})
-	t.Cleanup(resolver.shutdown)
-	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, parentComm, 0),
-		make(chan *event.Pair, 1))
+	el, s := newSequencedNewTaskLoop(t, parentComm)
 
 	// The pre-exec syscall: its comm use queues R.
-	pre := feedNewTaskSyscall(t, el)
-	if pre == nil {
-		t.Fatal("the pre-exec row was not emitted")
-	}
-	pre.Recycle()
+	emitNewTaskRow(t, el, "pre-exec")
 
 	// Consume the exec enter while R is in flight, then let R land with the
 	// name it read before the exec.
-	select {
-	case <-s.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for read R to start")
-	}
+	s.awaitReadStart(t)
 	ep := deliverRaw(el, execEnterRaw(t, parentComm), payloadExitRaw(t, types.SYS_EXIT_EXECVE, 0))
 	if ep == nil {
 		t.Fatal("the execve pair was not emitted")
 	}
 	ep.Recycle()
-	s.answers <- parentComm
+	s.answer(t, parentComm)
 	waitForCommLookupsToDrain(t, el)
 
 	// The first post-exec use must queue a fresh read, whose answer heals.
-	first := feedNewTaskSyscall(t, el)
-	if first == nil {
-		t.Fatal("the first post-exec row was not emitted")
-	}
-	first.Recycle()
+	emitNewTaskRow(t, el, "first post-exec")
 	s.answerNextRead(t, execComm)
 	waitForCommLookupsToDrain(t, el)
 

@@ -426,10 +426,12 @@ func (r *commResolver) refreshStaleComm(tid uint32) {
 // entry whose owner is gone: an entry is only ever overwritten by an
 // authoritative kernel-sourced name (setCachedFromKernel, or an enter payload
 // through setCachedFromEnterPayload), by a creator's inherited name for a new
-// task (setCachedProvisional, on a task_newtask record) or by a completed
-// procfs lookup. None of them is triggered by the owner's death, and the
-// task_newtask record that would overwrite the entry for the tid's next owner
-// can be lost or its probe missing. So without this the next process to be
+// task (setCachedProvisional, on a task_newtask record), by a completed
+// procfs lookup, or - once, at startup - by the procfs seed of ior itself, its
+// parent and the -pid target (setCached, from seedTrackedPidComm). None of
+// them is triggered by the owner's death, and the task_newtask record that
+// would overwrite the entry for the tid's next owner can be lost or its probe
+// missing. So without this the next process to be
 // handed the same tid number was labelled with the dead process's comm until
 // one of those writes happened to reach it (an open, an execve(), a rename) or
 // the entry aged out of the 8192-entry LRU - and on a box churning short-lived
