@@ -15,6 +15,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const streamChromeRows = 4
@@ -1142,21 +1143,49 @@ func (m *Model) SetPidFilter(pid int) {
 // Sub-model state (stream footer visibility, flamegraph viewport dimensions)
 // is kept in sync by the Update() handlers that trigger each state change,
 // so no fixup is needed here.
+//
+// The frame is never taller than the terminal: splitFrameRows budgets the
+// rows (status first, then tab bar, then body) and the body is clipped to its
+// share, so a short terminal loses body rows instead of scrolling the status
+// line off the bottom.
 func (m *Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
-	_, activeHeight := m.contentViewport(m.activeTab, width, height)
+	status := m.renderStatusBlock(width)
+	rows := splitFrameRows(height, lipgloss.Height(status))
 
-	var b strings.Builder
-	b.WriteString(renderTabBar(m.activeTab, width))
-	b.WriteString("\n")
-	b.WriteString(m.renderActiveContent(width, activeHeight, &m.streamModel, m.flamegraphModel))
-	b.WriteString("\n")
-	if m.showHelp {
-		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
-	} else {
-		b.WriteString(renderHelpHintWithStatus(width, m.filterSummary()))
+	parts := make([]string, 0, 3)
+	if rows.tabBar > 0 {
+		parts = append(parts, renderTabBar(m.activeTab, width))
 	}
-	return tea.NewView(common.Current().ScreenStyle.Render(b.String()))
+	if rows.body > 0 {
+		parts = append(parts, m.renderBody(width, height, rows.body))
+	}
+	parts = append(parts, clipTailLines(status, rows.status))
+	return tea.NewView(common.Current().ScreenStyle.Render(strings.Join(parts, "\n")))
+}
+
+// renderStatusBlock renders the bottom of the frame: the one-line help hint,
+// or the expanded help bar, with the filter/recording status on its last row.
+func (m *Model) renderStatusBlock(width int) string {
+	if m.showHelp {
+		return renderHelpBarWithStatus(m.keys, width, m.filterSummary())
+	}
+	return renderHelpHintWithStatus(width, m.filterSummary())
+}
+
+// renderBody renders the active tab into at most bodyRows rows. With fewer
+// than the tab's minimum (Model.minBodyRowsFor) it shows the "terminal too small" notice instead of a
+// mangled fragment. Otherwise the tab is sized by its own content viewport
+// (which also sizes its sub-model) and the result is clipped to bodyRows as a
+// last line of defence: a tab that keeps a minimum size of its own can then
+// at worst lose its bottom rows, never push the frame past the terminal.
+func (m *Model) renderBody(width, height, bodyRows int) string {
+	if bodyRows < m.minBodyRowsFor(m.activeTab) {
+		return clipLines(tooSmallNotice(width), bodyRows)
+	}
+	_, activeHeight := m.contentViewport(m.activeTab, width, height)
+	body := m.renderActiveContent(width, min(activeHeight, bodyRows), &m.streamModel, m.flamegraphModel)
+	return clipLines(body, bodyRows)
 }
 
 func (m *Model) filterSummary() string {
@@ -1464,6 +1493,11 @@ func flameViewport(width, height int, showHelp bool) (int, int) {
 	return dashboardViewport(width, height, chromeRows)
 }
 
+// dashboardViewport returns the content viewport left after chromeRows rows of
+// frame. It is never below one row, because the sub-models sized from it
+// (flame, stream, bubble charts) need a positive size; the real row budget of
+// a short terminal is View's (splitFrameRows), which shows a notice instead of
+// the body when the viewport would not be worth drawing.
 func dashboardViewport(width, height, chromeRows int) (int, int) {
 	width, height = common.EffectiveViewport(width, height)
 	height -= chromeRows

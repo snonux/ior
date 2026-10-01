@@ -76,6 +76,12 @@ type tabDescriptor struct {
 	// the standard viewport (tab bar plus the help hint or expanded help
 	// bar; see flameViewport).
 	ContentViewport func(width, height int, showHelp bool) (int, int)
+	// MinBodyRows is the fewest body rows at which the tab is drawn: its
+	// smallest complete unit (a table's header, one row and hint; a panel
+	// with its borders and one content row). With fewer rows View shows the
+	// "terminal too small" notice instead of a fragment cut mid-panel. Zero
+	// means the generic minBodyRows.
+	MinBodyRows int
 	// InitCmd starts this tab's own tick chain whenever the tab becomes the
 	// active one: on entry and when Init's tickChainsStartMsg is handled,
 	// alongside the global refresh chain. It runs on the Update path and
@@ -174,6 +180,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Flm",
 			Position:        10,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     flameMinRows,
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
 			InitCmd:     func(m *Model) tea.Cmd { return m.ticks.startFlame() },
@@ -190,6 +197,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Ovr",
 			Position:        20,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     overviewMinRows,
 			Render:          tabRenderOverview,
 			ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Two },
 		},
@@ -261,6 +269,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Lat",
 			Position:        60,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     latencyMinRows,
 			Render:          tabRenderLatency,
 			ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Six },
 		},
@@ -275,6 +284,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			// The stream draws its own footer, so its viewport ignores the
 			// dashboard help bar.
 			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },
+			MinBodyRows:     streamMinRows,
 			Render:          tabRenderStream,
 			HandleScroll:    tabScrollStream,
 			// The two modals and the FD-trace overlay each own the keyboard
@@ -411,6 +421,20 @@ func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 		return d.ContentViewport(width, height, m.showHelp)
 	}
 	return flameViewport(width, height, m.showHelp)
+}
+
+// minBodyRowsFor returns the fewest body rows at which tab is drawn in its
+// current state: the descriptor's own minimum (tabDescriptor.MinBodyRows), or
+// altVizMinRows while an alternative visualization (bubbles, treemap, icicle)
+// is the active view, or else the generic table minimum.
+func (m *Model) minBodyRowsFor(tab Tab) int {
+	if rows := lookupTab(tab).MinBodyRows; rows > 0 {
+		return rows
+	}
+	if m.altVizReady(tab) && m.tabVizModeFor(tab) != tabVizModeTable {
+		return altVizMinRows
+	}
+	return minBodyRows
 }
 
 // forEachBubbleChart calls fn with the bubble chart of every registered

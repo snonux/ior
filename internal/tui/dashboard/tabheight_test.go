@@ -6,10 +6,13 @@ import (
 	"testing"
 	"time"
 
+	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
+	"ior/internal/tui/eventstream"
 	"ior/internal/tui/messages"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -41,41 +44,139 @@ func tallSnapshot() *statsengine.Snapshot {
 	return &snap
 }
 
-// TestEveryTabFitsTheTerminalHeight pins that the dashboard View never
-// renders more lines than the terminal has rows, for every tab, at sizes from
-// comfortable down to a few rows. An over-tall frame scrolls the terminal and
-// pushes the chrome status line (filter, refusal notice, recording, auto-reset)
-// off the bottom, which is the one line that cannot be seen any other way.
-func TestEveryTabFitsTheTerminalHeight(t *testing.T) {
-	sizes := [][2]int{{80, 24}, {100, 20}, {120, 30}, {80, 12}, {60, 8}, {40, 6}, {120, 4}}
+// fitCase is one cell of the height-fit matrix: a tab in one of its
+// visualization modes (and, for Files, one of its table groupings).
+type fitCase struct {
+	tab     Tab
+	mode    tabVizMode
+	grouped bool
+	// paused freezes the stream, which turns its selection footer on
+	// whether or not the help bar is expanded.
+	paused bool
+}
+
+func (c fitCase) String() string {
+	return fmt.Sprintf("%s/mode=%d/grouped=%v/paused=%v", c.tab, c.mode, c.grouped, c.paused)
+}
+
+// fitCases lists every tab in every visualization mode it offers, so the
+// bubble, treemap and icicle views are held to the height budget too, not only
+// the default tables. The Files tab offers them only with directory grouping,
+// which it also gets as a table.
+func fitCases() []fitCase {
+	var cases []fitCase
 	for _, tab := range orderedTabs() {
-		for _, sz := range sizes {
-			if sz[1] < 12 && tab != TabOverview && tab != TabLatency {
-				// The table, flame and stream tabs keep a minimum body
-				// height of their own (task follow-up); only the two
-				// summary tabs are pinned down to a few rows here.
-				continue
+		for _, mode := range lookupTab(tab).AllowedVizModes {
+			grouped := tab == TabFiles && mode != tabVizModeTable
+			cases = append(cases, fitCase{tab: tab, mode: mode, grouped: grouped})
+			if tab == TabFiles && mode == tabVizModeTable {
+				cases = append(cases, fitCase{tab: tab, mode: mode, grouped: true})
 			}
-			for _, help := range []bool{false, true} {
-				name := fmt.Sprintf("%s/%dx%d/help=%v", tab, sz[0], sz[1], help)
-				t.Run(name, func(t *testing.T) {
-					m := NewModelWithConfig(nil, nil, 250, 200, common.DefaultKeyMap())
-					m.activeTab = tab
-					m.showHelp = help
-					m.width, m.height = sz[0], sz[1]
-					m = tickStats(t, m, messages.StatsTickMsg{Snap: tallSnapshot()})
-					out := m.View().Content
-					if got := lipgloss.Height(out); got > sz[1] {
-						t.Fatalf("View is %d lines, terminal has %d:\n%s", got, sz[1], out)
-					}
-					// The status line must still be the last line.
-					lines := strings.Split(out, "\n")
-					if !strings.Contains(lines[len(lines)-1], "filter:") {
-						t.Fatalf("last line is not the status line: %q", lines[len(lines)-1])
-					}
-				})
+			if tab == TabStream {
+				cases = append(cases, fitCase{tab: tab, mode: mode, paused: true})
 			}
 		}
+	}
+	return cases
+}
+
+// TestEveryTabFitsTheTerminalHeight pins that the dashboard View never
+// renders more lines than the terminal has rows, for every tab and
+// visualization mode, at every height from 1 to 30 rows and four widths (20 to 200 columns),
+// with and without the expanded help. An over-tall frame scrolls the
+// terminal and pushes the chrome status line (filter, refusal notice,
+// recording, auto-reset) off the bottom, which is the one line that cannot be
+// seen any other way. Whatever the height, the status line stays the last line.
+func TestEveryTabFitsTheTerminalHeight(t *testing.T) {
+	widths := []int{20, 60, 100, 200}
+	for _, c := range fitCases() {
+		for _, help := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/help=%v", c, help), func(t *testing.T) {
+				for _, width := range widths {
+					for height := 1; height <= 30; height++ {
+						assertViewFits(t, c, help, width, height)
+					}
+				}
+			})
+		}
+	}
+}
+
+// newFitModel returns a dashboard on c's tab and mode at width x height with
+// every panel populated: the stats snapshot (tallSnapshot), a flamegraph live
+// trie and a stream ring buffer. Without the last two the Flame and Stream
+// tabs would render their small empty states and prove nothing. The model is
+// sized and the help toggled through Update, as the runtime does, so the
+// sub-models' viewports and the stream footer are in sync with the frame.
+func newFitModel(t *testing.T, c fitCase, help bool, width, height int) *Model {
+	t.Helper()
+	rb := eventstream.NewRingBuffer()
+	for range 200 {
+		rb.Push(eventstream.StreamEvent{Syscall: "read", Comm: "proc", PID: 1234})
+	}
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
+
+	m := NewModelWithConfig(nil, rb, 250, 200, common.DefaultKeyMap())
+	m.activeTab = c.tab
+	m.filesDirGrouped = c.grouped
+	m.setTabVizMode(c.tab, c.mode)
+	m.SetLiveTrie(liveTrie)
+	m.streamModel.SetSource(rb)
+	m.streamModel.Refresh()
+	if help {
+		next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
+		m = next.(*Model)
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	m = next.(*Model)
+	if c.paused {
+		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+		m = next.(*Model)
+		if !m.streamModel.Paused() {
+			t.Fatal("space did not pause the stream")
+		}
+	}
+	return tickStats(t, m, messages.StatsTickMsg{Snap: tallSnapshot()})
+}
+
+// assertViewFits renders one cell of the matrix and checks the frame, the
+// notice threshold and the tab's own budget handling.
+func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
+	t.Helper()
+	m := newFitModel(t, c, help, width, height)
+	out := m.View().Content
+	label := fmt.Sprintf("%s help=%v %dx%d", c, help, width, height)
+	if got := lipgloss.Height(out); got > height {
+		t.Fatalf("%s: View is %d lines, terminal has %d:\n%s", label, got, height, out)
+	}
+	// The status line must still be the last line.
+	lines := strings.Split(out, "\n")
+	if !strings.Contains(lines[len(lines)-1], "filter:") {
+		t.Fatalf("%s: last line is not the status line: %q", label, lines[len(lines)-1])
+	}
+	rows := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width)))
+	tooSmall := strings.Contains(out, tooSmallNotice(width))
+	switch min := m.minBodyRowsFor(c.tab); {
+	case rows.body >= min && tooSmall:
+		t.Fatalf("%s: %d body rows (minimum %d) but the too-small notice is shown:\n%s", label, rows.body, min, out)
+	case rows.body > 0 && rows.body < min && !tooSmall:
+		t.Fatalf("%s: %d body rows is below the minimum %d but no notice is shown:\n%s", label, rows.body, min, out)
+	case rows.body >= min:
+		assertTabHonoursItsBudget(t, m, label, width, height, rows.body)
+	}
+}
+
+// assertTabHonoursItsBudget renders the active tab the way View does but
+// without the final clip, so a tab that only fits because clipLines cut its
+// bottom (a panel without its border, a table without its hint line) fails
+// instead of passing unnoticed.
+func assertTabHonoursItsBudget(t *testing.T, m *Model, label string, width, height, body int) {
+	t.Helper()
+	_, activeHeight := m.contentViewport(m.activeTab, width, height)
+	raw := m.renderActiveContent(width, min(activeHeight, body), &m.streamModel, m.flamegraphModel)
+	if got := lipgloss.Height(raw); got > body {
+		t.Errorf("%s: tab drew %d rows into a %d-row body (only the clip saved the frame):\n%s", label, got, body, raw)
 	}
 }
 
@@ -410,6 +511,118 @@ func TestSummaryTabsFitTheTerminalWidth(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// The frame gives the status block its rows first, then the tab bar, and the
+// body whatever is left; the parts never add up to more than the terminal.
+func TestSplitFrameRowsPrioritisesStatusThenTabBarThenBody(t *testing.T) {
+	for _, tc := range []struct {
+		height, statusRows int
+		want               frameRows
+	}{
+		{24, 1, frameRows{status: 1, tabBar: 1, body: 22}},
+		{24, 2, frameRows{status: 2, tabBar: 1, body: 21}},
+		{4, 1, frameRows{status: 1, tabBar: 1, body: 2}},
+		{2, 1, frameRows{status: 1, tabBar: 1, body: 0}},
+		{1, 1, frameRows{status: 1, tabBar: 0, body: 0}},
+		{2, 2, frameRows{status: 2, tabBar: 0, body: 0}},
+		{1, 2, frameRows{status: 1, tabBar: 0, body: 0}}, // the help bar loses its upper row
+		{0, 1, frameRows{}},
+		{-3, 2, frameRows{}},
+	} {
+		if got := splitFrameRows(tc.height, tc.statusRows); got != tc.want {
+			t.Errorf("splitFrameRows(%d, %d) = %+v, want %+v", tc.height, tc.statusRows, got, tc.want)
+		}
+		if got := splitFrameRows(tc.height, tc.statusRows); got.status+got.tabBar+got.body > max(tc.height, 0) {
+			t.Errorf("splitFrameRows(%d, %d) = %+v exceeds the height", tc.height, tc.statusRows, got)
+		}
+	}
+}
+
+func TestClipTailLines(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		height int
+		want   string
+	}{
+		{"a\nb\nc", 1, "c"},
+		{"a\nb\nc", 2, "b\nc"},
+		{"a\nb\nc", 3, "a\nb\nc"},
+		{"a\nb\nc", 9, "a\nb\nc"},
+		{"a\nb\nc", 0, ""},
+		{"a\nb\nc", -1, ""},
+		{"", 2, ""},
+	} {
+		if got := clipTailLines(tc.in, tc.height); got != tc.want {
+			t.Errorf("clipTailLines(%q, %d) = %q, want %q", tc.in, tc.height, got, tc.want)
+		}
+	}
+}
+
+// A table spends two rows on its header and hint, keeps at least one data row
+// and has a fixed default without a budget. It no longer keeps a minimum
+// of its own (it used to hold five rows whatever the terminal had).
+func TestTableRowBudget(t *testing.T) {
+	for height, want := range map[int]int{0: defaultTableRows, -1: defaultTableRows, 1: 1, 2: 1, 3: 1, 4: 2, 24: 22} {
+		if got := tableRowBudget(height); got != want {
+			t.Errorf("tableRowBudget(%d) = %d, want %d", height, got, want)
+		}
+	}
+}
+
+// Below a tab's minimum the body is the one-line notice; at the minimum the
+// tab itself is drawn. Pinned per tab at the registry values so a change to a
+// panel's chrome that outgrows its minimum is caught here, not by a user.
+func TestTooSmallNoticeAppearsExactlyBelowTheTabMinimum(t *testing.T) {
+	for _, c := range fitCases() {
+		m := newFitModel(t, c, false, 100, 40)
+		min := m.minBodyRowsFor(c.tab)
+		for body := 1; body <= min+1; body++ {
+			out := m.renderBody(100, body+2, body)
+			if got, want := strings.Contains(out, "terminal too small"), body < min; got != want {
+				t.Errorf("%s body=%d (minimum %d): notice shown = %v, want %v:\n%s", c, body, min, got, want, out)
+			}
+			if got := lipgloss.Height(out); got > body {
+				t.Errorf("%s body=%d: %d rows", c, body, got)
+			}
+		}
+	}
+}
+
+// The notice is cut to the width so it can never soft-wrap and add a row.
+func TestTooSmallNoticeFitsNarrowTerminals(t *testing.T) {
+	for width := 1; width <= 30; width++ {
+		if got := lipgloss.Width(tooSmallNotice(width)); got > width {
+			t.Errorf("notice is %d cells wide in a %d-cell terminal", got, width)
+		}
+	}
+}
+
+// On a very short terminal the frame degrades in a fixed order: the body goes
+// first (a notice, then nothing), then the tab bar; the status line stays.
+func TestViewDegradesBodyThenTabBarKeepingTheStatusLine(t *testing.T) {
+	c := fitCase{tab: TabSyscalls}
+	for _, tc := range []struct {
+		height              int
+		tabBar, notice, tbl bool
+	}{
+		{1, false, false, false},
+		{2, true, false, false},
+		{3, true, true, false},
+		{4, true, true, false},
+		{5, true, false, true}, // 3 body rows: header, one row and the hint line
+	} {
+		out := ansi.Strip(newFitModel(t, c, false, 80, tc.height).View().Content)
+		if got := strings.Contains(out, "3:Sys"); got != tc.tabBar {
+			t.Errorf("height %d: tab bar shown = %v, want %v:\n%s", tc.height, got, tc.tabBar, out)
+		}
+		if got := strings.Contains(out, "terminal too small"); got != tc.notice {
+			t.Errorf("height %d: notice shown = %v, want %v:\n%s", tc.height, got, tc.notice, out)
+		}
+		if got := strings.Contains(out, "Syscall "); got != tc.tbl {
+			t.Errorf("height %d: table shown = %v, want %v:\n%s", tc.height, got, tc.tbl, out)
 		}
 	}
 }

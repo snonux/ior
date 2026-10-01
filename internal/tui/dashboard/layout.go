@@ -55,3 +55,67 @@ func clipLines(s string, height int) string {
 	}
 	return s[:end-1]
 }
+
+// minBodyRows is the fewest body rows at which a tab is worth drawing unless
+// its descriptor says otherwise (tabDescriptor.MinBodyRows). Below it a table
+// has no room for its header plus one row plus its hint, so the body shows a
+// one-line "terminal too small" notice instead of a mangled fragment.
+const minBodyRows = 3
+
+// Per-tab minimums for the tabs whose smallest complete unit is a panel.
+const (
+	// altVizMinRows is a bubble, treemap or icicle chart: its header and
+	// status lines around a chart that is never shorter than four rows.
+	altVizMinRows = 6
+	// flameMinRows is the flamegraph's header line, one frame row, the
+	// selection line and the status line.
+	flameMinRows = 4
+	// overviewMinRows is one summary box: five content rows plus borders.
+	overviewMinRows = 7
+	// latencyMinRows is a histogram panel with a single (folded) bucket row.
+	latencyMinRows = histogramChromeRows + 1
+	// streamMinRows is the stream panel - two borders, the status line, the
+	// filter line, the column header and one event row - plus the one-row
+	// footer that the expanded help bar or a paused stream turns on.
+	streamMinRows = 7
+)
+
+// frameRows is how many terminal rows each part of the dashboard frame gets.
+type frameRows struct {
+	status, tabBar, body int
+}
+
+// splitFrameRows divides height rows among the status block (the help hint
+// or expanded help plus the filter/recording status), the tab bar and the tab
+// body, in that priority: the status line is the one place state that is
+// available nowhere else is reported, the tab bar says where the user is, and
+// the body takes whatever is left. The parts never add up to more than height,
+// so a short terminal drops the body, then the tab bar, then the upper help
+// rows, instead of scrolling the status line off the bottom.
+func splitFrameRows(height, statusRows int) frameRows {
+	f := frameRows{status: min(statusRows, max(height, 0))}
+	rest := max(height, 0) - f.status
+	f.tabBar = min(dashboardTabBarRows, rest)
+	f.body = rest - f.tabBar
+	return f
+}
+
+// tooSmallNotice is the body of a terminal with fewer than minBodyRows rows
+// to spare, cut to width cells so it never soft-wraps.
+func tooSmallNotice(width int) string {
+	return truncatePlain("terminal too small", width)
+}
+
+// clipTailLines keeps at most the last height lines of s (height <= 0 keeps
+// nothing). The status block keeps its tail because the status line is its
+// last row.
+func clipTailLines(s string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= height {
+		return s
+	}
+	return strings.Join(lines[len(lines)-height:], "\n")
+}

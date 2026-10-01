@@ -307,15 +307,26 @@ func formatDurationNs(v float64) string {
 	return (time.Duration(s * float64(time.Second))).String()
 }
 
-func syscallTableHeight(height int) int {
+// tableChromeRows is what a selectable table spends besides its data rows:
+// the column header line and the "[Row x/N ...]" hint line.
+const tableChromeRows = 2
+
+// defaultTableRows is the data-row count of a table rendered without a height
+// budget (height <= 0).
+const defaultTableRows = 10
+
+// tableRowBudget returns how many data rows a selectable table shows when its
+// body gets height rows: whatever is left once the header and hint lines are
+// paid for, at least one. The result is also the paging step's basis, so the
+// rows the user sees are exactly the rows PageUp/PageDown move over. A body
+// shorter than tableChromeRows+1 (never rendered; see minBodyRows) clips the
+// hint line instead of keeping a minimum row count that would outgrow the
+// terminal. height <= 0 means "no budget" and gives defaultTableRows.
+func tableRowBudget(height int) int {
 	if height <= 0 {
-		return 10
+		return defaultTableRows
 	}
-	h := height - 6
-	if h < 5 {
-		return 5
-	}
-	return h
+	return max(height-tableChromeRows, 1)
 }
 
 func clampOffset(offset, size int) int {

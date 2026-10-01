@@ -16,7 +16,7 @@ func renderSelectableTable(columns []common.TableColumn, rows [][]string, height
 
 	selectedRow = clampOffset(selectedRow, len(rows))
 	selectedCol = common.ClampTableCol(selectedCol, len(columns))
-	start, end := common.VisibleTableWindow(selectedRow, len(rows), syscallTableHeight(height))
+	start, end := common.VisibleTableWindow(selectedRow, len(rows), tableRowBudget(height))
 
 	lines := make([]string, 0, end-start+2)
 	lines = append(lines, common.RenderTableHeader(columns))
@@ -38,7 +38,7 @@ func renderSelectableTable(columns []common.TableColumn, rows [][]string, height
 }
 
 func tablePageStep(height int) int {
-	rows := syscallTableHeight(height)
+	rows := tableRowBudget(height)
 	if rows <= 1 {
 		return 1
 	}
