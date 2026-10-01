@@ -548,3 +548,52 @@ func TestNonEditingMessagesKeepNoMatchDerivation(t *testing.T) {
 		})
 	}
 }
+
+// TestFailedScanOutcomeDependsOnTheSelection pins what a failed scan (an empty
+// list plus an error) does to each kind of selection, since only a selection
+// derived from a non-empty filter ends up empty-handed:
+//   - a derived All row (empty filter) stays: followFilter's empty-query branch
+//     does not look at the list, so Enter still means all PIDs;
+//   - an All row the user moved back onto stays (relocateUserSelection only
+//     clamps it), with the same Enter;
+//   - a thread the user picked in the TID picker falls back to All TIDs, which
+//     stays inside the process;
+//   - a process the user picked in the PID picker is lost (noSelection, Enter a
+//     no-op) like one that exited.
+//
+// The derived-row-with-a-filter case is TestScanErrorOnDerivedSelectionShowsOnlyTheError.
+func TestFailedScanOutcomeDependsOnTheSelection(t *testing.T) {
+	t.Run("derived All row", func(t *testing.T) {
+		m := failScan(t, mysqlModel(t))
+		if m.selectedIndex != 0 {
+			t.Fatalf("selectedIndex = %d, want the All row", m.selectedIndex)
+		}
+		wantPid(t, m, 0)
+	})
+	t.Run("user-owned All row", func(t *testing.T) {
+		m := pressKey(t, typeText(t, mysqlModel(t), "my"), tea.KeyUp)
+		if m.implicit || m.selectedIndex != 0 {
+			t.Fatalf("setup: selectedIndex=%d implicit=%v, want a user-owned All row", m.selectedIndex, m.implicit)
+		}
+		m = failScan(t, m)
+		if m.selectedIndex != 0 {
+			t.Fatalf("selectedIndex = %d, want the All row kept", m.selectedIndex)
+		}
+		wantPid(t, m, 0)
+	})
+	t.Run("user thread in TID picker", func(t *testing.T) {
+		m := failScan(t, pressDown(t, tidThreadsModel(t), 2)) // tid 101
+		if msg, ok := enterMsg(t, m).(messages.TidSelectedMsg); !ok || msg != (messages.TidSelectedMsg{}) {
+			t.Fatalf("Enter emitted %+v, want the All TIDs message", msg)
+		}
+	})
+	t.Run("user process in PID picker", func(t *testing.T) {
+		m := failScan(t, pressDown(t, mysqlModel(t), 3)) // pid 30
+		if m.selectedIndex != noSelection {
+			t.Fatalf("selectedIndex = %d, want noSelection", m.selectedIndex)
+		}
+		if cmd := enterCmd(m); cmd != nil {
+			t.Fatalf("Enter emitted %+v, want a no-op", cmd())
+		}
+	})
+}

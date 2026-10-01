@@ -9,9 +9,14 @@ import (
 )
 
 // noSelection is the selectedIndex of a picker that deliberately highlights
-// nothing, and Enter does nothing there. It has two sources: the selected
-// process vanished in PID mode (relocateSelection, sticky until the user
-// moves), or a typed filter that matches no process (followFilter, derived).
+// nothing, and Enter does nothing there. It has two sources: the process the
+// user selected vanished in PID mode (relocateUserSelection, with a notice,
+// sticky until the user moves), or a selection derived from a non-empty filter
+// found the list empty (followFilter's no-match branch, recomputed on every
+// rebuild). The latter covers a filter that matches no process, shown with the
+// no-match notice, and a failed scan that emptied the list, shown with no
+// notice because the scan error line already explains it (applyScan holds a
+// derived pid across it, see heldPid).
 const noSelection = -1
 
 // idNoun names what a picker row is in the current mode, for notices: the TID
@@ -93,7 +98,9 @@ func (m Model) editFilter(msg tea.Msg) (Model, tea.Cmd) {
 // emitSelection returns the command announcing the highlighted row. With
 // noSelection it returns nil: Enter must not trace anything (in particular not
 // the whole system, which the All row means in PID mode) while the picker is
-// telling the user that their process is gone or that nothing matches.
+// telling the user that their process is gone or that nothing matches, or while
+// a failed scan has emptied the list under a filtered selection (no notice
+// then; the scan error line is the explanation, see noSelection).
 func (m Model) emitSelection() tea.Cmd {
 	if m.selectedIndex == noSelection {
 		return nil
@@ -192,8 +199,10 @@ func (m Model) followFilter(queryEmpty bool) Model {
 // but unlike the user's pick it may fall through to the new first match, with a
 // notice, since the filter still decides what it means.
 //
-// A failed scan carries no processes, so it empties the list and the derived
-// row with it (noSelection, Enter a no-op, only the scan error shown). Its pid
+// A failed scan carries no processes, so it empties the list and a derived
+// process row with it (noSelection via followFilter's no-match branch, Enter a
+// no-op, only the scan error shown; a derived All row survives, since an empty
+// filter derives it without looking at the list). Its pid
 // is kept in heldPid and tracked by the next successful scan instead: without
 // that, the empty list in between would make that scan see no previous
 // selection, and if the pid exited meanwhile the new first match would take

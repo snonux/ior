@@ -843,10 +843,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   A selection the user has not made is derived from the filter instead (task
   hs2, `selection.go`: `Model.implicit`, `followFilter`): no filter text selects
   the All row (a bare Enter still means all PIDs), a filter with matches selects
-  the first match, so typing `mysql` and pressing Enter picks that process rather
-  than the whole system, and a filter without a match selects nothing (the
-  `noSelection` state with a "no process matches the filter" notice, "thread" in
-  the TID picker; Enter is a no-op in both). That notice stays hidden while an
+  the first match, so typing `mysql` and pressing Enter picks that process
+  rather than the whole system, and a filter without a match selects nothing
+  (the `noSelection` state with a "no process matches the filter" notice,
+  "thread" in the TID picker; Enter is a no-op in both). That notice stays
+  hidden while an
   empty list does not mean "no match": before the first scan result is in (it
   only means "not loaded yet") and after a failed scan (the scan error line
   explains it). The derived state is recomputed on every edit of the text and
@@ -856,11 +857,19 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   match left the list the next match is selected with a notice that names both
   and the reason (`pid 30 exited - selected pid 40 instead`, or `pid 30 no
   longer matches the filter - ...` when the process still runs; `tid` in the TID
-  picker) instead of silently. A failed scan empties the list (nothing selected,
-  Enter a no-op, only the scan error shown) but holds a derived pid (`heldPid`)
-  for the next successful scan, which keeps it or announces the move the same
-  way; a real edit of the filter text drops the held pid. Up/Down hands the
-  selection to the user (a process row then follows the process as above); a
+  picker) instead of silently. A failed scan empties the list, and what that
+  does depends on the selection (`TestFailedScanOutcomeDependsOnTheSelection`).
+  A selection derived from a non-empty filter ends up with nothing selected
+  (`followFilter`'s no-match branch, Enter a no-op, only the scan error shown,
+  no notice), and a derived pid is held (`heldPid`) for the next successful
+  scan, which keeps it or announces the move the same way; a real edit of the
+  filter text drops the held pid. A derived All row (empty filter) and an All
+  row the user moved onto stay highlighted, so Enter still traces all PIDs (all
+  TIDs of the process in the TID picker); a thread the user picked in the TID
+  picker falls back to All TIDs, and a process the user picked in the PID
+  picker is lost like one that exited (`noSelection` with the lost-selection
+  notice). Up/Down hands the selection to the user (a process row then follows
+  the process as above); a
   user who moved back onto the All row and then edits the filter text gets it
   handed back to the filter, so typing a filter with a match highlights that
   match even after Up. Enter right after typing still means All in two cases: a
