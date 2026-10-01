@@ -1724,7 +1724,21 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `openedHandleFile`: the stash is one slot per tid (the thread's last
     `name_to_handle_at`), so it is checked against the returned descriptor
     through `/proc/<pid>/fd/<fd>` (inode, then link text) and a contradicted
-    stash is left alone while procfs names the row. That probe is taken when
+    stash is left alone while procfs names the row. The link-text rule
+    (`compareHandleLinkText`) accepts the link as it stands *or* minus one
+    trailing ` (deleted)`: the second is a file unlinked after its handle was
+    taken (clean stash, row shows the clean path), the first a stash that was
+    itself read from a `/proc` link by `name_to_handle_at(fd, "",
+    AT_EMPTY_PATH)` - a pidfd, a namespace, and a file already unlinked at
+    that point, which includes every memfd (`/memfd:x (deleted)`; the row
+    keeps the suffix, as every procfs-named unlinked file does). Stripping
+    the suffix from the link only made such a stash contradict its own
+    descriptor: the row was right, but the stash stayed in the slot and named
+    the thread's next `open_by_handle_at` whenever procfs could not answer for
+    it (task l03). The stash is never stripped: `<path> (deleted)` against a
+    live `<path>` is a new file at the old path, and a name literally ending
+    in ` (deleted)` must still match its `... (deleted) (deleted)` link.
+    Pinned by `internal/eventloop_handle_deleted_test.go`. That probe is taken when
     the loop handles the exit, not when the syscall returned, so a task that
     closed the descriptor and opened something else under the same number
     makes procfs describe the newer file (task j03: `TestOpenByHandleAt`
