@@ -167,13 +167,6 @@ Records whose selected `-fields` are all empty (for example an empty file name w
 event count with the default `-count count`, otherwise the sum of that counter); zero-weight
 records are omitted.
 
-A recording stores tracepoint names (`enter_openat`), not the build-specific numeric IDs, so
-it stays readable across ior releases and is translated to the reading build's IDs. A
-recording that names a tracepoint the reading build does not know is refused, as is one
-written before recordings carried names (no format header): its numbers cannot be mapped
-reliably, so re-record it instead of trusting a silently wrong syscall name.
-
-Traced comm names and paths come from other users and may contain terminal escape
 The recording is bounded in memory: it keeps about 2^19 (524288) distinct
 (path, comm, pid, tid, flags) records, plus a cap/8 headroom for pid/tid-folded records
 and a handful of `[other]` records, which an ordinary trace never reaches but a
@@ -189,6 +182,13 @@ end streams the records into it in small batches and adds only ~1-2 MB, however 
 Raise it when the warning appears and the pid/tid detail matters; lower it on a
 memory-constrained host.
 
+A recording stores tracepoint names (`enter_openat`), not the build-specific numeric IDs, so
+it stays readable across ior releases and is translated to the reading build's IDs. A
+recording that names a tracepoint the reading build does not know is refused, as is one
+written before recordings carried names (no format header): its numbers cannot be mapped
+reliably, so re-record it instead of trusting a silently wrong syscall name.
+
+Traced comm names and paths come from other users and may contain terminal escape
 sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
 (ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible, bidi format or blank-rendering space characters (no-break space,
 ideographic space, Braille blank, ...) are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
