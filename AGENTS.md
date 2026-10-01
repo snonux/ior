@@ -1012,11 +1012,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   does nothing (the thread already uses the creator's tgid entries);
   a new process without `CLONE_FILES` (fork, vfork, posix_spawn, plain clone)
   gets a copy of the creator's fd-table entries *and* procfs-cache entries
-  (`fdTracker.inherit`: independent `FdFile.Dup` copies so FD_CLOEXEC and later
-  flag changes stay per table; the kernel-shared status word is not mirrored
-  across the two tables, each learns changes from its own process's fcntl; the
-  copy is a snapshot, what the parent closes or reopens after the fork does not
-  reach the child). **The copy is bounded**: a parent tracking more than
+  (`fdTracker.inherit`: one `FdFile.Dup` per descriptor, so FD_CLOEXEC stays per
+  table while the status word is shared with the parent's entry through the
+  open-file-description object, as the kernel's fork shares it (task nr2, below);
+  the copy is a snapshot of the table, what the parent closes or reopens after
+  the fork does not reach the child). **The copy is bounded**: a parent tracking more than
   `maxInheritedEntries` (128) fd-table plus cache entries passes none on, and a
   copy that would not fit under the table cap is skipped too (the child then
   resolves through procfs, as before gr2; `fdTracker.inheritSkipped` counts
@@ -1053,6 +1053,39 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   sees other `ioworkload` processes (a parallel test), so the assertion only
   counts rows of this test's own child: the scenario writes the child's pid to
   `$IOR_WORKLOAD_CHILD_PID_FILE`.
+
+  **Duplicated descriptors share one open file description (task nr2).** The
+  kernel keeps the status word (access mode, creation flags, `O_APPEND`,
+  `O_NONBLOCK`, ...) in the open file description that `dup`, `dup2`, `dup3`,
+  `fcntl(F_DUPFD*)` and `fork` share between descriptors, and `FD_CLOEXEC` in the
+  descriptor itself; a second `open()` of the same path is a new description.
+  `FdFile` mirrors that split (`internal/file/fdfile_desc.go`): the status word
+  is a `*openFileDesc` (no `O_CLOEXEC` bit in it), `closeOnExec`/`closeOnExecKnown`
+  and the number and name are per `FdFile`, and `Flags()` folds the descriptor's
+  `FD_CLOEXEC` into the shared word for display. `FdFile.Dup` creates a second
+  descriptor on the *same* description (used by `registerDup`, the fork copy and
+  `copyTable`); `FdFile.Detach` makes an independent snapshot that shares
+  nothing (used by `freezePairForEmission` for every emitted row and by
+  `snapshotExecTarget`, because a row must keep the flags of its moment while the
+  live table entry moves on). Before nr2 `Dup` copied the flag word, so an
+  `fcntl(dup, F_SETFL, O_APPEND|O_NONBLOCK)` updated one table entry and the
+  original kept reporting `O_WRONLY|O_CREAT|O_TRUNC` (kernel: `0106001`), and a
+  later `dup(orig)` started from the stale word even after `F_GETFL` refreshed
+  the original. Rule for new code: change a status flag through
+  `SetStatusFlags`/`MergeFlags`/`AddFlags` on the descriptor the syscall named
+  (the change is then seen by every duplicate); never copy a flag word between
+  `FdFile`s by hand and never hold a live table entry on an emitted pair. A
+  `Dup` or `Detach` is one allocation (`FdFile` and its description share an
+  object, pinned by `TestFdFileDetachAndConstructorsAllocateOnce`). Not modelled:
+  descriptors that share a description through a transfer ior does not
+  model as a dup (`SCM_RIGHTS`, `pidfd_getfd`, which registers nothing) are
+  resolved per descriptor through procfs, so each carries its own word until
+  procfs or `F_GETFL` re-reads it. Pinned by
+  `internal/eventloop_ofdshare_test.go` (every dup variant, both directions, dup
+  of a dup, cleared flags, `F_GETFL` refresh incl. later dups, independent opens
+  and `FD_CLOEXEC` per descriptor as negative controls, close of one leaves the
+  other, emitted rows keep their moment, fork) and the `TestFdFile*` tests in
+  `internal/file/file_test.go`.
 
   **`CLONE_FILES` processes share one fd table (task hr2).** The kernel gives two
   processes that `clone(CLONE_FILES)` a single descriptor table, so what one

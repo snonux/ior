@@ -209,7 +209,7 @@ func (e *eventLoop) execTarget(ep *event.Pair, execEv *types.ExecEvent) file.Fil
 func (e *eventLoop) snapshotExecTarget(execEv *types.ExecEvent) file.File {
 	target := e.resolveExecTarget(execEv)
 	if fdFile, ok := target.(*file.FdFile); ok {
-		return fdFile.Dup(fdFile.FD())
+		return fdFile.Detach()
 	}
 	return target
 }
@@ -1377,7 +1377,9 @@ func (e *eventLoop) applyFcntlFdState(ep *event.Pair, fcntlEv *types.FcntlEvent,
 }
 
 // applyFcntlStatusFlags handles F_GETFL and F_SETFL, which read or change the
-// open-file-description status-flag word. It reports whether ep is still
+// open-file-description status-flag word. The word lives in the description
+// object every duplicate of fdFile shares (task nr2), so updating it through
+// this one entry is seen through all of them. It reports whether ep is still
 // alive; a malformed F_GETFL return value recycles the pair.
 func (e *eventLoop) applyFcntlStatusFlags(ep *event.Pair, fcntlEv *types.FcntlEvent,
 	fdFile *file.FdFile, fd int32, ret int64) bool {
@@ -1471,10 +1473,12 @@ func (e *eventLoop) registerDup(fdFile *file.FdFile, pid uint32, newFd, extraFla
 		return
 	}
 	duppedFdFile := fdFile.Dup(newFd)
-	// The duplicate shares the source's open file description and therefore
-	// its status flags, but FD_CLOEXEC belongs to the descriptor itself. The
-	// kernel clears it for dup/dup2/F_DUPFD and sets it only when dup3 or
-	// F_DUPFD_CLOEXEC requests O_CLOEXEC.
+	// FdFile.Dup shares the source's open file description object, so the
+	// status flags (O_APPEND, O_NONBLOCK, ...) stay one word across both
+	// numbers: an F_SETFL through either is seen through both, as in the kernel
+	// (task nr2). FD_CLOEXEC belongs to the descriptor itself. The kernel
+	// clears it for dup/dup2/F_DUPFD and sets it only when dup3 or
+	// F_DUPFD_CLOEXEC requests O_CLOEXEC, and it is not shared.
 	duppedFdFile.MergeFlags(syscall.O_CLOEXEC, extraFlags)
 	e.fdState().set(newFd, pid, duppedFdFile)
 }

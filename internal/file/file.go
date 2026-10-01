@@ -58,10 +58,19 @@ func appendText(dst []byte, s string, text func(string) string) []byte {
 }
 
 // FdFile represents a file descriptor-backed file reference.
+//
+// The kernel splits what a descriptor knows into two layers, and FdFile
+// mirrors the split (task nr2): the status word (access mode, creation flags,
+// O_APPEND/O_NONBLOCK/...) lives in the open file description, which every
+// duplicate of the descriptor (dup, dup2, dup3, F_DUPFD, and the copy a fork
+// inherits) shares through desc; FD_CLOEXEC belongs to the descriptor alone
+// and stays in the FdFile. Name and number are per descriptor too: the number
+// is the table slot, and the name is what that slot was opened (or last
+// resolved) as. See fdfile_desc.go for the sharing operations.
 type FdFile struct {
 	fd               int32
 	name             string
-	flags            Flags
+	desc             *openFileDesc
 	closeOnExecKnown bool
 	closeOnExec      bool
 	flagsFromProcFS  bool
@@ -69,10 +78,7 @@ type FdFile struct {
 
 // NewFd constructs an FdFile from explicit descriptor metadata.
 func NewFd(fd int32, name string, flags int32) *FdFile {
-	f := &FdFile{
-		fd:   fd,
-		name: name,
-	}
+	f := newFdFile(fd, name)
 	f.SetFlags(flags)
 	return f
 }
@@ -92,10 +98,7 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 // readlink could see a different file if the descriptor was closed and reused
 // in between). Only the flags still come from /proc/<pid>/fdinfo/<fd>.
 func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
-	f := &FdFile{
-		fd:   fd,
-		name: name,
-	}
+	f := newFdFile(fd, name)
 	flags, err := readFlagsFromFdInfo(fd, pid)
 	if err != nil {
 		f.SetFlags(-1)
@@ -110,20 +113,10 @@ func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
 // unresolvedFd is the descriptor procfs could not answer for: no name and
 // unknown flags.
 func unresolvedFd(fd int32) *FdFile {
-	f := &FdFile{fd: fd}
+	f := newFdFile(fd, "")
 	f.SetFlags(-1)
 	f.flagsFromProcFS = true
 	return f
-}
-
-// Dup copies the FdFile metadata onto descriptor number fd. Callers modelling
-// a descriptor-creating syscall must apply descriptor-specific flag semantics
-// to the copy; unlike status flags, O_CLOEXEC is not shared by duplicates.
-// This method is also used to detach metadata before a pair is emitted.
-func (f *FdFile) Dup(fd int32) *FdFile {
-	dupFd := *f
-	dupFd.fd = fd
-	return &dupFd
 }
 
 func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
@@ -187,7 +180,17 @@ func (f *FdFile) Flags() Flags {
 	// status word is unavailable would make its zero access-mode bits look like
 	// an authoritative O_RDONLY. The separately remembered descriptor bit is
 	// folded in when F_GETFL later supplies the status word.
-	return f.flags
+	status := f.status()
+	if status == unknownFlag {
+		return unknownFlag
+	}
+	// FD_CLOEXEC is this descriptor's own state, the status word is the
+	// shared open file description's: the row shows the pair as one word. An
+	// unknown FD_CLOEXEC keeps the historical clear representation.
+	if f.closeOnExecKnown && f.closeOnExec {
+		return status | syscall.O_CLOEXEC
+	}
+	return status
 }
 
 // CloseOnExec reports the descriptor's FD_CLOEXEC state: set is the flag's
@@ -207,41 +210,43 @@ func (f *FdFile) FD() int32 {
 	return f.fd
 }
 
-// SetFlags replaces a complete combined flag word outright. Use SetStatusFlags
-// for F_GETFL and MergeFlags for partial updates.
+// SetFlags replaces a complete combined flag word outright: the status part
+// goes into the open file description (so every duplicate sees it), the
+// O_CLOEXEC bit into this descriptor. Use SetStatusFlags for F_GETFL and
+// MergeFlags for partial updates.
 func (f *FdFile) SetFlags(flags int32) {
-	f.flags = Flags(flags)
-	if f.flags == unknownFlag {
+	if Flags(flags) == unknownFlag {
+		f.description().status = unknownFlag
 		f.closeOnExecKnown = false
 		f.closeOnExec = false
 		return
 	}
+	f.description().status = Flags(flags &^ syscall.O_CLOEXEC)
 	f.closeOnExecKnown = true
 	f.closeOnExec = flags&syscall.O_CLOEXEC != 0
 }
 
-// SetStatusFlags replaces the status word reported by F_GETFL while retaining
-// any separately learned FD_CLOEXEC state. When that descriptor bit is still
-// unknown, the flattened output keeps the historical clear representation;
-// a later F_GETFD will make it authoritative.
+// SetStatusFlags replaces the status word reported by F_GETFL, in the shared
+// open file description, while retaining this descriptor's separately learned
+// FD_CLOEXEC state (the kernel's word cannot carry it). While that descriptor
+// bit is still unknown, Flags keeps the historical clear representation; a
+// later F_GETFD will make it authoritative.
 func (f *FdFile) SetStatusFlags(flags int32) {
-	flags &^= syscall.O_CLOEXEC
-	if f.closeOnExecKnown && f.closeOnExec {
-		flags |= syscall.O_CLOEXEC
-	}
-	f.flags = Flags(flags)
+	f.description().status = Flags(flags &^ syscall.O_CLOEXEC)
 }
 
-// AddFlags ORs the given bits into the flag word.
+// AddFlags ORs the given bits into the flag word: the O_CLOEXEC bit into this
+// descriptor, every other bit into the shared open file description.
 func (f *FdFile) AddFlags(flags int32) {
 	if flags&syscall.O_CLOEXEC != 0 {
 		f.closeOnExecKnown = true
 		f.closeOnExec = true
 	}
-	if f.flags == unknownFlag {
+	desc := f.description()
+	if desc.status == unknownFlag {
 		return
 	}
-	f.flags = Flags(int32(f.flags) | flags)
+	desc.status = Flags(int32(desc.status) | flags&^syscall.O_CLOEXEC)
 }
 
 // MergeFlags replaces only the bits selected by mask with the corresponding
@@ -254,6 +259,11 @@ func (f *FdFile) AddFlags(flags int32) {
 // arg&mask would mask the access mode away and make a read-write descriptor
 // report as read-only for the rest of its life.
 //
+// The mask's O_CLOEXEC bit updates this descriptor only (F_SETFD); every other
+// selected bit is a status bit and changes the open file description, so a
+// F_SETFL through one descriptor is seen through all its duplicates, as in the
+// kernel.
+//
 // Status flags that are not known at all are left unknown: with no base word
 // there is nothing to merge into, and materialising one from the masked bits
 // alone would assert an access mode (O_RDONLY is the zero value) that was never
@@ -264,10 +274,12 @@ func (f *FdFile) MergeFlags(mask, flags int32) {
 		f.closeOnExecKnown = true
 		f.closeOnExec = flags&syscall.O_CLOEXEC != 0
 	}
-	if f.flags == unknownFlag {
+	desc := f.description()
+	if desc.status == unknownFlag {
 		return
 	}
-	f.flags = Flags((int32(f.flags) &^ mask) | (flags & mask))
+	statusMask := mask &^ syscall.O_CLOEXEC
+	desc.status = Flags((int32(desc.status) &^ statusMask) | (flags & statusMask))
 }
 
 type oldnameNewnameFile struct {

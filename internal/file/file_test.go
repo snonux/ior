@@ -388,3 +388,125 @@ func TestNewFdWithProcNameKeepsTheGivenName(t *testing.T) {
 		t.Errorf("unreadable fd = (%q, %v), want an unnamed file with unknown flags", unreadable.Name(), unreadable.Flags())
 	}
 }
+
+// Task nr2: the status word lives in the open file description that duplicates
+// share; FD_CLOEXEC lives in the descriptor.
+
+func TestFdFileDupSharesTheStatusWord(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_WRONLY|syscall.O_CREAT)
+	dup := orig.Dup(4)
+	third := dup.Dup(5)
+
+	dup.MergeFlags(settableStatusFlags, syscall.O_APPEND|syscall.O_NONBLOCK)
+
+	want := Flags(syscall.O_WRONLY | syscall.O_CREAT | syscall.O_APPEND | syscall.O_NONBLOCK)
+	for name, f := range map[string]*FdFile{"original": orig, "dup": dup, "dup of dup": third} {
+		if f.Flags() != want {
+			t.Errorf("%s flags = %v, want %v", name, f.Flags(), want)
+		}
+	}
+
+	// F_GETFL through any one of them refreshes all of them, and a dup made
+	// afterwards starts from the refreshed word.
+	third.SetStatusFlags(syscall.O_RDWR)
+	if orig.Dup(6).Flags() != Flags(syscall.O_RDWR) || orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("SetStatusFlags through a dup did not reach the original: %v", orig.Flags())
+	}
+	if orig.Name() != "a.txt" || dup.FD() != 4 {
+		t.Errorf("dup lost its own name/number: %q %d", orig.Name(), dup.FD())
+	}
+}
+
+func TestFdFileDupLearnsAnUnknownStatusWordForEveryone(t *testing.T) {
+	orig := NewFd(3, "", -1)
+	dup := orig.Dup(4)
+	dup.SetStatusFlags(syscall.O_RDWR)
+	if orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("original flags = %v, want the word learned through the dup", orig.Flags())
+	}
+}
+
+func TestFdFileCloseOnExecIsNotShared(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_RDWR)
+	dup := orig.Dup(4)
+
+	dup.MergeFlags(syscall.O_CLOEXEC, syscall.O_CLOEXEC)
+	if set, _ := orig.CloseOnExec(); set || orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("original picked up the duplicate's FD_CLOEXEC: set=%v flags=%v", set, orig.Flags())
+	}
+	if dup.Flags() != Flags(syscall.O_RDWR|syscall.O_CLOEXEC) {
+		t.Errorf("dup flags = %v, want O_RDWR|O_CLOEXEC", dup.Flags())
+	}
+
+	// A status change through the original keeps each descriptor's own bit.
+	orig.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if dup.Flags() != Flags(syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC) {
+		t.Errorf("dup flags = %v, want the shared O_NONBLOCK and its own O_CLOEXEC", dup.Flags())
+	}
+	if orig.Flags() != Flags(syscall.O_RDWR|syscall.O_NONBLOCK) {
+		t.Errorf("original flags = %v, want O_NONBLOCK without O_CLOEXEC", orig.Flags())
+	}
+	dup.AddFlags(syscall.O_CLOEXEC)
+	if set, _ := orig.CloseOnExec(); set {
+		t.Error("AddFlags(O_CLOEXEC) on the duplicate reached the original")
+	}
+}
+
+func TestFdFileIndependentOpensShareNothing(t *testing.T) {
+	a := NewFd(3, "same.txt", syscall.O_WRONLY)
+	b := NewFd(4, "same.txt", syscall.O_WRONLY)
+	a.MergeFlags(settableStatusFlags, syscall.O_APPEND)
+	if b.Flags() != Flags(syscall.O_WRONLY) {
+		t.Errorf("an independent open picked up O_APPEND: %v", b.Flags())
+	}
+}
+
+func TestFdFileDetachSharesNothing(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_WRONLY|syscall.O_CLOEXEC)
+	dup := orig.Dup(4)
+	snap := dup.Detach()
+
+	orig.MergeFlags(settableStatusFlags, syscall.O_APPEND)
+	dup.MergeFlags(syscall.O_CLOEXEC, 0)
+
+	if snap.FD() != 4 || snap.Name() != "a.txt" {
+		t.Errorf("snapshot lost its identity: fd %d name %q", snap.FD(), snap.Name())
+	}
+	if snap.Flags() != Flags(syscall.O_WRONLY|syscall.O_CLOEXEC) {
+		t.Errorf("snapshot flags = %v, want the flags at snapshot time", snap.Flags())
+	}
+	// And the snapshot's own changes stay its own.
+	snap.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if orig.Flags().Is(syscall.O_NONBLOCK) {
+		t.Error("a change to the snapshot reached the live descriptor")
+	}
+}
+
+func TestZeroFdFileKeepsItsHistoricalMeaning(t *testing.T) {
+	var f FdFile
+	if f.Flags() != Flags(syscall.O_RDONLY) {
+		t.Errorf("zero FdFile flags = %v, want O_RDONLY", f.Flags())
+	}
+	dup := f.Dup(1)
+	dup.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if !f.Flags().Is(syscall.O_NONBLOCK) {
+		t.Error("a zero FdFile does not share its description with its dup")
+	}
+}
+
+// TestFdFileDetachAndConstructorsAllocateOnce pins the single-allocation layout
+// (FdFile and its description in one object): Detach runs once per emitted row.
+func TestFdFileDetachAndConstructorsAllocateOnce(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_RDWR)
+	var sink *FdFile
+	if allocs := testing.AllocsPerRun(100, func() { sink = orig.Detach() }); allocs != 1 {
+		t.Errorf("Detach allocates %v times, want 1", allocs)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { sink = orig.Dup(4) }); allocs != 1 {
+		t.Errorf("Dup allocates %v times, want 1", allocs)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { sink = NewFd(3, "a.txt", syscall.O_RDWR) }); allocs != 1 {
+		t.Errorf("NewFd allocates %v times, want 1", allocs)
+	}
+	_ = sink
+}

@@ -486,17 +486,18 @@ const maxInheritedEntries = 128
 // number whose exit record was lost (the same staleness retireRecycledTid
 // clears for the tid-keyed state).
 //
-// Both maps are copied as they are. The copies are independent objects (Dup):
-// a status-flag or FD_CLOEXEC change the child makes through fcntl/dup3/
-// ioctl must not show on the parent's descriptor, and FD_CLOEXEC in particular
-// belongs to the descriptor, not the shared open file description. The one
-// thing the kernel shares that the copies do not is the status word
-// (F_SETFL O_NONBLOCK/O_APPEND act on the shared open file description), which
-// ior can only learn per process from that process's own fcntl records, so after
-// the fork each table tracks its own changes. Entries whose close-on-exec
-// state is known to be set are dropped by the child's exec record as for any
-// process (dropOnExec). The copy is a snapshot: what the parent closes or
-// reopens after the fork does not reach the child's entries.
+// Both maps are copied as they are. Each copy is its own FdFile (Dup) that
+// refers to the *same open file description object* as the parent's entry (task
+// nr2), as the kernel's fork does: the status word (F_SETFL O_NONBLOCK/O_APPEND,
+// F_GETFL) is one word across both tables, so a change either process makes
+// through any descriptor of that description is seen by the other and by every
+// dup of it. FD_CLOEXEC belongs to the descriptor, not the description, so it is
+// per copy: a child's fcntl(F_SETFD), dup3 or ioctl(FIOCLEX) must not show on
+// the parent's descriptor. Entries whose close-on-exec state is known to be set
+// are dropped by the child's exec record as for any process (dropOnExec). The
+// copy is a snapshot of the table: what the parent closes or reopens after the
+// fork does not reach the child's entries (the description's status word, being
+// shared, still follows).
 //
 // Nothing is copied when the parent holds more than maxInheritedEntries entries
 // (see there for why and what it costs), nor when the copy would not fit under
@@ -530,7 +531,8 @@ func (t *fdTracker) inherit(parent, child uint32) {
 
 // copyTable gives child (a pid with no table of its own yet) a copy of the table
 // with id src, under the rules inherit describes: bounded by
-// maxInheritedEntries and by the table caps, independent FdFile copies, age 0.
+// maxInheritedEntries and by the table caps, one FdFile per descriptor sharing
+// the source's open file description (Dup), age 0.
 // It is also how a process that leaves a shared table (exec, CLOSE_RANGE_UNSHARE;
 // see detachShared, unshareFiles) gets its private one.
 func (t *fdTracker) copyTable(src, child uint32) {
@@ -587,9 +589,9 @@ func (t *fdTracker) inheritFits(parent *pidFdKeys) bool {
 }
 
 // copyForChild returns the entry a forked child starts with for descriptor fd:
-// a detached copy of a mutable FdFile (see inherit), the value itself for the
-// immutable kinds (pathname, anonymous mapping, ... files carry no
-// per-descriptor state).
+// a Dup of a mutable FdFile (own descriptor state, shared open file description;
+// see inherit), the value itself for the immutable kinds (pathname, anonymous
+// mapping, ... files carry no per-descriptor state).
 func copyForChild(f file.File, fd int32) file.File {
 	if fdFile, ok := f.(*file.FdFile); ok && fdFile != nil {
 		return fdFile.Dup(fd)

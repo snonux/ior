@@ -512,10 +512,16 @@ func (e *eventLoop) finalizeTracepointPair(ep *event.Pair) {
 	e.freezePairForEmission(ep)
 }
 
+// freezePairForEmission gives the pair an independent snapshot of its
+// descriptor, so the row reports the flags the syscall returned with. The fd
+// table's FdFile is live: a later fcntl(F_SETFL) through any duplicate of the
+// same open file description rewrites the status word they share (task nr2), so
+// the pair must not keep a Dup (which shares it) but a Detach (which owns its
+// copy).
 func (e *eventLoop) freezePairForEmission(ep *event.Pair) {
 	fdFile, ok := ep.File.(*file.FdFile)
 	if !ok {
 		return
 	}
-	ep.File = fdFile.Dup(fdFile.FD())
+	ep.File = fdFile.Detach()
 }
