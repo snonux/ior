@@ -163,6 +163,9 @@ func TestCompareHandleLinkText(t *testing.T) {
 		{"traced memfd, other memfd", "/memfd:y (deleted)", "memfd:x", handleMismatch},
 		{"traced memfd, link without the suffix", "/memfd:x", "memfd:x", handleMismatch},
 		{"traced memfd, file", "/d/f", "memfd:x", handleMismatch},
+		// The translated link is compared as it stands: a memfd literally
+		// named "x (deleted)" is another memfd.
+		{"traced memfd, memfd literally named with the suffix", "/memfd:x (deleted) (deleted)", "memfd:x", handleMismatch},
 		{"traced pidfd, other anonymous inode", "anon_inode:[eventfd]", "pidfd:0", handleMismatch},
 		{"relative path", "/d/f", "f", handleMismatch},
 		{"unlinked stash, live file at the old path", "/d/f", "/d/f (deleted)", handleMismatch},

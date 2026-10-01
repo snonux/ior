@@ -1750,9 +1750,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     text is not the same file: any pidfd matches a pidfd stash, and two
     unlinked files that lived at one path, or two memfds of one name, read
     the same link, so the stash of one is spent on the open of the other
-    (the row's name is still that descriptor's). Still unmatched, stash left
-    behind: a traced memfd whose name BPF could not read (`memfd:<flags>`)
-    and every relative stash. Pinned by
+    (the row's name is still that descriptor's); a relative path stash
+    literally spelled `memfd:x` or `pidfd:0` is translated too and matches
+    such a memfd or any pidfd. A matching traced row carries the source's
+    traced name, for a pidfd including the source's flags suffix. Still
+    unmatched, stash left behind: a traced memfd whose name BPF could not
+    read (`memfd:<flags>`), an fsmount descriptor (tracked as `fsopen:<fs>`,
+    its link is the mount root), an `O_TMPFILE` descriptor (named after its
+    directory) and every relative stash (task m03). Pinned by
     `internal/eventloop_handle_deleted_test.go` and
     `internal/eventloop_handle_traced_test.go`. The `/proc/<pid>/fd/<fd>`
     probe that check rests on is taken when the loop handles the exit, not

@@ -189,6 +189,9 @@ func TestTracedHandleLink(t *testing.T) {
 		{"/memfd:x (deleted)", "", false},
 		{pidfdLinkText, "", false},
 		{"/tmp/memfd:x", "", false},
+		// The prefix includes the colon.
+		{"pidfdx", "", false},
+		{"memfdx", "", false},
 		{"dir/pidfd:0", "", false},
 		{"", "", false},
 	}

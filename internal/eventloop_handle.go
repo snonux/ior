@@ -175,8 +175,13 @@ func compareHandleInodes(fdInfo os.FileInfo, pathname string) (verdict handleVer
 // tracedMemfdPrefix and tracedPidfdPrefix start the names ior gives a memfd and
 // a pidfd it saw being created (eventfdDescriptorName builds them from these
 // constants): "memfd:<name>", or "memfd:<flags>" when the name could not be
-// read, and "pidfd:<flags>". Those two are the traced descriptors a file handle
-// can be taken of whose traced name is not a path.
+// read, and "pidfd:<flags>". Those are the two traced names whose link text
+// can be derived from the name alone (tracedHandleLink). They are not the only
+// traced names that are not the descriptor's link: an fsmount descriptor is
+// tracked under its fs-context's name ("fsopen:<fs>") while its link is the
+// new mount's root, and an O_TMPFILE descriptor is named after its directory;
+// a handle can be taken of both with AT_EMPTY_PATH, and such a stash still
+// contradicts its own open and stays in the slot (task m03).
 const (
 	tracedMemfdPrefix = "memfd:"
 	tracedPidfdPrefix = "pidfd:"
@@ -210,6 +215,14 @@ const (
 // Not covered: a memfd whose name BPF could not read is tracked as
 // "memfd:<flags>", which translates to a link its descriptor does not have, so
 // that stash still contradicts its own open and is left in the slot.
+//
+// A matching row is named by the stash, like every stash-named row, so it and
+// the fd table entry of the returned descriptor carry the SOURCE's traced
+// name: for a pidfd that includes the source's flags suffix ("pidfd:2048" for
+// a PIDFD_NONBLOCK source) although the handle-opened descriptor has the
+// call's flags, and, since any pidfd matches, the source can be a pidfd of
+// another process. The row's flags column is the call's; only the name's
+// suffix is the source's.
 func tracedHandleLink(stash string) (link string, ok bool) {
 	if name, isMemfd := strings.CutPrefix(stash, tracedMemfdPrefix); isMemfd {
 		return "/" + tracedMemfdPrefix + name + deletedSuffix, true
@@ -253,9 +266,14 @@ func tracedHandleLink(stash string) (link string, ok bool) {
 // literally ending in " (deleted)" must stay comparable with its link
 // "<name> (deleted) (deleted)" once that file is unlinked.
 //
-// A match by text is a match of names, not of files, and three false matches
+// A match by text is a match of names, not of files, and four false matches
 // remain:
 //
+//   - A relative path stash literally spelled like a traced name ("memfd:x",
+//     "pidfd:0": a file of that name in the cwd) is translated by
+//     tracedHandleLink and matches a memfd of that name or any pidfd; it was
+//     a mismatch, like every relative path, before the traced names were
+//     translated.
 //   - Different files whose links read the same. Every pidfd reads
 //     "anon_inode:[pidfd]"; two unlinked files that lived at the same path
 //     (create, take the handle, unlink, create again, unlink) both read
