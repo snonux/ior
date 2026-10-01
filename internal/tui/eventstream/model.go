@@ -862,6 +862,16 @@ const streamTableChromeRows = 5
 // longest, then the filter-stack line, then Row/Sel), so neither the stream
 // table nor the FD-trace overlay outgrows its height from 6 rows up; the
 // modals fit any height down to their compact layout (renderModal).
+//
+// The reservation is constant on purpose (task dz2): the dashboard no longer
+// double-reserves it (the Stream tab gets the standard content viewport since
+// ls2), but while the stream is live with the help bar off the footer and the
+// filter stack are not drawn, so up to three of these rows stay blank. Sizing
+// the table by what is drawn instead would grow and shrink it on every pause,
+// help toggle, status message or filter change - the table's height, its
+// paging step and its scroll offset would move under the user - and the
+// dashboard's "too small" threshold would depend on that transient state.
+// Three spare rows are the price of a table that stays put.
 const streamReservedRows = streamTableChromeRows + 1 + 2
 
 // visibleRows is how many event rows the table shows at the current height.
