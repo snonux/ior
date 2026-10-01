@@ -134,13 +134,17 @@ func TestCloseRangeEmpty(t *testing.T) {
 // the close, which named the reusing pipe (or nothing). A close row may only
 // carry what ior learned before the close: the first file was written to
 // first, which resolves and caches its name, so its close is named; the
-// others have no name at all, and none may be named after a pipe.
+// others are unnamed unless a write cached their name before the close, and
+// none may be named after a pipe.
 //
 // Each of the others is also written to right before its close. That write
 // row is mostly processed after the close and the pipe, so its procfs read
 // caches the pipe; only the read-time stamp keeps the close row from
 // repeating it (with the stamp check removed, 62 of 63 such closes were named
-// after the pipe, 5 of 5 runs).
+// after the pipe, 5 of 5 runs). When ior happens to process the write before
+// the close, the read caches the real file and the close row is correctly
+// named after it (3 runs: 62-63 of 63 unnamed, 1-2 named closeuntracked-N.txt),
+// so the test does not demand that these rows be unnamed.
 func TestCloseUntrackedNeverNamesTheReusingFile(t *testing.T) {
 	rows, _ := runParquetScenarioRows(t, "close-untracked", defaultDuration, nil, nil)
 	AssertRowsPresent(t, rows, []ExpectedRow{
