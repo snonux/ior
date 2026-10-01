@@ -18,7 +18,7 @@ import (
 // The kernel's own getname() faults that page in as part of servicing the
 // call, so the identical read succeeds at sys_exit; the generated exit handler
 // re-reads it there and publishes it as this OPEN_NAME_FIXUP_EVENT control
-// record (ior_take_pending_filename / ior_emit_open_name_fixup in
+// record (ior_on_syscall_exit_take_filename / ior_emit_open_name_fixup in
 // internal/c/filter.c).
 //
 // Ordering is what makes the splice safe. The kernel reserves the fixup record

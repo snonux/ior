@@ -21,10 +21,14 @@ var handlerSplit = regexp.MustCompile(`(?m)^/// (sys_\w+) is a struct `)
 var enterHookCall = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(`)
 
 // enterHookWithNow and exitHookWithNow match the enter/exit hook calls that
-// are passed the handler's single timestamp.
+// are passed the handler's single timestamp. The exit hook has three variants:
+// the plain one, and the two that also hand back the pending filename(s) from
+// their single enter-state lookup (the argument after now is then an out
+// pointer, not the closing parenthesis).
 var (
 	enterHookWithNow = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(tid, \w+, now\)`)
-	exitHookWithNow  = regexp.MustCompile(`ior_on_syscall_exit\(tid, \w+, ctx->ret, now\)`)
+	exitHookCall     = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?)?\(`)
+	exitHookWithNow  = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?)?\(tid, \w+, ctx->ret, now[,)]`)
 )
 
 // splitGeneratedHandlers returns each generated handler body keyed by its
@@ -84,8 +88,8 @@ func checkHandlerClockRead(name, body string) error {
 		if !enterHookWithNow.MatchString(body) {
 			return fmt.Errorf("%s: enter hook must be passed the handler's timestamp", name)
 		}
-	case strings.Contains(body, "ior_on_syscall_exit("):
-		hookAt := strings.Index(body, "ior_on_syscall_exit(")
+	case exitHookCall.MatchString(body):
+		hookAt := exitHookCall.FindStringIndex(body)[0]
 		if hookAt < clockAt {
 			return fmt.Errorf("%s: exit hook runs before the clock read it needs", name)
 		}
@@ -166,6 +170,12 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 		"ior_on_syscall_enter_impl":     "(__u32 tid, __u32 enter_trace_id, __u64 now, int keep_state)",
 		"ior_on_noreturn_syscall_enter": "(__u32 enter_trace_id)",
 		"ior_on_syscall_exit":           "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now)",
+		"ior_on_syscall_exit_impl": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
+			"__u64 *pending_filename, __u64 *pending_filename2)",
+		"ior_on_syscall_exit_take_filename": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
+			"__u64 *pending_filename)",
+		"ior_on_syscall_exit_take_filenames": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
+			"__u64 *pending_filename, __u64 *pending_filename2)",
 	}
 	for hook, params := range hooks {
 		re := regexp.MustCompile(`(?s)static __always_inline int ` + hook + `(\(.*?\)) \{\n(.*?)\n\}\n`)
@@ -174,7 +184,9 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 			t.Errorf("%s not found in filter.c", hook)
 			continue
 		}
-		if m[1] != params {
+		// A long parameter list is wrapped over several lines in filter.c;
+		// compare it as one line.
+		if strings.Join(strings.Fields(m[1]), " ") != params {
 			t.Errorf("%s parameters = %s, want %s", hook, m[1], params)
 		}
 		if strings.Contains(m[2], clockHelperCall) {
@@ -194,11 +206,13 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 // pre-task-69 shape where the body read the clock again for ev->time.
 func TestCheckHandlerClockReadRejectsViolations(t *testing.T) {
 	good := GenerateTracepointsC(mustParseAll(t, FormatRead+"\n"+FormatExitRead+"\n"+
+		FormatOpenat+"\n"+FormatExitOpenat+"\n"+
 		syntheticEnter("exit_group", 60)+"\n"+syntheticExit("exit_group", 59)+"\n"))
 	handlers := splitGeneratedHandlers(t, good)
 	enter, exit := handlers["sys_enter_read"], handlers["sys_exit_read"]
 	noreturn := handlers["sys_enter_exit_group"]
-	if enter == "" || exit == "" || noreturn == "" {
+	taking := handlers["sys_exit_openat"]
+	if enter == "" || exit == "" || noreturn == "" || taking == "" {
 		t.Fatal("fixture is missing the enter, exit or noreturn handler")
 	}
 	for name, body := range handlers {
@@ -213,6 +227,10 @@ func TestCheckHandlerClockReadRejectsViolations(t *testing.T) {
 		{"second read for ev->time", strings.Replace(enter, "ev->time = now;", "ev->time = bpf_ktime_get_boot_ns();", 1)},
 		{"no clock read at all", strings.Replace(exit, clockReadLine, "    __u64 now = 0;\n", 1)},
 		{"hook not given the timestamp", strings.Replace(exit, "ctx->ret, now)", "ctx->ret)", 1)},
+		{"pointer-taking hook not given the timestamp", strings.Replace(taking, "ctx->ret, now, &", "ctx->ret, 0, &", 1)},
+		{"pointer-taking hook before the clock read", strings.Replace(
+			strings.Replace(taking, clockReadLine, "", 1),
+			"&pending_filename))\n        return 0;\n", "&pending_filename))\n        return 0;\n"+clockReadLine, 1)},
 		{"enter hook not given the timestamp", strings.Replace(enter, ", now)", ")", 1)},
 		{"clock read after the hook", strings.Replace(
 			strings.Replace(exit, clockReadLine, "", 1),
@@ -229,7 +247,7 @@ func TestCheckHandlerClockReadRejectsViolations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.body == enter || tc.body == exit || tc.body == noreturn {
+			if tc.body == enter || tc.body == exit || tc.body == noreturn || tc.body == taking {
 				t.Fatal("mutation did not apply; the fixture shape changed")
 			}
 			if err := checkHandlerClockRead("mutated", tc.body); err == nil {

@@ -912,13 +912,43 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "output buffer taken after the exit hook",
+			// The pre-task-0t2 shape: a standalone take ahead of the plain
+			// hook, i.e. a second enter-state lookup per exit.
+			name: "output buffer taken by a separate lookup",
 			mutate: func(t *testing.T, source string) string {
 				source = replaceInHandler(t, source, "exit", "getcwd",
-					"    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);\n\n", "")
+					"    __u64 pending_filename;\n\n", "    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);\n\n")
 				return replaceInHandler(t, source, "exit", "getcwd",
-					"    if (ctx->ret > 0)\n",
-					"    __u64 pending_filename = ior_take_pending_filename(tid, SYS_ENTER_GETCWD);\n    if (ctx->ret > 0)\n")
+					"ior_on_syscall_exit_take_filename(tid, SYS_ENTER_GETCWD, ctx->ret, now, &pending_filename)",
+					"ior_on_syscall_exit(tid, SYS_ENTER_GETCWD, ctx->ret, now)")
+			},
+		},
+		{
+			name: "output buffer pointer never taken",
+			mutate: func(t *testing.T, source string) string {
+				source = replaceInHandler(t, source, "exit", "getcwd",
+					"    __u64 pending_filename;\n", "    __u64 pending_filename = 0;\n")
+				return replaceInHandler(t, source, "exit", "getcwd",
+					"ior_on_syscall_exit_take_filename(tid, SYS_ENTER_GETCWD, ctx->ret, now, &pending_filename)",
+					"ior_on_syscall_exit(tid, SYS_ENTER_GETCWD, ctx->ret, now)")
+			},
+		},
+		{
+			name: "output buffer taken for the wrong syscall",
+			mutate: func(t *testing.T, source string) string {
+				return replaceInHandler(t, source, "exit", "getcwd",
+					"ior_on_syscall_exit_take_filename(tid, SYS_ENTER_GETCWD,",
+					"ior_on_syscall_exit_take_filename(tid, SYS_ENTER_READ,")
+			},
+		},
+		{
+			name: "output buffer published before the exit hook",
+			mutate: func(t *testing.T, source string) string {
+				source = replaceInHandler(t, source, "exit", "getcwd",
+					"    if (ctx->ret > 0)\n        ior_emit_open_name_fixup(tid, SYS_ENTER_GETCWD, pending_filename);\n", "")
+				return replaceInHandler(t, source, "exit", "getcwd",
+					"    __u64 now = bpf_ktime_get_boot_ns();\n",
+					"    __u64 now = bpf_ktime_get_boot_ns();\n    if (ctx->ret > 0)\n        ior_emit_open_name_fixup(tid, SYS_ENTER_GETCWD, pending_filename);\n")
 			},
 		},
 		{
@@ -2761,8 +2791,10 @@ func validateFilenameFallback(name, enterBody, argIndex string) error {
 // parseOutputBufferCapture recognizes the output-path capture (getcwd): the
 // enter handler stashes the buffer pointer once, after ior_on_syscall_enter_stateful
 // created the enter state and before its own reserve, and the exit handler
-// takes it before ior_on_syscall_exit deletes that state and publishes it,
-// guarded by a successful return, before its own reserve. It returns the
+// takes it through ior_on_syscall_exit_take_filename (the exit hook copies the
+// pointer out of the entry it looks up anyway, before it deletes that entry,
+// task 0t2) and publishes it, guarded by a successful return, before its own
+// reserve. It returns the
 // buffer's argument index and whether the capture is present.
 func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, error) {
 	stashes := outputBufferStashRE.FindAllStringSubmatchIndex(enterBody, -1)
@@ -2783,15 +2815,22 @@ func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, erro
 		return 0, false, fmt.Errorf("sys_enter_%s stashes an output buffer no exit handler takes", name)
 	}
 	enterConst := regexp.QuoteMeta("SYS_ENTER_" + strings.ToUpper(name))
-	takes := regexp.MustCompile(`(?m)^    __u64 pending_filename = ior_take_pending_filename\(tid, `+enterConst+`\);$`).FindAllStringIndex(exitBody, -1)
+	// The take is the exit hook itself: the local is declared once ahead of it
+	// and the hook is the one-slot pointer-taking variant for this very enter
+	// id, so no separate map lookup (ior_take_pending_filename*) or plain
+	// ior_on_syscall_exit remains.
+	decls := regexp.MustCompile(`(?m)^    __u64 pending_filename;$`).FindAllStringIndex(exitBody, -1)
+	takes := regexp.MustCompile(`(?m)^    if \(!ior_on_syscall_exit_take_filename\(tid, `+enterConst+`, ctx->ret, now, &pending_filename\)\)\n        return 0;$`).FindAllStringIndex(exitBody, -1)
 	emits := regexp.MustCompile(`(?m)^    if \(ctx->ret > 0\)\n        ior_emit_open_name_fixup\(tid, `+enterConst+`, pending_filename\);$`).FindAllStringIndex(exitBody, -1)
 	allEmits := regexp.MustCompile(`\bior_emit_open_name_fixup\s*\(`).FindAllStringIndex(exitBody, -1)
-	if len(takes) != 1 || len(emits) != 1 || len(allEmits) != 1 {
-		return 0, false, fmt.Errorf("sys_exit_%s must take its output buffer once and publish it once, only after a successful return", name)
+	allHooks := regexp.MustCompile(`\bior_on_syscall_exit\w*\s*\(`).FindAllStringIndex(exitBody, -1)
+	if len(decls) != 1 || len(takes) != 1 || len(allHooks) != 1 || len(emits) != 1 || len(allEmits) != 1 ||
+		strings.Contains(exitBody, "ior_take_pending_filename") {
+		return 0, false, fmt.Errorf("sys_exit_%s must take its output buffer once through its exit hook and publish it once, only after a successful return", name)
 	}
-	exitHook := strings.Index(exitBody, "ior_on_syscall_exit(")
+	exitHook := takes[0][0]
 	exitReserve := ringbufReserveRE.FindStringIndex(exitBody)
-	if exitHook < 0 || takes[0][0] > exitHook || emits[0][0] < exitHook || exitReserve == nil || emits[0][0] > exitReserve[0] {
+	if decls[0][0] > exitHook || emits[0][0] < exitHook || exitReserve == nil || emits[0][0] > exitReserve[0] {
 		return 0, false, fmt.Errorf("sys_exit_%s takes or publishes its output buffer out of order", name)
 	}
 	return argIndex, true, nil

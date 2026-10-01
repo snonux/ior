@@ -38,7 +38,12 @@ var accountingFunctions = []string{
 	"ior_on_syscall_enter_impl",
 	"ior_on_syscall_enter",
 	"ior_on_syscall_enter_stateful",
+	"ior_on_syscall_exit_impl",
 	"ior_on_syscall_exit",
+	"ior_on_syscall_exit_take_filename",
+	"ior_on_syscall_exit_take_filenames",
+	"ior_stash_pending_filename",
+	"ior_stash_pending_filename2",
 	"ior_on_exec_tid_change",
 }
 
@@ -125,6 +130,10 @@ static long bpf_map_delete_elem(void *map, const void *key) {
     if (i < 0)
         return -ENOENT;
     m->used[i] = 0;
+    /* A deleted element's memory is not defined (the kernel frees or reuses it):
+     * poison it, so a hook that reads the entry after deleting it (the pending
+     * filename pointers must be copied out first) is caught by its output. */
+    memset(m->vals[i], 0xA5, m->vsize);
     return 0;
 }
 
@@ -172,6 +181,20 @@ int main(void) {
             printf("emit=%%d\n", ior_on_syscall_enter_stateful(a, b, c));
         } else if (!strcmp(cmd, "exit") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
             printf("emit=%%d\n", ior_on_syscall_exit(a, b, ret, d));
+        } else if (!strcmp(cmd, "exitf") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
+            /* The path handlers' exit: the out pointers start as garbage, so a
+             * stateless or foreign-entry exit must write the 0 itself. */
+            __u64 p1 = 0xdeadbeef;
+            int emit = ior_on_syscall_exit_take_filename(a, b, ret, d, &p1);
+            printf("emit=%%d p1=%%llu\n", emit, p1);
+        } else if (!strcmp(cmd, "exitf2") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
+            __u64 p1 = 0xdeadbeef, p2 = 0xfeedface;
+            int emit = ior_on_syscall_exit_take_filenames(a, b, ret, d, &p1, &p2);
+            printf("emit=%%d p1=%%llu p2=%%llu\n", emit, p1, p2);
+        } else if (!strcmp(cmd, "stash") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
+            ior_stash_pending_filename(a, b);
+            ior_stash_pending_filename2(a, c);
+            printf("ok\n");
         } else if (!strcmp(cmd, "exectid") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
             ior_on_exec_tid_change(a, b, c);
             printf("ok\n");
@@ -372,6 +395,55 @@ var accountingScenarios = []accountingScenario{
 		{"state 5", "nostate"}, {"state 1", "nostate"}, {"agg 200", accAggNone},
 		{"exit 1 200 0 6000", accEmit1}, {"agg 200", accAggNone},
 	}},
+	// Task 0t2: the path handlers' exit hook returns the stashed pointers out
+	// of its own single enter-state lookup. They come back only for an entry
+	// of the same syscall; a missing or foreign entry yields 0 (the harness
+	// presets the outputs to garbage), the pointers are read before the entry
+	// is deleted (the harness poisons deleted entries), and the one-slot
+	// variant never reports the second slot.
+	{name: "exit hook returns the stashed pointers", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exitf2 1 200 0 6000", "emit=1 p1=4096 p2=8192"}, {"state 1", "nostate"},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exitf 1 200 0 6000", "emit=1 p1=4096"}, {"state 1", "nostate"},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 0 8192", accOK},
+		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=8192"},
+	}},
+	{name: "exit hook takes each pointer once", steps: []accountingStep{
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exitf2 1 200 0 6000", "emit=1 p1=4096 p2=8192"},
+		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=0"}, {"exitf 1 200 0 6000", "emit=1 p1=0"},
+	}},
+	{name: "exit hook without an entry returns no pointers", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=0"}, {"exitf 1 200 0 6000", "emit=1 p1=0"},
+		{"exitf2 1 100 0 6000", "emit=0 p1=0 p2=0"}, {"agg 100", accAggNone},
+	}},
+	{name: "exit hook ignores a foreign entry's pointers", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exitf2 1 100 0 6000", "emit=0 p1=0 p2=0"}, {"state 1", "nostate"}, {"agg 100", accAggNone},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exitf 1 100 0 6000", "emit=0 p1=0"}, {"state 1", "nostate"},
+		// The foreign entry was dropped, not paired: the next exit is stateless.
+		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=0"},
+	}},
+	// A not-emitted syscall (rate 0) still gets its aggregate count from the
+	// same hook that hands the pointers back; the handler then returns before
+	// using them.
+	{name: "exit hook keeps the accounting", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"entersf 1 100 1000", accEmit0}, {"stash 1 4096 8192", accOK},
+		{"exitf2 1 100 -2 6000", "emit=0 p1=4096 p2=8192"}, {"state 1", "nostate"},
+		{"agg 100", "count=1 errors=1 total=5000 min=5000 max=5000 hist=0,1,0,0,0,0,0,0"},
+	}},
+	// A non-stateful rate-1 enter writes no entry (task 2s2), so there is
+	// nothing to stash into and nothing to take.
+	{name: "no pointers without a rate-1 entry", steps: []accountingStep{
+		{"enter 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK}, {"state 1", "nostate"},
+		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=0"},
+	}},
 	{name: "timed then untimed keeps min", steps: []accountingStep{
 		{"rate 100 0", accOK},
 		{"enter 1 100 1000", accEmit0}, {"exit 1 100 0 51000", accEmit0},
@@ -421,6 +493,26 @@ func accountingMutations() map[string][2]string {
 		"failed replacement keeps the old entry": {
 			"            bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n",
 			"            (void)tid;\n",
+		},
+		"pending pointer not taken": {
+			"*pending_filename = state->pending_filename;",
+			"*pending_filename = 0;",
+		},
+		"second pending pointer not taken": {
+			"*pending_filename2 = state->pending_filename2;",
+			"*pending_filename2 = 0;",
+		},
+		"foreign entry leaks its pending pointer": {
+			"    if (state->enter_trace_id != enter_trace_id) {\n        bpf_map_delete_elem(&syscall_enter_state_map, &tid);",
+			"    if (state->enter_trace_id != enter_trace_id) {\n        if (pending_filename)\n            *pending_filename = state->pending_filename;\n        bpf_map_delete_elem(&syscall_enter_state_map, &tid);",
+		},
+		"stateless exit leaves the pointers unset": {
+			"    if (pending_filename)\n        *pending_filename = 0;\n    if (pending_filename2)\n        *pending_filename2 = 0;\n",
+			"",
+		},
+		"pending pointer read after the delete": {
+			"    bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n    return emit_event != 0;",
+			"    bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n    if (pending_filename)\n        *pending_filename = state->pending_filename;\n    return emit_event != 0;",
 		},
 		"stateless exit always emits": {
 			"if (!state)\n        return ior_stateless_exit_emits(enter_trace_id);",

@@ -39,10 +39,11 @@ func exitTracepoint(name string, kind TracepointKind) GeneratedTracepoint {
 // reserve, so a full ring buffer can no longer strand the entry (task lo2).
 func checkSideMapTakeBeforeReserve(name, handler string) error {
 	reserveAt := strings.Index(handler, "bpf_ringbuf_reserve(")
-	hookAt := strings.Index(handler, "ior_on_syscall_exit(")
-	if reserveAt < 0 || hookAt < 0 {
+	hookLoc := exitHookCall.FindStringIndex(handler)
+	if reserveAt < 0 || hookLoc == nil {
 		return fmt.Errorf("%s: missing exit hook or ring-buffer reserve", name)
 	}
+	hookAt := hookLoc[0]
 	for _, loc := range sideMapOpRE.FindAllStringIndex(handler, -1) {
 		if loc[0] < hookAt || loc[0] > reserveAt {
 			return fmt.Errorf("%s: %s is not between ior_on_syscall_exit and bpf_ringbuf_reserve",

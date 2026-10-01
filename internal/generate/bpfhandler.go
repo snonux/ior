@@ -143,7 +143,9 @@ func enterConstForHandler(name string, isEnter bool) string {
 // state. Those lines are position-critical,
 // which is why they live here rather than in the kind emitters: the enter-side
 // stash must follow ior_on_syscall_enter_stateful (which creates this tid's
-// enter-state entry at every rate), the take must precede ior_on_syscall_exit (which deletes it) and the
+// enter-state entry at every rate), the take is part of the exit hook itself
+// (ior_on_syscall_exit_take_filename(s) copies the pointers out of the entry
+// it already looked up, before it deletes it; see renderTakingExitHook) and the
 // fixup must precede this handler's own reserve, so the ring buffer hands
 // userspace the name while the enter event of the same syscall is still
 // pending and unpaired.
@@ -156,13 +158,6 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 	b.WriteString("    if (filter(&pid, &tid))\n")
 	b.WriteString("        return 0;\n")
 	b.WriteString("\n")
-	if h.takesPendingFilename() {
-		fmt.Fprintf(b, "    __u64 pending_filename = ior_take_pending_filename(tid, %s);\n", h.enterName)
-		if h.recoverSecondFilename {
-			fmt.Fprintf(b, "    __u64 pending_filename2 = ior_take_pending_filename2(tid, %s);\n", h.enterName)
-		}
-		b.WriteString("\n")
-	}
 	renderSyscallHook(b, h)
 	b.WriteString("\n")
 	renderPendingFilenameUse(b, h)
@@ -197,11 +192,35 @@ func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 		}
 		fmt.Fprintf(b, "    if (!%s(tid, %s, now))\n", hook, strings.ToUpper(h.name))
 		b.WriteString("        return 0;\n")
+	case h.takesPendingFilename():
+		renderTakingExitHook(b, h)
 	default:
 		b.WriteString(clockReadLine)
 		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret, now))\n", h.enterName)
 		b.WriteString("        return 0;\n")
 	}
+}
+
+// renderTakingExitHook writes the exit hook of a handler that recovers the
+// pointer(s) its enter handler stashed. The pending pointers are locals that
+// the hook fills from its own single enter-state lookup, before it deletes the
+// entry, and only when the entry's enter_trace_id matches (a stale or foreign
+// entry leaves them 0), so the exit costs one map lookup instead of one for
+// the hook plus one per slot (task 0t2). The locals are declared ahead of the
+// clock read so they stay in scope for the fixup after the hook.
+func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
+	b.WriteString("    __u64 pending_filename;\n")
+	hook := "ior_on_syscall_exit_take_filename"
+	out := "&pending_filename"
+	if h.recoverSecondFilename {
+		b.WriteString("    __u64 pending_filename2;\n")
+		hook = "ior_on_syscall_exit_take_filenames"
+		out = "&pending_filename, &pending_filename2"
+	}
+	b.WriteString("\n")
+	b.WriteString(clockReadLine)
+	fmt.Fprintf(b, "    if (!%s(tid, %s, ctx->ret, now, %s))\n", hook, h.enterName, out)
+	b.WriteString("        return 0;\n")
 }
 
 // renderPendingFilenameUse writes what follows the hook for the handlers that
@@ -548,7 +567,7 @@ func generateExtraOpenWithFields(f *Format, pathnameField, flagsField string) st
 	// path string's page is not resident yet - routinely the case for the first
 	// open a program makes through a freshly mmap'ed library. Stash the pointer
 	// on failure; the exit handler re-reads it once the kernel has faulted the
-	// page in (ior_take_pending_filename / ior_emit_open_name_fixup in
+	// page in (ior_on_syscall_exit_take_filename / ior_emit_open_name_fixup in
 	// internal/c/filter.c). Without this the row printed "E:name", the
 	// descriptor was registered under the empty string, and -path could not
 	// match a name that was never captured.

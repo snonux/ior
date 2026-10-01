@@ -300,7 +300,7 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 //
 // What does need the entry at rate 1 is the pending-filename recovery: its
 // stash writes the user pointer onto the state (ior_stash_pending_filename)
-// and its take reads it back at the exit. The generator emits
+// and the exit hook reads it back (ior_on_syscall_exit_take_filename). The generator emits
 // ior_on_syscall_enter_stateful for those enter handlers
 // (handlerSpec.keepsEnterState in internal/generate/bpfhandler.go), which
 // always writes the entry. Other rates need it everywhere: they carry the
@@ -373,10 +373,32 @@ static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
     return 0;
 }
 
-static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
+// ior_on_syscall_exit_impl is the one exit hook. It looks the per-tid enter
+// state up exactly once and, when the caller passes pending_filename /
+// pending_filename2 (the path-capturing handlers), hands the stashed user
+// pointers back from that same lookup, so a path-capturing exit costs one
+// syscall_enter_state_map lookup instead of one for the hook plus one per
+// stash slot (task 0t2).
+//
+// The pointers are copied into the caller's locals BEFORE the entry is
+// deleted at the bottom: the delete is why the old separate
+// ior_take_pending_filename calls (now removed) had to precede the hook. They
+// are copied only when the entry belongs to this syscall (enter_trace_id
+// match); a missing or foreign entry is the stateless path and both outputs
+// stay 0, exactly what the standalone take returned for it, so a stale entry
+// can never graft a foreign path onto this pair. A NULL output pointer means the handler has no
+// such slot; the callers pass compile-time constants, so the dead stores and
+// branches vanish after inlining and the non-path handlers cost what they did.
+static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
+                                                    __u64 *pending_filename, __u64 *pending_filename2) {
     __u64 duration;
     __u8 emit_event = 1;
     struct syscall_enter_state *state;
+
+    if (pending_filename)
+        *pending_filename = 0;
+    if (pending_filename2)
+        *pending_filename2 = 0;
 
     state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
     if (!state)
@@ -388,6 +410,13 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
         bpf_map_delete_elem(&syscall_enter_state_map, &tid);
         return ior_stateless_exit_emits(enter_trace_id);
     }
+
+    // The entry is ours: read the stashed pointers now, before the delete at
+    // the end of this function.
+    if (pending_filename)
+        *pending_filename = state->pending_filename;
+    if (pending_filename2)
+        *pending_filename2 = state->pending_filename2;
 
     // A completed invocation always has a duration of at least 1ns in the
     // aggregate. A coarse clocksource can return the same reading at enter
@@ -425,6 +454,28 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 
     bpf_map_delete_elem(&syscall_enter_state_map, &tid);
     return emit_event != 0;
+}
+
+// ior_on_syscall_exit is the exit hook of every handler that recovers no
+// pending filename.
+static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
+    return ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, 0, 0);
+}
+
+// ior_on_syscall_exit_take_filename is the exit hook of the path-capturing
+// kinds and the output-path syscalls: besides the hook's own work it returns
+// the pointer the matching enter handler stashed (see
+// ior_stash_pending_filename), or 0 when there is none to use.
+static __always_inline int ior_on_syscall_exit_take_filename(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
+                                                             __u64 *pending_filename) {
+    return ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename, 0);
+}
+
+// ior_on_syscall_exit_take_filenames is the same for the two-path kinds
+// (rename/link, move_mount): it also returns the second slot.
+static __always_inline int ior_on_syscall_exit_take_filenames(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
+                                                              __u64 *pending_filename, __u64 *pending_filename2) {
+    return ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename, pending_filename2);
 }
 
 // ior_on_exec_tid_change carries an in-flight execve's enter state across the
@@ -534,7 +585,7 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
 // read at sys_enter (outputPathSyscalls in internal/generate/classify.go). Its
 // enter handler stashes args[0] unconditionally once ior_on_syscall_enter has
 // decided to emit the event; its exit handler takes the pointer the same way
-// but emits the fixup only when ctx->ret > 0, because a failed getcwd wrote
+// (ior_on_syscall_exit_take_filename) but emits the fixup only when ctx->ret > 0, because a failed getcwd wrote
 // nothing into the buffer. Userspace attaches that string to the pending pair
 // instead of splicing it into the (header-only) enter event
 // (applyCapturedOutputPath / finishGetcwdPath, internal/eventloop_getcwd.go).
@@ -551,45 +602,16 @@ static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename
         state->pending_filename = filename_ptr;
 }
 
-// ior_take_pending_filename returns the pointer stashed by the matching enter
-// handler, or 0 when there is nothing to read. It must be called BEFORE
-// ior_on_syscall_exit, which deletes the per-tid entry. The enter_trace_id
-// check makes a stale entry from a different syscall unusable rather than
-// letting it graft a foreign path onto this pair.
-//
-// Cost trade-off: every exit of a path-capturing syscall (open, stat, access,
-// unlink, ...) therefore does one extra syscall_enter_state_map lookup on top
-// of the one inside ior_on_syscall_exit, and the two-path kinds (rename/link,
-// move_mount) do one more for the second slot (three lookups in total).
-// Handing the already-looked-up state pointer to ior_on_syscall_exit would
-// remove them, but it changes the exit hook's signature and the generated
-// prologue order that the generator tests pin for nearly all path kinds, so it
-// is deliberately not bundled with the recovery fix; it is tracked as task
-// 0t2.
-static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id) {
-    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
-
-    if (!state || state->enter_trace_id != enter_trace_id)
-        return 0;
-    return state->pending_filename;
-}
-
-// ior_stash_pending_filename2 / ior_take_pending_filename2 are the second-path
-// slot of the two-path kinds (rename/link newname, move_mount to_pathname),
-// with the same contract as the first-slot helpers above.
+// ior_stash_pending_filename2 is the second-path slot of the two-path kinds
+// (rename/link newname, move_mount to_pathname), with the same contract as
+// ior_stash_pending_filename above. The exit side reads both slots through
+// ior_on_syscall_exit_take_filename(s); there is no separate take helper any
+// more, because it cost an extra map lookup per slot (task 0t2).
 static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 
     if (state)
         state->pending_filename2 = filename_ptr;
-}
-
-static __always_inline __u64 ior_take_pending_filename2(__u32 tid, __u32 enter_trace_id) {
-    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
-
-    if (!state || state->enter_trace_id != enter_trace_id)
-        return 0;
-    return state->pending_filename2;
 }
 
 // String fields in ring-buffer records.
