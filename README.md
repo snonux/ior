@@ -194,10 +194,12 @@ fails they are appended to the error screen under `Warnings logged during setup:
 rejected program is condensed there to one row: its name plus the last three lines of the
 kernel verifier log (the offending instruction, the reason such as
 `R1 invalid mem access 'scalar'`, and the `processed N insns` statistics) and a
-`... (N more lines)` marker for the rest. Each row is cut to at most 512 bytes, at most 8
-rows are listed (`... and N more warning(s)` counts the others), and control characters
-are shown escaped. An error text taller than the terminal is cut with a
-`... (N more lines)` row, so the key hint always stays visible. For the complete
+`... (N more lines)` marker for the rest. Each row is cut to at most 512 bytes and only then
+are its control characters shown escaped, so a row with many control or invalid bytes can
+end up to about four times longer; at most 8 rows are listed (`... and N more warning(s)`
+counts the others). The error screen fits the terminal at any size: text taller than the
+terminal is cut with a `... (N more lines)` row and every line, the key hint included, is
+wrapped or cut to the terminal width, so the key hint stays visible. For the complete
 verifier log rerun the same options with `-plain` and
 read stderr. The thousands of INFO/DEBUG lines libbpf prints while loading are
 dropped by default. To see them in a headless run, for example when a BPF program fails to
