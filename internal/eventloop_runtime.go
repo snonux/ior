@@ -351,6 +351,9 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 			e.tracepointExited(syscallEvent, ch)
 			return
 		}
+		// Before the enter filter: the payload comm is true whether or not this
+		// run wants the row, and a filtered-out enter must still heal the cache.
+		e.seedCommFromEnterPayload(syscallEvent)
 		if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), syscallEvent) {
 			syscallEvent.Recycle()
 			return

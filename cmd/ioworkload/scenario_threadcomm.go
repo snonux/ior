@@ -42,9 +42,10 @@ const (
 	// alive after the last syscall of the scenario. ior resolves things it was
 	// not told by the kernel - a path whose open it did not trace
 	// (/proc/<pid>/fd/<fd>), the comm of a thread whose records were lost
-	// (/proc/<tid>/comm) - lazily, when the event loop reaches the row. The loop can trail the workload by a while on
-	// a busy machine, and a lookup for a task that has already exited finds
-	// nothing, so the scenario must not vanish the instant its work is done.
+	// (/proc/<tid>/comm) - lazily, when the event loop reaches the row. The
+	// loop can trail the workload by a while on a busy machine, and a lookup
+	// for a task that has already exited finds nothing, so the scenario must
+	// not vanish the instant its work is done.
 	// The harness has no way to know when ior has caught up, so this is a
 	// generous bound (only lag beyond it can lose a lookup), not a handshake.
 	// It protects lookups of tasks that would otherwise be gone; it does not

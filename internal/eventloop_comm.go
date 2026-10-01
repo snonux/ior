@@ -30,9 +30,8 @@ const resolveCommTimeout = time.Second
 //
 // epoch counts the authoritative kernel-sourced names userspace has installed
 // for the tid - a sched_process_exec control record, a task_rename control
-// record, an open event's payload comm, a failed execve's payload comm
-// (setCachedFromKernel). A lookup worker
-// samples it *before* reading /proc and discards its result when the epoch
+// record, an open or exec enter's payload comm (setCachedFromKernel). A lookup
+// worker samples it *before* reading /proc and discards its result when the epoch
 // moved on in the meantime: without that guard a worker descheduled between the
 // procfs read and the cache write can overwrite an exact, kernel-reported name
 // with the older one it is still holding. That is a purely logical race (both
@@ -248,7 +247,8 @@ func (r *commResolver) sampleLookupState(tid uint32) lookupState {
 // the two generation counters sampled before the procfs read.
 //
 // epoch: an authoritative kernel-sourced name (a sched_process_exec control
-// record, an open event's payload comm, a failed execve) landed for this tid
+// record, a task_rename record, an open or exec enter's payload comm) landed
+// for this tid
 // while the lookup was in flight. That name is exact and this result - read
 // before the rename, or concurrently with it - would put the older name back,
 // so it is discarded outright.
@@ -365,12 +365,12 @@ func (r *commResolver) lookupCached(tid uint32) (comm string, ok, stale bool) {
 //
 // Called after the ring-buffer drop counter grew: a dropped record may have
 // been a sched_process_exec control record, and that is the one loss the event
-// stream cannot repair by itself. With an active -comm filter the usual
-// self-healing path is closed too, because matchRawOpenEvent drops
-// non-matching opens at enter, so handleOpenExit never gets to refresh the
-// cache from the kernel comm. Without this sweep a tid stale-cached as the
-// forking shell would keep that label - and keep contradicting the filter -
-// for the rest of its life.
+// stream cannot repair by itself. The open and exec payload comms heal a tid
+// that opens or execs (seedCommFromEnterPayload runs before the raw -comm gate,
+// so even a dropped open refreshes the cache), but a tid that only reads and
+// writes has no such record. Without this sweep it would keep a stale-cached
+// forking-shell label - and keep contradicting the filter - for the rest of its
+// life.
 func (r *commResolver) markAllStale() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -491,9 +491,9 @@ func (r *commResolver) setCommLocked(tid uint32, comm string) {
 //
 // Every authoritative kernel-sourced write takes this path, not just the
 // sched_process_exec record: a task_rename record (a task renaming itself with
-// prctl(PR_SET_NAME) or pthread_setname_np, handleTaskRenameEvent), an open
-// event's payload comm and a failed execve's payload comm are exact for the
-// moment the kernel produced them, whereas a resolver worker's /proc read is
+// prctl(PR_SET_NAME) or pthread_setname_np, handleTaskRenameEvent) and the
+// payload comm of an open or exec enter (seedCommFromEnterPayload) are exact
+// for the moment the kernel produced them, whereas a resolver worker's /proc read is
 // unordered with respect to them. Bumping only on exec left those writes
 // clobberable by a descheduled worker holding an older name - reachable
 // whenever the exec record was dropped, and also with no execve at all through
@@ -680,6 +680,37 @@ func (e *eventLoop) setCachedCommProvisional(tid uint32, comm string) {
 // commResolver.evictTid).
 func (e *eventLoop) evictCachedComm(tid uint32) {
 	e.commState().evictTid(tid)
+}
+
+// seedCommFromEnterPayload installs the comm an open or exec enter record
+// carries (BPF copies task->comm into it when the syscall starts) as the tid's
+// authoritative name.
+//
+// It runs when the enter record is consumed, not at the syscall's exit, because
+// ring-buffer order is what makes the write correct: a task_rename record that
+// lands between the enter and the exit (a sibling's pthread_setname_np on a
+// thread blocked in open(2) on a FIFO) is applied after this write, so the
+// rename wins. Writing the enter-time name at exit instead restored the
+// pre-rename name, with an epoch bump that also discarded the lookup which could
+// have repaired it, and every later row of the thread kept the old label.
+//
+// For an exec enter the name is the *calling* program's. That is right for the
+// tid until the syscall's own records say otherwise: a successful execve is
+// followed by task_rename (begin_new_exec) and PROCESS_EXEC_EVENT records that
+// replace it, and a failed one (no exec record is ever emitted) leaves the task
+// under exactly this name.
+//
+// Like every kernel-sourced write it bumps the rename generation, so a procfs
+// lookup already in flight cannot land on top of it. It also settles the cache
+// for enters the raw filter is about to drop (-comm), which could not heal it
+// when the write sat in the exit handler.
+func (e *eventLoop) seedCommFromEnterPayload(ev event.Event) {
+	switch p := ev.(type) {
+	case *types.OpenEvent:
+		e.setCachedCommFromKernel(p.Tid, types.StringValue(p.Comm[:]))
+	case *types.ExecEvent:
+		e.setCachedCommFromKernel(p.Tid, types.StringValue(p.Comm[:]))
+	}
 }
 
 // applyPendingCommRefresh consumes a refresh request raised by the ring-buffer

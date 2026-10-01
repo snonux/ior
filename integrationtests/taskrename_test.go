@@ -140,3 +140,63 @@ func TestCommFilterNoLongerSelectsTheOldNameAfterARename(t *testing.T) {
 	// name until its own rename too.
 	requireRowCount(t, "pread64 rows kept by -comm "+lateRenameOriginalName, reads, lateRenameWorkerRows+lateRenameOpsPerPhase)
 }
+
+const (
+	renameInOpenScenario = "thread-comm-rename-in-open"
+	renameInOpenName     = "fifo-renamed"
+	renameInOpenOps      = 4 // renameInOpenOps in cmd/ioworkload/scenario_threadrename_open.go
+)
+
+// TestRenameBetweenOpenEnterAndExitIsNotUndone pins the task lr2 review finding
+// end to end. A worker blocks in open(2) on a FIFO; a sibling renames it with a
+// write to its procfs comm and then unblocks the open. The ring buffer holds
+// open-enter(comm=ioworkload), task_rename(fifo-renamed), open-exit, and the
+// open's payload comm used to be applied at the exit, restoring the old name:
+// the worker's later pwrite64 and close rows were labelled "ioworkload". The
+// open's own row keeps the name task->comm had when the syscall started. The
+// strict comm assertions are safe: the task_rename record and the open's enter
+// are in ring order, so no timing of ior's event loop can change them.
+func TestRenameBetweenOpenEnterAndExitIsNotUndone(t *testing.T) {
+	allowed := []string{lateRenameOriginalName, renameInOpenName}
+	rows, pid := runParquetScenarioRowsAllowingComms(t, renameInOpenScenario, defaultDuration,
+		[]string{"-trace-syscalls", "openat,pwrite64,close"}, nil, allowed...)
+
+	// The worker is the only task that issues pwrite64. The sibling that renames
+	// it opens and closes the FIFO's write end on some other thread, which must
+	// not be counted among the worker's rows.
+	var writes, closes, opens []iorparquet.Record
+	workerTid := uint32(0)
+	for _, row := range rows {
+		if row.Syscall == "pwrite64" {
+			workerTid = row.TID
+			writes = append(writes, row)
+		}
+	}
+	if workerTid == 0 || workerTid == uint32(pid) {
+		t.Fatalf("no pwrite64 row of a worker thread (tid %d, pid %d)", workerTid, pid)
+	}
+	for _, row := range rows {
+		switch {
+		case row.TID != workerTid:
+		case row.Syscall == "close":
+			closes = append(closes, row)
+		case row.Syscall == "openat":
+			opens = append(opens, row)
+		}
+	}
+	requireRowCount(t, "worker pwrite64 rows", len(writes), renameInOpenOps)
+	for _, row := range writes {
+		if row.TID != workerTid {
+			t.Errorf("pwrite64 row on tid %d, want the single worker tid %d: %+v", row.TID, workerTid, row)
+		}
+		if row.Comm != renameInOpenName {
+			t.Errorf("pwrite64 after the rename during open: comm = %q, want %q: %+v", row.Comm, renameInOpenName, row)
+		}
+	}
+	if len(closes) != 1 || closes[0].Comm != renameInOpenName {
+		t.Errorf("worker close rows = %+v, want exactly one labelled %q", closes, renameInOpenName)
+	}
+	if len(opens) != 1 || opens[0].Comm != lateRenameOriginalName {
+		t.Errorf("worker openat rows = %+v, want exactly one labelled with the enter-time name %q", opens, lateRenameOriginalName)
+	}
+}

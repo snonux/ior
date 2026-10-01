@@ -6,10 +6,10 @@ import "ior/internal/types"
 // sibling thread performed on it) to the comm cache, as reported by the kernel's
 // task:task_rename tracepoint (internal/c/exec.c).
 //
-// Before this record only three things ever changed a cached name after it was
-// first resolved: the exec record, an open event's payload comm and a failed
-// execve's payload comm. A rename through prctl(PR_SET_NAME) or
-// pthread_setname_np (a write to /proc/<pid>/task/<tid>/comm) is none of them, so
+// Before this record only two things ever changed a cached name after it was
+// first resolved: the exec record and the payload comm of an open or exec
+// enter. A rename through prctl(PR_SET_NAME) or pthread_setname_np (a write to
+// /proc/<pid>/task/<tid>/comm) is neither, so
 // the cache kept serving the old name until an openat of that thread happened to
 // heal it. Every row in between carried the wrong comm, and under -comm the
 // filter inverted: -comm <new name> dropped the renamed thread's rows, and
@@ -17,11 +17,21 @@ import "ior/internal/types"
 // could not heal the cache either, so the wrong name could outlive the thread.
 //
 // The record is emitted by the renaming syscall itself (or the /proc write), in
-// ring-buffer order with that task's syscall records, so it applies after the
-// rows the task produced under its old name and before the ones it produces
-// under the new one (the same argument as for handleProcessExecEvent). The
-// prctl syscall's own row pairs after the record and is therefore labelled with
-// the new name, which is also what the kernel's task->comm reads from then on.
+// ring-buffer order with that task's syscall records (the same argument as for
+// handleProcessExecEvent), so a row's label depends on when the row is labelled:
+//
+//   - Most kinds take the label when the pair completes, at the syscall's exit
+//     (ep.Comm = e.comm(tid)). A syscall that entered before the rename record
+//     and exits after it is therefore labelled with the NEW name, which is also
+//     what task->comm reads at its exit. The prctl syscall's own row pairs after
+//     the record, so it carries the new name too.
+//   - The open kinds and execve carry the kernel's comm from their ENTER record
+//     (ep.Comm = openEv.Comm / execEv.Comm): an open that entered before the
+//     rename keeps the old name on its own row even when it exits after it.
+//   - The cache itself always ends up with the newest name in ring order: the
+//     enter payload is applied when the enter is consumed
+//     (seedCommFromEnterPayload), not at the exit, so a rename between an
+//     open's enter and exit is not overwritten with the pre-rename payload.
 //
 // The write goes through setCachedCommFromKernel, so it is authoritative: it
 // bumps the tid's rename generation and a procfs lookup that read the old name

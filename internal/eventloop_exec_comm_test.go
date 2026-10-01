@@ -233,8 +233,9 @@ func TestCommFilterAgreesWithReportedCommAcrossExec(t *testing.T) {
 
 // TestExecExitDoesNotCacheThePreExecComm guards the second half of the fix:
 // the sys_enter_execve payload carries the *calling* program's name, so writing
-// it into the comm cache would re-poison the tid right after the kernel's exec
-// record corrected it.
+// it into the comm cache at the exit would re-poison the tid right after the
+// kernel's exec record corrected it. (The enter's own seed precedes that record
+// in ring order and is covered by TestSuccessfulExecRecordReplacesTheCallerComm.)
 func TestExecExitDoesNotCacheThePreExecComm(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	el.processRawEvent(makeProcessExecEvent(t, defaulTime-1, execCommPid, execCommTid, "cat"),
@@ -277,20 +278,23 @@ func TestExecExitDoesNotCacheThePreExecComm(t *testing.T) {
 	}
 }
 
-// TestFailedExecCachesTheCallerComm covers the one execve where the
-// sys_enter_execve comm IS the task's name going forward: a failed one. No
-// sched_process_exec record fires for it, so refusing to cache here would throw
-// away a name the kernel handed us for free.
-func TestFailedExecCachesTheCallerComm(t *testing.T) {
+// TestExecExitNeverWritesTheCommCache pins that the execve exit handler leaves
+// the comm cache alone whatever the return value. The caller's name is applied
+// when the ENTER record is consumed (seedCommFromEnterPayload; see
+// TestFailedExecCommSeedsTheCacheWithoutARename), in ring order with the
+// task_rename and exec records that follow. A write at exit - the old
+// failed-execve path - restored the pre-rename name over a rename that landed
+// between enter and exit (TestFailedExecCommDoesNotUndoARenameBetweenEnterAndExit).
+// The enter goes through tracepointEntered here, which does not seed, so any
+// cache entry afterwards came from the exit handler.
+func TestExecExitNeverWritesTheCommCache(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		ret       int64
-		wantComm  string
-		wantCache bool
+		name string
+		ret  int64
 	}{
-		{name: "failed execve caches the caller name", ret: -2, wantComm: "bash", wantCache: true},
-		{name: "negative raw word is not an errno", ret: -4096, wantCache: false},
-		{name: "successful execve caches nothing", ret: 0, wantCache: false},
+		{name: "failed execve", ret: -2},
+		{name: "negative raw word is not an errno", ret: -4096},
+		{name: "successful execve", ret: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
@@ -324,12 +328,8 @@ func TestFailedExecCachesTheCallerComm(t *testing.T) {
 				t.Fatal("expected the execve pair to be emitted")
 			}
 
-			got, ok := el.commState().cached(execCommTid)
-			if ok != tc.wantCache {
-				t.Fatalf("cached comm present = %v, want %v (got %q)", ok, tc.wantCache, got)
-			}
-			if tc.wantCache && got != tc.wantComm {
-				t.Fatalf("cached comm = %q, want %q", got, tc.wantComm)
+			if got, ok := el.commState().cached(execCommTid); ok {
+				t.Fatalf("the execve exit wrote %q into the comm cache", got)
 			}
 		})
 	}
@@ -861,8 +861,8 @@ func TestOpenByHandleAtRowsCannotContradictTheCommFilter(t *testing.T) {
 }
 
 // TestKernelCommWinsOverAnInFlightProcfsLookup is the non-exec half of the
-// epoch guard. handleOpenExit caches the open event's payload comm, which BPF
-// read from task->comm at event time; a resolver worker descheduled with an
+// epoch guard. The open event's payload comm (cached when the enter is consumed),
+// which BPF read from task->comm at event time; a resolver worker descheduled with an
 // older name must not land on top of it. Before every kernel-sourced write
 // bumped the rename generation this was reachable without any execve at all -
 // prctl(PR_SET_NAME) is enough - and after a dropped exec record too.

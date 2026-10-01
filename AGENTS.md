@@ -959,10 +959,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   consumer goroutine, the refresh lands before the new program's first syscall
   pair — **for every record that is actually delivered**. Two residual paths are handled explicitly:
   - *Lost record.* Under backpressure `bpf_ringbuf_reserve()` fails and the
-    control record is never emitted (counted in `ringbuf_drop_map`). With
-    `-comm X` active the usual self-healing path is closed too, because
-    `matchRawOpenEvent` drops non-matching opens at enter so `handleOpenExit`
-    never refreshes the cache from the kernel comm. A non-zero drop delta
+    control record is never emitted (counted in `ringbuf_drop_map`). The
+    payload comm of an open or exec enter heals a tid that opens or execs
+    (`seedCommFromEnterPayload`, applied before the raw `-comm` gate so even a
+    dropped open refreshes the cache), but a tid that only reads and writes has
+    no such record to heal it. A non-zero drop delta
     therefore flags the whole comm cache stale (`markAllStale`, requested by the
     drop monitor goroutine and applied by the event-loop goroutine in
     `applyPendingCommRefresh`). A stale entry keeps serving its current value
@@ -1026,8 +1027,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   (`setCachedProvisional`): the inherited name is the creator's, and a new
   thread often renames itself at once (`prctl(PR_SET_NAME)`,
   `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which the
-  `task:task_rename` record (task lr2, below) reports. A provisional entry does not bump the tid's rename epoch and is
-  flagged stale, so the first use of the tid queues exactly one
+  `task:task_rename` record (task lr2, below) reports. A provisional entry does
+  not bump the tid's rename epoch and is flagged stale, so the first use of the
+  tid queues exactly one
   `/proc/<tid>/comm` read whose result replaces it (a read of an already-gone
   thread comes back empty and leaves the seed). Seeding as authoritative
   (`setCachedCommFromKernel`, which bumps the epoch and so discards later procfs
@@ -1066,8 +1068,23 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `setCachedCommFromKernel`: authoritative, so an in-flight procfs lookup that
   read the old name cannot undo it, and it settles a provisional newtask seed
   (the corrective `/proc` read becomes unnecessary). The record is ordered with
-  the task's syscall records, so rows before the rename keep the old name and
-  rows after it (the `prctl` row itself pairs after the record) carry the new one.
+  the task's syscall records, but a row is labelled when it is *paired*, so what
+  it carries depends on the kind. Most kinds take the label at the syscall's
+  exit (`e.comm(tid)`): a syscall that entered before a sibling's rename and
+  exits after it is labelled with the NEW name (the `prctl` row itself pairs
+  after the record and carries the new one too). The open kinds and `execve`
+  carry the kernel comm of their ENTER record (`ep.Comm = openEv.Comm`), so an
+  `open` that entered before the rename keeps the old name on its own row even
+  when it exits after it. The *cache* is always the newest name in ring order:
+  the payload comm of an open/exec enter is applied when the enter is consumed
+  (`seedCommFromEnterPayload`, before the raw `-comm` gate), not at the exit,
+  because an exit-time write restored the pre-rename payload over a rename that
+  landed in between (a thread blocked in `open(fifo)` renamed by a sibling, task
+  lr2 review: its later `pwrite64`/`close` rows kept the old name). A rename
+  *to the same name* just rewrites the same cache entry (and bumps its epoch);
+  an empty name (`prctl(PR_SET_NAME, "")` stores an empty comm) is ignored and
+  keeps the cached name, because an empty label is indistinguishable from "not
+  resolved yet".
   Two details differ from the other hand-written handlers. It is a **raw**
   tracepoint (`SEC("raw_tracepoint/task_rename")`, attached through
   `probemanager.RawTracepointProgram`, a separate interface so the syscall probe
@@ -1084,15 +1101,25 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   name read drops the record (`bpf_ringbuf_discard`) rather than sending an
   unterminated string. A lost record (`ringbuf_drop_map`), a failed attach or an
   older `IOR_BPF_OBJECT` degrade to the old behaviour (stale name until another
-  record corrects it). Pinned by `TestTaskRename*`
+  record corrects it). Pinned by the `TestTaskRename*`,
+  `TestRenamedTaskWithoutARecord*` and `TestMalformedTaskRenameRecord*` tests
   (`internal/eventloop_taskrename_test.go`, with the negative fixture without a
-  record), the attach tests in `internal/ior_bpfsetup_execprobe_test.go`, the
+  record), `TestSameNameRenameIsANoOp` and the enter/rename/exit ordering tests
+  of `internal/eventloop_taskrename_race_test.go` (`TestOpenPayloadComm*`,
+  `TestFailedExecComm*`, `TestFilteredOutOpenStillSeedsTheCache`, each with its
+  no-rename control), the attach tests in
+  `internal/ior_bpfsetup_execprobe_test.go`, the
   decoder layout test, the buildgate test that the handler has no ctx
-  relocation, and end to end by `TestRenamedTasksAreRelabelledByTheRenameRecord`
-  and the two `-comm` tests in `integrationtests/taskrename_test.go` (scenario
+  relocation, `TestTaskRenameHandlerChecksTheScopeBeforeEmitting` (the compiled
+  handler reads `IOR_PID_FILTER`/`PID_FILTER`/`TID_FILTER` before it reserves
+  ring-buffer space: `if (0)` in place of `ior_task_in_scope` fails it), and end
+  to end by `TestRenamedTasksAreRelabelledByTheRenameRecord` and the two `-comm`
+  tests in `integrationtests/taskrename_test.go` (scenario
   `thread-comm-late-rename`: the main thread and workers renamed by
   `prctl`, by a write to their own procfs comm and by a write from another
-  thread).
+  thread) and `TestRenameBetweenOpenEnterAndExitIsNotUndone` (scenario
+  `thread-comm-rename-in-open`: a worker blocked in `open(fifo)` renamed by a
+  sibling; its later `pwrite64` and `close` rows must carry the new name).
 
   **A forked child inherits its creator's fd-table entries (task gr2).** The fd
   table is keyed by tgid and nothing modelled fork, so a new process started
@@ -1374,12 +1401,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle`.
 
   A failed attach is non-fatal and simply degrades to the old procfs-only
-  labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
-  the `sys_enter_execve` comm of a *successful* execve (that is the *calling*
-  program's name); it does cache it for a **failed** one, where no
-  `sched_process_exec` fires and the task keeps running under exactly that name.
-  Kernel-sourced names — the control record, an open event's payload comm, a
-  failed execve's payload comm — all go in through
+  labelling. Correspondingly, the `sys_enter_execve` comm is the *calling*
+  program's name: it is cached when the enter record is consumed
+  (`seedCommFromEnterPayload`), so a *successful* execve's own records (the
+  `task_rename` of `begin_new_exec` and the exec record) replace it in ring
+  order, and a **failed** one, where no `sched_process_exec` fires, leaves the
+  task under exactly that name. Neither exit handler writes the cache.
+  Kernel-sourced names — the exec and rename control records and the payload comm
+  of an open or exec enter — all go in through
   `commResolver.setCachedFromKernel`, which bumps the tid's rename generation
   and so retires any procfs lookup still in flight for it. A `markAllStale`
   sweep likewise bumps a resolver-wide sweep generation, so a lookup that was

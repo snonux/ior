@@ -125,13 +125,13 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		// Keep path information for failed opens so error scenarios remain observable.
 		ep.File = filename
 	}
-	// The payload comm is read by BPF from task->comm at event time, so it is
-	// authoritative: it retires any procfs lookup still in flight for this tid
-	// (setCachedFromKernel bumps the rename generation). Like the fd
-	// registration above this is global state, so it is updated before the
-	// filter: a row this run does not want must still leave the fd table and
-	// the comm cache correct for the rows it does want.
-	e.setCachedCommFromKernel(openEv.Tid, comm)
+	// The open's payload comm (task->comm at the enter record) already updated
+	// the comm cache when the enter record arrived (seedCommFromEnterPayload),
+	// in ring order with any task_rename record. It is deliberately not written
+	// again here: the exit is processed later, and a rename that landed between
+	// enter and exit would be overwritten with the pre-rename name. Like the fd
+	// registration above that global state is settled before the filter, so a
+	// row this run does not want still leaves the fd table correct.
 	// The raw enter filter (MatchOpenEvent) only covers the comm and path
 	// dimensions, so without this checkpoint -syscall/-family/-fd/-ret/
 	// -latency/-bytes and non-equality -pid/-tid reached open rows nowhere.
@@ -160,15 +160,13 @@ func (e *eventLoop) handleExecExit(ep *event.Pair, execEv *types.ExecEvent) bool
 		return false
 	}
 	// execEv is the sys_enter_execve payload, so its comm is the name of the
-	// program that *called* execve - correct for this row, wrong for the tid
-	// from here on. On a SUCCESSFUL execve it is deliberately not written into
-	// the comm cache: the authoritative post-exec name arrives as a
-	// PROCESS_EXEC_EVENT control record (handleProcessExecEvent), and seeding
-	// the pre-exec name here would re-introduce exactly the stale label that
-	// record exists to prevent.
+	// program that *called* execve - correct for this row. The comm cache is
+	// not touched here: seedCommFromEnterPayload recorded that name at enter,
+	// and on a SUCCESSFUL execve the authoritative post-exec name arrives as a
+	// PROCESS_EXEC_EVENT control record (handleProcessExecEvent) after it. A
+	// write at exit would put the pre-exec name back on top of that record.
 	ep.Comm = types.StringValue(execEv.Comm[:])
 	ep.File = e.execTarget(ep, execEv)
-	e.cacheCommOfFailedExec(ep, execEv)
 	// The exec enter has no raw filter, so the path dimension is applied here
 	// against the resolved target rather than the captured relative name.
 	return e.finishPair(ep)
@@ -253,26 +251,6 @@ func execEventAllowsEmptyPath(execEv *types.ExecEvent, succeeded bool) bool {
 	return succeeded && execEv.TraceId == types.SYS_ENTER_EXECVEAT &&
 		(status == types.PATH_READ_OK || status == types.PATH_READ_NULL) &&
 		execEv.Flags&unix.AT_EMPTY_PATH != 0
-}
-
-// cacheCommOfFailedExec warms the comm cache from a *failed* execve.
-//
-// sched_process_exec only fires once the kernel has committed to the new
-// program, so a failing execve (ENOENT, EACCES, ELOOP, ...) produces no control
-// record at all. The task keeps running under its old name, which is precisely
-// the name the sys_enter_execve payload carries, so caching it here is both
-// correct and useful: for a tid whose lookup has not landed yet this is a free,
-// exact label. A successful execve must never take this path, which is why the
-// syscall's return value gates it.
-//
-// Like handleOpenExit this is a kernel-sourced name and goes in as such, so a
-// resolver worker descheduled with an older name cannot land on top of it.
-func (e *eventLoop) cacheCommOfFailedExec(ep *event.Pair, execEv *types.ExecEvent) {
-	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || !event.IsErrnoRet(retEv.Ret) {
-		return
-	}
-	e.setCachedCommFromKernel(execEv.GetTid(), types.StringValue(execEv.Comm[:]))
 }
 
 func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool {

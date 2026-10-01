@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -241,6 +242,27 @@ func TestTaskNewtaskHandlerHasNoContextPointerArithmetic(t *testing.T) {
 // The only relocations the handler may carry are the task_struct offsets it
 // probe-reads from kernel memory.
 func TestTaskRenameHandlerReadsItsArgumentsWithoutCoreRelocation(t *testing.T) {
+	out := taskRenameDisassembly(t)
+	if !bytes.Contains(out, []byte("struct task_struct::tgid")) || !bytes.Contains(out, []byte("struct task_struct::pid")) {
+		t.Fatalf("handle_task_rename carries no task_struct pid/tgid relocations; the disassembly parser or the "+
+			"section name is broken:\n%s", out)
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if bytes.Contains(line, []byte("CO-RE")) && bytes.Contains(line, []byte("bpf_raw_tracepoint_args")) {
+			t.Errorf("handle_task_rename relocates its context access: %q", line)
+		}
+	}
+	if !regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x0\)`).Match(out) ||
+		!regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x8\)`).Match(out) {
+		t.Errorf("handle_task_rename does not load both tracepoint arguments at offsets 0 and 8:\n%s", out)
+	}
+}
+
+// taskRenameDisassembly compiles the BPF object and returns llvm-objdump -dr
+// output of the task_rename raw-tracepoint section; the test is skipped when the
+// toolchain or the libbpf headers are missing.
+func taskRenameDisassembly(t *testing.T) []byte {
+	t.Helper()
 	objdump, err := exec.LookPath("llvm-objdump")
 	if err != nil {
 		t.Skipf("llvm-objdump not installed: %v", err)
@@ -255,18 +277,36 @@ func TestTaskRenameHandlerReadsItsArgumentsWithoutCoreRelocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llvm-objdump: %v\n%s", err, out)
 	}
-	if !bytes.Contains(out, []byte("struct task_struct::tgid")) || !bytes.Contains(out, []byte("struct task_struct::pid")) {
-		t.Fatalf("handle_task_rename carries no task_struct pid/tgid relocations; the disassembly parser or the "+
-			"section name is broken:\n%s", out)
+	return out
+}
+
+// TestTaskRenameHandlerChecksTheScopeBeforeEmitting pins ior_task_in_scope in
+// handle_task_rename (task lr2 review): without it every rename on the machine
+// - each thread of every process, 40 bytes into the ring buffer - would reach
+// the event loop under -pid/-tid, and nothing else would notice, because the
+// event loop only caches the names. The scope predicate compares the renamed
+// task's tgid and tid against three load-time constants, so the compiled
+// handler must read all three, and read them before it reserves ring-buffer
+// space. Replacing the check with `if (0)` removes the constants from the
+// object, which is what this catches. It is a source-level pin on the compiled
+// handler, not a run: an end-to-end check would need a second process renaming
+// threads and an observable for records the event loop silently absorbs.
+func TestTaskRenameHandlerChecksTheScopeBeforeEmitting(t *testing.T) {
+	out := string(taskRenameDisassembly(t))
+	reserve := strings.Index(out, "R_BPF_64_64\tevent_map")
+	if reserve < 0 {
+		t.Fatalf("handle_task_rename never references event_map; the disassembly parser or the section name is broken:\n%s", out)
 	}
-	for _, line := range bytes.Split(out, []byte("\n")) {
-		if bytes.Contains(line, []byte("CO-RE")) && bytes.Contains(line, []byte("bpf_raw_tracepoint_args")) {
-			t.Errorf("handle_task_rename relocates its context access: %q", line)
+	for _, constant := range []string{"IOR_PID_FILTER", "PID_FILTER", "TID_FILTER"} {
+		reloc := regexp.MustCompile(`R_BPF_64_64\s+` + constant + `\n`)
+		loc := reloc.FindStringIndex(out)
+		if loc == nil {
+			t.Errorf("handle_task_rename never reads %s: the scope check is missing:\n%s", constant, out)
+			continue
 		}
-	}
-	if !regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x0\)`).Match(out) ||
-		!regexp.MustCompile(`= \*\(u64 \*\)\(r\d \+ 0x8\)`).Match(out) {
-		t.Errorf("handle_task_rename does not load both tracepoint arguments at offsets 0 and 8:\n%s", out)
+		if loc[0] > reserve {
+			t.Errorf("handle_task_rename reads %s only after reserving ring-buffer space", constant)
+		}
 	}
 }
 
