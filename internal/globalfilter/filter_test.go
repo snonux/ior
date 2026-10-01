@@ -18,6 +18,8 @@ type sampleCandidate struct {
 	bytes   uint64
 	ret     int64
 	isError bool
+	// noReturn models a noreturn row (exit, exit_group, rt_sigreturn).
+	noReturn bool
 }
 
 func (s sampleCandidate) SyscallValue() string { return s.syscall }
@@ -33,6 +35,7 @@ func (s sampleCandidate) GapValue() uint64     { return s.gap }
 func (s sampleCandidate) BytesValue() uint64   { return s.bytes }
 func (s sampleCandidate) ReturnValue() int64   { return s.ret }
 func (s sampleCandidate) ErrorValue() bool     { return s.isError }
+func (s sampleCandidate) NoReturnValue() bool  { return s.noReturn }
 
 func testCandidate() sampleCandidate {
 	return sampleCandidate{

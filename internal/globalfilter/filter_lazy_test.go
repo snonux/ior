@@ -80,6 +80,11 @@ func (r recordingCandidate) ErrorValue() bool {
 	return r.sampleCandidate.ErrorValue()
 }
 
+func (r recordingCandidate) NoReturnValue() bool {
+	r.record("NoReturn")
+	return r.sampleCandidate.NoReturnValue()
+}
+
 // TestMatchesEvaluatesOnlyConfiguredDimensions pins the lazy evaluation of
 // Matches: an unset dimension must not call its accessor. Before task qo2
 // every accessor ran for every candidate even under the zero filter, and for
@@ -96,7 +101,9 @@ func TestMatchesEvaluatesOnlyConfiguredDimensions(t *testing.T) {
 		{name: "family only mismatch", filter: Filter{Family: &StringFilter{Pattern: "network"}}, want: false, wantCalls: []string{"Family"}},
 		{name: "errors only", filter: Filter{ErrorsOnly: true}, want: true, wantCalls: []string{"Error"}},
 		{name: "pid only", filter: Filter{PID: &NumericFilter{Op: OpEq, Value: 1234}}, want: true, wantCalls: []string{"PID"}},
-		{name: "retval only", filter: Filter{RetVal: &NumericFilter{Op: OpGte, Value: 0}}, want: false, wantCalls: []string{"Return"}},
+		{name: "retval only", filter: Filter{RetVal: &NumericFilter{Op: OpGte, Value: 0}}, want: false, wantCalls: []string{"NoReturn", "Return"}},
+		// Latency is an outcome dimension too: NoReturn is asked first.
+		{name: "latency only", filter: Filter{LatencyNs: &NumericFilter{Op: OpGte, Value: 0}}, want: true, wantCalls: []string{"NoReturn", "Latency"}},
 		// A file mismatch on a single-name candidate consults OldFileValue
 		// (empty), the alternate value of the file dimension.
 		{name: "file mismatch", filter: Filter{File: &StringFilter{Pattern: "/nope"}}, want: false, wantCalls: []string{"File", "OldFile"}},

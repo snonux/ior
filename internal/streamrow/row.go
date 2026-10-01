@@ -163,6 +163,14 @@ func (r *Row) ErrorValue() bool {
 	return r.IsError
 }
 
+// NoReturnValue reports the row of a syscall that never returns (NoReturn):
+// its DurationNs and RetVal are placeholders, so the global filter's latency
+// and return-value predicates reject it, as they reject the live pair
+// (globalfilter.Filter.matchesOutcome).
+func (r *Row) NoReturnValue() bool {
+	return r.NoReturn
+}
+
 // UnknownFD marks events that are not associated with a file descriptor.
 const UnknownFD int32 = -1
 

@@ -108,6 +108,13 @@ type Candidate interface {
 	BytesValue() uint64
 	ReturnValue() int64
 	ErrorValue() bool
+	// NoReturnValue reports that the candidate is the row of a syscall that
+	// never returns (exit, exit_group, rt_sigreturn; event.Pair.NoReturn): it
+	// has no outcome, i.e. neither a return value nor a latency, and the 0s
+	// that ReturnValue and LatencyValue report for it are placeholders. Every
+	// latency or return-value predicate rejects such a candidate (see
+	// matchesOutcome), and ErrorValue is false for it.
+	NoReturnValue() bool
 }
 
 // Filter is the active global event filter: one optional constraint per
@@ -239,8 +246,8 @@ func matchFile(sf *StringFilter, candidate Candidate) bool {
 	return oldFile != "" && matchString(sf, oldFile)
 }
 
-// matchesNumerics applies the numeric dimensions (pid, tid, fd, latency, gap,
-// bytes, return value).
+// matchesNumerics applies the numeric dimensions (pid, tid, fd, gap, bytes,
+// then the outcome dimensions latency and return value, matchesOutcome).
 func (f *Filter) matchesNumerics(candidate Candidate) bool {
 	if f.PID != nil && !matchNumeric(f.PID, int64(candidate.PIDValue())) {
 		return false
@@ -251,13 +258,38 @@ func (f *Filter) matchesNumerics(candidate Candidate) bool {
 	if f.FD != nil && !matchNumeric(f.FD, int64(candidate.FDValue())) {
 		return false
 	}
-	if f.LatencyNs != nil && !matchNumeric(f.LatencyNs, int64(candidate.LatencyValue())) {
-		return false
-	}
 	if f.GapNs != nil && !matchNumeric(f.GapNs, int64(candidate.GapValue())) {
 		return false
 	}
 	if f.Bytes != nil && !matchNumeric(f.Bytes, int64(candidate.BytesValue())) {
+		return false
+	}
+	return f.matchesOutcome(candidate)
+}
+
+// matchesOutcome applies the outcome dimensions, latency and return value.
+// A candidate without an outcome (NoReturnValue: exit, exit_group,
+// rt_sigreturn, recorded at sys_enter because they never reach sys_exit)
+// fails every configured outcome predicate, whatever its operator: ret == 0,
+// ret != 0, latency < 1ms and latency >= 0 all reject it. Its 0s are
+// placeholders, and a filter that selects calls by how they ended must not
+// report calls that did not end - otherwise "ret == 0" or "latency < 1ms"
+// would list every exit_group as a fast success. The errors-only switch
+// agrees without a check of its own: ErrorValue is false for such a
+// candidate. The same rule holds everywhere Matches runs (pair checkpoint,
+// dashboard ingest, Stream tab, CSV export), and it matches the aggregate
+// side, which drops all kernel aggregate rows (including their untimed
+// noreturn counts) under any latency, retval or errors-only filter
+// (aggregateIngestAllowedForFilter). The NoReturnValue call is made only
+// when an outcome predicate is configured, keeping Matches lazy.
+func (f *Filter) matchesOutcome(candidate Candidate) bool {
+	if f.LatencyNs == nil && f.RetVal == nil {
+		return true
+	}
+	if candidate.NoReturnValue() {
+		return false
+	}
+	if f.LatencyNs != nil && !matchNumeric(f.LatencyNs, int64(candidate.LatencyValue())) {
 		return false
 	}
 	return f.RetVal == nil || matchNumeric(f.RetVal, candidate.ReturnValue())

@@ -228,6 +228,7 @@ func (c stubCandidate) GapValue() uint64     { return 0 }
 func (c stubCandidate) BytesValue() uint64   { return 0 }
 func (c stubCandidate) ReturnValue() int64   { return 0 }
 func (c stubCandidate) ErrorValue() bool     { return false }
+func (c stubCandidate) NoReturnValue() bool  { return false }
 
 // TestMatchesSeesTheCandidateOldName is the Candidate-level counterpart of
 // TestMatchPairSeesTheRenameOldname. The Stream tab and its CSV export filter
