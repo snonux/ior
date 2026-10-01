@@ -1998,6 +1998,18 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   matches by function name, filtered to goroutines started by the calling
   test goroutine, so start the goroutine and call Count/Run from the test
   goroutine itself. Test-only: never import it from production code.
+- Event-loop test fixtures that model a made-up process use pids/tids of the
+  form `absentPidBase + n` (`internal/eventloop_absentpid_test.go`;
+  `defaultPid`, `execCommPid`, `forkChildPid` are built that way), never a
+  plain small literal. Every descriptor or comm the loop has not seen traced
+  falls back to the real `/proc/<pid>/...`, so a fixture pid that happens to
+  be alive on the host answers with that process's files: plain pid 7100 made
+  the fork negative control read `anon_inode:[eventfd]` (task zs2).
+  `absentPidBase` is `PID_MAX_LIMIT` (2^22); the kernel never allocates a pid
+  at or above it, and `TestAbsentPidsCannotExistOnThisHost` checks that
+  premise. A test that needs a live process uses its own pid or a child it
+  starts; one that needs specific procfs contents takes a fake root
+  (`resolveCommFromProcRoot`, `checkTraceTarget`).
 
 ## Rollback
 

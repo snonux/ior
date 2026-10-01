@@ -17,10 +17,13 @@ import (
 
 // execCommTid models a task that forked from a shell and then exec'd: the tid
 // survives the execve, which is exactly why a comm cached before the exec
-// stays attached to the post-exec program.
+// stays attached to the post-exec program. Both lie above every possible pid
+// (absentPidBase, task zs2) so the procfs fallback of an untraced descriptor
+// finds no process, whatever runs on the host (testdata/payloadsplit.golden
+// prints this pid).
 const (
-	execCommPid = 4242
-	execCommTid = 4242
+	execCommPid = absentPidBase + 4242
+	execCommTid = absentPidBase + 4242
 )
 
 // execSurvivalCase is one fd-table entry of

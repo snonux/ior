@@ -13,10 +13,14 @@ import (
 	"ior/internal/types"
 )
 
+// defaultPid and defaultTid lie above every possible pid (absentPidBase, task
+// zs2): the fixtures resolve untraced descriptors through procfs and expect no
+// such process, while pid 10 and 11 are kernel threads on most hosts and real
+// processes in a container.
 const (
 	defaulTime   = 1234567
-	defaultPid   = 10
-	defaultTid   = 11
+	defaultPid   = absentPidBase + 10
+	defaultTid   = absentPidBase + 11
 	defaultDirfd = -100
 )
 

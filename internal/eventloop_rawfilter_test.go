@@ -203,13 +203,15 @@ func TestOpenKindsApplyEveryFilterDimension(t *testing.T) {
 
 	t.Run("dropped by a non-equality -pid filter", func(t *testing.T) {
 		// Equality pid/tid filters are pushed kernel-side, so a comparison
-		// operator is the one that has to be honoured in userspace.
+		// operator is the one that has to be honoured in userspace. The bound
+		// is relative to the fixture pid, which lies above every real pid
+		// (absentPidBase), so a fixed small bound would not exclude it.
 		el := newFilteredEventLoop(t, globalfilter.Filter{
-			PID: &globalfilter.NumericFilter{Op: globalfilter.OpGt, Value: 99999},
+			PID: &globalfilter.NumericFilter{Op: globalfilter.OpGt, Value: execCommPid},
 		})
 		if ep := feedOpenPair(t, el, filename, "ioworkload", openedFd); ep != nil {
 			defer ep.Recycle()
-			t.Fatalf("open row of pid %d survived -pid > 99999: %v", execCommPid, ep)
+			t.Fatalf("open row of pid %d survived -pid > %d: %v", execCommPid, execCommPid, ep)
 		}
 	})
 

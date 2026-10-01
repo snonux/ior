@@ -39,7 +39,10 @@ import (
 // With zero fields omitted, a new field that stays zero in this scenario needs
 // no golden change, while one that becomes non-zero (a real change of a row)
 // still fails the comparison. The pre-split capture's values are unchanged: the
-// golden is the original %+v capture with its zero-valued fields dropped.
+// golden is the original %+v capture with its zero-valued fields dropped, and
+// with its pid/tid (4242, the fixture's then value) rewritten to execCommPid,
+// absentPidBase + 4242 (task zs2): the scenario leaves descriptors untraced on
+// purpose ("E:name" rows), which only holds while procfs finds no such pid.
 //
 // Both wire generations are checked against the one golden: payloadWireSplit
 // is what the current BPF object emits, payloadWireWide is what an older

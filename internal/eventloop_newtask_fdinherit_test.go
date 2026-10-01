@@ -21,10 +21,15 @@ import (
 // eventfd:0 -> anon_inode:[eventfd]) and, once the child has exited before the
 // lazy read, to an unresolvable E:name. The task:task_newtask record now carries
 // the creator's tgid and the clone flags, which is what these tests feed.
+//
+// The fixture pids lie above every possible pid (absentPidBase, task zs2): the
+// negative control below reads procfs for the child and must find no process.
+// With plain 7000/7100 it failed on any host where pid 7100 was alive (procfs
+// answered "anon_inode:[eventfd]" for its fd 3).
 
 const (
-	forkParentPid = 7000
-	forkChildPid  = 7100
+	forkParentPid = absentPidBase + 7000
+	forkChildPid  = absentPidBase + 7100
 	forkSigchld   = 17 // the flag word of a plain fork(): just the exit signal
 	forkStart     = defaulTime + 1000
 )
@@ -101,8 +106,9 @@ func TestForkedChildInheritsTheCreatorsTracedFdNames(t *testing.T) {
 
 // TestChildWithoutARecordHasNoInheritedNames keeps the fixture honest (the
 // negative control): the same read without the record resolves through procfs,
-// which has no such process, so the name is empty. If this ever started
-// answering, the positive test would prove nothing.
+// which has no such process (forkChildPid cannot be allocated, see
+// absentPidBase), so the name is empty. If this ever started answering, the
+// positive test would prove nothing.
 func TestChildWithoutARecordHasNoInheritedNames(t *testing.T) {
 	el := newTaskEventLoop(t, "")
 	registerParentFds(el, forkParentPid)
