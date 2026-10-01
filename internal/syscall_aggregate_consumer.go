@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"ior/internal/flags"
@@ -418,6 +419,15 @@ func subtractU64(current, previous uint64) uint64 {
 	return current - previous
 }
 
+// encodeSamplingRate is the value stored in syscall_sampling_rate_map for a
+// rate: rate + 1, because the BPF map is an array whose untouched slots read 0
+// and 0 means "not configured, rate 1" there (ior_sampling_rate decodes it). The
+// largest rate saturates one below the type's maximum, since adding 1 to it
+// would wrap to 0 and turn "1-in-4 billion" into "every event".
+func encodeSamplingRate(rate uint32) uint32 {
+	return min(rate, math.MaxUint32-1) + 1
+}
+
 func applySyscallSamplingRates(cfg flags.Config, module *bpf.Module) error {
 	samplingMap, err := module.GetMap(syscallSamplingRateMapName)
 	if err != nil {
@@ -425,7 +435,7 @@ func applySyscallSamplingRates(cfg flags.Config, module *bpf.Module) error {
 	}
 	for traceID, rate := range buildSyscallSamplingRates(cfg) {
 		key := uint32(traceID)
-		value := rate
+		value := encodeSamplingRate(rate)
 		if err := samplingMap.Update(unsafe.Pointer(&key), unsafe.Pointer(&value)); err != nil {
 			return fmt.Errorf("set sampling rate for %s to %d: %w", traceID.String(), rate, err)
 		}

@@ -200,11 +200,14 @@ static __always_inline void ior_count_untimed_syscall(__u32 enter_trace_id) {
 
 // ior_sampling_rate returns the configured sampling rate of enter_trace_id:
 // 0 = aggregate-only, 1 = emit every event (also the default for a syscall
-// userspace did not configure), N = emit 1-in-N.
+// userspace did not configure), N = emit 1-in-N. The map stores rate + 1
+// with 0 meaning "not configured" (see syscall_sampling_rate_map), so a
+// missing slot, an untouched slot and an ID past the array's end all give
+// the default 1.
 static __always_inline __u32 ior_sampling_rate(__u32 enter_trace_id) {
     __u32 *configured = bpf_map_lookup_elem(&syscall_sampling_rate_map, &enter_trace_id);
 
-    return configured ? *configured : 1;
+    return (configured && *configured) ? *configured - 1 : 1;
 }
 
 static __always_inline int ior_sample_rate_emits(__u32 rate) {
@@ -282,11 +285,33 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 // syscall costs two clock helper calls (one per side) instead of four, and the
 // kernel-side duration (syscall_aggregate_map) and the userspace duration
 // (exit ev->time - enter ev->time) are derived from the same two instants.
-static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
+//
+// Enter state is elided for most syscalls at rate 1 (task 2s2). The hash
+// update here and the lookup + delete in ior_on_syscall_exit were the bulk of
+// the ~280 ns a traced syscall cost (a bs=1 dd ran 2.6x slower): taking the
+// state out of the rate-1 path made a traced 6M-syscall dd about 25% faster.
+// At rate 1 the state carries nothing the exit needs: the sampling decision is
+// "emit" (the exit reads the rate again, and ior_stateless_exit_emits says
+// emit), the start time only feeds the kernel aggregate, which a rate-1
+// syscall never writes, and a failed state write already degrades to the same
+// stateless exit (ior_on_enter_state_lost). The exit therefore finds no entry
+// and takes the stateless path, which is exactly what a missing entry did
+// before for a map that was full.
+//
+// What does need the entry at rate 1 is the pending-filename recovery: its
+// stash writes the user pointer onto the state (ior_stash_pending_filename)
+// and its take reads it back at the exit. The generator emits
+// ior_on_syscall_enter_stateful for those enter handlers
+// (handlerSpec.keepsEnterState in internal/generate/bpfhandler.go), which
+// always writes the entry. Other rates need it everywhere: they carry the
+// per-invocation sampling decision and the start time to the exit.
+static __always_inline int ior_on_syscall_enter_impl(__u32 tid, __u32 enter_trace_id, __u64 now, int keep_state) {
     struct syscall_enter_state state = {};
     __u32 rate = ior_sampling_rate(enter_trace_id);
     long err;
 
+    if (rate == 1 && !keep_state)
+        return 1;
     state.start_ns = now;
     state.enter_trace_id = enter_trace_id;
     state.emit_event = ior_sample_rate_emits(rate) ? 1 : 0;
@@ -304,6 +329,19 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id,
         return ior_on_enter_state_lost(enter_trace_id, rate);
     }
     return state.emit_event != 0;
+}
+
+// ior_on_syscall_enter is the enter hook of every syscall whose handler never
+// stashes a pending filename; at rate 1 it writes no enter state.
+static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
+    return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 0);
+}
+
+// ior_on_syscall_enter_stateful is the enter hook of the handlers that stash
+// a pending filename (path-capturing kinds and the output-path syscalls): it
+// writes the enter state at every rate, since the stash needs the entry.
+static __always_inline int ior_on_syscall_enter_stateful(__u32 tid, __u32 enter_trace_id, __u64 now) {
+    return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 1);
 }
 
 // ior_on_noreturn_syscall_enter is the enter hook for noreturn syscalls

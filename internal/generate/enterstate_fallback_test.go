@@ -35,7 +35,9 @@ var accountingFunctions = []string{
 	"ior_sample_rate_emits",
 	"ior_on_enter_state_lost",
 	"ior_stateless_exit_emits",
+	"ior_on_syscall_enter_impl",
 	"ior_on_syscall_enter",
+	"ior_on_syscall_enter_stateful",
 	"ior_on_syscall_exit",
 	"ior_on_exec_tid_change",
 }
@@ -151,7 +153,8 @@ int main(void) {
     long long ret;
     while (scanf("%%15s", cmd) == 1) {
         if (!strcmp(cmd, "rate") && scanf("%%llu %%llu", &a, &b) == 2) {
-            __u32 k = a, v = b;
+            /* The BPF map is an array that stores rate + 1 (0 = not configured). */
+            __u32 k = a, v = b + 1;
             bpf_map_update_elem(&syscall_sampling_rate_map, &k, &v, BPF_ANY);
             printf("ok\n");
         } else if (!strcmp(cmd, "cap") && scanf("%%llu", &a) == 1) {
@@ -165,6 +168,8 @@ int main(void) {
             printf("ok\n");
         } else if (!strcmp(cmd, "enter") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
             printf("emit=%%d\n", ior_on_syscall_enter(a, b, c));
+        } else if (!strcmp(cmd, "entersf") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
+            printf("emit=%%d\n", ior_on_syscall_enter_stateful(a, b, c));
         } else if (!strcmp(cmd, "exit") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
             printf("emit=%%d\n", ior_on_syscall_exit(a, b, ret, d));
         } else if (!strcmp(cmd, "exectid") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
@@ -249,15 +254,37 @@ var accountingScenarios = []accountingScenario{
 	// as stateless, not paired with the foreign state.
 	{name: "mismatched exit is stateless", steps: []accountingStep{
 		{"rate 100 0", accOK},
-		{"enter 1 200 1000", accEmit1}, {"exit 1 100 0 6000", accEmit0},
+		{"entersf 1 200 1000", accEmit1}, {"exit 1 100 0 6000", accEmit0},
 		{"state 1", "nostate"}, {"agg 100", accAggNone}, {"agg 200", accAggNone},
+	}},
+	// Task 2s2: at rate 1 an ordinary enter writes no state (its exit is the
+	// stateless emit, the same as a lost entry), while the stateful hook of
+	// the pending-filename handlers keeps the entry at every rate; the other
+	// rates always keep it, since they carry the sampling decision.
+	{name: "rate 1 elides the enter state", steps: []accountingStep{
+		{"rate 100 0", accOK}, {"rate 300 4", accOK}, {"rand 0", accOK},
+		{"enter 1 200 1000", accEmit1}, {"state 1", "nostate"},
+		{"exit 1 200 0 6000", accEmit1}, {"state 1", "nostate"}, {"agg 200", accAggNone},
+		{"enter 1 100 1000", accEmit0}, {"state 1", "state id=100 emit=0"},
+		{"exit 1 100 0 6000", accEmit0}, {"state 1", "nostate"},
+		{"enter 1 300 1000", accEmit1}, {"state 1", "state id=300 emit=1"},
+		{"exit 1 300 0 6000", accEmit1}, {"state 1", "nostate"},
+		{"agg 100", "count=1 errors=0 total=5000 min=5000 max=5000 hist=0,1,0,0,0,0,0,0"},
+		{"agg 300", accAggNone},
+	}},
+	{name: "stateful enter keeps the rate-1 state", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"entersf 1 200 1000", accEmit1}, {"state 1", "state id=200 emit=1"},
+		{"exit 1 200 0 6000", accEmit1}, {"state 1", "nostate"}, {"agg 200", accAggNone},
+		{"entersf 1 100 1000", accEmit0}, {"state 1", "state id=100 emit=0"},
+		{"exit 1 100 0 6000", accEmit0}, {"state 1", "nostate"},
 	}},
 	// Enter-state map full: a new tid's write fails. Rate 1 still emits the
 	// pair; other rates count the invocation once, untimed, at enter.
 	{name: "full enter-state map", steps: []accountingStep{
 		{"rate 100 0", accOK}, {"rate 300 4", accOK}, {"cap 1", accOK}, {"rand 0", accOK},
-		{"enter 1 200 1000", accEmit1},
-		{"enter 2 200 1000", accEmit1}, {"exit 2 200 0 6000", accEmit1}, {"agg 200", accAggNone},
+		{"entersf 1 200 1000", accEmit1},
+		{"entersf 2 200 1000", accEmit1}, {"exit 2 200 0 6000", accEmit1}, {"agg 200", accAggNone},
 		{"enter 2 100 1000", accEmit0}, {"exit 2 100 0 6000", accEmit0},
 		{"agg 100", "count=1 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
 		{"enter 2 300 1000", accEmit0}, {"exit 2 300 0 6000", accEmit0},
@@ -278,7 +305,7 @@ var accountingScenarios = []accountingScenario{
 	// sample does, later ones only lower it.
 	{name: "untimed then timed seeds min", steps: []accountingStep{
 		{"rate 100 0", accOK}, {"cap 1", accOK},
-		{"enter 1 200 0", accEmit1},
+		{"entersf 1 200 0", accEmit1},
 		{"enter 2 100 0", accEmit0}, {"exit 2 100 0 0", accEmit0},
 		{"cap 64", accOK},
 		{"enter 2 100 1000", accEmit0}, {"exit 2 100 0 51000", accEmit0},
@@ -301,25 +328,25 @@ var accountingScenarios = []accountingScenario{
 	// whatever the dead leader left behind, and nothing stays under 5.
 	{name: "non-leader exec moves the enter state", steps: []accountingStep{
 		{"rate 100 0", accOK},
-		{"enter 1 200 0", accEmit1},
+		{"entersf 1 200 0", accEmit1},
 		{"enter 5 100 1000", accEmit0}, {"exectid 5 1 1", accOK},
 		{"state 5", "nostate"}, {"state 1", "state id=100 emit=0"},
 		{"exit 1 100 0 6000", accEmit0}, {"state 1", "nostate"},
 		{"agg 100", "count=1 errors=0 total=5000 min=5000 max=5000 hist=0,1,0,0,0,0,0,0"},
-		{"enter 6 200 1000", accEmit1}, {"exectid 6 1 1", accOK},
+		{"entersf 6 200 1000", accEmit1}, {"exectid 6 1 1", accOK},
 		{"exit 1 200 0 6000", accEmit1}, {"agg 200", accAggNone},
 	}},
 	// An exec that keeps its tid, or one with no in-flight entry, moves
 	// nothing.
 	{name: "exec without a tid change moves nothing", steps: []accountingStep{
-		{"enter 5 200 1000", accEmit1}, {"exectid 5 5 1", accOK}, {"state 5", "state id=200 emit=1"},
+		{"entersf 5 200 1000", accEmit1}, {"exectid 5 5 1", accOK}, {"state 5", "state id=200 emit=1"},
 		{"exectid 7 1 1", accOK}, {"state 1", "nostate"}, {"state 7", "nostate"},
 	}},
 	// On a full map the old entry's slot is freed before the insert, so the
 	// move still lands.
 	{name: "exec move on a full map", steps: []accountingStep{
 		{"cap 2", accOK},
-		{"enter 9 200 1000", accEmit1}, {"enter 5 200 1000", accEmit1}, {"exectid 5 1 1", accOK},
+		{"entersf 9 200 1000", accEmit1}, {"entersf 5 200 1000", accEmit1}, {"exectid 5 1 1", accOK},
 		{"state 1", "state id=200 emit=1"}, {"state 5", "nostate"},
 	}},
 	// The move cannot land: a failed insert falls back like a lost enter
@@ -340,7 +367,7 @@ var accountingScenarios = []accountingScenario{
 		{"agg 100", "count=2 errors=0 total=0 min=0 max=0 hist=0,0,0,0,0,0,0,0"},
 		// At rate 1 a failed insert counts nothing: the stateless exit is
 		// emitted and pairs with the emitted enter in userspace.
-		{"enter 5 200 1000", accEmit1},
+		{"entersf 5 200 1000", accEmit1},
 		{"fail 1", accOK}, {"exectid 5 1 1", accOK}, {"fail 0", accOK},
 		{"state 5", "nostate"}, {"state 1", "nostate"}, {"agg 200", accAggNone},
 		{"exit 1 200 0 6000", accEmit1}, {"agg 200", accAggNone},
@@ -348,7 +375,7 @@ var accountingScenarios = []accountingScenario{
 	{name: "timed then untimed keeps min", steps: []accountingStep{
 		{"rate 100 0", accOK},
 		{"enter 1 100 1000", accEmit0}, {"exit 1 100 0 51000", accEmit0},
-		{"cap 1", accOK}, {"enter 3 200 0", accEmit1}, {"enter 2 100 0", accEmit0},
+		{"cap 1", accOK}, {"entersf 3 200 0", accEmit1}, {"enter 2 100 0", accEmit0},
 		{"agg 100", "count=2 errors=0 total=50000 min=50000 max=50000 hist=0,0,1,0,0,0,0,0"},
 	}},
 }
@@ -373,6 +400,18 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 		"enter ignores a failed write": {
 			"        return ior_on_enter_state_lost(enter_trace_id, rate);\n    }",
 			"    }",
+		},
+		"rate 1 writes the enter state anyway": {
+			"if (rate == 1 && !keep_state)",
+			"if (0)",
+		},
+		"stateful hook elides the rate-1 state": {
+			"return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 1);",
+			"return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 0);",
+		},
+		"elision ignores the rate": {
+			"if (rate == 1 && !keep_state)",
+			"if (!keep_state)",
 		},
 		"delete skipped for every error": {
 			"if (err != -IOR_E2BIG)",

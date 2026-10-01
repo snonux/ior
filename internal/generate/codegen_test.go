@@ -3630,10 +3630,11 @@ func TestGenerateGetcwdCapturesItsOutputBuffer(t *testing.T) {
 	if !strings.Contains(enterBody, stash) {
 		t.Fatalf("sys_enter_getcwd does not stash its output buffer:\n%s", enterBody)
 	}
-	// The stash needs the enter-state entry ior_on_syscall_enter creates, and
-	// must stay a header-only null_event: the buffer holds nothing yet.
-	if strings.Index(enterBody, stash) < strings.Index(enterBody, "ior_on_syscall_enter(") {
-		t.Errorf("sys_enter_getcwd stashes before ior_on_syscall_enter created the enter state:\n%s", enterBody)
+	// The stash needs the enter-state entry ior_on_syscall_enter_stateful
+	// creates, and must stay a header-only null_event: the buffer holds nothing
+	// yet.
+	if strings.Index(enterBody, stash) < strings.Index(enterBody, "ior_on_syscall_enter_stateful(") {
+		t.Errorf("sys_enter_getcwd stashes before ior_on_syscall_enter_stateful created the enter state:\n%s", enterBody)
 	}
 	if strings.Contains(enterBody, "bpf_probe_read_user_str") {
 		t.Errorf("sys_enter_getcwd reads the output buffer before the kernel filled it:\n%s", enterBody)

@@ -2759,7 +2759,7 @@ func validateFilenameFallback(name, enterBody, argIndex string) error {
 }
 
 // parseOutputBufferCapture recognizes the output-path capture (getcwd): the
-// enter handler stashes the buffer pointer once, after ior_on_syscall_enter
+// enter handler stashes the buffer pointer once, after ior_on_syscall_enter_stateful
 // created the enter state and before its own reserve, and the exit handler
 // takes it before ior_on_syscall_exit deletes that state and publishes it,
 // guarded by a successful return, before its own reserve. It returns the
@@ -2774,7 +2774,7 @@ func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, erro
 	}
 	stash := stashes[0]
 	argIndex := mustArgIndex(enterBody[stash[2]:stash[3]])
-	enterHook := strings.Index(enterBody, "ior_on_syscall_enter(")
+	enterHook := strings.Index(enterBody, "ior_on_syscall_enter_stateful(")
 	enterReserve := ringbufReserveRE.FindStringIndex(enterBody)
 	if enterHook < 0 || stash[0] < enterHook || enterReserve == nil || stash[0] > enterReserve[0] {
 		return 0, false, fmt.Errorf("sys_enter_%s stashes its output buffer outside the enter hook..reserve window", name)

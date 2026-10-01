@@ -97,8 +97,21 @@ struct {
     __type(value, struct syscall_aggregate);
 } syscall_aggregate_map SEC(".maps");
 
+// syscall_sampling_rate_map holds the sampling rate of each enter trace ID
+// (task 2s2). It is an ARRAY indexed by the trace ID, not a HASH: every
+// traced syscall reads it at sys_enter and again at sys_exit, and an array
+// lookup is inlined by the verifier where a hash lookup is a helper call
+// (~280 ns per traced syscall in total was measured, a good part of it these
+// helper calls). Trace IDs top out near 1900, far below max_entries; an ID
+// beyond it looks up NULL and gets the default rate, like an unconfigured one.
+//
+// An array has no "absent" state - an untouched slot reads 0, which as a
+// rate would mean aggregate-only - so a slot stores rate + 1 and 0 means
+// "not configured, use the default rate 1" (ior_sampling_rate decodes it;
+// applySyscallSamplingRates in internal/syscall_aggregate_consumer.go
+// encodes it).
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 4096);
     __type(key, __u32);
     __type(value, __u32);

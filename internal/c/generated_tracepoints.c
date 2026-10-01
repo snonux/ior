@@ -2701,7 +2701,7 @@ int handle_sys_enter_mq_open(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_OPEN, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MQ_OPEN, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -2777,7 +2777,7 @@ int handle_sys_enter_mq_unlink(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MQ_UNLINK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MQ_UNLINK, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -3754,7 +3754,7 @@ int handle_sys_enter_quotactl(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_QUOTACTL, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_QUOTACTL, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -3888,7 +3888,7 @@ int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_NAME_TO_HANDLE_AT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_NAME_TO_HANDLE_AT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -5354,7 +5354,7 @@ int handle_sys_enter_fanotify_mark(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FANOTIFY_MARK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FANOTIFY_MARK, now))
         return 0;
 
     struct fd_path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_path_event), 0);
@@ -5567,7 +5567,7 @@ int handle_sys_enter_inotify_add_watch(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_INOTIFY_ADD_WATCH, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_INOTIFY_ADD_WATCH, now))
         return 0;
 
     struct fd_path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_path_event), 0);
@@ -5699,7 +5699,7 @@ int handle_sys_enter_file_getattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FILE_GETATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FILE_GETATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -5776,7 +5776,7 @@ int handle_sys_enter_file_setattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FILE_SETATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FILE_SETATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -5853,7 +5853,7 @@ int handle_sys_enter_fsopen(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FSOPEN, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FSOPEN, now))
         return 0;
 
     struct eventfd_name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_name_event), 0);
@@ -5938,7 +5938,7 @@ int handle_sys_enter_fspick(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FSPICK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FSPICK, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -6072,7 +6072,7 @@ int handle_sys_enter_statfs(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_STATFS, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_STATFS, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -6262,7 +6262,7 @@ int handle_sys_enter_getcwd(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_GETCWD, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_GETCWD, now))
         return 0;
 
     ior_stash_pending_filename(tid, ctx->args[0]);
@@ -6325,7 +6325,7 @@ int handle_sys_enter_utimensat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UTIMENSAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UTIMENSAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -6411,7 +6411,7 @@ int handle_sys_enter_futimesat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FUTIMESAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FUTIMESAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -6488,7 +6488,7 @@ int handle_sys_enter_utimes(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UTIMES, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UTIMES, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -6565,7 +6565,7 @@ int handle_sys_enter_utime(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UTIME, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UTIME, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7097,7 +7097,7 @@ int handle_sys_enter_setxattrat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SETXATTRAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SETXATTRAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7174,7 +7174,7 @@ int handle_sys_enter_setxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SETXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SETXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7251,7 +7251,7 @@ int handle_sys_enter_lsetxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LSETXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LSETXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7385,7 +7385,7 @@ int handle_sys_enter_getxattrat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_GETXATTRAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_GETXATTRAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7469,7 +7469,7 @@ int handle_sys_enter_getxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_GETXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_GETXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7548,7 +7548,7 @@ int handle_sys_enter_lgetxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LGETXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LGETXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7690,7 +7690,7 @@ int handle_sys_enter_listxattrat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LISTXATTRAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LISTXATTRAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7769,7 +7769,7 @@ int handle_sys_enter_listxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LISTXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LISTXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7848,7 +7848,7 @@ int handle_sys_enter_llistxattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LLISTXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LLISTXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -7990,7 +7990,7 @@ int handle_sys_enter_removexattrat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_REMOVEXATTRAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_REMOVEXATTRAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8067,7 +8067,7 @@ int handle_sys_enter_removexattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_REMOVEXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_REMOVEXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8144,7 +8144,7 @@ int handle_sys_enter_lremovexattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LREMOVEXATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LREMOVEXATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8278,7 +8278,7 @@ int handle_sys_enter_umount(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UMOUNT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UMOUNT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8355,7 +8355,7 @@ int handle_sys_enter_open_tree(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_OPEN_TREE, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_OPEN_TREE, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -8431,7 +8431,7 @@ int handle_sys_enter_mount(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MOUNT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MOUNT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8577,7 +8577,7 @@ int handle_sys_enter_move_mount(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MOVE_MOUNT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MOVE_MOUNT, now))
         return 0;
 
     struct two_fd_names_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct two_fd_names_event), 0);
@@ -8665,7 +8665,7 @@ int handle_sys_enter_pivot_root(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_PIVOT_ROOT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_PIVOT_ROOT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8742,7 +8742,7 @@ int handle_sys_enter_mount_setattr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MOUNT_SETATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MOUNT_SETATTR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -8819,7 +8819,7 @@ int handle_sys_enter_open_tree_attr(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_OPEN_TREE_ATTR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_OPEN_TREE_ATTR, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -9811,7 +9811,7 @@ int handle_sys_enter_mknodat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MKNODAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MKNODAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -9888,7 +9888,7 @@ int handle_sys_enter_mknod(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MKNOD, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MKNOD, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -9965,7 +9965,7 @@ int handle_sys_enter_mkdirat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MKDIRAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MKDIRAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -10042,7 +10042,7 @@ int handle_sys_enter_mkdir(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MKDIR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MKDIR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -10119,7 +10119,7 @@ int handle_sys_enter_rmdir(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_RMDIR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_RMDIR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -10196,7 +10196,7 @@ int handle_sys_enter_unlinkat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UNLINKAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UNLINKAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -10273,7 +10273,7 @@ int handle_sys_enter_unlink(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_UNLINK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_UNLINK, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -10350,7 +10350,7 @@ int handle_sys_enter_symlinkat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SYMLINKAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SYMLINKAT, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10438,7 +10438,7 @@ int handle_sys_enter_symlink(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SYMLINK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SYMLINK, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10526,7 +10526,7 @@ int handle_sys_enter_linkat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LINKAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LINKAT, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10614,7 +10614,7 @@ int handle_sys_enter_link(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LINK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LINK, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10702,7 +10702,7 @@ int handle_sys_enter_renameat2(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_RENAMEAT2, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_RENAMEAT2, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10790,7 +10790,7 @@ int handle_sys_enter_renameat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_RENAMEAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_RENAMEAT, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -10878,7 +10878,7 @@ int handle_sys_enter_rename(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_RENAME, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_RENAME, now))
         return 0;
 
     struct name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct name_event), 0);
@@ -11270,7 +11270,7 @@ int handle_sys_enter_newstat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_NEWSTAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_NEWSTAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -11347,7 +11347,7 @@ int handle_sys_enter_newlstat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_NEWLSTAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_NEWLSTAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -11424,7 +11424,7 @@ int handle_sys_enter_newfstatat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_NEWFSTATAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_NEWFSTATAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -11558,7 +11558,7 @@ int handle_sys_enter_readlinkat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_READLINKAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_READLINKAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -11635,7 +11635,7 @@ int handle_sys_enter_readlink(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_READLINK, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_READLINK, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -11712,7 +11712,7 @@ int handle_sys_enter_statx(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_STATX, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_STATX, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -12530,7 +12530,7 @@ int handle_sys_enter_truncate(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_TRUNCATE, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_TRUNCATE, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -12721,7 +12721,7 @@ int handle_sys_enter_faccessat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FACCESSAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FACCESSAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -12798,7 +12798,7 @@ int handle_sys_enter_faccessat2(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FACCESSAT2, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FACCESSAT2, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -12875,7 +12875,7 @@ int handle_sys_enter_access(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_ACCESS, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_ACCESS, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -12952,7 +12952,7 @@ int handle_sys_enter_chdir(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_CHDIR, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_CHDIR, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13086,7 +13086,7 @@ int handle_sys_enter_chroot(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_CHROOT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_CHROOT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13220,7 +13220,7 @@ int handle_sys_enter_fchmodat2(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FCHMODAT2, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FCHMODAT2, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13297,7 +13297,7 @@ int handle_sys_enter_fchmodat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FCHMODAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FCHMODAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13374,7 +13374,7 @@ int handle_sys_enter_chmod(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_CHMOD, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_CHMOD, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13451,7 +13451,7 @@ int handle_sys_enter_fchownat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_FCHOWNAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_FCHOWNAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13528,7 +13528,7 @@ int handle_sys_enter_chown(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_CHOWN, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_CHOWN, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13605,7 +13605,7 @@ int handle_sys_enter_lchown(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_LCHOWN, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_LCHOWN, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -13739,7 +13739,7 @@ int handle_sys_enter_open(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_OPEN, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_OPEN, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -13815,7 +13815,7 @@ int handle_sys_enter_openat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_OPENAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_OPENAT, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -13891,7 +13891,7 @@ int handle_sys_enter_openat2(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_OPENAT2, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_OPENAT2, now))
         return 0;
 
     struct open_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct open_event), 0);
@@ -13973,7 +13973,7 @@ int handle_sys_enter_creat(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_CREAT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_CREAT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -14163,7 +14163,7 @@ int handle_sys_enter_memfd_create(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_MEMFD_CREATE, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_MEMFD_CREATE, now))
         return 0;
 
     struct eventfd_name_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct eventfd_name_event), 0);
@@ -14722,7 +14722,7 @@ int handle_sys_enter_swapoff(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SWAPOFF, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SWAPOFF, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -14799,7 +14799,7 @@ int handle_sys_enter_swapon(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_SWAPON, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_SWAPON, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
@@ -16634,7 +16634,7 @@ int handle_sys_enter_acct(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_ACCT, now))
+    if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_ACCT, now))
         return 0;
 
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);

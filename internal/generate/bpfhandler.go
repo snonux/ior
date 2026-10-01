@@ -108,6 +108,22 @@ func (h handlerSpec) takesPendingFilename() bool {
 	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0)
 }
 
+// keepsEnterState reports whether this enter handler needs its per-tid
+// enter-state entry at every sampling rate, rate 1 included: a handler that
+// stashes a pending filename (the faulted-path recovery in its kind body, the
+// output-path capture in the prologue) writes the user pointer onto that entry
+// and its exit reads it back. The kind body is searched rather than a kind
+// table consulted, so a new kind that stashes keeps its entry without anyone
+// remembering to flag it. Every other enter handler uses ior_on_syscall_enter,
+// which writes no entry at rate 1 (internal/c/filter.c, task 2s2: it removes
+// the hash update, lookup and delete from the hot path of the common syscall).
+func (h handlerSpec) keepsEnterState() bool {
+	if !h.isEnter || h.noreturn {
+		return false
+	}
+	return h.outputPathArg >= 0 || strings.Contains(h.extra, "ior_stash_pending_filename")
+}
+
 // enterConstForHandler returns the C #define constant name for the
 // corresponding enter tracepoint. For enter handlers it returns
 // strings.ToUpper(name) directly; for exit handlers it replaces "EXIT"
@@ -126,8 +142,8 @@ func enterConstForHandler(name string, isEnter bool) string {
 // of a user pointer (two for rename/link and move_mount) carried on the enter
 // state. Those lines are position-critical,
 // which is why they live here rather than in the kind emitters: the enter-side
-// stash must follow ior_on_syscall_enter (which creates this tid's enter-state
-// entry), the take must precede ior_on_syscall_exit (which deletes it) and the
+// stash must follow ior_on_syscall_enter_stateful (which creates this tid's
+// enter-state entry at every rate), the take must precede ior_on_syscall_exit (which deletes it) and the
 // fixup must precede this handler's own reserve, so the ring buffer hands
 // userspace the name while the enter event of the same syscall is still
 // pending and unpaired.
@@ -175,7 +191,11 @@ func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 		b.WriteString(clockReadLine)
 	case h.isEnter:
 		b.WriteString(clockReadLine)
-		fmt.Fprintf(b, "    if (!ior_on_syscall_enter(tid, %s, now))\n", strings.ToUpper(h.name))
+		hook := "ior_on_syscall_enter"
+		if h.keepsEnterState() {
+			hook = "ior_on_syscall_enter_stateful"
+		}
+		fmt.Fprintf(b, "    if (!%s(tid, %s, now))\n", hook, strings.ToUpper(h.name))
 		b.WriteString("        return 0;\n")
 	default:
 		b.WriteString(clockReadLine)

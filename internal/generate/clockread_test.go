@@ -16,10 +16,14 @@ const clockHelperCall = "bpf_ktime_get_boot_ns("
 // handlerSplit matches the start of every generated syscall handler.
 var handlerSplit = regexp.MustCompile(`(?m)^/// (sys_\w+) is a struct `)
 
+// enterHookCall finds an enter hook call of either variant: ior_on_syscall_enter
+// or ior_on_syscall_enter_stateful (the handlers that stash a pending filename).
+var enterHookCall = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(`)
+
 // enterHookWithNow and exitHookWithNow match the enter/exit hook calls that
 // are passed the handler's single timestamp.
 var (
-	enterHookWithNow = regexp.MustCompile(`ior_on_syscall_enter\(tid, \w+, now\)`)
+	enterHookWithNow = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(tid, \w+, now\)`)
 	exitHookWithNow  = regexp.MustCompile(`ior_on_syscall_exit\(tid, \w+, ctx->ret, now\)`)
 )
 
@@ -72,8 +76,8 @@ func checkHandlerClockRead(name, body string) error {
 		if strings.Index(body, "ior_on_noreturn_syscall_enter(") > clockAt {
 			return fmt.Errorf("%s: noreturn handler reads the clock before its sampling decision", name)
 		}
-	case strings.Contains(body, "ior_on_syscall_enter("):
-		hookAt := strings.Index(body, "ior_on_syscall_enter(")
+	case enterHookCall.MatchString(body):
+		hookAt := enterHookCall.FindStringIndex(body)[0]
 		if hookAt < clockAt {
 			return fmt.Errorf("%s: enter hook runs before the clock read it needs", name)
 		}
@@ -158,6 +162,8 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 	}
 	hooks := map[string]string{
 		"ior_on_syscall_enter":          "(__u32 tid, __u32 enter_trace_id, __u64 now)",
+		"ior_on_syscall_enter_stateful": "(__u32 tid, __u32 enter_trace_id, __u64 now)",
+		"ior_on_syscall_enter_impl":     "(__u32 tid, __u32 enter_trace_id, __u64 now, int keep_state)",
 		"ior_on_noreturn_syscall_enter": "(__u32 enter_trace_id)",
 		"ior_on_syscall_exit":           "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now)",
 	}
