@@ -286,6 +286,7 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 		case <-ctx.Done():
 			e.notifyStatus("Stopping event loop")
 			e.drainBacklogAtStop(rawCh, pairs, flush)
+			e.countKernelRingLeftAtStop()
 			// Rows still held for a possible restart_syscall are emitted
 			// unchanged now, before run's deferred flushOutput writes the
 			// -plain buffer out (task fs2).

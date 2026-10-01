@@ -267,5 +267,6 @@ func newHeadlessParquetEventLoop(
 		el.aggregateSrc = aggregateSrc
 	}
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
+	attachRingbufUnreadReader(el, bpfModule, warnSetup)
 	return el, nil
 }

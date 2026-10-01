@@ -158,6 +158,14 @@ type eventLoop struct {
 	numDiscardedAtStop uint
 	// stopDrainBudget overrides defaultStopDrainBudget when positive (tests).
 	stopDrainBudget time.Duration
+	// ringUnread reads what the consumer left in the kernel ring buffer at the
+	// stop (task us2); nil disables the report (tests, a failed attach).
+	ringUnread ringbufUnreadSource
+	// numLeftInKernelRing counts the committed records still in the kernel ring
+	// buffer when the stop-time drain finished: delivered to neither rawCh nor
+	// the decoder, and not counted as drops. Written by the event-loop
+	// goroutine only; stats() reads it after <-e.done.
+	numLeftInKernelRing uint
 	// stopOnTargetExit arms endTraceOnTargetExit and
 	// endTraceOnTargetThreadExit, the record-based triggers: the -pid
 	// target's group-dead exit record, the -tid thread's own exit record (one
@@ -389,7 +397,7 @@ func (e *eventLoop) stats() string {
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine()+e.fdCopySkipStatLine(),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine(),
 		e.samplingStatLines(),
 	)
 }

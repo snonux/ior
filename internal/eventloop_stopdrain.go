@@ -93,3 +93,41 @@ func (e *eventLoop) discardedAtStopStatLine() string {
 		e.numDiscardedAtStop,
 	)
 }
+
+// countKernelRingLeftAtStop records what the consumer left in the kernel ring
+// buffer (task us2). The libbpfgo poller feeds rawCh ahead of the decoder and
+// blocks when it is full, so a consumer that lagged until the stop leaves
+// records in the kernel's ring, and RingBuffer.Stop abandons them. Unlike the
+// rawCh backlog (drainBacklogAtStop) they cannot be decoded here: only the
+// poller consumes the ring. They are counted so "drops: 0" does not read as a
+// complete trace. It runs after the drain, on the event-loop goroutine, with
+// the BPF module still open (teardown comes after the loop returns).
+func (e *eventLoop) countKernelRingLeftAtStop() {
+	if e.ringUnread == nil {
+		return
+	}
+	unread, err := e.ringUnread.Unread()
+	if err != nil {
+		e.notifyWarningOrLog(fmt.Sprintf("could not read the kernel ring buffer backlog at stop: %v", err))
+		return
+	}
+	if unread.records == 0 {
+		return
+	}
+	e.numLeftInKernelRing += uint(unread.records)
+	e.notifyWarningOrLog(fmt.Sprintf("%d records were still in the kernel ring buffer at stop and were not read: the consumer lagged", unread.records))
+}
+
+// leftInKernelRingStatLine renders the end-of-run "left in the kernel ring
+// buffer" line, empty when the consumer kept up. These records were never
+// delivered to userspace, so they appear in none of "tracepoints", "ring buffer
+// drops" and "discarded at stop".
+func (e *eventLoop) leftInKernelRingStatLine() string {
+	if e.numLeftInKernelRing == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\trecords left in the kernel ring buffer at stop: %d (never delivered; not counted in tracepoints, ring buffer drops or discarded at stop)\n",
+		e.numLeftInKernelRing,
+	)
+}

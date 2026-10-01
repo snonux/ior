@@ -1351,6 +1351,7 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(.
 	el.aggregateSrc = aggregateSrc
 	// Deliberately non-fatal, see attachRingbufDropCounter.
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
+	attachRingbufUnreadReader(el, bpfModule, warnSetup)
 	return el, nil
 }
 
