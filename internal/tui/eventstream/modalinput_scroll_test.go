@@ -33,12 +33,26 @@ func (m scrollModal) step(t *testing.T, label string, msg tea.Msg, width int) (s
 	return m, m.windowStart(t, label, width)
 }
 
-// windowStart renders m at width and returns the index of the first rune of
-// the value drawn in its input line: the cells drawn between the box's text
-// start and the cursor are the widths of the runes from there to the cursor.
-// It fails the test when the cursor is not drawn over the rune at the
-// cursor position (assertModalEditCursor).
+// windowStart renders m, sized to width, at width and returns the index of
+// the first rune of the value drawn in its input line: the cells drawn
+// between the box's text start and the cursor are the widths of the runes
+// from there to the cursor. It fails the test when the cursor is not drawn
+// over the rune at the cursor position (assertModalEditCursor), or when the
+// drawn window does not start where the modal remembers it does
+// (inputStart).
 func (m scrollModal) windowStart(t *testing.T, label string, width int) int {
+	t.Helper()
+	start := m.drawnWindowStart(t, label, width)
+	if remembered := m.rememberedStart(); remembered != start {
+		value, pos := m.state()
+		t.Fatalf("%s: inputStart %d, but the window is drawn from %d (value %q, pos %d):\n%s",
+			label, remembered, start, string(value), pos, ansi.Strip(m.view(width, 12)))
+	}
+	return start
+}
+
+// drawnWindowStart is windowStart without the inputStart check.
+func (m scrollModal) drawnWindowStart(t *testing.T, label string, width int) int {
 	t.Helper()
 	out := m.view(width, 12)
 	assertModalEditCursor(t, label, m.editableModal, out, width)
@@ -204,5 +218,38 @@ func assertMidValueTyping(t *testing.T, label string, m scrollModal, alphabet []
 		if start < prev || start > prev+2 {
 			t.Fatalf("%s: window moved from %d to %d, want at most two runes right", stepLabel, prev, start)
 		}
+	}
+}
+
+// The window a modal remembers (inputStart) is the one it draws (task ls2).
+// fitModalInput applies the start through textinput's cursor moves, and
+// CursorEnd alone already rebuilds textinput's own last screenful, so a
+// modalWindowStart whose tail window drifted from textinput's
+// handleOverflow still drew a correct screen while inputStart silently
+// disagreed with it (wide export at 9 columns: inputStart 23, drawn 22);
+// the next edit then scrolled from the wrong start. After Open and after
+// every Left, Right, Home, End and typed rune, the drawn window must start
+// at inputStart: both modals, ASCII and wide runes, every width from the
+// narrowest (8 export, 9 search) to 80 columns. A short fixed key sequence
+// per width keeps it fast; the long walks are TestStreamModalInputScrollsMinimally's.
+func TestStreamModalInputRemembersTheDrawnWindow(t *testing.T) {
+	left, right := tea.KeyPressMsg{Code: tea.KeyLeft}, tea.KeyPressMsg{Code: tea.KeyRight}
+	home, end := tea.KeyPressMsg{Code: tea.KeyHome}, tea.KeyPressMsg{Code: tea.KeyEnd}
+	for name, alphabet := range modalEditAlphabets {
+		typed := tea.KeyPressMsg{Code: alphabet[0], Text: string(alphabet[0])}
+		keys := []tea.Msg{left, left, typed, end, home, right, right, typed, end, left, typed, typed, right, end}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for width := 8; width <= 80; width++ {
+				value := scrollValue(alphabet, 3*width/2+10)
+				for _, m := range scrollModals(value, width) {
+					label := fmt.Sprintf("%s %T at width %d", name, m.editableModal, width)
+					m.windowStart(t, label+" opened", width)
+					for i, key := range keys {
+						m, _ = m.step(t, fmt.Sprintf("%s key %d", label, i), key, width)
+					}
+				}
+			}
+		})
 	}
 }

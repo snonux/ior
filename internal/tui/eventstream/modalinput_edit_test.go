@@ -12,12 +12,14 @@ import (
 )
 
 // editableModal is an input modal the random edit test can also resize and
-// inspect: its value, its cursor position and its box size.
+// inspect: its value, its cursor position, its box size and the window start
+// it remembers (inputStart).
 type editableModal interface {
 	inputModal
 	resize(width int) editableModal
 	state() (value []rune, pos int)
 	size() modalSize
+	rememberedStart() int
 }
 
 func (m searchInput) resize(width int) editableModal {
@@ -31,6 +33,8 @@ func (m searchInput) state() ([]rune, int) {
 
 func (m searchInput) size() modalSize { return searchModalSize }
 
+func (m searchInput) rememberedStart() int { return m.inputStart }
+
 func (m exportInput) resize(width int) editableModal {
 	m.ExportModal = m.Resize(width)
 	return m
@@ -41,6 +45,8 @@ func (m exportInput) state() ([]rune, int) {
 }
 
 func (m exportInput) size() modalSize { return exportModalSize }
+
+func (m exportInput) rememberedStart() int { return m.inputStart }
 
 // modalEditAlphabets are the runes the random edits type and paste: plain
 // ASCII, and wide (two-cell) runes mixed with ASCII.
@@ -121,8 +127,9 @@ func assertModalEditCursor(t *testing.T, label string, modal editableModal, out 
 // box (renderModalBox then cut the cursor off: "/検f" with an empty cursor
 // at 10 columns) and, after moving right past the window, drew the cursor
 // over a blank mid-value. fitModalInput keeps the window drawn when it can
-// and moves it as little as the cursor needs; after typing a rune in a sized
-// modal that rune stays drawn left of the cursor (assertTypedRuneDrawn).
+// and moves it as little as the cursor needs; a sized modal draws the window
+// it remembers (inputStart, scrollModal.windowStart), and after typing a rune
+// in it that rune stays drawn left of the cursor (assertTypedRuneDrawn).
 // Seeded random edit sequences, the input checked after every step, at
 // widths from the narrowest that holds a rune and the cursor (8 export, 9
 // search) to 80 columns; the third modal is the search left unsized, which
@@ -170,8 +177,14 @@ func runModalEdits(t *testing.T, label string, seed int, alphabet []rune, steps 
 		if gotValue, gotPos := modal.state(); strings.HasPrefix(did, "resize") && (string(gotValue) != string(value) || gotPos != pos) {
 			t.Fatalf("%s: resize changed %q at %d to %q at %d", stepLabel, string(value), pos, string(gotValue), gotPos)
 		}
-		assertModalEditCursor(t, stepLabel, modal, modal.view(width, 12), width)
-		if sized && strings.HasPrefix(did, "type") {
+		if !sized {
+			assertModalEditCursor(t, stepLabel, modal, modal.view(width, 12), width)
+			continue
+		}
+		// A sized modal also draws the window it remembers (windowStart
+		// checks the cursor and inputStart).
+		asScrollModal(modal, width).windowStart(t, stepLabel, width)
+		if strings.HasPrefix(did, "type") {
 			assertTypedRuneDrawn(t, stepLabel, modal, width)
 		}
 	}
@@ -183,12 +196,19 @@ func runModalEdits(t *testing.T, label string, seed int, alphabet []rune, steps 
 // rune and the cursor (typedRuneFits).
 func assertTypedRuneDrawn(t *testing.T, label string, modal editableModal, width int) {
 	t.Helper()
-	m := scrollModal{editableModal: modal, room: exportInputWidth(width) + 1}
-	if _, ok := modal.(searchInput); ok {
-		m.prefix, m.room = searchPrefixWidth, searchInputWidth(width)+1
-	}
+	m := asScrollModal(modal, width)
 	_, pos := modal.state()
 	if start := m.windowStart(t, label, width); start > pos-1 && typedRuneFits(m, pos-1) {
 		t.Fatalf("%s: the typed rune at %d is scrolled off, the window starts at %d", label, pos-1, start)
 	}
+}
+
+// asScrollModal wraps modal, drawn at width, for the scroll tests' window
+// read-back (scrollModal.windowStart).
+func asScrollModal(modal editableModal, width int) scrollModal {
+	m := scrollModal{editableModal: modal, room: exportInputWidth(width) + 1}
+	if _, ok := modal.(searchInput); ok {
+		m.prefix, m.room = searchPrefixWidth, searchInputWidth(width)+1
+	}
+	return m
 }
