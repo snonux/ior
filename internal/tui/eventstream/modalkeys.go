@@ -9,11 +9,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// namedKeyCodes maps the key names Bubble Tea's Key.Keystroke prints for the
-// named (non-printable) keys back to their key codes, plus the aliases the
-// stream's own key handling uses ("pgdn", "pagedown", "pageup"). It is built
-// from the codes' own Keystroke names, so it stays in step with Bubble Tea's
-// spelling ("pgdown", "esc", "delete", ...).
+// namedKeyCodes maps the names Bubble Tea's Key.Keystroke prints for the
+// fifteen named keys the stream and its modals use (arrows, Home/End, the page
+// keys, Backspace, Delete, Insert, Tab, Enter, Esc, Space) back to their key
+// codes, plus the aliases the stream's own key handling uses ("pgdn",
+// "pagedown", "pageup"). It is built from the codes' own Keystroke names, so
+// it stays in step with Bubble Tea's spelling ("pgdown", "esc", "delete", ...).
+// It is not every key Bubble Tea names: f1-f63, capslock, the keypad and media
+// keys are left out, as the modals' textinput binds none of them; HandleKey
+// ignores such a name while a modal is open, which is what the textinput
+// would do with the real key.
 var namedKeyCodes = buildNamedKeyCodes()
 
 // keyNameModifiers maps a modifier prefix of a key name ("ctrl+" in
@@ -50,15 +55,19 @@ func buildNamedKeyCodes() map[string]rune {
 // stream modals hand the result to their bubbles textinput, which acts on
 // the key (Code and Mod) and types only the press's Text.
 //
-// A single rune without modifiers is typed text (Text set). A named key or a
-// rune with modifiers is a key without text: "ctrl+x" is Ctrl+X, which the
-// textinput ignores, and never the five runes "ctrl+x" (task 9z2; the old
-// mapping knew only esc, enter, tab, up, down and space and typed every other
-// name into the search and export inputs). Anything else (an unknown name
-// such as "f13", a modifier on an unknown name, or a multi-rune string, which
-// is not a single key's name) is not a key, and the caller ignores it.
-// Composed multi-rune text reaches the modals as the original key press
-// through HandleTeaKey, or through HandlePaste.
+// A single rune without modifiers is typed text (Text set). A mapped named key
+// or a rune with modifiers is a key without text: "ctrl+x" is Ctrl+X, which
+// the textinput ignores, and never the six runes "ctrl+x". Before task 9z2 the
+// mapping knew only esc, enter, tab, up, down and space and made every other
+// name a press whose Text was the name itself. Names the textinput binds
+// ("ctrl+a", "home", "alt+b", ...) still worked as keys that way, because
+// bubbles' key.Matches compares msg.String(), which returns the Text; only
+// names it does not bind ("ctrl+x", "alt+x", "insert", "pgup", ...) were
+// typed into the search and export inputs. Anything else is not a key here,
+// and the caller ignores it: a real key name namedKeyCodes leaves out ("f13",
+// "capslock"), a string naming no key ("abc", "ctrl+foo"), a modifier on
+// either, or a multi-rune string, which is not a single key's name. Composed multi-rune text reaches the modals as the
+// original key press through HandleTeaKey, or through HandlePaste.
 func keyMsgFromString(keyStr string) (tea.KeyPressMsg, bool) {
 	if code, ok := namedKeyCodes[keyStr]; ok {
 		return namedKeyPress(code, 0), true
@@ -111,9 +120,11 @@ func namedKeyPress(code rune, mod tea.KeyMod) tea.KeyPressMsg {
 // press (Alt+D, Alt+Delete) with the cursor on the value's last rune becomes
 // a plain Delete, which removes the same rune. bubbles v2.0.0's
 // textinput.deleteWordForward indexes one past the value there and panics
-// (task kz2 fixes this for every textinput); the stream modals receive the
-// real key press since task 9z2 instead of the literal text "alt+d", so they
-// guard it here rather than gain a new way to crash.
+// (task kz2 fixes this for every textinput). This crash predates task 9z2:
+// the old name route made Alt+D a press with Text "alt+d", which matches the
+// binding just as the real press does, so "foo", Left, Alt+D panicked in both
+// modals. Task 9z2 added this guard to fix that existing crash here; kz2
+// still covers the other textinputs.
 func guardDeleteWordForward(ti textinput.Model, msg tea.Msg) tea.Msg {
 	press, ok := msg.(tea.KeyPressMsg)
 	if !ok || !key.Matches(press, ti.KeyMap.DeleteWordForward) {

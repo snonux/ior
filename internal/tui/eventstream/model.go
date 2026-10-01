@@ -542,11 +542,13 @@ func (m *Model) handleDirectionalKey(keyStr string) bool {
 // then falls back to string matching for rune-driven shortcuts. Its results
 // have the same meaning as HandleKey's.
 //
-// An open search or export modal gets msg itself, not its name: its bubbles
-// textinput then sees every editing key as the key it is (Ctrl+A/E/K/U/W/H,
-// Alt+B/F, Home/End, Ctrl+Left/Right, ...) and types only the press's text,
-// so a key it does not bind, such as Ctrl+X, types nothing. Round-tripping
-// through HandleKey's name typed "ctrl+x" into the input (task 9z2).
+// An open search or export modal gets msg itself, not its name, and its
+// bubbles textinput types only the press's text, so a key it does not bind,
+// such as Ctrl+X, types nothing (task 9z2). The old route went through
+// HandleKey's name: the switch below dropped the modifier of Ctrl/Alt+Left
+// and Ctrl/Alt+Right (a plain cursor step, not a word), and keyMsgFromString
+// then turned a name the textinput does not bind into typed text ("ctrl+x").
+// Bound names (ctrl+a, home, alt+b, ...) already acted as their keys there.
 func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.inputModalVisible() {
 		return m.handleModalKey(msg), nil

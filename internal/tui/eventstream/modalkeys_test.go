@@ -10,7 +10,9 @@ import (
 // modals' textinput binds (and the stream's page-key aliases) becomes that
 // key's press, without text unless it is a plain rune or space, and the
 // press spells the same name back. The old mapping knew only esc, enter, tab,
-// up, down and space and typed every other name as text (task 9z2).
+// up, down and space and made every other name a press whose Text was the
+// name (task 9z2): bound names still matched their bindings through that
+// text, unbound ones were typed.
 func TestKeyMsgFromStringNamesKeys(t *testing.T) {
 	tests := []struct {
 		name string
@@ -86,7 +88,7 @@ func TestKeyMsgFromStringNamesKeys(t *testing.T) {
 // not a key (and so is never typed): unknown names, unknown modifiers, a
 // modifier without a key and multi-rune text.
 func TestKeyMsgFromStringRejectsNonKeys(t *testing.T) {
-	for _, name := range []string{"", "f13", "ctrl+", "ctrl+foo", "foo+a", "ctrl+ctrl", "abc", "検索", "ctrl+x+"} {
+	for _, name := range []string{"", "nokey", "ctrl+", "ctrl+foo", "foo+a", "ctrl+ctrl", "abc", "検索", "ctrl+x+"} {
 		if got, ok := keyMsgFromString(name); ok {
 			t.Errorf("keyMsgFromString(%q) = %+v, want no key", name, got)
 		}
@@ -147,8 +149,18 @@ var streamInputModals = []streamInputModal{
 
 // modalEditKeyCases press keys on "foo bar baz" with the cursor at its end
 // (Open's position) and give the input's value and cursor afterwards. Every
-// key must reach the textinput as the key it names: before task 9z2 all but
-// esc, enter, tab, up, down and space were typed as their names.
+// key must reach the textinput as the key it names.
+//
+// Most cases are regression guards: before task 9z2 a name the textinput
+// binds (ctrl+a, home, alt+b, backspace, ...) became a press whose Text was
+// the name, and bubbles' key.Matches compares msg.String(), which returns
+// that Text, so those keys already edited. The cases marked "changed" pin
+// what task 9z2 changed: unbound names (ctrl+x, alt+x, pgup, insert) were
+// typed into the input through both entry points, and HandleTeaKey sent
+// Ctrl+Left/Right to HandleKey("left"/"right"), dropping the modifier (the
+// HandleKey entry already moved by word for those names). The alt+d and
+// alt+delete cases on the last rune pin the guardDeleteWordForward fix of a
+// panic that both entry points already hit before task 9z2.
 var modalEditKeyCases = []struct {
 	name  string
 	keys  []string
@@ -166,8 +178,10 @@ var modalEditKeyCases = []struct {
 	{name: "ctrl+b", keys: []string{"ctrl+b"}, value: "foo bar baz", pos: 10},
 	{name: "ctrl+f", keys: []string{"home", "ctrl+f"}, value: "foo bar baz", pos: 1},
 	{name: "alt+b", keys: []string{"alt+b"}, value: "foo bar baz", pos: 8},
+	// changed (HandleTeaKey entry): the modifier used to be dropped.
 	{name: "ctrl+left", keys: []string{"ctrl+left"}, value: "foo bar baz", pos: 8},
 	{name: "alt+f", keys: []string{"home", "alt+f"}, value: "foo bar baz", pos: 3},
+	// changed (HandleTeaKey entry): the modifier used to be dropped.
 	{name: "ctrl+right", keys: []string{"home", "ctrl+right"}, value: "foo bar baz", pos: 3},
 	{name: "backspace", keys: []string{"backspace"}, value: "foo bar ba", pos: 10},
 	{name: "ctrl+h", keys: []string{"ctrl+h"}, value: "foo bar ba", pos: 10},
@@ -178,17 +192,22 @@ var modalEditKeyCases = []struct {
 	{name: "ctrl+w", keys: []string{"ctrl+w"}, value: "foo bar ", pos: 8},
 	{name: "alt+backspace", keys: []string{"alt+backspace"}, value: "foo bar ", pos: 8},
 	{name: "alt+d mid-value", keys: []string{"home", "alt+d"}, value: " bar baz", pos: 0},
-	// bubbles v2.0.0 panics on a delete-word-forward from the last rune
-	// (task kz2); the modals turn it into Delete (guardDeleteWordForward).
+	// changed: bubbles v2.0.0 panics on a delete-word-forward from the
+	// last rune (task kz2), and did so here before task 9z2 too; the
+	// modals now turn it into Delete (guardDeleteWordForward).
 	{name: "alt+d on the last rune", keys: []string{"left", "alt+d"}, value: "foo bar ba", pos: 10},
 	{name: "alt+delete on the last rune", keys: []string{"left", "alt+delete"}, value: "foo bar ba", pos: 10},
 	{name: "alt+d at the end", keys: []string{"alt+d"}, value: "foo bar baz", pos: 11},
-	// Keys the textinput does not bind type nothing.
+	// changed: keys the textinput does not bind type nothing; before
+	// task 9z2 their names were typed ("ctrl+x", "pgup", ...).
 	{name: "ctrl+x", keys: []string{"ctrl+x"}, value: "foo bar baz", pos: 11},
 	{name: "alt+x", keys: []string{"alt+x"}, value: "foo bar baz", pos: 11},
-	{name: "ctrl+v", keys: []string{"ctrl+v"}, value: "foo bar baz", pos: 11},
 	{name: "pgup", keys: []string{"pgup", "pgdown"}, value: "foo bar baz", pos: 11},
 	{name: "insert", keys: []string{"insert"}, value: "foo bar baz", pos: 11},
+	// Regression only: Ctrl+V is bound (Paste), but the modals discard
+	// the clipboard-read command it returns, so it changes nothing. It
+	// did the same before task 9z2.
+	{name: "ctrl+v", keys: []string{"ctrl+v"}, value: "foo bar baz", pos: 11},
 }
 
 // TestStreamModalsEditWithNamedKeys presses every editing key on the search
@@ -225,7 +244,7 @@ func TestStreamModalsEditWithNamedKeys(t *testing.T) {
 // naming no key while a modal is open, and neither types it nor passes it on.
 func TestStreamModalsIgnoreUnknownKeyNames(t *testing.T) {
 	for _, modal := range streamInputModals {
-		for _, name := range []string{"f13", "ctrl+foo", "abc", "検索"} {
+		for _, name := range []string{"nokey", "ctrl+foo", "abc", "検索"} {
 			m := NewModel(NewRingBuffer())
 			m.SetViewport(80, 20)
 			modal.open(&m, "foo")
@@ -242,7 +261,8 @@ func TestStreamModalsIgnoreUnknownKeyNames(t *testing.T) {
 
 // TestHandleTeaKeyTypesComposedText pins that a key press carrying several
 // runes of text (an IME composition) is typed whole into an open modal: the
-// modal gets the press itself, not a name.
+// modal gets the press itself, not a name. A regression guard: the old name
+// route typed it whole too, as msg.String() returns the Text.
 func TestHandleTeaKeyTypesComposedText(t *testing.T) {
 	for _, modal := range streamInputModals {
 		m := NewModel(NewRingBuffer())
