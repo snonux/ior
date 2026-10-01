@@ -174,6 +174,21 @@ func (m *Model) statusTail() statusTail {
 	tail := statusTail{summary: m.filterSummary()}
 	if m.activeTab != TabStream {
 		tail.badges = warningBadges(m.streamModel.WarningCount())
+	} else if message := m.streamModel.UndrawnStatusMessage(); message != "" {
+		tail.badges = streamMessageBadges(message)
 	}
 	return tail
+}
+
+// streamMessageBadges returns the renderings of a stream status message that
+// had no row of its own in the panel (eventstream.UndrawnStatusMessage), longest
+// first: whole, then cut to 24 and to 12 cells. fitStatusRow takes the longest
+// that fits beside the filter summary and drops the badge, never the summary,
+// when none does (task 403).
+func streamMessageBadges(message string) []string {
+	return []string{
+		message,
+		common.TruncateRight(message, 24, "…"),
+		common.TruncateRight(message, 12, "…"),
+	}
 }

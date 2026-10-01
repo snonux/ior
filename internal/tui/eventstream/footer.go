@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"ior/internal/tui/common"
+
+	"charm.land/lipgloss/v2"
 )
 
 // Footer lines sit below the stream panel, outside its border, so nothing
@@ -87,4 +89,25 @@ func fdTraceFooterLine(width, row, total int) string {
 // ior-generated (counters and fixed hints), so they need no sanitising.
 func fitFooterSegments(segments []string, width int) string {
 	return common.FitSegments(segments, footerSep, footerTail, width)
+}
+
+// UndrawnStatusMessage returns the status message (sanitised) when the table
+// leaves no spare row to draw it in, "" otherwise (task 403). A terminal at
+// the Stream tab's minimum body (6 rows: the panel alone) has no row for the
+// footer, so "Export failed", "Open failed", "Invalid regex" and "No match"
+// would never reach the user; the dashboard shows them in the status line's
+// badge slot instead, which the Stream tab leaves free. It answers from the
+// same geometry View uses (renderStreamBase and the view height), without
+// waiting for a frame, and says nothing while a modal or the FD trace owns the
+// view: the message is not drawn there either.
+func (m *Model) UndrawnStatusMessage() string {
+	if m.statusMessage == "" || m.height <= 0 || m.width <= 0 || m.fdTraceView.visible ||
+		m.exportModal.Visible() || m.searchModal.Visible() {
+		return ""
+	}
+	base, _ := m.renderStreamBase(m.width)
+	if m.height-lipgloss.Height(base) >= 1 {
+		return ""
+	}
+	return common.Sanitize(m.statusMessage)
 }

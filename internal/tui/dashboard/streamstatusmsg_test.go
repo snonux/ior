@@ -15,8 +15,9 @@ import (
 // heights 1..30, widths 20..200, help on/off, live/paused and with/without a
 // message, the frame keeps the height matrix's contract (assertFrameFits: tab
 // bar first, the stream's own output, the status line last, nothing wider
-// than the terminal) and the message is on screen exactly when the stream
-// body has a row beyond its 6-row panel.
+// than the terminal) and the message is in the panel when the stream body has
+// a row beyond its 6-row panel; without one it may only appear in the status
+// line (task 403, UndrawnStatusMessage).
 func TestStreamStatusMessageReachesTheFrame(t *testing.T) {
 	const message = "Export failed: open /nonexistent/out.csv: no such file or directory"
 	for _, help := range []bool{false, true} {
@@ -44,9 +45,19 @@ func checkStreamMessageFrames(t *testing.T, c fitCase, help bool, msg string) {
 			m.streamModel.SetStatusMessage(msg)
 			assertFrameFits(t, m, c, label, width, height)
 			body := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width))).body
-			shown := strings.Contains(m.View().Content, "Export failed")
-			if want := msg != "" && body > streamTableMinRows; shown != want {
-				t.Fatalf("%s: message shown = %v, want %v (body %d rows):\n%s", label, shown, want, body, m.View().Content)
+			content := m.View().Content
+			shown := strings.Contains(content, "Export failed")
+			inPanel := msg != "" && body > streamTableMinRows
+			switch {
+			case msg == "" && shown, inPanel && !shown:
+				t.Fatalf("%s: message shown = %v, want %v (body %d rows):\n%s", label, shown, inPanel, body, content)
+			case msg != "" && !inPanel && shown:
+				// No row in the panel: the message is surfaced in the status
+				// line (task 403), the frame's last line, and nowhere else.
+				lines := strings.Split(content, "\n")
+				if !strings.Contains(lines[len(lines)-1], "Export failed") || strings.Contains(strings.Join(lines[:len(lines)-1], "\n"), "Export failed") {
+					t.Fatalf("%s: message outside the status line without a panel row:\n%s", label, content)
+				}
 			}
 		}
 	}

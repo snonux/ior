@@ -79,6 +79,11 @@ func checkStatusMessageViews(t *testing.T, m *Model, label, message string, foot
 			lines := strings.Split(out, "\n")
 			last := lines[len(lines)-1]
 			shown := message != "" && height >= 7
+			// The dashboard draws the message in its status line exactly when
+			// the panel has no row for it (task 403).
+			if got := m.UndrawnStatusMessage() != ""; got != (message != "" && !shown) {
+				t.Fatalf("%s %dx%d: UndrawnStatusMessage non-empty = %v, want %v", label, width, height, got, message != "" && !shown)
+			}
 			if got := last == want && message != ""; got != shown {
 				t.Fatalf("%s %dx%d: message shown = %v, want %v (last line %q)", label, width, height, got, shown, last)
 			}

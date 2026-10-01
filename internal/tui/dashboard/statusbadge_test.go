@@ -335,3 +335,48 @@ func TestStatusBadgeResumesTheHelpBarColour(t *testing.T) {
 		t.Fatalf("plain row must leave the summary unstyled: %q", out)
 	}
 }
+
+// TestStreamStatusMessageReachesTheStatusLineWhenThePanelHasNoRow (task 403):
+// at the Stream tab's 6-row minimum body the panel fills the body and the
+// footer, which is where a status message ("Export failed", "Invalid regex",
+// "No match") is drawn, has no row. The message then goes into the status
+// line's badge slot, which the Stream tab leaves free; with a spare row the
+// panel draws it and the status line stays as it was.
+func TestStreamStatusMessageReachesTheStatusLineWhenThePanelHasNoRow(t *testing.T) {
+	const message = "Export failed: permission denied"
+	for _, tc := range []struct {
+		height    int
+		inStatus  bool
+		inPanel   bool
+		helpShown bool
+	}{
+		{height: 8, inStatus: true}, // 6-row body, help off: no spare row
+		{height: 7, inStatus: true}, // below the minimum: the notice owns the body
+		{height: 12, inPanel: true}, // spare rows: the panel's footer shows it
+		{height: 30, inPanel: true},
+	} {
+		m := newFitModel(t, fitCase{tab: TabStream, mode: tabVizModeTable}, tc.helpShown, 100, tc.height)
+		m.streamModel.SetStatusMessage(message)
+		out := plainLines(m.View().Content)
+		lastLine := out[len(out)-1]
+		if got := strings.Contains(lastLine, message); got != tc.inStatus {
+			t.Errorf("height %d: status line carries the message = %v, want %v:\n%s", tc.height, got, tc.inStatus, strings.Join(out, "\n"))
+		}
+		inBody := strings.Contains(strings.Join(out[:len(out)-1], "\n"), message)
+		if tc.inPanel && !inBody {
+			t.Errorf("height %d: the panel's footer lost the message:\n%s", tc.height, strings.Join(out, "\n"))
+		}
+		if tc.inStatus && lipgloss.Height(m.View().Content) > tc.height {
+			t.Errorf("height %d: the frame outgrew the terminal", tc.height)
+		}
+	}
+	// No message: no badge on the Stream tab, as before.
+	m := newFitModel(t, fitCase{tab: TabStream, mode: tabVizModeTable}, false, 100, 8)
+	if len(m.statusTail().badges) != 0 {
+		t.Fatalf("badges = %q without a status message", m.statusTail().badges)
+	}
+}
+
+func plainLines(s string) []string {
+	return strings.Split(ansi.Strip(s), "\n")
+}
