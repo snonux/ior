@@ -3,6 +3,7 @@ package eventstream
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,19 +24,43 @@ var csvColumnForParquetTag = map[string]string{"is_error": "error"}
 // recorded under), not a property of the traced syscall.
 var notExported = map[string]bool{"filter_epoch": true}
 
-// parquetColumnNames returns the column name of every parquet.Record field,
-// read from the `parquet` struct tags - the same names the written files use.
-func parquetColumnNames(t *testing.T) []string {
+// parquetColumn is one parquet.Record field with the column name its
+// `parquet` tag gives it - the name the written files use.
+type parquetColumn struct {
+	name  string
+	field int // index into parquet.Record
+}
+
+// parquetColumns returns every column of parquet.Record read from the
+// `parquet` struct tags. A field tagged `parquet:"-"` is not a column and is
+// skipped. An untagged (or embedded) field would be written under a name this
+// test cannot know, so it fails loudly instead of being guessed at.
+func parquetColumns(t *testing.T) []parquetColumn {
 	t.Helper()
 	rt := reflect.TypeOf(parquet.Record{})
-	names := make([]string, 0, rt.NumField())
+	cols := make([]parquetColumn, 0, rt.NumField())
 	for i := 0; i < rt.NumField(); i++ {
-		tag := rt.Field(i).Tag.Get("parquet")
+		f := rt.Field(i)
+		tag, ok := f.Tag.Lookup("parquet")
 		name, _, _ := strings.Cut(tag, ",")
-		if name == "" {
-			t.Fatalf("parquet.Record.%s has no parquet tag; the schema test cannot map it", rt.Field(i).Name)
+		switch {
+		case name == "-":
+			continue
+		case !ok || name == "" || f.Anonymous:
+			t.Fatalf("parquet.Record.%s has no plain `parquet:\"name\"` tag (embedded or untagged); teach the schema test how it is written", f.Name)
 		}
-		names = append(names, name)
+		cols = append(cols, parquetColumn{name: name, field: i})
+	}
+	return cols
+}
+
+// parquetColumnNames returns just the column names of parquetColumns.
+func parquetColumnNames(t *testing.T) []string {
+	t.Helper()
+	cols := parquetColumns(t)
+	names := make([]string, len(cols))
+	for i, c := range cols {
+		names[i] = c.name
 	}
 	return names
 }
@@ -139,14 +164,15 @@ func TestWriteStreamCSVRepairsInvalidUTF8LikeParquet(t *testing.T) {
 	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
 		t.Fatalf("writeStreamCSV() error = %v", err)
 	}
+	// Copy the bytes before reading: csv.NewReader drains buf, and the reader
+	// itself accepts invalid UTF-8, so the validity check below has to look at
+	// the raw bytes that were written.
+	raw := bytes.Clone(buf.Bytes())
 	records, err := csv.NewReader(&buf).ReadAll()
 	if err != nil {
 		t.Fatalf("read CSV: %v", err)
 	}
-	col := map[string]int{}
-	for i, name := range records[0] {
-		col[name] = i
-	}
+	col := csvColumnIndex(records[0])
 
 	for i := range rows {
 		want := parquet.RecordFromStream(rows[i], 0)
@@ -180,7 +206,86 @@ func TestWriteStreamCSVRepairsInvalidUTF8LikeParquet(t *testing.T) {
 	if got := records[3][col["comm"]]; got != "n" {
 		t.Errorf("cut rune in comm = %q, want it dropped", got)
 	}
-	if !utf8.ValidString(buf.String()) {
-		t.Errorf("the CSV file is not valid UTF-8:\n%q", buf.String())
+	if !utf8.Valid(raw) {
+		t.Errorf("the CSV file is not valid UTF-8:\n%q", raw)
+	}
+	for _, bad := range []byte{0xff, 0xfe, 0x80} {
+		if bytes.IndexByte(raw, bad) >= 0 {
+			t.Errorf("the CSV file still holds the raw invalid byte %#x:\n%q", bad, raw)
+		}
+	}
+}
+
+// csvColumnIndex maps each header name to its position.
+func csvColumnIndex(header []string) map[string]int {
+	col := make(map[string]int, len(header))
+	for i, name := range header {
+		col[name] = i
+	}
+	return col
+}
+
+// distinctRow returns a row in which every exported field holds a value no
+// other field holds (numbers 1001.., strings named after their column), so a
+// cell written from the wrong field cannot match by accident. IsError is the
+// only bool and is true, so it differs from the zero value.
+func distinctRow() StreamEvent {
+	return StreamEvent{
+		Seq: 1001, TimeNs: 1002, GapNs: 1003, DurationNs: 1004,
+		Comm: "comm-v", PID: 1005, TID: 1006, Syscall: "syscall-v",
+		FD: 1007, RetVal: 1008, Bytes: 1009, FileName: "/file-v",
+		IsError: true, Family: "family-v", RequestedSleepNs: 1010,
+		Nfds: 1011, TimeoutNs: 1012, AddressSpaceBytes: 1013,
+		OldName: "/old-file-v", EpollOp: "epoll-op-v",
+		EpollTargetFD: 1014, EpollEvents: 1015,
+	}
+}
+
+// TestStreamCSVCellsMatchParquetRecord is the cell-level half of the ts2 drift
+// guard: the header test only checks column names, so two cells filled from
+// each other's field (gap_ns from DurationNs, say) would pass it. Here every
+// field of one row carries a distinct value, and each CSV cell must equal the
+// parquet.Record field of the same column name, so a swapped or missing cell
+// fails by name.
+func TestStreamCSVCellsMatchParquetRecord(t *testing.T) {
+	row := distinctRow()
+	rec := reflect.ValueOf(parquet.RecordFromStream(row, 0))
+
+	var buf bytes.Buffer
+	if err := writeStreamCSV(csv.NewWriter(&buf), []StreamEvent{row}); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+	records, err := csv.NewReader(&buf).ReadAll()
+	if err != nil || len(records) != 2 {
+		t.Fatalf("read CSV: %d records, err = %v; want header + 1 row", len(records), err)
+	}
+	col := csvColumnIndex(records[0])
+
+	seenValue := map[string]string{} // cell value -> column that has it
+	for _, pc := range parquetColumns(t) {
+		if notExported[pc.name] {
+			continue
+		}
+		name := pc.name
+		if renamed, ok := csvColumnForParquetTag[name]; ok {
+			name = renamed
+		}
+		idx, ok := col[name]
+		if !ok {
+			t.Errorf("CSV has no column %q for parquet column %q", name, pc.name)
+			continue
+		}
+		want := fmt.Sprint(rec.Field(pc.field).Interface())
+		if got := records[1][idx]; got != want {
+			t.Errorf("CSV column %q = %q, want the parquet.Record %q value %q", name, got, pc.name, want)
+		}
+		// The check above is only as strong as the row is distinct: a bool
+		// has two values, everything else must not repeat.
+		if rec.Field(pc.field).Kind() != reflect.Bool {
+			if other, dup := seenValue[want]; dup {
+				t.Errorf("distinctRow gives columns %q and %q the same value %q; the swap check is blind to them", other, name, want)
+			}
+			seenValue[want] = name
+		}
 	}
 }

@@ -56,8 +56,8 @@ this change hold `N:file` and `fd = -1` in those rows; filter them with
 
 ### Stream CSV export columns
 
-The TUI stream CSV export (`e`, and `x`/`X`/`E` on the Stream tab) carries the same per-event
-fields as the recording, in this order:
+The TUI stream CSV export (`e`, and `x`/`X` on the paused Stream tab; `E` only opens the last
+export in an editor) carries the same per-event fields as the recording, in this order:
 `seq, time_ns, gap_ns, latency_ns, comm, pid, tid, syscall, fd, ret, bytes, file, error, family,
 requested_sleep_ns, nfds, timeout_ns, address_space_bytes, old_file, epoll_op, epoll_target_fd,
 epoll_events`. The names match the Parquet columns above, except that `error` is the Parquet

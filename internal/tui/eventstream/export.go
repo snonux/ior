@@ -238,25 +238,27 @@ func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
 // such as DuckDB's read_csv accepts the file and the CSV and the Parquet
 // recording hold identical text for the same row. Valid text is unchanged.
 func streamCSVRecord(ev *StreamEvent) []string {
-	text := parquet.RecordFromStream(*ev, 0)
+	// filter_epoch (the second argument) is recorder bookkeeping and not a CSV
+	// column, so 0 is passed; only the repaired text fields are used.
+	rec := parquet.RecordFromStream(*ev, 0)
 	return []string{
 		fmt.Sprintf("%d", ev.Seq),
 		fmt.Sprintf("%d", ev.TimeNs),
 		fmt.Sprintf("%d", ev.GapNs),
 		fmt.Sprintf("%d", ev.DurationNs),
-		text.Comm,
+		rec.Comm,
 		fmt.Sprintf("%d", ev.PID),
 		fmt.Sprintf("%d", ev.TID),
 		ev.Syscall,
 		fmt.Sprintf("%d", ev.FD),
 		fmt.Sprintf("%d", ev.RetVal),
 		fmt.Sprintf("%d", ev.Bytes),
-		// text.File is built from FileValue, not FileName: the export is a
+		// rec.File is built from FileValue, not FileName: the export is a
 		// data file, so a fileless row gets an empty file cell like the
 		// Parquet column instead of the "N:file" display placeholder (task
 		// pq2). The fd column keeps -1 (streamrow.UnknownFD) for "no
 		// descriptor".
-		text.File,
+		rec.File,
 		fmt.Sprintf("%t", ev.IsError),
 		ev.Family,
 		fmt.Sprintf("%d", ev.RequestedSleepNs),
@@ -265,7 +267,7 @@ func streamCSVRecord(ev *StreamEvent) []string {
 		fmt.Sprintf("%d", ev.AddressSpaceBytes),
 		// Rename/link source path; empty for every other syscall. The
 		// file column holds the destination.
-		text.OldFile,
+		rec.OldFile,
 		// Empty/zero for everything but epoll_ctl.
 		ev.EpollOp,
 		fmt.Sprintf("%d", ev.EpollTargetFD),
