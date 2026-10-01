@@ -143,18 +143,25 @@ func newFitModel(t *testing.T, c fitCase, help bool, width, height int) *Model {
 	return tickStats(t, m, messages.StatsTickMsg{Snap: tallSnapshot()})
 }
 
-// assertViewFits renders one cell of the matrix and holds View's output to
-// the frame contract: never taller than the terminal, the tab bar (when it
-// has a row) first, the status line last, the "terminal too small" notice
-// exactly below the tab's minimum, and otherwise the tab's own unclipped
-// output as the body. The whole frame is compared with one built from those
-// parts, so a View that dropped, moved or clipped any of them fails here
-// rather than passing on the line count alone.
+// assertViewFits renders one cell of the matrix and holds it to the frame
+// contract (assertFrameFits).
 func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
 	t.Helper()
 	m := newFitModel(t, c, help, width, height)
+	assertFrameFits(t, m, c, fmt.Sprintf("%s help=%v %dx%d", c, help, width, height), width, height)
+}
+
+// assertFrameFits holds m's View output to the frame contract: never taller
+// than the terminal, the tab bar (when it has a row) first, the status line
+// last, the "terminal too small" notice exactly below the tab's minimum, and
+// otherwise the tab's own unclipped output as the body. The whole frame is
+// compared with one built from those parts, so a View that dropped, moved or
+// clipped any of them fails here rather than passing on the line count alone.
+// It returns whether the body is the notice, so callers can compare the body
+// kind across state changes.
+func assertFrameFits(t *testing.T, m *Model, c fitCase, label string, width, height int) bool {
+	t.Helper()
 	out := m.View().Content
-	label := fmt.Sprintf("%s help=%v %dx%d", c, help, width, height)
 	if got := lipgloss.Height(out); got > height {
 		t.Fatalf("%s: View is %d lines, terminal has %d:\n%s", label, got, height, out)
 	}
@@ -173,7 +180,8 @@ func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
 	if out != want {
 		t.Fatalf("%s: View differs from tab bar + tab output + status:\n--- got\n%s\n--- want\n%s", label, out, want)
 	}
-	assertFrameWidth(t, c, label, lines, width)
+	assertFrameWidth(t, c, label, lines, rows, width)
+	return rows.body > 0 && rows.body < m.minBodyRowsFor(m.activeTab)
 }
 
 // plainLine is a rendered line without its styling and the trailing padding
@@ -230,16 +238,25 @@ func expectedFrame(rows frameRows, tabBar, body, status string) string {
 
 // assertFrameWidth checks that no line of the frame is wider than the
 // terminal, which would soft-wrap into extra rows and break the height
-// guarantee. The table views of Syscalls, Files and Processes are exempt:
-// their fixed column widths are wider than narrow terminals today, which is
-// task cz2 (clamp the table columns to the width), not this budget.
-func assertFrameWidth(t *testing.T, c fitCase, label string, lines []string, width int) {
+// guarantee. Only the body lines of the Syscalls, Files and Processes table
+// views are exempt: their fixed column widths are wider than narrow terminals
+// today, which is task cz2 (clamp the table columns to the width), not this
+// budget. Their tab bar and status lines are still checked, without the
+// trailing blanks View's ScreenStyle pads every line with up to the widest
+// (body) line: that padding is the same cz2 overflow, not theirs.
+func assertFrameWidth(t *testing.T, c fitCase, label string, lines []string, rows frameRows, width int) {
 	t.Helper()
-	if knownWideTable(c) {
-		return
-	}
+	wide := knownWideTable(c)
+	bodyStart, bodyEnd := rows.tabBar, rows.tabBar+rows.body
 	for i, line := range lines {
-		if w := lipgloss.Width(line); w > width {
+		if wide && i >= bodyStart && i < bodyEnd {
+			continue
+		}
+		measured := line
+		if wide {
+			measured = plainLine(line)
+		}
+		if w := lipgloss.Width(measured); w > width {
 			t.Fatalf("%s: line %d is %d cells wide, terminal has %d: %q", label, i, w, width, line)
 		}
 	}
@@ -690,39 +707,47 @@ func TestRenderBodyLaysTheTabOutForTheBudget(t *testing.T) {
 	}
 }
 
-// The Stream tab's minimum follows its footer: the panel alone needs six
-// rows (help collapsed, stream live), the footer line one more (help expanded
-// or stream paused) and a status message under it another. A fixed seven
-// showed the notice one row early on the default live stream.
-func TestStreamMinimumFollowsItsFooter(t *testing.T) {
+// The Stream tab's minimum is its panel alone, six rows, whatever the help
+// bar, pause or status message: the footer lines below the panel are drawn
+// only while the body has rows left for them (eventstream.Model.View), so
+// they never decide whether the stream is drawn at all. At the minimum the
+// stream fits unclipped; each further row brings back the next footer line.
+func TestStreamMinimumIgnoresItsFooter(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		help, paused, status bool
-		want                 int
 	}{
-		{"live", false, false, false, 6},
-		{"live with message", false, false, true, 6}, // no footer, so no message
-		{"help", true, false, false, 7},
-		{"paused", false, true, false, 7},
-		{"help with message", true, false, true, 8},
+		{"live", false, false, false},
+		{"live with message", false, false, true},
+		{"help", true, false, false},
+		{"paused", false, true, false},
+		{"paused with message", false, true, true},
+		{"help with message", true, false, true},
 	} {
 		m := newFitModel(t, fitCase{tab: TabStream, paused: tc.paused}, tc.help, 100, 40)
 		if tc.status {
 			m.streamModel.SetStatusMessage("exported")
 		}
-		if got := m.minBodyRowsFor(TabStream); got != tc.want {
-			t.Fatalf("%s: minimum %d, want %d", tc.name, got, tc.want)
+		if got := m.minBodyRowsFor(TabStream); got != streamTableMinRows {
+			t.Fatalf("%s: minimum %d, want %d", tc.name, got, streamTableMinRows)
 		}
-		// At the minimum the whole stream fits unclipped (footer and
-		// message included); one row less shows the notice.
-		raw := m.renderActiveContent(100, tc.want, &m.streamModel, m.flamegraphModel)
-		if got := lipgloss.Height(raw); got > tc.want {
-			t.Errorf("%s: stream is %d rows at its %d-row minimum:\n%s", tc.name, got, tc.want, raw)
+		footer := tc.help || tc.paused
+		for body := streamTableMinRows; body <= streamTableMinRows+2; body++ {
+			raw := m.renderActiveContent(100, body, &m.streamModel, m.flamegraphModel)
+			if got := lipgloss.Height(raw); got > body {
+				t.Errorf("%s: stream is %d rows in a %d-row body:\n%s", tc.name, got, body, raw)
+			}
+			// The footer line comes back first, the message under it last.
+			wantRow := footer && body >= streamTableMinRows+1
+			if got := strings.Contains(raw, "Row ") || strings.Contains(raw, "Sel "); got != wantRow {
+				t.Errorf("%s body=%d: footer line shown = %v, want %v:\n%s", tc.name, body, got, wantRow, raw)
+			}
+			wantMsg := footer && tc.status && body >= streamTableMinRows+2
+			if got := strings.Contains(raw, "exported"); got != wantMsg {
+				t.Errorf("%s body=%d: status message shown = %v, want %v:\n%s", tc.name, body, got, wantMsg, raw)
+			}
 		}
-		if tc.status && tc.help && !strings.Contains(raw, "exported") {
-			t.Errorf("%s: status message missing:\n%s", tc.name, raw)
-		}
-		if out := m.renderBody(100, 40, tc.want-1); !strings.Contains(out, "terminal too small") {
+		if out := m.renderBody(100, 40, streamTableMinRows-1); !strings.Contains(out, "terminal too small") {
 			t.Errorf("%s: no notice one row below the minimum:\n%s", tc.name, out)
 		}
 	}
@@ -731,6 +756,72 @@ func TestStreamMinimumFollowsItsFooter(t *testing.T) {
 	out := newFitModel(t, fitCase{tab: TabStream}, false, 100, 8).View().Content
 	if strings.Contains(out, "terminal too small") || !strings.Contains(out, "Stream") {
 		t.Errorf("live stream at 100x8 shows the notice:\n%s", out)
+	}
+}
+
+// streamTransition is a Stream tab state change the user can trigger at any
+// terminal size.
+type streamTransition struct {
+	name  string
+	apply func(t *testing.T, m *Model) *Model
+}
+
+// pressStreamKey sends key to the dashboard as a printable key press.
+func pressStreamKey(t *testing.T, m *Model, key rune) *Model {
+	t.Helper()
+	next, _ := m.Update(tea.KeyPressMsg{Code: key, Text: string(key)})
+	return next.(*Model)
+}
+
+// streamTransitions are the pause, the status message (a search result, a
+// failed export) and the search modal, alone and combined.
+func streamTransitions() []streamTransition {
+	pause := func(t *testing.T, m *Model) *Model { return pressStreamKey(t, m, ' ') }
+	message := func(_ *testing.T, m *Model) *Model {
+		m.streamModel.SetStatusMessage("/zzz @ row 3/200")
+		return m
+	}
+	search := func(t *testing.T, m *Model) *Model {
+		m = pressStreamKey(t, m, '/')
+		if !m.streamModel.SearchModalVisible() {
+			t.Fatal("/ did not open the search modal")
+		}
+		return m
+	}
+	return []streamTransition{
+		{"pause", pause},
+		{"message", message},
+		{"search", search},
+		{"pause+message", func(t *testing.T, m *Model) *Model { return message(t, pause(t, m)) }},
+		{"pause+search", func(t *testing.T, m *Model) *Model { return search(t, pause(t, m)) }},
+	}
+}
+
+// Pausing the stream, a status message and opening the search modal must not
+// swap the Stream body between the table and the "terminal too small" notice:
+// a successful search would hide the row it just selected, and an open modal
+// hidden behind the notice would still take every key. At every height and a
+// few widths the body kind after each transition must equal the live
+// stream's, and the frame must keep the contract of the height matrix
+// (assertFrameFits), modal included: no line wider than the terminal, nothing
+// cut by the clip.
+func TestStreamBodyKindSurvivesTransientState(t *testing.T) {
+	live := fitCase{tab: TabStream}
+	for _, tr := range streamTransitions() {
+		for _, help := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/help=%v", tr.name, help), func(t *testing.T) {
+				for _, width := range []int{20, 30, 60, 100} {
+					for height := 1; height <= 20; height++ {
+						label := fmt.Sprintf("%s help=%v %dx%d", tr.name, help, width, height)
+						before := assertFrameFits(t, newFitModel(t, live, help, width, height), live, label+" before", width, height)
+						m := tr.apply(t, newFitModel(t, live, help, width, height))
+						if after := assertFrameFits(t, m, live, label, width, height); after != before {
+							t.Fatalf("%s: body notice %v before, %v after:\n%s", label, before, after, m.View().Content)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 

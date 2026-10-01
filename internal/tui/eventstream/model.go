@@ -13,6 +13,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 const (
@@ -167,21 +168,6 @@ func (m *Model) SetFooterVisible(visible bool) {
 // shows it because its selection/column/search line is interaction feedback.
 func (m *Model) footerShown() bool {
 	return m.showFooter || m.paused
-}
-
-// FooterRows is how many rows View currently adds below the stream table: 0
-// with the footer off, else the Row/Sel line plus the status message line
-// when one is set (see appendStreamFooter). The dashboard adds it to the
-// table's own minimum so its "terminal too small" threshold tracks the real
-// height instead of always reserving a footer row.
-func (m *Model) FooterRows() int {
-	if !m.footerShown() {
-		return 0
-	}
-	if m.statusMessage != "" {
-		return 2
-	}
-	return 1
 }
 
 // SetSource updates the backing ring buffer and refreshes visible rows.
@@ -625,12 +611,16 @@ func (m *Model) View(width, height int) string {
 	// feedback while the user navigates rows and columns, so render it whenever
 	// the stream is paused, independent of the dashboard help-bar toggle
 	// (m.showFooter). The live Row x/N footer remains tied to the help bar.
-	// footerShown is shared with FooterRows so the dashboard's row budget
-	// agrees with what is drawn here.
 	if !m.footerShown() {
 		return base
 	}
-	return m.appendStreamFooter(base, start)
+	// The footer gets only the rows the table leaves of height: on a short
+	// terminal the table (never under one event row) takes them all, and the
+	// footer lines are dropped, the status message first, instead of making
+	// the view taller than its budget. The dashboard can then size its "too
+	// small" threshold by the table alone, so pausing or a status message
+	// never swaps the table for that notice.
+	return m.appendStreamFooter(base, start, height-lipgloss.Height(base))
 }
 
 // renderStreamBase computes the visible row slice and renders the stream table.
@@ -656,8 +646,20 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 	if m.paused && selectedVisibleIdx >= 0 {
 		selectedCol = m.selectedCol
 	}
-	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, m.filterStack, visible, selectedVisibleIdx, selectedCol)
+	base := RenderStreamTable(width, m.paused, len(m.allEvents), len(m.filtered), bufferLen, ringBufferCapacity, m.filter, m.fittingFilterStack(len(visible)), visible, selectedVisibleIdx, selectedCol)
 	return base, start
+}
+
+// fittingFilterStack is the filter stack the table shows above its column
+// header: the whole stack while the table with that extra line still fits
+// m.height (visibleRows reserves a row for it), none on a terminal so short
+// that the table already takes every row. The dashboard status line
+// summarises the same stack, so dropping the line here loses nothing.
+func (m *Model) fittingFilterStack(eventRows int) []string {
+	if streamTableChromeRows+eventRows+1 > m.height {
+		return nil
+	}
+	return m.filterStack
 }
 
 // Refresh pulls a fresh snapshot from the source and re-applies the filter,
@@ -804,11 +806,23 @@ func (m *Model) maxScrollOffset() int {
 	return len(m.filtered) - rows
 }
 
+// streamTableChromeRows is the stream panel without event rows: its two
+// borders, the status line, the filter line and the column header.
+const streamTableChromeRows = 5
+
+// streamReservedRows is what visibleRows keeps of the view height besides the
+// event rows: the panel chrome, the optional filter-stack line and the two
+// footer lines (Row/Sel and the status message). Below that height the table
+// keeps one event row and the extra lines are dropped (fittingFilterStack,
+// View), so the view never outgrows its height from 6 rows up.
+const streamReservedRows = streamTableChromeRows + 1 + 2
+
+// visibleRows is how many event rows the table shows at the current height.
 func (m *Model) visibleRows() int {
 	if m.height <= 0 {
 		return 8
 	}
-	rows := m.height - 8
+	rows := m.height - streamReservedRows
 	if rows < 1 {
 		return 1
 	}

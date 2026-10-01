@@ -3,11 +3,8 @@ package eventstream
 import (
 	"strings"
 
-	"ior/internal/tui/common"
-
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // SearchDirection is which way the stream search scans from the current
@@ -101,7 +98,13 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	return m, "", false
 }
 
-// View renders the centered modal box within the given viewport.
+// searchModalSize is the search box's preferred and smallest width.
+var searchModalSize = modalSize{preferred: 58, min: 40}
+
+// View renders the centered modal box within the given viewport, fitted to
+// it (renderModal): the box and its input line shrink with a narrow view and
+// shed their spacing on a short one, so the modal never outgrows the stream
+// body it replaces.
 func (m SearchModal) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -112,33 +115,18 @@ func (m SearchModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	modalWidth := 58
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 40 {
-			modalWidth = 40
-		}
-	}
-
 	prefix := "/"
 	if m.direction == SearchBackward {
 		prefix = "?"
 	}
-	lines := []string{
-		"Regex Search",
-		"",
-		"Pattern:",
-		prefix + m.textInput.View(),
+	// m is a copy, so sizing its input here leaves the modal's state alone.
+	m.textInput.SetWidth(modalInputWidth(modalBoxWidth(searchModalSize, width), len(prefix)))
+	form := modalForm{
+		title: "Regex Search",
+		label: "Pattern:",
+		input: prefix + m.textInput.View(),
+		err:   m.err,
+		hint:  "Enter search • Esc cancel",
 	}
-	if m.err != "" {
-		lines = append(lines, "Error: "+common.Sanitize(m.err))
-	}
-	lines = append(lines, "", "Enter search • Esc cancel")
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return renderModal(form, searchModalSize, width, height)
 }

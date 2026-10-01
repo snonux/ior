@@ -3,11 +3,8 @@ package eventstream
 import (
 	"strings"
 
-	"ior/internal/tui/common"
-
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // ExportModal is the stream tab's filename-entry modal for CSV export.
@@ -111,7 +108,11 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	return m, "", false
 }
 
-// View renders the centered modal box within the given viewport.
+// exportModalSize is the export box's preferred and smallest width.
+var exportModalSize = modalSize{preferred: 74, min: 44}
+
+// View renders the centered modal box within the given viewport, fitted to
+// it like the search modal (renderModal).
 func (m ExportModal) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -122,30 +123,14 @@ func (m ExportModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	modalWidth := 74
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 44 {
-			modalWidth = 44
-		}
+	// m is a copy, so sizing its input here leaves the modal's state alone.
+	m.textInput.SetWidth(modalInputWidth(modalBoxWidth(exportModalSize, width), 0))
+	form := modalForm{
+		title: "Export Stream CSV",
+		label: "Filename:",
+		input: m.textInput.View(),
+		err:   m.err,
+		hint:  "Enter save • Esc cancel",
 	}
-
-	lines := []string{
-		"Export Stream CSV",
-		"",
-		"Filename:",
-		m.textInput.View(),
-	}
-	if m.err != "" {
-		lines = append(lines, "Error: "+common.Sanitize(m.err))
-	}
-	lines = append(lines, "", "Enter save • Esc cancel")
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return renderModal(form, exportModalSize, width, height)
 }

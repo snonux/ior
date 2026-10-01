@@ -137,3 +137,36 @@ func TestStatusMessageTruncatedToWidth(t *testing.T) {
 		t.Fatalf("status line is %d cols wide", w)
 	}
 }
+
+// The stream view never outgrows the height it is handed from six rows up,
+// whatever it has to show besides the table: the filter-stack line, the
+// paused footer and a status message are each dropped before the view would
+// be taller (the table keeps one event row), and come back with the rows.
+func TestStreamViewFitsItsHeightWithEveryExtraLine(t *testing.T) {
+	rb := NewRingBuffer()
+	for i := range 50 {
+		rb.Push(StreamEvent{Seq: uint64(i + 1), Syscall: "read", Comm: "proc", PID: 7, FD: UnknownFD})
+	}
+	m := NewModel(rb)
+	m.Refresh()
+	m.SetFilterStack([]string{"pid=7"})
+	m.HandleKey(" ")
+	if !m.Paused() {
+		t.Fatal("space did not pause the stream")
+	}
+	m.SetStatusMessage("exported")
+	for height := 6; height <= 30; height++ {
+		out := m.View(100, height)
+		if got := lipgloss.Height(out); got > height {
+			t.Fatalf("height %d: view is %d rows:\n%s", height, got, out)
+		}
+		// Every extra line is back once the table no longer needs the row.
+		if height >= 9 {
+			for _, tok := range []string{"pid=7", "Sel ", "exported"} {
+				if !strings.Contains(out, tok) {
+					t.Fatalf("height %d: %q missing:\n%s", height, tok, out)
+				}
+			}
+		}
+	}
+}

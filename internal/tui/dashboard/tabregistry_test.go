@@ -441,10 +441,13 @@ func TestUnhandledTabKeyFallsThroughToNumericShortcuts(t *testing.T) {
 	}
 }
 
-// TestStreamContentViewportHook pins the Stream tab's ContentViewport hook:
-// the stream draws its own footer, so its content viewport is
-// streamViewport whatever the help-bar state - not the standard viewport,
-// which follows the help bar.
+// TestStreamContentViewportHook pins that the Stream tab uses the standard
+// content viewport, which follows the help bar: that is exactly the body View
+// gives the tab, so the stream's key handling (page step, scroll clamp) and
+// its rendering agree on the rows, and the stream fits its own footer lines
+// into them (eventstream.Model.View). A stream-specific viewport that also
+// deducted the footer rows left them unused twice over (task dz2) and handed
+// the stream fewer rows than it was drawn into (task ls2).
 func TestStreamContentViewportHook(t *testing.T) {
 	const width, height = 120, 40
 	for _, showHelp := range []bool{false, true} {
@@ -453,13 +456,10 @@ func TestStreamContentViewportHook(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 		m.activeTab = TabStream
 
-		wantW, wantH := streamViewport(width, height)
+		wantW, wantH := flameViewport(width, height, showHelp)
 		gotW, gotH := m.contentViewport(TabStream, width, height)
 		if gotW != wantW || gotH != wantH {
-			t.Errorf("showHelp=%v: stream viewport = %dx%d, want %dx%d", showHelp, gotW, gotH, wantW, wantH)
-		}
-		if _, stdH := flameViewport(width, height, showHelp); gotH == stdH {
-			t.Errorf("showHelp=%v: stream viewport height %d equals the standard one; the hook is not in effect", showHelp, gotH)
+			t.Errorf("showHelp=%v: stream viewport = %dx%d, want the standard %dx%d", showHelp, gotW, gotH, wantW, wantH)
 		}
 	}
 }

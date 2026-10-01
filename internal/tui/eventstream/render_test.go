@@ -334,5 +334,5 @@ func TestRenderStreamAndFDTraceTablesSanitizeEscapeSequences(t *testing.T) {
 func TestStreamFooterSanitizesStatusMessage(t *testing.T) {
 	m := &Model{}
 	m.SetStatusMessage("Exported: /tmp/\x1b]8;;http://evil\a.csv")
-	assertNoInjectedEscapes(t, m.appendStreamFooter("base", 0))
+	assertNoInjectedEscapes(t, m.appendStreamFooter("base", 0, 2))
 }

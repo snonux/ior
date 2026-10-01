@@ -18,7 +18,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const streamChromeRows = 4
 const dashboardHelpHintRows = 1
 const dashboardExpandedHelpRows = 2
 const dashboardTabBarRows = 1
@@ -1494,10 +1493,6 @@ func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, strea
 		return common.Current().PanelStyle.Render("Unknown tab")
 	}
 	return d.Render(m, snap, streamModel, flameModel, width, height)
-}
-
-func streamViewport(width, height int) (int, int) {
-	return dashboardViewport(width, height, streamChromeRows)
 }
 
 func flameViewport(width, height int, showHelp bool) (int, int) {

@@ -82,10 +82,6 @@ type tabDescriptor struct {
 	// "terminal too small" notice instead of a fragment cut mid-panel. Zero
 	// means the generic minBodyRows.
 	MinBodyRows int
-	// MinBodyRowsFunc, when set, replaces MinBodyRows for a tab whose
-	// smallest complete unit depends on its state (the Stream tab's optional
-	// footer rows).
-	MinBodyRowsFunc func(*Model) int
 	// InitCmd starts this tab's own tick chain whenever the tab becomes the
 	// active one: on entry and when Init's tickChainsStartMsg is handled,
 	// alongside the global refresh chain. It runs on the Update path and
@@ -285,12 +281,13 @@ func registeredTabs() map[Tab]tabDescriptor {
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
 			InitCmd: func(m *Model) tea.Cmd { return m.ticks.startStream() },
-			// The stream draws its own footer, so its viewport ignores the
-			// dashboard help bar.
-			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },
-			MinBodyRowsFunc: streamMinBodyRows,
-			Render:          tabRenderStream,
-			HandleScroll:    tabScrollStream,
+			// The standard viewport (nil ContentViewport) is exactly the
+			// body View gives the tab, so the stream fits its own footer
+			// lines into it (eventstream.Model.View) instead of the
+			// dashboard reserving rows for them.
+			MinBodyRows:  streamTableMinRows,
+			Render:       tabRenderStream,
+			HandleScroll: tabScrollStream,
 			// The two modals and the FD-trace overlay each own the keyboard
 			// while open: without the overlay here q quit ior instead of
 			// closing it (the top-level model never re-routed it as esc).
@@ -428,15 +425,11 @@ func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 }
 
 // minBodyRowsFor returns the fewest body rows at which tab is drawn in its
-// current state: the descriptor's state-dependent minimum
-// (tabDescriptor.MinBodyRowsFunc) or fixed one (MinBodyRows), or
+// current state: the descriptor's own minimum (MinBodyRows), or
 // altVizMinRows while an alternative visualization (bubbles, treemap, icicle)
 // is the active view, or else the generic table minimum.
 func (m *Model) minBodyRowsFor(tab Tab) int {
 	d := lookupTab(tab)
-	if d.MinBodyRowsFunc != nil {
-		return d.MinBodyRowsFunc(m)
-	}
 	if rows := d.MinBodyRows; rows > 0 {
 		return rows
 	}

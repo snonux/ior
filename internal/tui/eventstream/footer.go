@@ -21,16 +21,23 @@ const footerSep = " | "
 // footerTail marks a footer line that had to be cut mid-segment.
 const footerTail = "..."
 
-// appendStreamFooter appends the Row/Sel footer line (and the optional status
-// message line) to the rendered table, each fitted to width.
-func (m *Model) appendStreamFooter(base string, start int) string {
+// appendStreamFooter appends the Row/Sel footer line and then the optional
+// status message line to the rendered table, each fitted to width, as far
+// as spare rows allow: with no spare row the table is returned as is, with
+// one the status message is the line left out. On a short terminal the table
+// (which keeps one event row) takes priority, and the message is transient
+// anyway (the next key clears or replaces it).
+func (m *Model) appendStreamFooter(base string, start, spare int) string {
+	if spare < 1 {
+		return base
+	}
 	// Use a Builder to avoid a redundant allocation for the optional status-message
 	// line appended conditionally on every render call.
 	var b strings.Builder
 	b.WriteString(base)
 	b.WriteString("\n")
 	b.WriteString(fitFooterSegments(m.streamFooterSegments(start), m.width))
-	if m.statusMessage != "" {
+	if m.statusMessage != "" && spare >= 2 {
 		// The message can echo export paths, error text and search terms,
 		// so it is sanitised like every other foreign string before being
 		// cut to the view width (the width helpers expect sanitised input).
