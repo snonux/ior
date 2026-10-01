@@ -120,7 +120,8 @@ func exportInputWidth(width int) int {
 
 // Resize fits the input to the box drawn in a view width cells wide, so
 // Update scrolls the typed text with the width View draws it at
-// (fitModalInput). The stream Model calls it on every size change.
+// (fitModalInput). The stream Model calls it on every size change and
+// render.
 func (m ExportModal) Resize(width int) ExportModal {
 	if width > 0 {
 		fitModalInput(&m.textInput, exportInputWidth(width))
@@ -140,8 +141,9 @@ func (m ExportModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	// m is a copy: a no-op after Resize(width), else the input is fitted for
-	// this render only, so the end of the value and the cursor stay visible.
+	// m is a copy: the input's scroll window is re-anchored for this render
+	// only (an edit inside the window leaves it stale, and a caller may have
+	// skipped Resize), so the cursor and the rune under it stay visible.
 	fitModalInput(&m.textInput, exportInputWidth(width))
 	form := modalForm{
 		title: "Export Stream CSV",

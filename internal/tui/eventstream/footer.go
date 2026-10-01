@@ -29,6 +29,9 @@ const footerTail = "..."
 // invalid regex or a missed search reaches the user, so it must not vanish on
 // a 9-10 row terminal; Row/Sel is only lost while the message stands (the
 // next key clears or replaces it) and the table still marks the selection.
+// The filter-stack line above the table yields its row to the message too
+// (fittingFilterStack keeps that row free before the table is drawn), so the
+// message is the last line besides the table to go.
 func (m *Model) appendStreamFooter(base string, start, spare int) string {
 	if spare < 1 {
 		return base

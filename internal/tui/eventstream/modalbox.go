@@ -48,29 +48,35 @@ func modalInputWidth(boxWidth, reserved int) int {
 	return max(boxWidth-modalBoxChrome-reserved-1, 1)
 }
 
-// fitModalInput sets ti to width cells and, when that changes its width,
-// re-anchors its scroll window around the cursor for the new width.
+// fitModalInput sets ti to width cells and re-anchors its scroll window
+// around the cursor, keeping its value and cursor position.
 //
-// textinput's SetWidth only stores the width: the window of the value it
-// draws (and so where the cursor sits in it) is recomputed by its private
-// handleOverflow, which runs from Update, SetValue and SetCursor, not from
-// SetWidth. A window left from a wider width can be wider than the box, and
-// renderModalBox cuts every line to the box, so the end of the value and the
-// cursor were cut off (task ls2). SetCursor re-runs handleOverflow, which
-// recomputes the window only for a cursor outside it, so the cursor is first
-// moved to the end (always outside or on the window's right edge: the window
-// is recomputed ending at the value's end) and then back (recomputed
-// starting at the cursor if it lies left of that window). Either way the
-// window then fits width, plus the cursor cell modalInputWidth reserves.
+// textinput keeps the window of the value it draws (and so where the cursor
+// sits in it) in private offsets that its handleOverflow recomputes only
+// when the cursor lies outside the window; SetWidth only stores the width.
+// Two cases left a window the box cannot draw (task ls2): a window left
+// from a wider width, and an insert, paste or delete inside the window,
+// after which the window is not recomputed even though its runes changed.
+// With two-cell runes that window can outgrow width plus the cursor cell,
+// and renderModalBox, which cuts every line to the box, cut the cursor off
+// (e.g. "/検f" with an empty cursor at 10 columns); with ASCII, moving right
+// past the window could leave the cursor over a blank mid-value.
+//
+// So the window is recomputed on every call: the cursor is moved to the end
+// (always outside or on the window's right edge, so the window is rebuilt
+// ending at the value's end) and back to its position (rebuilt starting at
+// the cursor if it lies left of that window). Either way the window then
+// fits width, plus the cursor cell modalInputWidth reserves, and holds the
+// cursor. The cost is two linear passes over the value per call, nothing
+// next to rendering the box. The window thus always either ends at the
+// value's end or starts at the cursor, rather than scrolling minimally.
 //
 // The modals keep their stored width in step with the view (Resize, called
 // by the stream Model on every size change and render) so Update scrolls
-// with the real width and this re-anchoring happens only on a resize; their
-// View calls it as well, on a copy, for a caller that skipped Resize.
+// with the real width; their View calls it as well, on a copy, so the
+// window drawn is re-anchored after every edit, and for a caller that
+// skipped Resize.
 func fitModalInput(ti *textinput.Model, width int) {
-	if ti.Width() == width {
-		return
-	}
 	ti.SetWidth(width)
 	pos := ti.Position()
 	ti.CursorEnd()

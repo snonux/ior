@@ -171,6 +171,35 @@ func TestStreamViewFitsItsHeightWithEveryExtraLine(t *testing.T) {
 	}
 }
 
+// A status message outranks the filter-stack line (task ls2): with one row
+// to spare beside the panel and its single event row (a 7-row stream body,
+// a 9-row terminal with the help bar off), "Export failed" takes it and the
+// stack line, which the dashboard status line summarises, is dropped. With
+// no message, or with a row more, the stack line is back.
+func TestStatusMessageOutranksTheFilterStack(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 20)
+	m := NewModel(rb)
+	m.Refresh()
+	m.SetFilterStack([]string{"pid=7"})
+	m.HandleKey(" ")
+	m.SetStatusMessage("Export failed: no such directory")
+	out := m.View(100, 7)
+	if got := lipgloss.Height(out); got > 7 {
+		t.Fatalf("7 rows: view is %d rows:\n%s", got, out)
+	}
+	if !strings.Contains(out, "Export failed") || strings.Contains(out, "pid=7") {
+		t.Fatalf("7 rows: want the message in place of the stack line:\n%s", out)
+	}
+	if out := m.View(100, 8); !strings.Contains(out, "Export failed") || !strings.Contains(out, "pid=7") {
+		t.Fatalf("8 rows: want the message and the stack line:\n%s", out)
+	}
+	m.SetStatusMessage("")
+	if out := m.View(100, 7); !strings.Contains(out, "pid=7") {
+		t.Fatalf("7 rows, no message: want the stack line:\n%s", out)
+	}
+}
+
 // The FD-trace overlay fits its height from six rows up too (task ls2): its
 // panel keeps one event row, so at six rows it drops its footer line instead
 // of drawing seven lines and losing the last to the dashboard's clip; from

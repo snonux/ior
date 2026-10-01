@@ -663,10 +663,17 @@ func (m *Model) renderStreamBase(width int) (string, int) {
 // fittingFilterStack is the filter stack the table shows above its column
 // header: the whole stack while the table with that extra line still fits
 // m.height (visibleRows reserves a row for it), none on a terminal so short
-// that the table already takes every row. The dashboard status line
-// summarises the same stack, so dropping the line here loses nothing.
+// that the table already takes every row. A status message the footer will
+// show outranks the stack line: the row it needs is kept free first, so a
+// single spare row goes to "Export failed", "Invalid regex" or "No match"
+// (appendStreamFooter) rather than to the stack, which loses nothing when
+// dropped because the dashboard status line summarises the same stack.
 func (m *Model) fittingFilterStack(eventRows int) []string {
-	if streamTableChromeRows+eventRows+1 > m.height {
+	messageRows := 0
+	if m.statusMessage != "" && m.footerShown() {
+		messageRows = 1
+	}
+	if streamTableChromeRows+eventRows+1+messageRows > m.height {
 		return nil
 	}
 	return m.filterStack
@@ -824,9 +831,10 @@ const streamTableChromeRows = 5
 // event rows: the panel chrome, the optional filter-stack line and the two
 // footer lines (Row/Sel and the status message). Below that height the table
 // keeps one event row and the extra lines are dropped (fittingFilterStack,
-// appendStreamFooter, viewFDTrace's footer), so neither the stream table nor
-// the FD-trace overlay outgrows its height from 6 rows up; the modals fit
-// any height down to their compact layout (renderModal).
+// appendStreamFooter, viewFDTrace's footer; a status message keeps its row
+// longest, then the filter-stack line, then Row/Sel), so neither the stream
+// table nor the FD-trace overlay outgrows its height from 6 rows up; the
+// modals fit any height down to their compact layout (renderModal).
 const streamReservedRows = streamTableChromeRows + 1 + 2
 
 // visibleRows is how many event rows the table shows at the current height.
