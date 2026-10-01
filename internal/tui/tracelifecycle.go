@@ -10,6 +10,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
 	common "ior/internal/tui/common"
 
 	tea "charm.land/bubbletea/v2"
@@ -267,15 +268,28 @@ func defaultTraceStarter(context.Context, TraceRequest) error {
 // recorderStart opens the parquet recorder at the given path.
 // It calls syncFn (typically syncDashboardFilterState) after the attempt
 // (success or failure) so the status bar stays in sync.
-func recorderStart(recorder runtime.RecordingController, path string, syncFn func()) error {
+//
+// sampler (nil for none) marks the recording as sampled: its rates go into the
+// footer now (ior.sampling) and its tally collects the recording's exact
+// totals, written at Stop (ior.sampling.totals); see recordingsampling.go.
+// beginRecordingSampling flushes the kernel counters first, so counts from
+// before the start belong to no recording.
+func recorderStart(recorder runtime.RecordingController, path string, sampler recordingSampler, syncFn func()) error {
 	if recorder == nil {
 		return errors.New("recording runtime is unavailable")
 	}
+	meta := tuiParquetMetadata()
+	var tally *sampling.Tally
+	if sampler != nil {
+		tally = sampler.beginRecordingSampling()
+		meta.Sampling = tally.Plan()
+	}
 	err := recorder.Start(path, parquet.StartOptions{
-		Metadata: tuiParquetMetadata(),
+		Metadata: meta,
 		// The R modal offers a generated default; only that name is ior's to
 		// protect. Anything the user typed is theirs and is replaced.
-		AutoNamed: isDefaultParquetRecordingName(path),
+		AutoNamed:     isDefaultParquetRecordingName(path),
+		SamplingTally: tally,
 	})
 	syncFn()
 	return err
@@ -284,7 +298,9 @@ func recorderStart(recorder runtime.RecordingController, path string, syncFn fun
 // recorderStop closes the active parquet recorder.
 // Returns nil without error when no recording is active.
 // Calls syncFn after the attempt so the status bar stays in sync.
-func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
+// sampler (nil for none) drains the kernel counters into the recording first,
+// so its sampling totals include the last partial drain interval.
+func recorderStop(recorder runtime.RecordingController, sampler recordingSampler, syncFn func()) error {
 	if recorder == nil {
 		return nil
 	}
@@ -292,6 +308,7 @@ func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
 		syncFn()
 		return nil
 	}
+	flushRecordingSampling(sampler)
 	err := recorder.Stop()
 	syncFn()
 	return err
@@ -307,12 +324,15 @@ func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
 // exclusive: a failure already delivered through a warning row, the modal, or
 // an earlier Stop is marked taken and is not returned again, and a healthy or
 // never-used recorder yields nil. Safe to call from any goroutine (the
-// recorder is), so the signal watcher uses it too.
-func recorderFinalise(recorder runtime.RecordingController) error {
+// recorder and the sampler's flush are), so the signal watcher uses it too.
+// Like recorderStop it flushes the kernel counters into an active recording
+// before stopping it (sampler may be nil).
+func recorderFinalise(recorder runtime.RecordingController, sampler recordingSampler) error {
 	if recorder == nil {
 		return nil
 	}
 	if recorder.Status().Active {
+		flushRecordingSampling(sampler)
 		return recorder.Stop()
 	}
 	return recorder.TakeFailure()
@@ -322,8 +342,8 @@ func recorderFinalise(recorder runtime.RecordingController) error {
 // paths that run on the event-loop goroutine. The in-session stops (record
 // shortcut, re-select) keep using recorderStop: a dead recording's failure
 // belongs on the stream or the record modal there, not on a stop error.
-func recorderStopAtQuit(recorder runtime.RecordingController, syncFn func()) error {
-	err := recorderFinalise(recorder)
+func recorderStopAtQuit(recorder runtime.RecordingController, sampler recordingSampler, syncFn func()) error {
+	err := recorderFinalise(recorder, sampler)
 	syncFn()
 	return err
 }

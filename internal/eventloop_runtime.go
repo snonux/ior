@@ -123,6 +123,11 @@ func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
 // events silently is exactly the finding this counter closes; stdout stays
 // machine-readable.
 func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
+	// A loss (or a counter that could not be read) during a TUI recording
+	// makes its sampling totals a lower bound.
+	if result.warning != "" || result.delta > 0 {
+		e.markRecordingLowerBound()
+	}
 	if result.warning != "" {
 		e.recordDropReadFailure()
 		e.notifyWarningOrLog(result.warning)
@@ -199,11 +204,14 @@ func (e *eventLoop) readDropStampClock() uint64 {
 // samples (newEventLoop). Both report a failed drain through
 // notifyWarningOrLog, so it reaches stderr where no warning sink is wired.
 // A raw-mode run also records whether its latest drain failed: the tally's
-// exact totals are only claimed when the final drain succeeded.
+// exact totals are only claimed when the final drain succeeded. In TUI mode
+// the result also goes to the active Parquet recording's sampling totals
+// (forwardAggregatesToRecording).
 func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 	if e.samplingTally != nil {
 		e.samplingTally.drainFailed.Store(result.warning != "")
 	}
+	e.forwardAggregatesToRecording(result)
 	if result.warning != "" {
 		e.notifyWarningOrLog(result.warning)
 		return

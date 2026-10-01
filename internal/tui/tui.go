@@ -14,6 +14,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
@@ -112,6 +113,15 @@ type runtimeBindings struct {
 	// event loop in-place so BPF probes need not be restarted.
 	liveFilterSetter       func(globalfilter.Filter)
 	liveFilterRegistration *liveFilterRegistration
+	// recordingSampling is the current session's sampling description and
+	// aggregate flush for Parquet recordings; cleared when the session ends,
+	// like the probe manager, so no flush reaches a retired session.
+	recordingSampling runtime.RecordingSampling
+	// sampledSyscalls is the last list a session published. Unlike
+	// recordingSampling it outlives the session: the rates are fixed for the
+	// process, so a recording started between two sessions (while the next
+	// one attaches) is still marked. See recordingsampling.go.
+	sampledSyscalls []sampling.Entry
 	// session is the generation of the newest trace session, advanced by
 	// beginSession. A traceSessionBindings view publishes only while its
 	// generation is still this one, so an older session that finishes setup
@@ -1406,7 +1416,7 @@ func (m *Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !submit {
 		return m, dashboardCmd
 	}
-	if err := recorderStart(m.runtime.Recorder(), path, m.syncDashboardFilterState); err != nil {
+	if err := m.startRecording(path); err != nil {
 		m.recordModal = m.recordModal.SetError(err)
 		return m, dashboardCmd
 	}
@@ -1776,20 +1786,20 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 // startRecording opens the parquet recorder at path and syncs dashboard status.
 // Tests and the Model's record-modal handler call this method.
 func (m *Model) startRecording(path string) error {
-	return recorderStart(m.runtime.Recorder(), path, m.syncDashboardFilterState)
+	return recorderStart(m.runtime.Recorder(), path, m.runtime, m.syncDashboardFilterState)
 }
 
 // stopRecording closes an active parquet recorder and syncs dashboard status.
 // Tests and the quit/reselect paths call this method.
 func (m *Model) stopRecording() error {
-	return recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+	return recorderStop(m.runtime.Recorder(), m.runtime, m.syncDashboardFilterState)
 }
 
 // stopRecordingAtQuit is stopRecording for the quit paths: it also reports a
 // failure of an already dead recording that nothing has shown yet (see
 // recorderFinalise).
 func (m *Model) stopRecordingAtQuit() error {
-	return recorderStopAtQuit(m.runtime.Recorder(), m.syncDashboardFilterState)
+	return recorderStopAtQuit(m.runtime.Recorder(), m.runtime, m.syncDashboardFilterState)
 }
 
 func (m *Model) applyTheme(isDark bool) {

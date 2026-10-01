@@ -111,6 +111,14 @@ type StartOptions struct {
 	// under a "-N" suffixed name and Status().Path reports it. A path the
 	// user chose (AutoNamed false) is replaced, as it always was.
 	AutoNamed bool
+	// SamplingTally, when non-nil, makes the recording count its own sampling
+	// totals (see recorder_sampling.go): the rows of sampled syscalls are
+	// counted as they are written, the kernel-only counts arrive through
+	// CountKernelOnly, and the totals go into the footer at Stop. It is how a
+	// TUI recording, which starts and stops while the trace runs, gets totals
+	// for exactly its own window. Metadata.Sampling should be the tally's
+	// Plan(). The headless run leaves it nil and uses SetSamplingTotals.
+	SamplingTally *sampling.Tally
 }
 
 // Status reports the last known recorder state.
@@ -158,6 +166,9 @@ type recordingSession struct {
 	// footer holds key/value pairs to add to the file footer when the session
 	// stops (SetSamplingTotals); guarded by mu.
 	footer map[string]string
+	// tally is the recording's own sampling tally (StartOptions.SamplingTally),
+	// or nil; set once before the session goroutine starts.
+	tally *sampling.Tally
 
 	// dropped counts rows shed on queue overflow; atomic so Status can
 	// read the live count without contending the session mutex.
@@ -221,6 +232,7 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 
 	session := newRecordingSession(cfg.QueueCapacity)
 	session.blockWhenFull = cfg.BlockWhenFull
+	session.tally = options.SamplingTally
 
 	r.mu.Lock()
 	if r.active != nil {
@@ -438,6 +450,10 @@ func (r *Recorder) bufferRecord(
 	req recordRequest,
 ) error {
 	*batch = append(*batch, RecordFromStream(req.row, req.filterEpoch))
+	// Counted here, on the writer goroutine, so the tally's traced count is
+	// exactly the rows this file holds: a row shed by a full queue never gets
+	// here (it makes the totals a lower bound instead, see finishSamplingTally).
+	session.tally.CountTraced(req.row.Syscall)
 	if len(*batch) < batchSize {
 		return nil
 	}
@@ -485,6 +501,8 @@ func (r *Recorder) stopSession(
 		_ = writer.Abort()
 		return err
 	}
+	// Every row has been counted now; the totals can be final.
+	session.finishSamplingTally()
 	if err := session.applyFooter(writer); err != nil {
 		_ = writer.Abort()
 		return err
@@ -682,7 +700,8 @@ func (s *recordingSession) wasStopRequested() bool {
 	return s.stopRequested
 }
 
-// applyFooter adds the pairs set through SetSamplingTotals to writer's footer,
+// applyFooter adds the pairs set through SetSamplingTotals (or by the
+// recording's own tally, finishSamplingTally) to writer's footer,
 // just before the writer is closed. A writer that cannot take footer pairs is
 // left alone.
 func (s *recordingSession) applyFooter(writer rowWriter) error {

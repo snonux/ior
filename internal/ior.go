@@ -210,6 +210,11 @@ type tuiRuntime struct {
 	// set only for the plain fallback (an emitter reads the epoch from the
 	// live bindings). Nil (headless modes without TUI bindings) stamps epoch 0.
 	filterEpochFn func() uint64
+	// samplingCounter receives the kernel counts and loss signals of the
+	// active Parquet recording's sampling totals: the session-gated recorder
+	// when the bindings' recorder keeps such totals, else nil (see
+	// recording_sampling.go).
+	samplingCounter runtime.RecordingSamplingCounter
 }
 
 // currentFilterEpoch returns the live filter epoch for parquet row stamping.
@@ -287,6 +292,11 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 		// re-wire the runtime), and recorded rows must stamp the epoch
 		// current at record time.
 		rt.filterEpochFn = bindings.FilterEpoch
+	}
+	// Independent of the emitter: the kernel counts reach the recording from
+	// the aggregate drain loop, not from the per-event output.
+	if counter, ok := bindings.Recorder().(runtime.RecordingSamplingCounter); ok {
+		rt.samplingCounter = counter
 	}
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
@@ -390,6 +400,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		if sink, ok := rt.snapSource.(aggregateSink); ok {
 			el.SetAggregateSink(sink)
 		}
+		wireRecordingSampling(cfg, el, rt, publisher)
 		if publisher != nil {
 			unregisterLiveFilterSetter = publisher.SetLiveFilterSetter(el.SetFilter)
 		}

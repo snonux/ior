@@ -76,6 +76,9 @@ var (
 	_ runtime.EventSink            = sessionEventSink{}
 	_ runtime.RecordingController  = sessionRecorder{}
 	_ runtime.WarningRecorder      = sessionRecorder{}
+	// The recording-sampling side (recordingsampling.go).
+	_ runtime.RecordingSamplingPublisher = traceSessionBindings{}
+	_ runtime.RecordingSamplingCounter   = sessionRecorder{}
 )
 
 // beginSession starts a new trace session generation and returns its bindings
@@ -92,6 +95,10 @@ func (r *runtimeBindings) beginSession() traceSessionBindings {
 // nothing it publishes or emits from now on reaches the TUI. Retiring an
 // already superseded session is a no-op: it must not disturb the newer one.
 func (r *runtimeBindings) endSession(session uint64) {
+	// Drain the retiring session's kernel counters into an active recording
+	// first: once the session is retired, its final drain is gated away, and
+	// the last partial interval would be missing from the recording's totals.
+	r.flushSessionForRecording(session)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.session == session {
@@ -104,7 +111,8 @@ func (r *runtimeBindings) endSession(session uint64) {
 // that is going away: the probes modal must not toggle probes on a manager
 // that is about to close, and a filter edit made before the next session is up
 // must take the restart path (so that session picks it up) rather than go to
-// the dying event loop. The dashboard sources are kept so the screen keeps its
+// the dying event loop. Its recording-sampling flush goes for the same reason
+// (the last published sampled-syscall list stays, see sampledSyscalls). The dashboard sources are kept so the screen keeps its
 // last data until the next session publishes its own. The caller must hold
 // r.mu for writing.
 func (r *runtimeBindings) endSessionLocked() {
@@ -112,6 +120,7 @@ func (r *runtimeBindings) endSessionLocked() {
 	r.probeManager = nil
 	r.liveFilterSetter = nil
 	r.liveFilterRegistration = nil
+	r.recordingSampling = nil
 }
 
 // updateIfCurrent runs update under the write lock if session is still the

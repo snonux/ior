@@ -156,10 +156,10 @@ func TestRecorderStartNamePolicy(t *testing.T) {
 	run := func(path string) parquet.Status {
 		t.Helper()
 		recorder := parquet.NewRecorder(parquet.RecorderConfig{})
-		if err := recorderStart(recorder, path, func() {}); err != nil {
+		if err := recorderStart(recorder, path, nil, func() {}); err != nil {
 			t.Fatalf("recorderStart(%q): %v", path, err)
 		}
-		if err := recorderStop(recorder, func() {}); err != nil {
+		if err := recorderStop(recorder, nil, func() {}); err != nil {
 			t.Fatalf("recorderStop: %v", err)
 		}
 		return recorder.Status()

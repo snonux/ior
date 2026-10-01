@@ -209,11 +209,10 @@ traced everything:
   `[{"syscall":"read","rate":10,"traced":110,"counted_only":890,"total":1000}]`:
   `traced` is the number of invocations ior handed to the recorder, `counted_only` the
   invocations only the kernel counted, `total` their sum. `traced` is not always the
-  number of rows in the file: a row the recorder queue shed (`events were dropped
-  (parquet recorder queue overflow)`; only a TUI `R` recording sheds, headless `-parquet`
-  waits for the writer instead) or a pair of a probe that is not active is
-  counted as traced but has no row, so compare `total`, not the row count, with the
-  population. When events were lost (the run statistics say
+  number of rows in the file of a headless recording: a pair of a probe that is not active
+  is counted as traced but has no row, so compare `total`, not the row count, with the
+  population (headless `-parquet` never sheds rows, it waits for the writer; for TUI
+  recordings see below). When events were lost (the run statistics say
   `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither `traced` nor `counted_only`: every
   element then carries `"lower_bound":true` and its numbers are a lower bound (the true
   total is at least that). The value is the word `unavailable` when the totals cannot be
@@ -222,7 +221,37 @@ traced everything:
 Row counts of sampled syscalls in such a file are therefore not the population; use
 `ior.sampling.totals` for that. The kernel counts carry no bytes, files or latency
 percentiles: those stay sampled. Read the footer with, for example,
-`SELECT decode(key), decode(value) FROM parquet_kv_metadata('trace.parquet')` in DuckDB. `R` recordings made from the TUI are not marked.
+`SELECT decode(key), decode(value) FROM parquet_kv_metadata('trace.parquet')` in DuckDB.
+
+#### TUI `R` recordings
+
+A TUI recording (`ior.mode` = `tui`) carries the same two keys, in the same format, whenever
+the trace samples. Unlike the raw modes, the TUI samples by default: `futex`, `futex_wait`,
+`futex_wake`, `futex_requeue`, `futex_waitv` and `clock_gettime` are aggregate-only (rate 0)
+unless you pass a rate for them, so they never have a row in a TUI recording, and a default
+TUI recording is marked `clock_gettime=0,futex=0,futex_requeue=0,...`. Their true counts are
+in `ior.sampling.totals`. Pass `-syscall-sampling-syscalls futex=1,...` to record them as
+rows; with every rate at 1 the file is unmarked. What the keys mean for a TUI recording:
+
+- `ior.sampling` lists the sampled syscalls whose probe is attached when the recording starts
+  (`R` pressed). The rates themselves cannot change while ior runs, so they hold for the whole
+  file. A sampled syscall whose probe you attach later in the probes modal (`o`) is not in
+  this key but appears in `ior.sampling.totals`, with its `rate`, once it was invoked.
+- `ior.sampling.totals` covers exactly this recording: the rows it holds (`traced` is the
+  number of rows in the file here, since it is counted where the rows are written) plus the
+  invocations the kernel counted while it ran. Each `R` recording starts from zero, so two
+  recordings of one trace do not share counts, and the kernel counters are flushed when the
+  recording starts and stops (and before a filter change restarts the trace), so no
+  invocation from before the start or after the stop is attributed to it. The dashboard's
+  auto-reset (`I`, 30s by default) and the `r` key do not affect it.
+- The elements carry `"lower_bound":true` when events were lost while recording: ring-buffer
+  drops, or rows shed by the recorder's full queue (the status line then shows
+  `rec: ... (dropped N)`).
+- The value is `unavailable` when kernel counts arrived during the recording while a filter
+  was active that the syscall-keyed kernel counters cannot apply (anything besides syscall, family, and
+  the PID/TID the trace was started with: comm, file, latency, ...), or a read of the
+  counters failed. The rows then follow the filter but the kernel-only invocations could not
+  be counted under it.
 
 `time_ns` is a boot-relative clock, so join it to wall time only if you have an independent
 boot-time reference.

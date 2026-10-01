@@ -15,7 +15,18 @@ import (
 type aggregateDrainResult struct {
 	rows    []statsengine.SyscallAggregate
 	warning string
+	// withheld, when non-empty, says why kernel counts that were drained were
+	// not ingested: the active filter cannot be applied to syscall-keyed rows
+	// (aggregateIngestAllowedForFilter). The counts are then simply missing
+	// from every sink, which a TUI recording's sampling totals must declare
+	// (see eventLoop.forwardAggregatesToRecording).
+	withheld string
 }
+
+// withheldByFilter is the aggregateDrainResult.withheld reason of a filter the
+// kernel counters cannot honour; the raw-mode samplingResult uses the same
+// words for the same situation.
+const withheldByFilter = "the active filter cannot be applied to the kernel counters"
 
 // kernelProcessScope is the PID/TID scope the BPF program enforces itself
 // (the PID_FILTER/TID_FILTER globals, fixed at load time). A value <= 0 means
@@ -74,11 +85,39 @@ func (d *aggregateDrainer) Tick() aggregateDrainResult {
 	if err != nil {
 		return aggregateDrainResult{warning: fmt.Sprintf("syscall aggregate drain failed: %v", err)}
 	}
-	rows = d.filterRowsForIngest(rows)
-	if len(rows) == 0 {
-		return aggregateDrainResult{}
+	result := aggregateDrainResult{withheld: d.withheldReason(rows)}
+	if ingest := d.filterRowsForIngest(rows); len(ingest) > 0 {
+		result.rows = ingest
 	}
-	return aggregateDrainResult{rows: rows}
+	return result
+}
+
+// withheldReason reports why drained rows that carry counts of an
+// ingestible syscall are not ingested at all, or "" when nothing was withheld
+// that way: the filter gates aggregate ingestion off entirely (see
+// filterRowsForIngest). A row dropped by the per-row syscall/family match is
+// not withheld - the filter excludes that syscall from the rows as well.
+func (d *aggregateDrainer) withheldReason(rows []statsengine.SyscallAggregate) string {
+	filter := d.currentFilter()
+	if aggregateIngestAllowedForFilter(&filter, d.kernelScope) {
+		return ""
+	}
+	for _, row := range rows {
+		if _, ok := d.aggregateIngestTraceIDs[row.TraceID]; ok && row.Count > 0 {
+			return withheldByFilter
+		}
+	}
+	return ""
+}
+
+// Flush drains the aggregate map now and hands the result to the sink, under
+// the same lock as the poll ticks; a no-op before Start and once the drainer
+// retired (see pollCycle), so it never touches a closed map. The TUI calls it
+// at the boundaries of a Parquet recording (runtime.RecordingSampling).
+func (d *aggregateDrainer) Flush() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flushLocked()
 }
 
 // Start polls the aggregate map every `every` until ctx is cancelled or the

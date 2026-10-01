@@ -27,6 +27,14 @@ func rawModeSamplingRates(cfg flags.Config) map[types.TraceId]uint32 {
 	if !cfg.IsRawOutputMode() {
 		return nil
 	}
+	return sampledSyscallRates(cfg)
+}
+
+// sampledSyscallRates returns the effective rate of every syscall cfg samples
+// (rate other than 1, as loaded into the BPF sampling map), or nil when it
+// samples none. Shared by the raw modes and the TUI recordings
+// (tuiSampledSyscalls), so both report exactly what the kernel applies.
+func sampledSyscallRates(cfg flags.Config) map[types.TraceId]uint32 {
 	rates := make(map[types.TraceId]uint32)
 	for traceID, rate := range buildSyscallSamplingRates(cfg) {
 		if rate != 1 {
@@ -48,6 +56,12 @@ func rawModeSamplingFamilyRates(cfg flags.Config) map[types.SyscallFamily]uint32
 	if !cfg.IsRawOutputMode() {
 		return nil
 	}
+	return sampledFamilyRates(cfg)
+}
+
+// sampledFamilyRates returns cfg's effective -syscall-sampling-families rates
+// other than 1 (promoteFamilyZeroForRawOutput only changes a raw mode's 0).
+func sampledFamilyRates(cfg flags.Config) map[types.SyscallFamily]uint32 {
 	rates := make(map[types.SyscallFamily]uint32)
 	for family, rate := range cfg.SyscallFamilySamplingRates {
 		if rate = promoteFamilyZeroForRawOutput(cfg, rate); rate != 1 {
@@ -144,18 +158,22 @@ func (t *samplingTally) summary(unavailable string) sampling.Summary {
 	defer t.mu.Unlock()
 	entries := make([]sampling.Entry, 0, len(t.rates))
 	for traceID, rate := range t.rates {
-		entry := sampling.Entry{
-			Syscall: traceID.Name(),
-			Rate:    rate,
-			Traced:  t.traced[traceID],
-			Counted: t.counted[traceID],
-		}
-		if familyRate, ok := t.familyRates[traceID.Family()]; ok && familyRate == rate {
-			entry.Family = string(traceID.Family())
-		}
+		entry := samplingEntry(traceID, rate, t.familyRates)
+		entry.Traced, entry.Counted = t.traced[traceID], t.counted[traceID]
 		entries = append(entries, entry)
 	}
 	return sampling.New(entries, unavailable)
+}
+
+// samplingEntry describes one sampled syscall, without counts. Its Family is
+// set when the syscall runs at its family's -syscall-sampling-families rate,
+// which lets sampling.New report that rate once for the whole family.
+func samplingEntry(traceID types.TraceId, rate uint32, familyRates map[types.SyscallFamily]uint32) sampling.Entry {
+	entry := sampling.Entry{Syscall: traceID.Name(), Rate: rate}
+	if familyRate, ok := familyRates[traceID.Family()]; ok && familyRate == rate {
+		entry.Family = string(traceID.Family())
+	}
+	return entry
 }
 
 // restrictSamplingToActive limits the sampling report to the syscalls whose
@@ -206,7 +224,7 @@ func (e *eventLoop) samplingResult() sampling.Summary {
 	scope := kernelProcessScope{pid: e.cfg.pidFilter, tid: e.cfg.tidFilter}
 	switch {
 	case !aggregateIngestAllowedForFilter(&filter, scope):
-		return t.summary("the active filter cannot be applied to the kernel counters")
+		return t.summary(withheldByFilter)
 	case t.drainFailed.Load():
 		return t.summary("reading the kernel counters failed")
 	}

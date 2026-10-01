@@ -94,7 +94,7 @@ func modelRecordingPublisher(model *Model) func() error {
 		}
 		// recorderFinalise also claims the failure of a recording that
 		// already died, so a signal quit cannot exit 0 over a lost recording.
-		return recorderFinalise(model.runtime.Recorder())
+		return recorderFinalise(model.runtime.Recorder(), model.runtime)
 	}
 }
 

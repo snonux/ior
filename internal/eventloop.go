@@ -7,6 +7,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/globalfilter"
+	"ior/internal/runtime"
 	"ior/internal/statsengine"
 	"ior/internal/textsafe"
 	"ior/internal/types"
@@ -115,6 +116,11 @@ type eventLoop struct {
 	// output mode, or nil (see eventLoopConfig.samplingRates). It is the
 	// aggregate sink of such a run.
 	samplingTally *samplingTally
+	// recordingCounter receives, in TUI mode, the kernel counts and the loss
+	// signals a Parquet recording's sampling totals need (see
+	// recording_sampling.go); nil everywhere else. Set by the TUI configurer
+	// before the loop and its drain/drop goroutines start, read-only after.
+	recordingCounter runtime.RecordingSamplingCounter
 	// aggregateDrainer is the running aggregate drainer, published by
 	// startAggregateDrainLoop and cleared by its stop function, so SetFilter
 	// (called from the TUI goroutine) can flush the aggregate map before a
