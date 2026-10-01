@@ -51,14 +51,17 @@ func (s *fakeSession) release() {
 	s.view.SetProbeManager(nil)
 }
 
-// TestOverlappingTraceSessionsKeepNewestSessionBindings drives the
-// interleavings of a restart that does not wait for the old session: A's
-// late setup or late teardown must never replace or clear what B published.
-func TestOverlappingTraceSessionsKeepNewestSessionBindings(t *testing.T) {
-	tests := []struct {
-		name  string
-		steps func(r *runtimeBindings, a, b *fakeSession)
-	}{
+// overlapCase is one interleaving of two overlapping sessions A and B, in
+// which B (the newer session) must end up owning the bindings.
+type overlapCase struct {
+	name  string
+	steps func(r *runtimeBindings, a, b *fakeSession)
+}
+
+// overlappingSessionCases lists the interleavings of A's late setup/teardown
+// with B's start that the bindings must survive.
+func overlappingSessionCases() []overlapCase {
+	return []overlapCase{
 		{
 			// Restart during "Attaching...": A finishes setup after B.
 			name: "A publishes late, then releases late",
@@ -93,31 +96,43 @@ func TestOverlappingTraceSessionsKeepNewestSessionBindings(t *testing.T) {
 			},
 		},
 	}
-	for _, tc := range tests {
+}
+
+// requireSessionBOwnsBindings checks that B, not A, owns the probe manager and
+// the live-filter setter, then that B's own release clears both.
+func requireSessionBOwnsBindings(t *testing.T, r *runtimeBindings, a, b *fakeSession) {
+	t.Helper()
+	if got := r.currentProbeManager(); got != runtime.ProbeManager(b.manager) {
+		t.Fatalf("probe manager = %v, want session B's", got)
+	}
+	if !r.applyLiveFilter(globalfilter.Filter{}) {
+		t.Fatal("session B's live-filter setter was cleared")
+	}
+	if a.calls != 0 || b.calls != 1 {
+		t.Fatalf("setter calls A=%d B=%d, want A=0 B=1", a.calls, b.calls)
+	}
+
+	// B is still the owner, so its own release must clear both.
+	b.release()
+	if got := r.currentProbeManager(); got != nil {
+		t.Fatalf("probe manager after B's release = %v, want nil", got)
+	}
+	if r.applyLiveFilter(globalfilter.Filter{}) {
+		t.Fatal("B's release left its live-filter setter registered")
+	}
+}
+
+// TestOverlappingTraceSessionsKeepNewestSessionBindings drives the
+// interleavings of a restart that does not wait for the old session: A's
+// late setup or late teardown must never replace or clear what B published.
+func TestOverlappingTraceSessionsKeepNewestSessionBindings(t *testing.T) {
+	for _, tc := range overlappingSessionCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRuntimeBindings()
 			a := &fakeSession{manager: sessionProbeManager{name: "A"}}
 			b := &fakeSession{manager: sessionProbeManager{name: "B"}}
 			tc.steps(r, a, b)
-
-			if got := r.currentProbeManager(); got != runtime.ProbeManager(b.manager) {
-				t.Fatalf("probe manager = %v, want session B's", got)
-			}
-			if !r.applyLiveFilter(globalfilter.Filter{}) {
-				t.Fatal("session B's live-filter setter was cleared")
-			}
-			if a.calls != 0 || b.calls != 1 {
-				t.Fatalf("setter calls A=%d B=%d, want A=0 B=1", a.calls, b.calls)
-			}
-
-			// B is still the owner, so its own release must clear both.
-			b.release()
-			if got := r.currentProbeManager(); got != nil {
-				t.Fatalf("probe manager after B's release = %v, want nil", got)
-			}
-			if r.applyLiveFilter(globalfilter.Filter{}) {
-				t.Fatal("B's release left its live-filter setter registered")
-			}
+			requireSessionBOwnsBindings(t, r, a, b)
 		})
 	}
 }

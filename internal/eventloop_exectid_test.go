@@ -255,15 +255,16 @@ func TestNonLeaderExecWithLostExecRecordStillPairs(t *testing.T) {
 	assertNoCallerState(t, el)
 }
 
-// TestLostExecRecordFallbackIsNarrow pins what the fallback must not adopt:
-// a failed execve exit (a failed exec keeps its tid), an exit under a
-// non-leader tid, a non-exec exit, and a hint whose enter was already
-// consumed by the caller's own exit.
-func TestLostExecRecordFallbackIsNarrow(t *testing.T) {
-	cases := []struct {
-		name  string
-		drive func(t *testing.T, el *eventLoop) *event.Pair
-	}{
+// lostExecCase drives one unrelated exit past a parked non-leader exec enter.
+type lostExecCase struct {
+	name  string
+	drive func(t *testing.T, el *eventLoop) *event.Pair
+}
+
+// lostExecUnrelatedExitCases lists the exits that must not adopt the parked
+// enter of the caller's exec.
+func lostExecUnrelatedExitCases() []lostExecCase {
+	return []lostExecCase{
 		{"failed execve exit", func(t *testing.T, el *eventLoop) *event.Pair {
 			return feedExecveExit(t, el, 2000, nleExecPid, -2)
 		}},
@@ -282,7 +283,14 @@ func TestLostExecRecordFallbackIsNarrow(t *testing.T) {
 			}
 		}},
 	}
-	for _, tc := range cases {
+}
+
+// TestLostExecRecordFallbackIsNarrow pins what the fallback must not adopt:
+// a failed execve exit (a failed exec keeps its tid), an exit under a
+// non-leader tid, a non-exec exit, and a hint whose enter was already
+// consumed by the caller's own exit.
+func TestLostExecRecordFallbackIsNarrow(t *testing.T) {
+	for _, tc := range lostExecUnrelatedExitCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			el := newNonLeaderExecLoop(t)
 			el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), make(chan *event.Pair, 1))

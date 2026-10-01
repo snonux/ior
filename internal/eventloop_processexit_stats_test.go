@@ -57,20 +57,18 @@ func openAccess(t *testing.T, at uint64, pathname string) [][]byte {
 	return [][]byte{enter, exit}
 }
 
-// TestGroupDeadExitSplitsRecycledPidStatsRows is the end-to-end regression
-// test for task ro2: a group-dead sched_process_exit must end the PID's row in
-// the stats engine, so the next process handed the PID gets its own row and
-// label instead of merging into the dead one's under the new comm. A thread
-// exit (group_dead clear) must not split the row, and neither may the legacy
-// 24-byte record of a pre-group_dead IOR_BPF_OBJECT, which cannot say whether
-// the process died (task gp2 review): retiring on it would split a live
-// multi-threaded process into one row per exited thread.
-func TestGroupDeadExitSplitsRecycledPidStatsRows(t *testing.T) {
-	tests := []struct {
-		name string
-		exit func(t *testing.T, at uint64) []byte
-		want []statsengine.ProcessSnapshot // PID, Lifetime, Comm, Syscalls only
-	}{
+// recycledPidExitCase is one way the first process of recycledStatsPid can
+// end between its two opens and the second process's three.
+type recycledPidExitCase struct {
+	name string
+	exit func(t *testing.T, at uint64) []byte
+	want []statsengine.ProcessSnapshot // PID, Lifetime, Comm, Syscalls only
+}
+
+// recycledPidExitCases lists the group-dead, thread and legacy exit records
+// and the process rows each must leave.
+func recycledPidExitCases() []recycledPidExitCase {
+	return []recycledPidExitCase{
 		{
 			name: "group dead exit retires the row",
 			exit: func(t *testing.T, at uint64) []byte {
@@ -104,7 +102,18 @@ func TestGroupDeadExitSplitsRecycledPidStatsRows(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
+}
+
+// TestGroupDeadExitSplitsRecycledPidStatsRows is the end-to-end regression
+// test for task ro2: a group-dead sched_process_exit must end the PID's row in
+// the stats engine, so the next process handed the PID gets its own row and
+// label instead of merging into the dead one's under the new comm. A thread
+// exit (group_dead clear) must not split the row, and neither may the legacy
+// 24-byte record of a pre-group_dead IOR_BPF_OBJECT, which cannot say whether
+// the process died (task gp2 review): retiring on it would split a live
+// multi-threaded process into one row per exited thread.
+func TestGroupDeadExitSplitsRecycledPidStatsRows(t *testing.T) {
+	for _, tt := range recycledPidExitCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			var raws [][]byte
 			at := uint64(1000)

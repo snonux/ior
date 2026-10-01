@@ -394,9 +394,10 @@ func TestSyscallAccountingScenarios(t *testing.T) {
 
 // TestSyscallAccountingScenariosCatchRegressions compiles plausible
 // regressions of filter.c and requires at least one scenario to fail on each.
-func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
-	filterC, mapsH := readAccountingSources(t)
-	mutations := map[string][2]string{
+// accountingMutations are plausible regressions of filter.c as {anchor,
+// replacement} pairs; each anchor occurs exactly once in the source.
+func accountingMutations() map[string][2]string {
+	return map[string][2]string{
 		"enter ignores a failed write": {
 			"        return ior_on_enter_state_lost(enter_trace_id, rate);\n    }",
 			"    }",
@@ -474,6 +475,11 @@ func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 			"    if (agg->count)\n        return 1;",
 		},
 	}
+}
+
+func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
+	filterC, mapsH := readAccountingSources(t)
+	mutations := accountingMutations()
 	for name, m := range mutations {
 		t.Run(name, func(t *testing.T) {
 			if strings.Count(filterC, m[0]) != 1 {

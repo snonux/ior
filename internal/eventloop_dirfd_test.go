@@ -827,30 +827,25 @@ func newExecPair(traceID types.TraceId, pid uint32, dirfd, flags int32, name str
 	return enter, exit
 }
 
-func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
-	const (
-		pid    = uint32(2700)
-		dirfd  = int32(30)
-		progfd = int32(31)
-		failed = int64(-int64(syscall.ENOENT))
-	)
-	dir := t.TempDir()
-	prog := filepath.Join(dir, "prog")
-	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
-	el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+// execExitCase is one handleExecExit scenario: the exec pair BPF reported and
+// the file the pair must end up with.
+type execExitCase struct {
+	name     string
+	traceID  types.TraceId
+	dirfd    int32
+	flags    int32
+	filename string
+	status   uint32
+	ret      int64
+	wantName string
+	wantFD   int32
+}
 
-	tests := []struct {
-		name     string
-		traceID  types.TraceId
-		dirfd    int32
-		flags    int32
-		filename string
-		status   uint32
-		ret      int64
-		wantName string
-		wantFD   int32
-	}{
+// execExitCases lists the dirfd/AT_EMPTY_PATH scenarios: dir is the directory
+// tracked as dirfd, prog the file tracked as progfd.
+func execExitCases(dir, prog string, dirfd, progfd int32) []execExitCase {
+	failed := int64(-int64(syscall.ENOENT))
+	return []execExitCase{
 		{name: "execveat relative to dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
 		{name: "failed execveat keeps resolved path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", ret: failed, wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
 		{name: "fexecve AT_EMPTY_PATH names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
@@ -872,8 +867,21 @@ func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
 		{name: "execve ignores AT_EMPTY_PATH bits", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, flags: unix.AT_EMPTY_PATH, wantName: "", wantFD: -1},
 		{name: "invalid dirfd keeps name and attribution", traceID: types.SYS_ENTER_EXECVEAT, dirfd: -9, filename: "ls", ret: -int64(syscall.EBADF), wantName: "ls", wantFD: -9},
 	}
+}
 
-	for _, tc := range tests {
+func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
+	const (
+		pid    = uint32(2700)
+		dirfd  = int32(30)
+		progfd = int32(31)
+	)
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "prog")
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
+	el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+
+	for _, tc := range execExitCases(dir, prog, dirfd, progfd) {
 		t.Run(tc.name, func(t *testing.T) {
 			enter, exit := newExecPair(tc.traceID, pid, tc.dirfd, tc.flags, tc.filename, tc.ret)
 			enter.FilenameStatus = tc.status
@@ -975,28 +983,24 @@ func runRawExecRecords(t *testing.T, el *eventLoop, enterRaw []byte, exit *types
 	}
 }
 
-// TestRawExecEnterSnapshotRespectsOutcomeAndIsolation drives the enter-time
-// snapshot path (storeEnter) end to end, where ep.File is already set when
-// handleExecExit runs: a failed fexecve must still withdraw the descriptor
-// attribution, and fd-table changes after the enter must not leak into the
-// row.
-func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
-	const (
-		pid    = uint32(0x7ffffff1)
-		progfd = int32(6)
-		flags  = int32(syscall.O_RDONLY)
-	)
-	prog := filepath.Join(t.TempDir(), "prog")
-	tests := []struct {
-		name     string
-		filename string
-		atFlags  int32
-		status   uint32
-		ret      int64
-		between  func(el *eventLoop)
-		wantName string
-		wantFD   int32
-	}{
+// rawExecEnterCase is one runRawExec scenario: the exec pair, an optional
+// mutation of the fd table between the enter and its exit, and the file the
+// emitted pair must carry.
+type rawExecEnterCase struct {
+	name     string
+	filename string
+	atFlags  int32
+	status   uint32
+	ret      int64
+	between  func(el *eventLoop)
+	wantName string
+	wantFD   int32
+}
+
+// rawExecEnterCases lists the outcome and isolation scenarios of the
+// enter-time file snapshot; prog is the file tracked as progfd of pid.
+func rawExecEnterCases(t *testing.T, prog string, pid uint32, progfd int32) []rawExecEnterCase {
+	return []rawExecEnterCase{
 		{name: "successful fexecve", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
 		{name: "failed fexecve reports no path", atFlags: unix.AT_EMPTY_PATH, ret: -int64(syscall.EACCES), wantName: "", wantFD: -1},
 		// The enter-time snapshot must not attribute an unreadable name to the
@@ -1016,7 +1020,21 @@ func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
 				tracked.(*file.FdFile).SetFlags(syscall.O_WRONLY)
 			}},
 	}
-	for _, tc := range tests {
+}
+
+// TestRawExecEnterSnapshotRespectsOutcomeAndIsolation drives the enter-time
+// snapshot path (storeEnter) end to end, where ep.File is already set when
+// handleExecExit runs: a failed fexecve must still withdraw the descriptor
+// attribution, and fd-table changes after the enter must not leak into the
+// row.
+func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
+	const (
+		pid    = uint32(0x7ffffff1)
+		progfd = int32(6)
+		flags  = int32(syscall.O_RDONLY)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	for _, tc := range rawExecEnterCases(t, prog, pid, progfd) {
 		t.Run(tc.name, func(t *testing.T) {
 			el := mustNewEventLoop(t, eventLoopConfig{})
 			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, flags))

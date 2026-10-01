@@ -155,6 +155,27 @@ func TestLiveTrieCompactionDoesNotOvershoot(t *testing.T) {
 	}
 }
 
+// buildUncompactedTrie fills a comm/path LiveTrie with 20000 seeded records
+// spread over comms comm names and dirs directories (skew piles a third of
+// them onto three hot values) without ever compacting it.
+func buildUncompactedTrie(comms, dirs int, skew bool) *LiveTrie {
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "")
+	lt.maxNodes = 0 // build without compacting
+	rng := rand.New(rand.NewSource(7))
+	for i := 0; i < 20000; i++ {
+		n := rng.Intn(20000)
+		if skew && rng.Intn(3) == 0 {
+			n %= 3
+		}
+		lt.AddRecord(IterRecord{
+			Comm: fmt.Sprintf("c%d", n%comms),
+			Path: fmt.Sprintf("/d%d/f%d", n%dirs, n),
+			Cnt:  Counter{Count: uint64(1 + rng.Intn(3))},
+		})
+	}
+	return lt
+}
+
 // TestLiveTrieCompactionPreservesTheView compacts tries whose snapshots use
 // the root and depth-one fallbacks and checks that, with buckets left out,
 // the view equals the full-walk reference of the trie before compacting.
@@ -170,20 +191,7 @@ func TestLiveTrieCompactionPreservesTheView(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			lt := NewLiveTrie([]string{"comm", "path"}, "count", "")
-			lt.maxNodes = 0 // build without compacting
-			rng := rand.New(rand.NewSource(7))
-			for i := 0; i < 20000; i++ {
-				n := rng.Intn(20000)
-				if tc.skew && rng.Intn(3) == 0 {
-					n %= 3
-				}
-				lt.AddRecord(IterRecord{
-					Comm: fmt.Sprintf("c%d", n%tc.comms),
-					Path: fmt.Sprintf("/d%d/f%d", n%tc.dirs, n),
-					Cnt:  Counter{Count: uint64(1 + rng.Intn(3))},
-				})
-			}
+			lt := buildUncompactedTrie(tc.comms, tc.dirs, tc.skew)
 			want, _ := referenceSnapshot(lt.root, 0, lt.root.total, false)
 			before := lt.nodeCount
 
