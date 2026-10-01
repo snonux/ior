@@ -113,9 +113,9 @@ func syscallRows(snap *statsengine.Snapshot) [][]string {
 // repair the Parquet recording and the stream CSV export apply (tasks 3z2,
 // 4z2): a rune cut at the BPF path capture limit is dropped and any other
 // invalid UTF-8 byte becomes a \xHH escape, so a strict reader such as
-// DuckDB's read_csv accepts the file. Valid text, including control characters, is
-// kept as it is, and quotes, commas and newlines are left to the csv.Writer's
-// quoting, so the file stays valid CSV.
+// DuckDB's read_csv accepts the file. Valid text, including control
+// characters, is kept as it is, and quotes, commas and newlines are left to
+// the csv.Writer's quoting, so the file stays valid CSV.
 func fileRows(snap *statsengine.Snapshot) [][]string {
 	var rows [][]string
 	for _, r := range snap.Files() {

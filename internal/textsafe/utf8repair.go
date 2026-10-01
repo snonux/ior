@@ -7,13 +7,18 @@ import (
 	"ior/internal/types"
 )
 
-// This file holds the UTF-8 repair that every data file ior writes applies to
-// its free-form traced text (comm, file, old_file): the Parquet recording
-// (parquet.RecordFromStream), the stream CSV export (internal/tui/eventstream)
-// and the dashboard snapshot CSV (internal/export). It lives here, not in
-// internal/parquet, so the CSV writers share one definition of the repair
-// without importing the Parquet library (task 4z2); the only extra dependency
-// is internal/types for the BPF capture limit, which has no ior imports.
+// This file holds the UTF-8 repair for the traced free-form text that ior's
+// table-shaped data files hand to strict readers. The Parquet recording
+// (parquet.RecordFromStream) and the stream CSV export
+// (internal/tui/eventstream) repair comm, file and old_file; the dashboard
+// snapshot CSV (internal/export) holds no comm and repairs only its file path.
+// The .ior.zst flamegraph record and the -plain stdout CSV do not use it: the
+// record stores the traced bytes as they are, and -plain output is escaped
+// with Escape when -escape asks for it and otherwise (piped, -escape=auto)
+// stays byte-exact. The repair lives here, not in
+// internal/parquet, so the CSV writers share one definition of it without
+// importing the Parquet library (task 4z2); the only extra dependency is
+// internal/types for the BPF capture limit, which has no ior imports.
 //
 // Strict readers (DuckDB, Arrow, a strict csv reader) reject a whole query
 // that touches a value holding an invalid UTF-8 byte. The traced values are
