@@ -614,37 +614,17 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 // selection.
 func RenderTerminalView(ctx RenderContext) string {
 	if msg, ok := renderPlaceholder(ctx); ok {
-		return renderMessagePanel(msg, ctx.Width)
+		return common.RenderMessagePanel(msg, ctx.Width)
 	}
 	if strings.TrimSpace(ctx.MetricLabel) == "" {
 		ctx.MetricLabel = "events"
 	}
 	filterSet, filterIsActive := resolveRenderFilterSet(ctx)
 	if filterIsActive && filterHidesAllFrames(filterSet) {
-		return renderMessagePanel(fmt.Sprintf("Flame: no frames match filter %q", common.Sanitize(ctx.SearchQuery)), ctx.Width)
+		return common.RenderMessagePanel(fmt.Sprintf("Flame: no frames match filter %q", common.Sanitize(ctx.SearchQuery)), ctx.Width)
 	}
 	ctx.FilterSet = filterSet
 	return renderSelectedView(ctx, filterIsActive)
-}
-
-// messagePanelChrome is the columns PanelStyle adds around its text: a border
-// cell and a padding cell on each side.
-const messagePanelChrome = 4
-
-// renderMessagePanel boxes a placeholder message in PanelStyle, cut so the
-// panel is at most width cells wide. The "terminal too narrow" message is
-// shown precisely when the terminal is narrow, and a line wider than the
-// terminal would soft-wrap into extra rows the dashboard has not budgeted.
-// Below the panel's own chrome plus one cell the bare message is cut instead;
-// width <= 0 means unbounded.
-func renderMessagePanel(msg string, width int) string {
-	if width <= 0 {
-		return common.Current().PanelStyle.Render(msg)
-	}
-	if width <= messagePanelChrome {
-		return common.TruncateRight(msg, width, "…")
-	}
-	return common.Current().PanelStyle.Render(common.TruncateRight(msg, width-messagePanelChrome, "…"))
 }
 
 // renderPlaceholder returns the message shown instead of a flamegraph when the

@@ -105,6 +105,38 @@ func TestEveryTabFitsTheTerminalHeight(t *testing.T) {
 	}
 }
 
+// The Latency+Gaps panels are at least ~26 columns wide in their compact
+// layout, so on narrower terminals they used to soft-wrap their title and
+// bucket rows: the panel grew past its row budget, was cut mid-row without its
+// bottom border, and the shown counts no longer added up to total= (task
+// ps2). Swept from 1 to 28 columns at every height and help state: the frame
+// contract holds (no line wider than the terminal), every histogram drawn is
+// whole with counts summing to its total, and once the width admits the
+// compact layout and the body the tab, a histogram is drawn rather than the
+// "terminal too narrow" notice.
+func TestLatencyTabFitsNarrowTerminals(t *testing.T) {
+	c := fitCase{tab: TabLatency, mode: tabVizModeTable}
+	snap := tallSnapshot()
+	minWidth := max(histogramMinWidth(snap.LatencyHistogram, latencyHistogramSpec),
+		histogramMinWidth(snap.GapHistogram, gapHistogramSpec))
+	for _, help := range []bool{false, true} {
+		t.Run(fmt.Sprintf("help=%v", help), func(t *testing.T) {
+			for width := 1; width <= 28; width++ {
+				for height := 1; height <= 30; height++ {
+					assertViewFits(t, c, help, width, height)
+					m := newFitModel(t, c, help, width, height)
+					rows := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width)))
+					drawn := len(drawnHistograms(t, m.View().Content)) > 0
+					if want := width >= minWidth && rows.body >= latencyMinRows; drawn != want {
+						t.Fatalf("help=%v %dx%d (body %d, panel needs %d columns): histogram drawn = %v, want %v:\n%s",
+							help, width, height, rows.body, minWidth, drawn, want, m.View().Content)
+					}
+				}
+			}
+		})
+	}
+}
+
 // newFitModel returns a dashboard on c's tab and mode at width x height with
 // every panel populated: the stats snapshot (tallSnapshot), a flamegraph live
 // trie and a stream ring buffer. Without the last two the Flame and Stream
@@ -144,11 +176,16 @@ func newFitModel(t *testing.T, c fitCase, help bool, width, height int) *Model {
 }
 
 // assertViewFits renders one cell of the matrix and holds it to the frame
-// contract (assertFrameFits).
+// contract (assertFrameFits); a Latency+Gaps frame must also show its
+// histograms whole (assertHistogramsWhole).
 func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
 	t.Helper()
 	m := newFitModel(t, c, help, width, height)
-	assertFrameFits(t, m, c, fmt.Sprintf("%s help=%v %dx%d", c, help, width, height), width, height)
+	label := fmt.Sprintf("%s help=%v %dx%d", c, help, width, height)
+	assertFrameFits(t, m, c, label, width, height)
+	if c.tab == TabLatency {
+		assertHistogramsWhole(t, label, m.View().Content)
+	}
 }
 
 // assertFrameFits holds m's View output to the frame contract: never taller
@@ -166,10 +203,14 @@ func assertFrameFits(t *testing.T, m *Model, c fitCase, label string, width, hei
 		t.Fatalf("%s: View is %d lines, terminal has %d:\n%s", label, got, height, out)
 	}
 	lines := strings.Split(out, "\n")
-	if !strings.Contains(lines[len(lines)-1], "filter:") {
+	status := m.renderStatusBlock(width)
+	// The status line is the status block's last line. From 20 columns it
+	// visibly starts the filter summary; narrower it is cut to the width
+	// like every other line, so only its identity is checked there.
+	last := plainLine(lines[len(lines)-1])
+	if last != plainLine(clipTailLines(status, 1)) || (width >= 20 && !strings.Contains(last, "filter:")) {
 		t.Fatalf("%s: last line is not the status line: %q", label, lines[len(lines)-1])
 	}
-	status := m.renderStatusBlock(width)
 	rows := splitFrameRows(height, lipgloss.Height(status))
 	tabBar := renderTabBar(m.activeTab, width)
 	if rows.tabBar > 0 && plainLine(lines[0]) != plainLine(tabBar) {
@@ -314,14 +355,33 @@ func TestFitBlocksDropsLowPriorityBlocksWhole(t *testing.T) {
 // histogramChromeRows rows besides its buckets.
 func TestHistogramChromeRowsMatchesRenderedPanel(t *testing.T) {
 	snap := tallSnapshot()
-	out := renderHistogram(snap.LatencyHistogram, "Latency Histogram", 100, 0)
+	out := renderHistogram(snap.LatencyHistogram, latencyHistogramSpec, 100, 0)
 	if got, want := lipgloss.Height(out), len(snap.LatencyHistogram.Buckets())+histogramChromeRows; got != want {
 		t.Fatalf("unbounded histogram is %d rows, want buckets+chrome = %d", got, want)
 	}
 	for _, height := range []int{5, 6, 9, 12} {
-		out := renderHistogram(snap.LatencyHistogram, "Latency Histogram", 100, height)
+		out := renderHistogram(snap.LatencyHistogram, latencyHistogramSpec, 100, height)
 		if got := lipgloss.Height(out); got != height {
 			t.Errorf("renderHistogram(height=%d) is %d rows, want exactly the budget", height, got)
+		}
+	}
+	// The compact layout (27 columns leave no room for a 4-cell bar beside
+	// the 16-cell labels) has no legend: histogramCompactChromeRows rows of
+	// chrome, and the row it saves goes to a bucket.
+	const compactWidth = 27
+	if layout, ok := planHistogramLayout(snap.LatencyHistogram, latencyHistogramSpec, compactWidth); !ok || !layout.compact {
+		t.Fatalf("width %d: layout %+v, ok=%v; want the compact layout", compactWidth, layout, ok)
+	}
+	for _, height := range []int{4, 5, 9, 12} {
+		out := renderHistogram(snap.LatencyHistogram, latencyHistogramSpec, compactWidth, height)
+		if got := lipgloss.Height(out); got != height {
+			t.Errorf("compact renderHistogram(height=%d) is %d rows, want exactly the budget", height, got)
+		}
+		if strings.Contains(out, "Scale:") || strings.ContainsAny(out, "█▓▒░") {
+			t.Errorf("compact renderHistogram(height=%d) draws bars or the legend:\n%s", height, out)
+		}
+		if got, want := strings.Count(out, " | "), height-histogramCompactChromeRows; got != want {
+			t.Errorf("compact renderHistogram(height=%d) has %d bucket rows, want %d", height, got, want)
 		}
 	}
 }
@@ -417,7 +477,13 @@ func TestLatencyGapsEmptyHistogramsFit(t *testing.T) {
 // realSnapshot returns a snapshot with the real 8 latency/gap buckets and the
 // given per-bucket counts (the last one is the slowest, [1s,+inf)).
 func realSnapshot(counts [8]uint64) *statsengine.Snapshot {
-	labels := [8]string{"[0,1us)", "[1us,10us)", "[10us,100us)", "[100us,1ms)", "[1ms,10ms)", "[10ms,100ms)", "[100ms,1s)", "[1s,+inf)"}
+	labels := []string{"[0,1us)", "[1us,10us)", "[10us,100us)", "[100us,1ms)", "[1ms,10ms)", "[10ms,100ms)", "[100ms,1s)", "[1s,+inf)"}
+	return labelledSnapshot(labels, counts[:])
+}
+
+// labelledSnapshot returns a snapshot whose latency and gap histograms both
+// have one bucket per label with the matching count, and a short sparkline.
+func labelledSnapshot(labels []string, counts []uint64) *statsengine.Snapshot {
 	var buckets []statsengine.HistogramBucketSnapshot
 	var total uint64
 	for i, c := range counts {
@@ -430,34 +496,83 @@ func realSnapshot(counts [8]uint64) *statsengine.Snapshot {
 	return &snap
 }
 
+// drawnHistogram is one histogram panel as it appears in rendered output: its
+// title (without the total), the "total=N" the title announces, the sum and
+// number of its bucket rows, and whether it is closed by its bottom border.
+type drawnHistogram struct {
+	title      string
+	total, sum uint64
+	rows       int
+	closed     bool
+}
+
+// drawnHistograms finds every histogram panel in out: a title line holding
+// "(total=N)", then its "label | ..." bucket rows (whose last field is the
+// count), the optional scale legend and the bottom border. A row the panel
+// does not end with that border was cut (or soft-wrapped) mid-panel.
+func drawnHistograms(t *testing.T, out string) []drawnHistogram {
+	t.Helper()
+	var panels []drawnHistogram
+	cur := -1 // index of the panel whose rows are being read, -1 for none
+	for _, line := range strings.Split(ansi.Strip(out), "\n") {
+		inner := strings.Trim(line, "│ ")
+		if i := strings.Index(inner, "(total="); i >= 0 {
+			p := drawnHistogram{title: strings.TrimSpace(inner[:i])}
+			if _, err := fmt.Sscanf(inner[i:], "(total=%d)", &p.total); err != nil {
+				t.Fatalf("no total in title %q: %v", line, err)
+			}
+			panels = append(panels, p)
+			cur = len(panels) - 1
+			continue
+		}
+		if cur < 0 {
+			continue
+		}
+		if label, counts, ok := strings.Cut(inner, " | "); ok && strings.HasPrefix(label, "[") {
+			fields := strings.Fields(counts)
+			var n uint64
+			if _, err := fmt.Sscanf(fields[len(fields)-1], "%d", &n); err != nil {
+				t.Fatalf("no count at the end of %q: %v", line, err)
+			}
+			panels[cur].sum += n
+			panels[cur].rows++
+			continue
+		}
+		if strings.HasPrefix(inner, "Scale:") {
+			continue
+		}
+		panels[cur].closed = strings.HasPrefix(strings.TrimSpace(line), "└")
+		cur = -1
+	}
+	return panels
+}
+
 // displayedBucketSum adds up the trailing count column of every bucket row of
-// the histogram panel whose title line contains title, and returns it with the
+// the histogram panel whose title contains title, and returns it with the
 // "total=N" the title announces.
 func displayedBucketSum(t *testing.T, out, title string) (sum, total uint64) {
 	t.Helper()
-	inPanel := false
-	for _, line := range strings.Split(ansi.Strip(out), "\n") {
-		if strings.Contains(line, title) {
-			inPanel = true
-			if _, err := fmt.Sscanf(line[strings.Index(line, "total="):], "total=%d)", &total); err != nil {
-				t.Fatalf("no total in title %q: %v", line, err)
-			}
-			continue
+	for _, p := range drawnHistograms(t, out) {
+		if strings.Contains(p.title, title) {
+			return p.sum, p.total
 		}
-		if strings.Contains(line, "Scale:") {
-			inPanel = false // the panel's last content line
-		}
-		if !inPanel || !strings.Contains(line, " | ") {
-			continue
-		}
-		fields := strings.Fields(strings.Trim(line, "│ "))
-		var n uint64
-		if _, err := fmt.Sscanf(fields[len(fields)-1], "%d", &n); err != nil {
-			t.Fatalf("no count at the end of %q: %v", line, err)
-		}
-		sum += n
 	}
-	return sum, total
+	t.Fatalf("no histogram titled %q in:\n%s", title, out)
+	return 0, 0
+}
+
+// assertHistogramsWhole holds every histogram panel in out to what a reader
+// relies on: at least one bucket row, the rows adding up to the title's
+// total=, and the bottom border drawn (a panel cut mid-row by a clip, or made
+// taller by soft-wrapped rows, fails one of these).
+func assertHistogramsWhole(t *testing.T, label, out string) {
+	t.Helper()
+	for _, p := range drawnHistograms(t, out) {
+		if p.rows == 0 || p.sum != p.total || !p.closed {
+			t.Fatalf("%s: histogram %q has %d rows summing to %d of total=%d, closed=%v:\n%s",
+				label, p.title, p.rows, p.sum, p.total, p.closed, out)
+		}
+	}
 }
 
 // The slowest buckets are the point of a latency tool: whatever the height,
@@ -583,9 +698,15 @@ func TestHistogramSectionDropsSparklineBeforeBuckets(t *testing.T) {
 // Real terminals soft-wrap a line wider than the terminal, which makes the
 // frame taller than the height guarantee; no line of the Overview or
 // Latency+Gaps tab may be wider than the terminal.
+// Latency+Gaps is swept from 1 column (its panels give way to a width-cut
+// notice), the Overview from 20.
 func TestSummaryTabsFitTheTerminalWidth(t *testing.T) {
 	for _, tab := range []Tab{TabOverview, TabLatency} {
-		for width := 20; width <= 200; width++ {
+		from := 20
+		if tab == TabLatency {
+			from = 1
+		}
+		for width := from; width <= 200; width++ {
 			for _, height := range []int{24, 40} {
 				var out string
 				if tab == TabOverview {
@@ -603,6 +724,117 @@ func TestSummaryTabsFitTheTerminalWidth(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// histogramRenderer is one of the histogram tab renderers with the panel
+// titles it draws.
+type histogramRenderer struct {
+	name   string
+	render func(*statsengine.Snapshot, int, int) string
+	specs  []histogramSpec
+}
+
+var histogramRenderers = []histogramRenderer{
+	{"latency", renderLatencyTab, []histogramSpec{latencyHistogramSpec}},
+	{"gaps", renderGapsTab, []histogramSpec{gapHistogramSpec}},
+	{"latency+gaps", renderLatencyGapsTab, []histogramSpec{latencyHistogramSpec, gapHistogramSpec}},
+}
+
+// Below the width its compact layout needs, a histogram panel is the width-cut
+// "terminal too narrow" notice; from that width on it is drawn whole, with no
+// line wider than the terminal (it used to soft-wrap below ~30 columns, task
+// ps2), at most height rows, and bucket rows that add up to total=. Swept at
+// every width from 1 to 40 and every height up to 30 (and unbounded), with
+// the real 8 buckets, with 14 buckets of wider labels and with labels that
+// folding widens. A sparkline under a histogram is drawn on one line or not
+// at all (its panel is never taller than sparklineRows).
+func TestHistogramSectionsFitNarrowWidths(t *testing.T) {
+	snaps := map[string]*statsengine.Snapshot{
+		"real": realSnapshot([8]uint64{1200, 800, 200, 40, 12, 5, 1, 1}),
+		"tall": tallSnapshot(),
+		// Labels narrower than their folded form ("[1000000000,1)" folds to
+		// "[1000000000,+inf)"), and wide enough to decide the panel's minimum
+		// width over its title, so the folded tail row is the widest one a
+		// short panel shows and must be measured before it is drawn.
+		"folding": labelledSnapshot(
+			[]string{"[1000000000,1)", "[1000000001,2)", "[1000000002,3)", "[1000000003,4)", "[1000000004,5)", "[1000000005,6)"},
+			[]uint64{9, 8, 7, 6, 5, 4}),
+	}
+	for snapName, snap := range snaps {
+		for _, r := range histogramRenderers {
+			for width := 1; width <= 40; width++ {
+				for height := 0; height <= 30; height++ {
+					label := fmt.Sprintf("%s/%s %dx%d", snapName, r.name, width, height)
+					assertHistogramSectionFits(t, label, r, snap, width, height)
+				}
+			}
+		}
+	}
+}
+
+// assertSparklinesOnOneLine checks that every sparkline panel in out is its
+// labelled sparkline on one line followed by the bottom border: a line wider
+// than the panel would be wrapped by lipgloss onto further rows.
+func assertSparklinesOnOneLine(t *testing.T, label, out string) {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(out), "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "sparkline:") {
+			continue
+		}
+		if i+1 >= len(lines) || !strings.HasPrefix(lines[i+1], "└") {
+			t.Fatalf("%s: sparkline line %q is not followed by its bottom border:\n%s", label, line, out)
+		}
+	}
+}
+
+// isSpecTitle reports whether a drawn histogram title is spec's full or short
+// title.
+func isSpecTitle(title string, spec histogramSpec) bool {
+	return title == spec.title || title == spec.shortTitle
+}
+
+// assertHistogramSectionFits renders one cell of
+// TestHistogramSectionsFitNarrowWidths and checks it.
+func assertHistogramSectionFits(t *testing.T, label string, r histogramRenderer, snap *statsengine.Snapshot, width, height int) {
+	t.Helper()
+	out := r.render(snap, width, height)
+	if height > 0 && lipgloss.Height(out) > height {
+		t.Fatalf("%s: %d rows:\n%s", label, lipgloss.Height(out), out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Fatalf("%s: line is %d cells wide: %q", label, w, line)
+		}
+	}
+	if height > 0 && height < latencyMinRows {
+		return // below the tab minimum the dashboard shows its own notice
+	}
+	assertHistogramsWhole(t, label, out)
+	assertSparklinesOnOneLine(t, label, out)
+	// The first section is always drawn: as a histogram from its minimum
+	// width on, else as the notice (cut to the width like Flame's).
+	first, firstHist := r.specs[0], snap.LatencyHistogram
+	if first == gapHistogramSpec {
+		firstHist = snap.GapHistogram
+	}
+	minWidth := histogramMinWidth(firstHist, first)
+	drawn := drawnHistograms(t, out)
+	if width >= minWidth {
+		if len(drawn) == 0 || !isSpecTitle(drawn[0].title, first) {
+			t.Fatalf("%s: %q histogram not drawn at its minimum width %d:\n%s", label, first.shortTitle, minWidth, out)
+		}
+		return
+	}
+	notice := first.shortTitle + ": terminal too narrow"
+	if width > common.MessagePanelChrome {
+		notice = common.TruncateRight(notice, width-common.MessagePanelChrome, common.Ellipsis)
+	} else {
+		notice = common.TruncateRight(notice, width, common.Ellipsis)
+	}
+	if len(drawn) > 0 && isSpecTitle(drawn[0].title, first) || !strings.Contains(ansi.Strip(out), notice) {
+		t.Fatalf("%s: below %d columns want the %q notice:\n%s", label, minWidth, notice, out)
 	}
 }
 

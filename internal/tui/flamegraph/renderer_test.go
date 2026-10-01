@@ -1166,7 +1166,7 @@ func TestPlaceholderPanelFitsTheWidth(t *testing.T) {
 			}
 		}
 	}
-	if out := renderMessagePanel("Flame: waiting for data...", 100); !strings.Contains(out, "Flame: waiting for data...") {
+	if out := RenderTerminalView(RenderContext{Width: 100, Height: 10}); !strings.Contains(out, "Flame: waiting for data...") {
 		t.Errorf("a wide terminal cut the message:\n%s", out)
 	}
 }

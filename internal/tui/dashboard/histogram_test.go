@@ -10,7 +10,7 @@ import (
 )
 
 func TestRenderHistogramNoBuckets(t *testing.T) {
-	out := renderHistogram(statsengine.HistogramSnapshot{}, "Latency Histogram", 80, 20)
+	out := renderHistogram(statsengine.HistogramSnapshot{}, latencyHistogramSpec, 80, 20)
 	if !strings.Contains(out, "no data") {
 		t.Fatalf("expected no data placeholder, got %q", out)
 	}
@@ -23,7 +23,7 @@ func TestRenderHistogramIncludesLabelsCountsAndScale(t *testing.T) {
 		{Label: "[10us,100us)", Count: 9},
 	})
 
-	out := renderHistogram(hist, "Latency Histogram", 100, 20)
+	out := renderHistogram(hist, latencyHistogramSpec, 100, 20)
 	for _, token := range []string{"Latency Histogram", "[0,1us)", "[1us,10us)", "[10us,100us)", "9", "Scale: █▓▒░"} {
 		if !strings.Contains(out, token) {
 			t.Fatalf("expected token %q in histogram output", token)
@@ -71,7 +71,7 @@ func TestRenderHistogramFoldsForSmallHeight(t *testing.T) {
 	// A one-bucket-row panel cannot show three buckets: they fold into one
 	// "[0,+inf)" row that still accounts for all 3 events instead of cutting
 	// the slow ones off.
-	out := renderHistogram(hist, "Latency Histogram", 100, 3)
+	out := renderHistogram(hist, latencyHistogramSpec, 100, 3)
 	if !strings.Contains(out, "[0,+inf)") {
 		t.Fatalf("expected the folded row in output: %q", out)
 	}
