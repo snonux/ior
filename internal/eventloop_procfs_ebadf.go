@@ -62,11 +62,16 @@ func exitedEBADF(ep *event.Pair) bool {
 }
 
 // resolveOnExit is the one place fd-resolving exit handlers turn a descriptor
-// number into a file.File. A non-EBADF exit resolves as usual (fd table, procfs
-// cache, procfs); an EBADF exit never reads procfs (see the comment above).
+// number into a file.File. An EBADF exit never reads procfs (see the comment
+// above); neither does a close or close_range, whose descriptor is already
+// released when the row is processed (eventloop_procfs_close.go). Every other
+// exit resolves as usual (fd table, procfs cache, procfs).
 func (e *eventLoop) resolveOnExit(ep *event.Pair, fd int32, pid uint32) file.File {
 	if exitedEBADF(ep) {
 		return e.fdState().resolveAfterEBADF(fd, pid)
+	}
+	if closesDescriptor(ep) {
+		return e.fdState().resolveClosing(fd, pid, ep.EnterEv.GetTime())
 	}
 	return e.fdState().resolve(fd, pid)
 }

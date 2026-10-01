@@ -219,6 +219,7 @@ func (t *fdTracker) rekeyTable(from, to uint32) {
 		moved := fdKey(to, fd)
 		t.procFdCache[moved] = t.procFdCache[key]
 		t.procFdAges[moved] = t.procFdAges[key]
+		t.copyProcFdReadAt(key, moved)
 		t.indexCacheKey(moved)
 		t.deleteCacheKey(key)
 	}

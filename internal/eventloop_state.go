@@ -38,6 +38,12 @@ type fdTracker struct {
 	procFdCache  map[uint64]*file.FdFile // procfs-resolved metadata for unknown FDs
 	procFdAges   map[uint64]uint64       // access age per cache entry, for LRU eviction
 	maxCacheSize int                     // max entries before eviction; 0 = defaultMaxProcFdCacheSize
+	// procFdReadAt is when each cache entry's readlink returned, on the
+	// CLOCK_BOOTTIME scale of the BPF record timestamps (absent: unknown). A
+	// close row may use a cache entry only if it was read before the close
+	// entered (task jr2, eventloop_procfs_close.go). It lives beside the cache
+	// rather than in file.FdFile so the per-row files keep their size.
+	procFdReadAt map[uint64]uint64
 	// pidIndex maps each pid to the exact set of its keys in files and in
 	// procFdCache. The per-process operations - the exec record's dropOnExec,
 	// the exit record's deletePid, close_range's closeRange and friends - run
@@ -141,6 +147,9 @@ func (t *fdTracker) ensureInit() {
 	}
 	if t.procFdAges == nil {
 		t.procFdAges = make(map[uint64]uint64)
+	}
+	if t.procFdReadAt == nil {
+		t.procFdReadAt = make(map[uint64]uint64)
 	}
 	if t.pidIndex == nil {
 		t.pidIndex = make(map[uint32]*pidFdKeys)
@@ -571,6 +580,7 @@ func (t *fdTracker) copyTable(src, child uint32) {
 		childKey := fdKey(child, fd)
 		t.procFdCache[childKey] = fdFile.Dup(fd)
 		t.procFdAges[childKey] = 0
+		t.copyProcFdReadAt(key, childKey)
 		t.indexCacheKey(childKey)
 	}
 	if len(dst.files) == 0 && len(dst.cache) == 0 {
@@ -694,7 +704,8 @@ func (t *fdTracker) filesLimit() int {
 }
 
 // resolve returns the file.File for fd, checking the fd table first, then the
-// procfs cache, and finally resolving via procfs and caching the result.
+// procfs cache, and finally resolving via procfs and caching the result with
+// its read time. Close rows do not come here (resolveClosing, task jr2).
 func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	if fdFile, ok := t.get(fd, pid); ok {
 		return fdFile
@@ -719,7 +730,10 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	// through resolveOnExit, which skips procfs for it (see
 	// eventloop_procfs_ebadf.go).
 	if discovered.Name() != "" {
-		t.setProcFdCache(fd, pid, discovered)
+		// Stamped after the readlink returned: a close row may reuse this
+		// answer only if it was read before that close began (task jr2,
+		// eventloop_procfs_close.go). One vDSO clock read next to a readlink.
+		t.setProcFdCacheRead(fd, pid, discovered, bootClockNs())
 	}
 	return discovered
 }
@@ -737,7 +751,29 @@ func (t *fdTracker) cachedProcFdFile(fd int32, pid uint32) (*file.FdFile, bool) 
 	return cache, ok
 }
 
+// cachedProcFdReadAt returns when the cache entry for (pid, fd) was read from
+// procfs, or false when there is no entry or its read time is unknown.
+func (t *fdTracker) cachedProcFdReadAt(fd int32, pid uint32) (uint64, bool) {
+	readNs, ok := t.procFdReadAt[t.key(pid, fd)]
+	return readNs, ok
+}
+
+// setProcFdCache caches resolved without a read time: a close row will not use
+// it (see procFdReadAt). The procfs path stamps its answers through
+// setProcFdCacheRead instead.
 func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) {
+	t.storeProcFdCache(fd, pid, resolved, 0, false)
+}
+
+// setProcFdCacheRead caches resolved as read from procfs at readNs (boot
+// clock, taken after the read returned).
+func (t *fdTracker) setProcFdCacheRead(fd int32, pid uint32, resolved *file.FdFile, readNs uint64) {
+	t.storeProcFdCache(fd, pid, resolved, readNs, true)
+}
+
+// storeProcFdCache is the one insertion path for procfs cache entries; stamped
+// says whether readNs is a read time to record or the entry has none.
+func (t *fdTracker) storeProcFdCache(fd int32, pid uint32, resolved *file.FdFile, readNs uint64, stamped bool) {
 	if t.isBlind(pid) {
 		return // see set: a blind table keeps no answers, procfs is read each time
 	}
@@ -745,12 +781,30 @@ func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) 
 		t.procFdCache = make(map[uint64]*file.FdFile)
 		t.procFdAges = make(map[uint64]uint64)
 	}
+	if t.procFdReadAt == nil {
+		t.procFdReadAt = make(map[uint64]uint64)
+	}
 	key := t.key(pid, fd)
 	t.age++
 	t.procFdCache[key] = resolved
 	t.procFdAges[key] = t.age
+	if stamped {
+		t.procFdReadAt[key] = readNs
+	} else {
+		delete(t.procFdReadAt, key) // a replaced entry must not keep the old stamp
+	}
 	t.indexCacheKey(key)
 	t.pruneCache()
+}
+
+// copyProcFdReadAt gives the cache entry at dst the read time of the one at
+// src, or none when src has none (copyTable and rekeyTable copy entries).
+func (t *fdTracker) copyProcFdReadAt(src, dst uint64) {
+	if readNs, ok := t.procFdReadAt[src]; ok {
+		t.procFdReadAt[dst] = readNs
+		return
+	}
+	delete(t.procFdReadAt, dst)
 }
 
 func (t *fdTracker) deleteProcFdCache(fd int32, pid uint32) {
@@ -813,12 +867,13 @@ func (t *fdTracker) cacheLimit() int {
 }
 
 // deleteCacheKey is the one removal path for procfs cache entries (the
-// counterpart of removeFileKey), keeping the entry, its age and its index
-// slot in step. delete on a nil map is a no-op in Go, so this is safe even
-// before any cache entries are set.
+// counterpart of removeFileKey), keeping the entry, its age, its procfs read
+// time and its index slot in step. delete on a nil map is a no-op in Go, so
+// this is safe even before any cache entries are set.
 func (t *fdTracker) deleteCacheKey(key uint64) {
 	delete(t.procFdCache, key)
 	delete(t.procFdAges, key)
+	delete(t.procFdReadAt, key)
 	t.unindexKey(key, true)
 }
 

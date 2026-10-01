@@ -84,6 +84,7 @@ var scenarios = map[string]func() error{
 	"close-invalid-fd":              closeInvalidFd,
 	"close-double-close":            closeDoubleClose,
 	"close-range-empty":             closeRangeEmpty,
+	"close-untracked":               closeUntracked,
 	"dup-basic":                     dupBasic,
 	"dup-dup2":                      dupDup2,
 	"dup-dup3":                      dupDup3,
