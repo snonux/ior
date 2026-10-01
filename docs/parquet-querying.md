@@ -67,8 +67,10 @@ destination), `address_space_bytes` and the `epoll_*` columns follow the same ze
 as in the recording. The synthetic warning lines the Stream tab shows (`Trace stopped: ...`,
 recorder failures) are UI notes with a wall-clock time and placeholder pid/ret, so they are not
 exported; like a recording, the CSV holds only traced syscalls with their boot-clock `time_ns`.
-Unlike the recording, the CSV writes `comm`, `file` and `old_file` as traced, without the UTF-8
-repair.
+Like the recording, the CSV repairs invalid UTF-8 in `comm`, `file` and `old_file` (the same
+code, so both hold identical text for a row), which lets strict readers such as DuckDB's
+`read_csv` accept the file: a name cut mid-rune at the capture limit loses the partial rune and
+any other invalid byte becomes a literal `\xHH` escape. Valid text is written unchanged.
 
 ### Restart codes and `is_error`
 
