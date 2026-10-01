@@ -22,9 +22,10 @@ const (
 	// task exited or the number was already closed) and the stashed path
 	// could not be compared by inode either.
 	handleUnverified handleVerdict = iota
-	// handleMatches: the descriptor and the pathname are the same file - the
-	// same inode, or, when the pathname cannot be stat'ed, the same name as
-	// the descriptor's /proc link (see compareHandleLinkText).
+	// handleMatches: the descriptor and the pathname are taken for the same
+	// file - the same inode, or, when the pathname cannot be stat'ed, the same
+	// name as the descriptor's /proc link, which different files can share
+	// (see compareHandleLinkText).
 	handleMatches
 	// handleMismatch: the descriptor procfs shows NOW is demonstrably not the
 	// file the stashed pathname names. That alone does not say which handle was
@@ -86,7 +87,8 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 //     was unlinked before, or the path does not exist in ior's mount
 //     namespace): the descriptor's /proc/<pid>/fd link is compared with the
 //     stash, as it stands and minus one trailing " (deleted)"
-//     (compareHandleLinkText). The same deleted file matches; a different file
+//     (compareHandleLinkText). The same deleted file matches - and so does
+//     another deleted file of the same name, see there; a file of another name
 //     is a mismatch even though the stashed path is gone. That is what lets a
 //     deleted or renamed stash still tell that the OTHER handle was opened.
 //
@@ -100,18 +102,27 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 //     link is readable. The row is then named from procfs if confirmedHandleFd
 //     confirms the descriptor, and after the relative stash, as the task
 //     spelled it, if not.
-//   - A non-path name resolved from a descriptor: name_to_handle_at(pidfd, "",
-//     AT_EMPTY_PATH), the normal way to take a pidfs handle, stashes the
-//     pidfd's own link text "anon_inode:[pidfd]", and a namespace descriptor
-//     stashes "net:[N]" and the like. Such a stash CAN match: it equals the
-//     link text of the descriptor its handle opens (every pidfd reads
-//     "anon_inode:[pidfd]", so it matches any pidfd, not only its own
-//     process's), and the stashed name is then used and consumed like any
-//     other match.
+//   - A non-path name resolved from a descriptor: name_to_handle_at(fd, "",
+//     AT_EMPTY_PATH) stashes what fdTracker.resolve calls that descriptor, and
+//     that is one of two spellings. A descriptor ior does not have in its fd
+//     table is read from procfs, so a pidfd (the normal way to take a pidfs
+//     handle) stashes its link text "anon_inode:[pidfd]" and a namespace
+//     descriptor "net:[N]" and the like. A descriptor ior saw being created is
+//     answered from the fd table, with ior's own traced name: "pidfd:<flags>"
+//     for a pidfd_open, "memfd:<name>" for a memfd_create. Both spellings CAN
+//     match: the first equals the link text of the descriptor its handle
+//     opens, the second is translated into it (tracedHandleLink). Every pidfd
+//     reads "anon_inode:[pidfd]", so either stash matches any pidfd, not only
+//     its own process's. The stashed name is then used and consumed like any
+//     other match, so the row of a traced source carries the traced name, as
+//     every other row on that descriptor does.
 //
-// An absolute stash can come from a descriptor too: AT_EMPTY_PATH on a regular
-// file stashes its /proc link, which for an unlinked file or a memfd ends in
-// " (deleted)". No such path exists, so it is decided by link text as well.
+// An absolute stash can come from a descriptor too: AT_EMPTY_PATH on a file ior
+// does not track stashes its /proc link, which for an unlinked file or a memfd
+// ends in " (deleted)". No such path exists, so it is decided by link text as
+// well. (A tracked file stashes the path it was opened by, which is decided
+// like any other path stash - by inode if absolute, never matching if
+// relative.)
 //
 // Mount namespaces: the stash is the string the task passed, procfs is read
 // from ior's own namespace. When ior's namespace has a DIFFERENT file at the
@@ -161,28 +172,79 @@ func compareHandleInodes(fdInfo os.FileInfo, pathname string) (verdict handleVer
 	return handleMismatch, true
 }
 
+// tracedMemfdPrefix and tracedPidfdPrefix start the names ior gives a memfd and
+// a pidfd it saw being created (eventfdDescriptorName builds them from these
+// constants): "memfd:<name>", or "memfd:<flags>" when the name could not be
+// read, and "pidfd:<flags>". Those two are the traced descriptors a file handle
+// can be taken of whose traced name is not a path.
+const (
+	tracedMemfdPrefix = "memfd:"
+	tracedPidfdPrefix = "pidfd:"
+)
+
+// tracedHandleLink translates a stash that is ior's own name for a traced
+// memfd or pidfd into the /proc/<pid>/fd link text of such a descriptor, which
+// is what the probe reads: "memfd:<name>" is "/memfd:<name> (deleted)" (a
+// memfd is unlinked from birth and cannot be linked anywhere, so the suffix is
+// always there) and "pidfd:<flags>" is "anon_inode:[pidfd]". ok is false for
+// every other stash.
+//
+// It exists because the stash of name_to_handle_at(fd, "", AT_EMPTY_PATH) is
+// answered from ior's fd table before procfs is asked (fdTracker.resolve), so
+// for a descriptor whose memfd_create or pidfd_open ior saw it is the traced
+// name, which equals no link text. Untranslated, such a stash contradicted the
+// very descriptor its handle opened: the row was named from procfs
+// ("/memfd:x (deleted)" on a descriptor every other row calls "memfd:x") and
+// the stash stayed in the slot (task l03, review of 9f02f3a).
+//
+// The translation is done here, from the name alone, instead of reading the
+// source descriptor's link when the stash is taken: the fd table is in event
+// order, procfs is not, and a task that takes a handle and closes the
+// descriptor has usually handed the number on before the loop gets to the
+// name_to_handle_at exit (the reuse confirmedHandleFd guards against on the
+// open side). It also costs no /proc read. The price is that the name alone
+// decides: a relative PATH stash literally spelled "memfd:x" or "pidfd:0" is
+// translated too and would match a memfd of that name or any pidfd, where it
+// used to be a mismatch like every relative path.
+//
+// Not covered: a memfd whose name BPF could not read is tracked as
+// "memfd:<flags>", which translates to a link its descriptor does not have, so
+// that stash still contradicts its own open and is left in the slot.
+func tracedHandleLink(stash string) (link string, ok bool) {
+	if name, isMemfd := strings.CutPrefix(stash, tracedMemfdPrefix); isMemfd {
+		return "/" + tracedMemfdPrefix + name + deletedSuffix, true
+	}
+	if strings.HasPrefix(stash, tracedPidfdPrefix) {
+		return pidfdLinkText, true
+	}
+	return "", false
+}
+
 // compareHandleLinkText compares the descriptor's /proc link with a stash that
 // could not be decided by inode. An unreadable link decides nothing. Otherwise
-// the stash matches in two cases, which are the two moments a file can have
-// been unlinked relative to its name_to_handle_at:
+// the stash matches in three cases:
 //
 //   - The link minus one trailing " (deleted)" equals the stash: the file was
 //     unlinked AFTER its handle was taken, so the stash is the clean pathname
 //     the task passed and only procfs carries the suffix.
 //   - The link equals the stash as it stands: the stash was itself read from a
-//     /proc link - name_to_handle_at(fd, "", AT_EMPTY_PATH) is resolved from
-//     the descriptor - so it carries whatever procfs said. That covers a pidfd
-//     or namespace descriptor ("anon_inode:[pidfd]", "net:[N]"), and a file
-//     that was ALREADY unlinked when its handle was taken, including every
-//     memfd ("/memfd:x (deleted)"). The suffix is the kernel's on both sides
-//     then and must not be stripped from one only: doing so made such a stash
-//     contradict its own descriptor, which named the row correctly from procfs
-//     but left the stash in the slot, to name the thread's next
-//     open_by_handle_at whenever procfs could not answer for that one (task
-//     l03). The matching row keeps the suffix, which is how ior shows every
-//     unlinked file it knows only from procfs. Observed on Linux 7.2.5, on
-//     tmpfs, a disk filesystem and a memfd: the descriptor such a handle
-//     opens reads exactly the link the handle was taken from.
+//     /proc link - name_to_handle_at(fd, "", AT_EMPTY_PATH) on a descriptor
+//     that is not in ior's fd table - so it carries whatever procfs said. That
+//     covers a pidfd or namespace descriptor ("anon_inode:[pidfd]", "net:[N]"),
+//     and a file that was ALREADY unlinked when its handle was taken, an
+//     untracked memfd among them ("/memfd:x (deleted)"). The suffix is the
+//     kernel's on both sides then and must not be stripped from one only:
+//     doing so made such a stash contradict its own descriptor, which named
+//     the row correctly from procfs but left the stash in the slot, to name
+//     the thread's next open_by_handle_at whenever procfs could not answer for
+//     that one (task l03). The matching row keeps the suffix, which is how ior
+//     shows every unlinked file it knows only from procfs. Observed on Linux
+//     7.2.5, on tmpfs, a disk filesystem and a memfd: the descriptor such a
+//     handle opens reads exactly the link the handle was taken from.
+//   - The link equals the stash translated by tracedHandleLink: the same
+//     AT_EMPTY_PATH call on a memfd or pidfd that IS in ior's fd table, whose
+//     stash is ior's traced name ("memfd:x", "pidfd:0") rather than a link.
+//     The matching row keeps the traced name.
 //
 // The suffix is deliberately NOT stripped from the stash as well. A stash
 // "<path> (deleted)" against a link "<path>" is a file living at the old path
@@ -191,21 +253,41 @@ func compareHandleInodes(fdInfo os.FileInfo, pathname string) (verdict handleVer
 // literally ending in " (deleted)" must stay comparable with its link
 // "<name> (deleted) (deleted)" once that file is unlinked.
 //
-// Text cannot tell the kernel's suffix from a literal one, so two false
-// matches remain, both needing a file whose own name ends in " (deleted)": a
-// stash "<path>" that is gone against a LIVE descriptor named
-// "<path> (deleted)", and a gone stash literally named "<path> (deleted)"
-// against the unlinked file "<path>". The reverse also exists: a live file
-// literally named "<path> (deleted)" in ior's namespace makes the stash of the
-// unlinked "<path>" stat-able, so the inode comparison decides, calls it a
-// mismatch and leaves that stash unconsumed as before l03. All three keep the
-// row's name right or off by the suffix only, and telling them apart would
-// take further stat calls on the event loop for names that hardly occur.
+// A match by text is a match of names, not of files, and three false matches
+// remain:
+//
+//   - Different files whose links read the same. Every pidfd reads
+//     "anon_inode:[pidfd]"; two unlinked files that lived at the same path
+//     (create, take the handle, unlink, create again, unlink) both read
+//     "<path> (deleted)"; two memfds created with the same name both read
+//     "/memfd:<name> (deleted)". A stash taken from one is therefore consumed
+//     by the open of the other, whether it is the link text or a traced name.
+//     Before l03 the unlinked-file and memfd cases were mismatches that kept
+//     the stash. The row's name is still the text procfs gives that
+//     descriptor (or its traced spelling), and its flags are the call's; what
+//     is lost is the stash, spent on another handle's open, so the stashed
+//     file's own open is named from procfs.
+//   - A stash "<path>" that is gone against a LIVE descriptor named
+//     "<path> (deleted)", and
+//   - a gone stash literally named "<path> (deleted)" against the unlinked
+//     file "<path>": text cannot tell the kernel's suffix from a literal one,
+//     so both need a file whose own name ends in " (deleted)".
+//
+// The reverse also exists: a live file literally named "<path> (deleted)" in
+// ior's namespace makes the stash of the unlinked "<path>" stat-able, so the
+// inode comparison decides, calls it a mismatch and leaves that stash
+// unconsumed as before l03. All of these keep the row's name right or off by
+// the suffix only, and telling them apart would take the handle bytes, which
+// the events do not carry, or further stat calls on the event loop for names
+// that hardly occur.
 func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 	if probe.linkErr != nil {
 		return handleUnverified
 	}
 	if probe.target == pathname || strings.TrimSuffix(probe.target, deletedSuffix) == pathname {
+		return handleMatches
+	}
+	if link, traced := tracedHandleLink(pathname); traced && probe.target == link {
 		return handleMatches
 	}
 	return handleMismatch

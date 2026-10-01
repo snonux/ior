@@ -9,9 +9,12 @@ import (
 )
 
 // These tests cover a stash that already carries procfs's " (deleted)" suffix
-// (task l03). name_to_handle_at(fd, "", AT_EMPTY_PATH) is resolved from the
-// descriptor's /proc link, so a handle taken of an already-unlinked file - or
-// of a memfd, which is born unlinked - is stashed as "<path> (deleted)".
+// (task l03). name_to_handle_at(fd, "", AT_EMPTY_PATH) on a descriptor that is
+// not in ior's fd table is resolved from the descriptor's /proc link, so a
+// handle taken of an already-unlinked file - or of a memfd, which is born
+// unlinked - is stashed as "<path> (deleted)". None of the source descriptors
+// here is registered in the fd table; a traced source, whose stash is ior's
+// own name for it, is eventloop_handle_traced_test.go.
 
 // unlinkedHandleFds creates dir/name, opens it twice and unlinks it. source
 // stands in for the descriptor the task took the handle from, opened for the
@@ -65,8 +68,8 @@ func TestOpenByHandleAtUnlinkedEmptyPathStashMatchesItsOwnFile(t *testing.T) {
 }
 
 // TestOpenByHandleAtMemfdStashMatchesTheMemfd: a memfd is unlinked from birth,
-// so its handle is always stashed as "/memfd:<name> (deleted)" and never
-// matched the descriptor the handle opens.
+// so the handle of one ior does not track is stashed as
+// "/memfd:<name> (deleted)" and never matched the descriptor the handle opens.
 func TestOpenByHandleAtMemfdStashMatchesTheMemfd(t *testing.T) {
 	source, err := unix.MemfdCreate("handlebuf", unix.MFD_CLOEXEC)
 	if err != nil {
@@ -135,7 +138,11 @@ func TestOpenByHandleAtNameLiterallyEndingInDeleted(t *testing.T) {
 }
 
 // TestCompareHandleLinkText pins the rule itself: the stash matches the link as
-// it stands or the link minus ONE kernel suffix, and nothing else.
+// it stands, the link minus ONE kernel suffix, or - when it is ior's traced
+// name of a memfd or pidfd - the link such a descriptor has, and nothing else.
+// The rule sees names, not files: the rows marked "same text" are the false
+// match of two different files with one link text, which it cannot tell from
+// the first rows.
 func TestCompareHandleLinkText(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -149,6 +156,15 @@ func TestCompareHandleLinkText(t *testing.T) {
 		{"memfd", "/memfd:x (deleted)", "/memfd:x (deleted)", handleMatches},
 		{"literal suffix, unlinked since", "/d/f (deleted) (deleted)", "/d/f (deleted)", handleMatches},
 		{"pidfd", pidfdLinkText, pidfdLinkText, handleMatches},
+		{"same text: other unlinked file that lived at the path", "/d/f (deleted)", "/d/f (deleted)", handleMatches},
+		{"same text: other memfd of the name", "/memfd:x (deleted)", "/memfd:x (deleted)", handleMatches},
+		{"traced memfd", "/memfd:x (deleted)", "memfd:x", handleMatches},
+		{"traced pidfd", pidfdLinkText, "pidfd:0", handleMatches},
+		{"traced memfd, other memfd", "/memfd:y (deleted)", "memfd:x", handleMismatch},
+		{"traced memfd, link without the suffix", "/memfd:x", "memfd:x", handleMismatch},
+		{"traced memfd, file", "/d/f", "memfd:x", handleMismatch},
+		{"traced pidfd, other anonymous inode", "anon_inode:[eventfd]", "pidfd:0", handleMismatch},
+		{"relative path", "/d/f", "f", handleMismatch},
 		{"unlinked stash, live file at the old path", "/d/f", "/d/f (deleted)", handleMismatch},
 		{"unlinked stash, other unlinked file", "/d/g (deleted)", "/d/f (deleted)", handleMismatch},
 		{"two suffixes are not stripped", "/d/f (deleted) (deleted)", "/d/f", handleMismatch},

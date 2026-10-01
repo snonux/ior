@@ -1725,25 +1725,42 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `name_to_handle_at`), so it is checked against the returned descriptor
     through `/proc/<pid>/fd/<fd>` (inode, then link text) and a contradicted
     stash is left alone while procfs names the row. The link-text rule
-    (`compareHandleLinkText`) accepts the link as it stands *or* minus one
-    trailing ` (deleted)`: the second is a file unlinked after its handle was
-    taken (clean stash, row shows the clean path), the first a stash that was
-    itself read from a `/proc` link by `name_to_handle_at(fd, "",
-    AT_EMPTY_PATH)` - a pidfd, a namespace, and a file already unlinked at
-    that point, which includes every memfd (`/memfd:x (deleted)`; the row
-    keeps the suffix, as every procfs-named unlinked file does). Stripping
-    the suffix from the link only made such a stash contradict its own
-    descriptor: the row was right, but the stash stayed in the slot and named
-    the thread's next `open_by_handle_at` whenever procfs could not answer for
-    it (task l03). The stash is never stripped: `<path> (deleted)` against a
-    live `<path>` is a new file at the old path, and a name literally ending
-    in ` (deleted)` must still match its `... (deleted) (deleted)` link.
-    Pinned by `internal/eventloop_handle_deleted_test.go`. That probe is taken when
-    the loop handles the exit, not when the syscall returned, so a task that
-    closed the descriptor and opened something else under the same number
-    makes procfs describe the newer file (task j03: `TestOpenByHandleAt`
-    failed 10 of 40 runs because `os.RemoveAll`'s directory open reused the
-    number, and the row and its `close` were named after the directory).
+    (`compareHandleLinkText`) accepts three things. The link minus one
+    trailing ` (deleted)`: a file unlinked after its handle was taken (clean
+    stash, row shows the clean path). The link as it stands: a stash that was
+    itself read from a `/proc` link, which is what `name_to_handle_at(fd, "",
+    AT_EMPTY_PATH)` stashes for a descriptor that is *not* in ior's fd table
+    (`fdTracker.resolve` falls back to procfs) - a pidfd, a namespace, a file
+    already unlinked at that point, an untracked memfd (`/memfd:x (deleted)`;
+    the row keeps the suffix, as every procfs-named unlinked file does). And
+    the link form of a traced name (`tracedHandleLink`): the same call on a
+    memfd or pidfd ior saw being created is answered from the fd table, so
+    the stash is `memfd:x` or `pidfd:0`, which is translated to
+    `/memfd:x (deleted)` or `anon_inode:[pidfd]` for the comparison while the
+    row keeps the traced name, like every other row on that descriptor. It
+    is translated from the name rather than read from the source's `/proc`
+    link when the stash is taken: the fd table is in event order, procfs is
+    not, and the source number is often reused by then. Without the last two
+    such a stash contradicted its own descriptor: the row was named from
+    procfs, but the stash stayed in the slot and named the thread's next
+    `open_by_handle_at` whenever procfs could not answer for it (task l03).
+    The stash is never stripped: `<path> (deleted)` against a live `<path>`
+    is a new file at the old path, and a name literally ending in
+    ` (deleted)` must still match its `... (deleted) (deleted)` link. Equal
+    text is not the same file: any pidfd matches a pidfd stash, and two
+    unlinked files that lived at one path, or two memfds of one name, read
+    the same link, so the stash of one is spent on the open of the other
+    (the row's name is still that descriptor's). Still unmatched, stash left
+    behind: a traced memfd whose name BPF could not read (`memfd:<flags>`)
+    and every relative stash. Pinned by
+    `internal/eventloop_handle_deleted_test.go` and
+    `internal/eventloop_handle_traced_test.go`. The `/proc/<pid>/fd/<fd>`
+    probe that check rests on is taken when the loop handles the exit, not
+    when the syscall returned, so a task that closed the descriptor and
+    opened something else under the same number makes procfs describe the
+    newer file (task j03: `TestOpenByHandleAt` failed 10 of 40 runs because
+    `os.RemoveAll`'s directory open reused the number, and the row and its
+    `close` were named after the directory).
     A contradicting descriptor is therefore believed only when
     `confirmedHandleFd` finds it still there (link read, fdinfo readable) with
     the fixed open flags the call asked for (`sameFixedFlags`: `O_ACCMODE`,

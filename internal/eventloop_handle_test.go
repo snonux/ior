@@ -72,7 +72,9 @@ func (f *handleFeed) openByHandleWithFlags(fd int, flags int32) *event.Pair {
 }
 
 // nameToHandleEmptyPath feeds a successful name_to_handle_at(dirfd, "",
-// AT_EMPTY_PATH), whose stash is resolved from the descriptor, not a string.
+// AT_EMPTY_PATH), whose stash is resolved from the descriptor, not a string:
+// its name in the feed's fd table if it has one (traceSource), else its /proc
+// link text.
 func (f *handleFeed) nameToHandleEmptyPath(dirfd int) {
 	f.t.Helper()
 	ev, _ := makeEnterPathEvent(f.t, f.time, f.pid, f.pid, "", types.SYS_ENTER_NAME_TO_HANDLE_AT)
@@ -722,9 +724,11 @@ func TestOpenByHandleAtIgnoresANumberReusedByAHandleLessDescriptor(t *testing.T)
 
 // TestOpenByHandleAtPidfdStashMatchesAPidfd pins that a stash need not be an
 // absolute path to match: name_to_handle_at(pidfd, "", AT_EMPTY_PATH), the
-// normal way to take a pidfs handle, stashes the pidfd's link text, and the
-// descriptor its handle opens has the same link text. The stashed name is
-// used and consumed like any other match.
+// normal way to take a pidfs handle, stashes the link text of a pidfd ior
+// does not track, and the descriptor its handle opens has the same link text.
+// The stashed name is used and consumed like any other match. (A pidfd in the
+// fd table stashes "pidfd:<flags>" instead:
+// TestOpenByHandleAtTracedPidfdStashMatchesAPidfd.)
 func TestOpenByHandleAtPidfdStashMatchesAPidfd(t *testing.T) {
 	source, err := unix.PidfdOpen(os.Getpid(), 0)
 	if err != nil {

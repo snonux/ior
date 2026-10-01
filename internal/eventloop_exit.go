@@ -1100,9 +1100,9 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, 
 		return "fsopen:" + identity
 	case types.SYS_ENTER_MEMFD_CREATE:
 		if !identityKnown {
-			return fmt.Sprintf("memfd:%d", flags)
+			return fmt.Sprintf(tracedMemfdPrefix+"%d", flags)
 		}
-		return "memfd:" + identity
+		return tracedMemfdPrefix + identity
 	case types.SYS_ENTER_MEMFD_SECRET:
 		return fmt.Sprintf("memfd-secret:%d", flags)
 	case types.SYS_ENTER_USERFAULTFD:
@@ -1112,7 +1112,7 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, 
 	case types.SYS_ENTER_TIMERFD_CREATE:
 		return fmt.Sprintf("timerfd:%d", flags)
 	case types.SYS_ENTER_PIDFD_OPEN:
-		return fmt.Sprintf("pidfd:%d", flags)
+		return fmt.Sprintf(tracedPidfdPrefix+"%d", flags)
 	default:
 		return fmt.Sprintf("eventfd:%d", flags)
 	}
