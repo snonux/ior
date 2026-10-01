@@ -19,7 +19,8 @@ const hexDigits = "0123456789abcdef"
 //   - C0 controls, DEL and each byte of invalid UTF-8 become \xHH
 //     (ESC -> \x1b, BEL -> \x07, LF -> \x0a, raw byte 0x9b -> \x9b);
 //   - other unsafe runes become \uXXXX or \UXXXXXXXX (C1 CSI -> \u009b,
-//     RLO -> \u202e, stray ZWJ -> \u200d, tag rune -> \U000e0041).
+//     RLO -> \u202e, stray ZWJ -> \u200d, tag rune -> \U000e0041, no-break
+//     space -> \u00a0, Braille blank -> \u2800).
 //
 // The notation names the exact original code point or byte, so an operator
 // can tell what a file name really contains. It is not a full quoting scheme:

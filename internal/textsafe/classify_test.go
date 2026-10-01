@@ -62,6 +62,12 @@ func TestClassAt(t *testing.T) {
 		{"ZWJ in emoji sequence", "\U0001F468\u200d\U0001F469", 4, Safe, 3},
 		{"ZWJ between letters", "a\u200db", 1, Unsafe, 3},
 		{"literal U+FFFD is text", "\ufffd", 0, Safe, 3},
+		{"ASCII space", " ", 0, Safe, 1},
+		{"no-break space", "\u00a0", 0, Unsafe, 2},
+		{"ideographic space", "\u3000", 0, Unsafe, 3},
+		{"Braille blank", "\u2800", 0, Unsafe, 3},
+		{"Khitan filler", "\U00016FE4", 0, Unsafe, 4},
+		{"Braille dots are text", "\u2801", 0, Safe, 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,6 +134,7 @@ var trickyRunes = []rune{
 	0x180B, 0x180F, 0x17B4, 0x17B5, 0xE0100, 0xFE00, combiningKeycap,
 	'a', '1', '\x1b', 0x2764, 0x1F600, 0x1F3FD, 0x1F1E9,
 	0x0645, 0x0710, 0x1820, 0x0915, 0x094D, 0x0995, 0x0B95, 0x1000, 0x1780,
+	0x00A0, 0x3000, 0x2800, 0x16FE4,
 }
 
 // forEachCombination calls fn with every string of 1 to maxLen runes drawn

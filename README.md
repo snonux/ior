@@ -166,8 +166,8 @@ barely notice for pid/tid churn. ior warns on stderr when the limit is first hit
 prints the number of folded events after `Wrote <file>`. The limit is currently fixed.
 
 sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
-(ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible or bidi format characters
-are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
+(ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible, bidi format or blank-rendering space characters (no-break space,
+ideographic space, Braille blank, ...) are shown in Go escape notation such as `\x1b` or `\u202e`; the CSV stays valid.
 Backslashes are not doubled, so this display is for reading only. When stdout is piped or
 redirected, both commands write the exact traced bytes for machine consumers, with one
 exception: `ior collapsed` always writes a line feed or carriage return inside a frame as

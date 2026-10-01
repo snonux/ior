@@ -1,6 +1,6 @@
 // Package textsafe classifies the runes of traced, attacker-controlled text
 // (paths, comm names, other users' argv, flamegraph frames) by whether a
-// terminal could misinterpret them, and escapes the unsafe ones for
+// terminal could misinterpret or mistake for something else, and escapes the unsafe ones for
 // line-oriented terminal output.
 //
 // A local unprivileged user can name a file
@@ -33,8 +33,9 @@ import (
 type Class uint8
 
 const (
-	// Safe runes are printed unchanged: printable ASCII, printable non-ASCII
-	// text (CJK, emoji incl. ZWJ sequences, skin tones, combining marks) and
+	// Safe runes are printed unchanged: printable ASCII (the space U+0020 is
+	// the only space), printable non-ASCII text (CJK, emoji incl. ZWJ
+	// sequences, skin tones, combining marks) and
 	// the joiners/selectors that have a visible job in their context: a
 	// ZWJ inside an emoji sequence, U+FE0E/U+FE0F directly after an emoji
 	// or keycap base, and a ZWNJ between two letters of a script that uses
@@ -47,6 +48,7 @@ const (
 	Whitespace
 	// Unsafe covers every other control rune (C0 incl. ESC and BEL, DEL,
 	// C1 U+0080..U+009F), the invisible format runes (IsInvisibleFormat),
+	// the blank-rendering lookalikes of a space (IsBlankLookalike),
 	// a ZWJ, ZWNJ or variation selector U+FE0E/U+FE0F outside the context
 	// where it is visible and each byte of invalid UTF-8 (a raw
 	// 0x9b byte is the C1 CSI introducer on 8-bit terminals).
@@ -83,6 +85,11 @@ const (
 // Trade-offs the context rules accept, because a name that an operator
 // cannot tell apart from another name is worse than a lost joiner:
 //
+//   - every Unicode space except the ASCII space (no-break space U+00A0,
+//     ideographic space U+3000, U+2000..U+200A, ...) and the blank symbols
+//     of IsBlankLookalike (Braille blank U+2800, ...) are replaced, so
+//     CJK and European names that use a no-break or ideographic space show
+//     it as an escape instead of as an ordinary-looking space;
 //   - ZWNJ is replaced in scripts that are not in zwnjScripts (Tibetan, Lao,
 //     Thai, Balinese, Javanese, N'Ko, Adlam, Mandaic), between an Arabic
 //     letter and a digit or Latin letter, and next to any other script;
@@ -109,7 +116,7 @@ func ClassAt(s string, i int) (Class, int) {
 		return Unsafe, size
 	case isWhitespaceControl(r):
 		return Whitespace, size
-	case unicode.IsControl(r) || IsInvisibleFormat(r):
+	case unicode.IsControl(r) || IsInvisibleFormat(r) || IsBlankLookalike(r):
 		return Unsafe, size
 	case r == zeroWidthJoiner && !joinsEmoji(s, i, size):
 		return Unsafe, size
@@ -174,6 +181,10 @@ func isWhitespaceControl(r rune) bool {
 //     U+17B4/17B5, U+3164, U+FFA0 (Hangul fillers render as blank cells);
 //   - U+2028/U+2029 line and paragraph separators (terminals may break the
 //     row on them).
+//
+// The blank-rendering Zs spaces (U+00A0, U+3000, ...) and a few blank symbols
+// (U+2800, ...) are not in these classes; IsBlankLookalike covers them and
+// ClassAt applies both predicates.
 //
 // Exceptions: U+200C ZWNJ (needed by Persian and Indic text), U+FE0E/U+FE0F
 // (text/emoji presentation) and U+200D ZWJ. They are invisible on their own,
@@ -284,12 +295,12 @@ func separatesJoiningLetters(s string, i, size int) bool {
 
 // isJoiningContext reports whether r may stand next to a ZWNJ as the letter
 // or combining mark it separates (an Indic virama is a mark). A mark that
-// ClassAt itself replaces, such as the Mongolian free variation selectors or
-// Khmer U+17B4/17B5, is excluded: it disappears from the text on the first
+// ClassAt itself replaces, such as the Mongolian free variation selectors,
+// Khmer U+17B4/17B5 or the Khitan filler U+16FE4, is excluded: it disappears from the text on the first
 // pass, so accepting it would keep a ZWNJ that the second pass (over the
 // escaped or sanitised text) rejects.
 func isJoiningContext(r rune) bool {
-	return (unicode.IsLetter(r) || unicode.IsMark(r)) && !IsInvisibleFormat(r)
+	return (unicode.IsLetter(r) || unicode.IsMark(r)) && !IsInvisibleFormat(r) && !IsBlankLookalike(r)
 }
 
 // isEmojiBase reports whether r may stand next to a ZWJ or take a variation

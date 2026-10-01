@@ -13,8 +13,10 @@ const (
 	// ControlPlaceholder replaces non-whitespace control runes (ESC, BEL,
 	// DEL, C1 U+0080..U+009F, ...), invisible format runes (bidi controls,
 	// zero-width and default-ignorable runes, see
-	// textsafe.IsInvisibleFormat), a ZWJ, ZWNJ or variation selector
-	// outside the context where it is visible and every byte of invalid UTF-8. '?' is used
+	// textsafe.IsInvisibleFormat), blank-rendering lookalikes of the space
+	// (no-break and ideographic space, Braille blank, ... see
+	// textsafe.IsBlankLookalike), a ZWJ, ZWNJ or variation selector outside
+	// the context where it is visible and every byte of invalid UTF-8. '?' is used
 	// rather than U+FFFD or a Control Pictures glyph such as U+241B, because
 	// those are East-Asian-ambiguous or font-dependent and could render two
 	// cells wide, breaking column alignment.
@@ -45,7 +47,11 @@ const (
 // and zero-width or blank-rendering runes can hide text, smuggle data or
 // make two different paths look identical. Replacing them with a visible
 // one-cell placeholder both exposes the trick and keeps the measured width
-// equal to the rendered width. Three invisible runes are context-dependent
+// equal to the rendered width. The same holds for every Unicode space other
+// than the ASCII space and for the blank symbols of textsafe.IsBlankLookalike:
+// "etc\u00a0passwd" and "pass\u2800wd" render as "etc?passwd" and "pass?wd",
+// so a no-break or ideographic space in a legitimate name shows as '?'
+// instead of posing as a real space (task ms2). Three invisible runes are context-dependent
 // and kept only where they do something visible: U+200D ZWJ where it glues
 // two emoji together, U+FE0E/U+FE0F directly after an emoji (or after a
 // keycap base that is followed by U+20E3) and U+200C ZWNJ between two letters
