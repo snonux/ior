@@ -95,6 +95,13 @@ func BenchmarkFilterRows(b *testing.B) {
 // predicates used to hide it, leaving an empty view with no explanation
 // (task ur2). The negative half proves the bypass is not "filter nothing":
 // the real rows the same filter rejects are still dropped.
+//
+// There is deliberately no "errors only" case: NewWarning builds its rows with
+// IsError set (RetVal -1), so a warning satisfies that predicate through plain
+// Filter.Matches and the case would pass with the bypass removed - it could
+// not tell the bypass from ordinary matching. Every case below is one a
+// warning row does not satisfy on its own (it is Syscall "warning", Family
+// Misc, PID 0), so each fails if the IsWarning bypass is taken out.
 func TestFilterRowsKeepsWarningRowsWhateverTheFilterSays(t *testing.T) {
 	warn := NewWarningEvent(5, "ior: -tid 1: not a thread of -pid 7: the trace will stay empty")
 	src := append(filterRowsFixture(), warn)
@@ -106,7 +113,6 @@ func TestFilterRowsKeepsWarningRowsWhateverTheFilterSays(t *testing.T) {
 		{name: "pid+tid that match no row", filter: Filter{PID: globalfilter.NewEqFilter(7), TID: globalfilter.NewEqFilter(1)}, want: []uint64{5}},
 		{name: "syscall pattern", filter: Filter{Syscall: &StringFilter{Pattern: "^open$"}}, want: []uint64{5}},
 		{name: "family filter keeps matching real rows too", filter: Filter{Family: &StringFilter{Pattern: "network"}}, want: []uint64{2, 4, 5}},
-		{name: "errors only", filter: Filter{ErrorsOnly: true}, want: []uint64{2, 3, 5}},
 		{name: "inactive filter", filter: Filter{}, want: []uint64{1, 2, 3, 4, 5}},
 	}
 	for _, tc := range cases {
@@ -123,7 +129,10 @@ func TestFilterRowsKeepsWarningRowsWhateverTheFilterSays(t *testing.T) {
 // reproduction of task ur2's finding: `-pid P -tid 1` left the stream tab at
 // "total:1 filtered:0" because the pid/tid filter hid the lone warning row.
 // The warning must be counted and rendered, and real rows the filter rejects
-// must still be hidden.
+// must still be hidden. It also pins the documented counter trade-off: the
+// status line's "filtered" count includes the bypassed warning row (here
+// total:2 filtered:1, although no real row matches), because visibility of the
+// warning wins over counter purity.
 func TestModelShowsStartupWarningBehindAnActivePidTidFilter(t *testing.T) {
 	rb := NewRingBuffer()
 	m := NewModel(rb)
@@ -135,7 +144,11 @@ func TestModelShowsStartupWarningBehindAnActivePidTidFilter(t *testing.T) {
 	if len(m.allEvents) != 2 || len(m.filtered) != 1 || !m.filtered[0].IsWarning {
 		t.Fatalf("allEvents=%d filtered=%+v, want 2 rows with only the warning visible", len(m.allEvents), m.filtered)
 	}
-	if got := m.View(200, 24); !strings.Contains(got, "not a thread of -pid 7") {
+	got := m.View(200, 24)
+	if !strings.Contains(got, "not a thread of -pid 7") {
 		t.Fatalf("stream view hides the startup warning:\n%s", got)
+	}
+	if !strings.Contains(got, "total:2 filtered:1") {
+		t.Fatalf("status line should count the bypassed warning in filtered (total:2 filtered:1):\n%s", got)
 	}
 }

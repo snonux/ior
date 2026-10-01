@@ -689,6 +689,14 @@ func (m *Model) takeSnapshot() {
 // nothing to say about them - and the active -pid/-tid predicates of exactly
 // the scopes that raise such warnings used to hide the explanation of why the
 // trace stays empty (tasks ur2/wr2). The CSV export skips them separately.
+//
+// Trade-off: because the bypassed warnings land in the returned slice, they
+// are counted by the Stream tab's "filtered" counter (len(Model.filtered)
+// feeds RenderStreamTable), so "filtered:N" can include warning rows that no
+// filter predicate matched. That is intended: showing the explanation matters
+// more than keeping the counter a pure count of matching syscalls, and the
+// alternative (a second counter or a post-hoc subtraction) would put the
+// warning's visibility and the number the user reads out of step.
 func filterRows(dst, src []StreamEvent, filter Filter) []StreamEvent {
 	if !filter.IsActive() {
 		return append(dst, src...)

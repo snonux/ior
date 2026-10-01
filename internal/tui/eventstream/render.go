@@ -38,7 +38,10 @@ var columnShrinkSteps = []struct{ col, floor int }{
 }
 
 // RenderStreamTable renders the stream tab's main panel: status line, filter
-// line and the (selected) event rows, fitted to width.
+// line and the (selected) event rows, fitted to width. filteredCount is the
+// length of the rows the model keeps after filterRows, so it includes synthetic
+// warning rows that bypass the user filter (task ur2): "filtered" is the number
+// of rows shown, not strictly the number of syscalls that matched.
 func RenderStreamTable(width int, paused bool, totalCount, filteredCount, bufferLen, bufferCap int, filter Filter, filterStack []string, events []StreamEvent, selectedVisibleIdx int, selectedCol int) string {
 	if width <= 0 {
 		width = 100

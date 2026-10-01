@@ -385,18 +385,19 @@ func finalModelError(final tea.Model) error {
 // filter of pid=1 would hide every stream row and export nothing but a CSV
 // header. Any real -pid/-tid the user passed is still honoured.
 //
-// The pid/tid pair goes through resolveStartupPIDFilters, the same helper the
-// production path uses, so that "the exact same model wiring" above is true of
-// the filters too: -pid and -tid combine here exactly as they do for a real
-// attach.
+// The raw -pid/-tid values are passed straight through: with initialPID -1
+// newModelWithRuntimeConfig runs them through resolveStartupPIDFilters, the
+// same helper the production path uses, which only normalises non-positive
+// values to -1 here (there is no attach pid that could differ from -pid and
+// clear the tid). So -pid and -tid combine here exactly as they do for a real
+// `ior -pid P -tid T` startup.
 func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
-	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    -1,
 		skipPicker:    true,
 		filter:        filterFromConfig(cfg),
-		pidFilter:     pidFilter,
-		tidFilter:     tidFilter,
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
 		exportEnabled: cfg.TUIExportEnable,
 		startTrace:    starter,
 	})

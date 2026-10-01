@@ -124,14 +124,39 @@ func TestNewModelWithConfigAttachPidOverridesConfiguredTid(t *testing.T) {
 
 // TestPickedPidReplacesStartupTid pins that the startup tid seeds only the
 // first session: once the user picks another process, the thread they started
-// with no longer applies.
+// with no longer applies. It checks the model state, the live filter stack
+// and the TraceRequest the second session actually receives, because the
+// request is what decides whether the new process is traced whole or just one
+// (foreign) thread.
 func TestPickedPidReplacesStartupTid(t *testing.T) {
-	m := newRunModel(startupConfig(-1, 1240), func(context.Context, TraceRequest) error { return nil })
+	starter := newRecordingStarter()
+	m := newRunModel(startupConfig(-1, 1240), starter.start)
 	t.Cleanup(m.tracer.stop)
 
-	next, _ := m.Update(PidSelectedMsg{Pid: 99})
+	// First session: -tid alone traces just that thread.
+	runCmdAsync(initTraceCmd(t, m))
+	starter.next(t)
+	if first := starter.nextRequest(t); first.Filter == nil || first.Filter.TID == nil || first.Filter.TID.Value != 1240 {
+		t.Fatalf("first request filter = %+v, want TID 1240", first.Filter)
+	}
+
+	next, cmd := m.Update(PidSelectedMsg{Pid: 99})
 	updated := next.(*Model)
 	if updated.proc.pid != 99 || updated.proc.tid != -1 {
 		t.Fatalf("model pid/tid after picking = %d/%d, want 99/-1", updated.proc.pid, updated.proc.tid)
+	}
+	if f := updated.filters.current(); f.TID != nil {
+		t.Fatalf("filter stack TID after picking = %+v, want cleared", f.TID)
+	}
+
+	// Second session: the new process is traced whole, without the old tid.
+	runCmdAsync(cmd)
+	starter.next(t)
+	req := starter.nextRequest(t)
+	if req.Filter == nil || req.Filter.PID == nil || req.Filter.PID.Value != 99 {
+		t.Fatalf("second request filter = %+v, want PID 99", req.Filter)
+	}
+	if req.Filter.TID != nil {
+		t.Fatalf("second request filter TID = %+v, want none: the startup thread leaked into the picked process", req.Filter.TID)
 	}
 }
