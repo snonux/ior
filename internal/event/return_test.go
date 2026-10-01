@@ -55,6 +55,22 @@ func TestIsRestartRet(t *testing.T) {
 	}
 }
 
+// TestIsRestartBlockRet pins that only -516 has a restart_syscall
+// continuation: the event loop holds exactly those rows back (task fs2), and
+// the codes re-executed in place (-512/-513/-514) must not be held.
+func TestIsRestartBlockRet(t *testing.T) {
+	for _, ret := range []int64{-516} {
+		if !IsRestartBlockRet(ret) {
+			t.Errorf("IsRestartBlockRet(%d) = false, want true", ret)
+		}
+	}
+	for _, ret := range []int64{-512, -513, -514, -515, -517, -4, 0, 516, math.MinInt64} {
+		if IsRestartBlockRet(ret) {
+			t.Errorf("IsRestartBlockRet(%d) = true, want false", ret)
+		}
+	}
+}
+
 // TestIsErrorRetExcludesRestartCodes pins the split between "no result"
 // (IsErrnoRet, restart codes included) and "failure" (IsErrorRet).
 func TestIsErrorRetExcludesRestartCodes(t *testing.T) {

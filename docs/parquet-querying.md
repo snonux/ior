@@ -22,7 +22,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `seq` | UInt64 | Event sequence number |
 | `time_ns` | UInt64 | Timestamp in nanoseconds since boot |
 | `gap_ns` | UInt64 | Gap since the previous traced syscall on the same thread |
-| `latency_ns` | UInt64 | Syscall duration; `0` for the [syscalls that never return](#syscalls-that-never-return) |
+| `latency_ns` | UInt64 | Syscall duration (for a call [stopped and resumed](#a-stopped-sleep-is-one-row), the whole call); `0` for the [syscalls that never return](#syscalls-that-never-return) |
 | `comm`, `syscall`, `family` | String | Process name, syscall name and family |
 | `pid`, `tid` | UInt32 | Process and thread IDs |
 | `fd` | Int32 | File descriptor; `-1` when the syscall has none (not `0`, which is a real descriptor) |
@@ -93,9 +93,10 @@ library functions by signal handlers"):
   - -512 (`ERESTARTSYS`) is restarted when no handler ran, or when the handler was installed with
     `SA_RESTART`.
   - -514 (`ERESTARTNOHAND`) is restarted only when no handler ran.
-  - -516 (`ERESTART_RESTARTBLOCK`) is re-executed via `restart_syscall` only when no handler ran.
-  The row with the restart code is followed by a second row for the restarted call (for -516 that
-  is `restart_syscall`, which carries no requested sleep).
+  - -516 (`ERESTART_RESTARTBLOCK`) is resumed via `restart_syscall` only when no handler ran.
+  For -512, -513 and -514 the row with the restart code is followed by a second row for the
+  re-executed call (for example `read ret=-512`, then `read ret=1`). A -516 call resumed by
+  `restart_syscall` is one row instead; see below.
 - The program gets a real `EINTR` when a handler ran and the code does not allow a restart:
   -512 without `SA_RESTART`, -514 (`ERESTARTNOHAND`, for example `pause` or `sigsuspend`) and -516 (a relative `clock_nanosleep`/`nanosleep` interrupted by a handled
   signal) always. ior still shows the restart code with `is_error=false` in that case, because
@@ -105,7 +106,37 @@ library functions by signal handlers"):
   pending, is a genuine result: `ret=-4`, `is_error=true`. Only the four restart codes are
   excluded. `-515` (`ENOIOCTLCMD`) is not a restart code and stays an error.
 
-Folding the restart row and its continuation into one row is not done yet (task fs2).
+#### A stopped sleep is one row
+
+A `nanosleep`, `clock_nanosleep`, `poll` or timed futex wait that is stopped without a handler
+(`kill -STOP`/`-CONT`, Ctrl-Z and `fg`, a debugger attaching, a cgroup freeze) exits with -516
+and is then resumed by the kernel through `restart_syscall`, possibly several times. ior folds
+the `restart_syscall` continuation into the interrupted call, so the recording holds a single
+row for it:
+
+- `syscall` and the arguments (`requested_sleep_ns`, `nfds`, `timeout_ns`, ...) are the
+  original call's, `ret` is what the call finally returned (`0` for a completed sleep), and
+  `is_error` follows that value.
+- `latency_ns` spans the whole call, from its enter to the final return, including the time
+  the process was stopped. A resumed relative sleep still ends at its original deadline, so a
+  stop shorter than the sleep does not lengthen it: `latency_ns` is about `requested_sleep_ns`.
+- `gap_ns` is the gap before the original call. The call is counted once, and filters (for
+  example `-latency`, `-ret`, `-syscall`) judge the folded row.
+
+Only `restart_syscall` is folded, because it is the one continuation that provably belongs to
+the interrupted call. A -516 row that is not followed by `restart_syscall` on the same thread
+stays as it is: a handler ran and the program got `EINTR`, or the trace ended (or the thread
+exited) while the call was stopped. A `restart_syscall` row whose interrupted call was not
+traced (the trace started while the process was stopped, or the original syscall is not
+traced) also stays. The -512/-513/-514 pairs are not folded: the kernel restarts them by
+running the same syscall again, which ior cannot tell apart from a program that saw `EINTR`
+and called it again itself. Kernel-side aggregate counts (sampled-out or aggregate-only
+syscalls) are per invocation and are not folded.
+
+Because ior waits for the thread's next syscall to decide whether a -516 row is resumed, such
+a row appears in the stream only when ior sees the thread's next traced syscall or its exit
+(for a folded call, when the call completes), so rows of other threads may be listed before
+it.
 
 ### Syscalls that never return
 

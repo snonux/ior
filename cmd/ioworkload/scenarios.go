@@ -68,6 +68,7 @@ var scenarios = map[string]func() error{
 	"polling-epoll":                 pollingEpoll,
 	"sleep-syscalls":                sleepSyscalls,
 	"signal-restart":                signalRestart,
+	"stop-restart":                  stopRestart,
 	"posix-timer-lifecycle":         posixTimerLifecycle,
 	"interval-timer-noop":           intervalTimerNoop,
 	"process-exec-lifecycle":        processExecLifecycle,

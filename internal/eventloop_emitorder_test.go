@@ -372,20 +372,28 @@ func runCancelWithPairPending(t *testing.T, n, k int, viaWarning bool) (emitted,
 	return len(times), warnings
 }
 
-// TestRunSurvivesHandlerProducingTwoPairs pins that a handler breaking the
-// one-pair-per-record rule cannot deadlock the loop on the one-slot pair
-// channel: the extra pair is dropped with a warning, the first is emitted,
-// and the run goes on to the end of the stream.
-func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
-	const otherTid = emitOrderTestTid + 1
+// TestRunSurvivesHandlerProducingThreePairs pins that a handler breaking the
+// pairs-per-record rule cannot deadlock the loop on the pair channel. Its two
+// slots hold a record's own pair plus the held -516 row it may release first
+// (task fs2); a third pair is dropped with a warning, the first two are
+// emitted in order, and the run goes on to the end of the stream.
+func TestRunSurvivesHandlerProducingThreePairs(t *testing.T) {
+	const secondTid = emitOrderTestTid + 1
+	const thirdTid = emitOrderTestTid + 2
 	const after = 3
 	el := newEmitOrderEventLoop(t)
-	el.setCachedComm(otherTid, "emitorder2")
+	el.setCachedComm(secondTid, "emitorder2")
+	el.setCachedComm(thirdTid, "emitorder3")
 	var log streamLog
 	log.attach(el)
 
 	gen := benchutil.NewEventGenerator()
-	otherEnter, otherExit, err := gen.NullPair(emitOrderTestTime(100), otherTid, otherTid,
+	secondEnter, secondExit, err := gen.NullPair(emitOrderTestTime(1), secondTid, secondTid,
+		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+	if err != nil {
+		t.Fatalf("NullPair error = %v", err)
+	}
+	thirdEnter, thirdExit, err := gen.NullPair(emitOrderTestTime(100), thirdTid, thirdTid,
 		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
 	if err != nil {
 		t.Fatalf("NullPair error = %v", err)
@@ -397,14 +405,15 @@ func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
 	el.rawHandlers[exitType] = func(raw []byte, ch chan<- *event.Pair) {
 		exitHandler(raw, ch)
 		if !broken {
-			// Complete the other tid's pair from the same record.
+			// Complete the other two tids' pairs from the same record.
 			broken = true
-			exitHandler(otherExit, ch)
+			exitHandler(secondExit, ch)
+			exitHandler(thirdExit, ch)
 		}
 	}
 
-	stream := [][]byte{otherEnter, first[0], first[1]}
-	stream = append(stream, syncPairStream(t, 1, after)...)
+	stream := [][]byte{secondEnter, thirdEnter, first[0], first[1]}
+	stream = append(stream, syncPairStream(t, 2, after)...)
 	rawCh := filledRawChannel(stream)
 	close(rawCh)
 
@@ -418,20 +427,20 @@ func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
 	select {
 	case <-el.done:
 	case <-time.After(emitOrderTestWait):
-		t.Fatal("run() hung on a handler that produced two pairs for one record")
+		t.Fatal("run() hung on a handler that produced three pairs for one record")
 	}
 
-	if len(log.entries) != 1+1+after {
-		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+1+after)
+	if len(log.entries) != 1+2+after {
+		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+2+after)
 	}
 	if !strings.Contains(log.entries[0].warning, secondPairPanic) {
 		t.Fatalf("entry 0 = %+v, want the extra-pair warning", log.entries[0])
 	}
-	requireOrderedPairs(t, log.pairTimes(), 1+after)
+	requireOrderedPairs(t, log.pairTimes(), 2+after)
 	// The dropped pair was produced, so it is counted in numSyscalls only.
-	if el.numSyscalls != 1+after+1 || el.numSyscallsAfterFilter != 1+after {
+	if el.numSyscalls != 2+after+1 || el.numSyscallsAfterFilter != 2+after {
 		t.Fatalf("numSyscalls=%d numSyscallsAfterFilter=%d, want %d and %d",
-			el.numSyscalls, el.numSyscallsAfterFilter, 1+after+1, 1+after)
+			el.numSyscalls, el.numSyscallsAfterFilter, 2+after+1, 2+after)
 	}
 }
 

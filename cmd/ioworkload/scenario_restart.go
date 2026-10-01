@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"syscall"
@@ -112,4 +113,48 @@ func interruptedSleep(tid int) error {
 		return err
 	}
 	return nil
+}
+
+const (
+	// stopRestartSleepNs is the relative clock_nanosleep request of the
+	// stop-restart scenario. It outlasts the stop, so the call is resumed and
+	// still has time left to sleep after SIGCONT.
+	stopRestartSleepNs = 600_000_000
+	// stopRestartStopAfter and stopRestartStopFor are the stopper's timing,
+	// in sh(1) sleep syntax: SIGSTOP 150ms into the sleep, SIGCONT 200ms
+	// later. stopRestartLinger keeps the stopper alive until well after the
+	// sleep ends, so its SIGCHLD (which the Go runtime handles) cannot
+	// interrupt the sleep and turn the restart into EINTR.
+	stopRestartStopAfter = "0.15"
+	stopRestartStopFor   = "0.2"
+	stopRestartLinger    = "1"
+)
+
+// stopRestart makes the kernel resume an interrupted sleep through
+// restart_syscall (task fs2). A relative clock_nanosleep is stopped by
+// SIGSTOP and continued by SIGCONT; neither has a handler (SIGSTOP cannot
+// have one, and the Go runtime leaves SIGCONT at its default unless it is
+// requested through os/signal), so the call exits with
+// -ERESTART_RESTARTBLOCK (-516) and the kernel re-enters the thread via
+// restart_syscall, which sleeps until the original deadline and returns 0.
+// ior must report this as ONE clock_nanosleep row.
+//
+// A stopped process cannot continue itself, so the stopper is an external
+// process: a child sh(1) signalling this pid. It is a separate process, so a
+// -pid trace of the workload does not see its syscalls. The sleep runs on
+// the main thread, which main.go's init() pins, so its tid is the pid.
+func stopRestart() error {
+	script := fmt.Sprintf("sleep %s; kill -STOP %d; sleep %s; kill -CONT %d; sleep %s",
+		stopRestartStopAfter, os.Getpid(), stopRestartStopFor, os.Getpid(), stopRestartLinger)
+	stopper := exec.Command("sh", "-c", script)
+	if err := stopper.Start(); err != nil {
+		return fmt.Errorf("start stopper: %w", err)
+	}
+	// Syscall6 (via invokeClockNanosleep), not RawSyscall: the runtime keeps
+	// scheduling other goroutines while this thread sleeps.
+	sleepErr := callClockNanosleep(stopRestartSleepNs)
+	if err := stopper.Wait(); err != nil {
+		return fmt.Errorf("stopper: %w", err)
+	}
+	return sleepErr
 }

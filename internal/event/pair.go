@@ -33,6 +33,10 @@ const NoFileName = "N:file"
 // Timing semantics for Duration (durationNs) and DurationToPrev (durationToPrevNs),
 // mirroring the README:
 //   - Duration is the syscall runtime on the same thread: exit(current) - enter(current).
+//     For a call interrupted with -516 and resumed through restart_syscall, the event loop
+//     folds the continuation into the pair (task fs2, internal/eventloop_restart.go): ExitEv
+//     then carries the final return and time, so Duration spans the whole call, stopped
+//     time included.
 //   - DurationToPrev is the inter-syscall gap on the same thread: enter(current) - exit(previous).
 //   - DurationToPrev is tracked per TID; the first observed Pair for a TID has DurationToPrev == 0
 //     and FirstOnTID set, so aggregations can tell "no previous pair" from a measured 0ns gap.

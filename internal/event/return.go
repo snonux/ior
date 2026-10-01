@@ -30,6 +30,16 @@ func IsRestartRet(ret int64) bool {
 	return false
 }
 
+// IsRestartBlockRet reports whether ret is -ERESTART_RESTARTBLOCK (-516), the
+// one restart code whose continuation is a separate syscall: when no handler
+// runs, the kernel re-enters the task through restart_syscall instead of
+// re-executing the interrupted call, so restart_syscall is the only sys_enter
+// that can resume it. The event loop folds that continuation into the
+// interrupted row (task fs2, internal/eventloop_restart.go).
+func IsRestartBlockRet(ret int64) bool {
+	return ret == -errRestartRestartBl
+}
+
 // IsErrnoRet reports whether ret lies in the kernel's errno window, that is
 // whether the call produced no result (the raw return is -MAX_ERRNO through
 // -1). Other negative raw words can be successful returns from pointer- or

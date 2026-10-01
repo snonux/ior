@@ -92,6 +92,7 @@ type eventLoop struct {
 	// second 'Attaching tracepoints' overlay every time the filter changed).
 	filterPtr      atomic.Pointer[globalfilter.Filter]
 	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
+	restarts       restartTracker        // -516 rows held for a restart_syscall continuation, by tid (eventloop_restart.go)
 	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
 	fdTracker      *fdTracker            // fd table and procfs resolution cache
 	commResolver   *commResolver

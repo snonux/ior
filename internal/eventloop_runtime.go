@@ -254,12 +254,15 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 // when ctx is cancelled are not abandoned: drainBacklogAtStop decodes them
 // first (bounded by count and time) and accounts for any it cannot.
 func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
-	// A raw record completes at most one pair (tracepointExited and, for a
-	// noreturn enter, completeNoReturnEnter are the only senders, both through
-	// sendPair), so one slot always suffices. sendPair
-	// never blocks: a second pair for one record panics instead of
-	// deadlocking this goroutine, which is the channel's only reader.
-	pairs := make(chan *event.Pair, 1)
+	// A raw record completes at most one pair of its own (tracepointExited,
+	// completeNoReturnEnter for a noreturn enter, completeUntracedExec for the
+	// exec record; all through sendPair), and before it at most one -516 row
+	// its tid held back (routeHeldRestart releases or folds the one row of
+	// that tid, task fs2), so two slots always suffice and the released row
+	// is drained first. sendPair never blocks: a third pair for one record
+	// panics instead of deadlocking this goroutine, which is the channel's
+	// only reader.
+	pairs := make(chan *event.Pair, 2)
 
 	// Buffered output (-plain) is flushed by the timer: a row waits at most
 	// plainFlushInterval, however busy or idle the loop is.
@@ -272,12 +275,17 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 			flush.fire()
 		case raw, ok := <-rawCh:
 			if !ok {
+				e.releaseAllHeldRestarts(pairs)
 				return
 			}
 			e.consumeRaw(raw, pairs, flush)
 		case <-ctx.Done():
 			e.notifyStatus("Stopping event loop")
 			e.drainBacklogAtStop(rawCh, pairs, flush)
+			// Rows still held for a possible restart_syscall are emitted
+			// unchanged now, before run's deferred flushOutput writes the
+			// -plain buffer out (task fs2).
+			e.releaseAllHeldRestarts(pairs)
 			return
 		}
 	}
@@ -366,13 +374,18 @@ func (e *eventLoop) initRawHandlers() {
 }
 
 // rawRuntimeEventHandler builds the raw handler for one registered event
-// kind: it decodes the record, applies control records to event-loop state,
-// and hands syscall enter/exit events on to pairing (syscallEntered,
-// tracepointExited).
+// kind: it decodes the record, lets the restart fold claim or settle it
+// (routeHeldRestart, task fs2: a restart_syscall that resumes a held -516 row
+// is folded into it, any other record of that tid first releases the row),
+// applies control records to event-loop state, and hands syscall enter/exit
+// events on to pairing (syscallEntered, tracepointExited).
 func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHandler {
 	return func(raw []byte, ch chan<- *event.Pair) {
 		ev, ok := e.decodeRuntimeEvent(rawEvent, raw)
 		if !ok {
+			return
+		}
+		if e.routeHeldRestart(rawEvent.direction, ev, ch) {
 			return
 		}
 		if rawEvent.direction == rawControlEvent {
@@ -502,6 +515,8 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		return
 	}
 	ep.ExitEv = exitEv
+	// Counted here, once per call: a -516 row folded with its restart_syscall
+	// continuation does not count that continuation again (task fs2).
 	e.numSyscalls++
 
 	// Expect ID one lower, otherwise, enter and exit tracepoints
@@ -513,6 +528,25 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Recycle()
 		return
 	}
+	// A call interrupted with -516 may still be resumed by restart_syscall:
+	// it is held, not completed, until its tid's next record decides
+	// (eventloop_restart.go). Everything that judges the row - exit handler,
+	// derived values, pair filter - waits for that, so it sees the whole call.
+	if e.restarts.hold(ep) {
+		return
+	}
+	e.completeTracepointPair(ep, ch)
+}
+
+// completeTracepointPair turns a matched pair into a row: it derives the
+// filterable values, runs the kind's exit handler (state changes and the pair
+// filter), advances the tid's gap baseline and sends the row on ch. It is the
+// tail of tracepointExited and the path a held -516 row takes once its fate is
+// known (folded or released unchanged, eventloop_restart.go). For a held row
+// the gap is thus read at release rather than at its first exit; the tid's
+// baseline cannot have moved in between, because every record of that tid
+// releases the row before it is processed itself.
+func (e *eventLoop) completeTracepointPair(ep *event.Pair, ch chan<- *event.Pair) {
 	// The derived values must be on the Pair *before* the exit handlers run,
 	// because that is where the pair filter is applied: MatchPair reads
 	// Bytes/Duration/DurationToPrev, and evaluating them while they are still
@@ -529,12 +563,13 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 }
 
 // secondPairPanic is the panic message of sendPair on a full channel.
-const secondPairPanic = "raw record completed more than one pair; extra pair dropped"
+const secondPairPanic = "raw record completed more pairs than the pair channel holds; extra pair dropped"
 
 // sendPair hands a completed pair to processRawEvents, which drains the
-// channel only after the handler has returned. Its one slot is enough
-// because a raw record completes at most one pair; a full channel therefore
-// means a handler broke that rule. A blocking send would then wait forever
+// channel only after the handler has returned. Its two slots are enough
+// because a raw record completes at most one pair of its own plus at most one
+// held -516 row it releases first (see processRawEvents); a full channel
+// therefore means a handler broke that rule. A blocking send would then wait forever
 // for a reader that runs on this very goroutine - run() would never return,
 // e.done never close, and stats and shutdown would hang with it. So the send
 // never blocks: the extra pair is recycled and the handler panics, which
