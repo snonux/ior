@@ -83,27 +83,40 @@ func recordAsync(r *Recorder, seq uint64) <-chan error {
 // TestRecorderBlockWhenFullWaitsInsteadOfShedding is the core of task 4s2: on
 // a full queue a backpressured recorder holds the producer until the writer
 // makes room, and then every row - including the one that waited - is written.
+//
+// The wait is proven, not assumed from a quiet time window (task oz2):
+// waiterRegisteredHook fires only once the producer has met the full queue and
+// registered as a waiter, i.e. committed to waitForRoom. With the writer still
+// gated nothing can free room or stop the session, so from that point on
+// Record cannot return until w is opened. A recorder that shed the row instead
+// returns ErrRecorderStartedDropping without ever reaching the hook, which the
+// select below reports at once rather than after a timeout.
 func TestRecorderBlockWhenFullWaitsInsteadOfShedding(t *testing.T) {
+	registered := make(chan struct{}, 1)
+	waiterRegisteredHook = func() { registered <- struct{}{} }
+	t.Cleanup(func() { waiterRegisteredHook = nil })
 	w := newGateWriter(nil)
 	r := newGatedRecorder(t, w, true)
+	// Unwedge the producer and the session if a check below fails first.
+	t.Cleanup(func() { w.open(); _ = r.Stop() })
 
 	done := recordAsync(r, 3)
 	select {
+	case <-registered:
 	case err := <-done:
 		t.Fatalf("Record on a full queue returned %v, want it to wait for room", err)
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(stuckTimeout):
+		t.Fatal("Record on a full queue neither returned nor registered as a waiter")
 	}
-	if dropped := r.Status().RowsDropped; dropped != 0 {
-		t.Fatalf("RowsDropped = %d while a producer waits, want 0", dropped)
-	}
+	assertProducerStillWaiting(t, r, done)
 
-	close(w.release)
+	w.open() // the session's write completes and frees queue room
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("Record after room freed error = %v, want nil", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(stuckTimeout):
 		t.Fatal("the waiting Record did not resume after the writer freed room")
 	}
 	if err := r.Stop(); err != nil {
@@ -116,9 +129,30 @@ func TestRecorderBlockWhenFullWaitsInsteadOfShedding(t *testing.T) {
 	}
 }
 
+// assertProducerStillWaiting checks, right after the producer behind done
+// registered as a waiter, that it has not returned and that no row was shed.
+// Both are deterministic: the writer is still gated, so the producer cannot
+// have been released yet.
+func assertProducerStillWaiting(t *testing.T, r *Recorder, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("a registered waiter returned %v before the writer freed room", err)
+	default:
+	}
+	if dropped := r.Status().RowsDropped; dropped != 0 {
+		t.Fatalf("RowsDropped = %d while a producer waits, want 0", dropped)
+	}
+}
+
 // TestRecorderShedModeStillDoesNotBlock is the negative twin: without
 // BlockWhenFull (the TUI) the same full queue sheds at once and never stalls.
+// The producer must also never register as a waiter, so the shed path is not
+// a backpressure wait that merely happened to end quickly.
 func TestRecorderShedModeStillDoesNotBlock(t *testing.T) {
+	var waiters atomic.Int32
+	waiterRegisteredHook = func() { waiters.Add(1) }
+	t.Cleanup(func() { waiterRegisteredHook = nil })
 	w := newGateWriter(nil)
 	r := newGatedRecorder(t, w, false)
 
@@ -129,6 +163,9 @@ func TestRecorderShedModeStillDoesNotBlock(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("shed-mode Record blocked on a full queue")
+	}
+	if n := waiters.Load(); n != 0 {
+		t.Fatalf("shed-mode Record registered %d waiter(s), want it to shed without waiting", n)
 	}
 	close(w.release)
 	if err := r.Stop(); err != nil {
