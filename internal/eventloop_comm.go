@@ -46,7 +46,9 @@ const resolveCommTimeout = time.Second
 // That read happens after the exec, so it returns the new name and heals the
 // label. The same flag marks a provisional entry - the name a new task
 // inherited from its creator (setCachedProvisional) - whose one re-read picks up
-// a rename the task performed on itself.
+// a rename the task performed on itself - and an entry seeded from an enter
+// payload that is either about to be superseded (an exec enter) or contradicted
+// the cache (setCachedFromEnterPayload).
 type commEntry struct {
 	comm  string
 	epoch uint64
@@ -492,8 +494,9 @@ func (r *commResolver) setCommLocked(tid uint32, comm string) {
 // Every authoritative kernel-sourced write takes this path, not just the
 // sched_process_exec record: a task_rename record (a task renaming itself with
 // prctl(PR_SET_NAME) or pthread_setname_np, handleTaskRenameEvent) and the
-// payload comm of an open or exec enter (seedCommFromEnterPayload) are exact
-// for the moment the kernel produced them, whereas a resolver worker's /proc read is
+// payload comm of an open or exec enter (seedCommFromEnterPayload, through
+// setCachedFromEnterPayload, which shares this write) are exact for the moment
+// the kernel produced them, whereas a resolver worker's /proc read is
 // unordered with respect to them. Bumping only on exec left those writes
 // clobberable by a descheduled worker holding an older name - reachable
 // whenever the exec record was dropped, and also with no execve at all through
@@ -504,10 +507,73 @@ func (r *commResolver) setCachedFromKernel(tid uint32, comm string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.setKernelCommLocked(tid, comm)
+}
+
+// setKernelCommLocked is the body of setCachedFromKernel: it bumps the tid's
+// rename generation and stores comm (clearing the stale flag). Callers must
+// hold r.mu and pass a non-empty comm.
+func (r *commResolver) setKernelCommLocked(tid uint32, comm string) {
 	entry := r.comms[tid]
 	entry.epoch++
 	r.comms[tid] = entry
 	r.setCommLocked(tid, comm)
+}
+
+// markStaleLocked flags an existing entry for one procfs re-read on next use
+// (refreshStaleComm). Callers must hold r.mu.
+func (r *commResolver) markStaleLocked(tid uint32) {
+	entry, ok := r.comms[tid]
+	if !ok {
+		return
+	}
+	entry.stale = true
+	r.comms[tid] = entry
+}
+
+// setCachedFromEnterPayload installs the payload comm of an open or exec enter
+// record (seedCommFromEnterPayload). The write is authoritative like any
+// kernel-sourced one - it bumps the rename generation, so a procfs read already
+// in flight cannot land on top of it - but in two cases it additionally leaves
+// the entry stale, so that its next use queues exactly one /proc re-read:
+//
+//   - recheck (an exec enter): the payload is the *calling* program's name, which
+//     a successful execve is about to replace. The task_rename and
+//     sched_process_exec records that report the replacement follow in ring
+//     order and clear the flag again (setCachedFromKernel). When neither probe
+//     is attached (an old IOR_BPF_OBJECT, or both attaches failed) or both
+//     records were lost, the re-read is the only thing that ever learns the new
+//     program's name. It runs on the tid's first comm use after the enter - the
+//     execve exit labels its row from its own payload, so that is a syscall of
+//     the new program - and therefore reads the post-exec name. Clearing the
+//     flag here instead cost exactly that read for a fork child whose first
+//     syscall is execve: the task_newtask record had left the parent's name
+//     provisional and stale, and the exec enter re-wrote that same name as
+//     final. A failed execve pays one redundant read on the next use.
+//   - the payload contradicts the cached name: almost always the cache was the
+//     wrong one (a lost record), but it is also the trace of a narrow race.
+//     __set_task_comm() fires the task_rename tracepoint *before* it copies the
+//     new name into task->comm, so when thread A renames sibling T
+//     (/proc/<T>/comm, pthread_setname_np) while T enters openat on another
+//     CPU, T's payload can carry the old name although its record sits behind
+//     the rename record in the ring. Applying the payload then undoes the
+//     rename; the re-read, which happens after the rename record and a later
+//     record of T have reached userspace, finds the new name. Without it the
+//     old name stuck until T's next open or rename. The row labelled between
+//     the two still carries the old name, and a /proc read of a thread that has
+//     already exited finds nothing and leaves the payload name. A matching
+//     payload (the common case) costs nothing.
+func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, recheck bool) {
+	if comm == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prev, had := r.comms[tid]
+	r.setKernelCommLocked(tid, comm)
+	if recheck || (had && prev.comm != comm) {
+		r.markStaleLocked(tid)
+	}
 }
 
 // setCachedProvisional stores a best-guess name for tid without invalidating
@@ -531,8 +597,11 @@ func (r *commResolver) setCachedFromKernel(tid uint32, comm string) {
 //     task that has already exited yields nothing and leaves the guess in
 //     place, which is still better than an empty comm.
 //
-// A later authoritative write (exec record, open payload) bumps the epoch and
-// so still outranks a read that was in flight at that moment.
+// A later authoritative write (exec record, task_rename record, open or exec
+// enter payload) bumps the epoch and so still outranks a read that was in
+// flight at that moment. Of those, only the exec enter payload keeps the entry
+// stale (setCachedFromEnterPayload): it names the program that is about to be
+// replaced, so it must not count as the answer the re-read was waiting for.
 func (r *commResolver) setCachedProvisional(tid uint32, comm string) {
 	if comm == "" {
 		return
@@ -540,9 +609,7 @@ func (r *commResolver) setCachedProvisional(tid uint32, comm string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.setCommLocked(tid, comm)
-	entry := r.comms[tid]
-	entry.stale = true
-	r.comms[tid] = entry
+	r.markStaleLocked(tid)
 }
 
 // touchCommLocked refreshes the LRU age of an existing comms entry. Callers
@@ -698,18 +765,28 @@ func (e *eventLoop) evictCachedComm(tid uint32) {
 // tid until the syscall's own records say otherwise: a successful execve is
 // followed by task_rename (begin_new_exec) and PROCESS_EXEC_EVENT records that
 // replace it, and a failed one (no exec record is ever emitted) leaves the task
-// under exactly this name.
+// under exactly this name. Because those records may be missing (probes not
+// attached, ring-buffer drops), the exec seed leaves the entry stale so the
+// first use after the exec re-reads /proc once (setCachedFromEnterPayload).
 //
 // Like every kernel-sourced write it bumps the rename generation, so a procfs
 // lookup already in flight cannot land on top of it. It also settles the cache
 // for enters the raw filter is about to drop (-comm), which could not heal it
 // when the write sat in the exit handler.
+//
+// Known limit: ring order is not quite task->comm order for a rename of a
+// *sibling* thread. __set_task_comm() fires the task_rename tracepoint before it
+// stores the new name, so an open enter of the renamed thread racing with it on
+// another CPU (a nanosecond window) can carry the old name behind the rename
+// record. A self-rename (prctl) cannot race this way, since the thread is busy
+// renaming itself. setCachedFromEnterPayload marks such a contradicting seed
+// stale, so the thread's next comm use re-reads /proc and heals it; see there.
 func (e *eventLoop) seedCommFromEnterPayload(ev event.Event) {
 	switch p := ev.(type) {
 	case *types.OpenEvent:
-		e.setCachedCommFromKernel(p.Tid, types.StringValue(p.Comm[:]))
+		e.commState().setCachedFromEnterPayload(p.Tid, types.StringValue(p.Comm[:]), false)
 	case *types.ExecEvent:
-		e.setCachedCommFromKernel(p.Tid, types.StringValue(p.Comm[:]))
+		e.commState().setCachedFromEnterPayload(p.Tid, types.StringValue(p.Comm[:]), true)
 	}
 }
 

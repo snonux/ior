@@ -215,21 +215,26 @@ func TestFilteredOutOpenStillSeedsTheCache(t *testing.T) {
 	}
 }
 
-// TestSameNameRenameIsANoOp: a task that renames itself to the name it already
-// has changes nothing observable - the same cache entry, the same row label and
-// no procfs lookup queued - so thread pools that re-apply their name on every
-// task cost nothing but the record.
-func TestSameNameRenameIsANoOp(t *testing.T) {
+// TestSameNameRenameKeepsTheLabelAndQueuesNoRead: a task that renames itself to
+// the name it already has keeps its cached name and row label and queues no
+// procfs lookup, so thread pools that re-apply their name on every task cost
+// little more than the record. It is not a complete no-op: like every
+// kernel-sourced write it bumps the tid's rename generation, so a procfs read
+// that happened to be in flight is discarded when it lands (harmless - the
+// record's name is exact).
+func TestSameNameRenameKeepsTheLabelAndQueuesNoRead(t *testing.T) {
 	el := newTaskEventLoop(t, "")
 	nameNewTask(t, el, newTaskComm)
 	renameNewTask(t, el, newTaskComm)
-	before := pendingCount(el.commResolver)
+	// Let the loop's start-up lookups (the tracer's own pid) land first: comparing
+	// against a pending count sampled while they were still in flight was flaky.
+	waitForCommLookupsToDrain(t, el)
 
 	renameNewTask(t, el, newTaskComm)
 
 	requireCachedComm(t, el, "after a same-name rename", newTaskComm)
-	if got := pendingCount(el.commResolver); got != before {
-		t.Fatalf("pending procfs lookups = %d, want %d: a same-name rename queued work", got, before)
+	if got := pendingCount(el.commResolver); got != 0 {
+		t.Fatalf("pending procfs lookups = %d, want 0: a same-name rename queued work", got)
 	}
 	ep := feedNewTaskSyscall(t, el)
 	if ep == nil {
@@ -238,5 +243,156 @@ func TestSameNameRenameIsANoOp(t *testing.T) {
 	defer ep.Recycle()
 	if ep.Comm != newTaskComm {
 		t.Fatalf("row comm = %q, want %q", ep.Comm, newTaskComm)
+	}
+}
+
+// healByGatedRead lets the one gated /proc read land and returns the row of the
+// task's next syscall (failing when it is not emitted).
+func healByGatedRead(t *testing.T, el *eventLoop, g *gatedProcfs) *event.Pair {
+	t.Helper()
+	g.waitEntered(t)
+	close(g.release)
+	waitForCommLookupsToDrain(t, el)
+	ep := feedNewTaskSyscall(t, el)
+	if ep == nil {
+		t.Fatal("the row after the procfs read was not emitted")
+	}
+	return ep
+}
+
+// requireNoReadQueued feeds the task's next syscall and fails when that use of
+// the tid queued a procfs read; it returns the row's comm. It checks the tid's
+// own pending flag, which enqueueLookupLocked sets synchronously, rather than
+// the total pending count, which also covers the loop's start-up lookups that
+// may still be in flight.
+func requireNoReadQueued(t *testing.T, el *eventLoop) string {
+	t.Helper()
+	ep := feedNewTaskSyscall(t, el)
+	if ep == nil {
+		t.Fatal("the row was not emitted")
+	}
+	defer ep.Recycle()
+	r := el.commResolver
+	r.mu.RLock()
+	_, pending := r.pending[newTaskTid]
+	r.mu.RUnlock()
+	if pending {
+		t.Fatal("the row's comm use queued a procfs read")
+	}
+	return ep.Comm
+}
+
+// TestExecEnterKeepsTheInheritedSeedCorrectable is the degraded-mode case of a
+// fork child whose first syscall is execve, with neither the task_rename nor the
+// sched_process_exec record arriving (old IOR_BPF_OBJECT, failed attaches,
+// drops). The task_newtask record leaves the parent's name provisional, and the
+// exec enter carries that same name. If the enter's seed counted as final, the
+// one corrective /proc read would never happen and the new program would keep
+// the parent's name until its first open. The read must still be queued by the
+// first use after the exec, and its post-exec answer must label the rows.
+func TestExecEnterKeepsTheInheritedSeedCorrectable(t *testing.T) {
+	const execComm = "cat"
+	g := newGatedProcfs(execComm)
+	el := newGatedTaskEventLoop(t, g, "")
+	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, inheritedComm, 0),
+		make(chan *event.Pair, 1))
+
+	ep := deliverRaw(el, execEnterRaw(t, inheritedComm), payloadExitRaw(t, types.SYS_EXIT_EXECVE, 0))
+	if ep == nil {
+		t.Fatal("the execve pair was not emitted")
+	}
+	ep.Recycle()
+
+	// The first post-exec row has no better name than the inherited one yet.
+	first := feedNewTaskSyscall(t, el)
+	if first == nil {
+		t.Fatal("the first post-exec row was not emitted")
+	}
+	first.Recycle()
+
+	second := healByGatedRead(t, el, g)
+	defer second.Recycle()
+	if second.Comm != execComm {
+		t.Fatalf("row comm after the read = %q, want the post-exec %q", second.Comm, execComm)
+	}
+}
+
+// TestExecRecordsMakeTheExecEnterRecheckUnnecessary is the control: when the
+// exec's own records arrive (the normal case), they settle the name and the
+// first post-exec use queues no /proc read.
+func TestExecRecordsMakeTheExecEnterRecheckUnnecessary(t *testing.T) {
+	const execComm = "cat"
+	g := newGatedProcfs("must-not-be-read")
+	el := newGatedTaskEventLoop(t, g, "")
+	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, inheritedComm, 0),
+		make(chan *event.Pair, 1))
+
+	ep := deliverRaw(el,
+		execEnterRaw(t, inheritedComm),
+		makeTaskRenameEvent(t, newTaskPid, newTaskTid, execComm),
+		makeProcessExecEvent(t, newTaskStart+100, newTaskPid, newTaskTid, execComm),
+		payloadExitRaw(t, types.SYS_EXIT_EXECVE, 0))
+	if ep == nil {
+		t.Fatal("the execve pair was not emitted")
+	}
+	ep.Recycle()
+
+	if got := requireNoReadQueued(t, el); got != execComm {
+		t.Fatalf("post-exec row comm = %q, want %q", got, execComm)
+	}
+}
+
+// TestContradictingOpenPayloadIsRecheckedAgainstProcfs models the sibling-rename
+// race: __set_task_comm() fires task_rename before it stores the new name, so an
+// openat enter of the renamed thread on another CPU can carry the old name and
+// still sit behind the rename record in the ring. The payload is applied (the
+// open row keeps its enter-time name), but because it contradicts the cache the
+// entry is re-read from /proc on its next use, which finds the new name.
+// Without the re-read the old name stuck until the thread's next open or rename.
+func TestContradictingOpenPayloadIsRecheckedAgainstProcfs(t *testing.T) {
+	g := newGatedProcfs(payloadNewComm)
+	el := newGatedTaskEventLoop(t, g, "")
+
+	ep := deliverRaw(el,
+		makeTaskRenameEvent(t, newTaskPid, newTaskTid, payloadNewComm),
+		openEnterRaw(t, payloadOldComm),
+		payloadExitRaw(t, types.SYS_EXIT_OPENAT, 5))
+	if ep == nil {
+		t.Fatal("the open pair was not emitted")
+	}
+	ep.Recycle()
+
+	// The row in between still carries the stale payload name; its use queues
+	// the read.
+	between := feedNewTaskSyscall(t, el)
+	if between == nil {
+		t.Fatal("the row after the open was not emitted")
+	}
+	between.Recycle()
+
+	healed := healByGatedRead(t, el, g)
+	defer healed.Recycle()
+	if healed.Comm != payloadNewComm {
+		t.Fatalf("row comm after the read = %q, want the renamed %q", healed.Comm, payloadNewComm)
+	}
+}
+
+// TestMatchingOpenPayloadQueuesNoRead is the control: an open payload that
+// agrees with the cached name (the common case) costs no /proc read.
+func TestMatchingOpenPayloadQueuesNoRead(t *testing.T) {
+	g := newGatedProcfs("must-not-be-read")
+	el := newGatedTaskEventLoop(t, g, "")
+
+	ep := deliverRaw(el,
+		makeTaskRenameEvent(t, newTaskPid, newTaskTid, payloadNewComm),
+		openEnterRaw(t, payloadNewComm),
+		payloadExitRaw(t, types.SYS_EXIT_OPENAT, 5))
+	if ep == nil {
+		t.Fatal("the open pair was not emitted")
+	}
+	ep.Recycle()
+
+	if got := requireNoReadQueued(t, el); got != payloadNewComm {
+		t.Fatalf("row comm = %q, want %q", got, payloadNewComm)
 	}
 }

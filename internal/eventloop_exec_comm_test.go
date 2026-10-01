@@ -576,11 +576,13 @@ func TestExecRecordWinsOverAnInFlightProcfsLookup(t *testing.T) {
 
 // TestRingbufDropsHealAStaleCommCache covers the one loss the ordered control
 // record cannot cover: the record itself was dropped because
-// bpf_ringbuf_reserve() failed. Nothing else corrects that tid - with a -comm
-// filter active, handleOpenExit never sees the non-matching program's opens -
-// so the drop counter has to trigger re-resolution. Until the re-read lands the
-// old label is still served, which is deliberate: blanking it would drop the
-// tid's rows at the exit-side comm check.
+// bpf_ringbuf_reserve() failed. An open or exec of the tid would heal it (the
+// enter payload is applied before the raw -comm gate, seedCommFromEnterPayload,
+// so even a filtered-out open does), but a tid that only reads and writes has
+// no such record and nothing else corrects it, so the drop counter has to
+// trigger re-resolution (markAllStale). This test's tid issues only access(2).
+// Until the re-read lands the old label is still served, which is deliberate:
+// blanking it would drop the tid's rows at the exit-side comm check.
 func TestRingbufDropsHealAStaleCommCache(t *testing.T) {
 	var procComm atomic.Value
 	procComm.Store("bash")
@@ -861,11 +863,12 @@ func TestOpenByHandleAtRowsCannotContradictTheCommFilter(t *testing.T) {
 }
 
 // TestKernelCommWinsOverAnInFlightProcfsLookup is the non-exec half of the
-// epoch guard. The open event's payload comm (cached when the enter is consumed),
-// which BPF read from task->comm at event time; a resolver worker descheduled with an
-// older name must not land on top of it. Before every kernel-sourced write
-// bumped the rename generation this was reachable without any execve at all -
-// prctl(PR_SET_NAME) is enough - and after a dropped exec record too.
+// epoch guard. The open event's payload comm is task->comm as BPF read it when
+// the syscall started, and it is cached when the enter record is consumed; a
+// resolver worker descheduled with an older name must not land on top of it.
+// Before every kernel-sourced write bumped the rename generation this was
+// reachable without any execve at all - prctl(PR_SET_NAME) is enough - and
+// after a dropped exec record too.
 func TestKernelCommWinsOverAnInFlightProcfsLookup(t *testing.T) {
 	readStarted := make(chan struct{})
 	release := make(chan struct{})
