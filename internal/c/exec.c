@@ -412,7 +412,8 @@ int handle_sched_process_exit(void *ctx) {
 // predate a drop the monitor has seen (provisionalSeedNeedsRecheck, task xr2).
 // A rename record lost to backpressure otherwise shows up as a drop, whose
 // sweep flags the seed for the same read. A rename record handle_task_rename
-// discards because it cannot read the new name is not counted yet (task mz2).
+// discards because it cannot read the new name is counted as a drop as well
+// (task mz2), so that sweep sees it.
 //
 // The record also carries the raw clone_flags and the creator's tgid, the inputs
 // userspace needs to tell a thread from a process and to model the fd table the
@@ -640,11 +641,15 @@ int handle_task_rename(void *ctx) {
     // the executable for exec); it is NUL-terminated by the helper on success.
     // A failed read leaves no usable name, so the record is dropped rather than
     // sent with an unterminated one; see "String fields in ring-buffer records"
-    // in filter.c. The discard is not counted as a ring-buffer drop, so
-    // userspace never learns of this rename (its newtask seed may have skipped
-    // the corrective /proc read, task xr2); counting it is task mz2.
+    // in filter.c. The lost rename is counted as a ring-buffer drop (task mz2):
+    // userspace's drop-triggered comm sweep (markAllStale) is the only thing
+    // that can learn of a rename it never received, and the newtask seed may
+    // have skipped its corrective /proc read because rename records are trusted
+    // (task xr2), so without the count this rename would go unhealed until the
+    // task's next open, exec or rename.
     if (bpf_probe_read_kernel_str(ev->comm, sizeof(ev->comm), args->comm) < 0) {
         bpf_ringbuf_discard(ev, 0);
+        ior_count_ringbuf_drop();
         return 0;
     }
 

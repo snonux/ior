@@ -331,9 +331,9 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 		t.Error("handle_task_rename memsets comm")
 	}
 	const renameCommRead = "    if (bpf_probe_read_kernel_str(ev->comm, sizeof(ev->comm), args->comm) < 0) {\n" +
-		"        bpf_ringbuf_discard(ev, 0);\n        return 0;\n    }\n"
+		"        bpf_ringbuf_discard(ev, 0);\n        ior_count_ringbuf_drop();\n        return 0;\n    }\n"
 	if !strings.Contains(rename, renameCommRead) {
-		t.Error("handle_task_rename must discard a record whose comm read failed; only a successful read is terminated")
+		t.Error("handle_task_rename must discard a record whose comm read failed and count it as a drop (task mz2); only a successful read is terminated")
 	}
 	if strings.Contains(rename, "ctx->newcomm") {
 		t.Error("handle_task_rename must not read the classic tracepoint's newcomm array out of the context")

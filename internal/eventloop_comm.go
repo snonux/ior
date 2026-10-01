@@ -613,8 +613,9 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 // (eventLoop.provisionalSeedNeedsRecheck, task xr2). When the task_rename probe
 // is attached and ring-buffer drops are monitored, a rename normally arrives
 // as a record or shows up as a drop whose markAllStale sweep flags the entry
-// (not yet a rename whose new name the BPF handler cannot read, task mz2, nor
-// the copy_process windows listed at provisionalSeedNeedsRecheck), so the read
+// (a rename whose new name the BPF handler cannot read is counted as a drop
+// too, task mz2; the copy_process windows listed at provisionalSeedNeedsRecheck
+// are not covered), so the read
 // is overhead - and under thread churn it was most of the
 // resolver's work: one read per new thread, nearly all of them ENOENT because
 // the thread had exited before a worker got to it. Without recheck the entry

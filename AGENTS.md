@@ -1207,14 +1207,12 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   loop sweep and then seed such a record against the old stamp), and a seed
   whose record time is not newer keeps its read. **Not covered** (each wrong
   name stays until the thread execs, renames again or makes an open/exec
-  syscall whose payload comm contradicts the cache): a rename record that
-  `handle_task_rename` discards because it cannot read the new name is not
-  counted as a drop (follow-up task mz2); and two microsecond-wide windows in
+  syscall whose payload comm contradicts the cache): two microsecond-wide windows in
   `copy_process` - a third thread writing the child's `/proc/<tid>/comm`
   between `attach_pid` and `trace_task_newtask` (its rename record precedes the
   newtask record, whose seed then overwrites the newer name with the
   creator's), or a sibling renaming the creator between `dup_task_struct` and
-  the tracepoint (the record carries a name the child never had). Before xr2
+  the tracepoint (the record carries a name the child never had). A rename record `handle_task_rename` cannot read the name of is counted as a ring-buffer drop (task mz2), so the drop sweep covers it. Before xr2
   the corrective read healed both windows. `resolveCommFromProcWithError`
   returns at once on ENOENT/ESRCH instead of trying the exe fallback
   (`TestResolveCommOfAGoneTaskSkipsTheExeFallback`, over a fake procfs root

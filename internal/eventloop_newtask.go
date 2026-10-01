@@ -141,9 +141,6 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 // thread execs, renames again, or makes an open/exec syscall whose payload
 // comm contradicts the cache):
 //
-//   - A rename whose BPF handler cannot read the new name discards its record
-//     without counting a drop (handle_task_rename in exec.c), so neither a
-//     record nor a sweep follows; follow-up task mz2 counts it.
 //   - Two microsecond-wide windows inside copy_process: a third thread writing
 //     /proc/<tid>/comm of the child between attach_pid and trace_task_newtask
 //     emits its rename record before the newtask record, whose seed then
