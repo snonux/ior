@@ -168,9 +168,12 @@ churns as well, into `[other]` records. Counts, durations and bytes stay exact; 
 detail of the folded events is lost, which the default collapsed fields (`comm,tracepoint,path`)
 barely notice for pid/tid churn. ior warns on stderr when the limit is first hit and
 prints the number of folded events after `Wrote <file>`. `-flamegraph-max-keys N` sets the
-limit (1 to 16777216, default 524288); each record costs about 250 bytes of memory, so the
-default is ~130 MB and the maximum ~4 GB, plus 1/8 headroom on top. Raise it when the warning
-appears and the pid/tid detail matters; lower it on a memory-constrained host.
+limit (1 to 16777216, default 524288); each record costs about 250 bytes of memory while
+recording, plus up to ~500 bytes more transiently while the file is written at the end (the
+records are serialized and buffered in full before compression). So the default needs ~130 MB
+while tracing and ~400 MB at the peak, the maximum ~4 GB and ~12 GB, plus 1/8 headroom on top.
+Raise it when the warning appears and the pid/tid detail matters; lower it on a
+memory-constrained host.
 
 sequences. When `-plain` or `ior collapsed` writes to a terminal, control characters
 (ESC, BEL, C1, line breaks), invalid UTF-8 bytes and invisible, bidi format or blank-rendering space characters (no-break space,

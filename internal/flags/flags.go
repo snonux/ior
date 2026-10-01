@@ -56,8 +56,9 @@ type Config struct {
 	FlamegraphOutput bool
 	// FlamegraphMaxKeys (-flamegraph-max-keys) is the -flamegraph recorder's
 	// cap on distinct (path, tracepoint, comm, pid, tid, flags) records held
-	// in memory, ~250 bytes each; past it new keys are folded (see
-	// internal/flamegraph/recordcap.go). Validated to [1,
+	// in memory, ~250 bytes each while recording plus up to ~500 bytes each
+	// transiently while the .ior.zst file is written; past it new keys are
+	// folded (see internal/flamegraph/recordcap.go). Validated to [1,
 	// flamegraph.MaxRecordKeysLimit]; ignored without -flamegraph.
 	FlamegraphMaxKeys int
 	// ParquetPath is the file path for writing all traced syscall rows to
@@ -332,8 +333,10 @@ func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
 	fs.IntVar(&cfg.FlamegraphMaxKeys, "flamegraph-max-keys", cfg.FlamegraphMaxKeys,
 		fmt.Sprintf("Cap on distinct (path, comm, pid, tid, flags) records the -flamegraph recorder keeps in memory, "+
-			"~250 bytes each (the default is ~130 MB, plus 1/8 headroom); past it, events of new keys are folded "+
-			"into pid 0/tid 0 and then [other] records with exact totals and a stderr warning. Between 1 and %d (~4 GB)",
+			"~250 bytes each while recording plus up to ~500 bytes each while the file is written "+
+			"(the default is ~130 MB recording and ~400 MB peak, plus 1/8 headroom); past it, events of new keys are folded "+
+			"into pid 0/tid 0 and then [other] records with exact totals and a stderr warning. "+
+			"Between 1 and %d (~4 GB recording, ~12 GB peak)",
 			flamegraph.MaxRecordKeysLimit))
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode, replacing an existing file at that path (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name (no '/') for .ior.zst trace output files, written to the working directory as <hostname>-<name>-<timestamp>.ior.zst")
@@ -500,10 +503,11 @@ func validateNumericLimits(cfg Config) error {
 	}
 	// The -flamegraph recorder's cap: 0 or a negative value would mean an
 	// unbounded live recorder (iorData's maxKeys == 0) or a nonsensical one,
-	// and a cap above MaxRecordKeysLimit asks for more than ~4 GB of heap,
-	// most likely a typo; reject both before any memory is spent (task rs2).
+	// and a cap above MaxRecordKeysLimit asks for more than ~4 GB of recorder
+	// heap (~12 GB at the peak while the file is written), most likely a
+	// typo; reject both before any memory is spent (task rs2).
 	if cfg.FlamegraphMaxKeys < 1 || cfg.FlamegraphMaxKeys > flamegraph.MaxRecordKeysLimit {
-		return fmt.Errorf("invalid flamegraph-max-keys: %d (must be between 1 and %d records, ~250 bytes each)",
+		return fmt.Errorf("invalid flamegraph-max-keys: %d (must be between 1 and %d records, ~250 bytes each and ~750 at the peak while the file is written)",
 			cfg.FlamegraphMaxKeys, flamegraph.MaxRecordKeysLimit)
 	}
 	return nil
