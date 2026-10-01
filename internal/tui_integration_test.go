@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1932,34 +1933,103 @@ func TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh(t *testing.T) {
 // Passing initialPID=-1 to tui.NewModel selects the PID picker screen instead
 // of the dashboard (tuiNewPickerModel). The picker (internal/tui/pidpicker/
 // model.go) reads the host's real /proc, so its process rows are
-// non-deterministic; these tests assert only the deterministic chrome: the
-// "Select PID" header, the "Filter: " input prompt, and the synthetic "All
-// PIDs" row that always occupies index 0 (selected on entry as "> All PIDs").
-// Selecting that row emits PidSelectedMsg{Pid:0}, which the tui model handles
+// non-deterministic; these tests assert only the deterministic chrome (the
+// "Select PID" header, the "Filter: " input prompt and the synthetic "All
+// PIDs" row at index 0, selected on entry as "> All PIDs") plus behaviour that
+// holds for whatever rows exist.
+//
+// Selection contract (task hs2): typing a filter hands the selection to the
+// filter, so the FIRST MATCHING process row is highlighted (and Enter attaches
+// to it); a filter that matches nothing highlights nothing, shows the notice
+// "no process matches the filter" and makes Enter a no-op; deleting the filter
+// back to empty returns to the "All PIDs" row. Selecting a row emits
+// PidSelectedMsg{Pid: N} (Pid:0 for the All row), which the tui model handles
 // by attaching and transitioning to the populated dashboard (asserted via the
-// flame tab's "view:root" token).
+// flame tab's "view:root" token and the "filter: pid=N" status line).
 
-// TestTUIIntegration_PidPicker_FilterSelectAllToDashboard starts on the PID
-// picker, asserts its chrome and the selected "All PIDs" row, types a filter
-// string (echoed in the "Filter: " input), then presses Enter on the still-
-// selected "All PIDs" row (index 0). The resulting PidSelectedMsg{Pid:0}
-// transitions to the dashboard, asserted via the seeded flame view.
-func TestTUIIntegration_PidPicker_FilterSelectAllToDashboard(t *testing.T) {
+// TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard starts on
+// the PID picker and types "zzz", which matches no process: the filter is
+// echoed, the no-match notice is shown, no row is highlighted and Enter does
+// nothing (the picker stays up, no dashboard). Backspacing the filter empty
+// returns the highlight to "All PIDs" (derived from the filter, not sticky),
+// and Enter on it then emits PidSelectedMsg{Pid:0}, which transitions to the
+// dashboard, asserted via the seeded flame view.
+func TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard(t *testing.T) {
 	s := tuiNewPickerModel(t)
 	// Picker chrome: the header, the filter input prompt, and the synthetic
 	// "All PIDs" row, which starts selected ("> ").
 	s.waitFor("Select PID", "Filter: ", "> All PIDs")
 
 	// Typing focuses the input and echoes into the "Filter: " prompt; "zzz" is an
-	// unlikely comm/pid substring, so the real process rows narrow away while the
-	// always-present "All PIDs" row stays at index 0.
+	// unlikely comm/pid substring, so no process matches: the notice appears and
+	// the selection is dropped instead of silently staying on All PIDs.
 	s.typeStr("zzz")
-	s.waitFor("Filter: zzz", "All PIDs")
+	s.waitFor("Filter: zzz", "no process matches the filter")
+	if scr := s.screen(); strings.Contains(scr, "> All PIDs") {
+		t.Fatalf("no-match filter must not leave All PIDs highlighted.\n--- screen ---\n%s", scr)
+	}
 
-	// Enter on the selected index-0 row emits PidSelectedMsg{Pid:0}; the model
-	// attaches and lands on the populated dashboard (seeded flame view).
+	// Enter without a selection is a no-op. Give the program a moment to (wrongly)
+	// process the key, then require the picker to be the current screen and the
+	// dashboard's flame token to be absent.
+	s.press(tea.KeyEnter)
+	time.Sleep(300 * time.Millisecond)
+	scr := s.screen()
+	if !strings.Contains(scr, "Select PID") || strings.Contains(scr, "view:root") {
+		t.Fatalf("Enter on a no-match filter must stay on the picker.\n--- screen ---\n%s", scr)
+	}
+
+	// Clearing the filter re-derives the selection: the empty filter highlights
+	// All PIDs again and the notice goes away.
+	for range len("zzz") {
+		s.press(tea.KeyBackspace)
+	}
+	s.waitForAbsent("no process matches the filter", "Select PID", "> All PIDs")
+
+	// Enter on All PIDs emits PidSelectedMsg{Pid:0}; the model attaches and lands
+	// on the populated dashboard (seeded flame view).
 	s.press(tea.KeyEnter)
 	s.waitFor("view:root")
+}
+
+// pickerHighlightedPID matches the highlighted PID-mode process row of the
+// rendered picker, "> <pid>  <comm> ...", capturing the pid. The "All PIDs"
+// row starts with a letter, so it never matches.
+var pickerHighlightedPID = regexp.MustCompile(`(?m)^\s*> (\d+)\b`)
+
+// TestTUIIntegration_PidPicker_FilterSelectsFirstMatchToDashboard types this
+// test process's own PID (a string that certainly matches at least one real
+// /proc row) and requires the filter to hand the selection to the first match:
+// a process row, not "All PIDs", is highlighted. Which process comes first is
+// host-dependent (another pid or command line may contain the digits), so the
+// test reads the highlighted pid back from the screen and asserts that Enter
+// attaches to exactly that pid, via the dashboard's "filter: pid=N" status line.
+func TestTUIIntegration_PidPicker_FilterSelectsFirstMatchToDashboard(t *testing.T) {
+	s := tuiNewPickerModel(t)
+	s.waitFor("Select PID", "Filter: ", "> All PIDs")
+
+	own := strconv.Itoa(os.Getpid())
+	s.typeStr(own)
+	s.waitFor("Filter: " + own)
+
+	// Wait for the derived selection to move off the All row onto a process row.
+	var pid string
+	deadline := time.Now().Add(tuiWaitFor)
+	for {
+		scr := s.screen()
+		if m := pickerHighlightedPID.FindStringSubmatch(scr); m != nil && !strings.Contains(scr, "> All PIDs") {
+			pid = m[1]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no process row highlighted for filter %q.\n--- screen ---\n%s", own, scr)
+		}
+		time.Sleep(tuiWaitTick)
+	}
+
+	// Enter attaches to the highlighted first match, not to all PIDs.
+	s.press(tea.KeyEnter)
+	s.waitFor("view:root", "filter: pid="+pid)
 }
 
 // TestTUIIntegration_PidPicker_ReselectEscReturns starts on the dashboard,
