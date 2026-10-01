@@ -799,11 +799,12 @@ func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop,
 // maybePrependFlamegraphConfigure wraps configure so that, when flamegraph
 // output is requested, each event pair is also forwarded to the recorder.
 // Returns the (possibly wrapped) configure func and the recorder (or nil).
+// The recorder's cap on distinct records is -flamegraph-max-keys (task rs2).
 func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop)) (func(*eventLoop), *flamegraph.Recorder) {
 	if !cfg.FlamegraphOutput {
 		return configure, nil
 	}
-	recorder := flamegraph.NewRecorder(cfg.OutputName)
+	recorder := flamegraph.NewRecorderWithMaxKeys(cfg.OutputName, cfg.FlamegraphMaxKeys)
 	recordOutput := func(el *eventLoop) {
 		el.SetPrintCallback(func(ep *event.Pair) {
 			recorder.AddPair(ep)

@@ -72,7 +72,7 @@ type iorData struct {
 	// new key is folded in two stages (recordcap.go): first into the pid-less
 	// record of its path and comm, then into an "[other]" record. Zero means
 	// unbounded, which is what data loaded from disk and test fixtures use;
-	// NewRecorder sets the cap.
+	// NewRecorder/NewRecorderWithMaxKeys set the cap (-flamegraph-max-keys).
 	maxKeys int
 	// folds counts the events (Counter.Count) each fold stage absorbed.
 	folds foldCounts

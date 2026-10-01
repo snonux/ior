@@ -16,6 +16,7 @@ import (
 	"ior/internal/collapse"
 	appconfig "ior/internal/config"
 	"ior/internal/csvlist"
+	"ior/internal/flamegraph"
 	"ior/internal/globalfilter"
 	"ior/internal/textsafe"
 	"ior/internal/tracepoints"
@@ -53,6 +54,12 @@ type Config struct {
 	EscapeMode textsafe.EscapeMode
 	// FlamegraphOutput writes aggregated .ior.zst output for offline workflows.
 	FlamegraphOutput bool
+	// FlamegraphMaxKeys (-flamegraph-max-keys) is the -flamegraph recorder's
+	// cap on distinct (path, tracepoint, comm, pid, tid, flags) records held
+	// in memory, ~250 bytes each; past it new keys are folded (see
+	// internal/flamegraph/recordcap.go). Validated to [1,
+	// flamegraph.MaxRecordKeysLimit]; ignored without -flamegraph.
+	FlamegraphMaxKeys int
 	// ParquetPath is the file path for writing all traced syscall rows to
 	// Parquet in headless mode; empty string disables Parquet output.
 	ParquetPath string
@@ -128,6 +135,7 @@ func NewFlags() Config {
 		PidFilter:                   -1,
 		TidFilter:                   -1,
 		EventMapSize:                appconfig.DefaultEventMapSize,
+		FlamegraphMaxKeys:           flamegraph.DefaultMaxRecordKeys,
 		Duration:                    900,
 		LiveInterval:                200 * time.Millisecond,
 		TUIFastRefreshInterval:      250 * time.Millisecond,
@@ -322,6 +330,11 @@ func registerOutputFlags(fs *flag.FlagSet, cfg *Config) {
 	fs.BoolVar(&cfg.PlainMode, "plain", false, "Enable plain CSV output mode (disable TUI); control, invisible and blank-rendering space characters in traced text are escaped (\\x1b, \\u202e, \\u00a0) as selected by -escape")
 	fs.Var(&cfg.EscapeMode, "escape", "When -plain escapes control, invisible and blank-rendering space characters in traced text (`mode`): auto (only when stdout is a terminal; a pipe such as | less -R, | grep or | tee gets raw bytes), always, or never")
 	fs.BoolVar(&cfg.FlamegraphOutput, "flamegraph", false, "Write aggregated .ior.zst output for trace/integration workflows")
+	fs.IntVar(&cfg.FlamegraphMaxKeys, "flamegraph-max-keys", cfg.FlamegraphMaxKeys,
+		fmt.Sprintf("Cap on distinct (path, comm, pid, tid, flags) records the -flamegraph recorder keeps in memory, "+
+			"~250 bytes each (the default is ~130 MB, plus 1/8 headroom); past it, events of new keys are folded "+
+			"into pid 0/tid 0 and then [other] records with exact totals and a stderr warning. Between 1 and %d (~4 GB)",
+			flamegraph.MaxRecordKeysLimit))
 	fs.StringVar(&cfg.ParquetPath, "parquet", cfg.ParquetPath, "Write traced syscall rows directly to a parquet file in headless mode, replacing an existing file at that path (skip the TUI; compatible with -pid; incompatible with -plain, -flamegraph, -testflames, -testliveflames, and other content filters)")
 	fs.StringVar(&cfg.OutputName, "name", cfg.OutputName, "Base name (no '/') for .ior.zst trace output files, written to the working directory as <hostname>-<name>-<timestamp>.ior.zst")
 	fs.BoolVar(&cfg.TestFlames, "testflames", false, "Run TUI with static synthetic flamegraph data for keyboard-navigation testing")
@@ -420,33 +433,13 @@ const maxEventMapSize int64 = 1 << 31
 // so the constant also compiles where int is 32 bits wide.
 const maxDurationSeconds int64 = math.MaxInt64 / int64(time.Second)
 
-// validateConfig checks numeric/duration bounds that cannot be enforced by the
-// flag package itself and returns a descriptive error on the first violation.
+// validateConfig checks what the flag package cannot enforce by itself - the
+// numeric/duration bounds (validateNumericLimits), the -pid/-tid range, the
+// tracepoint selection and the -comm/-path pattern lengths - and returns a
+// descriptive error on the first violation.
 func validateConfig(cfg Config) error {
-	// A zero or negative duration would cause the trace context to cancel
-	// immediately, capturing no events. Require at least one second. The
-	// upper bound matters just as much: setupTraceContext converts the
-	// seconds with time.Duration(cfg.Duration)*time.Second, and anything
-	// above maxDurationSeconds overflows int64 nanoseconds into a negative
-	// (already expired) timeout, so the trace would silently end at once
-	// with exit 0.
-	if cfg.Duration <= 0 || int64(cfg.Duration) > maxDurationSeconds {
-		return fmt.Errorf("invalid duration: %d (must be between 1 and %d seconds)",
-			cfg.Duration, maxDurationSeconds)
-	}
-	// A negative reset timer would imply auto-resets in the past, which is
-	// nonsensical. 0 disables, anything positive enables.
-	if cfg.ResetTimer < 0 {
-		return fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
-	}
-	// A non-positive mapSize would wrap to a huge uint32 when cast in
-	// resizeBPFMaps, causing libbpf to fail with a confusing "map too large"
-	// error. Reject it here with a clear diagnostic instead. The upper bound
-	// is the largest power of two a uint32 holds (the biggest ring buffer
-	// libbpf can round up to); anything above would wrap in the same cast.
-	if cfg.EventMapSize <= 0 || int64(cfg.EventMapSize) > maxEventMapSize {
-		return fmt.Errorf("invalid mapSize: %d (must be between 1 and %d bytes)",
-			cfg.EventMapSize, maxEventMapSize)
+	if err := validateNumericLimits(cfg); err != nil {
+		return err
 	}
 	// A -pid/-tid of 0 matches only the idle task, and any negative value
 	// other than the -1 "no filter" sentinel wraps to a huge uint32 BPF
@@ -475,6 +468,45 @@ func validateConfig(cfg Config) error {
 	// screen; refusing it here means the user gets the reason on stderr with
 	// a non-zero exit, before any terminal is taken over at all.
 	return BuildTraceFilter(cfg).ValidateTracepointFields()
+}
+
+// validateNumericLimits checks the plain numeric and duration flags against
+// their bounds. It is split from validateConfig to keep both short.
+func validateNumericLimits(cfg Config) error {
+	// A zero or negative duration would cause the trace context to cancel
+	// immediately, capturing no events. Require at least one second. The
+	// upper bound matters just as much: setupTraceContext converts the
+	// seconds with time.Duration(cfg.Duration)*time.Second, and anything
+	// above maxDurationSeconds overflows int64 nanoseconds into a negative
+	// (already expired) timeout, so the trace would silently end at once
+	// with exit 0.
+	if cfg.Duration <= 0 || int64(cfg.Duration) > maxDurationSeconds {
+		return fmt.Errorf("invalid duration: %d (must be between 1 and %d seconds)",
+			cfg.Duration, maxDurationSeconds)
+	}
+	// A negative reset timer would imply auto-resets in the past, which is
+	// nonsensical. 0 disables, anything positive enables.
+	if cfg.ResetTimer < 0 {
+		return fmt.Errorf("invalid resetTimer: %s (must be >= 0; 0 disables)", cfg.ResetTimer)
+	}
+	// A non-positive mapSize would wrap to a huge uint32 when cast in
+	// resizeBPFMaps, causing libbpf to fail with a confusing "map too large"
+	// error. Reject it here with a clear diagnostic instead. The upper bound
+	// is the largest power of two a uint32 holds (the biggest ring buffer
+	// libbpf can round up to); anything above would wrap in the same cast.
+	if cfg.EventMapSize <= 0 || int64(cfg.EventMapSize) > maxEventMapSize {
+		return fmt.Errorf("invalid mapSize: %d (must be between 1 and %d bytes)",
+			cfg.EventMapSize, maxEventMapSize)
+	}
+	// The -flamegraph recorder's cap: 0 or a negative value would mean an
+	// unbounded live recorder (iorData's maxKeys == 0) or a nonsensical one,
+	// and a cap above MaxRecordKeysLimit asks for more than ~4 GB of heap,
+	// most likely a typo; reject both before any memory is spent (task rs2).
+	if cfg.FlamegraphMaxKeys < 1 || cfg.FlamegraphMaxKeys > flamegraph.MaxRecordKeysLimit {
+		return fmt.Errorf("invalid flamegraph-max-keys: %d (must be between 1 and %d records, ~250 bytes each)",
+			cfg.FlamegraphMaxKeys, flamegraph.MaxRecordKeysLimit)
+	}
+	return nil
 }
 
 // validateTracepointSelection fails when sel attaches none of tpNames, the

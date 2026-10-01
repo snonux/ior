@@ -230,6 +230,88 @@ func TestNewRecorderIsCapped(t *testing.T) {
 	}
 }
 
+// NewRecorderWithMaxKeys (-flamegraph-max-keys, task rs2) takes the cap as
+// given, both below and above the default, and never builds an unbounded
+// live recorder: a non-positive cap falls back to the default.
+func TestNewRecorderWithMaxKeysSetsTheCap(t *testing.T) {
+	for _, tc := range []struct{ in, want int }{
+		{3, 3},
+		{DefaultMaxRecordKeys * 4, DefaultMaxRecordKeys * 4},
+		{MaxRecordKeysLimit, MaxRecordKeysLimit},
+		{0, DefaultMaxRecordKeys},
+		{-5, DefaultMaxRecordKeys},
+	} {
+		r := NewRecorderWithMaxKeys("x", tc.in)
+		if got := r.MaxKeys(); got != tc.want {
+			t.Fatalf("NewRecorderWithMaxKeys(%d).MaxKeys() = %d, want %d", tc.in, got, tc.want)
+		}
+		if got := r.data.maxKeys; got != tc.want {
+			t.Fatalf("NewRecorderWithMaxKeys(%d) data.maxKeys = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// feedPids adds n events of one path and comm with pids/tids first..first+n-1:
+// every event is a new exact key, and all share one stage-1 key.
+func feedPids(recorder *Recorder, first, n uint32) {
+	for pid := first; pid < first+n; pid++ {
+		recorder.AddPair(collapsedTestPair(uint64(pid), "api", "/srv/a", types.SYS_ENTER_READ, types.SYS_EXIT_READ, pid))
+	}
+}
+
+// A lowered cap folds every new key past it and counts the folded events in
+// the end-of-run summary; the notice names the cap and the flag to raise it.
+func TestRecorderHonoursALoweredCap(t *testing.T) {
+	t.Chdir(t.TempDir())
+	status := captureStatus(t)
+	recorder := NewRecorderWithMaxKeys("rs2low", 4)
+	feedPids(recorder, 1, 10)
+	// 4 exact keys plus the one pid-less key absorbing the other 6 events.
+	if got := len(recorder.data.records); got != 5 {
+		t.Fatalf("records = %d, want 5 (4 exact + 1 pid-less)", got)
+	}
+	if recorder.data.folds != (foldCounts{pidless: 6}) {
+		t.Fatalf("folds = %+v, want 6 stage-1 events", recorder.data.folds)
+	}
+	if err := recorder.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	out := status.String()
+	for _, want := range []string{"reached its limit of 4 distinct", "-flamegraph-max-keys", "6 event(s) into pid 0/tid 0"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+// A raised cap keeps storing exactly where the default would have folded.
+// Filling past the 2^19 default takes about a second, so it is a short-mode
+// skip; the lowered-cap test above covers the same mechanism cheaply.
+func TestRecorderHonoursARaisedCap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("fills more than DefaultMaxRecordKeys records")
+	}
+	captureStatus(t)
+	recorder := NewRecorderWithMaxKeys("rs2high", DefaultMaxRecordKeys+100)
+	n := uint32(DefaultMaxRecordKeys + 50)
+	for pid := uint32(1); pid <= n; pid++ {
+		recorder.data.add("/srv/a", types.SYS_ENTER_READ, "api", pid, pid, 0, Counter{Count: 1})
+	}
+	if got := len(recorder.data.records); got != int(n) {
+		t.Fatalf("records = %d, want %d: every key below the raised cap is stored exactly", got, n)
+	}
+	if total := recorder.data.folds.total(); total != 0 {
+		t.Fatalf("folded %d events below the raised cap, want 0", total)
+	}
+	// Past the raised cap the fold starts as usual.
+	for pid := n + 1; pid <= n+60; pid++ {
+		recorder.data.add("/srv/a", types.SYS_ENTER_READ, "api", pid, pid, 0, Counter{Count: 1})
+	}
+	if recorder.data.folds != (foldCounts{pidless: 10}) {
+		t.Fatalf("folds = %+v, want the 10 events past the raised cap in stage 1", recorder.data.folds)
+	}
+}
+
 // captureStatus replaces statusOut for one test.
 func captureStatus(t *testing.T) *bytes.Buffer {
 	t.Helper()

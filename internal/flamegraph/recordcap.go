@@ -20,7 +20,9 @@ import (
 // stages so the part of the key that churns (pid, tid) goes first and the part
 // the default collapsed fields show (comm, tracepoint, path) goes last:
 //
-//  1. Up to DefaultMaxRecordKeys (the cap) records are stored exactly.
+//  1. Up to the cap records are stored exactly: DefaultMaxRecordKeys, or the
+//     value of -flamegraph-max-keys (task rs2) passed to
+//     NewRecorderWithMaxKeys.
 //  2. Stage 1, "pid fold": once the cap is reached, an event whose key is new
 //     is folded into the record of the same path, comm, tracepoint and flags
 //     with pid 0 and tid 0. Stage-1 records are extra keys of their own, so
@@ -45,11 +47,20 @@ import (
 // summary of Recorder.reportFolds name the stage and the number of events
 // folded by it), not buried in the file.
 const (
-	// DefaultMaxRecordKeys is the recorder's cap on distinct exact keys: 2^19,
-	// about 130 MB at ~250 B each, in line with the LiveTrie node cap scale
-	// and far above what an ordinary trace produces. The stage-1 headroom and
-	// the "[other]" records come on top (see hardLimit).
+	// DefaultMaxRecordKeys is the recorder's default cap on distinct exact
+	// keys: 2^19, about 130 MB at ~250 B each, in line with the LiveTrie node
+	// cap scale and far above what an ordinary trace produces. The stage-1
+	// headroom and the "[other]" records come on top (see hardLimit).
+	// -flamegraph-max-keys overrides it per run (task rs2).
 	DefaultMaxRecordKeys = 1 << 19
+
+	// MaxRecordKeysLimit is the largest cap -flamegraph-max-keys accepts: 2^24
+	// records, about 4 GB of heap at ~250 B each, plus the cap/8 stage-1
+	// headroom (~0.5 GB) on top, so ~4.5 GB in all. A larger cap is far more
+	// likely a typo (an extra digit) than a host with that much memory to
+	// spare for one trace, and an int cap that big would also let
+	// cap+cap/8 overflow on a 32-bit build.
+	MaxRecordKeysLimit = 1 << 24
 
 	// recordOverflowLabel is the path and comm of the stage-2 keys. Unlike
 	// LiveTrie's "[other;]" it cannot be made collision-free (frames of a
@@ -132,11 +143,14 @@ func (iod *iorData) fold(key recordKey, cnt Counter) recordKey {
 // first hit (stage 1), while the trace is still running (a run can last 900s
 // and the recording is only written at the end, so the warning cannot wait for
 // Write).
+// It names -flamegraph-max-keys so the user learns how to keep the detail on
+// the next run.
 func recorderPidFoldNotice(limit int) string {
 	return fmt.Sprintf("ior: flamegraph recorder reached its limit of %d distinct "+
 		"(path, comm, pid, tid, flags) records; events of further new pid/tid combinations are "+
 		"folded into pid 0/tid 0 records of the same path and comm (counts and totals stay exact, "+
-		"only their pid/tid detail is lost)", limit)
+		"only their pid/tid detail is lost; raise the limit with -flamegraph-max-keys, "+
+		"at ~250 bytes of memory per record)", limit)
 }
 
 // recorderOtherFoldNotice is the one-time stderr line printed when stage 2

@@ -7,10 +7,11 @@ import (
 
 // Recorder aggregates event pairs and writes them to the legacy .ior.zst format.
 // Integration tests still use this artifact to assert trace output end-to-end.
-// It holds at most DefaultMaxRecordKeys distinct records in memory (plus a
-// stage-1 headroom and the "[other]" records); events of further new keys are
-// folded into pid-less and then "[other]" records with exact totals and
-// reported on stderr (recordcap.go, task uq2).
+// It holds at most its cap of distinct records in memory (DefaultMaxRecordKeys
+// unless -flamegraph-max-keys chose another, plus a stage-1 headroom and the
+// "[other]" records); events of further new keys are folded into pid-less and
+// then "[other]" records with exact totals and reported on stderr
+// (recordcap.go, task uq2).
 type Recorder struct {
 	name string
 	// layout is the time.Format layout of the timestamp in the output name;
@@ -19,15 +20,34 @@ type Recorder struct {
 	data   iorData
 }
 
-// NewRecorder creates a recorder for one trace run.
+// NewRecorder creates a recorder for one trace run with the default cap of
+// DefaultMaxRecordKeys distinct records.
 func NewRecorder(name string) *Recorder {
+	return NewRecorderWithMaxKeys(name, DefaultMaxRecordKeys)
+}
+
+// NewRecorderWithMaxKeys creates a recorder for one trace run that stores up
+// to maxKeys distinct records exactly before it starts to fold (task rs2: the
+// -flamegraph-max-keys flag). The flags package bounds the value to
+// [1, MaxRecordKeysLimit]; a maxKeys <= 0 from any other caller falls back to
+// DefaultMaxRecordKeys instead of meaning "unbounded" as it does inside
+// iorData, because a live recorder must never grow without bound (task uq2).
+func NewRecorderWithMaxKeys(name string, maxKeys int) *Recorder {
+	if maxKeys <= 0 {
+		maxKeys = DefaultMaxRecordKeys
+	}
 	data := newIorData()
-	data.maxKeys = DefaultMaxRecordKeys // bound the memory of long, churny runs (task uq2)
+	data.maxKeys = maxKeys // bound the memory of long, churny runs (task uq2)
 	return &Recorder{
 		name:   name,
 		layout: timestampLayout,
 		data:   data,
 	}
+}
+
+// MaxKeys returns the recorder's cap on distinct exactly stored records.
+func (r *Recorder) MaxKeys() int {
+	return r.data.maxKeys
 }
 
 // AddPair folds one traced syscall pair into the aggregated output.
