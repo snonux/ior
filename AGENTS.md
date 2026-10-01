@@ -1831,6 +1831,29 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   not shortened; and successful events of an already-exited pid or an fd closed
   before the event was processed still cost one failing readlink each (no
   per-pid "dead" marker: a failing readlink cannot tell dead pid from closed fd).
+- **Close rows never read procfs (task jr2, `internal/eventloop_procfs_close.go`)**:
+  `resolveOnExit` routes close and close_range (not `CLOSE_RANGE_CLOEXEC`,
+  which closes nothing) to `fdTracker.resolveClosing`: the fd-table entry, else
+  a procfs-cache entry whose read time (`fdTracker.procFdReadAt`, CLOCK_BOOTTIME
+  stamped by `resolve` after the readlink returned, the clock of the BPF record
+  timestamps) is earlier than the close's enter time, else an unnamed row with
+  unknown flags. Reading `/proc/<pid>/fd` for a close row happens after the
+  close, so it named nothing or the file that reused the number (`close(3);
+  pipe()` reported the new pipe). Doing the readlink when the *enter* record is
+  processed is no better: user space consumes it after the kernel finished the
+  close (prototype, 200 pre-attach fds closed and each reused by a pipe, 3 runs:
+  exit-time 0/600 correct names, 181 reuser's pipe; enter-time 0/600 correct, 29
+  pipe). Only BPF could name the file before the close (no `bpf_d_path` in
+  tracepoints; a dentry walk per close), not done. The read time is needed
+  because the cache itself lags: a write processed after its fd's close and
+  reuse caches the reuser. It lives in a side map, not in `file.FdFile`, so
+  per-row files keep their size; `copyTable`/`rekeyTable` carry it along and
+  `deleteCacheKey` drops it, and `setProcFdCache` (no time) makes an entry a
+  close row ignores. A close of an untracked fd no longer costs a procfs read
+  (`BenchmarkCloseUntrackedOpenFd`: ~22 allocs and 33-79 us to 2 allocs and
+  ~4-6 us on a busy host). Integration: `TestCloseUntrackedNeverNamesTheReusingFile`
+  (scenario `close-untracked`: 64 fds opened in a prestart hook, before ior
+  attaches; pre-fix 58-62 of 64 close rows named after the pipe).
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
