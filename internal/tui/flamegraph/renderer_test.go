@@ -1153,3 +1153,20 @@ func TestRenderRowWideCharLabelKeepsRowWidth(t *testing.T) {
 		}
 	}
 }
+
+// The placeholder panels are shown exactly when the viewport is small, so they
+// must not be wider than it: a wider line soft-wraps into rows the dashboard
+// has not budgeted. Negative control: a wide terminal keeps the whole message.
+func TestPlaceholderPanelFitsTheWidth(t *testing.T) {
+	for width := 1; width < minFlameWidth; width++ {
+		out := RenderTerminalView(RenderContext{Width: width, Height: 10})
+		for _, line := range strings.Split(out, "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Fatalf("width %d: placeholder line is %d cells: %q", width, w, line)
+			}
+		}
+	}
+	if out := renderMessagePanel("Flame: waiting for data...", 100); !strings.Contains(out, "Flame: waiting for data...") {
+		t.Errorf("a wide terminal cut the message:\n%s", out)
+	}
+}

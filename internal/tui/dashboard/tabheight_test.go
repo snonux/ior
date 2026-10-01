@@ -82,11 +82,14 @@ func fitCases() []fitCase {
 
 // TestEveryTabFitsTheTerminalHeight pins that the dashboard View never
 // renders more lines than the terminal has rows, for every tab and
-// visualization mode, at every height from 1 to 30 rows and four widths (20 to 200 columns),
-// with and without the expanded help. An over-tall frame scrolls the
-// terminal and pushes the chrome status line (filter, refusal notice,
-// recording, auto-reset) off the bottom, which is the one line that cannot be
-// seen any other way. Whatever the height, the status line stays the last line.
+// visualization mode, at every height from 1 to 30 rows and four widths (20
+// to 200 columns), with and without the expanded help. An over-tall frame
+// scrolls the terminal and pushes the chrome status line (filter, refusal
+// notice, recording, auto-reset) off the bottom, which is the one line that
+// cannot be seen any other way. Whatever the height, the tab bar stays the
+// first line, the status line the last, the body in between is the tab's own
+// unclipped output (or the notice), and no line is wider than the terminal
+// (see assertViewFits).
 func TestEveryTabFitsTheTerminalHeight(t *testing.T) {
 	widths := []int{20, 60, 100, 200}
 	for _, c := range fitCases() {
@@ -140,8 +143,13 @@ func newFitModel(t *testing.T, c fitCase, help bool, width, height int) *Model {
 	return tickStats(t, m, messages.StatsTickMsg{Snap: tallSnapshot()})
 }
 
-// assertViewFits renders one cell of the matrix and checks the frame, the
-// notice threshold and the tab's own budget handling.
+// assertViewFits renders one cell of the matrix and holds View's output to
+// the frame contract: never taller than the terminal, the tab bar (when it
+// has a row) first, the status line last, the "terminal too small" notice
+// exactly below the tab's minimum, and otherwise the tab's own unclipped
+// output as the body. The whole frame is compared with one built from those
+// parts, so a View that dropped, moved or clipped any of them fails here
+// rather than passing on the line count alone.
 func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
 	t.Helper()
 	m := newFitModel(t, c, help, width, height)
@@ -150,34 +158,100 @@ func assertViewFits(t *testing.T, c fitCase, help bool, width, height int) {
 	if got := lipgloss.Height(out); got > height {
 		t.Fatalf("%s: View is %d lines, terminal has %d:\n%s", label, got, height, out)
 	}
-	// The status line must still be the last line.
 	lines := strings.Split(out, "\n")
 	if !strings.Contains(lines[len(lines)-1], "filter:") {
 		t.Fatalf("%s: last line is not the status line: %q", label, lines[len(lines)-1])
 	}
-	rows := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width)))
+	status := m.renderStatusBlock(width)
+	rows := splitFrameRows(height, lipgloss.Height(status))
+	tabBar := renderTabBar(m.activeTab, width)
+	if rows.tabBar > 0 && plainLine(lines[0]) != plainLine(tabBar) {
+		t.Fatalf("%s: first line is not the tab bar: %q", label, lines[0])
+	}
+	assertNoticeThreshold(t, m, label, out, width, rows.body)
+	want := expectedFrame(rows, tabBar, expectedBody(t, m, label, width, height, rows.body), status)
+	if out != want {
+		t.Fatalf("%s: View differs from tab bar + tab output + status:\n--- got\n%s\n--- want\n%s", label, out, want)
+	}
+	assertFrameWidth(t, c, label, lines, width)
+}
+
+// plainLine is a rendered line without its styling and the trailing padding
+// lipgloss adds when it aligns a block to its widest line.
+func plainLine(s string) string {
+	return strings.TrimRight(ansi.Strip(s), " ")
+}
+
+// assertNoticeThreshold checks that the notice is shown exactly when the body
+// has rows, but fewer than the active tab's minimum.
+func assertNoticeThreshold(t *testing.T, m *Model, label, out string, width, body int) {
+	t.Helper()
 	tooSmall := strings.Contains(out, tooSmallNotice(width))
-	switch min := m.minBodyRowsFor(c.tab); {
-	case rows.body >= min && tooSmall:
-		t.Fatalf("%s: %d body rows (minimum %d) but the too-small notice is shown:\n%s", label, rows.body, min, out)
-	case rows.body > 0 && rows.body < min && !tooSmall:
-		t.Fatalf("%s: %d body rows is below the minimum %d but no notice is shown:\n%s", label, rows.body, min, out)
-	case rows.body >= min:
-		assertTabHonoursItsBudget(t, m, label, width, height, rows.body)
+	switch min := m.minBodyRowsFor(m.activeTab); {
+	case body >= min && tooSmall:
+		t.Fatalf("%s: %d body rows (minimum %d) but the too-small notice is shown:\n%s", label, body, min, out)
+	case body > 0 && body < min && !tooSmall:
+		t.Fatalf("%s: %d body rows is below the minimum %d but no notice is shown:\n%s", label, body, min, out)
 	}
 }
 
-// assertTabHonoursItsBudget renders the active tab the way View does but
-// without the final clip, so a tab that only fits because clipLines cut its
-// bottom (a panel without its border, a table without its hint line) fails
-// instead of passing unnoticed.
-func assertTabHonoursItsBudget(t *testing.T, m *Model, label string, width, height, body int) {
+// expectedBody is what View must draw as the body of a body-row budget: the
+// notice below the tab's minimum, else the active tab rendered the way
+// renderBody sizes it (its content viewport capped at the budget) but without
+// the final clip. That output must fit the budget on its own, so a tab that
+// only fits because clipLines cut its bottom (a panel without its border, a
+// table without its hint line) fails instead of passing unnoticed.
+func expectedBody(t *testing.T, m *Model, label string, width, height, body int) string {
 	t.Helper()
+	if body < m.minBodyRowsFor(m.activeTab) {
+		return clipLines(tooSmallNotice(width), body)
+	}
 	_, activeHeight := m.contentViewport(m.activeTab, width, height)
 	raw := m.renderActiveContent(width, min(activeHeight, body), &m.streamModel, m.flamegraphModel)
 	if got := lipgloss.Height(raw); got > body {
-		t.Errorf("%s: tab drew %d rows into a %d-row body (only the clip saved the frame):\n%s", label, got, body, raw)
+		t.Fatalf("%s: tab drew %d rows into a %d-row body (only the clip saved the frame):\n%s", label, got, body, raw)
 	}
+	return raw
+}
+
+// expectedFrame stacks the parts that have rows in the frame - tab bar, body,
+// the tail of the status block - and styles them like View does.
+func expectedFrame(rows frameRows, tabBar, body, status string) string {
+	var parts []string
+	if rows.tabBar > 0 {
+		parts = append(parts, tabBar)
+	}
+	if rows.body > 0 {
+		parts = append(parts, body)
+	}
+	parts = append(parts, clipTailLines(status, rows.status))
+	return common.Current().ScreenStyle.Render(strings.Join(parts, "\n"))
+}
+
+// assertFrameWidth checks that no line of the frame is wider than the
+// terminal, which would soft-wrap into extra rows and break the height
+// guarantee. The table views of Syscalls, Files and Processes are exempt:
+// their fixed column widths are wider than narrow terminals today, which is
+// task cz2 (clamp the table columns to the width), not this budget.
+func assertFrameWidth(t *testing.T, c fitCase, label string, lines []string, width int) {
+	t.Helper()
+	if knownWideTable(c) {
+		return
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Fatalf("%s: line %d is %d cells wide, terminal has %d: %q", label, i, w, width, line)
+		}
+	}
+}
+
+// knownWideTable reports whether c is a table view tracked by task cz2.
+func knownWideTable(c fitCase) bool {
+	switch c.tab {
+	case TabSyscalls, TabFiles, TabProcesses:
+		return c.mode == tabVizModeTable
+	}
+	return false
 }
 
 func TestClipLines(t *testing.T) {
@@ -587,6 +661,121 @@ func TestTooSmallNoticeAppearsExactlyBelowTheTabMinimum(t *testing.T) {
 			if got := lipgloss.Height(out); got > body {
 				t.Errorf("%s body=%d: %d rows", c, body, got)
 			}
+		}
+	}
+}
+
+// renderBody lays the tab out for the body budget, not for the taller content
+// viewport of the terminal height, and leaves the clip nothing to cut. In
+// View's own geometry the viewport never exceeds the budget today (the chrome
+// constants match the status block), so the matrix above cannot tell the cap
+// from the clip; this drives renderBody with a 40-row terminal and smaller
+// budgets, as a status block taller than its constant would. The Flame tab
+// is left out: it ignores the height it is handed and draws at the viewport
+// its sub-model was sized to on resize (from contentViewport), which only
+// View's real geometry, i.e. the matrix, can exercise.
+func TestRenderBodyLaysTheTabOutForTheBudget(t *testing.T) {
+	for _, c := range fitCases() {
+		if c.tab == TabFlame {
+			continue
+		}
+		m := newFitModel(t, c, false, 100, 40)
+		for body := m.minBodyRowsFor(c.tab); body <= 15; body++ {
+			want := m.renderActiveContent(100, body, &m.streamModel, m.flamegraphModel)
+			got := m.renderBody(100, 40, body)
+			if got != want || lipgloss.Height(got) > body {
+				t.Fatalf("%s body=%d: renderBody is not the tab laid out for %d rows:\n--- got\n%s\n--- want\n%s", c, body, body, got, want)
+			}
+		}
+	}
+}
+
+// The Stream tab's minimum follows its footer: the panel alone needs six
+// rows (help collapsed, stream live), the footer line one more (help expanded
+// or stream paused) and a status message under it another. A fixed seven
+// showed the notice one row early on the default live stream.
+func TestStreamMinimumFollowsItsFooter(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		help, paused, status bool
+		want                 int
+	}{
+		{"live", false, false, false, 6},
+		{"live with message", false, false, true, 6}, // no footer, so no message
+		{"help", true, false, false, 7},
+		{"paused", false, true, false, 7},
+		{"help with message", true, false, true, 8},
+	} {
+		m := newFitModel(t, fitCase{tab: TabStream, paused: tc.paused}, tc.help, 100, 40)
+		if tc.status {
+			m.streamModel.SetStatusMessage("exported")
+		}
+		if got := m.minBodyRowsFor(TabStream); got != tc.want {
+			t.Fatalf("%s: minimum %d, want %d", tc.name, got, tc.want)
+		}
+		// At the minimum the whole stream fits unclipped (footer and
+		// message included); one row less shows the notice.
+		raw := m.renderActiveContent(100, tc.want, &m.streamModel, m.flamegraphModel)
+		if got := lipgloss.Height(raw); got > tc.want {
+			t.Errorf("%s: stream is %d rows at its %d-row minimum:\n%s", tc.name, got, tc.want, raw)
+		}
+		if tc.status && tc.help && !strings.Contains(raw, "exported") {
+			t.Errorf("%s: status message missing:\n%s", tc.name, raw)
+		}
+		if out := m.renderBody(100, 40, tc.want-1); !strings.Contains(out, "terminal too small") {
+			t.Errorf("%s: no notice one row below the minimum:\n%s", tc.name, out)
+		}
+	}
+	// End to end: 8 rows with the help collapsed leave the live stream its
+	// 6 rows, so View draws it rather than the notice.
+	out := newFitModel(t, fitCase{tab: TabStream}, false, 100, 8).View().Content
+	if strings.Contains(out, "terminal too small") || !strings.Contains(out, "Stream") {
+		t.Errorf("live stream at 100x8 shows the notice:\n%s", out)
+	}
+}
+
+// effectiveFlameClick returns a left click, in dashboard coordinates, that
+// changes the flamegraph when it reaches it, found by trying the body cells
+// of fresh models of the same size; it fails the test when there is none,
+// since a click without effect would prove nothing about the routing.
+func effectiveFlameClick(t *testing.T, width, height int) tea.MouseClickMsg {
+	t.Helper()
+	for y := range height {
+		for x := 0; x < width; x += 4 {
+			m := newFitModel(t, fitCase{tab: TabFlame}, false, width, height)
+			before := m.flamegraphModel.View().Content
+			m.flamegraphModel.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			if m.flamegraphModel.View().Content != before {
+				return tea.MouseClickMsg{X: x, Y: y + dashboardTabBarRows, Button: tea.MouseLeft}
+			}
+		}
+	}
+	t.Fatalf("no click changes the flamegraph at %dx%d", width, height)
+	return tea.MouseClickMsg{}
+}
+
+// While the Flame tab shows the "terminal too small" notice the flamegraph is
+// not on screen, so a click on the notice must not zoom or select one of its
+// invisible frames. Negative control: at a normal size the same routing
+// forwards the click and the flamegraph changes.
+func TestFlameMouseIsDroppedWhileTheNoticeIsShown(t *testing.T) {
+	for _, tc := range []struct {
+		height  int
+		forward bool
+	}{
+		{5, false}, // 3 body rows, below flameMinRows
+		{30, true},
+	} {
+		click := effectiveFlameClick(t, 80, tc.height)
+		m := newFitModel(t, fitCase{tab: TabFlame}, false, 80, tc.height)
+		if got := m.activeBodyDrawn(); got != tc.forward {
+			t.Fatalf("height %d: activeBodyDrawn = %v, want %v", tc.height, got, tc.forward)
+		}
+		before := m.flamegraphModel.View().Content
+		m.Update(click)
+		if changed := m.flamegraphModel.View().Content != before; changed != tc.forward {
+			t.Errorf("height %d: click at (%d,%d) changed the flamegraph = %v, want %v",
+				tc.height, click.X, click.Y, changed, tc.forward)
 		}
 	}
 }

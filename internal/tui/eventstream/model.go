@@ -162,6 +162,28 @@ func (m *Model) SetFooterVisible(visible bool) {
 	m.showFooter = visible
 }
 
+// footerShown reports whether View appends the footer below the table: the
+// dashboard help bar turns it on (m.showFooter), and a paused stream always
+// shows it because its selection/column/search line is interaction feedback.
+func (m *Model) footerShown() bool {
+	return m.showFooter || m.paused
+}
+
+// FooterRows is how many rows View currently adds below the stream table: 0
+// with the footer off, else the Row/Sel line plus the status message line
+// when one is set (see appendStreamFooter). The dashboard adds it to the
+// table's own minimum so its "terminal too small" threshold tracks the real
+// height instead of always reserving a footer row.
+func (m *Model) FooterRows() int {
+	if !m.footerShown() {
+		return 0
+	}
+	if m.statusMessage != "" {
+		return 2
+	}
+	return 1
+}
+
 // SetSource updates the backing ring buffer and refreshes visible rows.
 func (m *Model) SetSource(source Source) {
 	m.source = source
@@ -603,7 +625,9 @@ func (m *Model) View(width, height int) string {
 	// feedback while the user navigates rows and columns, so render it whenever
 	// the stream is paused, independent of the dashboard help-bar toggle
 	// (m.showFooter). The live Row x/N footer remains tied to the help bar.
-	if !m.showFooter && !m.paused {
+	// footerShown is shared with FooterRows so the dashboard's row budget
+	// agrees with what is drawn here.
+	if !m.footerShown() {
 		return base
 	}
 	return m.appendStreamFooter(base, start)

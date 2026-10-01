@@ -74,11 +74,20 @@ const (
 	overviewMinRows = 7
 	// latencyMinRows is a histogram panel with a single (folded) bucket row.
 	latencyMinRows = histogramChromeRows + 1
-	// streamMinRows is the stream panel - two borders, the status line, the
-	// filter line, the column header and one event row - plus the one-row
-	// footer that the expanded help bar or a paused stream turns on.
-	streamMinRows = 7
+	// streamTableMinRows is the stream panel alone: two borders, the status
+	// line, the filter line, the column header and one event row. The footer
+	// below it is counted per frame (streamMinBodyRows), because it is only
+	// there while the help bar is expanded or the stream is paused.
+	streamTableMinRows = 6
 )
+
+// streamMinBodyRows is the Stream tab's minimum: its panel plus the footer
+// rows the stream draws right now (eventstream.Model.FooterRows). A fixed
+// minimum would either show the notice one row early with the footer off or
+// cut the footer (and its status message) with it on.
+func streamMinBodyRows(m *Model) int {
+	return streamTableMinRows + m.streamModel.FooterRows()
+}
 
 // frameRows is how many terminal rows each part of the dashboard frame gets.
 type frameRows struct {

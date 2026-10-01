@@ -82,6 +82,10 @@ type tabDescriptor struct {
 	// "terminal too small" notice instead of a fragment cut mid-panel. Zero
 	// means the generic minBodyRows.
 	MinBodyRows int
+	// MinBodyRowsFunc, when set, replaces MinBodyRows for a tab whose
+	// smallest complete unit depends on its state (the Stream tab's optional
+	// footer rows).
+	MinBodyRowsFunc func(*Model) int
 	// InitCmd starts this tab's own tick chain whenever the tab becomes the
 	// active one: on entry and when Init's tickChainsStartMsg is handled,
 	// alongside the global refresh chain. It runs on the Update path and
@@ -284,7 +288,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			// The stream draws its own footer, so its viewport ignores the
 			// dashboard help bar.
 			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },
-			MinBodyRows:     streamMinRows,
+			MinBodyRowsFunc: streamMinBodyRows,
 			Render:          tabRenderStream,
 			HandleScroll:    tabScrollStream,
 			// The two modals and the FD-trace overlay each own the keyboard
@@ -424,11 +428,16 @@ func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 }
 
 // minBodyRowsFor returns the fewest body rows at which tab is drawn in its
-// current state: the descriptor's own minimum (tabDescriptor.MinBodyRows), or
+// current state: the descriptor's state-dependent minimum
+// (tabDescriptor.MinBodyRowsFunc) or fixed one (MinBodyRows), or
 // altVizMinRows while an alternative visualization (bubbles, treemap, icicle)
 // is the active view, or else the generic table minimum.
 func (m *Model) minBodyRowsFor(tab Tab) int {
-	if rows := lookupTab(tab).MinBodyRows; rows > 0 {
+	d := lookupTab(tab)
+	if d.MinBodyRowsFunc != nil {
+		return d.MinBodyRowsFunc(m)
+	}
+	if rows := d.MinBodyRows; rows > 0 {
 		return rows
 	}
 	if m.altVizReady(tab) && m.tabVizModeFor(tab) != tabVizModeTable {

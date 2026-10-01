@@ -295,9 +295,23 @@ func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame {
 		return m, nil
 	}
-	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
+	translated, ok := translateFlamegraphMsg(msg, m.activeBodyDrawn())
+	if !ok {
+		return m, nil
+	}
+	next, cmd := m.flamegraphModel.Update(translated)
 	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, cmd
+}
+
+// activeBodyDrawn reports whether View draws the active tab's body at the
+// current terminal size, i.e. the body has at least the tab's minimum rows
+// (renderBody). Otherwise the body is the "terminal too small" notice or
+// nothing, and input aimed at the tab's screen positions must not reach it.
+func (m *Model) activeBodyDrawn() bool {
+	width, height := common.EffectiveViewport(m.width, m.height)
+	rows := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width)))
+	return rows.body >= m.minBodyRowsFor(m.activeTab)
 }
 
 // HandleFlameRefreshCompletion offers a background flamegraph result to its
@@ -1174,11 +1188,12 @@ func (m *Model) renderStatusBlock(width int) string {
 }
 
 // renderBody renders the active tab into at most bodyRows rows. With fewer
-// than the tab's minimum (Model.minBodyRowsFor) it shows the "terminal too small" notice instead of a
-// mangled fragment. Otherwise the tab is sized by its own content viewport
-// (which also sizes its sub-model) and the result is clipped to bodyRows as a
-// last line of defence: a tab that keeps a minimum size of its own can then
-// at worst lose its bottom rows, never push the frame past the terminal.
+// than the tab's minimum (Model.minBodyRowsFor) it shows the "terminal too
+// small" notice instead of a mangled fragment. Otherwise the tab is sized by
+// its own content viewport (which also sizes its sub-model), capped at
+// bodyRows, and the result is clipped to bodyRows as a last line of defence:
+// a tab that keeps a minimum size of its own can then at worst lose its
+// bottom rows, never push the frame past the terminal.
 func (m *Model) renderBody(width, height, bodyRows int) string {
 	if bodyRows < m.minBodyRowsFor(m.activeTab) {
 		return clipLines(tooSmallNotice(width), bodyRows)
@@ -1507,25 +1522,32 @@ func dashboardViewport(width, height, chromeRows int) (int, int) {
 	return width, height
 }
 
-func translateFlamegraphMsg(msg tea.Msg) tea.Msg {
+// translateFlamegraphMsg maps a message for the Flame tab into the
+// flamegraph's coordinates: mouse rows are shifted up by the tab bar above
+// the body, every other message passes unchanged. bodyDrawn is whether View
+// draws the flamegraph at all (Model.activeBodyDrawn); when it does not, the
+// screen shows the "terminal too small" notice where the frames would be, so
+// a mouse message is dropped (ok false) instead of selecting or scrolling a
+// frame the user cannot see.
+func translateFlamegraphMsg(msg tea.Msg, bodyDrawn bool) (tea.Msg, bool) {
 	switch mouse := msg.(type) {
 	case tea.MouseClickMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseClickMsg(m)
+		return tea.MouseClickMsg(m), bodyDrawn
 	case tea.MouseReleaseMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseReleaseMsg(m)
+		return tea.MouseReleaseMsg(m), bodyDrawn
 	case tea.MouseMotionMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseMotionMsg(m)
+		return tea.MouseMotionMsg(m), bodyDrawn
 	case tea.MouseWheelMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseWheelMsg(m)
+		return tea.MouseWheelMsg(m), bodyDrawn
 	default:
-		return msg
+		return msg, true
 	}
 }

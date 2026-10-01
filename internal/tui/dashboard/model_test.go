@@ -1849,11 +1849,14 @@ func TestHelpToggleIgnoresH(t *testing.T) {
 }
 
 func TestTranslateFlamegraphMouseMsgOffsetsTabBarRow(t *testing.T) {
-	translated := translateFlamegraphMsg(tea.MouseClickMsg{
+	translated, forward := translateFlamegraphMsg(tea.MouseClickMsg{
 		X:      17,
 		Y:      9,
 		Button: tea.MouseLeft,
-	})
+	}, true)
+	if !forward {
+		t.Fatal("a click must reach a drawn flamegraph")
+	}
 	click, ok := translated.(tea.MouseClickMsg)
 	if !ok {
 		t.Fatalf("expected translated message to stay mouse click, got %T", translated)
@@ -1861,11 +1864,24 @@ func TestTranslateFlamegraphMouseMsgOffsetsTabBarRow(t *testing.T) {
 	if click.X != 17 || click.Y != 8 {
 		t.Fatalf("expected click coordinates (17,8), got (%d,%d)", click.X, click.Y)
 	}
+	// With the flamegraph not drawn (the "terminal too small" notice) every
+	// pointer event is dropped.
+	for _, msg := range []tea.Msg{
+		tea.MouseClickMsg{Y: 9}, tea.MouseReleaseMsg{Y: 9}, tea.MouseMotionMsg{Y: 9}, tea.MouseWheelMsg{Y: 9},
+	} {
+		if _, forward := translateFlamegraphMsg(msg, false); forward {
+			t.Errorf("%T reached a flamegraph that is not drawn", msg)
+		}
+	}
 }
 
 func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
 	msg := messages.StatsTickMsg{}
-	translated := translateFlamegraphMsg(msg)
+	// Non-mouse messages pass even while the flamegraph is not drawn.
+	translated, forward := translateFlamegraphMsg(msg, false)
+	if !forward {
+		t.Fatal("a non-mouse message must always reach the flamegraph")
+	}
 	if _, ok := translated.(messages.StatsTickMsg); !ok {
 		t.Fatalf("expected non-mouse message to remain unchanged, got %T", translated)
 	}
