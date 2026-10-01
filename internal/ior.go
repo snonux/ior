@@ -1020,7 +1020,8 @@ type traceInfra struct {
 	targetGone func() bool
 
 	// renameProbeAttached records that the task_rename probe attached during
-	// setup (bpfSetupLog.attached); runTraceSetup hands it to the event loop
+	// setup (bpfSetupLog.attached through renameAttachRecorder); runTraceSetup
+	// hands it to the event loop
 	// (eventLoop.trustRenameRecords) once that exists.
 	renameProbeAttached bool
 
@@ -1117,8 +1118,29 @@ func setupTraceInfraWithEventLoop(
 // runTraceSetup is the setup sequence itself; setupTraceInfraWithEventLoop
 // wraps it to attach the collected warnings to a failure.
 // The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
-// event-loop build and the start signal stay in this body because the
-// ior_setup_test.go structural tests pin their relative order here.
+// event-loop build, its wiring and the start signal stay in this body because
+// the structural tests (ior_setup_test.go, console_routing_test.go,
+// ior_trace_wiring_test.go, eventloop_newtask_recheck_test.go) pin their
+// statements and relative order here. The steps, in order:
+//
+//   - Reject a filter the trace cannot honour before touching the kernel:
+//     newEventLoop matches comm/path patterns against fixed-size kernel event
+//     fields and refuses over-long ones. Doing it first means the caller gets
+//     that error instead of a running trace that never matches, and it costs
+//     no probe attach/detach cycle.
+//   - Non-fatal setup degradations are collected (warnSetup) and replayed as
+//     event-loop warnings once output is wired (see setupWarnings); on failure
+//     the caller appends them to the returned error instead.
+//   - Load and attach (setupTraceInfraBPF), start the runtime, build the loop.
+//   - Wire the loop: logging right after it is stored; sampling reported only
+//     for syscalls that really attached (raw modes; a no-op for the TUI, which
+//     has no tally); rename-record trust after the factory, which wires the
+//     drop counter the trust also depends on (task xr2).
+//   - Signal the start last. Nothing fallible may follow: every step above
+//     still reaches the caller through err, and in TUI mode that is the only
+//     path an error has - once started is closed the starter has already
+//     reported success and nobody is left to receive one. Pinned by
+//     TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
 func runTraceSetup(
 	parentCtx context.Context,
 	cfg flags.Config,
@@ -1128,30 +1150,18 @@ func runTraceSetup(
 	buildEventLoop traceEventLoopFactory,
 	warnings *setupWarnings,
 ) (*traceInfra, error) {
-	// Reject a filter the trace cannot honour before touching the kernel:
-	// newEventLoop below matches comm/path patterns against fixed-size kernel
-	// event fields and refuses over-long ones. Doing it here means the caller
-	// gets that error instead of a running trace that never matches, and it
-	// costs no probe attach/detach cycle.
 	if err := traceFilterFromConfig(cfg).ValidateTracepointFields(); err != nil {
 		return nil, err
 	}
-
-	// Non-fatal setup degradations are collected and replayed as event-loop
-	// warnings once output is wired (see setupWarnings); on failure the caller
-	// appends them to the returned error instead.
 	warnSetup := warnings.add
-
 	infra, bpfModule, err := setupTraceInfraBPF(parentCtx, cfg, hooks, logln, warnSetup)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := infra.setupRuntime(parentCtx, cfg, bpfModule, started, logln); err != nil {
 		infra.Close()
 		return nil, err
 	}
-
 	el, err := buildEventLoop(cfg, bpfModule, warnSetup)
 	if err != nil {
 		infra.Close()
@@ -1159,21 +1169,10 @@ func runTraceSetup(
 	}
 	infra.el = el
 	wireEventLoopLogging(el, logln, warnings)
-	// Report sampling only for syscalls that really attached (raw modes; a
-	// no-op for the TUI, which has no tally). It stays after the two lines
-	// above, which the structural setup tests require to be adjacent.
 	if infra.mgr != nil {
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
-	// After the factory, which wires the drop counter that the trust also
-	// depends on (task xr2).
 	el.trustRenameRecords(infra.renameProbeAttached)
-
-	// Nothing fallible may follow. Every step above still reaches the caller
-	// through err, and in TUI mode that is the only path an error has: once
-	// started is closed the starter has already reported success and nobody is
-	// left to receive one. Pinned by
-	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1202,12 +1201,8 @@ func setupTraceInfraBPF(
 	// call: ending it never disturbs a newer session's routing.
 	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
 	defer endLibbpfRouting()
-	renameProbeAttached := false
-	noteAttached := func(probeName string) {
-		if probeName == taskRenameProbeName {
-			renameProbeAttached = true
-		}
-	}
+	var renameAttach renameAttachRecorder
+	noteAttached := renameAttach.note
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes,
 		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached})
 	if err != nil {
@@ -1215,7 +1210,7 @@ func setupTraceInfraBPF(
 	}
 
 	infra := newTraceInfra(mgr, hooks.shutdown, logln)
-	infra.renameProbeAttached = renameProbeAttached
+	infra.renameProbeAttached = renameAttach.attached
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -1224,6 +1219,25 @@ func setupTraceInfraBPF(
 		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
 	})
 	return infra, bpfModule, nil
+}
+
+// renameAttachRecorder is setupTraceInfraBPF's bpfSetupLog.attached sink: it
+// remembers whether the task_rename probe was among the probes that attached.
+// That one fact is what lets the event loop trust rename records and skip the
+// newtask seed's corrective /proc read (eventLoop.trustRenameRecords, task
+// xr2), so a sink that never turned it on would silently disable the
+// optimisation, and one that turned it on for any other probe would skip the
+// read with no rename record to replace it. Pinned by
+// TestRenameAttachRecorderNotesOnlyTheRenameProbe.
+type renameAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached (called by attachHandProbe).
+func (r *renameAttachRecorder) note(probeName string) {
+	if probeName == taskRenameProbeName {
+		r.attached = true
+	}
 }
 
 // newTraceInfra returns the still-empty infrastructure of one run, with its

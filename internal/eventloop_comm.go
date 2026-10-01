@@ -611,9 +611,11 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 //
 // recheck is the caller's verdict on whether a rename could go unreported
 // (eventLoop.provisionalSeedNeedsRecheck, task xr2). When the task_rename probe
-// is attached and ring-buffer drops are monitored, every rename either arrives
-// as a record or shows up as a drop whose markAllStale sweep flags the entry,
-// so the read is pure overhead - and under thread churn it was most of the
+// is attached and ring-buffer drops are monitored, a rename normally arrives
+// as a record or shows up as a drop whose markAllStale sweep flags the entry
+// (not yet a rename whose new name the BPF handler cannot read, task mz2, nor
+// the copy_process windows listed at provisionalSeedNeedsRecheck), so the read
+// is overhead - and under thread churn it was most of the
 // resolver's work: one read per new thread, nearly all of them ENOENT because
 // the thread had exited before a worker got to it. Without recheck the entry
 // is stored non-stale and costs nothing until a sweep or a record touches it.
@@ -900,8 +902,15 @@ func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<-
 	e.setCachedCommFromKernel(ev.Tid, comm)
 }
 
+// procTidPathPrefix is tid's /proc/<tid> directory on the real procfs.
 func procTidPathPrefix(tid uint32) string {
-	return "/proc/" + strconv.FormatUint(uint64(tid), 10)
+	return procTidPathIn(procRoot, tid)
+}
+
+// procTidPathIn is the /proc/<tid> directory of tid under the procfs mount
+// root (procRoot in production; tests pass a temporary directory).
+func procTidPathIn(root string, tid uint32) string {
+	return root + "/" + strconv.FormatUint(uint64(tid), 10)
 }
 
 func resolveCommFromProc(tid uint32) string {
@@ -964,7 +973,15 @@ func readWithDeadline(ctx context.Context, read func() (string, error)) (string,
 // lookup (task xr2 measured 99% ENOENT at 300 new threads/s), and the
 // fallback doubled the syscalls of every one of them.
 func resolveCommFromProcWithError(tid uint32) (string, error) {
-	procPath := procTidPathPrefix(tid)
+	return resolveCommFromProcRoot(procRoot, tid)
+}
+
+// resolveCommFromProcRoot is resolveCommFromProcWithError under the procfs
+// mount root, the seam that lets tests lay out a fake /proc/<tid> (a missing
+// comm next to a present exe link) the way checkTraceTarget and targetWatch
+// take theirs.
+func resolveCommFromProcRoot(root string, tid uint32) (string, error) {
+	procPath := procTidPathIn(root, tid)
 	commPath := procPath + "/comm"
 	data, commErr := os.ReadFile(commPath)
 	if commErr == nil {

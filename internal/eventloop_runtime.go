@@ -113,57 +113,83 @@ func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
 }
 
 // handleRingbufDropResult records the running drop total and raises a warning
-// for every interval that lost events, so backpressure shows up live in the
-// TUI stream (and in -plain runs via the end-of-run statistics).
+// for every interval that lost events, and for every failed counter read, so
+// backpressure shows up live (and in the end-of-run statistics).
+//
+// Both warnings go through notifyWarningOrLog, which falls back to stderr in
+// modes without a warning sink (-plain, -flamegraph, headless -parquet): those
+// would otherwise learn about the loss, or about a counter that cannot be
+// read, only from the end-of-run statistics, which can be hours away. Losing
+// events silently is exactly the finding this counter closes; stdout stays
+// machine-readable.
 func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	if result.warning != "" {
-		// The counter could not be read, so the run total is not "unchanged"
-		// - it is unknown. Record that so stats() stops asserting the last
-		// reading (0, for a run whose first read already failed) as fact, and
-		// surface the failure in every mode: a headless run that only called
-		// notifyWarning here learnt nothing at all, which is precisely the
-		// silence this counter exists to end.
-		e.ringbufDropReadFailed.Store(true)
+		e.recordDropReadFailure()
 		e.notifyWarningOrLog(result.warning)
 		return
 	}
-	// The kernel counter is cumulative, so one successful read supersedes any
-	// earlier failure: the total is authoritative again.
-	//
-	// The total is published before the flag is cleared, and stats() reads
-	// them in the opposite order, so a reader that sees "not failed" is
-	// guaranteed to see the total that cleared it. Storing the flag first
-	// would leave a window where stats() reads the stale total (0, on a run
-	// whose first read failed) together with a cleared flag and prints it as a
-	// confident "no loss" - the very statement this whole change exists to
-	// prevent. The two goroutines do overlap: startTraceShutdownWatcher calls
-	// stats() on ctx.Done() while the monitor is still winding down on the
-	// same signal.
-	e.numRingbufDrops.Store(result.total)
-	e.ringbufDropReadFailed.Store(false)
+	e.publishDropTotal(result.total)
 	if result.delta == 0 {
 		return
 	}
-	// Some of those lost records may have been sched_process_exec control
-	// records, and that is the one loss the stream cannot repair on its own:
-	// with an active -comm filter the open-side cache refresh never runs for a
-	// non-matching program, so a tid stale-cached under its pre-exec name would
-	// keep that name forever. Ask the event-loop goroutine to re-resolve the
-	// comm cache; the flag is consumed in applyPendingCommRefresh because this
-	// callback runs on the monitor goroutine.
-	//
-	// The boot-clock time goes first: it is taken after the counter read, so
-	// every record counted here was reserved before it, and a newtask seed the
-	// event loop consumes after the sweep but recorded before this point keeps
-	// its corrective /proc read (provisionalSeedNeedsRecheck).
-	e.lastDropSeenBootNs.Store(bootClockNs())
-	e.commRefreshPending.Store(true)
-	// Modes without a warning sink (-plain, -flamegraph, headless -parquet)
-	// would otherwise only learn about the loss from the end-of-run
-	// statistics, which can be hours away. Losing events silently is exactly
-	// the finding this counter closes, so notifyWarningOrLog falls back to
-	// stderr - stdout stays machine-readable.
+	e.requestCommSweepAfterDrop()
 	e.notifyWarningOrLog(formatRingbufDropWarning(result))
+}
+
+// recordDropReadFailure notes that the counter could not be read, so the run
+// total is not "unchanged" - it is unknown. stats() then stops asserting the
+// last reading (0, for a run whose first read already failed) as fact, and
+// provisionalSeedNeedsRecheck stops trusting rename records while the flag
+// stays set: a lost rename could no longer show up as a drop.
+func (e *eventLoop) recordDropReadFailure() {
+	e.ringbufDropReadFailed.Store(true)
+}
+
+// publishDropTotal stores a successful reading of the cumulative kernel
+// counter. Being cumulative, one successful read supersedes any earlier
+// failure: the total is authoritative again.
+//
+// The total is published before the flag is cleared, and stats() reads them
+// in the opposite order, so a reader that sees "not failed" is guaranteed to
+// see the total that cleared it. Storing the flag first would leave a window
+// where stats() reads the stale total (0, on a run whose first read failed)
+// together with a cleared flag and prints it as a confident "no loss" - the
+// very statement this whole change exists to prevent. The two goroutines do
+// overlap: startTraceShutdownWatcher calls stats() on ctx.Done() while the
+// monitor is still winding down on the same signal.
+func (e *eventLoop) publishDropTotal(total uint64) {
+	e.numRingbufDrops.Store(total)
+	e.ringbufDropReadFailed.Store(false)
+}
+
+// requestCommSweepAfterDrop answers a poll that saw lost records. Some of them
+// may have been sched_process_exec control records, and that is the one loss
+// the stream cannot repair on its own: with an active -comm filter the
+// open-side cache refresh never runs for a non-matching program, so a tid
+// stale-cached under its pre-exec name would keep that name forever. (A lost
+// task_rename record is the same case, task xr2.) So the event-loop goroutine
+// is asked to re-resolve the comm cache; the flag is consumed in
+// applyPendingCommRefresh because this runs on the monitor goroutine.
+//
+// The boot-clock stamp is stored before the flag is raised. It is read after
+// the counter, so every record counted here was reserved before it. Were the
+// flag visible first, the loop could apply the sweep and then seed a newtask
+// record reserved before the drop while lastDropSeenBootNs still held the
+// previous stamp: that seed would escape both the sweep and the time check
+// in provisionalSeedNeedsRecheck. Pinned by
+// TestDropStampIsStoredBeforeTheSweepIsRequested.
+func (e *eventLoop) requestCommSweepAfterDrop() {
+	e.lastDropSeenBootNs.Store(e.readDropStampClock())
+	e.commRefreshPending.Store(true)
+}
+
+// readDropStampClock reads the boot clock through the test seam
+// dropStampClock, or bootClockNs when none is set.
+func (e *eventLoop) readDropStampClock() uint64 {
+	if e.dropStampClock != nil {
+		return e.dropStampClock()
+	}
+	return bootClockNs()
 }
 
 // handleAggregateDrainResult ingests one drained batch of kernel-side syscall

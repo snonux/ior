@@ -54,8 +54,9 @@ const (
 // matched against it), which is what the base behaviour had too: it had no name
 // at all until the read landed. An exec, rename or open record that arrives
 // meanwhile is authoritative and still outranks the read. Whether the read is
-// needed at all is provisionalSeedNeedsRecheck's call (task xr2): when every
-// rename is either reported or detected as a drop, it is skipped.
+// needed at all is provisionalSeedNeedsRecheck's call (task xr2): when a
+// rename is reported or its loss detected as a drop, it is skipped (with the
+// exceptions listed there).
 //
 // A fork that then execve()s is renamed by the sched_process_exec record, which
 // arrives after this one and needs no read at all.
@@ -108,26 +109,50 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 //
 // The read exists for a rename that userspace would otherwise never hear of.
 // With renameRecordsTrusted (the task_rename probe attached and the ring-buffer
-// drop counter monitored, see trustRenameRecords) there is no such rename: it
+// drop counter monitored, see trustRenameRecords) such a rename normally
 // arrives as a record, which outranks the seed, or its record was lost, which
 // the drop monitor detects and answers with a markAllStale sweep that flags
 // the seed for the same one read. Skipping the read then saves exactly what
 // churn workloads paid for it - one lookup per new thread, which almost always
 // failed with ENOENT because the thread had already exited.
 //
-// One ordering needs the read even then. The sweep only flags entries that
-// exist when the event loop applies it, but the loop consumes a backlog: a
-// newtask record reserved *before* a drop the monitor has already reported can
-// still be in the ring when the sweep runs, and its seed, written afterwards,
-// would escape it while the lost record (a rename of that very thread) is gone
-// for good. lastDropSeenBootNs is the boot-clock time of the newest poll that
-// saw drops, taken after the counter read, so every record lost before it was
-// reserved earlier still; a seed whose record is no newer than that is treated
-// as possibly predating a lost rename and keeps the read. A seed recorded after
-// that poll is covered by the next poll's sweep, or by this check once that
-// poll has moved lastDropSeenBootNs past it.
+// Three cases keep the read even then:
+//
+//   - The drop counter's latest read failed (ringbufDropReadFailed). A lost
+//     rename could not show up as a drop while the counter stays unreadable, so
+//     nothing would sweep the seed. A one-off failure costs only the reads of
+//     the seeds consumed meanwhile: the counter is cumulative, so the next
+//     successful poll reports the drops of the failed interval and stamps
+//     lastDropSeenBootNs past their records.
+//   - The seed may predate a reported drop. The sweep only flags entries that
+//     exist when the event loop applies it, but the loop consumes a backlog: a
+//     newtask record reserved *before* a drop the monitor has already reported
+//     can still be in the ring when the sweep runs, and its seed, written
+//     afterwards, would escape it while the lost record (a rename of that very
+//     thread) is gone for good. lastDropSeenBootNs is the boot-clock time of
+//     the newest poll that saw drops, taken after the counter read, so every
+//     record lost before it was reserved earlier still; a seed whose record is
+//     no newer than that keeps the read. A seed recorded after that poll is
+//     covered by the next poll's sweep, or by this check once that poll has
+//     moved lastDropSeenBootNs past it.
+//   - Trust is off (probe not attached, or no drop monitor).
+//
+// What the trust does not cover (all rare; the wrong name stays until the
+// thread execs, renames again, or makes an open/exec syscall whose payload
+// comm contradicts the cache):
+//
+//   - A rename whose BPF handler cannot read the new name discards its record
+//     without counting a drop (handle_task_rename in exec.c), so neither a
+//     record nor a sweep follows; follow-up task mz2 counts it.
+//   - Two microsecond-wide windows inside copy_process: a third thread writing
+//     /proc/<tid>/comm of the child between attach_pid and trace_task_newtask
+//     emits its rename record before the newtask record, whose seed then
+//     overwrites the newer name with the creator's; and a sibling renaming the
+//     creator between dup_task_struct and the tracepoint makes the record carry
+//     a name the child never had. Before task xr2 the corrective read healed
+//     both.
 func (e *eventLoop) provisionalSeedNeedsRecheck(seedTime uint64) bool {
-	if !e.renameRecordsTrusted {
+	if !e.renameRecordsTrusted || e.ringbufDropReadFailed.Load() {
 		return true
 	}
 	return seedTime <= e.lastDropSeenBootNs.Load()

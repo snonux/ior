@@ -190,9 +190,14 @@ type eventLoop struct {
 	// reserved before it. Written by the drop-monitor goroutine, read by the
 	// event-loop goroutine (provisionalSeedNeedsRecheck), hence atomic.
 	lastDropSeenBootNs atomic.Uint64
+	// dropStampClock reads the clock lastDropSeenBootNs is stamped from. nil
+	// (every loop outside one test) means bootClockNs; the store-order test
+	// injects one that observes commRefreshPending at the moment of the read
+	// (TestDropStampIsStoredBeforeTheSweepIsRequested).
+	dropStampClock func() uint64
 	// renameRecordsTrusted is set by trace setup (trustRenameRecords) before
 	// the loop starts and only read afterwards: the task_rename probe attached
-	// and drops are monitored, so a provisional newtask seed needs no
+	// and drops are monitored, so a provisional newtask seed normally needs no
 	// corrective /proc read (provisionalSeedNeedsRecheck). False in tests and
 	// whenever either is missing, which keeps the read.
 	renameRecordsTrusted bool

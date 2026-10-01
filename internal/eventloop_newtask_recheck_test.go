@@ -14,8 +14,9 @@ import (
 // read for every new thread, which under thread churn was nearly all of the
 // resolver's work and nearly always failed with ENOENT. With the task_rename
 // probe attached and ring-buffer drops monitored the read is skipped
-// (provisionalSeedNeedsRecheck); these tests pin both sides of that decision and
-// that every lr2/fr2 path that still needs a read keeps it.
+// (provisionalSeedNeedsRecheck); these tests pin both sides of that decision
+// and that every lr2/fr2 path that still needs a read keeps it. The inputs of
+// the trust are pinned in eventloop_newtask_trust_test.go.
 
 const procfsComm = "procfs-name"
 
@@ -26,7 +27,9 @@ type countingProcfs struct {
 	reads atomic.Int32
 }
 
-func (c *countingProcfs) resolve(_ context.Context, tid uint32) (string, error) {
+func (c *countingProcfs) resolve(
+	_ context.Context, tid uint32,
+) (string, error) {
 	if tid != newTaskTid {
 		return "", nil
 	}

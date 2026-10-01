@@ -11,8 +11,9 @@ import (
 	"ior/internal/flags"
 )
 
-// procRoot is the procfs mount checkTraceTarget inspects. Tests point it at a
-// temporary directory laid out like /proc.
+// procRoot is the procfs mount checkTraceTarget, targetWatch and the comm
+// resolver (resolveCommFromProcRoot) inspect. Tests pass a temporary directory
+// laid out like /proc in its place.
 const procRoot = "/proc"
 
 // checkTraceTarget reports why a -pid/-tid scope can never match anything,
