@@ -42,7 +42,8 @@ type traceSessionBindings struct {
 // sessionEventSink is the stream buffer as one session sees it: Push is
 // dropped once the session is no longer current, reads go straight through.
 // The trace core also publishes it as the TUI's stream source, so it forwards
-// the ring buffer's AppendSnapshot fast path as well (see AppendSnapshot).
+// the ring buffer's optional read extensions as well: the AppendSnapshot fast
+// path and the warning count behind the status-line badge (WarningCount).
 type sessionEventSink struct {
 	view traceSessionBindings
 }
@@ -80,6 +81,11 @@ var (
 	_ runtime.RecordingSamplingPublisher = traceSessionBindings{}
 	_ runtime.RecordingSamplingCounter   = sessionRecorder{}
 )
+
+// The sink is the stream source of every real trace: the dashboard's warning
+// badge reads it through this optional interface, so without the assertion a
+// dropped WarningCount forward would compile and silently show no badge.
+var _ eventstream.WarningCounter = sessionEventSink{}
 
 // beginSession starts a new trace session generation and returns its bindings
 // view, superseding every earlier view. It also drops the previous session's
@@ -277,6 +283,20 @@ func (k sessionEventSink) AppendSnapshot(dst []streamrow.Row) []streamrow.Row {
 		return buffer.AppendSnapshot(dst)
 	}
 	return dst
+}
+
+// WarningCount returns the ring buffer's exact count of synthetic warning
+// rows (ungated, like every read). This sink is the stream source the
+// dashboard holds during every real trace (the trace core publishes it via
+// SetEventStreamSource), and eventstream finds the count only through the
+// optional eventstream.WarningCounter interface: without this forward the
+// warning badge reads 0 from the moment a trace starts - exactly the runs
+// that push the wrong -tid and zero-probes warnings (task ys2).
+func (k sessionEventSink) WarningCount() int {
+	if buffer := k.view.bindings.ringBuffer(); buffer != nil {
+		return buffer.WarningCount()
+	}
+	return 0
 }
 
 // Record records row while the session is current. A superseded session's

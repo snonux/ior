@@ -160,10 +160,16 @@ func warningBadges(count int) []string {
 // points a user on any other tab at the warning rows (wrong -tid, zero
 // probes attached, libbpf warnings) that appear nowhere but the Stream tab -
 // on the default Flame tab such a run otherwise just looks empty. It is left
-// out while the Stream tab is active: the rows are on screen there (warning
-// rows bypass every stream filter), and a badge pointing at the current tab
-// would only take room from the filter summary on the tab whose filter stack
-// the user is working with.
+// out while the Stream tab is active, because its only job is to say which
+// tab holds the rows, and that is the current tab. The rows are in the Stream
+// tab's buffer then (warning rows bypass every stream filter) but not
+// necessarily on screen: a paused stream shows a frozen snapshot without
+// warnings pushed since the pause, and in follow mode a startup warning
+// scrolls off screen once a screenful of rows follows it (it stays in the
+// buffer, and counted, until the ring evicts it). Unpausing (space) brings
+// in the newer rows and g jumps to the oldest; a badge on this tab would only
+// repeat "go to this tab", and it would take room from the filter summary on
+// the tab whose filter stack the user is working with.
 func (m *Model) statusTail() statusTail {
 	tail := statusTail{summary: m.filterSummary()}
 	if m.activeTab != TabStream {
