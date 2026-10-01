@@ -154,10 +154,11 @@ count, so the totals are labelled `at least` (Parquet: `"lower_bound":true`) ins
 A family rate (`-syscall-sampling-families FS=10`) is reported once as `FS=10`, with lines and
 totals only for the syscalls that were invoked; syscalls whose probes are not attached are not
 reported.
-TUI `R` recordings are marked the same way whenever the trace samples, which a default TUI
-trace does: `futex*` and `clock_gettime` are aggregate-only there, so they have no rows, and
-`ior.sampling.totals` holds their exact counts for that recording alone (see
-`docs/parquet-querying.md`).
+TUI `R` recordings are marked the same way whenever a sampled syscall's probe is attached:
+`futex*` and `clock_gettime` are aggregate-only in the TUI, so once their probes are attached
+(`-trace-families FS,IPC,Time` or the probes modal; the default attaches the FS family only,
+so a default recording is unmarked) they have no rows, and `ior.sampling.totals` holds their
+exact counts for that recording alone (see `docs/parquet-querying.md`).
 
 `-flamegraph` writes an aggregated native record, not an SVG. To render it with external
 FlameGraph tools, run `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`.
