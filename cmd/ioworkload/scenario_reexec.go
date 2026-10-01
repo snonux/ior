@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -85,63 +86,91 @@ func signalReexec() error {
 }
 
 // stoppedRead blocks in a read that an external stopper interrupts with
-// SIGSTOP and SIGCONT. A stopped process cannot continue itself, so the
-// stopper is a child sh(1), as in the stop-restart scenario; it is a separate
-// process, so a -pid trace of the workload does not see its syscalls. It acts
-// when told to and reports back, and it stays alive until the read is done so
-// that its SIGCHLD (which the Go runtime handles) cannot interrupt the read.
+// SIGSTOP and SIGCONT. The stopper stays alive until the read is done so that
+// its SIGCHLD (which the Go runtime handles) cannot interrupt the read.
 func stoppedRead(writeFd, tid int) error {
-	stopper := exec.Command("sh", "-c", stopperScript(os.Getpid()))
-	stdin, err := stopper.StdinPipe()
+	stopper, err := startStopper()
 	if err != nil {
-		return fmt.Errorf("stopper stdin: %w", err)
+		return err
 	}
-	stdout, err := stopper.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stopper stdout: %w", err)
-	}
-	if err := stopper.Start(); err != nil {
-		return fmt.Errorf("start stopper: %w", err)
-	}
-
-	interrupted := interruptAndFeed(writeFd, tid, reexecStopBytes, func() error {
-		if _, err := stdin.Write([]byte("go\n")); err != nil {
-			return fmt.Errorf("signal stopper: %w", err)
-		}
-		// "stopped" means the stopper saw the main thread in a group stop,
-		// which a thread only enters on its way out of the interrupted
-		// syscall: the read did exit with a restart code.
-		line, err := bufio.NewReader(stdout).ReadString('\n')
-		if err != nil || strings.TrimSpace(line) != "stopped" {
-			return fmt.Errorf("stopper reported %q, want \"stopped\": %v", line, err)
-		}
-		return nil
-	})
-	eintrs, readErr := blockingRead(reexecStopBytes)
+	interrupted := interruptAndFeed(writeFd, tid, reexecReadFd, reexecStopBytes, stopper.stopAndContinue)
+	eintrs, readErr := blockingRead(reexecReadFd, reexecStopBytes)
 	err = errors.Join(readErr, <-interrupted)
 	if eintrs != 0 {
 		err = errors.Join(err, fmt.Errorf("read saw EINTR %d times, want none: no handler ran", eintrs))
 	}
-	// Closing stdin lets the stopper's final read return and the shell exit.
-	return errors.Join(err, stdin.Close(), stopper.Wait())
+	return errors.Join(err, stopper.close())
 }
 
-// stopperScript is the stopper's program: wait for the go-ahead on stdin,
-// stop the workload, wait until the kernel reports its main thread stopped
-// (bounded, so a stop that never shows cannot hang the scenario), continue
-// it, report whether the stop was seen, and linger until stdin closes.
+// reexecStopper is the external process that stops and continues the
+// workload. A stopped process cannot continue itself, so it is a child sh(1),
+// as in the stop-restart scenario; it is a separate process, so a -pid trace
+// of the workload does not see its syscalls. It acts when told to and reports
+// back, once per stopAndContinue.
+type reexecStopper struct {
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	// reports reads the stopper's answers; one reader for the stopper's whole
+	// life, so no answer is lost in a discarded buffer.
+	reports *bufio.Reader
+}
+
+// startStopper starts the stopper; it does nothing until stopAndContinue.
+func startStopper() (*reexecStopper, error) {
+	cmd := exec.Command("sh", "-c", stopperScript(os.Getpid()))
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stopper stdin: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stopper stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start stopper: %w", err)
+	}
+	return &reexecStopper{cmd: cmd, stdin: stdin, reports: bufio.NewReader(stdout)}, nil
+}
+
+// stopAndContinue has the stopper send SIGSTOP and then SIGCONT, and returns
+// once it reported that it saw the workload stopped in between. "stopped"
+// means the stopper saw the main thread in a group stop, which a thread only
+// enters on its way out of the interrupted syscall: the blocked read did exit
+// with a restart code.
+func (s *reexecStopper) stopAndContinue() error {
+	if _, err := s.stdin.Write([]byte("go\n")); err != nil {
+		return fmt.Errorf("signal stopper: %w", err)
+	}
+	line, err := s.reports.ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "stopped" {
+		return fmt.Errorf("stopper reported %q, want \"stopped\": %v", line, err)
+	}
+	return nil
+}
+
+// close ends the stopper: closing stdin ends its command loop and the shell
+// exits.
+func (s *reexecStopper) close() error {
+	return errors.Join(s.stdin.Close(), s.cmd.Wait())
+}
+
+// stopperScript is the stopper's program. For every go-ahead line on stdin
+// it stops the workload, waits until the kernel reports its main thread
+// stopped (bounded, so a stop that never shows cannot hang the scenario),
+// continues it and reports whether the stop was seen. It exits when stdin
+// closes.
 func stopperScript(pid int) string {
-	return fmt.Sprintf(`read go || exit 1
-kill -STOP %[1]d
-seen=timeout
-i=0
-while [ $i -lt 5000 ]; do
-	if grep -q '^State:[[:space:]]*T' /proc/%[1]d/status; then seen=stopped; break; fi
-	i=$((i+1))
+	return fmt.Sprintf(`while read go; do
+	kill -STOP %[1]d
+	seen=timeout
+	i=0
+	while [ $i -lt 5000 ]; do
+		if grep -q '^State:[[:space:]]*T' /proc/%[1]d/status; then seen=stopped; break; fi
+		i=$((i+1))
+	done
+	kill -CONT %[1]d
+	echo $seen
 done
-kill -CONT %[1]d
-echo $seen
-read bye
 exit 0`, pid)
 }
 
@@ -159,7 +188,7 @@ func handledRead(writeFd, tid int, sig syscall.Signal, restart bool, n int) erro
 		}
 	}
 
-	interrupted := interruptAndFeed(writeFd, tid, n, func() error {
+	interrupted := interruptAndFeed(writeFd, tid, reexecReadFd, n, func() error {
 		if err := unix.Tgkill(os.Getpid(), tid, sig); err != nil {
 			return fmt.Errorf("tgkill: %w", err)
 		}
@@ -172,7 +201,7 @@ func handledRead(writeFd, tid int, sig syscall.Signal, restart bool, n int) erro
 			return fmt.Errorf("signal %d was never handled", sig)
 		}
 	})
-	eintrs, readErr := blockingRead(n)
+	eintrs, readErr := blockingRead(reexecReadFd, n)
 	err := errors.Join(readErr, <-interrupted)
 	wantEINTR := 1
 	if restart {
@@ -185,13 +214,13 @@ func handledRead(writeFd, tid int, sig syscall.Signal, restart bool, n int) erro
 }
 
 // interruptAndFeed starts the helper of one phase: once the thread tid is
-// blocked in the scenario's read it runs interrupt, and then makes n bytes
+// blocked in a read on readFd it runs interrupt, and then makes n bytes
 // readable. The bytes are written even when a step failed, so the reader is
 // never left blocked; the channel delivers the helper's error.
-func interruptAndFeed(writeFd, tid, n int, interrupt func() error) <-chan error {
+func interruptAndFeed(writeFd, tid, readFd, n int, interrupt func() error) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		err := waitBlockedInRead(tid)
+		err := waitBlockedInRead(tid, readFd)
 		if err == nil {
 			err = interrupt()
 		}
@@ -203,15 +232,16 @@ func interruptAndFeed(writeFd, tid, n int, interrupt func() error) <-chan error 
 	return done
 }
 
-// blockingRead reads n bytes from the scenario's pipe, retrying after EINTR
-// like any C read loop, and returns how often it saw EINTR.
-func blockingRead(n int) (eintrs int, err error) {
+// blockingRead reads n bytes from the scenario's pipe through the descriptor
+// fd, retrying after EINTR like any C read loop, and returns how often it saw
+// EINTR.
+func blockingRead(fd, n int) (eintrs int, err error) {
 	buf := make([]byte, n)
 	for {
 		// Syscall, not RawSyscall: the runtime hands the P to another thread
 		// while this one is blocked, so the helper goroutine runs even with
 		// GOMAXPROCS=1.
-		got, _, errno := syscall.Syscall(syscall.SYS_READ, reexecReadFd,
+		got, _, errno := syscall.Syscall(syscall.SYS_READ, uintptr(fd),
 			uintptr(unsafe.Pointer(&buf[0])), uintptr(n))
 		switch {
 		case errno == syscall.EINTR:
@@ -227,12 +257,12 @@ func blockingRead(n int) (eintrs int, err error) {
 }
 
 // waitBlockedInRead returns once the thread tid sleeps inside read(2) on the
-// scenario's descriptor. /proc/<pid>/task/<tid>/syscall shows the syscall
+// descriptor fd. /proc/<pid>/task/<tid>/syscall shows the syscall
 // number and arguments of a thread that is blocked in the kernel ("running"
 // while it is on a CPU), which is exactly the state a signal has to find.
-func waitBlockedInRead(tid int) error {
+func waitBlockedInRead(tid, fd int) error {
 	path := fmt.Sprintf("/proc/self/task/%d/syscall", tid)
-	want := fmt.Sprintf("%d 0x%x ", syscall.SYS_READ, reexecReadFd)
+	want := fmt.Sprintf("%d 0x%x ", syscall.SYS_READ, fd)
 	deadline := time.Now().Add(reexecHandshakeTimeout)
 	for {
 		state, err := os.ReadFile(path)

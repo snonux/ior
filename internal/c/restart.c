@@ -50,12 +50,51 @@
  *      RESTART_PHASE_RESUME control record right before that enter's own
  *      record, and forgets the task.
  *
- * Userspace folds only on that RESUME record followed by the enter and exit of
- * the same syscall. Every lost record therefore fails safe: no RESUME, no
- * fold. The HANDLER record emitted at step 2 is not part of the proof; it
- * tells userspace to keep the interrupted row while the handler's own
- * syscalls pass (and lets it release the row at once when the program got
- * EINTR).
+ * Userspace folds only on that RESUME record followed by the enter it
+ * announces and that enter's exit. The HANDLER record emitted at step 2 is not
+ * part of the proof; it tells userspace to keep the interrupted row while the
+ * handler's own syscalls pass (and lets it release the row at once when the
+ * program got EINTR).
+ *
+ * RESUME names its enter by time. The record is emitted before the enter
+ * hook's sampling decision and before the handler reserves the enter's own
+ * record, so the announced enter may never reach userspace: at a 1-in-N rate
+ * it is sampled out N-1 times out of N, and a full ring buffer can refuse it.
+ * What userspace then sees after RESUME is the task's NEXT call of that
+ * syscall, whenever it comes. So ior_restart_on_enter stamps RESUME with the
+ * handler's `now`, the value the handler also writes to the enter's ev->time
+ * (every generated handler reads the clock once, see "The per-syscall hooks"
+ * in filter.c), and userspace takes an enter for the announced one only when
+ * it carries exactly that time (isReexecutedEnter in
+ * internal/eventloop_restart.go). The equal timestamps are part of the
+ * record's contract, not a coincidence: stamp RESUME from another clock read
+ * and nothing is folded any more.
+ *
+ * Emitting RESUME only for an enter that is emitted, or carrying the
+ * interrupted call's sampling decision over to the re-execution, were the
+ * alternatives. Both move the restart check behind or into the sampling
+ * verdict on the enter path that every traced syscall pays, the second also
+ * emits rows the configured rate did not select, and neither helps when the
+ * ring buffer refuses the enter after RESUME went out - the time rule is
+ * needed in any case, and it is sufficient, so it is the whole mechanism. The
+ * price: at a rate above 1 a re-execution folds only when both of its halves
+ * happen to be sampled in; otherwise the interrupted row keeps its restart
+ * code.
+ *
+ * Lost records. The state in restart_pending_map is not lossy; the records
+ * are. A lost RESUME means no fold. A lost HANDLER makes the handler's first
+ * syscall release the row. A lost announced enter is caught by the time rule.
+ * What neither catches is a loss that leaves a well-formed stream behind: the
+ * re-executed exit and the next call's enter lost together (that call's exit
+ * then looks like the continuation's), or the lost exit of a call interrupted
+ * inside the handler (the entry here moves on to the inner call while
+ * userspace still holds the outer row). For those userspace refuses a fold
+ * whenever the ring-buffer drop counter moved since the interrupted exit
+ * (restartDropWatch, read at RESUME and again at the folding exit), and keeps
+ * the fold off altogether when it cannot read that counter. With that, a lost
+ * record fails towards "not folded"; the remaining assumption is the one all
+ * of ior's record-time comparisons make, that ior does not run in a time
+ * namespace with a boottime offset.
  *
  * Cost. The enter hook pays an inlined array lookup, one load and one compare
  * per traced syscall; the exit hook pays one range check of ret. Everything
@@ -64,7 +103,7 @@
  * and compare unless the task is pending; the extra rt_sigreturn program
  * likewise.
  *
- * Known limits (all fail towards "not folded", except the two marked):
+ * Known limits: not folded although the kernel re-executed the call.
  *   - A handler that leaves through siglongjmp never closes its depth; the
  *     call is not folded (it was not re-executed either).
  *   - Two pending tasks whose tids collide in the map: the earlier is evicted.
@@ -73,20 +112,50 @@
  *     earlier pass found no handler and already set the restart up, does not
  *     change the kernel's decision, but is judged here like a first handler:
  *     without SA_RESTART (or for -514) the restarted call is not announced.
- *   - WRONG FOLD, exotic: a restarting handler that rewrites the saved user
- *     context so that its rt_sigreturn resumes somewhere else (a preemptive
- *     user-level thread switch), and the code it resumes immediately issues
- *     the same syscall as the interrupted one.
- *   - WRONG FOLD, exotic: a call interrupted inside handler A, restarted
- *     through a nested handler B that siglongjmps back into A; A's own
- *     rt_sigreturn then closes B's depth, and the interrupted code issues the
- *     same syscall next.
- *   - WRONG FOLD, exotic: the syscall's probes are detached at runtime (TUI
- *     probes view) between the interrupted exit and the re-execution and
- *     attached again before the task's next call of that syscall; the pending
- *     entry then outlives the re-execution it stood for.
+ *   - The re-executed call's enter or exit is sampled out or lost, or any
+ *     record at all was dropped host-wide while the row was held (above).
  *   - The 32-bit sigreturn of compat tasks is not seen; syscall tracepoints
  *     do not fire for compat syscalls either, so such tasks are never pending.
+ *
+ * Known wrong folds. All of them need the same two things at once. First, the
+ * entry stands at depth 0 although the kernel is not about to re-execute the
+ * call: it outlived the re-execution, or there never was one. Second, the
+ * first syscall enter of the task that ior traces after that is an enter of
+ * the very syscall that was interrupted (the same tracepoint: a read for a
+ * read, not a pread64), and its exit is recorded. RESUME then names a real
+ * enter of the right syscall, so the time rule cannot object. Any other
+ * traced syscall the task makes first takes the RESUME instead, and userspace
+ * releases the row. The ways an entry gets into that state:
+ *   - A restarting handler rewrites the saved user context so that its
+ *     rt_sigreturn resumes somewhere else (a preemptive user-level thread
+ *     switch).
+ *   - A call is interrupted inside handler A and restarted through a nested
+ *     handler B that siglongjmps back into A; A's own rt_sigreturn then
+ *     closes B's depth, and the interrupted code runs on.
+ *   - The syscall's probes are detached at runtime (TUI probes view) between
+ *     the interrupted exit and the re-execution, and attached again later:
+ *     the entry outlives the re-execution it stood for.
+ *   - A ptrace tracer rewrites the registers so that the kernel neither
+ *     restarts the call nor runs a handler: at the signal-delivery stop (a
+ *     gdb inferior call sets orig_ax to -1 and suppresses the signal, and the
+ *     called function's first traced syscall is announced), or at the
+ *     syscall-exit stop, which comes after the sys_exit tracepoint this file
+ *     judges by (strace -e inject replacing the return value).
+ *   - Something answers the re-executed call before trace_sys_enter fires, so
+ *     the re-execution has no enter here and the entry stays: a seccomp
+ *     user-notification supervisor that let the first attempt through and
+ *     answers the second itself (or a filter installed in between), or
+ *     syscall user dispatch switched on in between (its SIGSYS handler is
+ *     then also judged as if it had interrupted the call).
+ *   - A kernel or driver bug lets -ERESTARTSYS escape with no signal pending:
+ *     nothing restarts, the program sees errno 512 and carries on.
+ *   - A clocksource too coarse to give two enters of one task different
+ *     readings (jiffies) weakens the time rule to "same syscall, same tick";
+ *     only then can a sampled-out re-execution still be mistaken.
+ * No longer among them: a recycled tid inheriting the entry of a task that
+ * died pending (ior_restart_forget drops it in sched_process_exit, and
+ * userspace folds only when that probe attached), and the sampled-out and
+ * lost-record cases described above.
  *
  * Old kernels: the probes use only an ARRAY map, scalar context loads through
  * a CO-RE flavor (the pattern handle_task_newtask uses, see exec.c) and the
@@ -137,10 +206,12 @@ static __always_inline __u64 ior_restart_entry(__u32 tid, __u32 code) {
     return (__u64)tid | ((__u64)(code - IOR_ERESTARTSYS + 1) << IOR_RESTART_CODE_SHIFT);
 }
 
-// ior_restart_emit publishes one syscall_restart_event for the current task.
-// A record the ring buffer cannot take is counted like every other lost
-// record; the state in restart_pending_map advances regardless, so a lost
-// HANDLER or RESUME record can only make userspace fold less, never wrongly.
+// ior_restart_emit publishes one syscall_restart_event for the current task,
+// stamped with now: for RESUME the caller's enter timestamp, which is how the
+// record names its enter (see "RESUME names its enter by time" above). A
+// record the ring buffer cannot take is counted like every other lost record;
+// the state in restart_pending_map advances regardless, so a lost HANDLER or
+// RESUME record can only make userspace fold less, never wrongly.
 static __always_inline void ior_restart_emit(__u32 tid, __u64 now, __u32 phase, __u32 sa_restart) {
     struct syscall_restart_event *ev;
 
@@ -193,6 +264,10 @@ static __always_inline int ior_restart_on_exit(__u32 tid, __s64 ret, int emits) 
 // interrupted call (see the file comment): the RESUME record goes out ahead of
 // the enter's own record, and the task is forgotten. An enter at depth > 0 is
 // a syscall the signal handler makes and changes nothing.
+//
+// now must be the timestamp the calling handler writes to its enter record's
+// ev->time. The enter may be sampled out or lost after RESUME is out, and the
+// shared timestamp is the only thing that ties the two records together.
 //
 // Hot path: a task that is not pending returns after the slot compare.
 static __always_inline void ior_restart_on_enter(__u32 tid, __u64 now) {

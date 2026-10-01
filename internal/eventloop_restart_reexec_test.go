@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"ior/internal/event"
@@ -22,13 +23,35 @@ const (
 	restartReadFd = int32(3)
 )
 
+// reexecDrops scripts the kernel drop counter and the boot clock of a
+// re-execution fixture: total is what the counter reads, err makes the read
+// fail, and now is the time a change of the total is noticed at.
+type reexecDrops struct {
+	total uint64
+	err   error
+	now   uint64
+}
+
 // newReexecFixture is newRestartFixture with BPF's re-execution proof on, as
-// trace setup turns it on when the signal_deliver probe attached.
+// trace setup turns it on when the signal_deliver and sched_process_exit
+// probes attached and the drop counter can be read. The counter starts at 0
+// and stays there unless the test moves it through the returned fixture's
+// drops.
 func newReexecFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
 	t.Helper()
 	f := newRestartFixture(t, filter)
-	f.el.foldReexecutedRestarts(true)
+	f.drops = &reexecDrops{}
+	f.el.dropSrc = ringbufDropSourceFunc(func() (uint64, error) { return f.drops.total, f.drops.err })
+	f.el.dropStampClock = func() uint64 { return f.drops.now }
+	f.el.foldReexecutedRestarts(true, true)
 	return f
+}
+
+// loseRecords moves the kernel drop counter by n, as n records refused by a
+// full ring buffer do; the loop notices it at boot-clock time now.
+func (f *restartFixture) loseRecords(n, now uint64) {
+	f.drops.total += n
+	f.drops.now = now
 }
 
 func (f *restartFixture) readEnter(at uint64, tid uint32) []byte {
@@ -269,17 +292,20 @@ func (f *restartFixture) sigreturn0(at uint64) []byte {
 }
 
 // TestResumeMustBeFollowedByTheSameSyscall: RESUME licenses exactly the tid's
-// next record, and only when it is an enter of the held syscall. Another
-// syscall's enter (the re-executed enter was sampled out or lost), an exit,
-// and a second RESUME all release the row unchanged.
+// next record, and only when it is the enter RESUME announced: the held
+// syscall, at the RESUME record's own time. Another syscall's enter or a
+// later enter of the same syscall (the announced enter was sampled out or
+// lost), an exit, and a second RESUME all release the row unchanged.
 func TestResumeMustBeFollowedByTheSameSyscall(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	_, syncEnter := makeEnterNullEvent(t, restartBase+900, restartPid, restartTid, types.SYS_ENTER_SYNC)
 	for name, next := range map[string][]byte{
-		"another syscall's enter": syncEnter,
-		"a sleep enter":           f.sleepEnter(restartBase+900, restartTid),
-		"an exit":                 f.readExit(restartBase+900, restartTid, 1),
-		"a second RESUME":         f.resumeRecord(restartBase+900, restartTid),
+		"another syscall's enter":      syncEnter,
+		"a sleep enter":                f.sleepEnter(restartBase+900, restartTid),
+		"the same syscall, 1ns later":  f.readEnter(restartBase+801, restartTid),
+		"the same syscall, 1ns before": f.readEnter(restartBase+799, restartTid),
+		"an exit":                      f.readExit(restartBase+900, restartTid, 1),
+		"a second RESUME":              f.resumeRecord(restartBase+900, restartTid),
 	} {
 		f := newReexecFixture(t, globalfilter.Filter{})
 		f.interruptRead(restartBase, restartTid, restartSys)
@@ -290,6 +316,191 @@ func TestResumeMustBeFollowedByTheSameSyscall(t *testing.T) {
 		}
 		requireInterruptedRow(t, rows[0], restartSys)
 		f.requireNothingHeld()
+	}
+}
+
+// TestSampledOutReexecutionIsNotFolded: BPF emits RESUME before the sampling
+// decision, so at a 1-in-N rate the re-executed call's own enter and exit are
+// suppressed N-1 times out of N. The row then stands in "resumed" until the
+// thread's next read - a different call, any time later - and that call must
+// not be taken for the re-execution: RESUME names its enter by time, and this
+// enter has another one. The interrupted row is released unchanged and the
+// later read is a row of its own, with its own enter time and latency (live,
+// before the time check, a 100 ms read showed up as one row of 200-400 ms
+// spanning several reads).
+func TestSampledOutReexecutionIsNotFolded(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	// The re-executed read (enter at +800, some exit) was sampled out.
+	released := f.feedOne(f.readEnter(restartBase+50000, restartTid), "a later read's enter")
+	requireInterruptedRow(t, released, restartSys)
+	f.requireNothingHeld()
+	later := f.feedOne(f.readExit(restartBase+60000, restartTid, 7), "the later read's exit")
+	want := restartRow{name: "read", tid: restartTid, ret: 7, enterTime: restartBase + 50000, duration: 10000, gap: 49500}
+	if later != want {
+		t.Fatalf("later read = %+v, want its own row %+v", later, want)
+	}
+	if f.el.numSyscalls != 2 {
+		t.Fatalf("numSyscalls = %d, want 2 (the interrupted read and the later one)", f.el.numSyscalls)
+	}
+}
+
+// TestLostContinuationRecordsNeverFoldAStranger covers the ways a full ring
+// buffer can cut the continuation out of the stream while the records around
+// it arrive. In each, a later call of the same syscall would complete the fold
+// if nothing stopped it.
+func TestLostContinuationRecordsNeverFoldAStranger(t *testing.T) {
+	// RESUME arrived, the re-executed enter and exit were both refused, and
+	// the loop has not seen the drop counter move yet: the time check alone
+	// keeps the thread's next read out of the row.
+	t.Run("enter and exit lost", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptRead(restartBase, restartTid, restartSys)
+		f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+		released := f.feedOne(f.readEnter(restartBase+5000, restartTid), "the next read's enter")
+		requireInterruptedRow(t, released, restartSys)
+		if next := f.feedOne(f.readExit(restartBase+6000, restartTid, 7), "the next read's exit"); next.enterTime != restartBase+5000 || next.ret != 7 {
+			t.Fatalf("next read = %+v, want its own row", next)
+		}
+	})
+	// The re-executed enter arrived and was consumed; its exit and the next
+	// read's enter were refused. The next read's exit is the same syscall's
+	// exit and the tid's next record - only the drop counter tells it is not
+	// the continuation. The row is released unchanged; the exit has no enter
+	// left and is dropped.
+	t.Run("exit and the next enter lost", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptRead(restartBase, restartTid, restartSys)
+		f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+		f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
+		f.loseRecords(2, restartBase+9000)
+		released := f.feedOne(f.readExit(restartBase+6000, restartTid, 7), "the next read's exit")
+		requireInterruptedRow(t, released, restartSys)
+		f.requireNothingHeld()
+		if f.el.numSyscalls != 1 {
+			t.Fatalf("numSyscalls = %d, want 1 (the unpaired exit is not a call ior saw start)", f.el.numSyscalls)
+		}
+	})
+	// A read interrupted inside the restarting handler whose exit record was
+	// refused: BPF now tracks the inner read and announces ITS re-execution,
+	// while the loop still holds the outer row and saw nothing of the inner
+	// interruption. RESUME arrives after a loss and releases the outer row;
+	// the inner re-execution completes the inner enter that is still parked.
+	t.Run("inner interrupted exit lost", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptRead(restartBase, restartTid, restartSys)
+		f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+		f.feedNone(f.readEnter(restartBase+600, restartTid), "the handler's read enter")
+		f.loseRecords(1, restartBase+9000)
+		released := f.feedOne(f.resumeRecord(restartBase+900, restartTid), "RESUME for the inner read")
+		requireInterruptedRow(t, released, restartSys)
+		f.feedNone(f.readEnter(restartBase+900, restartTid), "the inner read's re-executed enter")
+		inner := f.feedOne(f.readExit(restartBase+2000, restartTid, 7), "the inner read's exit")
+		if inner.enterTime != restartBase+900 || inner.ret != 7 {
+			t.Fatalf("inner read = %+v, want a row of its own from its re-executed enter", inner)
+		}
+	})
+	// A counter that cannot be read vouches for nothing.
+	t.Run("drop counter unreadable", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptRead(restartBase, restartTid, restartSys)
+		f.drops.err = errors.New("map gone")
+		released := f.feedOne(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+		requireInterruptedRow(t, released, restartSys)
+	})
+}
+
+// TestDropsBeforeTheInterruptionDoNotBlockTheFold: the drop check asks about
+// the time since the interrupted exit only. Records lost - and noticed -
+// before it say nothing about this call, and a later call folds again once the
+// loss lies behind its interrupted exit.
+func TestDropsBeforeTheInterruptionDoNotBlockTheFold(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.loseRecords(5, restartBase-100)
+	fold := func(base uint64) restartRow {
+		f.interruptRead(base, restartTid, restartSys)
+		f.feedNone(f.resumeRecord(base+800, restartTid), "RESUME record")
+		f.feedNone(f.readEnter(base+800, restartTid), "re-executed read enter")
+		return f.feedOne(f.readExit(base+3000, restartTid, 1), "re-executed read exit")
+	}
+	if row := fold(restartBase); row.ret != 1 || row.enterTime != restartBase || row.duration != 3000 {
+		t.Fatalf("row = %+v, want the fold: the loss was noticed before the interruption", row)
+	}
+
+	// A loss noticed while a row is held refuses that row's fold...
+	f.interruptRead(restartBase+10000, restartTid, restartSys)
+	f.loseRecords(1, restartBase+10600)
+	released := f.feedOne(f.resumeRecord(restartBase+10800, restartTid), "RESUME after a loss")
+	if released.ret != restartSys || released.enterTime != restartBase+10000 {
+		t.Fatalf("released row = %+v, want the unchanged interrupted read", released)
+	}
+	// ...and the next interrupted call, after it, folds again.
+	if row := fold(restartBase + 20000); row.ret != 1 || row.enterTime != restartBase+20000 {
+		t.Fatalf("row = %+v, want the fold of a call interrupted after the loss", row)
+	}
+}
+
+// TestRestartDropWatch pins the watch itself: a moved total is stamped with
+// the time it is first seen, an unchanged total keeps its stamp, and a missing
+// or failing counter always reports a loss.
+func TestRestartDropWatch(t *testing.T) {
+	var watch restartDropWatch
+	now, total := uint64(100), uint64(0)
+	src := ringbufDropSourceFunc(func() (uint64, error) { return total, nil })
+	clock := func() uint64 { return now }
+	if watch.lostSince(50, src, clock) {
+		t.Fatal("a counter that never moved reported a loss")
+	}
+	total, now = 3, 200
+	if !watch.lostSince(150, src, clock) || !watch.lostSince(200, src, clock) {
+		t.Fatal("a loss first seen at 200 was not reported for a row interrupted at or before 200")
+	}
+	now = 900
+	if watch.lostSince(201, src, clock) {
+		t.Fatal("an unchanged total was stamped again: the loss predates a row interrupted at 201")
+	}
+	if !watch.lostSince(0, nil, clock) {
+		t.Fatal("a missing counter did not report a loss")
+	}
+	failing := ringbufDropSourceFunc(func() (uint64, error) { return 0, errors.New("unreadable") })
+	if !watch.lostSince(1000, failing, clock) {
+		t.Fatal("an unreadable counter did not report a loss")
+	}
+}
+
+// TestInterruptedCallInTheHandlerTakesTheRowsPlaceAtTheBound: with
+// maxHeldRestarts rows held, a read interrupted inside the restarting handler
+// still replaces the outer row - the outer row's release is what makes room
+// for it. Judged against the bound first, the inner read was emitted unheld
+// and the outer row stayed waiting; BPF, which had moved on to the inner
+// read, then announced the inner read's re-execution, and the handler's read
+// was folded into the call the handler had interrupted.
+func TestInterruptedCallInTheHandlerTakesTheRowsPlaceAtTheBound(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+	// Fill the tracker to the bound with rows of other threads.
+	for tid := uint32(1); len(f.el.restarts.held) < maxHeldRestarts; tid++ {
+		f.el.restarts.held[tid] = &heldRestart{pair: &event.Pair{
+			EnterEv: &types.FdEvent{TraceId: types.SYS_ENTER_READ, Tid: tid},
+			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_READ, Tid: tid, Ret: restartSys},
+		}}
+	}
+
+	f.feedNone(f.readEnter(restartBase+600, restartTid), "the handler's read enter")
+	outer := f.feedOne(f.readExit(restartBase+700, restartTid, restartSys), "the handler's read, interrupted")
+	requireInterruptedRow(t, outer, restartSys)
+	held, ok := f.el.restarts.lookup(restartTid)
+	if !ok || held.pair.EnterEv.GetTime() != restartBase+600 || held.phase != restartWaiting {
+		t.Fatalf("the thread holds %+v (held=%t), want the handler's read, waiting", held, ok)
+	}
+
+	f.feedNone(f.resumeRecord(restartBase+900, restartTid), "RESUME for the handler's read")
+	f.feedNone(f.readEnter(restartBase+900, restartTid), "the handler's read, re-executed")
+	inner := f.feedOne(f.readExit(restartBase+2000, restartTid, 7), "its exit")
+	if inner.enterTime != restartBase+600 || inner.ret != 7 || inner.duration != 1400 {
+		t.Fatalf("row = %+v, want the handler's own read folded: enter +600, ret 7, duration 1400", inner)
 	}
 }
 
@@ -564,7 +775,9 @@ func TestCallInterruptedInsideTheHandlerTakesTheRowsPlace(t *testing.T) {
 }
 
 // TestReexecRowsStayUnfoldedWithoutTheProbe: when the signal_deliver probe
-// did not attach, a RESUME record would also precede a program's own retry.
+// did not attach (or the exit probe, or the drop counter is missing: see
+// TestFoldReexecutedRestartsNeedsTheWholeProof), a RESUME record proves
+// nothing - without signal_deliver it would also precede a program's own retry.
 // The rows are then not held at all: the interrupted row is emitted at its
 // exit and the re-execution is a second row, exactly as before task 103.
 func TestReexecRowsStayUnfoldedWithoutTheProbe(t *testing.T) {

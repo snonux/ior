@@ -1059,6 +1059,12 @@ type traceInfra struct {
 	// event loop (eventLoop.foldReexecutedRestarts).
 	signalProbeAttached bool
 
+	// exitProbeAttached records that the sched_process_exit probe attached
+	// during setup (exitAttachRecorder). The re-execution fold needs it too:
+	// that probe is what makes BPF forget a task that died with a call
+	// pending (eventLoop.foldReexecutedRestarts).
+	exitProbeAttached bool
+
 	cleanups []func()
 }
 
@@ -1207,7 +1213,7 @@ func runTraceSetup(
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
-	el.foldReexecutedRestarts(infra.signalProbeAttached)
+	el.foldReexecutedRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1247,6 +1253,7 @@ func setupTraceInfraBPF(
 	infra := newTraceInfra(mgr, hooks.shutdown, logln)
 	infra.renameProbeAttached = handAttach.rename.attached
 	infra.signalProbeAttached = handAttach.signal.attached
+	infra.exitProbeAttached = handAttach.exit.attached
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -1258,17 +1265,19 @@ func setupTraceInfraBPF(
 }
 
 // handProbeAttachRecorder is setupTraceInfraBPF's bpfSetupLog.attached sink:
-// it shows every hand-written probe that attached to the two recorders whose
+// it shows every hand-written probe that attached to the recorders whose
 // facts the event loop needs.
 type handProbeAttachRecorder struct {
 	rename renameAttachRecorder
 	signal signalAttachRecorder
+	exit   exitAttachRecorder
 }
 
 // note records one probe that attached (called by attachHandProbe).
 func (r *handProbeAttachRecorder) note(probeName string) {
 	r.rename.note(probeName)
 	r.signal.note(probeName)
+	r.exit.note(probeName)
 }
 
 // renameAttachRecorder remembers whether the task_rename probe was among the
@@ -1304,6 +1313,24 @@ type signalAttachRecorder struct {
 // note records one probe that attached.
 func (r *signalAttachRecorder) note(probeName string) {
 	if probeName == signalDeliverProbeName {
+		r.attached = true
+	}
+}
+
+// exitAttachRecorder remembers whether the sched_process_exit probe was among
+// the probes that attached. Its program is where BPF forgets the pending
+// restart of a dying task (ior_restart_forget in internal/c/restart.c); a run
+// without it would let a recycled tid inherit the dead task's entry, so the
+// re-execution fold is switched on only when it attached as well
+// (eventLoop.foldReexecutedRestarts, task 103). Pinned by
+// TestExitAttachRecorderNotesOnlyTheExitProbe.
+type exitAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *exitAttachRecorder) note(probeName string) {
+	if probeName == processExitProbeName {
 		r.attached = true
 	}
 }

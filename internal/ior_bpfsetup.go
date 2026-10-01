@@ -76,9 +76,9 @@ type bpfSetupLog struct {
 	// Trace setup uses it to learn whether task_rename records will flow, which
 	// decides whether a new task's inherited comm still needs a corrective
 	// /proc read (eventLoop.trustRenameRecords, task xr2), and whether the
-	// signal_deliver probe attached, which decides whether re-executed
-	// syscalls are folded (eventLoop.foldReexecutedRestarts, task 103). nil
-	// means nobody listens.
+	// signal_deliver and sched_process_exit probes attached, which decides
+	// whether re-executed syscalls are folded
+	// (eventLoop.foldReexecutedRestarts, task 103). nil means nobody listens.
 	attached func(probeName string)
 }
 
@@ -401,6 +401,10 @@ const processExecProgName = "handle_sched_process_exec"
 // exiting task's tgid, so the fdTracker can evict its per-(pid, fd) entries.
 const processExitProgName = "handle_sched_process_exit"
 
+// processExitProbeName is the probe name attachProcessExitProbe reports, in
+// warnings and through bpfSetupLog.attached.
+const processExitProbeName = "sched_process_exit"
+
 // taskNewtaskProgName is the BPF program in internal/c/exec.c that reports a
 // newly created task's inherited comm, so a new tid is named before its first
 // syscall instead of after an asynchronous procfs lookup.
@@ -418,9 +422,12 @@ func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // attachProcessExitProbe attaches sched:sched_process_exit, whose control
 // records evict a dead process's fdTracker entries (see internal/c/exec.c and
 // eventLoop.handleProcessExitEvent). Same attach policy as the exec probe:
-// direct attach, whole run, independent of -trace-* selection.
+// direct attach, whole run, independent of -trace-* selection. Its program
+// also drops a dying task's pending restart in BPF (ior_restart_forget), so
+// without it kernel-re-executed calls are left unfolded
+// (eventLoop.foldReexecutedRestarts).
 func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachHandTracepoint(attacher, processExitProgName, "sched", "sched_process_exit", log)
+	return attachHandTracepoint(attacher, processExitProgName, "sched", processExitProbeName, log)
 }
 
 // attachTaskNewtaskProbe attaches task:task_newtask, whose records name every
@@ -474,7 +481,7 @@ const signalDeliverProbeName = "signal_deliver"
 // probes: direct attach, whole run, independent of -trace-* selection.
 // Without it a handler that turns an interrupted call into EINTR would go
 // unseen, so trace setup then leaves -512/-513/-514 rows unfolded, exactly as
-// before the fold existed.
+// before the fold existed (and likewise without the sched_process_exit probe).
 func attachSignalDeliverProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
 	return attachHandTracepoint(attacher, signalDeliverProgName, "signal", signalDeliverProbeName, log)
 }
@@ -502,9 +509,9 @@ func attachRestartSigreturnProbe(attacher probemanager.Attacher, log bpfSetupLog
 }
 
 // attachHandTracepoint attaches one hand-written (non-syscall) tracepoint
-// program from internal/c/exec.c, subsystem/tracepointName being the tracepoint
-// it hooks (sched/sched_process_exec, task/task_newtask, ...). The policy is
-// documented on attachHandProbe.
+// program from internal/c/exec.c or internal/c/restart.c, subsystem/tracepointName
+// being the tracepoint it hooks (sched/sched_process_exec, task/task_newtask,
+// signal/signal_deliver, ...). The policy is documented on attachHandProbe.
 func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, tracepointName string, log bpfSetupLog) func() {
 	return attachHandProbe(attacher, progName, tracepointName, log,
 		func(prog probemanager.Program) (probemanager.Link, error) {

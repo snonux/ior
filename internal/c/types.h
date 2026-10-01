@@ -696,6 +696,14 @@ struct task_rename_event {
 //     is the kernel's re-execution of the interrupted call. It is the only
 //     record that licenses a fold; sa_restart is 0.
 //
+// time is the boot clock, as in every record. For RESUME it is more than a
+// timestamp: it equals the time field of the enter record the RESUME
+// announces, bit for bit (both are the enter handler's single clock read).
+// That enter may be sampled out or lost after RESUME was emitted, so
+// userspace accepts as the re-execution only an enter with this exact time;
+// the task's next call of the same syscall has a later one. For HANDLER it is
+// the time of the delivery.
+//
 // pid/tid name the interrupted task (every such record is emitted in its own
 // context). sa_restart is a __u32 (0 or 1) because the Go type generator maps
 // only 32/64-bit integers; with phase it completes the 8-byte alignment, so

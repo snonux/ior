@@ -13,8 +13,8 @@ import (
 // The restart fold's kernel side (internal/c/restart.c, task 103) decides
 // whether userspace may fold an interrupted syscall and its re-execution into
 // one row: it must announce a re-execution (the RESUME record) exactly when
-// the kernel re-executes the call, and never for a program's own retry after
-// EINTR. As with the syscall accounting (enterstate_fallback_test.go), these
+// the kernel re-executes the call, never for a program's own retry after
+// EINTR, and stamped with the announced enter's own time. As with the syscall accounting (enterstate_fallback_test.go), these
 // tests cut the real functions out of restart.c, compile them with the host C
 // compiler against a simulated map and ring buffer, and drive them through
 // the signal sequences that matter. Each scenario is also run against mutated
@@ -39,10 +39,23 @@ var restartFunctions = []string{
 
 // restartHarnessTemplate simulates what restart.c uses of BPF: the
 // direct-mapped pending map, the ring buffer (one record at a time; "drop 1"
-// makes every reserve fail, as a full buffer does) and the current task.
-// Commands name the acting tid first; each prints one line: the records the
-// step emitted ("handler sa_restart=N", "resume", "lost" for a failed reserve,
-// "-" for none), or the slot state for "slot".
+// makes every reserve fail, as a full buffer does), the current task and the
+// clock. Commands name the acting tid first; each prints one line: the records
+// the step emitted ("handler sa_restart=N", "resume", "lost" for a failed
+// reserve, "-" for none), or the slot state for "slot".
+//
+// "deliver" and "sigreturn" go through the two SEC programs themselves
+// (handle_signal_deliver with a simulated tracepoint context,
+// handle_restart_sigreturn), so the scenarios also cover which context field
+// feeds which argument and that the acting task is the current tid, not its
+// tgid (the simulated tgid is 77, a tid no scenario uses).
+//
+// Time: every "enter" passes a fresh timestamp (sim_enter_now) as the hook's
+// now, the way a generated handler passes its single clock read, and the
+// simulated clock helper returns a different value (SIM_CLOCK). A RESUME
+// record must carry the former - userspace matches it to the enter record by
+// that time - and a HANDLER record, which has no enter to match, the latter;
+// anything else prints the offending stamp instead of the record's name.
 const restartHarnessTemplate = `#include <stdio.h>
 #include <string.h>
 
@@ -52,6 +65,8 @@ typedef long long __s64;
 #ifndef __always_inline
 #define __always_inline inline __attribute__((always_inline))
 #endif
+#define SEC(name)
+#define SIM_CLOCK 1001ULL
 
 %s
 %s
@@ -60,6 +75,7 @@ static __u64 restart_pending_map[IOR_RESTART_SLOTS];
 static int event_map;
 static __u32 sim_tid;
 static int sim_drop;
+static __u64 sim_enter_now = 5000;
 static struct syscall_restart_event sim_record;
 static char sim_out[128];
 
@@ -82,6 +98,10 @@ static void bpf_ringbuf_submit(void *data, __u64 flags) {
     (void)flags;
     if (ev->event_type != SYSCALL_RESTART_EVENT || ev->trace_id != 0 || ev->tid != sim_tid || ev->pid != 77)
         snprintf(sim_out, sizeof(sim_out), "malformed record");
+    else if (ev->phase == RESTART_PHASE_RESUME && ev->time != sim_enter_now)
+        snprintf(sim_out, sizeof(sim_out), "resume stamped %%llu, not the enter's %%llu", ev->time, sim_enter_now);
+    else if (ev->phase == RESTART_PHASE_HANDLER && ev->time != SIM_CLOCK)
+        snprintf(sim_out, sizeof(sim_out), "handler stamped %%llu, not the clock's %%llu", ev->time, SIM_CLOCK);
     else if (ev->phase == RESTART_PHASE_RESUME && ev->sa_restart == 0)
         snprintf(sim_out, sizeof(sim_out), "resume");
     else if (ev->phase == RESTART_PHASE_HANDLER)
@@ -95,7 +115,7 @@ static __u64 bpf_get_current_pid_tgid(void) {
 }
 
 static __u64 bpf_ktime_get_boot_ns(void) {
-    return 1;
+    return SIM_CLOCK;
 }
 
 /* unused: one mutation removes its only caller. */
@@ -126,11 +146,12 @@ int main(void) {
         } else if (!strcmp(cmd, "exit") && scanf("%%lld %%llu", &ret, &a) == 2) {
             snprintf(sim_out, sizeof(sim_out), "emit=%%d", ior_restart_on_exit(tid, ret, a));
         } else if (!strcmp(cmd, "enter")) {
-            ior_restart_on_enter(tid, 5);
+            ior_restart_on_enter(tid, ++sim_enter_now);
         } else if (!strcmp(cmd, "deliver") && scanf("%%llu %%llu", &a, &b) == 2) {
-            ior_restart_on_deliver(tid, a, b);
+            struct trace_event_raw_signal_deliver___ior sig = {.sa_handler = a, .sa_flags = b};
+            handle_signal_deliver(&sig);
         } else if (!strcmp(cmd, "sigreturn")) {
-            ior_restart_on_sigreturn(tid);
+            handle_restart_sigreturn(NULL);
         } else if (!strcmp(cmd, "forget")) {
             ior_restart_forget(tid);
         } else if (!strcmp(cmd, "slot")) {
@@ -267,7 +288,7 @@ var restartScenarios = []restartScenario{
 	// A full ring buffer loses the record and counts it, but the state moves
 	// on: a lost HANDLER still postpones the restart, a lost EINTR verdict
 	// still cancels it, and a lost RESUME is not sent again for a later enter.
-	{name: "lost records fail safe", steps: []restartStep{
+	{name: "a lost control record still advances the state", steps: []restartStep{
 		{"exit 9 -512 1", rsEmit1}, {"drop 1", rsNone},
 		{"deliver 9 " + rsHandler + " " + rsRestart, "lost"}, {"slot 9", "tid=9 code=512 decided=1 depth=1"},
 		{"drop 0", rsNone}, {"sigreturn 9", rsNone}, {"enter 9", rsResume},
@@ -277,6 +298,40 @@ var restartScenarios = []restartScenario{
 		{"exit 9 -512 1", rsEmit1}, {"drop 1", rsNone}, {"enter 9", "lost"},
 		{"drop 0", rsNone}, {"slot 9", rsFree}, {"enter 9", rsNone},
 	}},
+	restartDepthScenario(),
+}
+
+// restartMaxDepth is the deepest handler nesting the 8-bit depth field of a
+// restart_pending_map word can count (IOR_RESTART_DEPTH_MASK).
+const restartMaxDepth = 255
+
+// restartDepthScenario drives the handler depth to both ends of its counter.
+// 255 nested handlers are counted and unwound exactly, and the re-execution
+// is announced after the last return. A 256th does not fit: the task must be
+// forgotten, because an increment would carry out of the depth field, leave
+// depth 0 behind, and the next syscall the innermost handler makes would be
+// announced as the re-execution.
+func restartDepthScenario() restartScenario {
+	deliver := restartStep{"deliver 9 " + rsHandler + " " + rsNoRestart, rsNone}
+	nest := func(steps []restartStep) []restartStep {
+		// -513 survives a handler with or without SA_RESTART.
+		steps = append(steps, restartStep{"exit 9 -513 1", rsEmit1},
+			restartStep{deliver.cmd, "handler sa_restart=0"})
+		for depth := 2; depth <= restartMaxDepth; depth++ {
+			steps = append(steps, deliver)
+		}
+		return append(steps, restartStep{"slot 9", fmt.Sprintf("tid=9 code=513 decided=1 depth=%d", restartMaxDepth)},
+			restartStep{"enter 9", rsNone})
+	}
+	steps := nest(nil)
+	for depth := restartMaxDepth; depth > 0; depth-- {
+		steps = append(steps, restartStep{"sigreturn 9", rsNone})
+	}
+	steps = append(steps, restartStep{"slot 9", "tid=9 code=513 decided=1 depth=0"}, restartStep{"enter 9", rsResume})
+	steps = nest(steps)
+	steps = append(steps, deliver, restartStep{"slot 9", rsFree}, restartStep{"enter 9", rsNone},
+		restartStep{"sigreturn 9", rsNone}, restartStep{"enter 9", rsNone})
+	return restartScenario{name: "handler depth at its limits", steps: steps}
 }
 
 // restartMutations are plausible regressions of restart.c as {anchor,
@@ -365,6 +420,40 @@ var restartMutations = map[string][2]string{
 	"phase swapped": {
 		"    ior_restart_emit(tid, bpf_ktime_get_boot_ns(), RESTART_PHASE_HANDLER, sa_restart);",
 		"    ior_restart_emit(tid, bpf_ktime_get_boot_ns(), RESTART_PHASE_RESUME, sa_restart);",
+	},
+	// The depth field saturates: without the check the 256th handler carries
+	// into the bit above it and the entry reads depth 0.
+	"depth overflow carries": {
+		"        if (ior_restart_depth(entry) == IOR_RESTART_DEPTH_MASK)",
+		"        if (0)",
+	},
+	// RESUME must carry the enter's own timestamp, not a clock read of its own
+	// and not a constant: userspace matches the two records by it.
+	"resume stamped by its own clock read": {
+		"    ior_restart_emit(tid, now, RESTART_PHASE_RESUME, 0);",
+		"    ior_restart_emit(tid, bpf_ktime_get_boot_ns(), RESTART_PHASE_RESUME, 0);",
+	},
+	"emit ignores the caller's time": {
+		"    ev->time = now;",
+		"    ev->time = bpf_ktime_get_boot_ns();",
+	},
+	// The SEC programs: which context field is which argument, and whose
+	// state they touch.
+	"deliver swaps handler and flags": {
+		"    ior_restart_on_deliver((__u32)bpf_get_current_pid_tgid(), sa_handler, sa_flags);",
+		"    ior_restart_on_deliver((__u32)bpf_get_current_pid_tgid(), sa_flags, sa_handler);",
+	},
+	"deliver reads the flags from the handler field": {
+		"    __u64 sa_flags = ctx->sa_flags;",
+		"    __u64 sa_flags = ctx->sa_handler;",
+	},
+	"deliver judges the tgid": {
+		"    ior_restart_on_deliver((__u32)bpf_get_current_pid_tgid(), sa_handler, sa_flags);",
+		"    ior_restart_on_deliver((__u32)(bpf_get_current_pid_tgid() >> 32), sa_handler, sa_flags);",
+	},
+	"sigreturn closes the tgid's handler": {
+		"    ior_restart_on_sigreturn((__u32)bpf_get_current_pid_tgid());",
+		"    ior_restart_on_sigreturn((__u32)(bpf_get_current_pid_tgid() >> 32));",
 	},
 }
 
@@ -477,6 +566,16 @@ func readRestartSources(t *testing.T) restartSources {
 	return sources
 }
 
+// The two SEC programs and the tracepoint context flavor the signal program
+// reads, cut out whole. The patterns pin each program's section (the
+// tracepoint it is loaded for) and signature along the way; the flavor's CO-RE
+// attribute means nothing to the host compiler and is removed.
+var (
+	restartSignalCtxRE     = regexp.MustCompile(`(?s)struct trace_event_raw_signal_deliver___ior \{.*?\n\} __attribute__\(\(preserve_access_index\)\);`)
+	restartSignalProgramRE = regexp.MustCompile(`(?s)SEC\("tracepoint/signal/signal_deliver"\)\nint handle_signal_deliver\(void \*raw_ctx\) \{.*?\n\}`)
+	restartSigretProgramRE = regexp.MustCompile(`(?s)SEC\("tracepoint/syscalls/sys_enter_rt_sigreturn"\)\nint handle_restart_sigreturn\(void \*ctx\) \{.*?\n\}`)
+)
+
 var (
 	restartDefineRE     = regexp.MustCompile(`(?m)^#define IOR_(RESTART_[A-Z_]+|SA_RESTART|SIG_IGN) .*$`)
 	restartCodeDefineRE = regexp.MustCompile(`(?m)^#define IOR_(ERESTARTSYS|ERESTARTNOINTR|ERESTARTNOHAND|ERESTART_RESTARTBLOCK) .*$`)
@@ -484,8 +583,9 @@ var (
 	restartEventRE      = regexp.MustCompile(`(?s)struct syscall_restart_event \{.*?\n\};`)
 )
 
-// restartHarnessSource assembles the harness from the defines and functions
-// of restart.c, the restart codes of filter.c and the record of types.h.
+// restartHarnessSource assembles the harness from the defines, functions and
+// SEC programs of restart.c, the restart codes of filter.c and the record of
+// types.h.
 func restartHarnessSource(sources restartSources) (string, error) {
 	defines := strings.Join(restartCodeDefineRE.FindAllString(sources.filterC, -1), "\n") + "\n" +
 		strings.Join(restartTypeDefineRE.FindAllString(sources.typesH, -1), "\n") + "\n" +
@@ -504,7 +604,26 @@ func restartHarnessSource(sources restartSources) (string, error) {
 		}
 		functions = append(functions, fn)
 	}
+	programs, err := restartPrograms(code)
+	if err != nil {
+		return "", err
+	}
+	functions = append(functions, programs...)
 	return fmt.Sprintf(restartHarnessTemplate, defines, record, strings.Join(functions, "\n\n")), nil
+}
+
+// restartPrograms returns the signal context flavor and the two SEC programs
+// of restart.c (comments stripped), ready for the host compiler.
+func restartPrograms(code string) ([]string, error) {
+	flavor := restartSignalCtxRE.FindString(code)
+	deliver := restartSignalProgramRE.FindString(code)
+	sigreturn := restartSigretProgramRE.FindString(code)
+	if flavor == "" || deliver == "" || sigreturn == "" {
+		return nil, fmt.Errorf("restart.c: context flavor (%d bytes), handle_signal_deliver (%d) or "+
+			"handle_restart_sigreturn (%d) not found in the expected shape", len(flavor), len(deliver), len(sigreturn))
+	}
+	flavor = strings.Replace(flavor, " __attribute__((preserve_access_index))", "", 1)
+	return []string{flavor, deliver, sigreturn}, nil
 }
 
 func compileRestartHarness(t *testing.T, sources restartSources) string {

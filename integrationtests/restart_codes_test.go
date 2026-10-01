@@ -146,6 +146,94 @@ func TestSignalRestartedReadFoldsAroundTheHandlersRows(t *testing.T) {
 	}
 }
 
+// reexecManyReads and reexecManyFdBase mirror cmd/ioworkload's
+// reexecSampledReads and reexecSampledFdBase: the signal-reexec-many scenario
+// makes that many stopped reads, read i through descriptor reexecManyFdBase+i
+// and returning i+1 bytes.
+const (
+	reexecManyReads  = 32
+	reexecManyFdBase = int32(300)
+)
+
+// reexecManyRows runs the signal-reexec-many workload with read traced (plus
+// extraArgs) and returns the reading thread's rows on the scenario's
+// descriptors, grouped by read index, in emission order.
+func reexecManyRows(t *testing.T, extraArgs ...string) [][]iorparquet.Record {
+	t.Helper()
+	rows, pid := runParquetScenarioRows(t, "signal-reexec-many", defaultDuration,
+		append([]string{"-trace-syscalls", "read"}, extraArgs...), []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
+	byRead := make([][]iorparquet.Record, reexecManyReads)
+	for _, row := range rows {
+		// main.go pins the scenario to the main thread, so its tid is the pid.
+		i := int(row.FD - reexecManyFdBase)
+		if row.TID != uint32(pid) || row.Syscall != "read" || i < 0 || i >= reexecManyReads {
+			continue
+		}
+		byRead[i] = append(byRead[i], row)
+	}
+	return byRead
+}
+
+// TestSignalStoppedReadsEachFoldIntoOneRow is the fold in bulk: 32 blocking
+// reads, each stopped and continued once while blocked. Every one must be
+// exactly one row, on its own descriptor and with its own byte count - the
+// descriptor comes from the call's first enter and the count from the
+// re-execution's exit, so a row with both right is that call and no other.
+func TestSignalStoppedReadsEachFoldIntoOneRow(t *testing.T) {
+	for i, rows := range reexecManyRows(t) {
+		want := int64(i + 1)
+		if len(rows) != 1 || rows[0].Ret != want || rows[0].Bytes != uint64(want) || rows[0].IsError {
+			t.Errorf("read %d (fd %d): rows %+v, want exactly one row returning %d bytes",
+				i, reexecManyFdBase+int32(i), rows, want)
+		}
+	}
+}
+
+// TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls is the same workload
+// with read sampled 1-in-2. The kernel's announcement of a re-execution goes
+// out before the sampling decision, so half the announced calls are never
+// recorded; the interrupted row must then stay as it is rather than take the
+// thread's next read - a different call - for its continuation (before the
+// announcement was tied to its enter's timestamp, such rows spanned two to
+// four reads: descriptor of one, byte count and end time of a later one).
+//
+// The check is by value, not by timing. Whatever the sampler picks, a row on
+// descriptor i can only be read i: it returns i+1 bytes (the call, folded or
+// its re-execution alone) or -512 (the interrupted half alone), each at most
+// once. Which rows exist at all is the sampler's choice, so only their
+// presence in general is required.
+func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
+	total := 0
+	for i, rows := range reexecManyRows(t, "-syscall-sampling-syscalls", "read=2") {
+		want := int64(i + 1)
+		finals, interrupted := 0, 0
+		for _, row := range rows {
+			total++
+			switch row.Ret {
+			case want:
+				finals++
+			case -512:
+				interrupted++
+			default:
+				t.Errorf("read %d (fd %d) has a row returning %d: only %d or -512 belong to this call, "+
+					"another call was folded into it: %+v", i, reexecManyFdBase+int32(i), row.Ret, want, row)
+			}
+			if row.IsError {
+				t.Errorf("read %d: row flagged is_error=true: %+v", i, row)
+			}
+		}
+		if finals > 1 || interrupted > 1 {
+			t.Errorf("read %d (fd %d): %d rows returning %d and %d returning -512, want at most one each: %+v",
+				i, reexecManyFdBase+int32(i), finals, want, interrupted, rows)
+		}
+	}
+	// 64 sampled invocations at 1-in-2: no row at all means the trace or the
+	// workload did not run as intended.
+	if total == 0 {
+		t.Fatal("no row of the scenario's reads was recorded")
+	}
+}
+
 // stopRestartSleepNs mirrors cmd/ioworkload's stopRestartSleepNs.
 const stopRestartSleepNs = int64(600_000_000)
 

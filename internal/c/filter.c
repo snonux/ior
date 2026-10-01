@@ -292,6 +292,11 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 // syscall costs two clock helper calls (one per side) instead of four, and the
 // kernel-side duration (syscall_aggregate_map) and the userspace duration
 // (exit ev->time - enter ev->time) are derived from the same two instants.
+// A third user depends on it: the restart fold's RESUME record is stamped with
+// the enter handler's `now` (ior_restart_on_enter below) and userspace matches
+// it to the enter record by that time alone, so an enter handler that stamped
+// ev->time from a second clock read would silently end all re-execution folds
+// (restart.c, "RESUME names its enter by time").
 //
 // Enter state is elided for most syscalls at rate 1 (task 2s2). The hash
 // update here and the lookup + delete in ior_on_syscall_exit were the bulk of
@@ -344,9 +349,11 @@ static __always_inline int ior_on_syscall_enter_impl(__u32 tid, __u32 enter_trac
 // Both enter hooks first let the restart fold look at the enter
 // (ior_restart_on_enter, restart.c): the first enter of a task whose
 // interrupted call the kernel re-executes is announced by a control record
-// that has to precede the enter's own record, whatever the sampling decision
-// turns out to be. The noreturn hook below does not: exit and exit_group are
-// never a re-execution, and rt_sigreturn is the restart fold's own business
+// that has to precede the enter's own record. It goes out before the sampling
+// decision, so the enter it announces may be sampled out; the record carries
+// `now` so that userspace can tell (restart.c). The noreturn hook below does
+// not consult the restart fold: exit and exit_group are never a
+// re-execution, and rt_sigreturn is the restart fold's own business
 // (handle_restart_sigreturn).
 static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
     ior_restart_on_enter(tid, now);

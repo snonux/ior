@@ -167,7 +167,9 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 // The handler reads the clock exactly once (clockReadLine) and hands that
 // value to the hook and to ev->time, instead of the hook and the body each
 // calling bpf_ktime_get_boot_ns(). The hook's duration and the pair's ev->time
-// delta are then the same two instants.
+// delta are then the same two instants, and the RESUME record the enter hook
+// may emit for a kernel-re-executed call (internal/c/restart.c) carries
+// exactly the enter record's time, which is how userspace matches the two.
 func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 	switch {
 	case h.isEnter && h.noreturn:

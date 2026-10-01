@@ -56,6 +56,9 @@ type restartFixture struct {
 	t   *testing.T
 	el  *eventLoop
 	out chan *event.Pair
+	// drops is the scripted drop counter of a re-execution fixture
+	// (newReexecFixture); nil for the plain restart_syscall fixture.
+	drops *reexecDrops
 }
 
 func newRestartFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
