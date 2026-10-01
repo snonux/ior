@@ -93,7 +93,11 @@ func readName(t *testing.T, el *eventLoop, pid uint32, fd int32) string {
 // assertFdShareInvariants checks the bookkeeping that every operation must leave
 // exact: the per-pid index mirrors the maps, the alias map and its inverse
 // agree, no entry is keyed under a pid that only aliases another's table, and a
-// table id is never itself an alias.
+// table id is never itself an alias. For the blind set (markBlind): a blind id
+// names a table, never an alias (markBlind resolves through tableID and
+// handOverTable moves the mark with the table), and it tracks nothing: neither
+// fd-table nor procfs-cache entries are keyed under it, which is what makes
+// every lookup fall through to procfs instead of answering a possibly wrong name.
 func assertFdShareInvariants(t *testing.T, tr *fdTracker) {
 	t.Helper()
 	for key := range tr.files {
@@ -134,6 +138,7 @@ func assertFdShareInvariants(t *testing.T, tr *fdTracker) {
 			t.Errorf("table id %d of pid %d is itself an alias", id, pid)
 		}
 	}
+	assertBlindInvariants(t, tr)
 	for id, members := range tr.share.sharers {
 		if len(members) == 0 {
 			t.Errorf("table %d kept an empty sharer set", id)
@@ -142,6 +147,20 @@ func assertFdShareInvariants(t *testing.T, tr *fdTracker) {
 			if tr.share.tableOf[m] != id {
 				t.Errorf("sharer %d of table %d maps to %d", m, id, tr.share.tableOf[m])
 			}
+		}
+	}
+}
+
+// assertBlindInvariants is the blind-set part of assertFdShareInvariants.
+func assertBlindInvariants(t *testing.T, tr *fdTracker) {
+	t.Helper()
+	for id := range tr.share.blind {
+		if owner, alias := tr.share.tableOf[id]; alias {
+			t.Errorf("blind id %d only aliases table %d: the mark must sit on the table id", id, owner)
+		}
+		if keys := tr.pidIndex[id]; keys != nil {
+			t.Errorf("blind table %d tracks %d fd entries and %d cache entries, want none",
+				id, len(keys.files), len(keys.cache))
 		}
 	}
 }
@@ -500,6 +519,51 @@ func TestCloseRangeUnshareByABlindSharerStaysBlind(t *testing.T) {
 	if tr.sharesTable(shareChild) || !tr.isBlind(shareChild) || !tr.isBlind(shareCreator) {
 		t.Errorf("shares=%v blind(child)=%v blind(creator)=%v, want false true true",
 			tr.sharesTable(shareChild), tr.isBlind(shareChild), tr.isBlind(shareCreator))
+	}
+	assertFdShareInvariants(t, tr)
+}
+
+// TestCloseRangeUnshareByTheLeaderOfABlindTableWithSharers: a blind table whose
+// leader (the holder the entries were keyed by) has an in-scope sharer, and the
+// leader unshares via close_range(UNSHARE): unshareFiles hands the table over to
+// the sharer (handOverTable moves the blind mark to the heir) and then marks the
+// leader blind again (markBlind), because the leader's siblings may still share
+// the old table with the invisible process. Both ends must stay blind and empty:
+// the leader with a private table of its own, the sharer holding the old one; no
+// entry may appear under either id, so every lookup of either falls to procfs
+// instead of answering a name the invisible task may have changed.
+func TestCloseRangeUnshareByTheLeaderOfABlindTableWithSharers(t *testing.T) {
+	el := newTaskEventLoop(t, "")
+	tr := el.fdState()
+	openAs(t, el, shareCreator, shareHost, 3) // tracked before the table goes blind
+	tr.shareTable(shareChild, shareCreator)
+	tr.markBlind(shareCreator)
+	if _, ok := tr.get(3, shareCreator); ok {
+		t.Fatal("markBlind kept a tracked entry")
+	}
+
+	closeRangeAs(t, el, shareCreator, 3, -1, closeRangeUnshare)
+
+	if tr.sharesTable(shareCreator) || tr.sharesTable(shareChild) {
+		t.Error("the leader and the sharer still share a table after the unshare")
+	}
+	if !tr.isBlind(shareCreator) || !tr.isBlind(shareChild) {
+		t.Errorf("blind(leader)=%v blind(sharer)=%v, want both true", tr.isBlind(shareCreator), tr.isBlind(shareChild))
+	}
+	if len(tr.share.blind) != 2 {
+		t.Errorf("blind set %v, want exactly the leader's private table and the sharer's", tr.share.blind)
+	}
+	// New opens on either side must not be tracked (they would be named from a
+	// table the invisible process also writes), so procfs keeps answering.
+	openAs(t, el, shareCreator, shareOsRel, 5)
+	openAs(t, el, shareChild, shareOsRel, 6)
+	for _, probe := range []struct {
+		pid uint32
+		fd  int32
+	}{{shareCreator, 3}, {shareCreator, 5}, {shareChild, 3}, {shareChild, 6}} {
+		if _, ok := tr.get(probe.fd, probe.pid); ok {
+			t.Errorf("pid %d fd %d is tracked, a blind table must answer from procfs", probe.pid, probe.fd)
+		}
 	}
 	assertFdShareInvariants(t, tr)
 }

@@ -1087,8 +1087,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   un-blinds, because the caller may have sibling threads still sharing the old
   table with the invisible process, so an unsharing leader stays blind with an
   empty private table - names stay right, only the speed-up is lost). The price:
-  one successful procfs resolution (`NewFdWithPid`, about 13 us measured; the
-  4.5 us figure is only a *failing* `readlink`) per event of that process and
+  one successful procfs resolution (`NewFdWithPid`, 6 to 13 us measured, depending on
+  host and descriptor type; the 4.5 us figure is only a *failing* `readlink`) per event of that process and
   procfs spellings for anonymous descriptors (`pipe:[N]`) instead of the traced
   ones - the state before gr2. The out-of-scope child's exit is filtered out
   too, so nothing ever says the invisible sharer is gone: **a blind table stays
@@ -1116,15 +1116,16 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   out. (4) A `-pid` target that was itself created with `CLONE_FILES` by a
   creator the trace never saw (records exist only for children of in-scope
   creators) is aliased by nobody and blinded by nobody: a sibling's writes to its
-  table go unnoticed. (5) A leader that calls `close_range(CLOSE_RANGE_UNSHARE)`
+  table go unnoticed (as before hr2, so (4) is no regression). (5) **Also not the pre-hr2 behaviour,
+  like (3):** a leader that calls `close_range(CLOSE_RANGE_UNSHARE)`
   while sibling threads still share the old table is treated as alone: it leaves
   the sharing (a blind table stays blind), and the siblings' later rows on those
   numbers keep the leader's view. Pinned by
   `internal/eventloop_fdshare_test.go` (sharing both ways, exit/hand-over,
   exec and `CLOSE_RANGE_UNSHARE` detach (leader) / no-op (worker thread) / stays
-  blind, a recycled tgid that was a stale sharer or holder, blind table, a plain fork that stays
+  blind (also a blind leader with sharers that unshares), a recycled tgid that was a stale sharer or holder, blind table, a plain fork that stays
   independent, an unshared trace that keeps the fast path, bookkeeping
-  invariants) and `TestNewTaskNewtaskEventFastScopeFlags`
+  invariants incl. the blind-set properties: a blind id is a table id and tracks nothing) and `TestNewTaskNewtaskEventFastScopeFlags`
   and `TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine` (the Go constant is a
   hand-kept copy of the define in `internal/c/exec.c`; the latter parses the C
   source) in `internal/types/fastdecode_test.go`.

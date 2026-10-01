@@ -23,8 +23,8 @@ package internal
 //     state: markBlind drops the table's entries and keeps it empty; every lookup
 //     then reads /proc/<pid>/fd (resolve), which is the live shared table. The
 //     price is one successful procfs resolution per event on such a process
-//     (NewFdWithPid, about 13 us measured; the 4.5 us figure is only the cost of a
-//     failing readlink) and the procfs spelling of anonymous descriptors
+//     (NewFdWithPid, 6 to 13 us measured, depending on host and descriptor type; the
+//     4.5 us figure is only the cost of a failing readlink) and the procfs spelling of anonymous descriptors
 //     (pipe:[N]) instead of the traced one - the state before task gr2. The child's
 //     exit is filtered out too, so nothing ever says the invisible sharer is gone:
 //     a blind table stays blind for the life of its holder (until the holder
@@ -48,22 +48,29 @@ package internal
 // a blind table stays blind (the caller joins it as a blind private table),
 // because a sibling thread may still share the table with an invisible process.
 //
-// Not modelled (stay as before hr2, see AGENTS.md):
+// Not modelled. The numbers match the limitations list in AGENTS.md:
 //
-//   - A *thread* that unshares its own table (unshare(CLONE_FILES), or
+// Same wrong names as before hr2 (each tgid had its own table then):
+//
+//   - (1) A *thread* that unshares its own table (unshare(CLONE_FILES), or
 //     CLOSE_RANGE_UNSHARE from a non-leader thread) stays mapped to its process's
 //     table: the tracker is keyed by tgid and the stream has no per-thread table.
-//   - unshare(CLONE_FILES) by anything: unshare is a null-kind record that carries
-//     no flags, so the call cannot even be recognised. For a thread that is the
-//     old behaviour; for a CLONE_FILES child *process* it is a new wrong-name
-//     mode compared with before hr2 (each tgid then had its own table): the child
-//     stays aliased to the creator's table after the kernel has given it a copy,
-//     so its later close/open of a shared number overwrites the creator's entry.
-//   - -tid: the filter hides the sibling threads that write the shared table.
-//   - A -pid target that was itself created with CLONE_FILES by a creator the
+//   - (2) -tid: the filter hides the sibling threads that write the shared table.
+//   - (4) A -pid target that was itself created with CLONE_FILES by a creator the
 //     trace never saw (a record exists only for children of in-scope creators)
 //     has an aliased table nobody has blinded, so a sibling's writes go
-//     unnoticed.
+//     unnoticed. Before hr2 the same writes went unnoticed too.
+//
+// New with hr2 (a wrong-name mode that did not exist before):
+//
+//   - (3) unshare(CLONE_FILES) by a CLONE_FILES child *process*: unshare is a
+//     null-kind record that carries no flags, so the call cannot even be
+//     recognised. The child stays aliased to the creator's table after the kernel
+//     has given it a copy, so its later close/open of a shared number overwrites
+//     the creator's entry.
+//   - (5) A leader that calls close_range(CLOSE_RANGE_UNSHARE) while sibling
+//     threads still share the old table is treated as alone (see above): the
+//     siblings' later rows on those numbers keep the leader's view.
 
 // fdTableShare is the sharing state of an fdTracker; the zero value means every
 // tgid owns its table, which is what nearly every process does.
