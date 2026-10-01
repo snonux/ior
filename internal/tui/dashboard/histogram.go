@@ -129,7 +129,8 @@ func renderHistogramSection(hist statsengine.HistogramSnapshot, spec histogramSp
 // exactly width columns wide (not panelWidth, which widens a sub-20-column
 // panel to 20). ok is false when the labelled sparkline line would be wider
 // than the panel's inner width (renderOverviewSparkline keeps at least 8
-// sparkline cells beside the label, so below ~34 columns it does not fit):
+// sparkline cells beside the label, so it fits from 31 columns for
+// "Latency sparkline:" and from 27 for "Gap sparkline:"):
 // lipgloss would wrap it onto further rows, so the caller leaves the
 // sparkline out instead.
 func renderHistogramSparkline(label string, series []float64, width int) (panel string, ok bool) {

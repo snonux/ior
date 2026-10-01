@@ -771,6 +771,109 @@ func TestHistogramSectionsFitNarrowWidths(t *testing.T) {
 			}
 		}
 	}
+	// Before the first stats snapshot ("waiting for stats") and before the
+	// first syscall is recorded ("no data") the panels are one-line
+	// placeholders, which a narrow terminal shows right at startup:
+	// "Latency Histogram: no data" alone needs 30 columns. They are cut to
+	// the width as well. The heights start at the tab minimum (below it the
+	// dashboard shows its own notice instead of the tab).
+	for snapName, snap := range placeholderSnapshots() {
+		for _, r := range histogramRenderers {
+			for width := 1; width <= 40; width++ {
+				for _, height := range []int{0, latencyMinRows, 6, 12, 30} {
+					label := fmt.Sprintf("%s/%s %dx%d", snapName, r.name, width, height)
+					assertPlaceholderFits(t, label, r.render(snap, width, height), width, height)
+				}
+			}
+		}
+	}
+}
+
+// placeholderSnapshots are the snapshots whose histogram tabs show only
+// placeholder panels: none yet (nil, "waiting for stats") and one with empty
+// histograms ("no data").
+func placeholderSnapshots() map[string]*statsengine.Snapshot {
+	empty := statsengine.NewSnapshot(nil, nil, nil, nil, nil, nil, statsengine.HistogramSnapshot{}, statsengine.HistogramSnapshot{})
+	return map[string]*statsengine.Snapshot{"waiting": nil, "no data": &empty}
+}
+
+// assertPlaceholderFits checks that a placeholder rendering has some content,
+// at most height rows (height <= 0: unbounded) and no line wider than width.
+func assertPlaceholderFits(t *testing.T, label, out string, width, height int) {
+	t.Helper()
+	if strings.TrimSpace(ansi.Strip(out)) == "" {
+		t.Fatalf("%s: nothing rendered", label)
+	}
+	if height > 0 && lipgloss.Height(out) > height {
+		t.Fatalf("%s: %d rows:\n%s", label, lipgloss.Height(out), out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Fatalf("%s: line is %d cells wide: %q", label, w, line)
+		}
+	}
+}
+
+// The placeholders of TestHistogramSectionsFitNarrowWidths through the whole
+// frame: a dashboard on the Latency+Gaps tab before any snapshot and after
+// one with empty histograms keeps the frame contract (assertFrameFits: no
+// line wider than the terminal, status line last) at every narrow width.
+func TestLatencyTabPlaceholdersFitNarrowTerminals(t *testing.T) {
+	c := fitCase{tab: TabLatency, mode: tabVizModeTable}
+	for snapName, snap := range placeholderSnapshots() {
+		for width := 1; width <= 40; width++ {
+			for _, height := range []int{1, 4, 6, 10, 24} {
+				m := NewModelWithConfig(nil, eventstream.NewRingBuffer(), 250, 200, common.DefaultKeyMap())
+				m.activeTab = TabLatency
+				next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+				m = next.(*Model)
+				if snap != nil {
+					m = tickStats(t, m, messages.StatsTickMsg{Snap: snap})
+				}
+				assertFrameFits(t, m, c, fmt.Sprintf("%s %dx%d", snapName, width, height), width, height)
+			}
+		}
+	}
+}
+
+// A snapshot taken mid-update may count events in its buckets that its total
+// does not include yet. The count column is then as wide as the bucket sum,
+// not the total, and the layout must be planned for it: here the buckets add
+// up to 6 digits under a 4-digit total=, which makes the compact row
+// ("[10us,100us) | 100000", 21 cells) wider than the short title line, so
+// the panel needs one column more than the total alone would suggest. No line
+// may be wider than the terminal at any width, from the one where the panel
+// is first drawn on.
+func TestHistogramCountColumnFitsBucketsAheadOfTotal(t *testing.T) {
+	labels := []string{"[0,1us)", "[1us,10us)", "[10us,100us)", "[100us,1ms)", "[1ms,10ms)", "[10ms,100ms)", "[100ms,1s)", "[1s,+inf)"}
+	var buckets []statsengine.HistogramBucketSnapshot
+	for i, l := range labels {
+		count := uint64(1)
+		if i == 0 {
+			count = 100000 - uint64(len(labels)-1)
+		}
+		buckets = append(buckets, statsengine.HistogramBucketSnapshot{Label: l, Count: count})
+	}
+	hist := statsengine.NewHistogramSnapshot(9999, buckets)
+	series := []float64{10, 20, 15, 30}
+	snap := statsengine.NewSnapshot(series, series, series, nil, nil, nil, hist, hist)
+	for _, r := range histogramRenderers {
+		minWidth := histogramMinWidth(hist, r.specs[0])
+		for width := 1; width <= 60; width++ {
+			for _, height := range []int{0, 6, 12, 30} {
+				label := fmt.Sprintf("%s %dx%d", r.name, width, height)
+				out := r.render(&snap, width, height)
+				for _, line := range strings.Split(out, "\n") {
+					if w := lipgloss.Width(line); w > width {
+						t.Fatalf("%s: line is %d cells wide: %q\n%s", label, w, line, out)
+					}
+				}
+				if drawn := len(drawnHistograms(t, out)) > 0; drawn != (width >= minWidth) {
+					t.Fatalf("%s: histogram drawn = %v, its minimum width is %d:\n%s", label, drawn, minWidth, out)
+				}
+			}
+		}
+	}
 }
 
 // assertSparklinesOnOneLine checks that every sparkline panel in out is its
