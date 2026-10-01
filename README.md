@@ -232,6 +232,21 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
 
 `./ior -help` lists the variable too.
 
+## Known limitations
+
+- **io_uring changes descriptors without a syscall.** `IORING_OP_CLOSE` and
+  `IORING_OP_OPENAT` (and the other ring operations that open or close a descriptor) are
+  executed by the kernel from `io_uring_enter` (or a worker thread) and fire no
+  `sys_enter`/`sys_exit` tracepoint, so ior never sees the descriptor change. If a program
+  closes an fd through the ring and the number is reused by another open, later rows on
+  that fd keep the file ior last bound to it (for example `pread64` rows still show the old
+  path while the kernel reads the new file). Descriptors the program opens and closes with
+  ordinary syscalls are tracked correctly; the `io_uring_setup`, `io_uring_enter` and
+  `io_uring_register` calls themselves are traced as usual.
+- **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
+  `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
+  mismatched enter/exit pairs either.
+
 ## Bytes Classification
 
 Throughput bytes come from positive return values of these syscalls only
