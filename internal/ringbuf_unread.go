@@ -127,6 +127,9 @@ func (r *kernelRingUnread) Unread() (ringbufUnread, error) {
 // Like the drop counter it is deliberately non-fatal: without it only the
 // end-of-run line about records left in the kernel ring is missing.
 func attachRingbufUnreadReader(el *eventLoop, bpfModule *bpf.Module, warnSetup func(...any)) {
+	if bpfModule == nil {
+		return // no module: attachRingbufDropCounter already warned about it
+	}
 	reader, err := newKernelRingUnread(bpfModule)
 	if err != nil {
 		warnSetup("Ring-buffer backlog reader unavailable (records left in the kernel ring at stop will not be reported):", err)
