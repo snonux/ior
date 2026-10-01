@@ -1107,11 +1107,13 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   old name sticking until the next open or rename (the row labelled in between
   still carries the old name; a self-rename via `prctl` cannot race this way;
   documented next to `handle_task_rename` in `exec.c`). A matching payload, the
-  common case, costs nothing. A rename *to the same name* just rewrites the
-  same cache entry (and bumps its epoch, discarding an in-flight procfs read);
-  an empty name (`prctl(PR_SET_NAME, "")` stores an empty comm) is ignored and
-  keeps the cached name, because an empty label is indistinguishable from "not
-  resolved yet".
+  common case, costs nothing, and so does an open payload for a tid with no
+  cached entry, which contradicts nothing
+  (`TestOpenPayloadWithoutACachedEntryQueuesNoRead`). A rename *to the same
+  name* just rewrites the same cache entry (and bumps its epoch, discarding an
+  in-flight procfs read); an empty name (`prctl(PR_SET_NAME, "")` stores an
+  empty comm) is ignored and keeps the cached name, because an empty label is
+  indistinguishable from "not resolved yet".
   Two details differ from the other hand-written handlers. It is a **raw**
   tracepoint (`SEC("raw_tracepoint/task_rename")`, attached through
   `probemanager.RawTracepointProgram`, a separate interface so the syscall probe
@@ -1439,10 +1441,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `task_rename` of `begin_new_exec` and the exec record) replace it in ring
   order, and a **failed** one, where no `sched_process_exec` fires, leaves the
   task under exactly that name. Neither exit handler writes the cache.
-  Kernel-sourced names — the exec and rename control records and the payload comm
-  of an open or exec enter — all go in through
-  `commResolver.setCachedFromKernel`, which bumps the tid's rename generation
-  and so retires any procfs lookup still in flight for it. A `markAllStale`
+  Kernel-sourced names all bump the tid's rename generation and so retire any
+  procfs lookup still in flight for it: the exec and rename control records go
+  in through `commResolver.setCachedFromKernel`, the payload comm of an open or
+  exec enter through `commResolver.setCachedFromEnterPayload`, which shares
+  that epoch-bumping write but leaves the entry stale for an exec enter or a
+  contradicting open payload (see the lr2 paragraph above). The bump matters
+  for the exec enter too: a pre-exec read queued by a fork child's dup2/close
+  would otherwise land after it, store the parent's name and clear the flag
+  (`TestExecEnterRetiresAPreExecReadInFlight`). A `markAllStale`
   sweep likewise bumps a resolver-wide sweep generation, so a lookup that was
   already in flight when the sweep ran lands *stale* rather than silently
   clearing the flag it never received.

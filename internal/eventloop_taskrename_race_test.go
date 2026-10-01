@@ -1,8 +1,10 @@
 package internal
 
 import (
+	"context"
 	"syscall"
 	"testing"
+	"time"
 
 	"ior/internal/event"
 	"ior/internal/types"
@@ -394,5 +396,133 @@ func TestMatchingOpenPayloadQueuesNoRead(t *testing.T) {
 
 	if got := requireNoReadQueued(t, el); got != payloadNewComm {
 		t.Fatalf("row comm = %q, want %q", got, payloadNewComm)
+	}
+}
+
+// TestOpenPayloadWithoutACachedEntryQueuesNoRead is the other control for the
+// contradiction rule: an open payload for a tid the cache has never named (no
+// task_newtask record, no earlier lookup) contradicts nothing, so it is taken
+// as the answer and the tid's next use queues no /proc read. Only a payload
+// that disagrees with an entry that is actually there is suspicious.
+func TestOpenPayloadWithoutACachedEntryQueuesNoRead(t *testing.T) {
+	g := newGatedProcfs("must-not-be-read")
+	el := newGatedTaskEventLoop(t, g, "")
+
+	ep := deliverRaw(el,
+		openEnterRaw(t, payloadNewComm),
+		payloadExitRaw(t, types.SYS_EXIT_OPENAT, 5))
+	if ep == nil {
+		t.Fatal("the open pair was not emitted")
+	}
+	ep.Recycle()
+
+	if got := requireNoReadQueued(t, el); got != payloadNewComm {
+		t.Fatalf("row comm = %q, want %q", got, payloadNewComm)
+	}
+}
+
+// sequencedProcfs is a resolveFn stand-in for /proc/<tid>/comm of newTaskTid
+// that answers each read with the next name sent on answers, so a test can
+// hold one read in flight and give a later read a different answer. It signals
+// on entered when a read starts (the worker has sampled the epoch by then).
+type sequencedProcfs struct {
+	entered chan struct{}
+	answers chan string
+}
+
+func newSequencedProcfs() *sequencedProcfs {
+	return &sequencedProcfs{entered: make(chan struct{}, 16), answers: make(chan string)}
+}
+
+func (s *sequencedProcfs) resolve(ctx context.Context, tid uint32) (string, error) {
+	if tid != newTaskTid {
+		return "", nil
+	}
+	s.entered <- struct{}{}
+	select {
+	case name := <-s.answers:
+		return name, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// answerNextRead waits for the next read of newTaskTid to start and answers
+// it with name.
+func (s *sequencedProcfs) answerNextRead(t *testing.T, name string) {
+	t.Helper()
+	select {
+	case <-s.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a procfs read to start")
+	}
+	select {
+	case s.answers <- name:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out handing the procfs read its answer")
+	}
+}
+
+// TestExecEnterRetiresAPreExecReadInFlight pins that the exec enter's write
+// bumps the epoch, not only that it leaves the entry stale. A fork child does
+// a syscall (dup2/close redirecting its stdio) before execve: that first use
+// consumes the task_newtask stale flag and queues procfs read R, which reads
+// the pre-exec name "bash". If R lands after the exec enter has been consumed
+// and the enter's write did not bump the epoch, R still matches the epoch it
+// sampled, stores "bash" and clears the stale flag the exec enter set - and in
+// degraded mode (no task_rename and no exec record) nothing else ever asks
+// again, so the new program keeps the parent's name. With the bump R is
+// discarded, the flag survives, and the next use re-reads the post-exec name.
+func TestExecEnterRetiresAPreExecReadInFlight(t *testing.T) {
+	const (
+		parentComm = "bash"
+		execComm   = "cat"
+	)
+	s := newSequencedProcfs()
+	resolver := newCommResolver(nil)
+	resolver.resolveFn = s.resolve
+	el := mustNewEventLoop(t, eventLoopConfig{commResolver: resolver})
+	t.Cleanup(resolver.shutdown)
+	el.processRawEvent(makeTaskNewtaskEvent(t, newTaskPid, newTaskTid, parentComm, 0),
+		make(chan *event.Pair, 1))
+
+	// The pre-exec syscall: its comm use queues R.
+	pre := feedNewTaskSyscall(t, el)
+	if pre == nil {
+		t.Fatal("the pre-exec row was not emitted")
+	}
+	pre.Recycle()
+
+	// Consume the exec enter while R is in flight, then let R land with the
+	// name it read before the exec.
+	select {
+	case <-s.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for read R to start")
+	}
+	ep := deliverRaw(el, execEnterRaw(t, parentComm), payloadExitRaw(t, types.SYS_EXIT_EXECVE, 0))
+	if ep == nil {
+		t.Fatal("the execve pair was not emitted")
+	}
+	ep.Recycle()
+	s.answers <- parentComm
+	waitForCommLookupsToDrain(t, el)
+
+	// The first post-exec use must queue a fresh read, whose answer heals.
+	first := feedNewTaskSyscall(t, el)
+	if first == nil {
+		t.Fatal("the first post-exec row was not emitted")
+	}
+	first.Recycle()
+	s.answerNextRead(t, execComm)
+	waitForCommLookupsToDrain(t, el)
+
+	healed := feedNewTaskSyscall(t, el)
+	if healed == nil {
+		t.Fatal("the row after the post-exec read was not emitted")
+	}
+	defer healed.Recycle()
+	if healed.Comm != execComm {
+		t.Fatalf("row comm after the post-exec read = %q, want %q", healed.Comm, execComm)
 	}
 }

@@ -29,8 +29,11 @@ const resolveCommTimeout = time.Second
 // honest across execve.
 //
 // epoch counts the authoritative kernel-sourced names userspace has installed
-// for the tid - a sched_process_exec control record, a task_rename control
-// record, an open or exec enter's payload comm (setCachedFromKernel). A lookup
+// for the tid - a sched_process_exec or task_rename control record
+// (setCachedFromKernel) and an open or exec enter's payload comm
+// (setCachedFromEnterPayload, which shares the epoch-bumping write but may
+// leave the entry stale). A provisional write (setCachedProvisional) does not
+// count: it is a guess a procfs result is meant to replace. A lookup
 // worker samples it *before* reading /proc and discards its result when the epoch
 // moved on in the meantime: without that guard a worker descheduled between the
 // procfs read and the cache write can overwrite an exact, kernel-reported name
@@ -421,11 +424,16 @@ func (r *commResolver) refreshStaleComm(tid uint32) {
 //
 // Tids are recycled, and nothing else in the cache's write paths reaches an
 // entry whose owner is gone: an entry is only ever overwritten by an
-// authoritative kernel-sourced name (setCachedFromKernel) or by a completed
-// procfs lookup. So without this the next process to be handed the same tid
-// number was labelled with the dead process's comm until it happened to
-// execve() or the entry aged out of the 8192-entry LRU - and on a box churning
-// short-lived processes that reuse is neither rare nor slow.
+// authoritative kernel-sourced name (setCachedFromKernel, or an enter payload
+// through setCachedFromEnterPayload), by a creator's inherited name for a new
+// task (setCachedProvisional, on a task_newtask record) or by a completed
+// procfs lookup. None of them is triggered by the owner's death, and the
+// task_newtask record that would overwrite the entry for the tid's next owner
+// can be lost or its probe missing. So without this the next process to be
+// handed the same tid number was labelled with the dead process's comm until
+// one of those writes happened to reach it (an open, an execve(), a rename) or
+// the entry aged out of the 8192-entry LRU - and on a box churning short-lived
+// processes that reuse is neither rare nor slow.
 //
 // The record fires per *task*, and the comm cache is keyed per task, so
 // evicting exactly ev.Tid is precise rather than degraded: a thread exiting
@@ -599,9 +607,14 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 //
 // A later authoritative write (exec record, task_rename record, open or exec
 // enter payload) bumps the epoch and so still outranks a read that was in
-// flight at that moment. Of those, only the exec enter payload keeps the entry
-// stale (setCachedFromEnterPayload): it names the program that is about to be
-// replaced, so it must not count as the answer the re-read was waiting for.
+// flight at that moment. Of those, only an enter payload can keep the entry
+// stale (setCachedFromEnterPayload), and in two cases: an exec enter always,
+// because it names the program that is about to be replaced and so must not
+// count as the answer the re-read was waiting for, and an open enter whose
+// payload contradicts the cached name (here: the inherited guess), because the
+// payload may predate a sibling's rename. A matching open payload clears the
+// flag, which is fine: it confirms the guess with a name the kernel reported
+// after the task started running.
 func (r *commResolver) setCachedProvisional(tid uint32, comm string) {
 	if comm == "" {
 		return
