@@ -148,8 +148,9 @@ type eventLoop struct {
 	stopDrainBudget time.Duration
 	// stopOnTargetExit arms endTraceOnTargetExit and
 	// endTraceOnTargetThreadExit, the record-based triggers: the -pid
-	// target's group-dead exit record, or the -tid thread's own exit record,
-	// cancels the trace. Set by
+	// target's group-dead exit record, the -tid thread's own exit record (one
+	// not flagged as inherited by an exec'ing sibling), or, for a -tid leader
+	// target, the group-dead record of its process cancels the trace. Set by
 	// runTraceLoop for the headless modes before the loop starts; false (the
 	// zero value) in the TUI and in tests. The liveness watcher
 	// (watchTargetLiveness) does not need it: it is started separately.

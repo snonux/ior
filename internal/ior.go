@@ -832,9 +832,11 @@ func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), l
 	// instead of idling to -duration and later tracing a recycled id; verbose
 	// is true for exactly the headless modes. The TUI keeps its session open
 	// (see eventLoop.endTraceOnTargetExit). Two triggers: the exit records
-	// here (the -pid process's group-dead record, the -tid thread's own exit
-	// record), and the liveness watcher started below for the records that
-	// never arrive (dropped, or the target died during the probe attach).
+	// here (the -pid process's group-dead record; for -tid the thread's own
+	// exit record and, when the target is a leader, the group-dead record of
+	// its process, which ends the run whichever task holds the tid by then),
+	// and the liveness watcher started below for the records that never
+	// arrive (dropped, or the target died during the probe attach).
 	infra.el.stopOnTargetExit = verbose && !targetExitRecordDisabled()
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has

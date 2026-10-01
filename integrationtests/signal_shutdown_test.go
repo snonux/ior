@@ -435,7 +435,8 @@ func TestHeadlessPidRunEndsWhenTargetExits(t *testing.T) {
 // group-dead record and the -tid thread's own exit record (plus a leader
 // target's group-dead record) alike, leaving the liveness watcher as the only
 // thing that can end a run with its target. The "liveness watcher only"
-// subtests of the -pid and -tid tests rely on that.
+// subtests of the -tid tests (tid_target_exit_test.go) and the -pid test
+// TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord rely on that.
 const testDisableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 
 // testDisableTargetWatchEnv is the opposite hook (internal.disableTargetWatchEnv,

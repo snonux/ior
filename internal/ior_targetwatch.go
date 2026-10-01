@@ -234,9 +234,10 @@ func (w *targetWatch) attachTo(infra *traceInfra) {
 // -tid thread's own exit record and a leader target's group-dead record
 // (endTraceOnTargetThreadExit). That way an integration test can prove the
 // liveness watcher alone ends a run (the "liveness watcher only" subtests of
-// the -pid and -tid tests rely on it), which a real lost record or a death
-// during the attach would otherwise be needed for and cannot be forced. It is
-// not documented for users.
+// the -tid tests in tid_target_exit_test.go and the -pid test
+// TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord rely on it), which
+// a real lost record or a death during the attach would otherwise be needed for
+// and cannot be forced. It is not documented for users.
 const disableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 
 // targetExitRecordDisabled reports the test hook above.
