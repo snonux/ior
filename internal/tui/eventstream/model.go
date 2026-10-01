@@ -234,23 +234,43 @@ func (m *Model) Paused() bool {
 }
 
 // HandleKey dispatches keyStr to the active modal or live/paused stream handlers.
-// It reports whether the key was consumed (false means the caller should
-// handle it) and returns a command for any request the stream cannot fulfil
-// itself: it emits messages.GlobalFilterRequestedMsg,
-// messages.GlobalFilterUndoRequestedMsg or messages.OpenEditorRequestedMsg
-// for the parent to act on. The command is nil when the key only changed
-// local stream state.
+// keyStr is one key's name as tea.KeyPressMsg.String spells it; an open modal
+// gets the key press it names (keyMsgFromString) and ignores a string that
+// names no key, rather than typing it. It reports whether the key was
+// consumed (false means the caller should handle it) and returns a command
+// for any request the stream cannot fulfil itself: it emits
+// messages.GlobalFilterRequestedMsg, messages.GlobalFilterUndoRequestedMsg
+// or messages.OpenEditorRequestedMsg for the parent to act on. The command
+// is nil when the key only changed local stream state.
 func (m *Model) HandleKey(keyStr string) (bool, tea.Cmd) {
-	if m.searchModal.Visible() {
-		return m.handleSearchModalKey(keyStr), nil
-	}
-	if m.exportModal.Visible() {
-		return m.handleExportModalKey(keyStr), nil
+	if m.inputModalVisible() {
+		msg, ok := keyMsgFromString(keyStr)
+		if !ok {
+			// The modal owns the keyboard, so the unknown name is
+			// consumed, not passed on as a dashboard shortcut.
+			return true, nil
+		}
+		return m.handleModalKey(msg), nil
 	}
 	if m.fdTraceView.visible {
 		return m.handleFDTraceKey(keyStr), nil
 	}
 	return m.handleStreamKey(keyStr)
+}
+
+// inputModalVisible reports whether the search or export-filename modal is open
+// and owns the keyboard.
+func (m *Model) inputModalVisible() bool {
+	return m.searchModal.Visible() || m.exportModal.Visible()
+}
+
+// handleModalKey hands msg to the open search or export modal and reports
+// that it was consumed: a modal takes every key.
+func (m *Model) handleModalKey(msg tea.KeyPressMsg) bool {
+	if m.searchModal.Visible() {
+		return m.handleSearchModalKey(msg)
+	}
+	return m.handleExportModalKey(msg)
 }
 
 // HandlePaste inserts bracketed-paste text into the search or export-filename
@@ -273,13 +293,13 @@ func (m *Model) HandlePaste(msg tea.PasteMsg) bool {
 }
 
 // handleSearchModalKey routes a key press while the search modal is open.
-func (m *Model) handleSearchModalKey(keyStr string) bool {
+func (m *Model) handleSearchModalKey(msg tea.KeyPressMsg) bool {
 	m.statusMessage = ""
 	var (
 		term   string
 		submit bool
 	)
-	m.searchModal, term, submit = m.searchModal.Update(keyMsgFromString(keyStr))
+	m.searchModal, term, submit = m.searchModal.Update(msg)
 	if !submit {
 		return true
 	}
@@ -287,13 +307,13 @@ func (m *Model) handleSearchModalKey(keyStr string) bool {
 }
 
 // handleExportModalKey routes a key press while the export modal is open.
-func (m *Model) handleExportModalKey(keyStr string) bool {
+func (m *Model) handleExportModalKey(msg tea.KeyPressMsg) bool {
 	m.statusMessage = ""
 	var (
 		filename string
 		submit   bool
 	)
-	m.exportModal, filename, submit = m.exportModal.Update(keyMsgFromString(keyStr))
+	m.exportModal, filename, submit = m.exportModal.Update(msg)
 	if !submit {
 		return true
 	}
@@ -512,21 +532,25 @@ func (m *Model) handleDirectionalKey(keyStr string) bool {
 	if m.paused {
 		return m.handlePausedTableNavigation(keyStr)
 	}
-	// Map multi-word key names to canonical viewport key strings.
-	vpKey := keyStr
-	switch keyStr {
-	case "pgdown", "pgdn", "pagedown":
-		vpKey = "pgdown"
-	case "pgup", "pageup":
-		vpKey = "pgup"
-	}
-	return m.handleViewportUpdate(keyMsgFromString(vpKey))
+	// keyMsgFromString maps the page-key aliases (pgdn, pagedown, pageup)
+	// to the page keys themselves, which handleViewportUpdate matches.
+	msg, ok := keyMsgFromString(keyStr)
+	return ok && m.handleViewportUpdate(msg)
 }
 
 // HandleTeaKey handles stream keys based on Bubble Tea key message types first,
 // then falls back to string matching for rune-driven shortcuts. Its results
 // have the same meaning as HandleKey's.
+//
+// An open search or export modal gets msg itself, not its name: its bubbles
+// textinput then sees every editing key as the key it is (Ctrl+A/E/K/U/W/H,
+// Alt+B/F, Home/End, Ctrl+Left/Right, ...) and types only the press's text,
+// so a key it does not bind, such as Ctrl+X, types nothing. Round-tripping
+// through HandleKey's name typed "ctrl+x" into the input (task 9z2).
 func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.inputModalVisible() {
+		return m.handleModalKey(msg), nil
+	}
 	if m.handleViewportUpdate(msg) {
 		return true, nil
 	}
@@ -1131,28 +1155,6 @@ func (m *Model) clampSelection() {
 		return
 	}
 	m.selectedIdx = clamp(m.selectedIdx, 0, len(m.filtered)-1)
-}
-
-func keyMsgFromString(keyStr string) tea.KeyPressMsg {
-	switch keyStr {
-	case "esc":
-		return tea.KeyPressMsg{Code: tea.KeyEsc}
-	case "enter":
-		return tea.KeyPressMsg{Code: tea.KeyEnter}
-	case "tab":
-		return tea.KeyPressMsg{Code: tea.KeyTab}
-	case "up":
-		return tea.KeyPressMsg{Code: tea.KeyUp}
-	case "down":
-		return tea.KeyPressMsg{Code: tea.KeyDown}
-	case " ", "space":
-		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
-	}
-	if keyStr == "" {
-		return tea.KeyPressMsg{}
-	}
-	runes := []rune(keyStr)
-	return tea.KeyPressMsg{Code: runes[0], Text: keyStr}
 }
 
 func rowNumber(start, total int) int {

@@ -82,6 +82,8 @@ func (m ExportModal) Reject(filename string, err error) ExportModal {
 }
 
 // Update returns updated modal, submitted filename, and whether submit occurred.
+// Every other message goes to the text input, an Alt+D on the last rune as
+// Delete (guardDeleteWordForward: bubbles' delete-word-forward panics there).
 //
 // An error (the empty-name message here, or the reason a Reject gave) stays
 // until the user edits the text: it describes the name that was submitted, so
@@ -106,7 +108,7 @@ func (m ExportModal) Update(msg tea.Msg) (ExportModal, string, bool) {
 	}
 	before := m.textInput.Value()
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textInput, cmd = m.textInput.Update(guardDeleteWordForward(m.textInput, msg))
 	_ = cmd
 	// Keep the window the user saw unless the edit moved the cursor out of
 	// it (fitModalInput), at the width the last Resize stored.

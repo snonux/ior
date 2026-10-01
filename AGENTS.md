@@ -819,6 +819,22 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   display is made safe.
   A new text input must accept `tea.PasteMsg` as well as keys.
   Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
+
+  **The stream search/export modals get the real key press** (task 9z2).
+  `eventstream.Model.HandleTeaKey` hands an open modal the `tea.KeyPressMsg`
+  itself, so its `textinput` sees Ctrl+A/E/B/F/H/D/K/U/W, Alt+B/F/Backspace,
+  Home/End and Ctrl+Left/Right as keys and types only the press's `Text`
+  (Ctrl+X types nothing; composed multi-rune text goes in whole). The old route
+  went through `HandleKey(msg.String())`, whose `keyMsgFromString` knew six names
+  and typed every other one ("ctrl+x") into the input. `HandleKey(name)` stays
+  for name-driven callers and tests: `keyMsgFromString` (`modalkeys.go`) now maps
+  every named key with modifier prefixes and reports a string that names no key
+  (`f13`, `abc`), which an open modal consumes and ignores. Since the modals now
+  receive the real Alt+D/Alt+Delete, their `Update` turns it into Delete when the
+  cursor is on the last rune (`guardDeleteWordForward`): bubbles v2.0.0
+  `deleteWordForward` panics there (the other textinputs are task kz2). Pinned
+  by `eventstream/modalkeys_test.go` (both modals, both entry points) and
+  `dashboard/streammodalkeys_test.go` (end to end through `dashboard.Update`).
 - **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).
   `eventstream.Model.FDTraceVisible` joins `ExportModalVisible`/`SearchModalVisible` in the
   Stream tab's `BlocksGlobalShortcut`, so `q` (and `ctrl+c`) is re-routed as Esc and closes
