@@ -1209,16 +1209,18 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   the copy is a snapshot of the table, what the parent closes or reopens after
   the fork does not reach the child). **The copy is bounded**: a parent tracking more than
   `maxInheritedEntries` (128) fd-table plus cache entries passes none on, and a
-  copy that would not fit under the table cap is skipped too (the child then
-  resolves through procfs, as before gr2; `fdTracker.inheritSkipped` counts
-  them, together with the same skip when an exec or `CLOSE_RANGE_UNSHARE` leaves a
-  shared table (`copyTable`), and a non-zero count is printed in the end-of-run
-  `Statistics:` block as `fd-table copies skipped: N (source table over 128
-  entries or fd table full; descriptors resolved through procfs)`, hidden at 0 like
-  `rows lost`/`records discarded at stop` (task ss2,
-  `eventLoop.fdCopySkipStatLine`, `internal/eventloop_fdcopyskip_stats_test.go`);
-  it explains rows of a child that show the procfs spelling of an inherited
-  descriptor). Reason: the copy is O(entries) per fork on
+  copy that would not fit in ior's own tracker maps (`filesLimit`/`cacheLimit`,
+  `inheritFits`; not the traced process's fd table) is skipped too (the child
+  then resolves through procfs, as before gr2; `fdTracker.inheritSkipped`
+  counts them, together with the same skip when an exec or
+  `CLOSE_RANGE_UNSHARE` leaves a shared table (`copyTable`), and a non-zero
+  count is printed in the end-of-run `Statistics:` block as `fd-table copies
+  skipped: N (source table over 128 entries or no room in ior's fd tracker;
+  descriptors resolved through procfs)`, hidden at 0 like `rows lost`/`records
+  discarded at stop` (task ss2, `eventLoop.fdCopySkipStatLine`,
+  `internal/eventloop_fdcopyskip_stats_test.go`); it explains rows of a child
+  that show the procfs spelling of an inherited descriptor). Reason: the copy
+  is O(entries) per fork on
   the one event-loop goroutine plus the same again at the child's exit
   (`BenchmarkForkStorm`: 1.2 us for 8 entries, 11 us for 64, 28 us for 128, and
   0.27 ms for 1024, 3.7-7.8 ms for 8192 before the cap, i.e. half a core for a

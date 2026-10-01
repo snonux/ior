@@ -41,7 +41,7 @@ func TestStatsReportsSkippedFdTableCopies(t *testing.T) {
 
 	stats := finishedStats(t, el)
 	want := fdCopySkipStatPrefix + "2 (source table over " +
-		strconv.Itoa(maxInheritedEntries) + " entries or fd table full; descriptors resolved through procfs)\n"
+		strconv.Itoa(maxInheritedEntries) + " entries or no room in ior's fd tracker; descriptors resolved through procfs)\n"
 	if !strings.Contains(stats, want) {
 		t.Fatalf("stats lack the skipped-copy line %q:\n%s", want, stats)
 	}

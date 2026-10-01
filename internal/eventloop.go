@@ -390,11 +390,16 @@ func (e *eventLoop) outputLossStatLine() string {
 
 // fdCopySkipStatLine reports the fd-table copies the tracker skipped
 // (fdTracker.inheritSkipped): forks, and execs/CLOSE_RANGE_UNSHARE leaving a
-// shared table, whose source table held more than maxInheritedEntries entries
-// or whose copy would not fit under the table cap. Those processes start with
-// an empty tracked table and resolve their inherited descriptors through
-// procfs, so their rows may show the procfs spelling (pipe:[N]) or E:name
-// instead of the tracked name; the line explains such rows. Like the other
+// shared table, whose source table held more than maxInheritedEntries
+// fd-table plus procfs-cache entries, or whose copy would not fit in ior's own
+// tracker maps (the files and procfs-cache maps would exceed filesLimit or
+// cacheLimit; see inheritFits). That second reason is about ior's bounded
+// bookkeeping, not the traced process's fd table or RLIMIT_NOFILE, so the line
+// says "no room in ior's fd tracker" rather than "fd table full". Those
+// processes start with an empty tracked table and resolve their inherited
+// descriptors through procfs, so their rows may show the procfs spelling
+// (pipe:[N]) or E:name instead of the tracked name; the line explains such
+// rows. Like the other
 // conditional lines it is empty when nothing was skipped, the common case.
 // stats() reads the counter only after e.done is closed, so the event-loop
 // goroutine that writes it has finished.
@@ -404,7 +409,7 @@ func (e *eventLoop) fdCopySkipStatLine() string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"\tfd-table copies skipped: %d (source table over %d entries or fd table full; descriptors resolved through procfs)\n",
+		"\tfd-table copies skipped: %d (source table over %d entries or no room in ior's fd tracker; descriptors resolved through procfs)\n",
 		skipped, maxInheritedEntries,
 	)
 }
