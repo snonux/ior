@@ -60,12 +60,13 @@ func appendText(dst []byte, s string, text func(string) string) []byte {
 // FdFile represents a file descriptor-backed file reference.
 //
 // The kernel splits what a descriptor knows into two layers, and FdFile
-// mirrors the split (task nr2): the status word (access mode, O_APPEND/
-// O_NONBLOCK/... and, as open() reported them until F_GETFL replaces the word
-// with the kernel's, O_CREAT/O_TRUNC/...) lives in the open file description, which every
-// duplicate of the descriptor (dup, dup2, dup3, F_DUPFD, and the copy a fork
-// inherits) shares through desc; FD_CLOEXEC belongs to the descriptor alone
-// and stays in the FdFile. Name and number are per descriptor too: the number
+// mirrors the split (task nr2): the status word lives in the open file
+// description, which every duplicate of the descriptor (dup, dup2, dup3,
+// F_DUPFD, and the copy a fork inherits) shares through desc. The word holds
+// the access mode and O_APPEND/O_NONBLOCK/... and, as open() reported them
+// until F_GETFL replaces the word with the kernel's, the open-only flags
+// O_CREAT/O_TRUNC/.... FD_CLOEXEC belongs to the descriptor alone and stays
+// in the FdFile. Name and number are per descriptor too: the number
 // is the table slot, and the name is what that slot was opened (or last
 // resolved) as. See fdfile_desc.go for the sharing operations.
 type FdFile struct {

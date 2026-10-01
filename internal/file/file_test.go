@@ -176,10 +176,10 @@ func TestFdFileMergeFlags(t *testing.T) {
 	}{
 		{
 			// The real caller's shape: F_GETFL, OR in a bit, F_SETFL. The
-			// access mode and the creation flags must come through untouched;
+			// access mode and the open-only flags must come through untouched;
 			// replacing the word instead of merging it left O_NONBLOCK alone
 			// and reported the descriptor as O_RDONLY from here on.
-			name:  "settable bit added, access mode and creation flags kept",
+			name:  "settable bit added, access mode and open-only flags kept",
 			start: syscall.O_RDWR | syscall.O_CREAT,
 			arg:   syscall.O_RDWR | syscall.O_NONBLOCK,
 			want:  Flags(syscall.O_RDWR | syscall.O_CREAT | syscall.O_NONBLOCK),
