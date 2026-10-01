@@ -208,8 +208,11 @@ func truncateLeftProbe(s string, cut int) string {
 // result is re-measured with StringWidth, the same measure every caller uses,
 // and the Truncate budget is lowered until the prefix really fits.
 //
-// Truncate's prefix grows monotonically with its budget and so does its real
-// width, hence the largest fitting budget yields the longest fitting prefix.
+// For well-formed text Truncate's prefix grows monotonically with its budget
+// and so does its real width, hence the largest fitting budget yields the
+// longest fitting prefix. Malformed sequences (orphan modifiers, wrong-order
+// keycap selectors) can make the library split a cluster non-monotonically;
+// the result then still fits the budget but may be shorter than the longest.
 // The budget is never above width (a prefix's real width is at least what
 // Truncate counted), and budget 0 yields "", so the largest fitting budget is
 // found by binary search over [0, width]. A walk down from width, one cell at
@@ -241,8 +244,10 @@ func graphemePrefix(s string, width int) string {
 // keepRight returns the longest suffix of s (total cells wide) that is at
 // most width cells wide. ansi.TruncateLeft removes n cells but has two
 // quirks, so its result is re-measured with StringWidth and the cut adjusted
-// in both directions. The suffix width only ever shrinks as the cut grows, so
-// the smallest fitting cut is the longest suffix:
+// in both directions. For well-formed clusters the suffix width only ever
+// shrinks as the cut grows, so the smallest fitting cut is the longest suffix
+// (for malformed input the result still fits but may be shorter, see
+// graphemePrefix):
 //
 //   - it keeps a wide rune that straddles the cut, which leaves the result
 //     one cell too wide, so the cut is widened until the suffix fits (at most
@@ -289,7 +294,8 @@ func narrowCut(s, kept string, cut, width int) string {
 		return kept
 	}
 	kept = longer
-	// Invariant: cut hi fits (kept is its suffix), cut lo-1 may or may not.
+	// Invariant: cut hi fits (kept is its suffix) and no cut below lo fits
+	// (vacuous while lo is 0).
 	lo, hi := 0, cut-1
 	for lo < hi {
 		mid := lo + (hi-lo)/2

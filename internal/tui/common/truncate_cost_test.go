@@ -29,6 +29,8 @@ func keycapPath(n int) string {
 const cutProbeBudget = 40
 
 // countCutProbes runs f and returns how many full-string cuts it made.
+// It sets the package-global cutProbeHook, so tests that call it must not use
+// t.Parallel (the hook would race).
 func countCutProbes(t *testing.T, f func()) int {
 	t.Helper()
 	n := 0
