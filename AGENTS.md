@@ -823,19 +823,27 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
 
   **The stream search/export modals get the real key press** (task 9z2).
   `eventstream.Model.HandleTeaKey` hands an open modal the `tea.KeyPressMsg`
-  itself, so its `textinput` sees Ctrl+A/E/B/F/H/D/K/U/W, Alt+B/F/Backspace,
-  Home/End and Ctrl+Left/Right as keys and types only the press's `Text`
-  (Ctrl+X types nothing; composed multi-rune text goes in whole). The old route
-  went through `HandleKey(msg.String())`, whose `keyMsgFromString` knew six names
-  and typed every other one ("ctrl+x") into the input. `HandleKey(name)` stays
-  for name-driven callers and tests: `keyMsgFromString` (`modalkeys.go`) now maps
-  every named key with modifier prefixes and reports a string that names no key
-  (`f13`, `abc`), which an open modal consumes and ignores. Since the modals now
-  receive the real Alt+D/Alt+Delete, their `Update` turns it into Delete when the
-  cursor is on the last rune (`guardDeleteWordForward`): bubbles v2.0.0
-  `deleteWordForward` panics there (the other textinputs are task kz2). Pinned
-  by `eventstream/modalkeys_test.go` (both modals, both entry points) and
-  `dashboard/streammodalkeys_test.go` (end to end through `dashboard.Update`).
+  itself instead of round-tripping it through its name, and the `textinput`
+  types only the press's `Text`. The old route went through `HandleKey(name)`,
+  whose `keyMsgFromString` knew six names and made every other one a press
+  with `Text` set to the name. Bound names (Ctrl+A/E/B/F/H/D/K/U/W, Home/End,
+  Alt+B/F/D/Backspace/Delete, Ctrl+V) still acted as keys that way, because
+  bubbles' `key.Matches` compares `msg.String()`, which returns the `Text`.
+  What changed: unbound keys (Ctrl+X, Alt+X, Insert, PgUp, Shift+Tab) are no
+  longer typed as their names, and Ctrl/Alt+Left/Right now move by word
+  (`HandleTeaKey`'s switch used to send them to `HandleKey("left"/"right")`,
+  dropping the modifier). `HandleKey(name)` stays for name-driven callers and
+  tests: `keyMsgFromString` (`modalkeys.go`) maps the fifteen named keys the
+  stream uses plus the `pgdn`/`pagedown`/`pageup` aliases, with modifier
+  prefixes, and reports anything else (`f13`, which it leaves out, or `abc`)
+  as no key, which an open modal consumes and ignores. Alt+D/Alt+Delete on the
+  last rune already panicked in both modals before task 9z2 (bubbles v2.0.0
+  `deleteWordForward` indexes past the value); their `Update` now turns it
+  into Delete there (`guardDeleteWordForward`; the other textinputs are task
+  kz2). Pinned by `eventstream/modalkeys_test.go` (both modals, both entry
+  points; comments mark which cases pin changed behaviour) and
+  `dashboard/streammodalkeys_test.go` (end to end through `dashboard.Update`
+  with presses built as Bubble Tea delivers them).
 - **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).
   `eventstream.Model.FDTraceVisible` joins `ExportModalVisible`/`SearchModalVisible` in the
   Stream tab's `BlocksGlobalShortcut`, so `q` (and `ctrl+c`) is re-routed as Esc and closes
