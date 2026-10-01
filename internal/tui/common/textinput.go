@@ -3,6 +3,8 @@ package common
 import (
 	"unicode/utf8"
 
+	"github.com/rivo/uniseg"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -17,7 +19,59 @@ func UpdateTextInput(ti textinput.Model, msg tea.Msg) (textinput.Model, tea.Cmd)
 	if isClipboardPaste(ti, msg) {
 		return ti, nil
 	}
-	return ti.Update(guardDeleteWordForward(ti, msg))
+	before := ti.Position()
+	ti, cmd := ti.Update(guardDeleteWordForward(ti, msg))
+	snapCursorToGrapheme(&ti, before)
+	return ti, cmd
+}
+
+// snapCursorToGrapheme keeps the cursor on a grapheme boundary (task pz2).
+// bubbles moves and edits by rune, so Left/Right can leave the cursor between
+// a base rune and its variation selector, ZWJ continuation or combining mark
+// (the heart + U+FE0F emoji, a flag's two regional indicators). The cursor is
+// then drawn over the lone continuation rune, which renders as a stray mark
+// glued to the previous cell and which the terminal and ansi/lipgloss measure
+// one cell wider than bubbles' per-rune width, so the input line outgrew its
+// box. A cursor that landed inside a cluster is moved to its edge in the
+// direction it was travelling (before is where it started): Left to the
+// cluster's start, Right to its end, so one key press still crosses exactly
+// one grapheme.
+func snapCursorToGrapheme(ti *textinput.Model, before int) {
+	value, pos := []rune(ti.Value()), ti.Position()
+	if pos <= 0 || pos >= len(value) {
+		return
+	}
+	lower, upper := graphemeEdges(value, pos)
+	switch {
+	case pos == lower:
+	case pos < before:
+		ti.SetCursor(lower)
+	default:
+		ti.SetCursor(upper)
+	}
+}
+
+// graphemeEdges returns the rune indexes of the grapheme boundaries around
+// pos: the greatest boundary at or before it and the least at or after it (both
+// equal pos when pos is itself a boundary).
+func graphemeEdges(value []rune, pos int) (lower, upper int) {
+	lower, upper = 0, len(value)
+	offset := 0
+	graphemes := uniseg.NewGraphemes(string(value))
+	for graphemes.Next() {
+		if offset <= pos {
+			lower = offset
+		}
+		if offset >= pos {
+			upper = offset
+			break
+		}
+		offset += len(graphemes.Runes())
+	}
+	if lower == pos {
+		upper = pos
+	}
+	return lower, upper
 }
 
 // isClipboardPaste reports whether msg is the textinput's own paste key

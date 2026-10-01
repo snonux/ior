@@ -276,3 +276,33 @@ func TestStreamModelSizesTheModalInputs(t *testing.T) {
 		t.Fatalf("search input width %d after View(52), want %d", got, want)
 	}
 }
+
+// TestStreamModalInputFitsWithMultiCodePointEmoji (task pz2): values made of
+// flags, heart + U+FE0F and combining sequences, walked with Left across every
+// cursor position at widths 7..60 and several heights, never draw a line wider
+// than the view, measured the way the frame contract does (lipgloss.Width and
+// ansi.StringWidth). The cursor never rests inside a grapheme
+// (common.UpdateTextInput), so it is not drawn over a lone variation selector.
+func TestStreamModalInputFitsWithMultiCodePointEmoji(t *testing.T) {
+	values := []string{
+		strings.Repeat("\U0001F1E9\U0001F1EA", 6),
+		strings.Repeat("❤️", 10),
+		"a❤️b❤️c❤️d❤️e❤️f",
+		strings.Repeat("é", 8),
+	}
+	for _, val := range values {
+		for width := 7; width <= 60; width++ {
+			for _, height := range []int{5, 8, 12} {
+				m := NewSearchModal().Open(SearchForward, val)
+				for step := 0; step < 14; step++ {
+					for i, line := range strings.Split(m.View(width, height), "\n") {
+						if w, aw := lipgloss.Width(line), ansi.StringWidth(line); w > width || aw > width {
+							t.Fatalf("value %q %dx%d after %d Left presses: line %d is %d/%d cells wide: %q", val, width, height, step, i, w, aw, ansi.Strip(line))
+						}
+					}
+					m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+				}
+			}
+		}
+	}
+}

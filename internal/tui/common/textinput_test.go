@@ -126,3 +126,47 @@ func TestUpdateTextInputSwallowsTheClipboardPasteKey(t *testing.T) {
 		t.Fatalf("typing gave %q, want abcz", typed.Value())
 	}
 }
+
+// TestUpdateTextInputKeepsTheCursorOnGraphemeBoundaries (task pz2): bubbles
+// moves by rune, which parks the cursor between an emoji and its U+FE0F or
+// between the two regional indicators of a flag; the cursor is then drawn over
+// a lone continuation rune. Left and Right must cross exactly one grapheme and
+// never stop inside one.
+func TestUpdateTextInputKeepsTheCursorOnGraphemeBoundaries(t *testing.T) {
+	const heart, flag = "❤️", "\U0001F1E9\U0001F1EA"
+	left, right := tea.KeyPressMsg{Code: tea.KeyLeft}, tea.KeyPressMsg{Code: tea.KeyRight}
+	tests := []struct {
+		name  string
+		value string
+		start int // cursor in runes
+		key   tea.KeyPressMsg
+		want  int
+	}{
+		{"left over a heart", "a" + heart + "b", 3, left, 1},
+		{"right over a heart", "a" + heart + "b", 1, right, 3},
+		{"left over a flag", "x" + flag + "y", 3, left, 1},
+		{"right over a flag", "x" + flag + "y", 1, right, 3},
+		{"left over ASCII still moves one rune", "abc", 2, left, 1},
+		{"right over a combining accent", "éz", 0, right, 2},
+		{"left from the end over a heart", heart, 2, left, 0},
+		{"right at the end stays", "a" + heart, 3, right, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := UpdateTextInput(focusedInput(tc.value, tc.start), tc.key)
+			if got.Position() != tc.want {
+				t.Fatalf("cursor at %d, want %d", got.Position(), tc.want)
+			}
+		})
+	}
+}
+
+// Typing keeps working next to a cluster: the cursor ends after the typed
+// rune, which is a boundary.
+func TestUpdateTextInputTypingAfterAClusterStillAdvancesOneRune(t *testing.T) {
+	ti := focusedInput("❤️", 2)
+	got, _ := UpdateTextInput(ti, tea.KeyPressMsg{Code: 'z', Text: "z"})
+	if got.Value() != "❤️z" || got.Position() != 3 {
+		t.Fatalf("value %q pos %d, want the typed rune after the heart at 3", got.Value(), got.Position())
+	}
+}
