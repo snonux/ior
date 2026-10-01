@@ -122,7 +122,7 @@ change still hold `N:file` as a real path frame (no format version bump; the for
 
 Files are written to a temporary `ior-<random>.tmp` file and renamed into place when
 complete. Names ior generates itself (`ior-stream-<timestamp>.csv`,
-`ior-recording-<timestamp>.parquet`, `ior-snapshot-<timestamp>.csv`, and the
+`ior-recording-<timestamp>.parquet`, and the
 `<host>-<name>-<timestamp>.ior.zst` flamegraph record) are only accurate to the second and are
 never overwritten: if the name is taken, ior writes `<name>-1.<ext>` (then `-2`, ...) and
 prints or shows the path it really used (a very long name is shortened to fit the 255-byte
