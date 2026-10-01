@@ -13,15 +13,26 @@
 //
 // What is matched is a function name, not a goroutine instance: the dump
 // cannot say "the goroutine this test started". Two filters narrow it down.
-// Only goroutines whose "created by ... in goroutine N" line names the
+// Only goroutines whose own "created by ... in goroutine N" line names the
 // goroutine calling Count/Run are counted, so a goroutine leaked by another
-// test (started by that test's goroutine) never satisfies the wait; this
-// requires the test goroutine to start the waited-for goroutine itself with a
-// go statement and to call Count and Run itself. The Baseline then excludes
-// goroutines of the same test goroutine that were already parked there before
-// the waited-for one was started. What remains unfiltered is a second
-// goroutine the same test goroutine started into the same frame after the
-// baseline: the test controls that, and must not do it.
+// test (started by that test's goroutine) never satisfies the wait. The
+// creator is whichever goroutine executed the go statement, so the test
+// goroutine must start the waited-for goroutine on itself: a go statement in
+// the test function, or in a helper or library call made synchronously on the
+// test goroutine (errgroup.Go called on it, for instance), all qualify; a
+// goroutine started from inside another goroutine does not, and a wait for it
+// times out, naming how many goroutines parked in the frame it ignored as
+// started elsewhere. Count and Run must likewise be called on the test
+// goroutine itself. The Baseline then excludes goroutines of the same test
+// goroutine that were already parked there when it was taken.
+//
+// Two cases remain unfiltered, and the test controls both, so it must avoid
+// them: a second goroutine the same test goroutine starts into the same frame
+// after the baseline, and a goroutine it started before the baseline that had
+// not parked in the frame yet when the baseline was taken (the baseline does
+// not count it, so once it parks there it satisfies the wait just as the
+// intended goroutine would). Take the baseline only once every earlier
+// goroutine of the test that can reach the frame is parked there or finished.
 //
 // It is a non-test package only because _test.go helpers cannot be shared
 // across packages; nothing outside tests should import it.
@@ -62,36 +73,71 @@ const pollInterval = 200 * time.Microsecond
 
 // Count returns how many goroutines started by the calling goroutine are
 // currently parked with one of the given wait reasons and have frame (a
-// substring such as "(*aggregateDrainer).SwapFilter") somewhere in their
-// stack. Goroutines started by any other goroutine are ignored (see the
+// substring such as "(*aggregateDrainer).SwapFilter") in their own stack: the
+// function and file:line lines between the goroutine's header and its
+// "created by" line. The "created by" line itself (which names the creating
+// function) and, under GODEBUG=tracebackancestors, the ancestor stacks below
+// it are not searched, so a goroutine merely started from inside frame does
+// not count. Goroutines started by any other goroutine are ignored (see the
 // package doc), so call it from the goroutine that starts the waiter.
 func Count(frame string, reasons ...string) int {
 	return countCreatedBy(createdBySuffix(), frame, reasons)
 }
 
-// countCreatedBy counts the goroutines in a full dump whose header carries one
-// of reasons, whose stack contains frame and whose creation line ends with
-// creator (see createdBySuffix).
+// countCreatedBy counts the goroutines in a full dump that are parked in frame
+// with one of reasons and were created by creator (see createdBySuffix).
 func countCreatedBy(creator, frame string, reasons []string) int {
-	count := 0
-	for _, g := range strings.Split(string(dumpAll()), "\n\n") {
-		header, _, _ := strings.Cut(g, "\n")
-		if hasAny(header, reasons) && strings.Contains(g, frame) && strings.Contains(g, creator) {
-			count++
+	mine, _ := countParked(dumpAll(), creator, frame, reasons)
+	return mine
+}
+
+// countParked splits a full goroutine dump into per-goroutine blocks and
+// counts those parked in frame with one of reasons (see parkedIn): mine were
+// created by creator, others by any other goroutine. A goroutine without a
+// "created by" line (the main goroutine) is in neither count.
+func countParked(dump []byte, creator, frame string, reasons []string) (mine, others int) {
+	for _, g := range strings.Split(string(dump), "\n\n") {
+		createdBy, ok := parkedIn(g, frame, reasons)
+		switch {
+		case !ok:
+		case strings.HasSuffix(createdBy, creator):
+			mine++
+		default:
+			others++
 		}
 	}
-	return count
+	return mine, others
+}
+
+// parkedIn reports whether the goroutine dump block g has one of reasons in
+// its header and frame in its own stack, and returns its "created by" line
+// (without the trailing newline) for the creator check. The own stack ends at
+// that line: what follows is the creation site and, with tracebackancestors,
+// "[originating from goroutine N]:" ancestor stacks, neither of which says
+// where this goroutine is parked.
+func parkedIn(g, frame string, reasons []string) (createdBy string, ok bool) {
+	header, rest, _ := strings.Cut(g, "\n")
+	if !hasAny(header, reasons) {
+		return "", false
+	}
+	stack, created, found := strings.Cut(rest, "\ncreated by ")
+	if !found || !strings.Contains(stack, frame) {
+		return "", false
+	}
+	createdBy, _, _ = strings.Cut(created, "\n")
+	return "created by " + createdBy, true
 }
 
 // createdBySuffix returns the tail of the "created by <func> in goroutine N"
 // line that every goroutine started by the calling goroutine carries in a
-// dump. The trailing newline (the creation site's file:line follows on the
-// next line) keeps goroutine 35 from matching goroutine 350.
+// dump. countParked matches it as a suffix of that one line, which keeps
+// goroutine 35 from matching goroutine 350 (and the ancestor lines below it
+// out of the comparison).
 func createdBySuffix() string {
 	buf := make([]byte, 64)
 	buf = buf[:runtime.Stack(buf, false)] // "goroutine 35 [running]:\n..."
 	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf), "goroutine "), " ")
-	return " in goroutine " + id + "\n"
+	return " in goroutine " + id
 }
 
 // dumpAll returns the stacks of all goroutines, growing the buffer until the
@@ -119,7 +165,8 @@ func hasAny(s string, subs []string) bool {
 // Await describes one wait: until more than Baseline goroutines started by
 // the goroutine calling Run are parked with one of Reasons inside Frame. Take
 // Baseline from Count, on that same goroutine, before starting the waited-for
-// goroutine, so goroutines parked there earlier do not satisfy the wait.
+// goroutine, so goroutines parked there earlier do not satisfy the wait (the
+// package doc lists the goroutines a baseline cannot exclude).
 type Await struct {
 	Frame    string
 	Reasons  []string
@@ -147,14 +194,18 @@ func (a Await) Run(tb testing.TB) {
 	}
 	creator := createdBySuffix()
 	deadline := time.Now().Add(timeout)
-	for countCreatedBy(creator, a.Frame, a.Reasons) <= a.Baseline {
+	for {
+		mine, others := countParked(dumpAll(), creator, a.Frame, a.Reasons)
+		if mine > a.Baseline {
+			return
+		}
 		select {
 		case <-a.Done: // a nil Done blocks forever, so this case never fires
 			tb.Fatal(a.doneMsg())
 		default:
 		}
 		if time.Now().After(deadline) {
-			tb.Fatal(a.timeoutMsg(timeout))
+			tb.Fatal(a.timeoutMsg(timeout, others))
 		}
 		runtime.Gosched()
 		time.Sleep(pollInterval) // poll interval, not a synchronisation guess
@@ -171,9 +222,17 @@ func (a Await) doneMsg() string {
 }
 
 // timeoutMsg is TimeoutMsg followed by what was waited for; without a
-// TimeoutMsg the detail stands alone.
-func (a Await) timeoutMsg(timeout time.Duration) string {
-	detail := fmt.Sprintf("no goroutine parked in %s with reason %v after %v", a.Frame, a.Reasons, timeout)
+// TimeoutMsg the detail stands alone. ignored is how many goroutines were
+// parked in the frame with a matching reason on the last poll but were
+// started by another goroutine than the caller of Run: naming them keeps a
+// waiter started from the wrong goroutine (which the creator filter rightly
+// rejects) from reading as "nothing parked there".
+func (a Await) timeoutMsg(timeout time.Duration, ignored int) string {
+	detail := fmt.Sprintf("no goroutine started by the calling goroutine parked in %s with reason %v beyond the baseline %d after %v",
+		a.Frame, a.Reasons, a.Baseline, timeout)
+	if ignored > 0 {
+		detail += fmt.Sprintf("; %d goroutine(s) parked in %s were started by other goroutines and are ignored", ignored, a.Frame)
+	}
 	if a.TimeoutMsg == "" {
 		return detail
 	}

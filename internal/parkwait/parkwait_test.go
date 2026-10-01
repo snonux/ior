@@ -125,10 +125,13 @@ func TestAwaitRunFailsWithTimeoutMsg(t *testing.T) {
 	if !tb.failed {
 		t.Fatal("Run returned although nothing parked on a lock")
 	}
-	for _, want := range []string{"never parked (", "no goroutine parked in parkwait.waitOnChannel", "after 20ms"} {
+	for _, want := range []string{"never parked (", "no goroutine started by the calling goroutine parked in parkwait.waitOnChannel", "after 20ms"} {
 		if !strings.Contains(tb.msg, want) {
 			t.Errorf("failure %q does not contain %q", tb.msg, want)
 		}
+	}
+	if strings.Contains(tb.msg, "ignored") {
+		t.Errorf("failure %q mentions ignored goroutines although none parked in the frame", tb.msg)
 	}
 }
 
@@ -221,5 +224,89 @@ func TestCountIgnoresGoroutinesStartedElsewhere(t *testing.T) {
 	})
 	if !tb.failed {
 		t.Fatal("Run was satisfied by a goroutine another goroutine started")
+	}
+	// The failure must not claim nothing was parked there: it names the
+	// creator filter and how many parked goroutines it excluded.
+	want := "1 goroutine(s) parked in parkwait.readUnderLock were started by other goroutines and are ignored"
+	if !strings.Contains(tb.msg, want) {
+		t.Fatalf("failure %q does not contain %q", tb.msg, want)
+	}
+}
+
+// fakeDump mirrors a real runtime.Stack(all=true) dump (go1.21+ format, with
+// GODEBUG=tracebackancestors ancestor sections), one goroutine per block.
+// Every block but goroutine 1 is parked with sync.RWMutex.RLock.
+const fakeDump = `goroutine 1 [sync.RWMutex.RLock]:
+main.target()
+	/src/main.go:5 +0x10
+
+goroutine 40 [sync.RWMutex.RLock]:
+sync.(*RWMutex).RLock(...)
+	/go/src/sync/rwmutex.go:74
+main.target(0xc000010000)
+	/src/main.go:11 +0x30
+created by main.spawn in goroutine 35
+	/src/main.go:16 +0x46
+
+goroutine 41 [sync.RWMutex.RLock]:
+sync.(*RWMutex).RLock(...)
+	/go/src/sync/rwmutex.go:74
+main.target(0xc000010000)
+	/src/main.go:11 +0x30
+created by main.spawn in goroutine 350
+	/src/main.go:16 +0x46
+
+goroutine 42 [sync.RWMutex.RLock]:
+sync.(*RWMutex).RLock(...)
+	/go/src/sync/rwmutex.go:74
+main.other(0xc000010000)
+	/src/main.go:21 +0x30
+created by main.target in goroutine 35
+	/src/main.go:12 +0x46
+
+goroutine 43 [sync.RWMutex.RLock]:
+sync.(*RWMutex).RLock(...)
+	/go/src/sync/rwmutex.go:74
+main.other(0xc000010000)
+	/src/main.go:21 +0x30
+created by main.spawn in goroutine 35
+	/src/main.go:16 +0x46
+[originating from goroutine 35]:
+main.target(...)
+	/src/main.go:12 +0x46
+created by main.spawn
+	/src/main.go:16 +0x65
+
+goroutine 44 [chan receive]:
+main.target(0xc000010000)
+	/src/main.go:11 +0x30
+created by main.spawn in goroutine 35
+	/src/main.go:16 +0x46
+`
+
+// TestCountParkedMatchesOwnStackAndExactCreator pins the parsing on a fake
+// dump: goroutine 40 is the only one of goroutine 35's parked in main.target
+// on the right reason. 41 was created by goroutine 350, which must not pass
+// for 35 (it is counted as started elsewhere instead). 42 and 43 only mention
+// main.target in their "created by" line or an ancestor stack, not where they
+// are parked; 44 has the wrong wait reason; 1 has no creator at all.
+func TestCountParkedMatchesOwnStackAndExactCreator(t *testing.T) {
+	mine, others := countParked([]byte(fakeDump), " in goroutine 35", "main.target", []string{RWMutexRLock})
+	if mine != 1 || others != 1 {
+		t.Fatalf("countParked = (mine %d, others %d), want (1, 1)", mine, others)
+	}
+	mine, others = countParked([]byte(fakeDump), " in goroutine 350", "main.target", []string{RWMutexRLock})
+	if mine != 1 || others != 1 {
+		t.Fatalf("countParked for creator 350 = (mine %d, others %d), want (1, 1)", mine, others)
+	}
+}
+
+// TestTimeoutMsgWithoutIgnoredGoroutines checks the message when nothing
+// parked in the frame at all: it says so and mentions no ignored goroutines.
+func TestTimeoutMsgWithoutIgnoredGoroutines(t *testing.T) {
+	a := Await{Frame: "pkg.f", Reasons: []string{MutexLock}, Baseline: 2, TimeoutMsg: "stuck"}
+	want := "stuck (no goroutine started by the calling goroutine parked in pkg.f with reason [sync.Mutex.Lock] beyond the baseline 2 after 1s)"
+	if got := a.timeoutMsg(time.Second, 0); got != want {
+		t.Fatalf("timeoutMsg = %q, want %q", got, want)
 	}
 }
