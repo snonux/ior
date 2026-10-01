@@ -39,7 +39,7 @@ func TestParseFlamegraphMaxKeysAcceptsTheWholeRange(t *testing.T) {
 func TestParseFlamegraphMaxKeysRejectsOutOfRange(t *testing.T) {
 	// 0 would make the live recorder unbounded (maxKeys == 0 inside
 	// flamegraph.iorData), negatives are nonsense, and one past the limit asks
-	// for more than ~4 GB of recorder heap (~12 GB at the save-time peak).
+	// for more than ~4 GB of recorder heap.
 	for _, bad := range []string{"0", "-1", "-524288", strconv.Itoa(flamegraph.MaxRecordKeysLimit + 1), "1000000000"} {
 		_, err := parseForTest(t, "-flamegraph", "-flamegraph-max-keys", bad)
 		if err == nil {
@@ -74,9 +74,10 @@ func TestUsageDocumentsFlamegraphMaxKeys(t *testing.T) {
 	for _, want := range []string{
 		"-flamegraph-max-keys",
 		"~250 bytes each while recording",
-		// The save-time serialization peak must be documented too (task rs2).
-		"up to ~500 bytes each while the file is written",
-		"~12 GB peak",
+		// What saving costs must be documented too (task rs2): since task
+		// tz2 streams the records into the file, a small constant.
+		"writing the file adds only ~1-2 MB",
+		"(~4 GB)",
 		strconv.Itoa(flamegraph.MaxRecordKeysLimit),
 		"(default " + strconv.Itoa(flamegraph.DefaultMaxRecordKeys) + ")",
 	} {

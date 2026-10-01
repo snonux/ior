@@ -96,25 +96,31 @@ func newRecordingHeader(records map[recordKey]Counter, samples sampling.Summary)
 
 // encodeRecords writes the full recording stream (magic, header, records) to w.
 //
-// Memory: the records map is one gob value, and gob encodes a whole value into
-// an in-memory buffer (grown by append) before it hands it to w in a single
-// Write, which the zstd writer in encodeCompressed answers with a destination
-// buffer of CompressBound of that size. The serialized form is ~60-120 bytes
-// per record depending on path length, and the peak extra heap while saving
-// was measured at ~330-520 bytes per record (2^17 and 2^18 keys, task rs2),
-// i.e. up to ~2x the recorder's own ~250 bytes per record, transiently. The
-// flag help and README state this as "up to ~500 bytes each while the file is
-// written". Even at MaxRecordKeysLimit plus headroom the gob message stays
-// far below gob's 8 GB message limit on 64-bit builds.
+// Memory: the records map is one gob value, but it is not encoded with a
+// single gob Encode, which would build the whole message in memory and hand
+// it over in one Write (the zstd writer in encodeCompressed then adds a
+// CompressBound-sized copy). writeRecordsMessage (recordsgob.go) writes the
+// identical message batch by batch, so saving holds only one batch of the
+// ~60-120 bytes per record that the serialized form takes. Measured (task
+// tz2, 2^17 and 2^19 records with 30-60 character paths): the peak extra heap
+// while saving fell from ~240-390 bytes per record (GOGC 10 and 100; ~580-660
+// bytes per record allocated) to a constant ~1-2 MB, which the flag help and
+// README state as "adds only ~1-2 MB". Even at MaxRecordKeysLimit plus
+// headroom the message stays far below gob's 8 GB message limit on 64-bit
+// builds, which writeRecordsMessage enforces like gob does.
 func encodeRecords(w io.Writer, records map[recordKey]Counter, samples sampling.Summary) error {
 	if _, err := w.Write(recordingMagic[:]); err != nil {
 		return fmt.Errorf("write recording magic: %w", err)
 	}
-	enc := gob.NewEncoder(w)
+	// One encoder for header and records, as with plain Encode calls: the
+	// records message must use the type IDs and type definitions of this
+	// stream. sw lets writeRecordsMessage divert it to a scratch buffer.
+	sw := &switchWriter{w: w}
+	enc := gob.NewEncoder(sw)
 	if err := enc.Encode(newRecordingHeader(records, samples)); err != nil {
 		return fmt.Errorf("encode recording header: %w", err)
 	}
-	if err := enc.Encode(records); err != nil {
+	if err := writeRecordsMessage(w, enc, sw, records); err != nil {
 		return fmt.Errorf("encode records: %w", err)
 	}
 	return nil

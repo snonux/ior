@@ -10,7 +10,7 @@ import (
 //
 // iorData keeps one Counter per distinct (path, tracepoint, comm, pid, tid,
 // flags) key, about 250 bytes of heap each while recording; writing the file
-// needs up to ~500 bytes per record more on top, transiently (see
+// streams the records and adds only ~1-2 MB, whatever their number (see
 // encodeRecords). pid and tid are part of the key on
 // purpose (`ior collapsed -fields` picks the frames after the fact, so every
 // field must survive into the file), which makes a fork-heavy or thread-churning
@@ -50,9 +50,9 @@ import (
 // folded by it), not buried in the file.
 const (
 	// DefaultMaxRecordKeys is the recorder's default cap on distinct exact
-	// keys: 2^19, about 130 MB at ~250 B each while recording and ~400 MB at
-	// the peak while the file is written (encodeRecords), in line with the
-	// LiveTrie node cap scale and far above what an ordinary trace produces.
+	// keys: 2^19, about 130 MB at ~250 B each (writing the file adds only
+	// ~1-2 MB, see encodeRecords), in line with the LiveTrie node cap scale
+	// and far above what an ordinary trace produces.
 	// The stage-1 headroom and the "[other]" records come on top (see
 	// hardLimit).
 	// -flamegraph-max-keys overrides it per run (task rs2).
@@ -60,12 +60,11 @@ const (
 
 	// MaxRecordKeysLimit is the largest cap -flamegraph-max-keys accepts: 2^24
 	// records, about 4 GB of heap at ~250 B each, plus the cap/8 stage-1
-	// headroom (~0.5 GB) on top, so ~4.5 GB while recording; writing the file
-	// then needs up to ~500 B per record more, transiently (encodeRecords), so
-	// the peak is ~12 GB plus 1/8 (~14 GB). A larger cap is far more
-	// likely a typo (an extra digit) than a host with that much memory to
-	// spare for one trace, and an int cap that big would also let
-	// cap+cap/8 overflow on a 32-bit build.
+	// headroom (~0.5 GB) on top, so ~4.5 GB; writing the file adds only
+	// ~1-2 MB to that (encodeRecords). A larger cap is far more likely a typo
+	// (an extra digit) than a host with that much memory to spare for one
+	// trace, and an int cap that big would also let cap+cap/8 overflow on a
+	// 32-bit build.
 	MaxRecordKeysLimit = 1 << 24
 
 	// recordOverflowLabel is the path and comm of the stage-2 keys. Unlike
@@ -156,7 +155,7 @@ func recorderPidFoldNotice(limit int) string {
 		"(path, comm, pid, tid, flags) records; events of further new pid/tid combinations are "+
 		"folded into pid 0/tid 0 records of the same path and comm (counts and totals stay exact, "+
 		"only their pid/tid detail is lost; raise the limit with -flamegraph-max-keys, "+
-		"at ~250 bytes of memory per record, ~750 at the peak while the file is written)", limit)
+		"at ~250 bytes of memory per record)", limit)
 }
 
 // recorderOtherFoldNotice is the one-time stderr line printed when stage 2

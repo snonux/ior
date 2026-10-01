@@ -211,7 +211,9 @@ func serializedFilename(flamegraphName string, now time.Time, layout string) (st
 // encodeCompressed writes the recording stream (magic, header with the
 // tracepoint-name table, records; see iorformat.go) through a zstd writer into
 // w and closes that writer, which flushes the final zstd frame and releases the
-// native zstd context. name only labels errors.
+// native zstd context. name only labels errors. encodeRecords hands the zstd
+// writer one records batch per Write (recordsgob.go), so the writer's
+// CompressBound-sized destination buffer stays batch-sized too.
 func (iod *iorData) encodeCompressed(w io.Writer, name string) error {
 	encoder := zstd.NewWriter(w)
 	if err := encodeRecords(encoder, iod.records, iod.sampling); err != nil {
