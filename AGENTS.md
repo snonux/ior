@@ -881,10 +881,16 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   negative controls, and `TestBubblesDeleteWordForwardStillPanicsOnTheLastRune`,
   which fails once an upgraded bubbles fixes the bug so the guard can go),
   `internal/tui/textinput_deleteword_test.go` (every host end to end through
-  `Model.Update`) and `common/textinput_hosts_test.go`, an AST scan of
-  `internal/tui` that fails when a non-test file calls `Update` on a
-  `textinput.Model` (field, variable, parameter or `textinput.New()` result)
-  outside the allow-list (`common/textinput.go` only).
+  `Model.Update`) and `common/textinput_hosts_test.go`, a type-checked scan
+  of `internal/tui` (each package type-checked from source against the
+  export data of `go list -export`) that fails when a non-test file uses
+  the `Update` method of `textinput.Model` outside the allow-list
+  (`common/textinput.go` only). It resolves the method itself, so any
+  expression of type `textinput.Model` or `*textinput.Model` is caught:
+  fields, pointer fields, parameters, locals and copies, slice/map
+  elements, getter results, embedded fields, method values and method
+  expressions. Only dynamic dispatch (an interface value holding the
+  input, reflection) gets past it.
 
   **The stream search/export modals get the real key press** (task 9z2).
   `eventstream.Model.HandleTeaKey` hands an open modal the `tea.KeyPressMsg`
