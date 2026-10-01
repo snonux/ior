@@ -47,10 +47,28 @@ func (s *headlessParquetSink) configure(el *eventLoop) {
 	})
 }
 
+// headlessRecorderConfig is the recorder setup of a headless run: backpressure
+// with a large bounded queue. Nobody watches a headless run, so a file that
+// silently misses rows the event loop had already processed (the old 4096-row
+// shed-mode queue lost ~2% at 870k rows/s while a row-group flush held the
+// writer) is worse than a slower loop: the print callback waits for the
+// writer, the event loop falls behind, and whatever the kernel then cannot
+// deliver is lost in the ring buffer, where it is counted ("ring buffer
+// drops") and taken into account by the sampling totals. The TUI keeps the
+// non-blocking shed mode, because its event loop also feeds the live views.
+func headlessRecorderConfig() parquet.RecorderConfig {
+	return parquet.RecorderConfig{
+		QueueCapacity: parquet.HeadlessQueueCapacity,
+		BlockWhenFull: true,
+	}
+}
+
 // isFatalRecorderError reports whether a recorder error must abort the
 // headless run. Queue overflow sheds the single row while the session stays
 // active, so it is surfaced via Status().RowsDropped after the run instead
-// of cancelling the trace and losing every already-captured event.
+// of cancelling the trace and losing every already-captured event. The
+// headless recorder blocks rather than sheds (headlessRecorderConfig), so this
+// only matters for a recorder configured otherwise.
 func isFatalRecorderError(err error) bool {
 	return err != nil && !errors.Is(err, parquet.ErrRecorderQueueFull)
 }
@@ -146,7 +164,7 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 	// totals follow when the recording stops (finishHeadlessParquetRecording).
 	meta := parquet.NewFileMetadata("headless")
 	meta.Sampling = infra.el.samplingPlan()
-	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
+	recorder := parquet.NewRecorder(headlessRecorderConfig())
 	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: meta}); err != nil {
 		return fmt.Errorf("start parquet recording: %w", err)
 	}
@@ -167,7 +185,8 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 // during the run is the primary error - it is what cancelled the trace - with
 // a distinct Stop error joined to it; otherwise Stop's own error is returned.
 // Rows shed by queue overflow are not an error, but the recording is then
-// partial, so that is logged.
+// partial, so that is logged; the headless recorder applies backpressure
+// instead of shedding, so in practice this stays silent.
 //
 // samples is the run's sampling outcome. Its exact totals go into the file
 // footer before the recorder stops (a recording that sampled nothing gets no

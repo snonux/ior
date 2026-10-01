@@ -12,7 +12,20 @@ import (
 )
 
 const (
-	defaultRecorderQueueCapacity = 4096
+	// defaultRecorderQueueCapacity is the shed-mode (TUI) queue size. The
+	// channel is allocated up front at about 224 bytes per slot (one
+	// streamrow.Row plus the filter epoch), so 16384 slots cost ~3.5 MiB per
+	// recording. That covers roughly 19 ms of a 870k rows/s burst - a row-group
+	// flush (every column compressed at once on the recorder goroutine) fits
+	// inside it, while the old 4096 slots (~5 ms) did not. Headless runs that
+	// need a lossless file choose backpressure instead (RecorderConfig.
+	// BlockWhenFull) and a bigger queue (HeadlessQueueCapacity).
+	defaultRecorderQueueCapacity = 16384
+	// HeadlessQueueCapacity is the queue size a backpressured headless
+	// recording asks for: 65536 slots, ~14 MiB up front, ~75 ms of a 870k
+	// rows/s burst. Memory is bounded by this constant; once it is full the
+	// producer waits rather than the queue growing.
+	HeadlessQueueCapacity        = 65536
 	defaultRecorderBatchSize     = 256
 	defaultRecorderFlushInterval = 250 * time.Millisecond
 )
@@ -53,7 +66,18 @@ type writerFactory func(path string, cfg WriterConfig, meta FileMetadata) (rowWr
 
 // RecorderConfig controls queueing and batching behavior.
 type RecorderConfig struct {
+	// QueueCapacity bounds the rows buffered between Record and the writer
+	// goroutine; memory use is bounded by it in both overflow modes.
 	QueueCapacity int
+	// BlockWhenFull selects backpressure instead of shedding: a Record call on
+	// a full queue waits for room rather than dropping the row, so a headless
+	// recording matches what the event loop processed and any loss shows up as
+	// the kernel's counted ring-buffer drops. The wait ends when the session
+	// stops or dies (the row is then rejected like any row after a stop), so a
+	// dead writer can never wedge the caller. The zero value keeps the
+	// non-blocking shed mode the TUI needs: its event loop also feeds the live
+	// views and must never stall behind the disk.
+	BlockWhenFull bool
 	BatchSize     int
 	FlushInterval time.Duration
 	Writer        WriterConfig
@@ -120,6 +144,16 @@ type recordingSession struct {
 	// dropped counts rows shed on queue overflow; atomic so Status can
 	// read the live count without contending the session mutex.
 	dropped atomic.Uint64
+
+	// blockWhenFull selects backpressure over shedding (RecorderConfig.
+	// BlockWhenFull); set once before the session goroutine starts.
+	blockWhenFull bool
+	// senders is read-locked by every producer that is waiting for queue room
+	// (mu is not held while it waits, so stop can still run) and write-locked
+	// once by the session goroutine before its final drain. That makes the
+	// drain wait for every waiter to either enqueue or give up, so no row can
+	// be accepted after the drain has looked at the queue and then be lost.
+	senders sync.RWMutex
 }
 
 type recordRequest struct {
@@ -157,6 +191,7 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 	}
 
 	session := newRecordingSession(cfg.QueueCapacity)
+	session.blockWhenFull = cfg.BlockWhenFull
 
 	r.mu.Lock()
 	if r.active != nil {
@@ -182,7 +217,9 @@ func (r *Recorder) Start(path string, options StartOptions) error {
 // queue is full the row is shed (counted in Status().RowsDropped) and
 // ErrRecorderQueueFull is returned (ErrRecorderStartedDropping for the first
 // shed row of a recording); the session stays active so later rows are
-// recorded as capacity frees up.
+// recorded as capacity frees up. With RecorderConfig.BlockWhenFull a full
+// queue instead makes Record wait for room, so nothing is shed; the wait ends
+// early, rejecting the row, if the session stops or dies meanwhile.
 //
 // Without an active session Record returns ErrRecorderNotActive, or, if the
 // last session died with an error, that error (Status().LastError) until the
@@ -407,6 +444,8 @@ func (r *Recorder) stopSession(
 		_ = writer.Abort()
 		return cause
 	}
+	// Rows of producers that were waiting for room are still to be drained.
+	session.awaitSenders()
 	if err := drainQueue(session, func(req recordRequest) error {
 		return r.bufferRecord(session, writer, batch, written, batchSize, req)
 	}); err != nil {
@@ -501,30 +540,89 @@ func newRecordingSession(queueCapacity int) *recordingSession {
 	}
 }
 
+// enqueue hands one row to the session goroutine. A full queue either sheds
+// the row (shed mode) or makes the caller wait for room (blockWhenFull).
 func (s *recordingSession) enqueue(req recordRequest) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.accepting {
-		if s.stopCause != nil {
-			return s.stopCause
-		}
-		return ErrRecorderNotActive
+		err := s.rejectionLocked()
+		s.mu.Unlock()
+		return err
 	}
 
 	select {
 	case s.queue <- req:
+		s.mu.Unlock()
 		return nil
 	default:
-		// Shed the row instead of failing the session: aborting here would
-		// discard every already-captured event. The drop is counted so
-		// callers can surface it while the recording continues. The first
-		// drop gets its own sentinel so callers can warn once per recording.
-		if s.dropped.Add(1) == 1 {
-			return ErrRecorderStartedDropping
-		}
-		return ErrRecorderQueueFull
 	}
+	if !s.blockWhenFull {
+		s.mu.Unlock()
+		return s.shed()
+	}
+	// Register as a waiter before releasing mu: stop() flips accepting under
+	// mu, so every waiter either holds senders already or was turned away
+	// above, which is what awaitSenders relies on.
+	s.senders.RLock()
+	s.mu.Unlock()
+	defer s.senders.RUnlock()
+	if waiterRegisteredHook != nil {
+		waiterRegisteredHook()
+	}
+	return s.waitForRoom(req)
+}
+
+// waiterRegisteredHook, when non-nil, runs in enqueue once a producer has
+// registered as a waiter and before it starts waiting. A test stalls the
+// producer there to stop the session inside exactly the window that
+// awaitSenders closes. Always nil in production.
+var waiterRegisteredHook func()
+
+// waitForRoom blocks until req fits into the queue or the session stops. A
+// stop or a dead writer closes stopC, so this cannot wait on a consumer that
+// is gone; the row is then rejected with the stop cause, exactly as a row
+// offered after the stop would be.
+func (s *recordingSession) waitForRoom(req recordRequest) error {
+	select {
+	case s.queue <- req:
+		return nil
+	case <-s.stopC:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.rejectionLocked()
+	}
+}
+
+// rejectionLocked is the error for a row offered to a session that no longer
+// accepts rows: the failure that stopped it, or ErrRecorderNotActive. Callers
+// hold s.mu.
+func (s *recordingSession) rejectionLocked() error {
+	if s.stopCause != nil {
+		return s.stopCause
+	}
+	return ErrRecorderNotActive
+}
+
+// shed counts one row dropped on queue overflow instead of failing the
+// session: aborting would discard every already-captured event. The drop is
+// counted so callers can surface it while the recording continues. The first
+// drop gets its own sentinel so callers can warn once per recording.
+func (s *recordingSession) shed() error {
+	if s.dropped.Add(1) == 1 {
+		return ErrRecorderStartedDropping
+	}
+	return ErrRecorderQueueFull
+}
+
+// awaitSenders returns once no producer is left waiting for queue room. The
+// session goroutine calls it after stopC closed and before the final drain:
+// the waiters wake on stopC, and by then stop() has cleared accepting, so no
+// new one can register.
+func (s *recordingSession) awaitSenders() {
+	// Taking the write lock is the barrier; deferring the release (rather than
+	// an empty Lock/Unlock pair) keeps staticcheck's SA2001 quiet.
+	s.senders.Lock()
+	defer s.senders.Unlock()
 }
 
 func (s *recordingSession) stop(cause error) {

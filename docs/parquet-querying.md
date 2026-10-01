@@ -197,7 +197,8 @@ traced everything:
   `traced` is the number of invocations ior handed to the recorder, `counted_only` the
   invocations only the kernel counted, `total` their sum. `traced` is not always the
   number of rows in the file: a row the recorder queue shed (`events were dropped
-  (parquet recorder queue overflow)` on stderr) or a pair of a probe that is not active is
+  (parquet recorder queue overflow)`; only a TUI `R` recording sheds, headless `-parquet`
+  waits for the writer instead) or a pair of a probe that is not active is
   counted as traced but has no row, so compare `total`, not the row count, with the
   population. When events were lost (the run statistics say
   `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither `traced` nor `counted_only`: every
