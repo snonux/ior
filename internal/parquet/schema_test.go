@@ -12,46 +12,10 @@ import (
 	"ior/internal/types"
 )
 
-func TestSanitizeUTF8(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"empty", "", ""},
-		{"ascii", "/tmp/file", "/tmp/file"},
-		{"valid multibyte kept", "/tmp/äö/日本語/😀", "/tmp/äö/日本語/😀"},
-		{"valid controls kept", "a\tb\nc\x00", "a\tb\nc\x00"},
-		{"lone high byte", "f\xff\xfeinv", `f\xff\xfeinv`},
-		{"truncated rune", "abc\xc3", `abc\xc3`},
-		{"stray continuation", "\x80x", `\x80x`},
-		{"overlong encoding", "\xc0\xaf", `\xc0\xaf`},
-		{"utf-16 surrogate", "\xed\xa0\x80", `\xed\xa0\x80`},
-		{"valid runes around invalid byte", "ä\xffö", `ä\xffö`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeUTF8(tt.in)
-			if got != tt.want {
-				t.Fatalf("sanitizeUTF8(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-			if !utf8.ValidString(got) {
-				t.Fatalf("sanitizeUTF8(%q) = %q is not valid UTF-8", tt.in, got)
-			}
-		})
-	}
-}
-
-// TestSanitizeUTF8DoesNotAllocateForValidText pins the fast path: almost
-// every traced string is valid, so the hot recording path must not pay for
-// the rare invalid one.
-func TestSanitizeUTF8DoesNotAllocateForValidText(t *testing.T) {
-	const s = "/var/log/ünïcode/access.log"
-	if allocs := testing.AllocsPerRun(100, func() { _ = sanitizeUTF8(s) }); allocs != 0 {
-		t.Fatalf("sanitizeUTF8 allocated %v times for valid text, want 0", allocs)
-	}
-}
-
+// TestRecordFromStreamProducesValidUTF8 pins that RecordFromStream applies
+// the comm repair (cut rune dropped, other invalid bytes escaped) to comm and
+// the escape to file/old_file; the repair functions themselves are tested in
+// internal/textsafe (utf8repair_test.go).
 func TestRecordFromStreamProducesValidUTF8(t *testing.T) {
 	// A comm can hold an invalid byte that is not a trailing cut (prctl
 	// PR_SET_NAME accepts arbitrary bytes): it must be escaped, not dropped.
@@ -150,76 +114,11 @@ func capturedPath(n int, tail string) string {
 	return base + tail
 }
 
-func TestSanitizePath(t *testing.T) {
-	// Exactly the BPF capture limit, cut inside "ä": the partial rune is
-	// the kernel-side cut and is dropped, like comm's.
-	full := capturedPath(types.MAX_FILENAME_LENGTH-2, "") + "\xc3"
-	if len(full) != types.MAX_FILENAME_LENGTH-1 {
-		t.Fatalf("test path length = %d, want %d", len(full), types.MAX_FILENAME_LENGTH-1)
-	}
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"empty", "", ""},
-		{"valid", "/tmp/ü", "/tmp/ü"},
-		{"limit-length path cut mid-rune", full, full[:len(full)-1]},
-		{"limit-length path ending in a complete rune", capturedPath(types.MAX_FILENAME_LENGTH-1, "ä"), capturedPath(types.MAX_FILENAME_LENGTH-1, "ä")},
-		{"limit-length path with mid-string invalid byte keeps the escape", "\xff" + full[1:len(full)-1] + "\xe6", `\xff` + full[1:len(full)-1]},
-		// Shorter than the limit nothing was cut, so an invalid byte is corrupt
-		// data (a real name), and is escaped rather than trimmed.
-		{"short path ending in a lone lead byte is escaped", "/tmp/x\xe6", `/tmp/x\xe6`},
-		{"short path mid-string invalid byte", "f\xff\xfeinv", `f\xff\xfeinv`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizePath(tt.in)
-			if got != tt.want {
-				t.Fatalf("sanitizePath(len %d) = %q, want %q", len(tt.in), got, tt.want)
-			}
-			if !utf8.ValidString(got) {
-				t.Fatalf("sanitizePath(len %d) is not valid UTF-8", len(tt.in))
-			}
-		})
-	}
-}
-
-// TestSanitizePathTrimsTruncatedGetcwdPath covers the getcwd form: a path
-// longer than the captured field is reported as the captured prefix plus
-// types.TruncatedPathSuffix, so the byte-wise cut sits in front of the suffix.
-func TestSanitizePathTrimsTruncatedGetcwdPath(t *testing.T) {
-	prefix := capturedPath(types.MAX_FILENAME_LENGTH-2, "") + "\xc3"
-	in := prefix + types.TruncatedPathSuffix
-	want := prefix[:len(prefix)-1] + types.TruncatedPathSuffix
-	if got := sanitizePath(in); got != want {
-		t.Fatalf("sanitizePath = %q, want %q", got, want)
-	}
-	// A "..." suffix on a path of any other length is ordinary text.
-	if got := sanitizePath("/tmp/\xc3..."); got != `/tmp/\xc3...` {
-		t.Fatalf("short path with dots = %q", got)
-	}
-	// Longer than the getcwd form (255+3 bytes) is not a captured prefix any
-	// more (e.g. a real name that merely ends in dots), so nothing is trimmed:
-	// the partial rune is escaped like any other invalid byte.
-	long := capturedPath(types.MAX_FILENAME_LENGTH+10, "") + "\xc3" + types.TruncatedPathSuffix
-	if got, want := sanitizePath(long), long[:len(long)-4]+`\xc3`+types.TruncatedPathSuffix; got != want {
-		t.Fatalf("over-long path ending in dots: got tail %q, want tail %q", got[len(got)-8:], want[len(want)-8:])
-	}
-}
-
-// TestTruncatedPathSuffixLiteral pins the value the docs and AGENTS.md
-// promise for an over-long getcwd path.
-func TestTruncatedPathSuffixLiteral(t *testing.T) {
-	if types.TruncatedPathSuffix != "..." {
-		t.Fatalf("types.TruncatedPathSuffix = %q, want %q", types.TruncatedPathSuffix, "...")
-	}
-}
-
 // TestRecordFromStreamTrimsCutPaths pins that RecordFromStream applies the
-// path repair (sanitizePath) to both file and old_file, in the plain limit
-// form and the getcwd "..." form: replacing either call with the plain
-// sanitizeUTF8 would leave a "\xc3" residue and fail here.
+// path repair (textsafe.SanitizePath) to both file and old_file, in the plain
+// limit form and the getcwd "..." form: replacing either call with the plain
+// textsafe.SanitizeUTF8 would leave a "\xc3" residue and fail here. The repair
+// itself is tested in internal/textsafe (utf8repair_test.go).
 func TestRecordFromStreamTrimsCutPaths(t *testing.T) {
 	cut := capturedPath(types.MAX_FILENAME_LENGTH-2, "") + "\xc3"
 	trimmed := cut[:len(cut)-1]
@@ -252,27 +151,34 @@ func TestRecordFromStreamTrimsCutPaths(t *testing.T) {
 	}
 }
 
+// TestRecordFromStreamUsesTextsafeRepair pins that the recording's text
+// columns are exactly what the shared textsafe repair produces, so the stream
+// and snapshot CSV exports, which call textsafe directly, hold the same text
+// as the recording (task 4z2). A Parquet-local variant of the repair would
+// diverge on one of these inputs.
+func TestRecordFromStreamUsesTextsafeRepair(t *testing.T) {
+	cut := capturedPath(types.MAX_FILENAME_LENGTH-2, "") + "\xc3"
+	for _, in := range []string{
+		"", "ok", "日本語", "äääääää\xc3", "a\xffb", "ab\xff", "/tmp/x\xe6",
+		cut, cut + types.TruncatedPathSuffix, "f\xff\xfeinv",
+	} {
+		rec := RecordFromStream(streamrow.Row{Comm: in, FileName: in, OldName: in}, 0)
+		if want := textsafe.SanitizeComm(in); rec.Comm != want {
+			t.Errorf("Comm(%q) = %q, want textsafe.SanitizeComm %q", tail(in), tail(rec.Comm), tail(want))
+		}
+		want := textsafe.SanitizePath(in)
+		if rec.File != want || rec.OldFile != want {
+			t.Errorf("File/OldFile(%q) = %q/%q, want textsafe.SanitizePath %q", tail(in), tail(rec.File), tail(rec.OldFile), tail(want))
+		}
+	}
+}
+
 // tail returns the last few bytes of s for compact failure messages.
 func tail(s string) string {
 	if len(s) > 8 {
 		return s[len(s)-8:]
 	}
 	return s
-}
-
-// TestSanitizeUTF8UsesTextsafeNotation pins that the \xHH form is exactly
-// what textsafe.Escape produces for every possible invalid byte, so the two
-// notations cannot drift apart.
-func TestSanitizeUTF8UsesTextsafeNotation(t *testing.T) {
-	for b := 0x80; b <= 0xff; b++ {
-		in := string([]byte{byte(b)})
-		if utf8.ValidString(in) {
-			continue
-		}
-		if got, want := sanitizeUTF8(in), textsafe.Escape(in); got != want {
-			t.Fatalf("byte 0x%02x: sanitizeUTF8 = %q, textsafe.Escape = %q", b, got, want)
-		}
-	}
 }
 
 // TestFilelessRowPersistsEmptyFileAndNegativeFD is the task pq2 regression: the

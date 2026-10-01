@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"ior/internal/atomicfile"
-	"ior/internal/parquet"
 	"ior/internal/statsengine"
+	"ior/internal/textsafe"
 )
 
 // SnapshotCSV writes a dashboard snapshot to a timestamped CSV file in the
@@ -109,17 +109,17 @@ func syscallRows(snap *statsengine.Snapshot) [][]string {
 //
 // The file path is the only free-form traced text in the snapshot (the
 // syscall names and histogram labels are ior's own, and the process column is
-// a numeric id, not the comm). It goes through parquet.SanitizePath, the
-// repair the Parquet recording and the stream CSV export apply (task 3z2): a
-// rune cut at the BPF path capture limit is dropped and any other invalid
-// UTF-8 byte becomes a \xHH escape, so a strict reader such as DuckDB's
-// read_csv accepts the file. Valid text, including control characters, is
+// a numeric id, not the comm). It goes through textsafe.SanitizePath, the
+// repair the Parquet recording and the stream CSV export apply (tasks 3z2,
+// 4z2): a rune cut at the BPF path capture limit is dropped and any other
+// invalid UTF-8 byte becomes a \xHH escape, so a strict reader such as
+// DuckDB's read_csv accepts the file. Valid text, including control characters, is
 // kept as it is, and quotes, commas and newlines are left to the csv.Writer's
 // quoting, so the file stays valid CSV.
 func fileRows(snap *statsengine.Snapshot) [][]string {
 	var rows [][]string
 	for _, r := range snap.Files() {
-		path := parquet.SanitizePath(r.Path)
+		path := textsafe.SanitizePath(r.Path)
 		rows = append(rows,
 			[]string{"file", path, fmt.Sprint(r.Accesses), fmt.Sprint(r.BytesRead), fmt.Sprint(r.BytesWritten)},
 			[]string{"file_latency_ns", path, fmt.Sprintf("%.2f", r.AvgLatencyNs), fmt.Sprint(r.MaxLatencyNs), ""},

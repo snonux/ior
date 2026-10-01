@@ -387,8 +387,8 @@ func trimCutPathname(pathname string) string {
 // may show a stray lead byte (for example "\xc3") in TUI/plain output:
 // inotify_add_watch targets (handleFdPathExit, non-fanotify branch), eventfd
 // identity names, events that do not need a target path, and non-OK path
-// statuses. Parquet output stays valid regardless, because its sanitizePath
-// trims the cut itself.
+// statuses. Parquet and CSV output stay valid regardless, because
+// textsafe.SanitizePath trims the cut itself.
 func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
 	pathname = trimCutPathname(pathname)
 	if !dirfdPathNeedsResolution(dirfd, pathname) {

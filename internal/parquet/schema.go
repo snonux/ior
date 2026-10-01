@@ -3,15 +3,12 @@ package parquet
 import (
 	"os"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"ior/internal/flags"
 	"ior/internal/sampling"
 	"ior/internal/streamrow"
 	"ior/internal/textsafe"
-	"ior/internal/types"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 )
@@ -24,9 +21,10 @@ import (
 // the kernel cuts comm at 15 bytes regardless of rune boundaries, the BPF
 // side cuts a path at MAX_FILENAME_LENGTH-1 bytes just the same, and any
 // local user can create file names (or, via prctl(PR_SET_NAME), comm names)
-// with arbitrary bytes. RecordFromStream therefore sanitizes them (see
-// sanitizeUTF8, textsafe.TrimPartialRune and sanitizeComm/sanitizePath); a Record
-// built by hand is written as given.
+// with arbitrary bytes. RecordFromStream therefore repairs them with
+// textsafe.SanitizeComm/SanitizePath (internal/textsafe/utf8repair.go, shared
+// with the stream and snapshot CSV exports); a Record built by hand is written
+// as given.
 //
 // No-file and no-descriptor conventions (task pq2): File is empty when the
 // syscall has no file. The "N:file" placeholder of the terminal views is
@@ -110,17 +108,19 @@ func NewFileMetadata(mode string) FileMetadata {
 }
 
 // RecordFromStream converts one shared stream row into the persisted format.
-// Free-form traced text (comm, file, old_file) is made valid UTF-8 first so
-// the STRING columns stay readable by strict Parquet readers. The rewrite
-// happens here, on the single row-to-Record path, so every recording (TUI,
-// plain, headless) gets it.
+// Free-form traced text (comm, file, old_file) is made valid UTF-8 first
+// (textsafe.SanitizeComm/SanitizePath) so the STRING columns stay readable by
+// strict Parquet readers. The rewrite happens here, on the single
+// row-to-Record path, so every recording (TUI, plain, headless) gets it; the
+// stream CSV export applies the same textsafe functions to the same fields, so
+// both files hold identical text for a row.
 func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 	return Record{
 		Seq:               row.Seq,
 		TimeNS:            row.TimeNs,
 		GapNS:             row.GapNs,
 		LatencyNS:         row.DurationNs,
-		Comm:              sanitizeComm(row.Comm),
+		Comm:              textsafe.SanitizeComm(row.Comm),
 		PID:               row.PID,
 		TID:               row.TID,
 		Syscall:           row.Syscall,
@@ -134,98 +134,15 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		TimeoutNS:         row.TimeoutNs,
 		// FileValue, not FileName: a fileless row's FileName is the "N:file"
 		// display placeholder, which must not be persisted (task pq2).
-		File:          sanitizePath(row.FileValue()),
+		File:          textsafe.SanitizePath(row.FileValue()),
 		IsError:       row.IsError,
 		FilterEpoch:   filterEpoch,
-		OldFile:       sanitizePath(row.OldName),
+		OldFile:       textsafe.SanitizePath(row.OldName),
 		EpollOp:       row.EpollOp,
 		EpollTargetFD: row.EpollTargetFD,
 		EpollEvents:   row.EpollEvents,
 	}
 }
-
-// sanitizeUTF8 returns s unchanged when it is valid UTF-8 (the common case,
-// checked without allocating). Otherwise every invalid byte is rewritten as
-// the four characters \xHH (lower-case hex) by textsafe.Escape, the single
-// definition of that notation (also used by -plain and ior collapsed), so the
-// operator can still see which byte was there.
-// Valid runes, including valid control characters, are kept as they are.
-//
-// The mapping is deliberately not injective: a name that already contains the
-// characters `\xff` is stored identically to one containing the byte 0xff, and
-// a literal backslash is not doubled. Doubling every backslash would corrupt
-// ordinary Windows-style names for the sake of a vanishingly rare collision,
-// and an exact-bytes column would roughly double the size of the file.
-func sanitizeUTF8(s string) string {
-	if utf8.ValidString(s) {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s) + 12)
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size == 1 {
-			// Only this rare path allocates; Escape of one invalid byte is
-			// always exactly its \xHH form.
-			b.WriteString(textsafe.Escape(s[i : i+1]))
-		} else {
-			b.WriteString(s[i : i+size])
-		}
-		i += size
-	}
-	return b.String()
-}
-
-// sanitizeComm makes a comm value valid UTF-8. The kernel cuts comm at 15
-// bytes regardless of rune boundaries, so a partial trailing rune is dropped
-// first (it is the cut-off half of a character, not corrupt data) and any
-// other invalid byte, e.g. one set with prctl(PR_SET_NAME), is escaped.
-func sanitizeComm(comm string) string {
-	return sanitizeUTF8(textsafe.TrimPartialRune(comm))
-}
-
-// sanitizePath makes a file/old_file value valid UTF-8. A path the BPF side
-// captured in a full MAX_FILENAME_LENGTH buffer (bpf_probe_read_user_str
-// stores at most MAX_FILENAME_LENGTH-1 bytes plus the NUL) was cut by bytes
-// too, so a non-ASCII path can end in half a character; that partial rune is
-// dropped like comm's. A getcwd path longer than the buffer is reported as
-// the captured prefix plus "..." (types.TruncatedPathSuffix), so the cut rune
-// sits in front of that suffix and is trimmed there.
-//
-// A name that went through dirfd resolution (openat, newfstatat, unlinkat,
-// renameat2, execveat, ...) was already trimmed by the event loop before it
-// was joined to the directory (eventloop_exit.go trimCutPathname), because
-// the joined string no longer has the recognisable capture length; this
-// function repairs what reaches it untrimmed (absolute/AT_FDCWD names never
-// change length, and the getcwd form is built after the capture).
-//
-// Limitations: a path shorter than the limit is never trimmed, so an invalid
-// trailing byte in it (a real file name ending in a lone lead byte) becomes a
-// \xHH escape, as does every invalid byte elsewhere; and a real 255-byte path
-// that happens to end in a lone lead byte is trimmed although it was not cut.
-func sanitizePath(path string) string {
-	switch {
-	case len(path) == maxCapturedPath:
-		path = textsafe.TrimPartialRune(path)
-	case len(path) == maxCapturedPath+len(types.TruncatedPathSuffix) && strings.HasSuffix(path, types.TruncatedPathSuffix):
-		path = textsafe.TrimPartialRune(path[:maxCapturedPath]) + types.TruncatedPathSuffix
-	}
-	return sanitizeUTF8(path)
-}
-
-// SanitizePath is sanitizePath for data files outside the Parquet recording
-// that hold a traced path but no streamrow.Row, such as the dashboard
-// snapshot CSV (internal/export, task 3z2). It keeps one definition of the
-// repair, so such a file stores the same text as the recording and the
-// stream CSV export for the same path. Task 4z2 moves the repair to
-// internal/textsafe; callers then switch to it.
-func SanitizePath(path string) string {
-	return sanitizePath(path)
-}
-
-// maxCapturedPath is the longest path the BPF side captures: the
-// MAX_FILENAME_LENGTH buffer minus its NUL terminator.
-const maxCapturedPath = types.MAX_FILENAME_LENGTH - 1
 
 func writerMetadataOptions(meta FileMetadata) []parquetgo.WriterOption {
 	meta = normalizeMetadata(meta)
