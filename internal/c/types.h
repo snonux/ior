@@ -623,8 +623,13 @@ struct process_exit_event {
 // which the child's pid/tid alone cannot name. A record of a pre-creator_pid
 // IOR_BPF_OBJECT is 48 bytes long and decodes with creator_pid 0 ("unknown").
 // The layout has no implicit padding (clone_flags starts at offset 40 and the
-// explicit reserved word completes the trailing 8-byte alignment), so the
+// explicit scope_flags word completes the trailing 8-byte alignment), so the
 // kernel record and a binary.Write payload share one size, 56 bytes.
+// scope_flags bit 0 (IOR_NEWTASK_CHILD_OUT_OF_SCOPE) marks the one record
+// emitted for a child the PID/TID filter excludes: a CLONE_FILES process child
+// of an in-scope creator, whose invisible descriptor-table writes change the
+// creator's table. The word was the always-zero "reserved" before, so an older
+// object reads as "child in scope".
 struct task_newtask_event {
     __u32 event_type;
     __u32 trace_id;
@@ -634,5 +639,5 @@ struct task_newtask_event {
     char comm[MAX_PROGNAME_LENGTH];
     __u64 clone_flags;
     __u32 creator_pid;
-    __u32 reserved;
+    __u32 scope_flags;
 };

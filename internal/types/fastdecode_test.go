@@ -527,6 +527,38 @@ func TestNewTaskNewtaskEventFastLegacyRecord(t *testing.T) {
 	}
 }
 
+// TestNewTaskNewtaskEventFastScopeFlags pins scope_flags at 52..56 and its one
+// defined bit: a record that says its child is out of scope reports it, a plain
+// record does not, and - the negative path - a legacy 48-byte record decoded
+// right after a flagged one (the pooled struct held the flag) reads "in scope",
+// not the previous record's bit, and an unrelated bit does not count.
+func TestNewTaskNewtaskEventFastScopeFlags(t *testing.T) {
+	flagged := taskNewtaskRaw(taskNewtaskEventSize)
+	binary.LittleEndian.PutUint32(flagged[52:56], TaskNewtaskChildOutOfScope)
+	ev := NewTaskNewtaskEventFast(flagged)
+	if ev == nil || !ev.ChildOutOfScope() {
+		t.Fatalf("flagged record decode = %#v, want ChildOutOfScope", ev)
+	}
+	ev.Recycle()
+
+	legacy := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventLegacySize))
+	if legacy == nil {
+		t.Fatal("legacy record rejected")
+	}
+	if legacy.ChildOutOfScope() || legacy.ScopeFlags != 0 {
+		t.Fatalf("legacy record ScopeFlags = %#x, want 0 (no bit leaked from the pooled event)", legacy.ScopeFlags)
+	}
+	legacy.Recycle()
+
+	other := taskNewtaskRaw(taskNewtaskEventSize)
+	binary.LittleEndian.PutUint32(other[52:56], 0x2)
+	ev = NewTaskNewtaskEventFast(other)
+	if ev == nil || ev.ChildOutOfScope() {
+		t.Fatalf("record with only an unrelated flag bit = %#v, want in scope", ev)
+	}
+	ev.Recycle()
+}
+
 // TestNewTaskNewtaskEventFastRejectsShortRecords is the negative path: anything
 // that is neither the 56-byte layout nor the legacy 48-byte one fails closed, and an oversized record still decodes
 // its prefix (forward compatibility with an object that appends fields).

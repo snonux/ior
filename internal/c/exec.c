@@ -319,7 +319,16 @@ int handle_sched_process_exit(void *ctx) {
 // userspace needs to tell a thread from a process and to model the fd table the
 // child inherits: a fork()ed child starts with a copy of the creator's
 // descriptor table (handleTaskNewtaskEvent copies the tracked entries), while
-// CLONE_FILES shares it.
+// CLONE_FILES shares it (one table, two tgids: the child's table operations
+// show up under the child's tgid but change the creator's table too).
+//
+// One record is emitted for a child that is OUT of scope: the CLONE_FILES
+// process child of an in-scope creator (IOR_NEWTASK_CHILD_OUT_OF_SCOPE in
+// scope_flags). Under -pid/-tid such a child's syscalls are filtered out, yet
+// whatever it closes or opens changes the descriptor table its in-scope creator
+// keeps using, so the creator's tracked names would go stale without anyone
+// noticing; the record lets userspace stop trusting that table. It is the only
+// record an out-of-scope task produces.
 //
 // Cost: one 56-byte record per created task, the same order as the per-exec and
 // per-exit records, on the same ring buffer.
@@ -327,6 +336,16 @@ int handle_sched_process_exit(void *ctx) {
 // IOR_CLONE_THREAD is CLONE_THREAD from include/uapi/linux/sched.h: the new
 // task joins the creator's thread group instead of founding its own.
 #define IOR_CLONE_THREAD 0x00010000ULL
+
+// IOR_CLONE_FILES is CLONE_FILES: the new task shares the creator's descriptor
+// table instead of receiving a copy of it.
+#define IOR_CLONE_FILES 0x00000400ULL
+
+// IOR_NEWTASK_CHILD_OUT_OF_SCOPE is the scope_flags bit of a record whose child
+// is not in scope (see above); every other record carries 0 there, exactly like
+// the always-zero reserved word it replaced, so an older object or a consumer
+// that ignores the field reads "child in scope".
+#define IOR_NEWTASK_CHILD_OUT_OF_SCOPE 0x1U
 
 // ior_newtask_in_scope is filter() applied to the *child*. The handler runs in
 // the parent's context, so filter() itself would judge the parent, but what
@@ -368,7 +387,9 @@ int handle_task_newtask(void *raw_ctx) {
     __u32 child_tid = (__u32)ctx->pid;
     // The creator's tgid: this handler runs in the context of the task that
     // called clone, so the current task is the creator.
-    __u32 creator_pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+    __u64 creator_id = bpf_get_current_pid_tgid();
+    __u32 creator_pid = (__u32)(creator_id >> 32);
+    __u32 creator_tid = (__u32)creator_id;
     // The child's tgid: the creator's for a new thread, its own tid for a new
     // process. Derived rather than read from the child's task_struct so the
     // handler does not depend on when copy_process() assigns p->tgid relative to
@@ -377,8 +398,20 @@ int handle_task_newtask(void *raw_ctx) {
         ? creator_pid
         : child_tid;
 
-    if (!ior_newtask_in_scope(child_pid, child_tid))
-        return 0;
+    __u32 scope_flags = 0;
+
+    if (!ior_newtask_in_scope(child_pid, child_tid)) {
+        // Out of scope: silent, except for a CLONE_FILES process child of an
+        // in-scope creator, whose hidden table writes hit the creator's table.
+        // A new thread (CLONE_THREAD) is excluded: it is not a separate
+        // process, and a hidden sibling thread is the -tid limitation
+        // documented in AGENTS.md, not something this record can fix.
+        if (!(clone_flags & IOR_CLONE_FILES) || (clone_flags & IOR_CLONE_THREAD))
+            return 0;
+        if (!ior_newtask_in_scope(creator_pid, creator_tid))
+            return 0;
+        scope_flags = IOR_NEWTASK_CHILD_OUT_OF_SCOPE;
+    }
 
     ev = bpf_ringbuf_reserve(&event_map, sizeof(struct task_newtask_event), 0);
     if (!ev) {
@@ -412,10 +445,10 @@ int handle_task_newtask(void *raw_ctx) {
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->clone_flags = clone_flags;
     // The process whose descriptor table a non-thread, non-CLONE_FILES child
-    // starts as a copy of (handleTaskNewtaskEvent). Ring-buffer memory is not
-    // zeroed, so the explicit reserved word must be written too.
+    // starts as a copy of (handleTaskNewtaskEvent), or shares for CLONE_FILES.
+    // Ring-buffer memory is not zeroed, so scope_flags must always be written.
     ev->creator_pid = creator_pid;
-    ev->reserved = 0;
+    ev->scope_flags = scope_flags;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

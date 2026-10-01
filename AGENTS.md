@@ -1030,15 +1030,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   per-fd copy was rejected: O(1) per fork, but keeping the snapshot semantic
   when the parent closes or reopens a descriptor after the fork needs
   copy-on-write on the parent's side, which is unbounded again.
-  A `CLONE_FILES` process gets *no* snapshot (a shared table cannot be modelled
-  with per-tgid keys and a copy would go stale on the first open/close of
-  either side, worse than the procfs fallback that reads the one live table).
-  In every non-thread case the entries under the child's tgid are dropped
+  A `CLONE_FILES` process gets *no* snapshot but the creator's very table
+  (task hr2, below): a copy would go stale on the first open/close of either
+  side. In every non-thread case the entries under the child's tgid are dropped
   first: a new process's tgid is fresh, so they belong to a previous owner whose
   exit record was lost. A fork+exec child then loses the close-on-exec entries
   through the ordinary exec record (`dropOnExec`). A record without a creator
-  (legacy object), a lost record or a child out of scope (`-pid` fork children)
-  leave the child's table empty as before. The inherited copy is only as good as the
+  (legacy object), a lost record or a fork child out of scope (`-pid`
+  children) leave the child's table empty as before. The inherited copy is only as good as the
   creator's table: entries the trace never saw (a `-path`/`-comm` run drops
   non-matching opens at enter) stay on the procfs path. Pinned by
   `internal/eventloop_newtask_fdinherit_test.go` (including a real child process
@@ -1052,6 +1051,53 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   sees other `ioworkload` processes (a parallel test), so the assertion only
   counts rows of this test's own child: the scenario writes the child's pid to
   `$IOR_WORKLOAD_CHILD_PID_FILE`.
+
+  **`CLONE_FILES` processes share one fd table (task hr2).** The kernel gives two
+  processes that `clone(CLONE_FILES)` a single descriptor table, so what one
+  closes, opens or `dup2()`s changes what the other's numbers mean; a per-tgid
+  table kept answering with the old name (a read of fd 3 labelled
+  `/etc/hostname` while the kernel had pointed it at `/etc/os-release`).
+  `fdTracker` now translates every pid to a *table id* first (`tableID`,
+  `internal/eventloop_fdshare.go`; the map is empty for an ordinary trace, so
+  the cost is one length check per lookup): an in-scope `CLONE_FILES` child is
+  pointed at its creator's table by `shareTable`, so both tgids read and write
+  the same entries (they count once toward the table caps); procfs reads still
+  use the real pid. A member leaves the sharing by `exec` (the kernel copies the
+  table before closing close-on-exec descriptors: `dropOnExec` calls
+  `detachShared`, which hands the exec'ing process a bounded private copy,
+  `copyTable`), by `close_range(CLOSE_RANGE_UNSHARE)` (same, before the range
+  is applied) and by exit (`deletePid`: a table others still share outlives its
+  holder and is re-keyed onto the smallest sharer, `handOverTable`, so no table
+  id dangles on a tgid the kernel may reuse). **A `CLONE_FILES` child that is out
+  of scope** (`-pid`/`-tid` names the creator): the filter hides every syscall
+  of the child, so nothing says what it does to the creator's table. The BPF
+  handler therefore emits the one record an out-of-scope task ever produces, for
+  a `CLONE_FILES` *process* child of an in-scope creator, flagged by
+  `IOR_NEWTASK_CHILD_OUT_OF_SCOPE` in the record's `scope_flags` word (formerly
+  the always-zero reserved word, so an older object reads "in scope";
+  `TaskNewtaskEvent.ChildOutOfScope`). Userspace marks the creator's table
+  *blind* (`markBlind`): its entries are dropped and no new ones are stored,
+  every lookup reads `/proc/<pid>/fd`, the live shared table, until the table
+  dies or its holder execs. The price: one `readlink` (about 4.5 us) per event
+  of that process and procfs spellings for anonymous descriptors (`pipe:[N]`)
+  instead of the traced ones - the state before gr2. The record changes nothing
+  else: no comm seed, no tid retirement.
+  **Documented limitations** (no signal names them): (1) a *thread* that makes
+  its own table private with `unshare(CLONE_FILES)` or
+  `close_range(CLOSE_RANGE_UNSHARE)` stays mapped to its process's table - the
+  tracker is keyed by tgid, and `unshare` is a null-kind record that carries no
+  flags, so the call is not even recognised (the main thread's reads of a
+  number the thread reused keep showing the old name); (2) under `-tid`, a
+  sibling thread's close/reopen of a shared descriptor is filtered out in the
+  kernel and invisible. A hidden `CLONE_THREAD` sibling cannot be flagged like
+  the `CLONE_FILES` process child: the filter hides it by design and there is
+  no tgid of its own to blind. Both keep the pre-hr2 behaviour: stale names
+  until the number is re-registered or the table is dropped. Pinned by
+  `internal/eventloop_fdshare_test.go` (sharing both ways, exit/hand-over,
+  exec and `CLOSE_RANGE_UNSHARE` detach, blind table, a plain fork that stays
+  independent, an unshared trace that keeps the fast path, bookkeeping
+  invariants) and `TestNewTaskNewtaskEventFastScopeFlags`
+  (`internal/types/fastdecode_test.go`).
 
   Old-kernel portability (RHEL/Rocky 8 and 9, 4.18/5.14): the handler takes
   `void *` and reads `pid`/`clone_flags` through the local CO-RE flavor

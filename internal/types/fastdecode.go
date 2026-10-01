@@ -978,9 +978,22 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	return p
 }
 
+// TaskNewtaskChildOutOfScope is the ScopeFlags bit of a task_newtask record
+// whose child the PID/TID filter excludes (IOR_NEWTASK_CHILD_OUT_OF_SCOPE in
+// internal/c/exec.c): a CLONE_FILES process child of an in-scope creator.
+const TaskNewtaskChildOutOfScope = 0x1
+
+// ChildOutOfScope reports whether the record describes a child the trace does
+// not follow: none of its syscalls is ever reported, so the record exists only
+// to say that the creator's descriptor table is now also written by a task
+// ior cannot see. A record of an older object carries 0 here: "in scope".
+func (t *TaskNewtaskEvent) ChildOutOfScope() bool {
+	return t.ScopeFlags&TaskNewtaskChildOutOfScope != 0
+}
+
 // NewTaskNewtaskEventFast decodes the task:task_newtask control record: the
-// child's tgid (Pid) and tid, the comm it inherited, the raw clone flags and
-// the creator's tgid (CreatorPid).
+// child's tgid (Pid) and tid, the comm it inherited, the raw clone flags, the
+// creator's tgid (CreatorPid) and the scope flags.
 //
 // Accepted sizes: the current 56-byte layout, anything longer (its prefix is
 // decoded, so a newer object that appends fields stays readable) and exactly
@@ -1003,12 +1016,12 @@ func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
 	copy(p.Comm[:], raw[24:40])
 	p.CloneFlags = binary.LittleEndian.Uint64(raw[40:48])
 	// Every pooled decode assigns both fields, so a recycled event never leaks
-	// the previous record's creator into a legacy one.
+	// the previous record's creator or scope flags into a legacy one.
 	p.CreatorPid = 0
-	p.Reserved = 0
+	p.ScopeFlags = 0
 	if !legacy {
 		p.CreatorPid = binary.LittleEndian.Uint32(raw[48:52])
-		p.Reserved = binary.LittleEndian.Uint32(raw[52:56])
+		p.ScopeFlags = binary.LittleEndian.Uint32(raw[52:56])
 	}
 	return p
 }

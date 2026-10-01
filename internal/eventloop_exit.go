@@ -1001,6 +1001,12 @@ func (e *eventLoop) applyMoveMountPaths(ep *event.Pair, ev *types.TwoFdEvent) {
 // them, so the fds stay open and must remain tracked.
 const closeRangeCloexec = 1 << 2
 
+// closeRangeUnshare mirrors CLOSE_RANGE_UNSHARE: the caller first gets a private
+// copy of its descriptor table, then the range is closed (or marked) in that
+// copy only. For a process that shares its table through CLONE_FILES that ends
+// the sharing; see fdTracker.detachShared for what is and is not modelled.
+const closeRangeUnshare = 1 << 1
+
 // applyCloseRangeState evicts the fds closed by a successful close_range. The
 // enter event carries (first, last, flags) in fd_a/fd_b/extra. fd_b is an __s32
 // view of the unsigned "last" argument, so a negative value (e.g. ~0U meaning
@@ -1009,6 +1015,11 @@ func (e *eventLoop) applyCloseRangeState(ep *event.Pair, ev *types.TwoFdEvent) {
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok || retEv.Ret != 0 {
 		return
+	}
+	if ev.Extra&closeRangeUnshare != 0 {
+		// Before the range is applied: it acts on the private copy, and the
+		// former sharers keep every descriptor the range covers.
+		e.fdState().detachShared(ev.Pid)
 	}
 	if ev.Extra&closeRangeCloexec != 0 {
 		e.fdState().addFlagsRange(ev.FdA, ev.FdB, ev.Pid, syscall.O_CLOEXEC)

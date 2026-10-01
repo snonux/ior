@@ -20,6 +20,17 @@ import (
 // mapping. The pid here is the tgid the kernel stamps on every event
 // (bpf_get_current_pid_tgid() >> 32), which is exactly the granularity at
 // which Linux shares a descriptor table between threads.
+//
+// A tgid is not always the owner of its table, though: two processes that
+// clone(CLONE_FILES) share one. The pid every method takes is therefore
+// translated to a *table id* first (tableID, see eventloop_fdshare.go): the
+// tgid itself for an ordinary process, the tgid of the table's holder for a
+// CLONE_FILES sharer, so the sharers read and write the same entries. The pid is
+// still the real one for procfs reads (/proc/<pid>/fd serves every sharer the
+// shared table). Not modelled, for lack of a signal that names them: a table a
+// *thread* made private with unshare(CLONE_FILES) (a null-kind syscall record
+// without its flags) and, under -tid, the writes of sibling threads the filter
+// hides - see AGENTS.md.
 type fdTracker struct {
 	files        map[uint64]file.File    // open descriptors, keyed by (pid, fd)
 	fileAges     map[uint64]uint64       // access age per fd entry, for LRU eviction
@@ -52,6 +63,9 @@ type fdTracker struct {
 	// maxInheritedEntries entries and so passed none on (see inherit). Kept for
 	// tests and debugging; not part of the end-of-run statistics.
 	inheritSkipped uint64
+	// share maps the tgids that share a table (CLONE_FILES) onto it, and
+	// records the tables no longer tracked because an invisible task writes them.
+	share fdTableShare
 }
 
 // maxIdlePidKeys bounds how many emptied entries fdTracker.idlePidKeys holds.
@@ -172,7 +186,7 @@ func (t *pendingHandleTracker) ensureInit() {
 }
 
 func (t *fdTracker) get(fd int32, pid uint32) (file.File, bool) {
-	key := fdKey(pid, fd)
+	key := t.key(pid, fd)
 	f, ok := t.files[key]
 	if ok {
 		// Entries can only be created by set, which allocates fileAges, but a
@@ -188,13 +202,19 @@ func (t *fdTracker) get(fd int32, pid uint32) (file.File, bool) {
 }
 
 func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
+	if t.isBlind(pid) {
+		// A table an invisible task writes cannot be kept in step by this
+		// trace; storing the name would bring back the stale answers that
+		// markBlind exists to prevent (lookups go to procfs instead).
+		return
+	}
 	if t.files == nil {
 		t.files = make(map[uint64]file.File)
 	}
 	if t.fileAges == nil {
 		t.fileAges = make(map[uint64]uint64)
 	}
-	key := fdKey(pid, fd)
+	key := t.key(pid, fd)
 	t.age++
 	t.files[key] = f
 	t.fileAges[key] = t.age
@@ -203,7 +223,7 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 }
 
 func (t *fdTracker) delete(fd int32, pid uint32) {
-	t.removeFileKey(fdKey(pid, fd))
+	t.removeFileKey(t.key(pid, fd))
 }
 
 // tracksExactly reports whether the fd table (not the procfs cache) holds f
@@ -214,7 +234,7 @@ func (t *fdTracker) delete(fd int32, pid uint32) {
 // name a different file than it did. It does not refresh the LRU age: a
 // provenance check must not make an entry look recently used.
 func (t *fdTracker) tracksExactly(fd int32, pid uint32, f file.File) bool {
-	tracked, ok := t.files[fdKey(pid, fd)]
+	tracked, ok := t.files[t.key(pid, fd)]
 	return ok && tracked == f
 }
 
@@ -355,10 +375,11 @@ func (t *fdTracker) removeFileKey(key uint64) {
 	t.unindexKey(key, false)
 }
 
-// pidKeySets returns pid's index entry, or nil when pid owns no entry in
-// either map (the common case for a task exit on a system-wide trace).
+// pidKeySets returns the index entry of pid's table (its own, or the one it
+// shares), or nil when that table owns no entry in either map (the common case
+// for a task exit on a system-wide trace).
 func (t *fdTracker) pidKeySets(pid uint32) *pidFdKeys {
-	return t.pidIndex[pid]
+	return t.pidIndex[t.tableID(pid)]
 }
 
 // closeRange removes pid's tracked fds in the inclusive range [first, last], as
@@ -396,20 +417,27 @@ func (t *fdTracker) addFlagsRange(first, last int32, pid uint32, flags int32) {
 	}
 }
 
-// deletePid removes every entry of pid from the fd table and the procfs
-// cache. Called from handleProcessExitEvent on a group-dead sched_process_exit
-// control record (the last thread of the process exited): a process that
-// exited owns no descriptors anymore, so its slice of the (pid, fd) key space
-// is pure garbage until this runs. The per-pid index makes this O(entries of
-// pid), and O(1) for the common case - a process that never registered a
-// descriptor. The price is paid on the syscall path: every registration and
-// removal also updates the pid's index set (a small-map insert or delete), and
-// a pid entering the index takes a recycled entry or, when none is idle,
-// allocates one plus the set it needs. That is far cheaper than the full scan
-// of both capped maps it replaced (see BenchmarkDeletePidFullTable,
-// BenchmarkFdSetDeleteChurn and BenchmarkFdNewPidLifecycle).
-func (t *fdTracker) deletePid(pid uint32) {
-	keys := t.pidKeySets(pid)
+// dropTable removes every entry of the table with the given id from the fd
+// table and the procfs cache and forgets that the table was blind. It is the
+// end of a table's life (its last user exited, or a recycled pid's leftovers
+// are cleared); deletePid decides when that is the case (eventloop_fdshare.go:
+// a table other processes still share outlives one holder). The per-pid index
+// makes this O(entries of the table), and O(1) for the common case - a process
+// that never registered a descriptor. The price is paid on the syscall path:
+// every registration and removal also updates the pid's index set (a small-map
+// insert or delete), and a pid entering the index takes a recycled entry or,
+// when none is idle, allocates one plus the set it needs. That is far cheaper
+// than the full scan of both capped maps it replaced (see
+// BenchmarkDeletePidFullTable, BenchmarkFdSetDeleteChurn and
+// BenchmarkFdNewPidLifecycle).
+func (t *fdTracker) dropTable(id uint32) {
+	t.dropTableEntries(id)
+	delete(t.share.blind, id)
+}
+
+// dropTableEntries is dropTable without the blind mark (markBlind keeps it).
+func (t *fdTracker) dropTableEntries(id uint32) {
+	keys := t.pidIndex[id]
 	if keys == nil {
 		return
 	}
@@ -495,7 +523,18 @@ func (t *fdTracker) inherit(parent, child uint32) {
 		return
 	}
 	t.deletePid(child)
-	keys := t.pidKeySets(parent)
+	// After deletePid(child): it may have handed a table the parent still
+	// shares over to a new holder, which the parent's table id must reflect.
+	t.copyTable(t.tableID(parent), child)
+}
+
+// copyTable gives child (a pid with no table of its own yet) a copy of the table
+// with id src, under the rules inherit describes: bounded by
+// maxInheritedEntries and by the table caps, independent FdFile copies, age 0.
+// It is also how a process that leaves a shared table (exec, CLOSE_RANGE_UNSHARE;
+// see detachShared) gets its private one.
+func (t *fdTracker) copyTable(src, child uint32) {
+	keys := t.pidIndex[src]
 	if keys == nil {
 		return
 	}
@@ -571,8 +610,8 @@ func copyForChild(f file.File, fd int32) file.File {
 // their process's table and all but the exec'ing one are killed by
 // de_thread, and the table is keyed by tgid; a process sharing the table via
 // CLONE_FILES without being a thread gets its own copy before the closes
-// (unshare_files in begin_new_exec), so its entries, keyed by its own tgid,
-// are unaffected.
+// (unshare_files in begin_new_exec); detachShared models that, so the sharers'
+// entries are unaffected.
 //
 // Both maps keep an entry only when its close-on-exec state is known to be
 // clear (survivesExec). Procfs cache entries carry that state too: the fdinfo
@@ -589,6 +628,10 @@ func copyForChild(f file.File, fd int32) file.File {
 // the number may already name a different file opened by an untraced
 // syscall - but it never invents a name the process no longer has.
 func (t *fdTracker) dropOnExec(pid uint32) {
+	// The kernel unshares a shared table before it closes anything
+	// (unshare_files in begin_new_exec): the closes below must hit pid's own
+	// copy, not the table its former sharers keep using.
+	t.detachShared(pid)
 	keys := t.pidKeySets(pid)
 	if keys == nil {
 		return
@@ -679,7 +722,7 @@ func (t *fdTracker) cachedProcFdFile(fd int32, pid uint32) (*file.FdFile, bool) 
 	if t.procFdCache == nil {
 		return nil, false
 	}
-	key := fdKey(pid, fd)
+	key := t.key(pid, fd)
 	cache, ok := t.procFdCache[key]
 	if ok {
 		t.age++
@@ -689,11 +732,14 @@ func (t *fdTracker) cachedProcFdFile(fd int32, pid uint32) (*file.FdFile, bool) 
 }
 
 func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) {
+	if t.isBlind(pid) {
+		return // see set: a blind table keeps no answers, procfs is read each time
+	}
 	if t.procFdCache == nil {
 		t.procFdCache = make(map[uint64]*file.FdFile)
 		t.procFdAges = make(map[uint64]uint64)
 	}
-	key := fdKey(pid, fd)
+	key := t.key(pid, fd)
 	t.age++
 	t.procFdCache[key] = resolved
 	t.procFdAges[key] = t.age
@@ -702,7 +748,7 @@ func (t *fdTracker) setProcFdCache(fd int32, pid uint32, resolved *file.FdFile) 
 }
 
 func (t *fdTracker) deleteProcFdCache(fd int32, pid uint32) {
-	t.deleteCacheKey(fdKey(pid, fd))
+	t.deleteCacheKey(t.key(pid, fd))
 }
 
 // deleteProcFdCacheRange drops cached procfs resolutions for pid's fds in the

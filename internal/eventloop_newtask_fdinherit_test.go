@@ -166,7 +166,9 @@ func TestForkedChildInheritsTheProcfsCache(t *testing.T) {
 // TestCloneThreadAndCloneFilesDoNotCopyTheTable: a thread already reads the
 // creator's entries through the shared tgid, so the record must change nothing
 // (above all must not drop the creator's table), and a CLONE_FILES process
-// shares the table rather than copying it, so it starts with none.
+// shares the table rather than copying it (task hr2): it reads the creator's
+// very entries, not a snapshot that would go stale on the first open or close
+// of either side (eventloop_fdshare_test.go pins that behaviour).
 func TestCloneThreadAndCloneFilesDoNotCopyTheTable(t *testing.T) {
 	t.Run("CLONE_THREAD keeps the shared table", func(t *testing.T) {
 		el := newTaskEventLoop(t, "")
@@ -176,12 +178,16 @@ func TestCloneThreadAndCloneFilesDoNotCopyTheTable(t *testing.T) {
 			t.Fatalf("thread read of fd 3 = %q, want the process's entry", got)
 		}
 	})
-	t.Run("CLONE_FILES process is not snapshotted", func(t *testing.T) {
+	t.Run("CLONE_FILES process shares the entries, it does not copy them", func(t *testing.T) {
 		el := newTaskEventLoop(t, "")
 		registerParentFds(el, forkParentPid)
 		feedForkRecord(t, el, forkParentPid, forkChildPid, forkChildPid, cloneFlagFiles)
-		if _, ok := el.fdState().get(3, forkChildPid); ok {
-			t.Fatal("a shared-table child got a snapshot that would go stale on the first open or close")
+		got, ok := el.fdState().get(3, forkChildPid)
+		if !ok {
+			t.Fatal("a shared-table child does not see the creator's entries")
+		}
+		if !el.fdState().tracksExactly(3, forkParentPid, got) {
+			t.Fatal("the shared-table child got a copy (it would go stale), not the creator's entry")
 		}
 		if _, ok := el.fdState().get(3, forkParentPid); !ok {
 			t.Fatal("the creator lost its entries")
