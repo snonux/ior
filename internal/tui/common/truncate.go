@@ -174,46 +174,93 @@ func prefix(s string, ascii bool, width int) string {
 	return graphemePrefix(s, width)
 }
 
+// cutProbeHook, when non-nil, is called once per ansi.Truncate or
+// ansi.TruncateLeft call made by the searches below. It is nil in production
+// and exists only so tests can bound the number of full-string cuts
+// deterministically (a wall-clock bound would be flaky).
+var cutProbeHook func()
+
+// truncateProbe is ansi.Truncate without a tail, counted for cutProbeHook.
+func truncateProbe(s string, budget int) string {
+	if cutProbeHook != nil {
+		cutProbeHook()
+	}
+	return ansi.Truncate(s, budget, "")
+}
+
+// truncateLeftProbe is ansi.TruncateLeft without a prefix, counted for
+// cutProbeHook.
+func truncateLeftProbe(s string, cut int) string {
+	if cutProbeHook != nil {
+		cutProbeHook()
+	}
+	return ansi.TruncateLeft(s, cut, "")
+}
+
 // graphemePrefix is the non-ASCII path of prefix. ansi.Truncate does not
-// agree with ansi.StringWidth about every cluster: it counts an ASCII
-// base followed by U+FE0F or U+20E3 ("1\ufe0f\u20e3", "#\ufe0f\u20e3", "a\ufe0f")
-// as one cell plus two zero-width pieces, while StringWidth (and so measure,
-// lipgloss.Width and the terminal) counts the whole cluster as two cells.
-// Trusting Truncate's budget therefore returned a prefix up to one cell per
-// such cluster too wide, which overflowed padded columns and shifted every
-// hit span computed from DisplayWidth. Instead the result is re-measured with
-// StringWidth, the same measure every caller uses, and the Truncate budget is
-// lowered until the prefix really fits. Truncate's prefix grows
-// monotonically with its budget and so does the real width, so the first fit
-// found going down is the longest one. Truncate is kept (rather than a
+// agree with ansi.StringWidth about every cluster: it counts an ASCII base
+// followed by U+FE0F or U+20E3 ("1\ufe0f\u20e3", "#\ufe0f\u20e3", "a\ufe0f")
+// as a single cell (the cluster is kept whole, never split), while
+// StringWidth (and so measure, lipgloss.Width and the terminal) counts the
+// whole cluster as two cells. Trusting Truncate's budget therefore returned a
+// prefix up to one cell per such cluster too wide, which overflowed padded
+// columns and shifted every hit span computed from DisplayWidth. Instead the
+// result is re-measured with StringWidth, the same measure every caller uses,
+// and the Truncate budget is lowered until the prefix really fits.
+//
+// Truncate's prefix grows monotonically with its budget and so does its real
+// width, hence the largest fitting budget yields the longest fitting prefix.
+// The budget is never above width (a prefix's real width is at least what
+// Truncate counted), and budget 0 yields "", so the largest fitting budget is
+// found by binary search over [0, width]. A walk down from width, one cell at
+// a time, cost one full-string Truncate+StringWidth per step, which for a
+// long run of keycaps (real width twice the counted width) added up to
+// O(width * len(s)); the search needs O(log(width)) probes. Text without
+// miscounted clusters fits on the first probe. Truncate is kept (rather than a
 // hand-rolled grapheme walk) because it also passes ANSI sequences through
-// without counting them. The loop runs only for text with miscounted clusters
-// (one extra iteration per overshooting cluster); other text fits at once.
+// without counting them.
 func graphemePrefix(s string, width int) string {
-	for budget := width; budget > 0; budget-- {
-		if cut := ansi.Truncate(s, budget, ""); ansi.StringWidth(cut) <= width {
-			return cut
+	best := truncateProbe(s, width)
+	if ansi.StringWidth(best) <= width {
+		return best
+	}
+	// Invariant: budget lo fits (lo = 0 yields ""), budget hi (> lo) does not.
+	lo, hi := 0, width
+	best = ""
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if cut := truncateProbe(s, mid); ansi.StringWidth(cut) <= width {
+			lo, best = mid, cut
+		} else {
+			hi = mid
 		}
 	}
-	return ""
+	return best
 }
 
 // keepRight returns the longest suffix of s (total cells wide) that is at
 // most width cells wide. ansi.TruncateLeft removes n cells but has two
 // quirks, so its result is re-measured with StringWidth and the cut adjusted
-// in both directions (the suffix width only ever shrinks as the cut grows,
-// so the smallest fitting cut is the longest suffix):
+// in both directions. The suffix width only ever shrinks as the cut grows, so
+// the smallest fitting cut is the longest suffix:
 //
 //   - it keeps a wide rune that straddles the cut, which leaves the result
 //     one cell too wide, so the cut is widened until the suffix fits (at most
 //     one retry per straddled two-cell rune);
 //   - like ansi.Truncate (see graphemePrefix) it counts an ASCII base plus
-//     U+FE0F / U+20E3 as one cell, so it removes the whole cluster for a cut
-//     of one cell and the suffix can be shorter than it could be; the cut is
-//     narrowed while the longer suffix still fits.
+//     U+FE0F / U+20E3 as one cell, so a cut of n "cells" removes up to 2n real
+//     cells and the suffix can be shorter than it could be (or, since
+//     total-width counts real cells, the cut can overshoot the end of s
+//     altogether); the cut is narrowed while the longer suffix still fits.
 //
-// Neither direction splits a cluster, so no orphaned U+FE0F or U+20E3 is left
-// at the start of the result.
+// total-width is the right first guess for text without miscounted clusters,
+// and one neighbour probe settles it. When the guess is wrong the distance to
+// the answer can be as large as the number of miscounted clusters (about half
+// the string for a long run of keycaps), so the smallest fitting cut is then
+// found by binary search over the remaining range. Stepping one cell at a
+// time re-cut the whole string per step and made a 4KB keycap path cost tens
+// of milliseconds per call. Neither direction splits a cluster, so no orphaned
+// U+FE0F or U+20E3 is left at the start of the result.
 func keepRight(s string, total int, ascii bool, width int) string {
 	if width <= 0 {
 		return ""
@@ -221,29 +268,63 @@ func keepRight(s string, total int, ascii bool, width int) string {
 	if ascii {
 		return s[max(len(s)-width, 0):]
 	}
-	cut := max(total-width, 0)
-	kept := ansi.TruncateLeft(s, cut, "")
+	guess := max(total-width, 0)
+	kept := truncateLeftProbe(s, guess)
 	if ansi.StringWidth(kept) <= width {
-		return widenSuffix(s, kept, cut, width)
+		return narrowCut(s, kept, guess, width)
 	}
-	for cut++; cut <= total; cut++ {
-		if kept = ansi.TruncateLeft(s, cut, ""); ansi.StringWidth(kept) <= width {
-			return kept
-		}
-	}
-	return ""
+	return widenCut(s, guess, total, width)
 }
 
-// widenSuffix lowers the cut of an already fitting suffix (kept = s cut by
-// cut cells) while the longer suffix still fits width. It runs one probe for
-// text without miscounted clusters and stops there.
-func widenSuffix(s, kept string, cut, width int) string {
-	for ; cut > 0; cut-- {
-		longer := ansi.TruncateLeft(s, cut-1, "")
-		if ansi.StringWidth(longer) > width {
-			break
+// narrowCut lowers the cut of an already fitting suffix (kept = s cut by cut
+// cells) to the smallest cut whose suffix still fits width. One probe settles
+// text without miscounted clusters; otherwise the smallest fitting cut in
+// [0, cut) is found by binary search.
+func narrowCut(s, kept string, cut, width int) string {
+	if cut == 0 {
+		return kept
+	}
+	longer := truncateLeftProbe(s, cut-1)
+	if ansi.StringWidth(longer) > width {
+		return kept
+	}
+	kept = longer
+	// Invariant: cut hi fits (kept is its suffix), cut lo-1 may or may not.
+	lo, hi := 0, cut-1
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if cand := truncateLeftProbe(s, mid); ansi.StringWidth(cand) <= width {
+			hi, kept = mid, cand
+		} else {
+			lo = mid + 1
 		}
-		kept = longer
+	}
+	return kept
+}
+
+// widenCut finds the smallest cut above guess (which left a suffix wider than
+// width) whose suffix fits, by trying guess+1 first (a straddled two-cell rune
+// needs exactly one more cell) and binary searching up to total, where the
+// suffix is empty. It returns "" if even that does not fit.
+func widenCut(s string, guess, total, width int) string {
+	if guess >= total {
+		return ""
+	}
+	kept := truncateLeftProbe(s, guess+1)
+	if ansi.StringWidth(kept) <= width {
+		return kept
+	}
+	// Invariant: cut lo does not fit, cut hi is the smallest candidate that
+	// might (total always does: it leaves at most the empty suffix).
+	lo, hi := guess+1, total
+	kept = ""
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if cand := truncateLeftProbe(s, mid); ansi.StringWidth(cand) <= width {
+			hi, kept = mid, cand
+		} else {
+			lo = mid
+		}
 	}
 	return kept
 }
@@ -256,11 +337,20 @@ func padTo(s string, w, width int) string {
 	return s
 }
 
-// orMarker returns cut, or marker instead when cut is empty and marker fits
-// in width, so a hard cut never blanks out a non-empty value.
+// orMarker returns cut, or marker instead when cut shows nothing and marker
+// fits in width, so a hard cut never blanks out a non-empty value. A cut that
+// holds only ANSI sequences (the cut kept the escapes around a cluster too
+// wide to keep) shows nothing as well, so it is replaced the same way; the
+// escape scan is skipped for escape-free cuts.
 func orMarker(cut, marker string, width int) string {
-	if mw, _ := measure(marker); cut == "" && mw <= width {
+	if mw, _ := measure(marker); mw <= width && showsNothing(cut) {
 		return marker
 	}
 	return cut
+}
+
+// showsNothing reports whether cut renders no cell: it is empty or consists of
+// ANSI sequences only.
+func showsNothing(cut string) bool {
+	return cut == "" || (strings.IndexByte(cut, 0x1b) >= 0 && ansi.StringWidth(cut) == 0)
 }

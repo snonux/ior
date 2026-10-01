@@ -4,6 +4,8 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Task vp2: ansi.Truncate counted an ASCII base followed by U+FE0F / U+20E3
@@ -242,19 +244,130 @@ func TestKeycapAndFE0FRegressions(t *testing.T) {
 	}
 }
 
+// plainUnits are clusters the old and new cut code both handled correctly (no
+// ASCII+U+FE0F or keycap): the negative test below uses only these.
+var plainUnits = []unit{
+	{"a", 1}, {"Z", 1}, {"é", 1}, {"e\u0301", 1}, {"日", 2}, {"本", 2}, {"👍🏽", 2}, {"👍", 2},
+}
+
 // TestPlainCutsAreUnchangedByTheClusterFix is the negative test: text with no
 // miscounted cluster (ASCII, CJK, combining marks, skin-tone emoji) must cut
-// exactly as before, so the re-measuring loop changes nothing for it.
+// exactly as the reference model says (the longest whole-unit prefix and
+// suffix), so the re-measuring searches change nothing for it. Equality, not
+// just "fits", is asserted: an always-empty cut would otherwise pass.
 func TestPlainCutsAreUnchangedByTheClusterFix(t *testing.T) {
-	for _, s := range []string{"日本語abc", "éééé", "👍🏽👍🏽x", "ab日cd", "a\u0301bcd"} {
-		for width := 1; width < DisplayWidth(s); width++ {
-			if got := prefix(s, false, width); DisplayWidth(got) > width {
-				t.Fatalf("prefix(%q, %d) = %q is too wide", s, width, got)
+	rng := rand.New(rand.NewPCG(3, 2026))
+	for range 500 {
+		us := make([]unit, 1+rng.IntN(9))
+		for i := range us {
+			us[i] = plainUnits[rng.IntN(len(plainUnits))]
+		}
+		s := unitsString(us)
+		for width := 1; width <= unitsWidth(us)+1; width++ {
+			if got, want := prefix(s, false, width), unitsString(refPrefix(us, width)); got != want {
+				t.Fatalf("prefix(%q, %d) = %q, want %q", s, width, got, want)
 			}
-			// Maximal: adding the next cluster would overflow, so one more
-			// cell of budget can only add at most what fits.
-			if more := prefix(s, false, width+1); DisplayWidth(more) > width+1 {
-				t.Fatalf("prefix(%q, %d) = %q is too wide", s, width+1, more)
+			total := unitsWidth(us)
+			if got, want := keepRight(s, total, false, width), unitsString(refSuffix(us, width)); got != want {
+				t.Fatalf("keepRight(%q, %d) = %q, want %q", s, width, got, want)
+			}
+		}
+	}
+}
+
+// TestKeepRightNarrowsTheCut pins the narrowing direction of keepRight with
+// literals. ansi.TruncateLeft counts a keycap as one cell, so the first cut
+// (total-width cells) removes more than needed and must be narrowed:
+// "1\ufe0f\u20e3abc" is 5 cells wide, a cut of 2 would leave "bc" but cutting
+// just the keycap leaves the 3-cell "abc".
+func TestKeepRightNarrowsTheCut(t *testing.T) {
+	k := "1\ufe0f\u20e3"
+	tests := []struct {
+		in    string
+		width int
+		head  string
+		want  string
+	}{
+		{k + "abc", 3, "", "abc"},
+		{k + "abc", 4, "", "abc"}, // the keycap needs 2 cells, so it cannot be kept
+		{k + "abc", 5, "", k + "abc"},
+		{k + k + "abc", 3, "", "abc"},
+		{"ab" + k + "cd", 4, "", k + "cd"},
+		{"ab" + k + "cd", 5, "", "b" + k + "cd"},
+		{"ab" + k + "cd", 4, "…", "…cd"},
+	}
+	for _, tc := range tests {
+		if got := TruncateLeft(tc.in, tc.width, tc.head); got != tc.want {
+			t.Errorf("TruncateLeft(%q, %d, %q) = %q, want %q", tc.in, tc.width, tc.head, got, tc.want)
+		}
+	}
+}
+
+// TestMarkerWiderThanBudgetWithClusters covers the marker rule when the marker
+// has no room: the text is hard-cut on a cluster boundary, and the marker only
+// stands in when the cut would otherwise show nothing and the marker fits.
+func TestMarkerWiderThanBudgetWithClusters(t *testing.T) {
+	k := "1\ufe0f\u20e3"
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"left hard cut", TruncateLeft(k+"abcdef", 2, ASCIIEllipsis), "ef"},
+		{"left ends in keycap", TruncateLeft("ab"+k+"cdef"+k, 2, ASCIIEllipsis), k},
+		{"left keycap too wide, marker too wide", TruncateLeft("abc"+k, 1, ASCIIEllipsis), ""},
+		{"left keycap too wide, marker fits", TruncateLeft("abc"+k, 1, Ellipsis), "…"},
+		{"right hard cut", TruncateRight(k+"abc", 2, ASCIIEllipsis), k},
+		{"right keycap too wide, marker too wide", TruncateRight(k+"abc", 1, ASCIIEllipsis), ""},
+		{"middle hard cut", TruncateMiddle("ab"+k+"cdef"+k, 3, ASCIIEllipsis), "ab"},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// TestEscapesAroundKeycaps cuts text with SGR and OSC 8 sequences around and
+// inside keycap clusters at every width. Whatever the cut, the result must fit
+// the budget, its visible text must equal the cut of the same text without
+// escapes (the escapes never change what is kept), and every opened style or
+// link must be closed again.
+func TestEscapesAroundKeycaps(t *testing.T) {
+	k := "1\ufe0f\u20e3"
+	link := func(s string) string { return "\x1b]8;;http://x\x1b\\" + s + "\x1b]8;;\x1b\\" }
+	sgr := func(s string) string { return "\x1b[31m" + s + "\x1b[0m" }
+	inputs := []string{
+		sgr(k + "ab" + k + "cd"),
+		sgr(k) + "ab" + sgr(k) + "cd",
+		link(k + "abcd" + k),
+		link(k) + sgr("ab"+k) + link("cd"),
+		"x" + sgr("a"+k+k+"b") + "y",
+		sgr("日" + k + "本" + k),
+	}
+	cuts := map[string]func(string, int) string{
+		"right":  func(s string, w int) string { return TruncateRight(s, w, Ellipsis) },
+		"left":   func(s string, w int) string { return TruncateLeft(s, w, Ellipsis) },
+		"middle": func(s string, w int) string { return TruncateMiddle(s, w, Ellipsis) },
+		"fit":    func(s string, w int) string { return FitRight(s, w, ASCIIEllipsis) },
+	}
+	for _, in := range inputs {
+		plain := ansi.Strip(in)
+		for name, cut := range cuts {
+			for width := 1; width <= DisplayWidth(plain)+1; width++ {
+				got := cut(in, width)
+				if w := DisplayWidth(got); w > width || (name == "fit" && w != width) {
+					t.Fatalf("%s(%q, %d) = %q is %d cells wide", name, in, width, got, w)
+				}
+				if want := cut(plain, width); ansi.Strip(got) != want {
+					t.Fatalf("%s(%q, %d) shows %q, want %q", name, in, width, ansi.Strip(got), want)
+				}
+				if open, closed := strings.Count(got, "\x1b[31m"), strings.Count(got, "\x1b[0m"); open != closed {
+					t.Fatalf("%s(%q, %d) = %q opens %d styles, closes %d", name, in, width, got, open, closed)
+				}
+				if open, closed := strings.Count(got, "8;;http"), strings.Count(got, "8;;\x1b"); open != closed {
+					t.Fatalf("%s(%q, %d) = %q opens %d links, closes %d", name, in, width, got, open, closed)
+				}
 			}
 		}
 	}

@@ -55,4 +55,13 @@ func TestRenderPanelStillCutsPlainOverflow(t *testing.T) {
 	events := narrowTestEvents()
 	out := RenderStreamTable(40, false, 10, 10, 10, 1000, Filter{}, []string{strings.Repeat("comm~x", 30)}, events, -1, -1)
 	assertPanelFits(t, 40, out, 5+len(events)+1)
+	// The fit checks alone would pass for a blanked line, so also require the
+	// surviving start of the stack line: whole repetitions of the label, cut
+	// at the panel edge (6 cells per repetition, so at least three fit).
+	if want := strings.Repeat("comm~x", 3); !strings.Contains(out, want) {
+		t.Fatalf("the cut stack line must keep its leading text %q:\n%s", want, out)
+	}
+	if strings.Contains(out, strings.Repeat("comm~x", 30)) {
+		t.Fatalf("the overlong stack line must be cut, but it is intact:\n%s", out)
+	}
 }
