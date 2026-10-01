@@ -227,11 +227,16 @@ func (w *targetWatch) attachTo(infra *traceInfra) {
 }
 
 // disableTargetExitRecordEnv is a test hook: when set to exactly "1" (any
-// other value, including the empty string, leaves the trigger on) the
-// group-dead-record trigger (endTraceOnTargetExit) is disabled, so an
-// integration test can prove the liveness watcher alone ends a run, which a
-// real lost record or a death during the attach would otherwise be needed for
-// and cannot be forced. It is not documented for users.
+// other value, including the empty string, leaves the triggers on) every
+// record-based trigger is disabled, because runTraceLoop then leaves
+// eventLoop.stopOnTargetExit false, which both of them check: the -pid
+// process's group-dead record (endTraceOnTargetExit) and, since task os2, the
+// -tid thread's own exit record and a leader target's group-dead record
+// (endTraceOnTargetThreadExit). That way an integration test can prove the
+// liveness watcher alone ends a run (the "liveness watcher only" subtests of
+// the -pid and -tid tests rely on it), which a real lost record or a death
+// during the attach would otherwise be needed for and cannot be forced. It is
+// not documented for users.
 const disableTargetExitRecordEnv = "IOR_TEST_DISABLE_TARGET_EXIT_RECORD"
 
 // targetExitRecordDisabled reports the test hook above.

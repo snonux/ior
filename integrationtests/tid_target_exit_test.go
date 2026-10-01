@@ -132,10 +132,17 @@ func TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader(t *testing.T) {
 // that tid to the exec'ing thread, which runs on as the new program (here the
 // workload re-executed as open-basic). The BPF tid filter keeps tracing it,
 // so the run must survive the old leader's record (flagged
-// IOR_EXIT_TID_INHERITED) and the watcher's brief zombie, record the new
-// program's open of testfile.txt, and end when the new program exits. Run
-// with both triggers and with each alone: without the flag the record ended
-// the run at the exec while the watcher never noticed anything.
+// IOR_EXIT_TID_INHERITED), record the new program's open of testfile.txt, and
+// end when the new program exits. Run with both triggers and with each alone:
+// without the flag the record ended the run at the exec while the watcher
+// never noticed anything.
+//
+// The "liveness watcher only" subtest proves that the watcher follows the
+// inherited tid (pidfd and /proc/<tid> stay valid, the start time matches) and
+// ends the run with the new program. It does not exercise the watcher's
+// two-poll rule for the old leader's zombie state during de_thread(): that
+// window lasts microseconds, and a 500 ms poll practically never lands in it.
+// The rule is pinned by the unit tests (TestThreadWatchIgnoresTheExecHandoverZombie).
 func TestHeadlessTidLeaderRunSurvivesANonLeaderExec(t *testing.T) {
 	cases := append([]struct {
 		name string

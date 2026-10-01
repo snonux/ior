@@ -263,11 +263,19 @@ ior_process_exit_in_scope(void *ctx,
 
 // signal_struct___ior_exec and signal_struct___ior_exit are CO-RE flavors of
 // struct signal_struct naming the one member ior_exit_tid_inherited reads,
-// under its two kernel spellings: group_exec_task (Linux 5.16+) and
-// group_exit_task (older kernels, RHEL/Rocky 8 and 9 included). Both point at
-// the thread running de_thread() for an execve while it kills its siblings.
-// Flavors, not vmlinux.h's struct, because vmlinux.h is dumped from the build
-// host's kernel and carries only one of the two names.
+// under its two kernel spellings: group_exec_task (Linux 5.17+) and
+// group_exit_task (5.16 and older, RHEL/Rocky 8 and 9 included). Both are set
+// to the thread running de_thread() for an execve while it kills its
+// siblings. Through 5.16 the older name had a second user, though: the core
+// dump code (zap_threads() in fs/coredump.c) set it to the dumping thread
+// until coredump_finish() cleared it; 5.17 moved the dump off the field and
+// renamed it for its one remaining user, exec (checked against the upstream
+// v4.18, v5.15, v5.16 and v5.17 sources; the RHEL kernels themselves were not
+// checked). On such a kernel a leader that exits on its own and reaches the
+// sched_process_exit tracepoint while a sibling dumps core is flagged too,
+// see ior_exit_tid_inherited. Flavors, not vmlinux.h's struct, because
+// vmlinux.h is dumped from the build host's kernel and carries only one of
+// the two names.
 struct signal_struct___ior_exec {
     struct task_struct *group_exec_task;
 } __attribute__((preserve_access_index));
@@ -298,6 +306,16 @@ struct signal_struct___ior_exit {
 // waits for the leader to become a zombie and takes its tid all the same. If
 // the exec'ing thread is killed instead (a fatal signal during de_thread()),
 // the whole group dies; userspace then ends on the group-dead record.
+//
+// Known false positive on 5.16 and older (the group_exit_task flavor): that
+// field also names a thread dumping core (see signal_struct___ior_exit). The
+// threads the dump kills park in exit_mm() until coredump_finish() has
+// cleared the field and so fire the tracepoint unflagged, but a -tid <leader>
+// whose own pthread_exit() is already past exit_mm() when a sibling starts the
+// dump fires it with the dumper set, and the record is flagged. The run is
+// then only delayed, not stuck: the dump kills the whole group, so it ends on
+// the dumping thread's group-dead record, or on the liveness watcher about a
+// second later (two polls). Follow-up task gz2 tracks it.
 //
 // Verification status: the group_exec_task path is exercised by the
 // integration test TestHeadlessTidLeaderRunSurvivesANonLeaderExec on the 7.2

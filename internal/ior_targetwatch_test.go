@@ -301,8 +301,10 @@ func TestTargetWatchOpensBeforeTheProbesAttach(t *testing.T) {
 }
 
 // TestTargetExitRecordHookIsExactlyOne pins the test hook's contract: only
-// "1" disables the group-dead-record trigger, so a stray or empty value in the
-// environment cannot silently turn the primary trigger off.
+// "1" disables the record-based triggers (the -pid group-dead record and the
+// -tid thread exit records, both gated by stopOnTargetExit), so a stray or
+// empty value in the environment cannot silently turn the primary triggers
+// off.
 func TestTargetExitRecordHookIsExactlyOne(t *testing.T) {
 	for value, want := range map[string]bool{"1": true, "": false, "0": false, "true": false, "yes": false, "11": false} {
 		t.Setenv(disableTargetExitRecordEnv, value)
