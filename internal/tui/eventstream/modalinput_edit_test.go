@@ -133,7 +133,11 @@ func assertModalEditCursor(t *testing.T, label string, modal editableModal, out 
 // Seeded random edit sequences, the input checked after every step, at
 // widths from the narrowest that holds a rune and the cursor (8 export, 9
 // search) to 80 columns; the third modal is the search left unsized, which
-// View alone fits. A resize must keep the value and the cursor position.
+// View alone fits: its inputStart is not checked against the drawn window,
+// because SearchModal.View fits a copy of the input for that render only, so
+// the stored inputStart still refers to the 44-cell default width
+// NewSearchModal sets (Open and Update fit it there), not the drawn one. A
+// resize must keep the value and the cursor position.
 func TestStreamModalInputSurvivesMidValueEdits(t *testing.T) {
 	const seeds, steps = 45, 120
 	for name, alphabet := range modalEditAlphabets {
@@ -178,6 +182,11 @@ func runModalEdits(t *testing.T, label string, seed int, alphabet []rune, steps 
 			t.Fatalf("%s: resize changed %q at %d to %q at %d", stepLabel, string(value), pos, string(gotValue), gotPos)
 		}
 		if !sized {
+			// Only the drawn cursor is checked: SearchModal.View fits a copy
+			// of the input for this render only, so the stored inputStart
+			// still refers to the 44-cell default width (NewSearchModal),
+			// not the window drawn here, and windowStart would compare
+			// against the wrong width.
 			assertModalEditCursor(t, stepLabel, modal, modal.view(width, 12), width)
 			continue
 		}
