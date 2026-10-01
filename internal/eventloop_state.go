@@ -60,8 +60,10 @@ type fdTracker struct {
 	idlePidKeys []*pidFdKeys
 	age         uint64 // monotonic counter for LRU ordering
 	// inheritSkipped counts forks whose parent held more than
-	// maxInheritedEntries entries and so passed none on (see inherit). Kept for
-	// tests and debugging; not part of the end-of-run statistics.
+	// maxInheritedEntries entries, or whose copy would not fit under the table
+	// cap, and so passed none on (see inherit; copyTable also counts the same
+	// skip for an exec or CLOSE_RANGE_UNSHARE leaving a shared table). Printed
+	// in the end-of-run statistics when non-zero (eventLoop.fdCopySkipStatLine).
 	inheritSkipped uint64
 	// share maps the tgids that share a table (CLONE_FILES) onto it, and
 	// records the tables no longer tracked because an invisible task writes them.
