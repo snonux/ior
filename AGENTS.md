@@ -1044,7 +1044,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   thread often renames itself at once (`prctl(PR_SET_NAME)`,
   `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which the
   `task:task_rename` record (task lr2, below) reports. A provisional entry does
-  not bump the tid's rename epoch and is flagged stale, so the first use of the
+  not bump the tid's rename epoch and is flagged stale (unless rename records are
+  trusted, task xr2 below), so the first use of the
   tid queues exactly one
   `/proc/<tid>/comm` read whose result replaces it (a read of an already-gone
   thread comes back empty and leaves the seed). Seeding as authoritative
@@ -1065,6 +1066,33 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   excluded. A fork that execs is renamed by the exec record that follows. A lost
   record (`ringbuf_drop_map`), a failed attach or an older `IOR_BPF_OBJECT`
   without the program degrade to the old procfs lookup.
+
+  **The corrective read is skipped when renames are reported (task xr2).**
+  Under thread churn that one read per new thread was nearly all of the
+  resolver's work (300 threads/s: 4375 `/proc/<tid>/comm` reads in 15s, 99%
+  ENOENT because the thread had exited, each followed by a `/proc/<tid>/exe`
+  readlink failing the same way). The seed is now flagged stale only when a
+  rename could go unreported (`eventLoop.provisionalSeedNeedsRecheck`): when
+  the `task_rename` probe attached *and* the drop counter is monitored
+  (`dropSrc`), a rename arrives as a record or its loss shows up as a drop whose
+  `markAllStale` sweep flags the seed. Trace setup learns the attach through
+  `bpfSetupLog.attached` (`attachHandProbe` announces every sched probe that
+  attached) and hands it to `eventLoop.trustRenameRecords` after the event-loop
+  factory (which wires `dropSrc`) and before the start signal
+  (`TestRunTraceSetupTrustsRenameRecordsBeforeTheStart`). One ordering keeps the
+  read anyway: the sweep reaches only entries that exist when the loop applies
+  it, but the loop consumes a backlog, so a newtask record reserved before a
+  reported drop can be seeded *after* the sweep while the lost record was a
+  rename of that thread. `handleRingbufDropResult` therefore stamps
+  `lastDropSeenBootNs` (CLOCK_BOOTTIME, the clock of `bpf_ktime_get_boot_ns`,
+  read after the counter) and a seed whose record time is not newer keeps its
+  read. `resolveCommFromProcWithError` returns at once on ENOENT/ESRCH instead
+  of trying the exe fallback. Negative-caching ENOENT per tid was measured and
+  not needed: no tid was looked up twice. Benchmarks:
+  `BenchmarkThreadChurnCommLookups` (~16.5k -> ~6.1k CPU ns and 1 -> 0 lookups
+  per thread) and `BenchmarkResolveCommOfGoneTid`
+  (`internal/eventloop_commchurn_bench_test.go`); tests in
+  `internal/eventloop_newtask_recheck_test.go`.
 
   **A rename is reported by a record too (task lr2).** Nothing reported a task
   changing its own name: `prctl(PR_SET_NAME)` and `pthread_setname_np` (a write to
