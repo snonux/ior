@@ -25,7 +25,9 @@ import (
 //
 // If this record itself is lost (ring-buffer backpressure after the BPF move
 // already happened), the exit still arrives under the leader tid with its
-// enter parked under the caller's; adoptLostExecCaller recovers that pair.
+// enter parked under the caller's - or kept with a row held there, when the
+// execve was interrupted and re-executed; adoptLostExecCaller recovers that
+// pair.
 //
 // OldTid 0 never comes from the kernel (old_pid is a real task's tid) and is
 // treated as "tid kept", so records built without the field (tests, synthetic
@@ -128,10 +130,37 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 //
 // The adoption retires the caller's tid as the lost record would have, so it
 // also releases an interrupted row still held under it (sent on ch before the
-// adopted pair): with the enter parked there, that is a call whose restarting
-// signal handler exec'd (releaseExecCallerRestart). An execve that was itself
-// interrupted and re-executed is not recovered here - its enter is kept with
-// the held row, not parked, so there is no hint to find it by.
+// adopted pair), exactly as releaseExecCallerRestart does for a delivered
+// record. Two rows can be waiting there, and they are found in different
+// places:
+//
+//   - a call whose restarting signal handler exec'd. The handler's execve
+//     enter is parked under the caller's tid, so the index above finds it.
+//   - the execve itself, interrupted with -ERESTARTNOINTR and re-executed
+//     (task r13). Its re-executed enter was taken for the fold and is kept
+//     with the held row, not parked, so the index has no hint for it; when no
+//     parked caller is found, the held rows are asked instead
+//     (restartTracker.reexecutingExecCaller). The release completes the -513
+//     row and parks the kept enter again under the caller's tid, from where
+//     the tid change below moves it like any execve in flight. Before, this
+//     exit was dropped unpaired - no row for the successful execve, not
+//     counted - and the -513 row stayed held under the vanished tid until the
+//     loop stopped or a new task was handed the number.
+//
+// The result is the two rows the delivered record produces as well, the -513
+// row and the successful execve from its re-executed enter, not one folded
+// row: a record of this very exec is known to be lost, which is what refuses a
+// fold (restartProofLost). If this run's raw enter filter sheds the enter when
+// it is parked again, the exit stays the unpaired exit it would have been
+// without any fold.
+//
+// A parked caller is preferred over a held row when both exist: only one
+// thread can have won the exec, and the other's exit record is missing either
+// way. The held-row lookup has the residual of the parked one: adopting the
+// wrong thread needs the exec record AND a killed sibling's exit record to be
+// lost, or an exit whose own enter this run never parked (a leader's execve
+// shed by the raw enter filter) while a killed sibling's row is still held for
+// want of its exit record.
 func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
 	ret, ok := exitEv.(*types.RetEvent)
 	if !ok || ret.Ret != 0 || ret.Tid != ret.Pid {
@@ -141,6 +170,9 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pai
 		return nil, false
 	}
 	callerTid, ok := e.pairs.parkedExecCaller(ret.Pid)
+	if !ok {
+		callerTid, ok = e.restarts.reexecutingExecCaller(ret)
+	}
 	if !ok {
 		return nil, false
 	}

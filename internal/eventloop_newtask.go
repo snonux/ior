@@ -89,6 +89,9 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 		// (see inheritFdTable). Nothing of the child's - comm, per-tid state -
 		// is cached, and its tid is not retired: the filter never lets any of its
 		// records through, so there is nothing to seed or to keep from leaking.
+		// A row a dead previous owner of the tid still held has been released by
+		// now, without parking its continuation's enter under the tid
+		// (routeHeldRestart, reportsTaskGone): nothing here would evict it.
 		if ev.CreatorPid != 0 {
 			e.fdState().markBlind(ev.CreatorPid)
 		}
