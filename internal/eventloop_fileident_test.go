@@ -343,9 +343,9 @@ func TestStaleCachedAnswerIsDroppedWhenProcfsHasNoneNow(t *testing.T) {
 	verifyProcFdNotCached(t, el, pid, n)
 }
 
-// A cached answer that could not be told which file it describes (procfs
-// could not stat it, or it was cached by a row without an identity) is used
-// as before: an unknown identity contradicts nothing.
+// A cached answer that could not be told which file it describes (its fdinfo
+// had no inode number, or its name changed while it was read) is used as
+// before: an unknown identity contradicts nothing.
 func TestCachedAnswerOfUnknownIdentityIsUsed(t *testing.T) {
 	n := freeFdNumber(t)
 	el := identLoop(t)

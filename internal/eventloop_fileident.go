@@ -55,8 +55,8 @@ import (
 // row is resolved exactly as before the identity existed. That covers a
 // kernel without the capture (before 6.2), an object built before it, a run
 // that switched it off, the records without an identity word (fd_size_event,
-// fcntl_event, dup3_event, ...: recvfrom, ioctl, mmap, ... rows) and a file
-// procfs could not stat.
+// fcntl_event, dup3_event, ...: recvfrom, ioctl, mmap, ... rows) and a procfs
+// answer that could not be told which file it describes.
 //
 // What the identity cannot tell apart, so those stale bindings still go
 // unnoticed: files with equal inode numbers on different filesystems, and
@@ -92,8 +92,8 @@ func (t *fdTracker) identifyOpened(f *file.FdFile, exit *types.RetEvent) {
 }
 
 // readProcFd resolves (pid, fd) from procfs, recording which file the answer
-// describes when the run compares identities (two extra stat calls next to
-// the readlink and the fdinfo read).
+// describes when the run compares identities (the number comes with the
+// fdinfo read; one more readlink checks that the name still holds).
 func (t *fdTracker) readProcFd(fd int32, pid uint32) *file.FdFile {
 	if t.identOn {
 		return file.NewFdWithPidIdent(fd, pid)
@@ -112,39 +112,46 @@ func (e *eventLoop) resolveIdentifiedOnExit(ep *event.Pair, fd int32, pid uint32
 		return e.resolveOnExit(ep, fd, pid)
 	}
 	t := e.fdState()
-	t.reconcileBinding(fd, pid, ident)
+	if tracked, ok := t.trackedFile(fd, pid, ident); ok {
+		return tracked
+	}
 	enterNs := ep.EnterEv.GetTime()
 	if closesDescriptor(ep) {
-		return t.resolveClosingIdent(fd, pid, enterNs, ident)
+		return t.resolveUntrackedClosing(fd, pid, enterNs, ident)
 	}
-	return t.resolveIdent(fd, pid, ident, enterNs)
+	return t.resolveUntracked(fd, pid, ident, enterNs)
 }
 
-// reconcileBinding compares the fd table entry of (pid, fd) with the identity
-// a row reports for the number: an entry without one takes it, an entry of
-// another file is dropped as stale.
-func (t *fdTracker) reconcileBinding(fd int32, pid uint32, ident uint32) {
-	key := t.key(pid, fd)
-	fdFile, ok := t.files[key].(*file.FdFile)
-	if !ok || fdFile == nil {
-		return
+// trackedFile returns the fd table entry of (pid, fd) for a row that reports
+// the file ident for the number, in the one lookup a row on a tracked
+// descriptor costs anyway (get): an entry without an identity takes the
+// row's, an entry of another file is dropped as stale and reported as no
+// entry at all.
+func (t *fdTracker) trackedFile(fd int32, pid uint32, ident uint32) (file.File, bool) {
+	tracked, ok := t.get(fd, pid)
+	if !ok {
+		return nil, false
+	}
+	fdFile, isFd := tracked.(*file.FdFile)
+	if !isFd || fdFile == nil {
+		return tracked, true
 	}
 	switch known := fdFile.Ident(); {
 	case known == 0:
 		fdFile.SetIdent(ident)
 	case known != ident:
-		t.removeFileKey(key)
+		t.delete(fd, pid)
 		t.staleBindings++
+		return nil, false
 	}
+	return tracked, true
 }
 
-// resolveIdent is resolve for a row whose call entered at enterNs (boot
-// clock) on the file ident. Call reconcileBinding first: an fd table entry is
-// returned as it is.
-func (t *fdTracker) resolveIdent(fd int32, pid uint32, ident uint32, enterNs uint64) file.File {
-	if tracked, ok := t.get(fd, pid); ok {
-		return tracked
-	}
+// resolveUntracked is resolve for a row on a descriptor the fd table has no
+// (valid) entry for, whose call entered at enterNs (boot clock) on the file
+// ident: a procfs answer, cached or fresh, that does not describe another
+// file.
+func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs uint64) file.File {
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		if describes(cached, ident) {
 			return cached
@@ -169,14 +176,11 @@ func (t *fdTracker) resolveIdent(fd int32, pid uint32, ident uint32, enterNs uin
 	return discovered
 }
 
-// resolveClosingIdent is resolveClosing for a close row of the file ident:
-// the fd table entry (reconciled by the caller), else a procfs-cache entry of
+// resolveUntrackedClosing is resolveClosing for a close row of the file ident
+// on a descriptor without a (valid) fd table entry: a procfs-cache entry of
 // that same file, else nothing. A cache entry whose file is unknown falls
 // back to the read-time rule of task jr2 (cacheReadBefore).
-func (t *fdTracker) resolveClosingIdent(fd int32, pid uint32, closeNs uint64, ident uint32) file.File {
-	if tracked, ok := t.get(fd, pid); ok {
-		return tracked
-	}
+func (t *fdTracker) resolveUntrackedClosing(fd int32, pid uint32, closeNs uint64, ident uint32) file.File {
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		switch cached.Ident() {
 		case ident:

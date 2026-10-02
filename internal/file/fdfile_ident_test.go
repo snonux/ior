@@ -1,6 +1,7 @@
 package file
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -33,6 +34,9 @@ func TestIdentIsCopiedWithTheDescriptor(t *testing.T) {
 	f.Dup(9).SetIdent(1)
 	if f.Ident() != 4711 {
 		t.Fatalf("setting a duplicate's identity changed the source's to %#x", f.Ident())
+	}
+	if got := (*FdFile)(nil).Ident(); got != 0 {
+		t.Fatalf("nil FdFile has identity %#x, want 0", got)
 	}
 }
 
@@ -69,8 +73,8 @@ func statOf(t *testing.T, fd uintptr) uint64 {
 }
 
 // NewFdWithPidIdent names a descriptor like NewFdWithPid and says which file
-// that is, for the kinds of file a descriptor can be: procfs must be able to
-// stat the link whatever is behind it.
+// that is, whatever kind of file is behind it: the number fdinfo prints must
+// be the inode's, which fstat reports independently.
 func TestNewFdWithPidIdentIdentifiesTheFileBehindTheLink(t *testing.T) {
 	regular, err := os.Create(filepath.Join(t.TempDir(), "regular.txt"))
 	if err != nil {
@@ -100,6 +104,63 @@ func TestNewFdWithPidIdentIdentifiesTheFileBehindTheLink(t *testing.T) {
 				t.Fatalf("NewFdWithPid recorded identity %#x, want none", plain.Ident())
 			}
 		})
+	}
+}
+
+func TestParseInodeFromFdInfo(t *testing.T) {
+	const head = "pos:\t0\nflags:\t0100002\nmnt_id:\t29\n"
+	for _, tc := range []struct {
+		name, data string
+		want       uint64
+		wantOK     bool
+	}{
+		{name: "ordinary fdinfo", data: head + "ino:\t4711\n", want: 4711, wantOK: true},
+		{name: "wider than 32 bits", data: head + "ino:\t4294967338\n", want: 0x10000002a, wantOK: true},
+		{name: "followed by other lines", data: head + "ino:\t7\neventfd-count:\t0\n", want: 7, wantOK: true},
+		{name: "kernel before the line existed", data: head},
+		{name: "malformed number", data: head + "ino:\tabc\n"},
+		{name: "negative number", data: head + "ino:\t-3\n"},
+		// Another line that merely contains the word is not the line.
+		{name: "inotify line", data: head + "inotify wd:1 ino:2a sdev:1\n"},
+		{name: "empty", data: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseInodeFromFdInfo([]byte(tc.data))
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("parseInodeFromFdInfo = %d, %v; want %d, %v", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+// The identity is kept only while the link still reads as the name the
+// answer carries: a number reused between the reads must not pair one file's
+// name with another's identity.
+func TestIdentOfAnswerNeedsTheLinkToStillReadAsTheName(t *testing.T) {
+	const fdinfo = "pos:\t0\nflags:\t02\nmnt_id:\t29\nino:\t4711\n"
+	f, err := os.Create(filepath.Join(t.TempDir(), "named.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := fmt.Sprintf("/proc/self/fd/%d", f.Fd())
+	name, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := identOfAnswer([]byte(fdinfo), link, name); got != 4711 {
+		t.Fatalf("identity = %d although nothing changed, want 4711", got)
+	}
+	if got := identOfAnswer([]byte(fdinfo), link, name+".other"); got != 0 {
+		t.Fatalf("identity = %d for a link that reads as another name, want 0", got)
+	}
+	if got := identOfAnswer([]byte("pos:\t0\nflags:\t02\n"), link, name); got != 0 {
+		t.Fatalf("identity = %d from an fdinfo without the inode line, want 0", got)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := identOfAnswer([]byte(fdinfo), link, name); got != 0 {
+		t.Fatalf("identity = %d for a link that can no longer be read, want 0", got)
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"syscall"
+	"strings"
 )
 
 // File identity (task 603).
@@ -19,10 +19,10 @@ import (
 // two can be compared (internal/eventloop_fileident.go).
 //
 // The identity is the low 32 bits of the file's inode number: what the kernel
-// program can read cheaply and what stat(2) reports for a procfs descriptor
-// link. 0 means "unknown" - no capture on this kernel or in this run, a file
-// procfs could not stat, the rare inode whose low word is 0 - and an unknown
-// identity never contradicts anything.
+// program can read cheaply and what /proc/<pid>/fdinfo/<fd> prints for a
+// descriptor. 0 means "unknown" - no capture on this kernel or in this run,
+// an fdinfo without the number, the rare inode whose low word is 0 - and an
+// unknown identity never contradicts anything.
 
 // IdentOfInode returns the identity of the file with inode number ino, the
 // user-space counterpart of ior_file_ident.
@@ -31,8 +31,12 @@ func IdentOfInode(ino uint64) uint32 {
 }
 
 // Ident returns the identity of the file f's name describes, or 0 when it is
-// not known.
+// not known. A nil FdFile describes no file: the procfs cache can hold one
+// (fdTracker.copyTable skips them), and the comparison must not trip on it.
 func (f *FdFile) Ident() uint32 {
+	if f == nil {
+		return 0
+	}
 	return f.ident
 }
 
@@ -62,34 +66,67 @@ func (f *FdFile) appendUnnamed(dst []byte) []byte {
 }
 
 // NewFdWithPidIdent is NewFdWithPid that also records which file it read the
-// name of. The link is stat'ed before and after the readlink and the identity
-// is kept only when both agree: the three calls are not atomic, and a number
-// closed and reused in between would otherwise pair one file's name with
-// another file's identity, which is exactly the mix-up the identity exists to
-// catch. A disagreement, or a link stat cannot follow, leaves the identity
-// unknown and the name as NewFdWithPid would have returned it.
+// name of. The identity comes from the "ino:" line of
+// /proc/<pid>/fdinfo/<fd>, the read that supplies the flags anyway: procfs
+// prints the i_ino of the open file there, the very number the kernel program
+// reports, and reading it never touches the file's filesystem. (stat(2) on
+// the descriptor link would: it can block on an unreachable NFS server, is
+// refused on a FUSE mount of another user, and reports what the filesystem's
+// getattr says, which need not be i_ino.)
+//
+// The link is read again afterwards and the identity kept only when the name
+// did not change: the reads are not atomic, and a number closed and reused
+// in between would otherwise pair one file's name with another file's
+// identity, which is exactly the mix-up the identity exists to catch. A
+// changed name, or an fdinfo without the line (kernels before 5.14), leaves
+// the identity unknown; name and flags are what NewFdWithPid returns.
 func NewFdWithPidIdent(fd int32, pid uint32) *FdFile {
 	link := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
-	before := statIdent(link)
 	name, err := os.Readlink(link)
 	if err != nil {
 		return NewUnresolvedFd(fd)
 	}
-	f := NewFdWithProcName(fd, pid, name)
-	if before != 0 && statIdent(link) == before {
-		f.ident = before
+	// As NewFdWithProcName, on one fdinfo read for flags and inode.
+	f := newFdFile(fd, name)
+	f.fromProcFS = true
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
+	if err != nil {
+		f.SetFlags(-1)
+		return f
 	}
+	if flags, err := parseFlagsFromFdInfo(data); err != nil {
+		f.SetFlags(-1)
+	} else {
+		f.SetFlags(int32(flags))
+	}
+	f.ident = identOfAnswer(data, link, name)
 	return f
 }
 
-// statIdent returns the identity of the file path leads to (following a
-// procfs descriptor link to the open file itself, whatever its kind: a pipe,
-// a socket and a deleted file can all be stat'ed this way), or 0 when it
-// cannot be stat'ed.
-func statIdent(path string) uint32 {
-	var st syscall.Stat_t
-	if err := syscall.Stat(path, &st); err != nil {
+// identOfAnswer returns the identity to record with a procfs answer: that of
+// the inode fdinfo (its content, data) names, provided the descriptor link
+// still reads as name, the name the answer carries; else 0.
+func identOfAnswer(data []byte, link, name string) uint32 {
+	ino, ok := parseInodeFromFdInfo(data)
+	if !ok {
 		return 0
 	}
-	return IdentOfInode(st.Ino)
+	if again, err := os.Readlink(link); err != nil || again != name {
+		return 0
+	}
+	return IdentOfInode(ino)
+}
+
+// parseInodeFromFdInfo returns the inode number of the "ino:" line of an
+// fdinfo file, or false when there is none or it is malformed.
+func parseInodeFromFdInfo(data []byte) (uint64, bool) {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		value, ok := strings.CutPrefix(line, "ino:")
+		if !ok {
+			continue
+		}
+		ino, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		return ino, err == nil
+	}
+	return 0, false
 }

@@ -14,9 +14,10 @@
 // eventloop_fileident.go).
 //
 // The identity is the low 32 bits of the file's inode number:
-//   - it can be compared with what stat(/proc/<pid>/fd/<fd>) reports, which
-//     is what validates a procfs answer. The device cannot: btrfs and
-//     overlayfs report another st_dev than the superblock's s_dev;
+//   - it is the number /proc/<pid>/fdinfo/<fd> prints as "ino:", which is
+//     what validates a procfs answer without touching the file's filesystem
+//     (fdinfo has no device, and stat's st_dev is not the superblock's s_dev
+//     on btrfs and overlayfs anyway);
 //   - it is the same for every descriptor of the file and for as long as the
 //     file exists. The struct file pointer is neither comparable with procfs
 //     nor a safe key: the slab hands a freed struct file's address to the
