@@ -154,11 +154,11 @@ func TestChangeHookIsSilentWhenNothingChanges(t *testing.T) {
 }
 
 // TestChangeHookReportsFailedChanges: an attach that fails had its enter
-// tracepoint attached for a moment, and a detach that fails may have destroyed
-// one link of two. Both moved what the kernel sees, so both are reported - the
-// failed attach twice like any attach, the second time when the enter link it
-// had attached is destroyed again: that is a detach, and a detach is reported
-// when it is over.
+// tracepoint attached for a moment, and a detach whose destroy reports an
+// error has destroyed both links all the same (Link). Both moved what the
+// kernel sees, so both are reported - the failed attach twice like any attach,
+// the second time when the enter link it had attached is destroyed again:
+// that is a detach, and a detach is reported when it is over.
 func TestChangeHookReportsFailedChanges(t *testing.T) {
 	h := newHookedRead(t, false)
 	h.exit.err = errors.New("no such tracepoint")
@@ -180,7 +180,10 @@ func TestChangeHookReportsFailedChanges(t *testing.T) {
 		t.Fatal("Detach with a failing exit link returned nil")
 	}
 	if h.calls != 1 || h.destroysSeen[0] != [2]int{1, 1} {
-		t.Fatalf("failed detach: hook ran %d times, saw %v; want once, after both destroy attempts", h.calls, h.destroysSeen)
+		t.Fatalf("failed detach: hook ran %d times, saw %v; want once, after both destroys", h.calls, h.destroysSeen)
+	}
+	if h.mgr.IsActive("read") {
+		t.Fatal("read is still active after a detach that destroyed both links")
 	}
 }
 

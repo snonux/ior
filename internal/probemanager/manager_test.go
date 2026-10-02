@@ -2,23 +2,43 @@ package probemanager
 
 import (
 	"errors"
+	"fmt"
 	"ior/internal/tracepoints"
+	"os"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
+// fakeLink stands for the links one fakeProgram hands out: the program
+// returns the same fakeLink at every attach and counts the attach on it
+// (handedOut), so a test can still name "the enter link" before anything is
+// attached. A fakeLink a test passes to the manager itself counts as one link.
+//
+// It holds the manager to the contract of Link, as the real link would with a
+// use after free: every link handed out may be destroyed once, also when that
+// Destroy returns err. A Destroy beyond that is recorded as a violation, and
+// TestMain fails the run over any (linkViolations; violations, when set,
+// takes them instead, for the test of the fake itself).
 type fakeLink struct {
-	mu        sync.Mutex
-	destroyed int
-	err       error
-	onDestroy func()
+	mu         sync.Mutex
+	handedOut  int
+	destroyed  int
+	err        error
+	onDestroy  func()
+	violations *violationLog
 }
 
 func (l *fakeLink) Destroy() error {
 	l.mu.Lock()
 	l.destroyed++
+	if l.destroyed > max(l.handedOut, 1) {
+		l.violationLog().add(fmt.Sprintf("Destroy call %d on a fake link handed out %d times\n%s",
+			l.destroyed, l.handedOut, debug.Stack()))
+	}
 	onDestroy := l.onDestroy
 	l.mu.Unlock()
 
@@ -28,10 +48,95 @@ func (l *fakeLink) Destroy() error {
 	return l.err
 }
 
+func (l *fakeLink) violationLog() *violationLog {
+	if l.violations != nil {
+		return l.violations
+	}
+	return &linkViolations
+}
+
+// attach counts one more link handed out by a program.
+func (l *fakeLink) attach() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.handedOut++
+}
+
 func (l *fakeLink) destroyCalls() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.destroyed
+}
+
+// live returns how many of the links handed out were not destroyed: the
+// programs this fake has attached to its tracepoint right now.
+func (l *fakeLink) live() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.handedOut - l.destroyed
+}
+
+// violationLog collects the breaches of the Link contract the fake links saw.
+type violationLog struct {
+	mu      sync.Mutex
+	entries []string
+}
+
+func (v *violationLog) add(entry string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.entries = append(v.entries, entry)
+}
+
+func (v *violationLog) all() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return slices.Clone(v.entries)
+}
+
+// linkViolations is where every fake link of the package reports, whichever
+// test made it; the stack in each entry names the test.
+var linkViolations violationLog
+
+// TestMain fails the run when any test destroyed a fake link twice. The check
+// sits here rather than in each test because most tests build their links as
+// plain literals, and a double Destroy is wrong in every one of them.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if found := linkViolations.all(); len(found) > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: %d violations of the Link contract (Destroy is final):\n%s\n",
+			len(found), strings.Join(found, "\n"))
+		code = 1
+	}
+	os.Exit(code)
+}
+
+// TestFakeLinkRecordsASecondDestroy pins the fake itself: one Destroy per
+// link handed out is fine, whatever it returns, and the next one is recorded.
+func TestFakeLinkRecordsASecondDestroy(t *testing.T) {
+	var log violationLog
+	link := &fakeLink{err: errors.New("busy"), violations: &log}
+	prog := &fakeProgram{link: link}
+	for range 2 {
+		if _, err := prog.AttachTracepoint("syscalls", "sys_enter_read"); err != nil {
+			t.Fatalf("AttachTracepoint: %v", err)
+		}
+		_ = link.Destroy()
+	}
+	if len(log.all()) != 0 || link.live() != 0 {
+		t.Fatalf("violations %v, live %d after two attaches and two destroys; want none and 0", log.all(), link.live())
+	}
+	_ = link.Destroy()
+	if len(log.all()) != 1 {
+		t.Fatalf("%d violations after a destroy of a link that is gone, want 1", len(log.all()))
+	}
+
+	direct := &fakeLink{violations: &log}
+	_ = direct.Destroy()
+	_ = direct.Destroy()
+	if len(log.all()) != 2 {
+		t.Fatalf("%d violations, want a second one for a link no program handed out", len(log.all()))
+	}
 }
 
 type fakeProgram struct {
@@ -56,10 +161,14 @@ func (p *fakeProgram) AttachTracepoint(_, name string) (Link, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
+	p.mu.Lock()
 	if p.link == nil {
 		p.link = &fakeLink{}
 	}
-	return p.link, nil
+	link := p.link
+	p.mu.Unlock()
+	link.attach()
+	return link, nil
 }
 
 func (p *fakeProgram) attachCalls() int {
@@ -492,7 +601,10 @@ func TestManagerDetachDestroysLinks(t *testing.T) {
 	}
 }
 
-func TestManagerDetachFailureKeepsActiveStateForUndetachedLink(t *testing.T) {
+// TestManagerDetachFailureLeavesTheProbeInactiveWithItsError: a Destroy that
+// reports an error is final like any other (Link), so the probe is off and
+// the error stays on it (final_destroy_test.go has the whole contract).
+func TestManagerDetachFailureLeavesTheProbeInactiveWithItsError(t *testing.T) {
 	enter := &fakeLink{err: errors.New("destroy failed")}
 	exit := &fakeLink{}
 	attacher := &fakeAttacher{
@@ -515,11 +627,14 @@ func TestManagerDetachFailureKeepsActiveStateForUndetachedLink(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected one state, got %+v", states)
 	}
-	if !states[0].Active {
-		t.Fatalf("expected probe to remain active when one link failed to detach")
+	if states[0].Active {
+		t.Fatalf("expected the probe to be inactive although one destroy reported an error")
 	}
 	if states[0].Error == "" {
 		t.Fatalf("expected error to be recorded after detach failure")
+	}
+	if enter.destroyCalls() != 1 || exit.destroyCalls() != 1 {
+		t.Fatalf("expected both links destroyed once, got enter=%d exit=%d", enter.destroyCalls(), exit.destroyCalls())
 	}
 }
 
@@ -726,11 +841,11 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	}
 }
 
-// TestAttachPairReturnsCleanupErrorWhenExitAttachFails: an enter link that
-// cannot be destroyed after the exit attach failed is still attached, so
-// attachPair hands it back with both errors for the manager to keep (task
-// z13; internal/probemanager/half_attached_test.go has the manager's side).
-// Returned as nil, as it once was, nothing could ever destroy it.
+// TestAttachPairReturnsCleanupErrorWhenExitAttachFails: an enter link whose
+// destroy reports an error after the exit attach failed is gone like any
+// destroyed link (Link), so attachPair returns both errors and no link.
+// Handed back, as task z13 first had it, the manager kept the link and
+// destroyed it a second time (final_destroy_test.go has the manager's side).
 func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	enterDestroyErr := errors.New("enter cleanup failed")
 	exitAttachErr := errors.New("exit attach failed")
@@ -748,8 +863,8 @@ func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected attachPair error")
 	}
-	if enterLink != Link(enter) || exitLink != nil {
-		t.Fatalf("expected failed attachPair to return the undestroyed enter link only, got enter=%v exit=%v", enterLink, exitLink)
+	if enterLink != nil || exitLink != nil {
+		t.Fatalf("expected failed attachPair to return no link, got enter=%v exit=%v", enterLink, exitLink)
 	}
 	if !errors.Is(err, exitAttachErr) {
 		t.Fatalf("expected exit attach error in result, got %v", err)
@@ -762,10 +877,8 @@ func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	}
 }
 
-// TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds is the counterpart: the
-// enter link destroyed again after the exit attach failed is gone, and
-// handing it back would have the manager keep, and later destroy again, a
-// link that no longer exists.
+// TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds is the ordinary failure:
+// the enter link is destroyed again, and the attach error comes back alone.
 func TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds(t *testing.T) {
 	exitAttachErr := errors.New("exit attach failed")
 	enter := &fakeLink{}

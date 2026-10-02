@@ -359,10 +359,12 @@ func TestFKeySetsSearchMode(t *testing.T) {
 }
 
 // TestViewWithProbeErrors verifies that View shows probe error annotations.
+// A probe with an error is always an inactive one: a failed attach leaves it
+// detached, and so does a detach whose destroy reported an error.
 func TestViewWithProbeErrors(t *testing.T) {
 	fm := &fakeManager{
 		states: []probemanager.ProbeState{
-			{Syscall: "read", Active: true, Error: "attach failed"},
+			{Syscall: "read", Active: false, Error: "attach failed"},
 		},
 	}
 	m := NewModel(fm).Open()

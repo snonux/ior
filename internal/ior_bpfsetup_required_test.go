@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"ior/internal/flags"
@@ -31,6 +33,59 @@ func (p syscallFailingProgram) AttachTracepoint(category, name string) (probeman
 }
 
 func (p syscallFailingProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
+	return recordingProgram{attacher: &p.attacher.recordingAttacher}.AttachRawTracepoint(name)
+}
+
+// finalLink is a syscall enter link whose Destroy reports an error. Like the
+// real link it is gone after that one call (probemanager.Link), so it fails
+// the test when it is destroyed again.
+type finalLink struct {
+	t        *testing.T
+	destroys atomic.Int32
+}
+
+func (l *finalLink) Destroy() error {
+	if n := l.destroys.Add(1); n > 1 {
+		l.t.Errorf("Destroy call %d on a link that was gone after the first", n)
+	}
+	return errors.New("enter link busy")
+}
+
+// exitFailingAttacher attaches the hand-written probes and every syscall
+// enter tracepoint, but no syscall exit tracepoint, and the enter links it
+// hands out report an error when they are destroyed again: every pair's
+// attach fails, and so does its cleanup.
+type exitFailingAttacher struct {
+	recordingAttacher
+	t          *testing.T
+	enterMu    sync.Mutex
+	enterLinks []*finalLink
+}
+
+func (a *exitFailingAttacher) GetProgram(progName string) (probemanager.Program, error) {
+	return exitFailingProgram{attacher: a, progName: progName}, nil
+}
+
+type exitFailingProgram struct {
+	attacher *exitFailingAttacher
+	progName string
+}
+
+func (p exitFailingProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
+	switch {
+	case strings.HasPrefix(p.progName, "handle_sys_exit_"):
+		return nil, errors.New("tracepoint not found")
+	case strings.HasPrefix(p.progName, "handle_sys_enter_"):
+		link := &finalLink{t: p.attacher.t}
+		p.attacher.enterMu.Lock()
+		defer p.attacher.enterMu.Unlock()
+		p.attacher.enterLinks = append(p.attacher.enterLinks, link)
+		return link, nil
+	}
+	return recordingProgram{attacher: &p.attacher.recordingAttacher}.AttachTracepoint(category, name)
+}
+
+func (p exitFailingProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
 	return recordingProgram{attacher: &p.attacher.recordingAttacher}.AttachRawTracepoint(name)
 }
 
@@ -77,6 +132,43 @@ func TestAttachRequiredTraceProbesHeadlessFailsWhenEveryAttachFails(t *testing.T
 	}
 	if _, live := attacher.attached(); live != 0 {
 		t.Fatalf("%d links still attached after the failed setup", live)
+	}
+}
+
+// TestAttachRequiredTraceProbesHeadlessFailsWhenEveryCleanupFailsToo: every
+// pair's exit attach fails and the destroy of its enter link reports an error
+// as well. Those links are gone all the same (probemanager.Link), so no pair
+// is attached and the headless guard must fire. While the manager kept such a
+// link and called the probe active (the first fix of task z13), this run
+// passed the guard with not one complete pair and traced nothing. Closing the
+// manager on the error path must not destroy the links a second time, which
+// finalLink checks.
+func TestAttachRequiredTraceProbesHeadlessFailsWhenEveryCleanupFailsToo(t *testing.T) {
+	attacher := &exitFailingAttacher{t: t}
+	skipped := &lineRecorder{}
+
+	mgr, release, err := attachRequiredTraceProbes(context.Background(), attacher, nil,
+		syscallPairNames("openat", "read"), true, bpfSetupLog{status: skipped.log, warn: failOnLog(t)})
+
+	if err == nil || !strings.Contains(err.Error(), "all 2 selected tracepoint pairs failed to attach") {
+		t.Fatalf("error = %v, want the all-attaches-failed diagnostic", err)
+	}
+	if mgr != nil || release != nil {
+		t.Fatal("a failed setup must not hand out a manager or release closure")
+	}
+	if got := skipped.joined(); !strings.Contains(got, "enter link busy") || !strings.Contains(got, "tracepoint not found") {
+		t.Fatalf("skip messages = %q, want the attach error and the cleanup error of a pair", got)
+	}
+	if len(attacher.enterLinks) != 2 {
+		t.Fatalf("%d syscall enter links handed out, want 2", len(attacher.enterLinks))
+	}
+	for i, link := range attacher.enterLinks {
+		if got := link.destroys.Load(); got != 1 {
+			t.Fatalf("enter link %d destroyed %d times, want exactly once", i, got)
+		}
+	}
+	if total, live := attacher.attached(); total != schedProbeLinks || live != 0 {
+		t.Fatalf("attached %d hand probe links (%d live), want %d, all released", total, live, schedProbeLinks)
 	}
 }
 

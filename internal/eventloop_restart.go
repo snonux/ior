@@ -310,33 +310,26 @@ import (
 // exit that only a later call can deliver.) The second report's stamp is
 // younger than that row and its clear takes the entry. A failed attach is
 // reported twice all the same: it may have had the enter tracepoint attached
-// for a moment, which is an attach and a detach in one - or, when that enter
-// link could not be destroyed again, have left it attached. The manager then
-// keeps the link and calls the probe active (task z13): the enter-only
-// (mirror) state described two paragraphs below.
+// for a moment, which is an attach and a detach in one - also when the
+// destroy of that enter link reported an error (next paragraph).
 //
-// A detach that failed half-way and left the exit tracepoint attached, with
-// the enter tracepoint gone, needs no report of its own while it lasts. A held
-// call whose continuation is that syscall - a call of the syscall itself, or
-// for restart_syscall a stopped call - is then continued unseen at its enter,
-// and its task stays pending. But the continuation's exit is recorded, arrives
-// as an exit of the tid that no RESUME announced, and releases the row (the
-// Release rule below). The entry stays until the task's next traced enter,
-// which cannot be one of that syscall, or until the probe is detached for
-// good, which reports and clears it (an attach of a probe that still has a
-// link is a no-op in the manager and reports nothing).
-//
-// The mirror state - the enter tracepoint left attached, the exit tracepoint
-// gone - needs no report while it lasts either. A detach leaves it when only
-// the enter link's destroy failed, and so does an attach whose exit tracepoint
-// did not attach and whose enter link could not be destroyed again. In both
-// the manager keeps the enter link, calls the probe active and takes a
-// further attach for a no-op, so the state ends at the next detach of the
-// syscall, which reports. The syscall emits no exit, so no call of it becomes
-// pending and nothing of it is held. Only as restart_syscall can it be a
-// continuation: its enter is announced and taken, its exit never arrives, and
-// the row waits in restartContinuing until the tid's next record releases it
-// or the next report does.
+// No change leaves a pair half attached. The manager takes a link's destroy
+// for final (probemanager.Link): a detach ends with the probe inactive and
+// without a link, and so does a failed attach, whatever the destroys
+// returned. So no pair is left with only its exit tracepoint attached, or
+// only its enter tracepoint, until some later change of the syscall, and no
+// such state has to be reasoned about here: once a change has made its last
+// report, the syscall is seen at both ends or at neither. That rests on what
+// a destroy that reports an error does in the kernel. In libbpf 1.5.1
+// (src/libbpf.c) bpf_link__destroy, line 10666, frees the link whatever its
+// detach returned, and bpf_link_perf_detach, line 10789, the detach of a
+// tracepoint link, closes the perf event fd and the link fd also when its
+// ioctl failed; closing them is what detaches the program. The tracepoint is
+// therefore detached even when Destroy reports an error. This was read from
+// the source, not tested against a failing ioctl. Should a tracepoint ever
+// stay attached behind such a destroy, nothing in ior could detach it any
+// more - the link is freed - and what it would mean for the folds is not
+// worked out here.
 //
 // What is left open. A report is made when the attach call has returned, not
 // at the instant the kernel attaches, so the fresh pair produces records
@@ -1462,15 +1455,10 @@ func (e *eventLoop) foldProvenRestarts(signalProbeAttached, exitProbeAttached bo
 // until the thread's next record ("Output order" in the file comment); so it
 // is not held. Inactive means that the manager holds no link of the pair and
 // neither tracepoint is attached: the syscall was not selected, or its attach
-// failed and took back what it had attached. While the manager calls it
-// active, -516 rows are held as before. That includes the one active state
-// without an exit tracepoint, the startup attach whose exit tracepoint failed
-// and whose enter link could not be destroyed again (the manager keeps that
-// link, task z13): the restart_syscall is then seen at its enter only, no
-// fold can complete, and a held row waits for the thread's next record (the
-// mirror state in "Runtime probe changes"), late like the row "Output order"
-// describes. IsActive does not tell that state from an attached pair, and a
-// failure of both calls is not worth a second question to the manager.
+// failed and took back what it had attached - which it has also when the
+// destroy of the enter link reported an error (probemanager.Link). While the
+// manager calls it active, both tracepoints are attached and -516 rows are
+// held as before.
 func (e *eventLoop) traceSetIsFinal(isActive func(syscall string) bool) {
 	e.restarts.restartSyscallUntraced = !isActive(types.SYS_ENTER_RESTART_SYSCALL.Name())
 }

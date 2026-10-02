@@ -5,11 +5,45 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 )
 
 // Link abstracts an attached tracepoint link.
+//
+// Destroy is final. It must be called at most once on a link, and when it has
+// returned the link is gone - also when it returned an error. The manager
+// therefore takes a link off its entry before it destroys it
+// (probeEntry.takeLinks), records the error, and never keeps a link to try
+// its destroy again; whoever else holds a Link has to do the same (the
+// release closures of attachHandProbe in internal/ior_bpfsetup.go).
+//
+// That is the contract of the real link, *bpf.BPFLink of libbpfgo
+// v0.9.2-libbpf-1.5.1, which internal/ior_bpfsetup.go hands out unwrapped. It
+// was read from the sources, not tested against a detach that fails:
+//
+//   - libbpf 1.5.1, src/libbpf.c, bpf_link__destroy (line 10666): calls
+//     link->detach and then frees the link (link->dealloc, or free) whatever
+//     detach returned. The error is only passed on.
+//   - the same file, bpf_link_perf_detach (line 10789), the detach of a
+//     tracepoint link: closes the perf event fd and the link fd also when its
+//     PERF_EVENT_IOC_DISABLE ioctl failed, and closing them is what detaches
+//     the program. (A raw tracepoint link's detach, bpf_link__detach_fd, line
+//     10695, is nothing but that close.) So a tracepoint whose Destroy
+//     reported an error is detached in the kernel all the same.
+//   - libbpfgo, link.go, BPFLink.Destroy (lines 70-81): returns that errno
+//     BEFORE it clears its pointer to the freed link. A second Destroy hands
+//     the freed struct to bpf_link__destroy again: a use after free and a
+//     double free.
+//
+// So a link that "could not be destroyed" and is still attached does not
+// exist, and there is nothing to retry (task z13 assumed both). Were a kernel
+// ever to keep a program attached past the close of those fds, the manager
+// could not help it either: the link struct is freed, and nothing is left to
+// call.
+//
+// What the manager cannot prevent is libbpfgo's own second destroy: its
+// Module.Close (module.go, lines 194-198) destroys every link of the module
+// whose pointer is still set, which includes one whose Destroy failed.
 type Link interface {
 	Destroy() error
 }
@@ -48,12 +82,29 @@ type probeEntry struct {
 	enterTP string
 	exitTP  string
 
+	// enterLink and exitLink are the links the manager still has to destroy.
+	// A link leaves the entry before its Destroy is called (takeLinks), so
+	// none is ever destroyed twice.
 	enterLink Link
 	exitLink  Link
 	attachMu  sync.Mutex
 
+	// active says that the probe is attached: it holds a link. The one
+	// moment the two differ is inside a Detach, which has taken the links
+	// and commits "inactive" only after it destroyed them and reported the
+	// change (commitDetach).
 	active  bool
 	lastErr error
+}
+
+// takeLinks removes both links from the entry and returns them, so the caller
+// holds the only reference when it destroys them: Destroy is final (Link) and
+// must not reach a link a second time, whatever happens meanwhile. The caller
+// holds the manager lock.
+func (e *probeEntry) takeLinks() (enterLink, exitLink Link) {
+	enterLink, exitLink = e.enterLink, e.exitLink
+	e.enterLink, e.exitLink = nil, nil
+	return enterLink, exitLink
 }
 
 // Manager tracks probe attach/detach state for grouped syscall tracepoints.
@@ -91,25 +142,21 @@ func NewManager(attacher Attacher) *Manager {
 //     failed attach is reported twice as well because it may have had the
 //     enter tracepoint attached for a moment (the exit attach failed and the
 //     enter link was destroyed again): for the kernel that is an attach
-//     followed by a detach, and a detach is reported when it is over. If that
-//     enter link could not be destroyed either, there was no detach: the
-//     enter tracepoint stays attached, and the manager keeps its link, so
-//     the probe counts as active (commitAttach). That is the enter-only
-//     state described under Detach below, as harmless for the listener and
-//     ended the same way, by the next Detach of the syscall.
+//     followed by a detach, and a detach is reported when it is over. That
+//     holds also when the destroy of the enter link reported an error: the
+//     tracepoint is detached all the same (Link).
 //   - Detach calls it AFTER both links were destroyed, and only when the
-//     probe had a link to destroy. A destroy that failed is reported like one
-//     that succeeded. It leaves the pair half attached, and with the enter
-//     link gone and the exit link left the syscall's calls do run unseen at
-//     their enter; the pair stays that way until the next Detach of the
-//     syscall, which reports again (an Attach of a probe that still has a
-//     link is a no-op). The mirror state, the enter link left and the exit
-//     link gone - also what the failed attach above leaves when it cannot
-//     destroy its enter link - lasts as long. Why the listener's outcome is
-//     right meanwhile is its business ("Runtime probe changes" in
-//     internal/eventloop_restart.go: the exit tracepoint that is still
-//     attached ends the wait of the row; with only the enter tracepoint left
-//     the syscall emits no exit, so nothing of it becomes pending).
+//     probe had a link to destroy. A destroy that reported an error is
+//     reported like one that did not, and for the same reason: its tracepoint
+//     is detached too, so the old attachment has seen its last syscall.
+//
+// Neither change leaves a pair half attached behind. A failed attach ends
+// with no tracepoint of the syscall attached and a detach does so always,
+// whatever their destroys returned, so outside an Attach or Detach that is
+// under way a pair is attached as a whole or not at all - as far as the
+// manager can know: that a tracepoint is detached when its Destroy reported
+// an error is libbpf 1.5 as read from its source (Link), not something a test
+// has seen.
 //
 // So what the listener notes in hook - the event loop clears the kernel's
 // restart_pending_map and stamps the boot clock - is noted after the old
@@ -301,17 +348,9 @@ func (m *Manager) snapshotAttachParams(syscall string) (enterTP, exitTP string, 
 }
 
 // commitAttach stores what attachPair returned under the manager lock: the
-// link pair, or the attach error with whatever link the failed attach could
-// not take back. On a concurrent manager close it cleans the links up instead.
-//
-// A failed attach normally returns no link, and the probe stays inactive with
-// the error. It returns the enter link when that could not be destroyed after
-// the exit attach failed (attachPair, task z13). The link is kept on the entry
-// then, which makes the probe active with only its enter tracepoint attached
-// and the error recorded - the state a Detach leaves whose exit destroy
-// succeeded and whose enter destroy failed (commitDetach), and handled like
-// it: States shows the probe active with the error, a further Attach is a
-// no-op, and Detach or Close try the destroy again.
+// link pair, which makes the probe active, or the attach error, with which it
+// stays inactive and without a link (a failed attachPair returns none). On a
+// concurrent manager close it destroys the links instead.
 //
 // The entry's own links need no merging with the new ones: Attach got here
 // only for an inactive entry, which has none, and it still holds attachMu.
@@ -320,8 +359,9 @@ func (m *Manager) snapshotAttachParams(syscall string) (enterTP, exitTP string, 
 // than accepting a *probeEntry: attachPair ran with m.mu released, so this has
 // to re-check that the manager was not closed underneath it before publishing
 // the links - otherwise Close would have already walked the entries and the
-// links stored here would leak. For a link kept from a failed attach that
-// cleanup is a second attempt at its destroy.
+// links stored here would leak. The links destroyed on that path were never
+// stored on the entry, so this is their one Destroy (Link); what it returns is
+// joined into the error, with the attach error if there was one.
 func (m *Manager) commitAttach(syscall string, enterLink, exitLink Link, attachErr error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -329,6 +369,7 @@ func (m *Manager) commitAttach(syscall string, enterLink, exitLink Link, attachE
 	if err != nil {
 		return errors.Join(
 			err,
+			attachErr,
 			destroyLink(fmt.Sprintf("cleanup enter %s", syscall), enterLink),
 			destroyLink(fmt.Sprintf("cleanup exit %s", syscall), exitLink),
 		)
@@ -340,7 +381,11 @@ func (m *Manager) commitAttach(syscall string, enterLink, exitLink Link, attachE
 	return attachErr
 }
 
-// Detach detaches enter/exit tracepoints for a registered syscall.
+// Detach detaches enter/exit tracepoints for a registered syscall. Afterwards
+// the probe is inactive and holds no link, whatever the destroys returned: a
+// Destroy is final (Link), so one that reports an error leaves nothing to
+// keep and nothing to retry. The error is recorded on the probe (States) and
+// returned, and the next Attach attaches both tracepoints afresh.
 func (m *Manager) Detach(syscall string) error {
 	if syscall == "" {
 		return errors.New("syscall is required")
@@ -356,37 +401,47 @@ func (m *Manager) Detach(syscall string) error {
 	entry.attachMu.Lock()
 	defer entry.attachMu.Unlock()
 
-	// Re-acquire the lock after the per-entry mutex to prevent races with
-	// concurrent Attach calls on the same syscall.
-	m.mu.Lock()
-	entry, err = m.entryLocked(syscall)
+	enterLink, exitLink, err := m.takeLinksToDetach(syscall)
 	if err != nil {
-		m.mu.Unlock()
 		return err
 	}
-	enterLink := entry.enterLink
-	exitLink := entry.exitLink
-	m.mu.Unlock()
-
-	errs, enterErr, exitErr := destroyLinkPair(syscall, enterLink, exitLink)
+	enterErr, exitErr := destroyLinkPair(enterLink, exitLink)
 	if enterLink != nil || exitLink != nil {
 		// Reported once the links are gone and before attachMu is released
 		// (SetChangeHook): what the listener notes is younger than anything
 		// the old attachment saw, and a re-attach cannot start before it.
 		m.reportChange()
 	}
-	return m.commitDetach(entry, enterErr, exitErr, errs)
+	return m.commitDetach(entry, detachError(syscall, enterErr, exitErr))
 }
 
-// destroyLinkPair destroys both BPF links concurrently and collects any errors
-// into a slice. It returns each link's error separately so partial-success can
-// be recorded.
+// takeLinksToDetach re-validates the entry under the manager lock - Detach
+// released it to take attachMu, and a Close may have landed in that window -
+// and takes its links off it (probeEntry.takeLinks). From here on Detach
+// holds the only reference to them: a Close that starts now finds none on the
+// entry and waits on attachMu for the detach to finish. The entry stays
+// active until commitDetach.
+func (m *Manager) takeLinksToDetach(syscall string) (enterLink, exitLink Link, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, err := m.entryLocked(syscall)
+	if err != nil {
+		return nil, nil, err
+	}
+	enterLink, exitLink = entry.takeLinks()
+	return enterLink, exitLink, nil
+}
+
+// destroyLinkPair destroys both BPF links concurrently, each exactly once,
+// and returns each link's error. The caller must have taken the links off
+// their entry (probeEntry.takeLinks): they are gone afterwards, also the one
+// whose Destroy returned an error (Link).
 //
 // The two Destroy calls run in parallel because each one closes a
 // perf-event tracepoint fd whose release waits for an RCU grace period
 // (~30ms); grace periods only overlap when the waits are concurrent, so a
 // serial enter-then-exit destroy pays for two of them where one suffices.
-func destroyLinkPair(syscall string, enterLink, exitLink Link) (errs []string, enterErr, exitErr error) {
+func destroyLinkPair(enterLink, exitLink Link) (enterErr, exitErr error) {
 	var wg sync.WaitGroup
 	if exitLink != nil {
 		wg.Add(1)
@@ -398,35 +453,35 @@ func destroyLinkPair(syscall string, enterLink, exitLink Link) (errs []string, e
 	if enterLink != nil {
 		enterErr = enterLink.Destroy()
 	}
-	wg.Wait() // also orders the write to exitErr before the reads below
-	if enterErr != nil {
-		errs = append(errs, fmt.Sprintf("detach enter %s: %v", syscall, enterErr))
-	}
-	if exitErr != nil {
-		errs = append(errs, fmt.Sprintf("detach exit %s: %v", syscall, exitErr))
-	}
-	return errs, enterErr, exitErr
+	wg.Wait() // also orders the write to exitErr before the caller's read
+	return enterErr, exitErr
 }
 
-// commitDetach updates entry link pointers and active flag under the manager
-// lock, then returns a combined error if any link destroy failed.
-func (m *Manager) commitDetach(entry *probeEntry, enterErr, exitErr error, errs []string) error {
+// detachError combines what the two destroys of a Detach returned into the
+// error of that Detach, or nil when neither failed.
+func detachError(syscall string, enterErr, exitErr error) error {
+	switch {
+	case enterErr != nil && exitErr != nil:
+		return fmt.Errorf("detach enter %s: %w; detach exit %s: %w", syscall, enterErr, syscall, exitErr)
+	case enterErr != nil:
+		return fmt.Errorf("detach enter %s: %w", syscall, enterErr)
+	case exitErr != nil:
+		return fmt.Errorf("detach exit %s: %w", syscall, exitErr)
+	}
+	return nil
+}
+
+// commitDetach marks the entry inactive under the manager lock and records
+// detachErr, the combined error of the destroys (nil when both succeeded),
+// which it returns. The links left the entry before they were destroyed
+// (takeLinksToDetach), so the probe is off either way: there is no
+// half-detached state to keep.
+func (m *Manager) commitDetach(entry *probeEntry, detachErr error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if enterErr == nil {
-		entry.enterLink = nil
-	}
-	if exitErr == nil {
-		entry.exitLink = nil
-	}
-	entry.active = entry.enterLink != nil || entry.exitLink != nil
-	if len(errs) == 0 {
-		entry.lastErr = nil
-		return nil
-	}
-	combined := errors.New(strings.Join(errs, "; "))
-	entry.lastErr = combined
-	return combined
+	entry.active = false
+	entry.lastErr = detachErr
+	return detachErr
 }
 
 // States returns a stable snapshot of all known probe states.
@@ -523,7 +578,7 @@ func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 
 	total := 0
 	for _, item := range entries {
-		if item.hasLinks {
+		if item.active {
 			total++
 		}
 	}
@@ -541,7 +596,7 @@ func (m *Manager) CloseWithProgress(progress func(completed, total int)) error {
 // set, 21s with all families) while a concurrent detach costs roughly one
 // grace period as long as the waits overlap. limit is a sliding window (a
 // semaphore), not a batch size: as soon as one entry finishes the next starts.
-// progress is called after each entry that had links,
+// progress is called after each entry that was active,
 // under a mutex, so callbacks are serialized and the count is monotonic.
 func (m *Manager) detachAll(entries []pairEntry, total int, progress func(completed, total int), limit int) error {
 	errs := make([]error, len(entries))
@@ -556,7 +611,7 @@ func (m *Manager) detachAll(entries []pairEntry, total int, progress func(comple
 			defer wg.Done()
 			errs[i] = m.detachProbeEntry(item)
 			<-sem
-			if !item.hasLinks {
+			if !item.active {
 				return
 			}
 			progressMu.Lock()
@@ -582,10 +637,14 @@ func firstNonNil(errs []error) error {
 }
 
 // pairEntry groups a probe entry with its syscall name for use during Close.
+// active is the entry's active flag when Close took its snapshot: the pairs
+// Close counts as the ones to detach. That includes a pair a Detach is
+// destroying at that moment (its links are off the entry already, see
+// probeEntry.active); Close waits for that Detach and destroys nothing itself.
 type pairEntry struct {
-	syscall  string
-	entry    *probeEntry
-	hasLinks bool
+	syscall string
+	entry   *probeEntry
+	active  bool
 }
 
 // snapshotAndMarkClosed atomically marks the manager as closed and returns a
@@ -601,9 +660,9 @@ func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 	entries := make([]pairEntry, 0, len(m.probes))
 	for syscall, entry := range m.probes {
 		entries = append(entries, pairEntry{
-			syscall:  syscall,
-			entry:    entry,
-			hasLinks: entry.enterLink != nil || entry.exitLink != nil,
+			syscall: syscall,
+			entry:   entry,
+			active:  entry.active,
 		})
 	}
 	m.closed = true
@@ -623,20 +682,21 @@ func (m *Manager) snapshotAndMarkClosed() ([]pairEntry, bool) {
 // The manager is marked closed before this function runs. A Close called
 // re-entrantly by a destroy/progress callback therefore returns at once rather
 // than trying to acquire this mutex again.
+//
+// It destroys the links that are on the entry once it has the mutex, and only
+// those: a link an earlier Detach or a failed attach already destroyed is not
+// there any more, whether or not its Destroy reported an error (Link).
 func (m *Manager) detachProbeEntry(item pairEntry) error {
 	item.entry.attachMu.Lock()
 	defer item.entry.attachMu.Unlock()
 
 	m.mu.Lock()
-	enterLink := item.entry.enterLink
-	exitLink := item.entry.exitLink
-	item.entry.enterLink = nil
-	item.entry.exitLink = nil
+	enterLink, exitLink := item.entry.takeLinks()
 	item.entry.active = false
 	item.entry.lastErr = nil
 	m.mu.Unlock()
 
-	_, enterErr, exitErr := destroyLinkPair(item.syscall, enterLink, exitLink)
+	enterErr, exitErr := destroyLinkPair(enterLink, exitLink)
 	errForSyscall := enterErr
 	if errForSyscall == nil {
 		errForSyscall = exitErr
@@ -669,15 +729,17 @@ func (m *Manager) setLastError(syscall string, err error) {
 	entry.lastErr = err
 }
 
-// attachPair attaches the enter tracepoint and then the exit tracepoint. When
-// the exit attach fails it destroys the enter link again, so a failed attach
-// normally returns no link at all.
+// attachPair attaches the enter tracepoint and then the exit tracepoint. It
+// returns both links or an error, never a link with an error: when the exit
+// attach fails it destroys the enter link again and returns none.
 //
-// The exception is an enter link that cannot be destroyed (task z13): its
-// tracepoint is still attached, so the link is returned together with the
-// error and the caller has to keep it. Dropped, nothing could destroy it any
-// more, and the next attach of the syscall would put a second enter program
-// beside it: every enter record twice.
+// That holds also when this destroy reports an error, which is then joined
+// to the attach error. Destroy is final (Link): the enter tracepoint is
+// detached and its link freed all the same, so handing the link back - as
+// task z13 first did, for the manager to keep and destroy again - would have
+// a freed link destroyed a second time. The next attach of the syscall
+// starts from nothing and finds no enter program of an earlier attempt
+// beside its own.
 func attachPair(attacher Attacher, enterTP, exitTP string) (Link, Link, error) {
 	enterLink, err := attachOne(attacher, enterTP)
 	if err != nil {
@@ -685,16 +747,15 @@ func attachPair(attacher Attacher, enterTP, exitTP string) (Link, Link, error) {
 	}
 
 	exitLink, err := attachOne(attacher, exitTP)
-	if err == nil {
-		return enterLink, exitLink, nil
+	if err != nil {
+		return nil, nil, errors.Join(err, destroyLink("cleanup enter link after exit attach failure", enterLink))
 	}
-	cleanupErr := destroyLink("cleanup enter link after exit attach failure", enterLink)
-	if cleanupErr == nil {
-		return nil, nil, err
-	}
-	return enterLink, nil, errors.Join(err, cleanupErr)
+	return enterLink, exitLink, nil
 }
 
+// destroyLink destroys link, if there is one, and wraps its error with
+// action. Like every Destroy it is final (Link): the caller must not keep the
+// link, whatever this returns.
 func destroyLink(action string, link Link) error {
 	if link == nil {
 		return nil

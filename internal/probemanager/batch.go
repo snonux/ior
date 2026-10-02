@@ -22,8 +22,11 @@ type SyscallError struct {
 // Total is the number of probes the batch had to change: for an attach the
 // matching probes that were detached, for a detach the matching probes that
 // were attached. Probes already in the requested state are not counted.
-// Changed counts the ones that did change; every other one has an entry in
-// Errors, in the (sorted) order the batch visited them.
+// Changed counts the ones that changed without an error; every other one has
+// an entry in Errors, in the (sorted) order the batch visited them. For an
+// attach those are the probes that stayed detached. For a detach they are
+// detached like the rest - a Destroy that reports an error is final too
+// (Link) - and only carry the error.
 type BatchResult struct {
 	Total   int
 	Changed int

@@ -274,11 +274,11 @@ func attachRequiredTraceProbes(ctx context.Context, attacher probemanager.Attach
 // runtime, and a user who switched every probe off before a restart
 // legitimately ends up here, so it is only a warning row.
 //
-// Closing the manager on the error path detaches nothing today (a pair that
-// fails to attach cleans up its own enter link, so a manager without an active
-// probe holds no links) but marks it closed, so nothing can attach through a
-// manager the caller no longer owns. It is kept so the error path stays
-// correct should the manager ever retain links of inactive probes.
+// Closing the manager on the error path detaches nothing (a pair that fails
+// to attach destroys its own enter link, and a link is gone once it was
+// destroyed, also when that reported an error - probemanager.Link - so a
+// manager without an active probe holds no links) but marks it closed, so
+// nothing can attach through a manager the caller no longer owns.
 func requireAttachedProbes(mgr *probemanager.Manager, releaseSchedProbes func(), headless bool, log bpfSetupLog) (*probemanager.Manager, func(), error) {
 	noProbes := noProbesError(mgr.States(), headless)
 	if noProbes == nil {
@@ -296,10 +296,15 @@ func requireAttachedProbes(mgr *probemanager.Manager, releaseSchedProbes func(),
 }
 
 // noProbesError returns the reason no syscall probe is active in states, or
-// nil when at least one is. It separates the two causes because they call for
-// different fixes: probes that were selected but failed to attach carry an
-// Error (the kernel lacks the tracepoints), while a selection that matched
-// nothing leaves every probe merely registered and inactive. For the second
+// nil when at least one is. Active means that the pair is attached: a probe
+// whose attach failed is inactive and has no tracepoint attached, also when
+// the destroy of its enter link reported an error on top (probemanager.Link),
+// so a run in which every pair failed that way is not taken for a traced one.
+//
+// It separates the two causes because they call for different fixes: probes
+// that were selected but failed to attach carry an Error (the kernel lacks
+// the tracepoints), while a selection that matched nothing leaves every probe
+// merely registered and inactive. For the second
 // cause the text depends on the mode: headless, the startup flags are the only
 // selection there is and the message names them; in the TUI the user may have
 // emptied the selection in the probes modal, so the flags would be a false
@@ -538,7 +543,8 @@ func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, t
 // reachable from tests without a live BPF module. The returned release closure
 // is idempotent: attachTraceProbes calls it on a cancelled setup and
 // publishProbeManager wraps it into the session's release closure, and a
-// double Destroy on a libbpf link is not safe.
+// second Destroy on a libbpf link is a use after free, also after a first one
+// that reported an error (probemanager.Link).
 //
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
