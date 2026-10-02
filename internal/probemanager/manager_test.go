@@ -277,278 +277,253 @@ func TestManagerAttachAllWithDimensionSelectorAttachesOnlyEnabledSyscalls(t *tes
 	}
 }
 
-func TestManagerAttachSerializesConcurrentCalls(t *testing.T) {
-	enterBlocked := make(chan struct{})
-	releaseEnter := make(chan struct{})
-	enter := &fakeProgram{link: &fakeLink{}}
-	var enteredOnce sync.Once
-	enter.onAttach = func() {
-		enteredOnce.Do(func() { close(enterBlocked) })
-		<-releaseEnter
-	}
-	exit := &fakeProgram{link: &fakeLink{}}
-	attacher := &fakeAttacher{
+// closeFixture is a manager with one registered syscall, close, whose two
+// fake programs hand out one fake link each. The tests of the manager's
+// locking below share it: they park one call inside a fake (blocker) and
+// watch what a second call does meanwhile.
+type closeFixture struct {
+	mgr                 *Manager
+	enterProg, exitProg *fakeProgram
+	enter, exit         *fakeLink
+}
+
+// newCloseFixture registers close, and attaches it too when attached.
+func newCloseFixture(t *testing.T, attached bool) *closeFixture {
+	t.Helper()
+	f := &closeFixture{enter: &fakeLink{}, exit: &fakeLink{}}
+	f.enterProg, f.exitProg = &fakeProgram{link: f.enter}, &fakeProgram{link: f.exit}
+	f.mgr = NewManager(&fakeAttacher{
 		programs: map[string]*fakeProgram{
-			"handle_sys_enter_close": enter,
-			"handle_sys_exit_close":  exit,
+			"handle_sys_enter_close": f.enterProg,
+			"handle_sys_exit_close":  f.exitProg,
 		},
 		errs: map[string]error{},
+	})
+	if !attached {
+		f.mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+		return f
 	}
-	mgr := NewManager(attacher)
-	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+	if err := f.mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
+		t.Fatalf("AttachAll returned error: %v", err)
+	}
+	return f
+}
 
-	errCh1 := make(chan error, 1)
-	go func() {
-		errCh1 <- mgr.Attach("close")
-	}()
+// assertAttachCalls checks how often each program was asked to attach.
+func (f *closeFixture) assertAttachCalls(t *testing.T, enter, exit int) {
+	t.Helper()
+	if got := f.enterProg.attachCalls(); got != enter {
+		t.Fatalf("enter attach ran %d times, want %d", got, enter)
+	}
+	if got := f.exitProg.attachCalls(); got != exit {
+		t.Fatalf("exit attach ran %d times, want %d", got, exit)
+	}
+}
 
+// assertDestroyCalls checks how often each link was destroyed.
+func (f *closeFixture) assertDestroyCalls(t *testing.T, enter, exit int) {
+	t.Helper()
+	if got := f.enter.destroyCalls(); got != enter {
+		t.Fatalf("enter link destroy calls = %d, want %d", got, enter)
+	}
+	if got := f.exit.destroyCalls(); got != exit {
+		t.Fatalf("exit link destroy calls = %d, want %d", got, exit)
+	}
+}
+
+// blocker parks the calls of a fake: hook, set as a fakeProgram's onAttach or
+// a fakeLink's onDestroy, returns only after release.
+type blocker struct {
+	once    sync.Once
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func newBlocker() *blocker {
+	return &blocker{started: make(chan struct{}), gate: make(chan struct{})}
+}
+
+func (b *blocker) hook() {
+	b.once.Do(func() { close(b.started) })
+	<-b.gate
+}
+
+// awaitStarted returns once a call is parked in hook, and fails the test with
+// notStarted when none arrives within a second.
+func (b *blocker) awaitStarted(t *testing.T, notStarted string) {
+	t.Helper()
 	select {
-	case <-enterBlocked:
+	case <-b.started:
 	case <-time.After(time.Second):
-		t.Fatal("first attach did not start")
+		t.Fatal(notStarted)
 	}
+}
+
+// release lets the parked call, and every later one, go on.
+func (b *blocker) release() {
+	close(b.gate)
+}
+
+// goErr runs call on a goroutine of its own and returns the channel its error
+// arrives on.
+func goErr(call func() error) <-chan error {
+	result := make(chan error, 1)
+	go func() { result <- call() }()
+	return result
+}
+
+// assertStillRunning fails the test with early when the call behind result
+// returns within 50ms: it is expected to wait for something the test holds.
+func assertStillRunning(t *testing.T, result <-chan error, early string) {
+	t.Helper()
+	select {
+	case err := <-result:
+		t.Fatalf("%s: %v", early, err)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// closeBegun starts CloseWithProgress on a goroutine of its own and returns
+// the channel of its error once it made its first report, (0, total): the
+// manager is marked closed by then.
+func closeBegun(t *testing.T, mgr *Manager) <-chan error {
+	t.Helper()
+	begun := make(chan struct{})
+	var once sync.Once
+	result := goErr(func() error {
+		return mgr.CloseWithProgress(func(completed, _ int) {
+			if completed == 0 {
+				once.Do(func() { close(begun) })
+			}
+		})
+	})
+	select {
+	case <-begun:
+	case <-time.After(time.Second):
+		t.Fatal("close did not begin")
+	}
+	return result
+}
+
+func TestManagerAttachSerializesConcurrentCalls(t *testing.T) {
+	f := newCloseFixture(t, false)
+	enterAttach := newBlocker()
+	f.enterProg.onAttach = enterAttach.hook
+
+	first := goErr(func() error { return f.mgr.Attach("close") })
+	enterAttach.awaitStarted(t, "first attach did not start")
 
 	// Goroutine 1 is now blocked inside AttachTracepoint for the enter probe.
 	// Enter has been called exactly once; exit has not been called yet because
 	// attachPair calls enter then exit sequentially.  These assertions are safe
-	// without any sleep: enterBlocked being closed is a happens-before edge that
-	// makes the attach-count writes visible here.
-	if got := enter.attachCalls(); got != 1 {
-		t.Fatalf("expected enter attach to be in flight (called once), got %d", got)
-	}
-	if got := exit.attachCalls(); got != 0 {
-		t.Fatalf("expected exit attach to not have started while enter is blocked, got %d", got)
-	}
+	// without any sleep: the blocker's started channel being closed is a
+	// happens-before edge that makes the attach-count writes visible here.
+	f.assertAttachCalls(t, 1, 0)
 
 	// Start a second concurrent Attach.  It will acquire m.mu briefly then
 	// block on entry.attachMu (held by goroutine 1) before it can reach
 	// AttachTracepoint.  The final count assertions below confirm it never ran
 	// a second attach.
-	errCh2 := make(chan error, 1)
-	go func() {
-		errCh2 <- mgr.Attach("close")
-	}()
+	second := goErr(func() error { return f.mgr.Attach("close") })
+	enterAttach.release()
 
-	close(releaseEnter)
-
-	if err := <-errCh1; err != nil {
+	if err := <-first; err != nil {
 		t.Fatalf("first Attach returned error: %v", err)
 	}
-	if err := <-errCh2; err != nil {
+	if err := <-second; err != nil {
 		t.Fatalf("second Attach returned error: %v", err)
 	}
-	if got := enter.attachCalls(); got != 1 {
-		t.Fatalf("expected enter attach to run once, got %d", got)
-	}
-	if got := exit.attachCalls(); got != 1 {
-		t.Fatalf("expected exit attach to run once, got %d", got)
-	}
-	if !mgr.IsActive("close") {
+	f.assertAttachCalls(t, 1, 1)
+	if !f.mgr.IsActive("close") {
 		t.Fatalf("expected probe to remain active after concurrent attach calls")
 	}
 }
 
 func TestManagerAttachWaitsForDetachBeforeReturning(t *testing.T) {
-	enterDestroyStarted := make(chan struct{})
-	releaseDestroy := make(chan struct{})
-	var enterDestroyOnce sync.Once
-	enter := &fakeLink{}
-	enter.onDestroy = func() {
-		enterDestroyOnce.Do(func() { close(enterDestroyStarted) })
-		<-releaseDestroy
-	}
-	exit := &fakeLink{}
-	enterProg := &fakeProgram{link: enter}
-	exitProg := &fakeProgram{link: exit}
-	attacher := &fakeAttacher{
-		programs: map[string]*fakeProgram{
-			"handle_sys_enter_close": enterProg,
-			"handle_sys_exit_close":  exitProg,
-		},
-		errs: map[string]error{},
-	}
-	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
-		t.Fatalf("AttachAll returned error: %v", err)
-	}
+	f := newCloseFixture(t, true)
+	enterDestroy := newBlocker()
+	f.enter.onDestroy = enterDestroy.hook
 
-	detachErrCh := make(chan error, 1)
-	go func() {
-		detachErrCh <- mgr.Detach("close")
-	}()
+	detach := goErr(func() error { return f.mgr.Detach("close") })
+	enterDestroy.awaitStarted(t, "detach did not start destroying the enter link")
 
-	select {
-	case <-enterDestroyStarted:
-	case <-time.After(time.Second):
-		t.Fatal("detach did not start destroying the enter link")
-	}
+	attach := goErr(func() error { return f.mgr.Attach("close") })
+	assertStillRunning(t, attach, "Attach returned before Detach completed")
+	enterDestroy.release()
 
-	attachErrCh := make(chan error, 1)
-	go func() {
-		attachErrCh <- mgr.Attach("close")
-	}()
-
-	select {
-	case err := <-attachErrCh:
-		t.Fatalf("Attach returned before Detach completed: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(releaseDestroy)
-
-	if err := <-detachErrCh; err != nil {
+	if err := <-detach; err != nil {
 		t.Fatalf("Detach returned error: %v", err)
 	}
-	if err := <-attachErrCh; err != nil {
+	if err := <-attach; err != nil {
 		t.Fatalf("Attach returned error: %v", err)
 	}
-	if got := enterProg.attachCalls(); got != 2 {
-		t.Fatalf("expected enter attach to run twice, got %d", got)
-	}
-	if got := exitProg.attachCalls(); got != 2 {
-		t.Fatalf("expected exit attach to run twice, got %d", got)
-	}
-	if got := enter.destroyCalls(); got != 1 {
-		t.Fatalf("expected enter link to be destroyed once, got %d", got)
-	}
-	if got := exit.destroyCalls(); got != 1 {
-		t.Fatalf("expected exit link to be destroyed once, got %d", got)
-	}
-	if !mgr.IsActive("close") {
+	f.assertAttachCalls(t, 2, 2)
+	f.assertDestroyCalls(t, 1, 1)
+	if !f.mgr.IsActive("close") {
 		t.Fatalf("expected probe to be active after detach followed by attach")
 	}
 }
 
+// TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy: a Close that starts
+// while a Detach is destroying the pair waits for it and destroys nothing
+// itself. Its progress counts that pair all the same (pairEntry): the Detach
+// has taken the links off the entry, but the entry is active until the Detach
+// commits, and the active pairs are what Close counts. A total taken from the
+// links still on the entries would be 0 here, and the progress bar of the
+// teardown would end before the last tracepoint is detached.
 func TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy(t *testing.T) {
-	enterDestroyStarted := make(chan struct{})
-	releaseDestroy := make(chan struct{})
-	var enterDestroyOnce sync.Once
-	enter := &fakeLink{}
-	enter.onDestroy = func() {
-		enterDestroyOnce.Do(func() { close(enterDestroyStarted) })
-		<-releaseDestroy
-	}
-	exit := &fakeLink{}
-	enterProg := &fakeProgram{link: enter}
-	exitProg := &fakeProgram{link: exit}
-	attacher := &fakeAttacher{
-		programs: map[string]*fakeProgram{
-			"handle_sys_enter_close": enterProg,
-			"handle_sys_exit_close":  exitProg,
-		},
-		errs: map[string]error{},
-	}
-	mgr := NewManager(attacher)
-	if err := mgr.AttachAll(nil, []string{"sys_enter_close", "sys_exit_close"}, nil); err != nil {
-		t.Fatalf("AttachAll returned error: %v", err)
-	}
+	f := newCloseFixture(t, true)
+	enterDestroy := newBlocker()
+	f.enter.onDestroy = enterDestroy.hook
 
-	detachErrCh := make(chan error, 1)
-	go func() {
-		detachErrCh <- mgr.Detach("close")
-	}()
+	detach := goErr(func() error { return f.mgr.Detach("close") })
+	enterDestroy.awaitStarted(t, "detach did not start destroying the enter link")
 
-	select {
-	case <-enterDestroyStarted:
-	case <-time.After(time.Second):
-		t.Fatal("detach did not start destroying the enter link")
-	}
+	// Written by Close's goroutines one at a time, and read only after Close
+	// has returned.
+	var progress [][2]int
+	closed := goErr(func() error {
+		return f.mgr.CloseWithProgress(func(completed, total int) {
+			progress = append(progress, [2]int{completed, total})
+		})
+	})
+	assertStillRunning(t, closed, "Close returned before Detach completed")
+	enterDestroy.release()
 
-	closeErrCh := make(chan error, 1)
-	go func() {
-		closeErrCh <- mgr.Close()
-	}()
-
-	select {
-	case err := <-closeErrCh:
-		t.Fatalf("Close returned before Detach completed: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(releaseDestroy)
-
-	if err := <-detachErrCh; err != nil {
+	if err := <-detach; err != nil {
 		t.Fatalf("Detach returned error: %v", err)
 	}
-	if err := <-closeErrCh; err != nil {
+	if err := <-closed; err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
-	if got := enter.destroyCalls(); got != 1 {
-		t.Fatalf("expected enter link to be destroyed once, got %d", got)
+	if want := [][2]int{{0, 1}, {1, 1}}; !slices.Equal(progress, want) {
+		t.Fatalf("Close reported progress %v, want %v: the pair being detached counts", progress, want)
 	}
-	if got := exit.destroyCalls(); got != 1 {
-		t.Fatalf("expected exit link to be destroyed once, got %d", got)
-	}
-	if mgr.IsActive("close") {
+	f.assertDestroyCalls(t, 1, 1)
+	if f.mgr.IsActive("close") {
 		t.Fatalf("expected probe to be inactive after Close")
 	}
 }
 
 func TestManagerCloseWaitsForBlockedAttachCleanup(t *testing.T) {
-	attachStarted := make(chan struct{})
-	releaseAttach := make(chan struct{})
-	enter := &fakeLink{}
-	exit := &fakeLink{}
-	enterProgram := &fakeProgram{link: enter}
-	var startOnce sync.Once
-	enterProgram.onAttach = func() {
-		startOnce.Do(func() { close(attachStarted) })
-		<-releaseAttach
-	}
-	mgr := NewManager(&fakeAttacher{
-		programs: map[string]*fakeProgram{
-			"handle_sys_enter_close": enterProgram,
-			"handle_sys_exit_close":  {link: exit},
-		},
-		errs: map[string]error{},
-	})
-	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+	f := newCloseFixture(t, false)
+	enterAttach := newBlocker()
+	f.enterProg.onAttach = enterAttach.hook
 
-	attachErr := make(chan error, 1)
-	go func() { attachErr <- mgr.Attach("close") }()
-	select {
-	case <-attachStarted:
-	case <-time.After(time.Second):
-		t.Fatal("attach did not reach the blocked module call")
-	}
+	attach := goErr(func() error { return f.mgr.Attach("close") })
+	enterAttach.awaitStarted(t, "attach did not reach the blocked module call")
 
-	closeStarted := make(chan struct{})
-	closeErr := make(chan error, 1)
-	go func() {
-		closeErr <- mgr.CloseWithProgress(func(completed, total int) {
-			if completed == 0 {
-				select {
-				case <-closeStarted:
-				default:
-					close(closeStarted)
-				}
-			}
-		})
-	}()
-	select {
-	case <-closeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("close did not begin")
-	}
-	select {
-	case err := <-closeErr:
-		t.Fatalf("CloseWithProgress returned before blocked attach cleanup: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
+	closed := closeBegun(t, f.mgr)
+	assertStillRunning(t, closed, "CloseWithProgress returned before blocked attach cleanup")
+	enterAttach.release()
 
-	close(releaseAttach)
-	if err := <-attachErr; err == nil || !strings.Contains(err.Error(), "closed") {
+	if err := <-attach; err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("Attach error = %v, want closed manager", err)
 	}
-	if err := <-closeErr; err != nil {
+	if err := <-closed; err != nil {
 		t.Fatalf("CloseWithProgress returned error: %v", err)
 	}
-	if got := enter.destroyCalls(); got != 1 {
-		t.Fatalf("enter link destroy calls = %d, want 1", got)
-	}
-	if got := exit.destroyCalls(); got != 1 {
-		t.Fatalf("exit link destroy calls = %d, want 1", got)
-	}
+	f.assertDestroyCalls(t, 1, 1)
 }
 
 func TestManagerCloseAllowsReentrantCloseDuringDestroy(t *testing.T) {
@@ -776,51 +751,19 @@ func TestManagerIsActiveReflectsCurrentState(t *testing.T) {
 func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	enterDestroyErr := errors.New("enter cleanup failed")
 	exitDestroyErr := errors.New("exit cleanup failed")
-	enter := &fakeLink{err: enterDestroyErr}
-	exit := &fakeLink{err: exitDestroyErr}
-	exitAttachStarted := make(chan struct{})
-	allowAttachReturn := make(chan struct{})
+	f := newCloseFixture(t, false)
+	f.enter.err, f.exit.err = enterDestroyErr, exitDestroyErr
+	exitAttach := newBlocker()
+	f.exitProg.onAttach = exitAttach.hook
 
-	attacher := &fakeAttacher{
-		programs: map[string]*fakeProgram{
-			"handle_sys_enter_close": {link: enter},
-			"handle_sys_exit_close":  {link: exit},
-		},
-		errs: map[string]error{},
-	}
-	mgr := NewManager(attacher)
-	attacher.programs["handle_sys_exit_close"].onAttach = func() {
-		close(exitAttachStarted)
-		<-allowAttachReturn
-	}
-	mgr.Register("close", TracepointPair{Enter: "sys_enter_close", Exit: "sys_exit_close"})
+	attach := goErr(func() error { return f.mgr.Attach("close") })
+	exitAttach.awaitStarted(t, "attach did not reach the exit tracepoint")
 
-	attachErr := make(chan error, 1)
-	go func() { attachErr <- mgr.Attach("close") }()
-	<-exitAttachStarted
+	closed := closeBegun(t, f.mgr)
+	assertStillRunning(t, closed, "CloseWithProgress returned before the in-flight attach could roll back")
+	exitAttach.release()
 
-	closed := make(chan struct{})
-	closeErr := make(chan error, 1)
-	go func() {
-		closeErr <- mgr.CloseWithProgress(func(completed, _ int) {
-			if completed == 0 {
-				select {
-				case <-closed:
-				default:
-					close(closed)
-				}
-			}
-		})
-	}()
-	<-closed
-	select {
-	case err := <-closeErr:
-		t.Fatalf("CloseWithProgress returned before the in-flight attach could roll back: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(allowAttachReturn)
-
-	err := <-attachErr
+	err := <-attach
 	if err == nil {
 		t.Fatalf("expected attach error when manager closes mid-attach")
 	}
@@ -833,10 +776,8 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	if !errors.Is(err, exitDestroyErr) {
 		t.Fatalf("expected joined exit cleanup error, got %v", err)
 	}
-	if enter.destroyed != 1 || exit.destroyed != 1 {
-		t.Fatalf("expected both cleanup destroys to run once, got enter=%d exit=%d", enter.destroyed, exit.destroyed)
-	}
-	if err := <-closeErr; err != nil {
+	f.assertDestroyCalls(t, 1, 1)
+	if err := <-closed; err != nil {
 		t.Fatalf("CloseWithProgress returned error: %v", err)
 	}
 }
@@ -902,12 +843,19 @@ func TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds(t *testing.T) {
 	}
 }
 
-func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *testing.T) {
-	firstEnterErr := errors.New("first enter detach failed")
-	links := []*fakeLink{
-		{err: firstEnterErr}, {}, {}, {},
-	}
-	mgr := &Manager{probes: map[string]*probeEntry{
+// closeUpdate is one progress report of CloseWithProgress, with the number of
+// Destroy calls the test's links had seen when it was made.
+type closeUpdate struct {
+	completed int
+	total     int
+	destroyed int
+}
+
+// twoActivePairsAndAnInactiveOne returns a manager holding links as the
+// enter and exit links of two active pairs, first and second, beside a
+// registered probe without a link.
+func twoActivePairsAndAnInactiveOne(links []*fakeLink) *Manager {
+	return &Manager{probes: map[string]*probeEntry{
 		"first": {
 			syscall:   "first",
 			enterLink: links[0],
@@ -922,21 +870,28 @@ func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *test
 		},
 		"inactive": {syscall: "inactive"},
 	}}
+}
 
-	type update struct {
-		completed int
-		total     int
-		destroyed int
-	}
-	var updates []update
+// closeRecordingDestroys closes mgr and returns its progress reports, each
+// with the Destroy calls links had seen by then, and the error of the close.
+func closeRecordingDestroys(mgr *Manager, links []*fakeLink) ([]closeUpdate, error) {
+	var updates []closeUpdate
 	err := mgr.CloseWithProgress(func(completed, total int) {
 		destroyed := 0
 		for _, link := range links {
 			destroyed += link.destroyCalls()
 		}
-		updates = append(updates, update{completed: completed, total: total, destroyed: destroyed})
+		updates = append(updates, closeUpdate{completed: completed, total: total, destroyed: destroyed})
 	})
+	return updates, err
+}
 
+func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *testing.T) {
+	firstEnterErr := errors.New("first enter detach failed")
+	links := []*fakeLink{
+		{err: firstEnterErr}, {}, {}, {},
+	}
+	updates, err := closeRecordingDestroys(twoActivePairsAndAnInactiveOne(links), links)
 	if !errors.Is(err, firstEnterErr) {
 		t.Fatalf("CloseWithProgress() error = %v, want %v", err, firstEnterErr)
 	}
@@ -944,7 +899,7 @@ func TestManagerCloseWithProgressCountsActivePairsAndContinuesAfterError(t *test
 	// of a pair that has not been counted yet. What must hold is that a pair is
 	// only counted after both its links are destroyed: destroyed is at least
 	// 2*completed, and exactly 0 before anything was reported and 4 at the end.
-	want := []update{
+	want := []closeUpdate{
 		{completed: 0, total: 2, destroyed: 0},
 		{completed: 1, total: 2},
 		{completed: 2, total: 2, destroyed: 4},

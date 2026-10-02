@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -169,6 +170,30 @@ func TestAttachRequiredTraceProbesHeadlessFailsWhenEveryCleanupFailsToo(t *testi
 	}
 	if total, live := attacher.attached(); total != schedProbeLinks || live != 0 {
 		t.Fatalf("attached %d hand probe links (%d live), want %d, all released", total, live, schedProbeLinks)
+	}
+}
+
+// TestSkipWarningOfAnAttachWhoseCleanupFailedToo: such an attach has two
+// errors to report, and the skip warning is one status line per syscall
+// (stderr headless) while the probe's recorded error is one row of the probes
+// modal. Joined by errors.Join the cleanup error began a second line (task
+// 223).
+func TestSkipWarningOfAnAttachWhoseCleanupFailedToo(t *testing.T) {
+	skipped := &lineRecorder{}
+	mgr, err := attachSyscallProbes(&exitFailingAttacher{t: t}, nil, syscallPairNames("read"), skipped.log)
+	if err != nil {
+		t.Fatalf("attachSyscallProbes: %v", err)
+	}
+	const attachErr = "attach sys_exit_read: tracepoint not found; " +
+		"cleanup enter link after exit attach failure: enter link busy"
+	if got, want := skipped.lines(), []string{"ior: skipping tracepoint for read: " + attachErr}; !slices.Equal(got, want) {
+		t.Fatalf("skip warnings = %q, want %q", got, want)
+	}
+	if states := mgr.States(); len(states) != 1 || states[0].Active || states[0].Error != attachErr {
+		t.Fatalf("States = %+v, want read inactive with the error %q", states, attachErr)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

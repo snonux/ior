@@ -74,9 +74,10 @@ func (m Model) ShowBatchProgress(msg FamilyBatchProgressMsg) Model {
 }
 
 // FinishBatch ends the displayed family batch: it reloads the probe list and
-// reports how many probes changed and, if any failed, the first failure (the
-// failing probes also carry their error in the Syscalls view rows). A
-// non-empty note is appended to the outcome line.
+// reports how many probes were attached or detached and, if any reported an
+// error, the first one (those probes also carry their error in the Syscalls
+// view rows; see familyOutcome for what the counts mean). A non-empty note
+// is appended to the outcome line.
 func (m Model) FinishBatch(msg FamilyToggledMsg, note string) Model {
 	m.batch = familyBatch{}
 	m = m.reload()
@@ -139,17 +140,30 @@ func (m Model) toggleSelectedFamily() (Model, tea.Cmd) {
 }
 
 // familyOutcome returns the info and error text for a finished family batch.
+//
+// The two operations count differently. A probe whose attach failed stayed
+// detached, so an attach reports the probes that changed without an error
+// ("attached 1 of 2 probes") and the others as failed. A probe whose detach
+// reported an error is detached like the rest - a link's Destroy is final,
+// whatever it returns (probemanager.Link, BatchResult) - so a detach counts
+// it among the detached ("detached 3 of 3 probes") and only says that it
+// reported an error: "detached 2 of 3" and "1 failed" told the user that a
+// probe was still attached, and the Families row beside it showed 0 attached.
 func familyOutcome(msg FamilyToggledMsg) (info, errText string) {
 	if msg.Err != nil {
 		return "", fmt.Sprintf("%s: %v", msg.Family, msg.Err)
 	}
 	result := msg.Result
-	info = fmt.Sprintf("%s: %s %d of %d probes", msg.Family, batchVerb(msg.Attach, true), result.Changed, result.Total)
+	done, failure := result.Changed, "failed"
+	if !msg.Attach {
+		done, failure = result.Changed+len(result.Errors), "reported an error"
+	}
+	info = fmt.Sprintf("%s: %s %d of %d probes", msg.Family, batchVerb(msg.Attach, true), done, result.Total)
 	if len(result.Errors) == 0 {
 		return info, ""
 	}
 	first := result.Errors[0]
-	errText = fmt.Sprintf("%d failed, first %s: %v", len(result.Errors), first.Syscall, first.Err)
+	errText = fmt.Sprintf("%d %s, first %s: %v", len(result.Errors), failure, first.Syscall, first.Err)
 	return info, errText
 }
 
