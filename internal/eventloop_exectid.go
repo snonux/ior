@@ -29,12 +29,51 @@ import (
 //
 // OldTid 0 never comes from the kernel (old_pid is a real task's tid) and is
 // treated as "tid kept", so records built without the field (tests, synthetic
-// replays) keep their old meaning.
+// replays) keep their old meaning (execChangedTid).
 func (e *eventLoop) rekeyExecCaller(ev *types.ProcessExecEvent) {
-	if ev.OldTid == 0 || ev.OldTid == ev.Tid {
+	if !execChangedTid(ev) {
 		return
 	}
 	e.applyExecTidChange(ev.OldTid, ev.Tid)
+}
+
+// execChangedTid reports whether ev is the exec of a non-leader thread, which
+// continues under another tid (the leader's) than the one it ran as.
+func execChangedTid(ev *types.ProcessExecEvent) bool {
+	return ev.OldTid != 0 && ev.OldTid != ev.Tid
+}
+
+// releaseExecCallerRestart releases the interrupted row a non-leader exec's
+// caller still holds under its pre-exec tid (eventloop_restart.go, task 103).
+//
+// A held row waits for the next record of its tid, and routeHeldRestart finds
+// it by the record's tid. This record carries the leader's tid, the exec'ing
+// thread gets no sched_process_exit under its old tid (it lives on as the
+// leader), and no record will ever name the old tid again - so the exec record
+// is the last chance to settle the row, and its OldTid is the only thing that
+// points at it. Two rows can be waiting there:
+//
+//   - the execve itself, interrupted with -ERESTARTNOINTR (a signal arrived
+//     while it waited for cred_guard_mutex: a concurrent exec in the group, a
+//     ptrace attach) and re-executed, with the re-executed enter taken for the
+//     fold (heldRestart.continuation). Left alone, the row stayed held under
+//     the vanished tid, moveExecCaller found no parked enter to carry over, and
+//     the successful execve's exit under the leader tid paired with nothing:
+//     the exec had no row at all. The release completes the -513 row and parks
+//     the enter again under the old tid, from where rekeyExecCaller moves it
+//     like any execve in flight.
+//   - another call (a read, a wait) whose restarting signal handler exec'd
+//     instead of returning. The call will never be re-executed.
+//
+// It runs first of all in handleProcessExecEvent: before rekeyExecCaller, so
+// the enter parked again is there to be moved, and before the FD_CLOEXEC
+// eviction, so that enter's target is resolved against the descriptors the
+// process had when it entered the execve (storeEnter).
+func (e *eventLoop) releaseExecCallerRestart(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
+	if !execChangedTid(ev) {
+		return
+	}
+	e.releaseHeldRestart(ev.OldTid, ch)
 }
 
 // applyExecTidChange moves a non-leader exec's per-tid state from the caller's
@@ -86,7 +125,14 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // carries the loser's tid and filename and the winner's enter stays parked
 // until LRU trimming; two lost records in one exec are accepted for that
 // over losing every non-leader exec whose record was dropped.
-func (e *eventLoop) adoptLostExecCaller(exitEv event.Event) (*event.Pair, bool) {
+//
+// The adoption retires the caller's tid as the lost record would have, so it
+// also releases an interrupted row still held under it (sent on ch before the
+// adopted pair): with the enter parked there, that is a call whose restarting
+// signal handler exec'd (releaseExecCallerRestart). An execve that was itself
+// interrupted and re-executed is not recovered here - its enter is kept with
+// the held row, not parked, so there is no hint to find it by.
+func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
 	ret, ok := exitEv.(*types.RetEvent)
 	if !ok || ret.Ret != 0 || ret.Tid != ret.Pid {
 		return nil, false
@@ -98,6 +144,7 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event) (*event.Pair, bool) 
 	if !ok {
 		return nil, false
 	}
+	e.releaseHeldRestart(callerTid, ch)
 	e.applyExecTidChange(callerTid, ret.Tid)
 	return e.pairs.consume(ret.Tid)
 }

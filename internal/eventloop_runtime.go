@@ -144,11 +144,20 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 		return
 	}
 	e.publishDropTotal(result.total)
-	// The restart fold learns of every reading, changed or not, with a clock
-	// reading taken after the counter was read (the result is in hand): that
-	// is how it knows since when the total has stood at its current value
-	// (restartDropWatch), and what lets a call interrupted long after a drop
-	// fold again. One clock read serves both users of the stamp.
+	// The restart fold's drop watch (restartDropWatch) is told of the reading,
+	// with a clock reading taken after the counter was read (the result is in
+	// hand). The reading that matters is the one that CHANGED the total: it
+	// stamps the new total here, within one monitor period of the drop, and a
+	// call interrupted after that stamp folds again. Without it the new total
+	// would first be seen by a fold's own read, which comes after that call's
+	// interruption, and the fold would be refused. A reading that returns the
+	// total the watch already has changes nothing there (observe keeps the
+	// first stamp). One reading with delta 0 does move the watch: a stale one,
+	// taken before the loop's own read saw a newer total and delivered after
+	// it. The watch takes any differing total for a change and stamps it now,
+	// and the next read of the real total stamps once more, so the invariant
+	// holds and the price is at most one refused fold. One clock read serves
+	// both users of the stamp.
 	if result.delta == 0 {
 		e.restarts.drops.observe(result.total, e.readDropStampClock())
 		return
@@ -264,18 +273,7 @@ func (e *eventLoop) handleAggregateDrainResult(result aggregateDrainResult) {
 // when ctx is cancelled are not abandoned: drainBacklogAtStop decodes them
 // first (bounded by count and time) and accounts for any it cannot.
 func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
-	// A raw record completes at most one pair of its own (tracepointExited,
-	// completeNoReturnEnter for a noreturn enter, completeUntracedExec for the
-	// exec record; all through sendPair), and before it at most one
-	// interrupted row its tid held back (routeHeldRestart releases or folds
-	// the one row of that tid, and holdRestart releases it before a new one
-	// takes its place; tasks fs2, 103), so two slots always suffice and the
-	// released row is drained first. A release that parks the continuation's
-	// enter again adds no pair (reparkContinuation), and the exit that then
-	// pairs with it is the record's one pair of its own. sendPair never
-	// blocks: a third pair for one record panics instead of deadlocking this
-	// goroutine, which is the channel's only reader.
-	pairs := make(chan *event.Pair, 2)
+	pairs := make(chan *event.Pair, pairChannelSlots)
 
 	// Buffered output (-plain) is flushed by the timer: a row waits at most
 	// plainFlushInterval, however busy or idle the loop is.
@@ -564,7 +562,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 	if !ok {
 		// A non-leader execve whose exec record was lost: see
 		// adoptLostExecCaller.
-		ep, ok = e.adoptLostExecCaller(exitEv)
+		ep, ok = e.adoptLostExecCaller(exitEv, ch)
 	}
 	if !ok {
 		// An exit with no enter is dropped without a row and without a count
@@ -633,14 +631,38 @@ func (e *eventLoop) completeTracepointPair(ep *event.Pair, ch chan<- *event.Pair
 	sendPair(ch, ep)
 }
 
-// secondPairPanic is the panic message of sendPair on a full channel.
-const secondPairPanic = "raw record completed more pairs than the pair channel holds; extra pair dropped"
+// pairChannelSlots is how many pairs one raw record may complete, and so the
+// size of the channel its handler sends them on (processRawEvents drains it
+// only after the handler has returned).
+//
+// A record completes at most one pair of its own - tracepointExited,
+// completeNoReturnEnter for a noreturn enter, completeUntracedExec for the
+// exec record - and before it at most one interrupted row for each tid it
+// retires (tasks fs2, 103). Every record retires the row of its own tid:
+// routeHeldRestart releases or folds it, and holdRestart releases it before a
+// new one takes its place, which is the same one row. The exec side of a
+// non-leader exec retires a second tid, the caller's pre-exec one: the exec
+// record through releaseExecCallerRestart, or, when that record was lost, the
+// execve's exit through adoptLostExecCaller. So the worst case is three: the
+// row held under the leader tid (only when the dead leader's own exit record
+// was lost, which would have released it), the row held under the caller's old
+// tid, and the execve's pair - from the exit record, or from the exec record
+// under -tid <caller>. The first and the last can hardly meet in the second
+// form (the kernel-side tid filter emits nothing under the leader's tid), but
+// a slot is cheaper than an argument that has to stay true: the channel is
+// sized for the sum. The released rows are sent first, so they are drained
+// first. A release that parks the continuation's enter again adds no pair
+// (reparkContinuation), and the exit that then pairs with it is that record's
+// one pair of its own.
+const pairChannelSlots = 3
+
+// extraPairPanic is the panic message of sendPair on a full channel.
+const extraPairPanic = "raw record completed more pairs than the pair channel holds; extra pair dropped"
 
 // sendPair hands a completed pair to processRawEvents, which drains the
-// channel only after the handler has returned. Its two slots are enough
-// because a raw record completes at most one pair of its own plus at most one
-// held interrupted row it releases first (see processRawEvents); a full channel
-// therefore means a handler broke that rule. A blocking send would then wait forever
+// channel only after the handler has returned. Its pairChannelSlots slots hold
+// everything one raw record can complete; a full channel therefore means a
+// handler broke that rule. A blocking send would then wait forever
 // for a reader that runs on this very goroutine - run() would never return,
 // e.done never close, and stats and shutdown would hang with it. So the send
 // never blocks: the extra pair is recycled and the handler panics, which
@@ -653,7 +675,7 @@ func sendPair(ch chan<- *event.Pair, ep *event.Pair) {
 	case ch <- ep:
 	default:
 		ep.Recycle()
-		panic(secondPairPanic)
+		panic(extraPairPanic)
 	}
 }
 

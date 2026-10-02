@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -372,31 +373,34 @@ func runCancelWithPairPending(t *testing.T, n, k int, viaWarning bool) (emitted,
 	return len(times), warnings
 }
 
-// TestRunSurvivesHandlerProducingThreePairs pins that a handler breaking the
-// pairs-per-record rule cannot deadlock the loop on the pair channel. Its two
-// slots hold a record's own pair plus the held -516 row it may release first
-// (task fs2); a third pair is dropped with a warning, the first two are
-// emitted in order, and the run goes on to the end of the stream.
-func TestRunSurvivesHandlerProducingThreePairs(t *testing.T) {
-	const secondTid = emitOrderTestTid + 1
-	const thirdTid = emitOrderTestTid + 2
+// TestRunSurvivesHandlerProducingTooManyPairs pins that a handler breaking the
+// pairs-per-record rule cannot deadlock the loop on the pair channel. Its
+// pairChannelSlots slots hold a record's own pair plus the held interrupted
+// rows it may release first (tasks fs2, 103); one pair more is dropped with a
+// warning, the ones that fit are emitted in order, and the run goes on to the
+// end of the stream.
+func TestRunSurvivesHandlerProducingTooManyPairs(t *testing.T) {
 	const after = 3
 	el := newEmitOrderEventLoop(t)
-	el.setCachedComm(secondTid, "emitorder2")
-	el.setCachedComm(thirdTid, "emitorder3")
 	var log streamLog
 	log.attach(el)
 
+	// One pair per extra tid: pairs 1..pairChannelSlots-1 fill the channel
+	// behind the record's own pair 0, and the last one (far in the future, so
+	// it would break the order if it were emitted) finds no slot.
 	gen := benchutil.NewEventGenerator()
-	secondEnter, secondExit, err := gen.NullPair(emitOrderTestTime(1), secondTid, secondTid,
-		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
-	if err != nil {
-		t.Fatalf("NullPair error = %v", err)
-	}
-	thirdEnter, thirdExit, err := gen.NullPair(emitOrderTestTime(100), thirdTid, thirdTid,
-		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
-	if err != nil {
-		t.Fatalf("NullPair error = %v", err)
+	var extraEnters, extraExits [][]byte
+	for i := 1; i <= pairChannelSlots; i++ {
+		tid, at := uint32(emitOrderTestTid+i), emitOrderTestTime(i)
+		if i == pairChannelSlots {
+			at = emitOrderTestTime(100)
+		}
+		el.setCachedComm(tid, "emitorder-extra")
+		enter, exit, err := gen.NullPair(at, tid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+		if err != nil {
+			t.Fatalf("NullPair error = %v", err)
+		}
+		extraEnters, extraExits = append(extraEnters, enter), append(extraExits, exit)
 	}
 	first := syncPairStream(t, 0, 1)
 	exitType := types.EventType(first[1][0])
@@ -405,15 +409,15 @@ func TestRunSurvivesHandlerProducingThreePairs(t *testing.T) {
 	el.rawHandlers[exitType] = func(raw []byte, ch chan<- *event.Pair) {
 		exitHandler(raw, ch)
 		if !broken {
-			// Complete the other two tids' pairs from the same record.
+			// Complete the other tids' pairs from the same record.
 			broken = true
-			exitHandler(secondExit, ch)
-			exitHandler(thirdExit, ch)
+			for _, exit := range extraExits {
+				exitHandler(exit, ch)
+			}
 		}
 	}
 
-	stream := [][]byte{secondEnter, thirdEnter, first[0], first[1]}
-	stream = append(stream, syncPairStream(t, 2, after)...)
+	stream := slices.Concat(extraEnters, first, syncPairStream(t, pairChannelSlots, after))
 	rawCh := filledRawChannel(stream)
 	close(rawCh)
 
@@ -427,20 +431,21 @@ func TestRunSurvivesHandlerProducingThreePairs(t *testing.T) {
 	select {
 	case <-el.done:
 	case <-time.After(emitOrderTestWait):
-		t.Fatal("run() hung on a handler that produced three pairs for one record")
+		t.Fatal("run() hung on a handler that produced more pairs for one record than the channel holds")
 	}
 
-	if len(log.entries) != 1+2+after {
-		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+2+after)
+	const emitted = pairChannelSlots + after
+	if len(log.entries) != 1+emitted {
+		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+emitted)
 	}
-	if !strings.Contains(log.entries[0].warning, secondPairPanic) {
+	if !strings.Contains(log.entries[0].warning, extraPairPanic) {
 		t.Fatalf("entry 0 = %+v, want the extra-pair warning", log.entries[0])
 	}
-	requireOrderedPairs(t, log.pairTimes(), 2+after)
+	requireOrderedPairs(t, log.pairTimes(), emitted)
 	// The dropped pair was produced, so it is counted in numSyscalls only.
-	if el.numSyscalls != 2+after+1 || el.numSyscallsAfterFilter != 2+after {
+	if el.numSyscalls != emitted+1 || el.numSyscallsAfterFilter != emitted {
 		t.Fatalf("numSyscalls=%d numSyscallsAfterFilter=%d, want %d and %d",
-			el.numSyscalls, el.numSyscallsAfterFilter, 2+after+1, 2+after)
+			el.numSyscalls, el.numSyscallsAfterFilter, emitted+1, emitted)
 	}
 }
 

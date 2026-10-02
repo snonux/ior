@@ -3,6 +3,8 @@ package internal
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"ior/internal/event"
@@ -1200,4 +1202,373 @@ func TestReexecFoldTakesAnyExitKindAndItsNameFixup(t *testing.T) {
 		t.Fatalf("folded row = %+v, want accept4 ret=7 from the original enter, duration 3000", row)
 	}
 	f.requireNothingHeld()
+}
+
+// execEnter is an execve enter of tid in the fixture's process.
+func (f *restartFixture) execEnter(at uint64, tid uint32) []byte {
+	f.t.Helper()
+	enter := &types.ExecEvent{EventType: types.ENTER_EXEC_EVENT, TraceId: types.SYS_ENTER_EXECVE, Time: at,
+		Pid: restartPid, Tid: tid, Dirfd: -1, SchemaVersion: types.EXEC_EVENT_SCHEMA_VERSION}
+	copy(enter.Filename[:], "/usr/bin/newprog")
+	copy(enter.Comm[:], "sleeper")
+	return mustRaw(f.t, enter)
+}
+
+func (f *restartFixture) execExit(at uint64, tid uint32, ret int64) []byte {
+	f.t.Helper()
+	_, raw := makeExitRetEvent(f.t, at, restartPid, tid, types.SYS_EXIT_EXECVE, ret)
+	return raw
+}
+
+// execRecord is the sched_process_exec record of an exec by the thread that
+// ran as oldTid and continues as tid. exitUntraced marks the record of a run
+// traced with -tid <oldTid>, whose execve exit never arrives.
+func (f *restartFixture) execRecord(at uint64, tid, oldTid uint32, exitUntraced bool) []byte {
+	f.t.Helper()
+	ev := &types.ProcessExecEvent{EventType: types.PROCESS_EXEC_EVENT, Time: at, Pid: restartPid, Tid: tid, OldTid: oldTid}
+	if exitUntraced {
+		ev.ExitUntraced = 1
+	}
+	copy(ev.Comm[:], "newprog")
+	return mustRaw(f.t, ev)
+}
+
+// interruptExecve drives an execve of tid that exits -513 (a signal arrived
+// while it waited for cred_guard_mutex) up to the point where its re-executed
+// enter has been taken for the fold: the row is held and the enter kept.
+func (f *restartFixture) interruptExecve(tid uint32) {
+	f.t.Helper()
+	f.feedNone(f.execEnter(restartBase, tid), "execve enter")
+	f.feedNone(f.execExit(restartBase+500, tid, restartNoIntr), "interrupted execve exit")
+	f.feedNone(f.resumeRecord(restartBase+800, tid), "RESUME record")
+	f.feedNone(f.execEnter(restartBase+800, tid), "re-executed execve enter")
+	if held, ok := f.el.restarts.lookup(tid); !ok || held.continuation == nil {
+		f.t.Fatal("the re-executed execve enter was not taken for the fold")
+	}
+}
+
+// requireNoEnterPending fails when an enter is still parked under any of tids.
+func (f *restartFixture) requireNoEnterPending(tids ...uint32) {
+	f.t.Helper()
+	for _, tid := range tids {
+		if parked, ok := f.el.pairs.pending(tid); ok {
+			f.t.Fatalf("enter %+v still parked under tid %d", parked.EnterEv, tid)
+		}
+	}
+}
+
+// The interrupted execve of interruptExecve as it was at its first exit, and
+// its successful re-execution as a row of its own (exit at restartBase+3000).
+var (
+	interruptedExecveRow = restartRow{name: "execve", tid: restartTid, ret: restartNoIntr, enterTime: restartBase, duration: 500}
+	reexecutedExecveRow  = restartRow{name: "execve", tid: restartTid, ret: 0, enterTime: restartBase + 800,
+		duration: 2200, gap: 300}
+)
+
+// TestNonLeaderExecReleasesTheRowHeldUnderItsOldTid: a non-leader thread's
+// execve exits -513 and is re-executed; the re-executed enter is taken for the
+// fold, and then the exec succeeds. de_thread hands the thread the leader's
+// tid, so everything that follows - the exec record, the execve's exit -
+// arrives under that tid, and the thread never gets a sched_process_exit under
+// its old one. The exec record is the last word about the old tid: it releases
+// the row held there, the kept enter is parked again and moves to the leader
+// tid with the rest of the caller's state, and the exit pairs with it. (Before,
+// the row stayed held under the vanished tid and the successful execve's exit
+// found no enter: no row for the exec at all.)
+func TestNonLeaderExecReleasesTheRowHeldUnderItsOldTid(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptExecve(restartTid)
+	f.feedNone(makeThreadExitEvent(t, restartBase+2000, restartPid, restartPid), "the dead leader's exit record")
+	released := f.feedOne(f.execRecord(restartBase+2100, restartPid, restartTid, false), "exec record")
+	if released != interruptedExecveRow {
+		t.Fatalf("released row = %+v, want the unchanged interrupted execve %+v", released, interruptedExecveRow)
+	}
+	f.requireNothingHeld()
+	if parked, ok := f.el.pairs.pending(restartPid); !ok || parked.EnterEv.GetTime() != restartBase+800 {
+		t.Fatalf("enter under the leader tid = %+v (parked=%t), want the re-executed execve's", parked, ok)
+	}
+	row := f.feedOne(f.execExit(restartBase+3000, restartPid, 0), "execve exit under the leader tid")
+	if row != reexecutedExecveRow {
+		t.Fatalf("row = %+v, want the successful execve %+v", row, reexecutedExecveRow)
+	}
+	if f.el.numSyscalls != 2 || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want 2 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
+	}
+	f.requireNoEnterPending(restartTid, restartPid)
+	if _, ok := f.el.commState().cached(restartTid); ok {
+		t.Fatal("the re-parked enter left a comm cached under the pre-exec tid")
+	}
+}
+
+// TestNonLeaderExecFromARestartingHandlerReleasesTheHeldRow: a read of a
+// non-leader thread exits -512, an SA_RESTART handler runs - and execs. The
+// handler never returns, the thread continues under the leader's tid, and no
+// record ever names its old tid again except the exec record's OldTid. That
+// record releases the read, which will never be re-executed. (Before, the
+// execve row came out but the read stayed held until the loop stopped.)
+func TestNonLeaderExecFromARestartingHandlerReleasesTheHeldRow(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+	f.feedNone(f.execEnter(restartBase+800, restartTid), "the handler's execve enter")
+	f.feedNone(makeThreadExitEvent(t, restartBase+2000, restartPid, restartPid), "the dead leader's exit record")
+	released := f.feedOne(f.execRecord(restartBase+2100, restartPid, restartTid, false), "exec record")
+	requireInterruptedRow(t, released, restartSys)
+	f.requireNothingHeld()
+	row := f.feedOne(f.execExit(restartBase+3000, restartPid, 0), "execve exit under the leader tid")
+	if row != reexecutedExecveRow {
+		t.Fatalf("row = %+v, want the handler's execve %+v", row, reexecutedExecveRow)
+	}
+	if f.el.numSyscalls != 2 {
+		t.Fatalf("numSyscalls = %d, want 2 (the read and the execve)", f.el.numSyscalls)
+	}
+	f.requireNoEnterPending(restartTid, restartPid)
+}
+
+// TestNonLeaderExecWithALostExecRecordReleasesTheHeldRow is the case above
+// with the exec record lost: the successful execve exit under the leader tid
+// adopts the enter still parked under the caller's (adoptLostExecCaller), and
+// that adoption retires the old tid just as the record would have - the row
+// held there included.
+func TestNonLeaderExecWithALostExecRecordReleasesTheHeldRow(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+	f.feedNone(f.execEnter(restartBase+800, restartTid), "the handler's execve enter")
+	rows := f.feed(f.execExit(restartBase+3000, restartPid, 0))
+	if len(rows) != 2 || rows[1] != reexecutedExecveRow {
+		t.Fatalf("rows = %+v, want the released read, then the execve %+v", rows, reexecutedExecveRow)
+	}
+	requireInterruptedRow(t, rows[0], restartSys)
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+}
+
+// TestLeaderExecReleasesItsOwnHeldRow: an exec that keeps its tid (the group
+// leader's, or a record without OldTid) needs nothing special. The exec record
+// carries the tid the row is held under, so it releases the row like any other
+// record of that tid, and the execve's exit pairs with the enter parked again.
+func TestLeaderExecReleasesItsOwnHeldRow(t *testing.T) {
+	for _, oldTid := range []uint32{restartTid, 0} {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptExecve(restartTid)
+		released := f.feedOne(f.execRecord(restartBase+2100, restartTid, oldTid, false), "exec record")
+		if released != interruptedExecveRow {
+			t.Fatalf("old tid %d: released row = %+v, want %+v", oldTid, released, interruptedExecveRow)
+		}
+		f.requireNothingHeld()
+		row := f.feedOne(f.execExit(restartBase+3000, restartTid, 0), "execve exit")
+		if row != reexecutedExecveRow || f.el.numSyscalls != 2 {
+			t.Fatalf("old tid %d: row = %+v numSyscalls=%d, want %+v and 2", oldTid, row, f.el.numSyscalls, reexecutedExecveRow)
+		}
+		f.requireNoEnterPending(restartTid)
+	}
+}
+
+// TestExecRecordMayCompleteThreeRows pins the pair channel's bound
+// (pairChannelSlots). The exec record of a non-leader thread names two tids,
+// and each may hold a row: the caller's old tid, and the leader's when the dead
+// leader's own exit record was lost. Under -tid <caller> the record also
+// stands in for the execve's exit (completeUntracedExec). All three rows are
+// emitted, in stream order per thread, and none is dropped for want of a slot.
+func TestExecRecordMayCompleteThreeRows(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.setCachedComm(restartPid, "leader")
+	f.interruptRead(restartBase-100, restartPid, restartSys)
+	f.interruptExecve(restartTid)
+	rows := f.feed(f.execRecord(restartBase+3000, restartPid, restartTid, true))
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want the leader's read, the interrupted execve and the execve the record completes", rows)
+	}
+	if rows[0].tid != restartPid || rows[0].ret != restartSys || rows[1] != interruptedExecveRow || rows[2] != reexecutedExecveRow {
+		t.Fatalf("rows = %+v, want the leader's -512 read, %+v, %+v", rows, interruptedExecveRow, reexecutedExecveRow)
+	}
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+	if f.el.numSyscalls != 3 {
+		t.Fatalf("numSyscalls = %d, want 3", f.el.numSyscalls)
+	}
+}
+
+// TestPanicInTheReleasedRowsHandlerKeepsTheEnter: the release completes the
+// held row first and parks the continuation's enter second, and the first step
+// runs handler code that may panic (processRawEventSafe recovers it and the
+// loop carries on). The enter must be parked all the same: the panic cost the
+// interrupted row, it must not cost the continuation's row too. Here the
+// panic is sendPair's, on a pair channel that is already full.
+func TestPanicInTheReleasedRowsHandlerKeepsTheEnter(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	var warnings []string
+	f.el.SetWarningCallback(func(message string) { warnings = append(warnings, message) })
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
+
+	full := make(chan *event.Pair, 1)
+	full <- &event.Pair{}
+	f.el.processRawEventSafe(makeTaskRenameEvent(t, restartPid, restartTid, "renamed"), full)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], extraPairPanic) {
+		t.Fatalf("warnings = %q, want the recovered sendPair panic", warnings)
+	}
+	f.requireNothingHeld()
+	if parked, ok := f.el.pairs.pending(restartTid); !ok || parked.EnterEv.GetTime() != restartBase+800 {
+		t.Fatalf("pending enter = %+v (parked=%t), want the re-executed read's", parked, ok)
+	}
+	row := f.feedOne(f.readExit(restartBase+3000, restartTid, 1), "re-executed read exit")
+	if row.enterTime != restartBase+800 || row.ret != 1 {
+		t.Fatalf("row = %+v, want the re-execution as its own row", row)
+	}
+}
+
+// TestFailedHandlerSyscallsDoNotReleaseTheRow: while a restarting handler
+// runs, only an exit of the tid with a RESTART code ends the wait (BPF then
+// tracks that inner call instead). A handler syscall that merely fails - a
+// non-blocking read returning -EAGAIN, a call returning a literal -EINTR -
+// leaves BPF's entry alone, and so must it leave the row; neither does an
+// interrupted call of another thread touch it. The fold still happens.
+func TestFailedHandlerSyscallsDoNotReleaseTheRow(t *testing.T) {
+	const eagain, eintr = int64(-11), int64(-4)
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+	for i, errno := range []int64{eagain, eintr} {
+		at := restartBase + 600 + uint64(i)*100
+		f.feedNone(f.readEnter(at, restartTid), "the handler's read enter")
+		if failed := f.feedOne(f.readExit(at+50, restartTid, errno), "the handler's failed read"); failed.ret != errno || failed.enterTime != at {
+			t.Fatalf("row = %+v, want the handler's own read returning %d", failed, errno)
+		}
+	}
+	f.interruptRead(restartBase+650, restartOtherTid, restartSys)
+	if held, ok := f.el.restarts.lookup(restartTid); !ok || held.phase != restartInHandler {
+		t.Fatalf("held = %+v (held=%t), want the row still waiting for its handler", held, ok)
+	}
+
+	f.sigreturn(restartBase+900, restartTid)
+	f.feedNone(f.resumeRecord(restartBase+1000, restartTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+1000, restartTid), "re-executed read enter")
+	row := f.feedOne(f.readExit(restartBase+3000, restartTid, 1), "re-executed read exit")
+	if row.ret != 1 || row.enterTime != restartBase || row.duration != 3000 {
+		t.Fatalf("folded row = %+v, want the original enter with ret 1 and duration 3000", row)
+	}
+	if _, ok := f.el.restarts.lookup(restartOtherTid); !ok || len(f.el.restarts.held) != 1 {
+		t.Fatal("the other thread's interrupted row is not the one row still held")
+	}
+}
+
+// TestRestartDropWatchIsSharedBetweenTheMonitorAndTheLoop: the drop watch is
+// written from two goroutines - the periodic monitor's handler and the loop's
+// own reads at RESUME and at the folding exit - so its two fields change under
+// a lock. Run with -race, this is what notices the lock going missing.
+func TestRestartDropWatchIsSharedBetweenTheMonitorAndTheLoop(t *testing.T) {
+	const rounds = 2000
+	var total, now atomic.Uint64
+	el := &eventLoop{dropStampClock: func() uint64 { return now.Add(1) }}
+	src := ringbufDropSourceFunc(func() (uint64, error) { return total.Load(), nil })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range uint64(rounds) {
+			// Alternating totals, so every poll moves the watch; delta 0 keeps
+			// the poll free of the warning a real loss raises.
+			total.Store(i % 2)
+			el.handleRingbufDropResult(ringbufDropResult{total: i % 2})
+		}
+	}()
+	for range rounds {
+		el.restarts.drops.lostSince(now.Load(), src, el.readDropStampClock)
+	}
+	<-done
+	if seen := el.restarts.drops.observe(total.Load(), now.Add(1)); seen == 0 || seen > now.Load() {
+		t.Fatalf("first-seen stamp = %d, want one of the clock readings taken (1..%d)", seen, now.Load())
+	}
+}
+
+// TestRestartDropWatchStampsAfterTheCounterRead: an observation's stamp must
+// be a clock reading taken AFTER the counter was read. The counter says how
+// many, not when; a stamp taken before the read would date a drop that happens
+// between the two before an interruption that in truth preceded it, and the
+// fold would be allowed across the loss. Here the counter read itself takes
+// time: the row was interrupted at 300, the read starts at 100, sees a new
+// total, and ends at 500.
+func TestRestartDropWatchStampsAfterTheCounterRead(t *testing.T) {
+	var watch restartDropWatch
+	now := uint64(100)
+	clock := func() uint64 { return now }
+	slow := ringbufDropSourceFunc(func() (uint64, error) {
+		now = 500
+		return 3, nil
+	})
+	if !watch.lostSince(300, slow, clock) {
+		t.Fatal("a new total was stamped with a clock reading taken before the counter was read")
+	}
+	if seen := watch.observe(3, 9000); seen != 500 {
+		t.Fatalf("first-seen stamp = %d, want 500, the reading taken after the counter read", seen)
+	}
+}
+
+// failedOpenEnter is an openat enter of the fixture's main tid whose path
+// read faulted at sys_enter: no name, and the status that lets a name fixup
+// fill it in.
+func (f *restartFixture) failedOpenEnter(at uint64) []byte {
+	f.t.Helper()
+	ev, _ := makeEnterOpenEvent(f.t, at, restartPid, restartTid)
+	ev.Filename = [types.MAX_FILENAME_LENGTH]byte{}
+	ev.FilenameStatus = types.PATH_READ_FAILED
+	return eventBytes(f.t, &ev)
+}
+
+// TestNameFixupReachesTheKeptEnter: the re-executed open's path read faulted
+// again, and its name arrives in a fixup record while the enter is kept with
+// the held row. The fixup is spliced into the kept enter, so when the fold is
+// refused and the enter is parked again, the continuation's row has its
+// filename - as it would have had with the enter parked all along.
+func TestNameFixupReachesTheKeptEnter(t *testing.T) {
+	const recovered = "/fifo/recovered"
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.feedNone(f.failedOpenEnter(restartBase), "openat enter")
+	exit, _ := makeExitOpenEvent(t, restartBase+500, restartPid, restartTid)
+	exit.Ret = restartSys
+	f.feedNone(eventBytes(t, &exit), "interrupted openat exit")
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	f.feedNone(f.failedOpenEnter(restartBase+800), "re-executed openat enter")
+	f.feedNone(makeOpenNameFixupEvent(t, restartTid, types.SYS_ENTER_OPENAT, recovered), "name fixup of the re-executed enter")
+	if held, ok := f.el.restarts.lookup(restartTid); !ok || held.continuation == nil {
+		t.Fatal("the name fixup released the row or cost it the kept enter")
+	}
+
+	// The fold is refused: a record was lost somewhere on the host.
+	f.loseRecords(1)
+	f.clockAt(restartBase + 9000)
+	exit.Time, exit.Ret = restartBase+3000, 7
+	f.el.processRawEvent(eventBytes(t, &exit), f.out)
+	first, second := <-f.out, <-f.out
+	defer first.Recycle()
+	defer second.Recycle()
+	if got := first.FileName(); got != "" {
+		t.Fatalf("interrupted row's file = %q, want none: the fixup belongs to the re-executed enter", got)
+	}
+	if second.EnterEv.GetTime() != restartBase+800 || second.FileName() != recovered {
+		t.Fatalf("continuation's row: enter time %d file %q, want %d and %q",
+			second.EnterEv.GetTime(), second.FileName(), restartBase+800, recovered)
+	}
+}
+
+// TestNameFixupIsNoStepOfTheRestartSyscallFold: restart_syscall has no path
+// argument, so a name fixup between its enter and its exit cannot be its own.
+// It is one more record that is not the next step: the -516 row is released
+// unchanged and restart_syscall becomes a row of its own.
+func TestNameFixupIsNoStepOfTheRestartSyscallFold(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interrupt(restartBase, restartTid)
+	f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
+	sleep := f.feedOne(makeOpenNameFixupEvent(t, restartTid, types.SYS_ENTER_OPENAT, "/stray"), "a stray name fixup")
+	if sleep.name != "clock_nanosleep" || sleep.ret != -516 {
+		t.Fatalf("released row = %+v, want the unchanged -516 sleep", sleep)
+	}
+	f.requireNothingHeld()
+	row := f.feedOne(f.restartExit(restartBase+3000, restartTid, 0), "restart_syscall exit")
+	if row.name != "restart_syscall" || row.enterTime != restartBase+1500 {
+		t.Fatalf("row = %+v, want restart_syscall as its own row", row)
+	}
 }

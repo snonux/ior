@@ -67,9 +67,9 @@ func newRestartFixture(t *testing.T, filter globalfilter.Filter) *restartFixture
 	t.Cleanup(el.commResolver.shutdown)
 	el.setCachedComm(restartTid, "sleeper")
 	el.setCachedComm(restartOtherTid, "other")
-	// Two slots, like processRawEvents: a record may release a held row
+	// As many slots as processRawEvents has: a record may release held rows
 	// before its own pair.
-	return &restartFixture{t: t, el: el, out: make(chan *event.Pair, 2)}
+	return &restartFixture{t: t, el: el, out: make(chan *event.Pair, pairChannelSlots)}
 }
 
 // feed processes one raw record and returns the rows it emitted, in order.

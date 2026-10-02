@@ -131,6 +131,10 @@ A -516 row that is not followed by `restart_syscall` on the same thread stays as
 handler ran and the program got `EINTR`, or the trace ended (or the thread exited) while the
 call was stopped. A `restart_syscall` row whose interrupted call was not traced (the trace
 started while the process was stopped, or the original syscall is not traced) also stays.
+And when some other record of the thread arrives between the `restart_syscall` enter and its
+exit (another thread wrote this thread's `comm` through `/proc/<pid>/task/<tid>/comm`), ior no
+longer treats what follows as the continuation: the -516 row stays as it is and is followed
+directly by a `restart_syscall` row with the final return value.
 
 #### A re-executed call is one row
 
@@ -182,6 +186,17 @@ followed by a second row for the continuation (if that was recorded at all), whe
   if it happened shortly before (ior reads the counter once a second, and again when it is
   about to fold). A fold refused for this reason costs no row: the
   restart-code row and the continuation's row are both recorded;
+- another record of the same thread arrived between the continuation's enter and its exit.
+  The fold only takes an exit that directly follows the enter; a thread's `comm` being written
+  by another thread (`/proc/<pid>/task/<tid>/comm`), or the exec record of a successful
+  `execve`, in between ends it. Both rows are recorded: the restart-code row, then the
+  continuation with the real result. An `execve` that was interrupted and restarted (-513: a
+  signal arrived while it waited for a concurrent exec or a ptrace attach in its thread group)
+  and then succeeded is therefore always two rows, `execve ret=-513` and `execve ret=0`, also
+  when a thread other than the main thread made the call (both rows carry that thread's id);
+- a restarting signal handler replaced the program with `execve` instead of returning: the
+  interrupted call is never re-executed and keeps its restart-code row, listed before the
+  `execve` row;
 - a signal handler made more than about a hundred traced syscalls before returning, never
   returned (it left through `siglongjmp`), or was itself interrupted in a blocking call (that
   inner call is folded instead);

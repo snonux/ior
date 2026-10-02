@@ -116,6 +116,13 @@ import (
 //     (when there is room, holdRestart). At the end of the run every held row
 //     is completed too (releaseAllHeldRestarts). No held row is lost: it is
 //     either folded or emitted as it was.
+//   - One release is not triggered by a record of the held tid, because there
+//     is none: a non-leader thread that execs continues under the leader's
+//     tid, gets no exit record under its old one, and is never heard of under
+//     that tid again. Its exec record names the old tid (OldTid), and that
+//     releases the row held there (releaseExecCallerRestart) - the execve
+//     itself when it was interrupted with -513 and re-executed, or the call
+//     whose restarting handler exec'd instead of returning.
 //   - A release never costs the continuation its row either. When the
 //     continuation's enter was already taken (restartContinuing), the release
 //     parks it again as the tid's pending enter, through the path every enter
@@ -599,6 +606,10 @@ type tidRecord interface {
 // parked again first, then the record goes its usual way. Records of tids
 // without a held row cost one length check. rawEvent is the registered kind
 // ev was decoded as.
+//
+// The row is found by the record's own tid. The one record that settles a row
+// held under another tid, the exec record of a non-leader thread, does so in
+// its control handler (releaseExecCallerRestart).
 func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecodedEvent, ch chan<- *event.Pair) bool {
 	if len(e.restarts.held) == 0 {
 		return false
@@ -770,12 +781,19 @@ func (e *eventLoop) releaseTakenRestart(held *heldRestart, ch chan<- *event.Pair
 // it at all, and an exec enter gets its target snapshot. The exit that
 // follows then pairs with it like any other.
 //
-// It sends nothing on ch, which the two-slot bound of processRawEvents relies
-// on: syscallEntered completes a row only for a syscall that never returns,
-// and the enter kept here is one whose syscall has an exit - the interrupted
-// call's own syscall, or restart_syscall. The tid has no other pending enter
-// to displace: its last one was consumed by the interrupted exit, and in
-// restartContinuing every further record of the tid comes through here first.
+// It sends nothing on ch, which the bound of the pair channel relies on
+// (pairChannelSlots): syscallEntered completes a row only for a syscall that
+// never returns, and the enter kept here is one whose syscall has an exit -
+// the interrupted call's own syscall, or restart_syscall.
+//
+// The tid usually has no pending enter at this point: the interrupted exit
+// consumed the call's own, and in restartContinuing every further record of
+// the tid comes through here first. It can have one all the same - an enter
+// that passed while the row's handler ran (restartInHandler) and whose exit
+// record never arrived. Parking displaces it exactly as the continuation's
+// enter would have displaced it had the fold never taken it: pairTracker.set
+// recycles the previous enter, a call that can no longer pair. No row comes
+// of that either.
 func (e *eventLoop) reparkContinuation(held *heldRestart, ch chan<- *event.Pair) {
 	enterEv := held.continuation
 	if enterEv == nil {
