@@ -34,12 +34,31 @@
 %developers ALL=(root) NOPASSWD: /bin/sh -c LC_ALL\=C find /sys/kernel/tracing/events/syscalls -maxdepth 2 -mindepth 2 -name format | sort | xargs cat
 
 # -----------------------------------------------------------------------------
-# 3. Run the compiled integration test binary (used by mage integrationTest,
+# 3. Run the compiled test binary (used by mage integrationTest,
 #    mage integrationTestSerial, mage testWithName for integration targets)
 # -----------------------------------------------------------------------------
-# The binary is produced by "go test -c ./integrationtests" and lands in the
-# repository root as "integrationtests.test". The rule matches its path, not
-# its contents; protect that path against untrusted writers.
+# Mage runs two different binaries at the path "integrationtests.test" in the
+# repository root, one after the other, each compiled by the caller:
+#
+#   a. "go test -c ./internal/", run from internal/ with
+#        -test.run ^(<the root link tests>)$ -test.timeout=5m -test.count=1
+#        -test.v
+#      (mage integrationTest and integrationTestSerial only; the names are
+#      gatecmd.RootLinkTests, the tests of internal/ior_bpflink_root_test.go).
+#      Mage removes this binary again before step b.
+#   b. "go test -c ./integrationtests/...", run from integrationtests/ with
+#      the integration flags.
+#
+# The rule below matches the path, not the contents and not the arguments: a
+# sudoers command without arguments matches any arguments. It sets no
+# directory either, so each binary runs where Mage started it. It therefore
+# permits both runs as it stands, and it never restricted which tests run as
+# root. Protect that path against untrusted writers.
+#
+# If you tighten the rule with an argument list, step a needs a line of its
+# own: its arguments differ from step b's. A CWD= option would force one
+# directory on both steps; leave it off, or pair it with the argument lists.
+# docs/sudo-hardening-plan.md has the rule text.
 #
 # If your repo is checked out in a non-standard location, you may need a
 # symlink or wrapper script at a fixed path (e.g. /usr/local/bin/ior-test-runner)

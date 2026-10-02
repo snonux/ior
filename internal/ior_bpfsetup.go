@@ -43,6 +43,10 @@ type libbpfTracepointModule struct {
 	module *bpf.Module
 }
 
+// GetProgram is the one function that holds a bare *bpf.BPFProg: it wraps it
+// and does nothing else with it. Its body is pinned as a whole
+// (TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram), because an
+// attach made here would run outside libbpfAttachMu and leave a bare link.
 func (m libbpfTracepointModule) GetProgram(progName string) (probemanager.Program, error) {
 	prog, err := m.module.GetProgram(progName)
 	if err != nil {

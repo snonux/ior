@@ -21,8 +21,10 @@ import (
 // tracepoint (sched_process_exec) and the raw tracepoint (task_rename), make
 // libbpf's destroy of both links fail, and close the module. They skip for
 // any other user, so `mage test` passes them by; `mage integrationTest` runs
-// them as root (runRootLinkTests in Magefile.go, which lists them by name:
-// internal/buildgate fails when a test here is added or renamed without it).
+// them as root (runRootLinkTests in Magefile.go, with the names listed in
+// gatecmd.RootLinkTests: internal/buildgate fails when a test here is added
+// or renamed without it, and the step itself fails unless each of them is
+// reported as passed - a skip is not a pass).
 //
 // The failure is real, not faked: the test closes the link's fds behind
 // libbpf's back, so the PERF_EVENT_IOC_DISABLE ioctl of the classic link and

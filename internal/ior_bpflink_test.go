@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io/fs"
 	"path/filepath"
@@ -205,7 +206,9 @@ func TestLibbpfLinkDestroysThroughLibbpfgo(t *testing.T) {
 // method that returned the *bpf.BPFLink itself would compile (it has a
 // Destroy) and bring the double destroy back. The root tests check the same
 // on real links; this one runs unprivileged. That nothing attaches beside
-// these four functions is TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks.
+// these four functions is TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks
+// and, for the one function that holds the bare program,
+// TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram.
 func TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks(t *testing.T) {
 	root := repoRoot(t)
 	methods := 0
@@ -234,6 +237,45 @@ func TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks(t *testing.T) {
 	}
 	if attaches < 2 {
 		t.Fatalf("found %d attachLibbpf... functions in ior_bpflink.go, want at least 2", attaches)
+	}
+}
+
+// libbpfGetProgramBody is the reviewed body of
+// libbpfTracepointModule.GetProgram, as gofmt prints it.
+const libbpfGetProgramBody = `{
+	prog, err := m.module.GetProgram(progName)
+	if err != nil {
+		return nil, err
+	}
+	return libbpfTracepointProgram{prog: prog}, nil
+}`
+
+// libbpfTracepointModule.GetProgram is the one function that holds a bare
+// *bpf.BPFProg in a variable: it gets it from libbpfgo and wraps it. The scan
+// of selectors (libbpfSeamNames) has to let it call GetProgram, and it cannot
+// follow a local variable: `attachBPFTracepoint(prog, ...)` there names no
+// selector at all, and would attach outside libbpfAttachMu and hand out or
+// drop a bare link. So the body is compared with the reviewed one, whole. A
+// change to it is a change to the seam: review it, then update the constant.
+func TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "internal", "ior_bpfsetup.go")
+	found := 0
+	for _, decl := range funcDecls(parseRepoFile(t, path)) {
+		if receiverTypeName(decl) != "libbpfTracepointModule" || decl.Name.Name != "GetProgram" {
+			continue
+		}
+		found++
+		var body strings.Builder
+		if err := printer.Fprint(&body, repoFileSet, decl.Body); err != nil {
+			t.Fatalf("print the body of GetProgram: %v", err)
+		}
+		if got := body.String(); got != libbpfGetProgramBody {
+			t.Errorf("libbpfTracepointModule.GetProgram is no longer the reviewed body.\n  is:\n%s\n  want:\n%s",
+				got, libbpfGetProgramBody)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("found %d declarations of libbpfTracepointModule.GetProgram, want 1", found)
 	}
 }
 
@@ -335,11 +377,23 @@ func returnsOnlyAWrappedAttach(decl *ast.FuncDecl) bool {
 //     the links and makes the attach calls; beyond it only the field of
 //     libbpfTracepointProgram names the program type.
 //   - prog is that field: only the two methods read it, to pass it on.
+//   - AttachTracepoint and AttachRawTracepoint are libbpfgo's two attach
+//     calls ior makes, in ior_bpflink.go. The scan goes by name here too, so
+//     the calls of probemanager.Program's methods of the same names are
+//     listed: the syscall probes' in the manager and the hand-written
+//     probes' in ior_bpfsetup.go. libbpfTracepointProgram's own two methods
+//     are not: they declare the names and select neither.
+//
+// Every other Attach... method of libbpfgo is pinned as well, to no place at
+// all (libbpfgoAttachMethods, libbpfSeamPlaces).
 //
 // Anything else is a way around the wrapper (libbpfLink: a bare link whose
 // Destroy failed is destroyed again by Module.Close) or around the attach
 // mutex (libbpfAttachMu). What the scan cannot see: a program reached without
-// any of these names, such as through libbpfgo's Module.Iterator.
+// any of these names, such as through libbpfgo's Module.Iterator, and a bare
+// program passed on as a plain variable, which is why the one function that
+// has such a variable is pinned whole
+// (TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram).
 var libbpfSeamNames = map[string]map[string][]string{
 	"GetProgram": {
 		"internal/ior_bpfsetup.go":         {"libbpfTracepointModule.GetProgram", "attachHandProbe"},
@@ -357,6 +411,60 @@ var libbpfSeamNames = map[string]map[string][]string{
 			"libbpfTracepointProgram.AttachTracepoint", "libbpfTracepointProgram.AttachRawTracepoint",
 		},
 	},
+	"AttachTracepoint": {
+		"internal/ior_bpflink.go":          {"*"},
+		"internal/ior_bpfsetup.go":         {"attachRestartSigreturnProbe", "attachHandTracepoint"},
+		"internal/probemanager/manager.go": {"attachOne"},
+	},
+	"AttachRawTracepoint": {
+		"internal/ior_bpflink.go":  {"*"},
+		"internal/ior_bpfsetup.go": {"attachTaskRenameProbe"},
+	},
+}
+
+// libbpfgoAttachMethods are the names of the methods of libbpfgo's program,
+// map and module whose name begins with "Attach" and goes on (AttachKprobe,
+// AttachGeneric, AttachStructOps, AttachPrograms, ...), asked of the linked
+// libbpfgo itself so that a bump which adds one is covered without an edit
+// here. Each attaches a program and, with two exceptions that return only an
+// error, hands out a bare *bpf.BPFLink.
+var libbpfgoAttachMethods = func() map[string]bool {
+	names := map[string]bool{}
+	for _, owner := range []any{(*bpf.BPFProg)(nil), (*bpf.BPFMap)(nil), (*bpf.Module)(nil)} {
+		typ := reflect.TypeOf(owner)
+		for i := range typ.NumMethod() {
+			if name := typ.Method(i).Name; strings.HasPrefix(name, "Attach") && name != "Attach" {
+				names[name] = true
+			}
+		}
+	}
+	return names
+}()
+
+// libbpfSeamPlaces returns the places that may select name, and whether name
+// is pinned at all: the names of libbpfSeamNames to their places, and every
+// other attach method of libbpfgo to none.
+func libbpfSeamPlaces(name string) (map[string][]string, bool) {
+	if places, ok := libbpfSeamNames[name]; ok {
+		return places, true
+	}
+	return nil, libbpfgoAttachMethods[name]
+}
+
+// The scan trusts reflection for libbpfgo's attach methods. Had it found
+// none, or not the two ior uses, every other attach kind would go unpinned
+// without a word.
+func TestLibbpfgoAttachMethodsAreFound(t *testing.T) {
+	for _, name := range []string{"AttachTracepoint", "AttachRawTracepoint", "AttachKprobe", "AttachGeneric", "AttachStructOps"} {
+		if !libbpfgoAttachMethods[name] {
+			t.Errorf("libbpfgoAttachMethods lacks %s (it has %d names)", name, len(libbpfgoAttachMethods))
+		}
+	}
+	for name := range libbpfSeamNames {
+		if strings.HasPrefix(name, "Attach") && !libbpfgoAttachMethods[name] {
+			t.Errorf("libbpfSeamNames lists %s, which libbpfgo no longer has", name)
+		}
+	}
 }
 
 // TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks scans every non-test Go
@@ -371,7 +479,7 @@ func TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks(t *testing.T) {
 			return
 		}
 		scanned++
-		for _, violation := range libbpfSeamViolations(rel, file) {
+		for _, violation := range libbpfSeamViolations(repoFileSet, rel, file) {
 			t.Error(violation)
 		}
 	})
@@ -381,8 +489,11 @@ func TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks(t *testing.T) {
 }
 
 // libbpfSeamViolations returns one message for every selector in file, the
-// file at the repository path rel, that libbpfSeamNames does not allow there.
-func libbpfSeamViolations(rel string, file *ast.File) []string {
+// file at the repository path rel parsed into fset, that libbpfSeamPlaces
+// does not allow there. The message has the line and both ways out, because
+// the scan goes by name: a field or method that merely shares a pinned name
+// (a `prog` field of some other struct) trips it just the same.
+func libbpfSeamViolations(fset *token.FileSet, rel string, file *ast.File) []string {
 	var violations []string
 	for _, declaration := range file.Decls {
 		for _, in := range declNames(declaration) {
@@ -391,11 +502,13 @@ func libbpfSeamViolations(rel string, file *ast.File) []string {
 				if !ok {
 					return true
 				}
-				places, pinned := libbpfSeamNames[selector.Sel.Name]
+				places, pinned := libbpfSeamPlaces(selector.Sel.Name)
 				allowed := places[rel]
 				if pinned && !slices.Contains(allowed, "*") && !slices.Contains(allowed, in.name) {
 					violations = append(violations, fmt.Sprintf(
-						"%s: %q uses .%s outside the libbpf seam (libbpfSeamNames)", rel, in.name, selector.Sel.Name))
+						"%s:%d: %q uses .%s outside the libbpf seam. If this is not libbpfgo's %s, rename the field or method; "+
+							"if it belongs to the seam, extend libbpfSeamNames (ior_bpflink_test.go)",
+						rel, fset.Position(selector.Sel.Pos()).Line, in.name, selector.Sel.Name, selector.Sel.Name))
 				}
 				return true
 			})
@@ -438,27 +551,44 @@ func declNames(declaration ast.Decl) []namedDecl {
 }
 
 // libbpfSeamSources are sources for the scan to judge, each as if it were the
-// file at rel, with the names it must report. The first three are ways around
-// the seam: a method that attaches by itself and hands out the bare link, a
-// function that reaches for the program field, and a file elsewhere that
-// names libbpfgo's types. The last is the seam as it stands.
+// file at rel, with the names it must report in source order (the outer
+// selector of a chain first) and the line of the first. All but the last are
+// ways around the seam: a method that attaches by itself and hands out the
+// bare link, a function that reaches for the program field, a file elsewhere
+// that names libbpfgo's types, an attach planted in the one function that
+// may call libbpfgo's GetProgram, and an attach kind ior does not use. The
+// last is the seam as it stands.
 var libbpfSeamSources = []struct {
 	name, rel, src string
 	want           []string
+	line           int
 }{
 	{"a module method that attaches by itself", "internal/ior_bpfsetup.go", `package p
 func (m libbpfTracepointModule) attachBare(n string) (probemanager.Link, error) {
 	prog, _ := m.module.GetProgram(n)
 	return prog.AttachTracepoint("syscalls", n)
-}`, []string{"GetProgram"}},
+}`, []string{"GetProgram", "AttachTracepoint"}, 3},
 	{"a function that reads the program field", "internal/ior_bpfsetup.go", `package p
 func bare(p libbpfTracepointProgram) probemanager.Link {
 	link, _ := p.prog.AttachRawTracepoint("task_rename")
 	return link
-}`, []string{"prog"}},
+}`, []string{"AttachRawTracepoint", "prog"}, 3},
 	{"the types named in another file", "internal/ior.go", `package p
 var keep []*bpf.BPFLink
-type holder struct{ prog *bpf.BPFProg }`, []string{"BPFLink", "BPFProg"}},
+type holder struct{ prog *bpf.BPFProg }`, []string{"BPFLink", "BPFProg"}, 2},
+	{"an attach planted in the module's GetProgram", "internal/ior_bpfsetup.go", `package p
+func (m libbpfTracepointModule) GetProgram(n string) (probemanager.Program, error) {
+	prog, err := m.module.GetProgram(n)
+	if err == nil {
+		_, err = prog.AttachTracepoint("syscalls", n)
+	}
+	return libbpfTracepointProgram{prog: prog}, err
+}`, []string{"AttachTracepoint"}, 5},
+	{"an attach kind ior does not use", "internal/probemanager/manager.go", `package p
+func attachOne(prog *bpf.BPFProg) error {
+	_, err := prog.AttachKprobe("do_sys_openat2")
+	return err
+}`, []string{"BPFProg", "AttachKprobe"}, 2},
 	{"the seam as it is", "internal/ior_bpfsetup.go", `package p
 type libbpfTracepointProgram struct{ prog *bpf.BPFProg }
 func (p libbpfTracepointProgram) AttachTracepoint(c, n string) (probemanager.Link, error) {
@@ -467,19 +597,23 @@ func (p libbpfTracepointProgram) AttachTracepoint(c, n string) (probemanager.Lin
 func (m libbpfTracepointModule) GetProgram(n string) (probemanager.Program, error) {
 	prog, err := m.module.GetProgram(n)
 	return libbpfTracepointProgram{prog: prog}, err
-}`, nil},
+}
+func attachHandTracepoint(prog probemanager.Program) (probemanager.Link, error) {
+	return prog.AttachTracepoint("sched", "sched_process_exit")
+}`, nil, 0},
 }
 
-// The scan above is only worth something if it finds a bypass, and leaves the
-// seam itself alone.
+// The scan above is only worth something if it finds a bypass, says where,
+// and leaves the seam itself alone.
 func TestLibbpfSeamViolationsFindsABypass(t *testing.T) {
 	for _, tc := range libbpfSeamSources {
 		t.Run(tc.name, func(t *testing.T) {
-			parsed, err := parser.ParseFile(token.NewFileSet(), "p.go", tc.src, parser.SkipObjectResolution)
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, "p.go", tc.src, parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			got := libbpfSeamViolations(tc.rel, parsed)
+			got := libbpfSeamViolations(fset, tc.rel, parsed)
 			if len(got) != len(tc.want) {
 				t.Fatalf("violations = %q, want one each for %q", got, tc.want)
 			}
@@ -487,6 +621,13 @@ func TestLibbpfSeamViolationsFindsABypass(t *testing.T) {
 				if !strings.Contains(got[i], "uses ."+name+" ") {
 					t.Errorf("violation %d = %q, want it to name .%s", i, got[i], name)
 				}
+			}
+			if len(got) == 0 {
+				return
+			}
+			at := fmt.Sprintf("%s:%d: ", tc.rel, tc.line)
+			if !strings.HasPrefix(got[0], at) || !strings.Contains(got[0], "extend libbpfSeamNames") {
+				t.Errorf("violation 0 = %q, want it to begin %q and say how to allow the use", got[0], at)
 			}
 		})
 	}
@@ -675,10 +816,14 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(thisFile))
 }
 
-// parseRepoFile parses the Go file at path.
+// repoFileSet holds the positions of every file parseRepoFile parsed, so that
+// a scan can name the line of what it found.
+var repoFileSet = token.NewFileSet()
+
+// parseRepoFile parses the Go file at path into repoFileSet.
 func parseRepoFile(t *testing.T, path string) *ast.File {
 	t.Helper()
-	parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	parsed, err := parser.ParseFile(repoFileSet, path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}

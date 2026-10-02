@@ -12,7 +12,14 @@
 // imports, asserts on, and executes against a package with a planted defect.
 // The Mage targets become the thin wrappers that supply the environment and
 // check the error.
+//
+// The root link step of `mage integrationTest` is here for the same reason,
+// although it is no static-analysis gate: which tests it runs, with which
+// arguments, and how it tells that they ran at all (RootLinkTests,
+// RootLinkTestArgs, RootLinkTestsNotPassed).
 package gatecmd
+
+import "strings"
 
 // GolangciLintBin is the linter binary the lint gate runs, and GolangciLintPkg
 // is the module path `mage lint` names when it is missing from PATH.
@@ -66,4 +73,57 @@ func CleanTestCache() []string {
 // integration tests drive real workloads.
 func TestAll() []string {
 	return []string{"go", "test", "./...", "-failfast", "-timeout=90m"}
+}
+
+// RootLinkTests are the tests of internal/ior_bpflink_root_test.go: they load
+// the real BPF object, make libbpf's destroy of real links fail and close the
+// module (task 123). They skip for anybody but root, so `mage test` passes
+// them by, and the root link step of `mage integrationTest` is the one place
+// that runs them. The names are listed rather than matched by a pattern so
+// that a renamed test fails a gate (internal/buildgate) instead of silently
+// no longer running.
+func RootLinkTests() []string {
+	return []string{
+		"TestModuleCloseSurvivesAFailedDestroyOfIorsLinks",
+		"TestModuleCloseAfterACleanDestroyOfIorsLinks",
+		"TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy",
+	}
+}
+
+// RootLinkTestArgs are the arguments the test binary of ./internal gets to
+// run RootLinkTests, and nothing else, as root. -test.v is not for the reader
+// alone: RootLinkTestsNotPassed reads the verdicts it prints.
+func RootLinkTestArgs() []string {
+	return []string{
+		"-test.run", "^(" + strings.Join(RootLinkTests(), "|") + ")$",
+		"-test.timeout=5m",
+		"-test.count=1",
+		"-test.v",
+	}
+}
+
+// RootLinkTestsNotPassed returns the tests of RootLinkTests that output, the
+// -test.v output of the test binary, does not report as passed.
+//
+// The exit status of the binary cannot say so. A test binary whose -test.run
+// matches nothing prints "testing: warning: no tests to run" and exits 0, and
+// so does one whose tests all skipped - which is what these do for anybody
+// but root. Either would make the step a green no-op. A verdict counts only
+// at the start of a line, where the testing package prints that of a
+// top-level test; a subtest's is indented.
+func RootLinkTestsNotPassed(output string) []string {
+	passed := map[string]bool{}
+	for line := range strings.SplitSeq(output, "\n") {
+		if rest, ok := strings.CutPrefix(line, "--- PASS: "); ok {
+			name, _, _ := strings.Cut(rest, " ")
+			passed[name] = true
+		}
+	}
+	var missing []string
+	for _, name := range RootLinkTests() {
+		if !passed[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }

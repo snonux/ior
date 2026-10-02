@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"go/format"
@@ -651,46 +652,49 @@ func compileIntegrationTestBinary(env map[string]string) error {
 	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", integrationTestBinaryName)
 }
 
-// rootLinkTests are the tests of internal/ior_bpflink_root_test.go: they load
-// the real BPF object, make libbpf's destroy of real links fail and close the
-// module (task 123). They skip for anybody but root, so `mage test` passes
-// them by, and runRootLinkTests is the one place that runs them. The names
-// are listed rather than matched by a pattern so that a renamed test fails a
-// gate (internal/buildgate) instead of silently no longer running.
-var rootLinkTests = []string{
-	"TestModuleCloseSurvivesAFailedDestroyOfIorsLinks",
-	"TestModuleCloseAfterACleanDestroyOfIorsLinks",
-	"TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy",
-}
-
-// runRootLinkTests builds the test binary of ./internal and runs rootLinkTests
-// with it as root, from the package directory as `go test` would (task 223).
-// They are what tells that a libbpfgo bump changed how a link whose Destroy
-// failed is treated, and before this step nothing ran them unless somebody
-// remembered to.
+// runRootLinkTests builds the test binary of ./internal and runs the root
+// link tests (gatecmd.RootLinkTests) with it as root, from the package
+// directory as `go test` would (task 223). They are what tells that a
+// libbpfgo bump changed how a link whose Destroy failed is treated, and
+// before this step nothing ran them unless somebody remembered to.
 //
-// The binary is written to the path of the integration test binary, which
-// runIntegrationTests builds over it afterwards: that path is the one a
-// scoped sudoers rule allows (see runRootTestBinary), and a second name would
-// need a second rule on every such host. Each of the tests re-executes the
-// binary as its helper process, which the same path covers.
-func runRootLinkTests(env map[string]string) error {
+// The binary is written to the path of the integration test binary: that
+// path is the one a scoped sudoers rule allows (see runRootTestBinary), and a
+// second name would need a second rule on every such host. Each of the tests
+// re-executes the binary as its helper process, which the same path covers.
+//
+// Two things keep the shared path from turning the integration tests into a
+// green no-op. The step removes its binary when it is done, passed or
+// failed, so nothing can run it in place of the integration test binary: a
+// step moved behind compileIntegrationTestBinary removes that one and the
+// run stops at sudo's "command not found" (internal/buildgate pins the order
+// as well).
+// And the exit status alone is not believed: a binary that ran none of the
+// tests, or whose tests skipped, exits 0, so every listed test has to be
+// reported as passed (gatecmd.RootLinkTestsNotPassed).
+func runRootLinkTests(env map[string]string) (err error) {
 	fmt.Println("Running the root link tests of ./internal (requires root)...")
+	defer func() {
+		err = errors.Join(err, removeFilesByPath(integrationTestBinaryName))
+	}()
 	if err := sh.RunWithV(env, "go", "test", "-c", "./internal/", "-o", integrationTestBinaryName); err != nil {
 		return err
 	}
-	return runRootTestBinary(env, "internal",
-		"-test.run", "^("+strings.Join(rootLinkTests, "|")+")$",
-		"-test.timeout=5m",
-		"-test.count=1",
-		"-test.v",
-	)
+	var output bytes.Buffer
+	if err := runRootTestBinary(env, "internal", io.MultiWriter(os.Stdout, &output), gatecmd.RootLinkTestArgs()...); err != nil {
+		return err
+	}
+	if missing := gatecmd.RootLinkTestsNotPassed(output.String()); len(missing) != 0 {
+		return fmt.Errorf("the test binary exited 0 but did not report these tests as passed: %s",
+			strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // runIntegrationTestBinary execs the compiled integration test binary as
 // root, with Dir=integrationtests.
 func runIntegrationTestBinary(env map[string]string, args ...string) error {
-	return runRootTestBinary(env, "integrationtests", args...)
+	return runRootTestBinary(env, "integrationtests", os.Stdout, args...)
 }
 
 // runRootTestBinary execs the test binary at integrationTestBinaryName as
@@ -698,8 +702,10 @@ func runIntegrationTestBinary(env map[string]string, args ...string) error {
 // absolute path matches the scoped sudoers rule
 // (/home/paul/git/ior/integrationtests.test), while the child process runs in
 // the directory of the package under test. Output is wired through to mage so
-// failures are visible instead of an opaque exit status (audit M12).
-func runRootTestBinary(env map[string]string, dir string, args ...string) error {
+// failures are visible instead of an opaque exit status (audit M12): stderr
+// as it is, and stdout to the writer the caller names, which is os.Stdout
+// or a writer that copies to it and keeps what the binary reported.
+func runRootTestBinary(env map[string]string, dir string, stdout io.Writer, args ...string) error {
 	binaryPath, err := filepath.Abs(integrationTestBinaryName)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", integrationTestBinaryName, err)
@@ -710,20 +716,16 @@ func runRootTestBinary(env map[string]string, dir string, args ...string) error 
 	}
 	slices.Sort(envList)
 
-	cmd := exec.Command(binaryPath, args...)
+	argv := append([]string{binaryPath}, args...)
+	if os.Geteuid() != 0 {
+		argv = append([]string{"sudo", "-n", "-E"}, argv...)
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), envList...)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = stdout
 	cmd.Stderr = os.Stderr
-	if os.Geteuid() == 0 {
-		return cmd.Run()
-	}
-	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", binaryPath}, args...)...)
-	sudoCmd.Dir = dir
-	sudoCmd.Env = cmd.Env
-	sudoCmd.Stdout = os.Stdout
-	sudoCmd.Stderr = os.Stderr
-	return sudoCmd.Run()
+	return cmd.Run()
 }
 
 func runIntegrationTests(parallel bool) error {
@@ -735,8 +737,10 @@ func runIntegrationTests(parallel bool) error {
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
-	// First, and before the integration test binary is built over theirs:
-	// they take seconds, and a failure stops the run before the long part.
+	// First: they take seconds, and a failure stops the run before the long
+	// part. And before the integration test binary is built, never after:
+	// the step builds its own binary at the same path and removes it again
+	// (see runRootLinkTests).
 	if err := runRootLinkTests(env); err != nil {
 		return fmt.Errorf("root link tests of ./internal: %w", err)
 	}

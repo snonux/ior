@@ -388,10 +388,22 @@ func assertStillRunning(t *testing.T, result <-chan error, early string) {
 // manager is marked closed by then.
 func closeBegun(t *testing.T, mgr *Manager) <-chan error {
 	t.Helper()
+	return closeBegunReporting(t, mgr, func(int, int) {})
+}
+
+// closeBegunReporting is closeBegun with every progress report of the Close
+// handed to report as well. The first report follows Close's snapshot of the
+// entries, so whatever the test lets go of afterwards cannot change what that
+// Close counted; a sleep in its place would leave that to the scheduler.
+// Close serializes its reports, so report needs no lock of its own as long as
+// what it writes is read only after the returned channel delivered.
+func closeBegunReporting(t *testing.T, mgr *Manager, report func(completed, total int)) <-chan error {
+	t.Helper()
 	begun := make(chan struct{})
 	var once sync.Once
 	result := goErr(func() error {
-		return mgr.CloseWithProgress(func(completed, _ int) {
+		return mgr.CloseWithProgress(func(completed, total int) {
+			report(completed, total)
 			if completed == 0 {
 				once.Do(func() { close(begun) })
 			}
@@ -479,13 +491,13 @@ func TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy(t *testing.T) {
 	detach := goErr(func() error { return f.mgr.Detach("close") })
 	enterDestroy.awaitStarted(t, "detach did not start destroying the enter link")
 
-	// Written by Close's goroutines one at a time, and read only after Close
-	// has returned.
+	// Written by Close's reports, which it makes one at a time, and read only
+	// after Close has returned. Close has taken its snapshot once the helper
+	// returns, so the Detach let go below cannot commit ahead of it and take
+	// the pair out of the count.
 	var progress [][2]int
-	closed := goErr(func() error {
-		return f.mgr.CloseWithProgress(func(completed, total int) {
-			progress = append(progress, [2]int{completed, total})
-		})
+	closed := closeBegunReporting(t, f.mgr, func(completed, total int) {
+		progress = append(progress, [2]int{completed, total})
 	})
 	assertStillRunning(t, closed, "Close returned before Detach completed")
 	enterDestroy.release()
