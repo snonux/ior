@@ -1787,9 +1787,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     the directory too and gets the mark, or a handle taken through that
     descriptor before its close would count as the directory's comparable
     path and outlive its own open. A descriptor procfs shows to BE that
-    directory (another handle's open) keeps the name unmarked, and a
-    procfs-named row is never marked. A relative or traced opaque stash sets
-    no mark; its form keeps it opaque wherever it is copied). An opaque stash
+    directory (another handle's open) keeps the name unmarked - also when
+    the number was merely reused by an open of that directory, an accepted
+    residual - and a procfs-named row is never marked. A relative or traced
+    opaque stash sets no mark; its form keeps it opaque wherever it is
+    copied). An opaque stash
     never outlives the thread's next `open_by_handle_at`: a confirmed
     descriptor names the row from procfs, as before, and the stash is now
     consumed with it; an unconfirmed one leaves the row to the stash, as

@@ -373,6 +373,14 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 // make a later handle of that directory opaque for nothing. A procfs-named row
 // (confirmed mismatch) is likewise never marked: its name is the link.
 //
+// "Is" is as strong as a probe gets: it looks at the number now. If the handle
+// really opened the tmpfile and the number was then reused by an open of that
+// very directory, the entry is unmarked too, and a handle taken through the
+// real descriptor before its close stays in the slot after its own open. That
+// needs a reuse by exactly that directory and is accepted, like the residuals
+// on comparableHandleName; marking on a match would instead mislabel every
+// genuine directory handle.
+//
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
 // caller asked for). A procfs-named row takes the kernel's own view from

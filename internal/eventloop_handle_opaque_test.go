@@ -404,6 +404,27 @@ func TestOpenByHandleAtDirectoryMatchingATmpfileStashIsNotMarked(t *testing.T) {
 	}
 }
 
+// TestOpenByHandleAtUnconfirmedMismatchOfATmpfileStashIsMarked is the other
+// half of the rule: the probe contradicts the stash (another directory under
+// the number) but the descriptor is not believed (its fixed flags are not the
+// call's), so the stash names the row - the tmpfile's directory - and the
+// entry is marked like one named without any probe.
+func TestOpenByHandleAtUnconfirmedMismatchOfATmpfileStashIsMarked(t *testing.T) {
+	dir := tempDir(t)
+	source, _, _ := tmpfileFds(t, dir)
+	reused := openReusingDirFd(t, tempDir(t)) // O_DIRECTORY|O_NOFOLLOW: not what the call asked for
+
+	feed := newHandleFeed(t)
+	feed.open(source, dir, tmpfileOpenFlags)
+	stashFromEmptyPath(t, feed, source, dir)
+	if got := feed.openByHandle(reused).File.Name(); got != dir {
+		t.Fatalf("row named %q, want the stashed directory %q", got, dir)
+	}
+	if !tmpfileDirMark(t, feed, reused) {
+		t.Fatal("a row named by a tmpfile-directory stash against an unconfirmed descriptor is not marked")
+	}
+}
+
 // TestRelativeTmpfileDirectoryStashRemembersItsOrigin pins the order in
 // stashHandleName: the tmpfile origin is asked before the form of the name, so
 // a tmpfile opened under a relative directory is recorded as a tmpfile
