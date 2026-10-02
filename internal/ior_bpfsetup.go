@@ -15,18 +15,21 @@ import (
 )
 
 // libbpfTracepointProgram wraps a libbpf BPF program as a probemanager.Program.
+// Every link it hands out is a libbpfLink, never a bare *bpf.BPFLink: after a
+// Destroy that reported an error libbpfgo's Module.Close would destroy the
+// bare one a second time (task 123; see libbpfLink).
 type libbpfTracepointProgram struct {
 	prog *bpf.BPFProg
 }
 
 func (p libbpfTracepointProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
-	return p.prog.AttachTracepoint(category, name)
+	return newLibbpfLink(p.prog.AttachTracepoint(category, name))
 }
 
 // AttachRawTracepoint makes libbpfTracepointProgram a
 // probemanager.RawTracepointProgram.
 func (p libbpfTracepointProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
-	return p.prog.AttachRawTracepoint(name)
+	return newLibbpfLink(p.prog.AttachRawTracepoint(name))
 }
 
 // libbpfTracepointModule wraps a libbpf BPF module as a probemanager.Module.
@@ -544,7 +547,9 @@ func attachHandTracepoint(attacher probemanager.Attacher, progName, subsystem, t
 // is idempotent: attachTraceProbes calls it on a cancelled setup and
 // publishProbeManager wraps it into the session's release closure, and a
 // second Destroy on a libbpf link is a use after free, also after a first one
-// that reported an error (probemanager.Link).
+// that reported an error (probemanager.Link). Such an error needs nothing
+// more from the closure: the link ior hands out has already seen to it that
+// closing the BPF module does not destroy that link again (libbpfLink).
 //
 // A skipped probe is reported through log.warn, which trace setup replays as
 // an event-loop warning (a TUI warning row, stderr headless); a detach failure
@@ -581,9 +586,10 @@ func attachHandProbe(attacher probemanager.Attacher, progName, probeName string,
 // setupEventChannel initialises the BPF ring-buffer and returns both the event
 // channel and the ring-buffer handle. The caller must call rb.Stop() when the
 // trace ends (before bpfModule.Close()) to promptly halt the background polling
-// goroutine and release the C ring_buffer struct. bpfModule.Close() also closes
-// all ring buffers it owns, but only calling Stop() first ensures the goroutine
-// exits without waiting for the module teardown path.
+// goroutine. bpfModule.Close() also closes all ring buffers it owns, which is
+// what frees the C ring_buffer struct (Stop does not), but only calling Stop()
+// first ensures the goroutine exits without waiting for the module teardown
+// path.
 func setupEventChannel(bpfModule *bpf.Module) (chan []byte, *bpf.RingBuffer, error) {
 	ch := make(chan []byte, appconfig.DefaultChannelBufferSize)
 	rb, err := bpfModule.InitRingBuf("event_map", ch)

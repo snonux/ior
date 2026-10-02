@@ -18,8 +18,9 @@ import (
 // release closures of attachHandProbe in internal/ior_bpfsetup.go).
 //
 // That is the contract of the real link, *bpf.BPFLink of libbpfgo
-// v0.9.2-libbpf-1.5.1, which internal/ior_bpfsetup.go hands out unwrapped. It
-// was read from the sources, not tested against a detach that fails:
+// v0.9.2-libbpf-1.5.1, which ior hands out wrapped in a libbpfLink
+// (internal/ior_bpflink.go). The wrapper forwards one Destroy and passes its
+// error on, so the contract is the wrapped link's:
 //
 //   - libbpf 1.5.1, src/libbpf.c, bpf_link__destroy (line 10666): calls
 //     link->detach and then frees the link (link->dealloc, or free) whatever
@@ -35,6 +36,11 @@ import (
 //     the freed struct to bpf_link__destroy again: a use after free and a
 //     double free.
 //
+// A Destroy that fails has been seen on the real link, though only provoked:
+// with the link's fds closed behind libbpf's back it returns EBADF (the root
+// tests in internal/ior_bpflink_root_test.go). Nothing is attached then
+// either - those closes are what detaches.
+//
 // So a link that "could not be destroyed" and is still attached does not
 // exist, and there is nothing to retry (task z13 assumed both). Were a kernel
 // ever to keep a program attached past the close of those fds, the manager
@@ -43,7 +49,12 @@ import (
 //
 // What the manager cannot prevent is libbpfgo's own second destroy: its
 // Module.Close (module.go, lines 194-198) destroys every link of the module
-// whose pointer is still set, which includes one whose Destroy failed.
+// whose pointer is still set, which includes one whose Destroy failed. The
+// wrapper prevents it (task 123): after such a Destroy it zeroes the BPFLink,
+// which clears that pointer, and Module.Close skips the link. The second
+// Destroy the wrapper would ignore is no licence to call one: this contract
+// holds for every implementation, and the manager's part is unchanged -
+// report the error, never destroy again.
 type Link interface {
 	Destroy() error
 }
