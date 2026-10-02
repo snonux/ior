@@ -839,8 +839,9 @@ func TestInterruptedCallInTheHandlerTakesTheRowsPlaceAtTheBound(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.interruptRead(restartBase, restartTid, restartSys)
 	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
-	// Fill the tracker to the bound with rows of other threads.
-	for tid := uint32(1); len(f.el.restarts.held) < maxHeldRestarts; tid++ {
+	// Fill the tracker to the bound with rows of other threads, which are as
+	// made up as the fixture's own (absentPidBase + n, n below restartPid's).
+	for tid := uint32(absentPidBase + 1); len(f.el.restarts.held) < maxHeldRestarts; tid++ {
 		f.el.restarts.held[tid] = &heldRestart{pair: &event.Pair{
 			EnterEv: &types.FdEvent{TraceId: types.SYS_ENTER_READ, Tid: tid},
 			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_READ, Tid: tid, Ret: restartSys},
@@ -1663,7 +1664,7 @@ func TestParkedExecCallerWinsOverAReexecutedOne(t *testing.T) {
 // candidates, and of several candidates the execve entered last is taken, the
 // higher tid on a tie, whatever the map order.
 func TestReexecutingExecCallerChoosesOneRow(t *testing.T) {
-	const pid, a, b = uint32(7), uint32(8), uint32(9)
+	const pid, a, b = uint32(absentPidBase + 7), uint32(absentPidBase + 8), uint32(absentPidBase + 9)
 	reexecuting := func(pid, tid uint32, enteredAt uint64) *heldRestart {
 		return &heldRestart{
 			pair: &event.Pair{

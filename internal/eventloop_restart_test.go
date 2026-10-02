@@ -24,10 +24,19 @@ import (
 // eventloop_restart_handled_test.go, and the re-execution fold of
 // -512/-513/-514 (task 103) in eventloop_restart_reexec_test.go.
 
+// The fixture's process and threads lie above every possible pid
+// (absentPidBase, task zs2): the loop falls back to the real /proc/<pid>/...
+// for a comm or a descriptor it has not seen traced - the read fixtures of
+// the re-execution fold carry such a descriptor - so a plain 4100 that is
+// alive on the host would put that process's answers into the rows. Every
+// other tid these tests make up (the rows that fill the tracker to its
+// bound, the hand-built trackers) is built the same way, also where no
+// procfs read is in reach, so that no restart fixture names a tid that a
+// host could hand out. restartPid is the leader's tid as well.
 const (
-	restartPid      = uint32(4100)
-	restartTid      = uint32(4101)
-	restartOtherTid = uint32(4102)
+	restartPid      = uint32(absentPidBase + 4100)
+	restartTid      = uint32(absentPidBase + 4101)
+	restartOtherTid = uint32(absentPidBase + 4102)
 	restartSleepNs  = int64(2_000_000_000)
 	restartBase     = uint64(1_000_000)
 )
@@ -483,7 +492,7 @@ func TestRestartRowsReleasedWhenTheLoopStops(t *testing.T) {
 func TestRestartRowBeyondTheBoundIsNotFolded(t *testing.T) {
 	eachRestartFixture(t, func(t *testing.T, newFixture restartFixtureMaker) {
 		f := newFixture(t, globalfilter.Filter{})
-		const firstOtherTid = uint32(900_000)
+		const firstOtherTid = uint32(absentPidBase + 900_000)
 		for tid := firstOtherTid; tid < firstOtherTid+maxHeldRestarts; tid++ {
 			f.el.restarts.hold(&heldRestart{pair: &event.Pair{
 				EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Tid: tid},
@@ -515,7 +524,9 @@ func TestRestartRowBeyondTheBoundIsNotFolded(t *testing.T) {
 // A tracker that was told nothing holds nothing.
 func TestRestartHoldIsBounded(t *testing.T) {
 	tracker := restartTracker{restartBlock: true}
-	heldFor := func(tid uint32, ret int64) *heldRestart {
+	// heldFor is the row of the n-th made-up thread (absentPidBase + n).
+	heldFor := func(n uint32, ret int64) *heldRestart {
+		tid := absentPidBase + n
 		return &heldRestart{pair: &event.Pair{
 			EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Tid: tid},
 			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Tid: tid, Ret: ret},
@@ -532,9 +543,9 @@ func TestRestartHoldIsBounded(t *testing.T) {
 			t.Fatalf("a ret=%d row was held; only -516 has a restart_syscall continuation", ret)
 		}
 	}
-	for tid := uint32(1); tid <= maxHeldRestarts; tid++ {
-		if !tracker.hold(heldFor(tid, -516)) {
-			t.Fatalf("row %d was not held below the bound", tid)
+	for n := uint32(1); n <= maxHeldRestarts; n++ {
+		if !tracker.hold(heldFor(n, -516)) {
+			t.Fatalf("row %d was not held below the bound", n)
 		}
 	}
 	if tracker.hold(heldFor(maxHeldRestarts+1, -516)) {
@@ -552,8 +563,8 @@ func TestRestartHoldIsBounded(t *testing.T) {
 			t.Fatalf("a ret=%d row was not held although re-executions are proven", ret)
 		}
 	}
-	for tid := uint32(5); tid <= maxHeldRestarts; tid++ {
-		proven.hold(heldFor(tid, -512))
+	for n := uint32(5); n <= maxHeldRestarts; n++ {
+		proven.hold(heldFor(n, -512))
 	}
 	if proven.hold(heldFor(maxHeldRestarts+1, -512)) {
 		t.Fatal("a -512 row beyond maxHeldRestarts was held")

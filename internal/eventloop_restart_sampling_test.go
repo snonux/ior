@@ -282,7 +282,9 @@ func TestNewEventLoopKnowsWhetherRestartSyscallIsSampled(t *testing.T) {
 // held as before - their fold goes by BPF's RESUME record, not by
 // restart_syscall.
 func TestSampledRestartSyscallHoldsOnlyReexecutedRows(t *testing.T) {
-	heldFor := func(tid uint32, ret int64) *heldRestart {
+	// heldFor is the row of the n-th made-up thread (absentPidBase + n).
+	heldFor := func(n uint32, ret int64) *heldRestart {
+		tid := absentPidBase + n
 		return &heldRestart{pair: &event.Pair{
 			EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Tid: tid},
 			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Tid: tid, Ret: ret},
