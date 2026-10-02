@@ -194,8 +194,13 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 // child gets none of its creator's scoped names: it is another process, and
 // falls back as one (a fork does inherit the working directory, so handing
 // them on would be right until the first chdir; not done).
+//
+// A record that names the creator's own process as the new one without
+// saying it is a thread is malformed: the pid is the live creator's, not a
+// recycled one, and dropping under it would take a running process's names.
+// fdTracker.inherit refuses the same record for the fd table.
 func (e *eventLoop) retireRecycledPid(ev *types.TaskNewtaskEvent) {
-	if ev.CloneFlags&cloneFlagThread != 0 {
+	if ev.CloneFlags&cloneFlagThread != 0 || ev.Pid == ev.CreatorPid {
 		return
 	}
 	e.handleState().dropScoped(ev.Pid)

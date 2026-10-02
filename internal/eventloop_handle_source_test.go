@@ -2,6 +2,7 @@ package internal
 
 import (
 	"path/filepath"
+	"reflect"
 	"syscall"
 	"testing"
 
@@ -94,18 +95,43 @@ func (f *handleFeed) requireNamedEntry(fd int32) {
 // is when the loop handles the exit - and here that link is a decoy, standing
 // for the newer file a task opened under the number after it closed the one
 // the handle belongs to. Filing it would name every later open of the handle,
-// by any process, after the decoy. Nothing is filed, an older name of the
-// handle is dropped, and the open falls back like one of an unknown handle.
+// by any process, after the decoy. Nothing is filed, and the open falls
+// back like one of an unknown handle.
 func TestHandleTakenThroughAnUntrackedDescriptorFilesNoName(t *testing.T) {
 	for _, source := range untrackedSources() {
 		t.Run(source.name, func(t *testing.T) {
 			decoy := int32(openTestFd(t, t.TempDir(), syscall.O_RDONLY|syscall.O_DIRECTORY))
 			feed := newLiveHandleFeed(t)
-			feed.nameToHandle("/data/older-name.txt", testHandleA)
 
 			source.take(feed, decoy)
 			assertNoHandleNames(t, feed)
 			assertHandleRow(t, feed, feed.openByHandle(testHandleA, unopenedFd), unopenedFd, "")
+		})
+	}
+}
+
+// TestUnnamedTakeLeavesTheAbsoluteNameInPlace drives the decision of the
+// task 523 review through the loop: the handle already has an absolute name
+// when it is taken again through a descriptor ior cannot name. That take
+// files nothing - the decoy least of all - and is no evidence against the
+// older name, so the taker and every other process are still named by it
+// (k03 dropped it, and every opener fell back to procfs).
+func TestUnnamedTakeLeavesTheAbsoluteNameInPlace(t *testing.T) {
+	const older = "/data/older-name.txt"
+	for _, source := range untrackedSources() {
+		t.Run(source.name, func(t *testing.T) {
+			decoy := int32(openTestFd(t, t.TempDir(), syscall.O_RDONLY|syscall.O_DIRECTORY))
+			feed := newLiveHandleFeed(t)
+			feed.nameToHandle(older, testHandleA)
+
+			source.take(feed, decoy)
+			want := map[handleKey]handleEntry{testHandleA.key(): {absolute: older}}
+			if got := feed.el.handleState().names; !reflect.DeepEqual(got, want) {
+				t.Fatalf("handle names = %v, want %v", got, want)
+			}
+			assertHandleRow(t, feed, feed.openByHandle(testHandleA, unopenedFd), unopenedFd, older)
+			feed.pid, feed.tid = defaultPid+200, defaultPid+200
+			assertHandleRow(t, feed, feed.openByHandle(testHandleA, unopenedFd), unopenedFd, older)
 		})
 	}
 }

@@ -57,7 +57,8 @@ func TestScopedHandleNamesEndOnALegacyExitRecord(t *testing.T) {
 }
 
 // notTheEndOfAProcess lists records that end a thread or a program but not
-// the thread group the scoped name belongs to.
+// the thread group the scoped name belongs to, and one that only looks like
+// the pid being handed on.
 func notTheEndOfAProcess(t *testing.T, feed *handleFeed) map[string][]byte {
 	t.Helper()
 	const sibling = defaultTid + 1
@@ -70,6 +71,9 @@ func notTheEndOfAProcess(t *testing.T, feed *handleFeed) map[string][]byte {
 		"a non-leader execve":   makeProcessExecEventFrom(t, feed.time, feed.pid, handleLeaderTid, feed.tid, "next"),
 		"a new thread":          makeForkRecord(t, feed.pid, feed.pid, sibling+1, cloneFlagThread),
 		"a forked child":        makeForkRecord(t, feed.pid, feed.pid+200, feed.pid+200, 0),
+		// Malformed: a new process whose pid is its live creator's. Treated
+		// as a recycled pid it would cost a running process its names.
+		"its own child": makeForkRecord(t, feed.pid, feed.pid, sibling+2, 0),
 	}
 }
 
@@ -77,6 +81,8 @@ func notTheEndOfAProcess(t *testing.T, feed *handleFeed) map[string][]byte {
 // The exit of one of its threads - the leader's included, which can precede
 // the others' - leaves it, and so does an execve: the new program has the
 // same pid and working directory, and the handle still opens the same file.
+// A task record that claims the process is its own new child leaves it too
+// (retireRecycledPid; fdTracker.inherit has the same guard).
 // Every surviving thread of the process is still named by it.
 func TestScopedHandleNamesOutliveThreadsAndExecs(t *testing.T) {
 	const sibling = defaultTid + 1

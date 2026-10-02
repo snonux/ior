@@ -83,8 +83,16 @@ func (f *handleFeed) dirfdOpen(c dirfdCall, dirfd int32, pathname string, fd int
 	before := len(f.rows)
 	f.consume(c.enterRecord(f, dirfd, pathname), exit)
 	f.time += 1000
+	return f.entryOfRow(c.name, before, fd)
+}
+
+// entryOfRow returns the fd table entry of descriptor fd after a call that
+// must have emitted exactly one row since the feed held before rows; that
+// row (a snapshot of the entry) must show the same name on the descriptor.
+func (f *handleFeed) entryOfRow(call string, before int, fd int32) *file.FdFile {
+	f.t.Helper()
 	if len(f.rows) != before+1 {
-		f.t.Fatalf("%s emitted %d rows, want 1", c.name, len(f.rows)-before)
+		f.t.Fatalf("%s emitted %d rows, want 1", call, len(f.rows)-before)
 	}
 	tracked, ok := f.el.fdState().get(fd, f.pid)
 	fdFile, isFd := tracked.(*file.FdFile)
@@ -95,6 +103,35 @@ func (f *handleFeed) dirfdOpen(c dirfdCall, dirfd int32, pathname string, fd int
 		f.t.Fatalf("row file %v does not show the fd table entry %v", row, fdFile)
 	}
 	return fdFile
+}
+
+// fsmount feeds one successful fsmount(fsfd) that returned fd and returns
+// the fd table entry it left.
+func (f *handleFeed) fsmount(fsfd, fd int32) *file.FdFile {
+	f.t.Helper()
+	enter := types.EventfdEvent{EventType: types.ENTER_EVENTFD_EVENT, TraceId: types.SYS_ENTER_FSMOUNT,
+		Time: f.time, Pid: f.pid, Tid: f.tid, Ret: -1, Fd: fsfd}
+	exit := types.EventfdEvent{EventType: types.EXIT_EVENTFD_EVENT, TraceId: types.SYS_EXIT_FSMOUNT,
+		Time: f.time + 100, Pid: f.pid, Tid: f.tid, Ret: int64(fd), Fd: -1}
+	before := len(f.rows)
+	f.consume(eventBytes(f.t, &enter), eventBytes(f.t, &exit))
+	f.time += 1000
+	return f.entryOfRow("fsmount", before, fd)
+}
+
+// openWithUnreadName feeds a successful openat whose filename BPF could not
+// read and that returned fd: the descriptor is tracked, and has no name.
+func (f *handleFeed) openWithUnreadName(fd int32) {
+	f.t.Helper()
+	ev, _ := makeEnterOpenEvent(f.t, f.time, f.pid, f.tid)
+	ev.Dirfd, ev.Flags = unix.AT_FDCWD, syscall.O_RDONLY|syscall.O_DIRECTORY
+	ev.Filename = [types.MAX_FILENAME_LENGTH]byte{}
+	ev.FilenameStatus = types.PATH_READ_FAILED
+	_, exit := makeExitRetEvent(f.t, f.time+100, f.pid, f.tid, types.SYS_EXIT_OPENAT, int64(fd))
+	before := len(f.rows)
+	f.consume(eventBytes(f.t, &ev), exit)
+	f.time += 1000
+	assertEntry(f.t, f.entryOfRow("openat", before, fd), "", false)
 }
 
 // assertEntry checks the name and the procfs mark of an fd table entry.
@@ -240,6 +277,70 @@ func TestOpenByTheCallersOwnPathnameIsNotMarked(t *testing.T) {
 			feed.nameToHandleOfFd(unopenedFd+1, testHandleB)
 			assertHandleRow(t, feed, feed.openByHandle(testHandleA, unopenedFd+2), unopenedFd+2, "/data/abs.txt")
 			assertHandleRow(t, feed, feed.openByHandle(testHandleB, unopenedFd+3), unopenedFd+3, "rel.txt")
+		})
+	}
+}
+
+// TestFsmountOfAProcfsNamedContextIsMarked: fsmount(fsfd) names the mount
+// descriptor it returns after fsfd, and that descriptor is an O_PATH one on
+// the root of the new mount, so a handle can be taken through it. An fsfd
+// ior did not see being opened has only its /proc link as it is when the
+// loop handles the exit - here a decoy directory, standing for the newer
+// file under a reused number. The copy carries the mark, whether the fsfd
+// is the procfs answer itself or a table entry that was one, and a take
+// through it files no name; unmarked, it filed the decoy's absolute path
+// for every opener in every process.
+func TestFsmountOfAProcfsNamedContextIsMarked(t *testing.T) {
+	const mountFd = unopenedFd + 2
+	for _, source := range procfsDirSources() {
+		t.Run(source.name, func(t *testing.T) {
+			dir := t.TempDir()
+			decoy := int32(openTestFd(t, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
+			feed := newLiveHandleFeed(t)
+			fsfd := source.prepare(feed, decoy)
+
+			assertEntry(t, feed.fsmount(fsfd, mountFd), dir, true)
+			feed.nameToHandleOfFd(mountFd, testHandleA)
+			feed.nameToHandleUnder(mountFd, "deeper.txt", 0, testHandleB)
+			assertNoHandleNames(t, feed)
+			feed.asOtherProcess()
+			assertHandleRow(t, feed, feed.openByHandle(testHandleA, unopenedFd), unopenedFd, "")
+		})
+	}
+}
+
+// TestFsmountOfATrackedContextIsNotMarked is the other side: an fsfd ior saw
+// being opened has a traced name, the mount descriptor copies it unmarked,
+// and a handle taken through it is filed (scoped: it is a descriptor name).
+// An fsfd without any name leaves the call's class name, which is ior's own
+// and unmarked as well.
+func TestFsmountOfATrackedContextIsNotMarked(t *testing.T) {
+	feed := newHandleFeed(t, globalfilter.Filter{})
+	feed.el.fdState().set(5, feed.pid, file.NewFd(5, "fsopen:ext4", syscall.O_RDWR))
+
+	assertEntry(t, feed.fsmount(5, 70), "fsopen:ext4", false)
+	feed.nameToHandleOfFd(70, testHandleA)
+	assertHandleRow(t, feed, feed.openByHandle(testHandleA, 71), 71, "fsopen:ext4")
+
+	assertEntry(t, feed.fsmount(6, 72), "eventfd:0", false)
+}
+
+// TestOpenBelowAnUnnamedTrackedDirfdIsMarked: the dirfd IS in the fd table,
+// but without a name (its own filename could not be read), so no look at
+// procfs is involved and the entry of a descriptor opened below it is the
+// bare pathname all the same. Nothing vouches for that name; it carries the
+// mark, and a handle taken through it is not filed as a path relative to
+// the working directory, which it used to be.
+func TestOpenBelowAnUnnamedTrackedDirfdIsMarked(t *testing.T) {
+	for _, c := range dirfdCalls() {
+		t.Run(c.name, func(t *testing.T) {
+			feed := newHandleFeed(t, globalfilter.Filter{})
+			feed.openWithUnreadName(5)
+
+			assertEntry(t, feed.dirfdOpen(c, 5, "below.txt", 70), "below.txt", true)
+			feed.nameToHandleOfFd(70, testHandleA)
+			feed.nameToHandleUnder(70, "deeper.txt", 0, testHandleB)
+			assertNoHandleNames(t, feed)
 		})
 	}
 }

@@ -1010,14 +1010,26 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 //     handle, the latest: a second process taking it by a scoped name
 //     replaces the first one's, which falls back to the absolute name.
 //   - An empty name (the caller has none it can vouch for, see
-//     takenHandleName) is no name to give a row, but it still supersedes the
-//     entry, which is dropped rather than left to be mistaken for the
-//     current one. (That is the k03 decision, unchanged. The argument for
-//     keeping the absolute name past a scoped take would keep it here as
-//     well; see the residuals in eventloop_handle.go.)
+//     takenHandleName) files nothing and leaves the absolute name where it
+//     is. Like a scoped take it is no evidence against that name: the usual
+//     reason for it is a take through a descriptor ior did not see being
+//     opened, of the very file the name belongs to. Until the task 523
+//     review it dropped the whole entry (the k03 decision, argued with a
+//     rename between the two takes and a cross-filesystem collision). But
+//     a renamed file leaves the absolute name stale whether or not anybody
+//     takes the handle again, a colliding handle is misnamed by the older
+//     entry before the second take as much as after it, and an unnamed
+//     take tells neither apart from the ordinary case. Dropping bought a
+//     fall back to procfs - the lagging look, and no name for a failed
+//     call - for every opener, each time one process took the handle
+//     through such a descriptor. What the take does supersede is the
+//     taker's own scoped name: within one process the latest take wins,
+//     and that process's latest has no name, so it is named by the absolute
+//     name like everyone else, or falls back. Another process's scoped name
+//     is not the taker's to end.
 func (t *handleTracker) store(key handleKey, name handleName) {
 	if name.name == "" {
-		t.remove(key)
+		t.clearScoped(key, name.pid)
 		return
 	}
 	t.ensureInit()
@@ -1031,6 +1043,22 @@ func (t *handleTracker) store(key handleKey, name handleName) {
 	t.prune()
 }
 
+// clearScoped takes the scoped name of the process pid out of the entry
+// under key, if the entry holds one of that process. The absolute name next
+// to it stays; an entry that held nothing else goes. The entry's age is left
+// alone: giving up a name is not a use of the handle.
+func (t *handleTracker) clearScoped(key handleKey, pid uint32) {
+	entry, ok := t.names[key]
+	if !ok || entry.scoped == "" || entry.scopedPid != pid {
+		return
+	}
+	if entry.absolute == "" {
+		t.remove(key)
+		return
+	}
+	t.setEntry(key, handleEntry{absolute: entry.absolute})
+}
+
 // setEntry writes entry under key and keeps the scoped index in step with
 // it; with remove it is the only writer of names.
 func (t *handleTracker) setEntry(key handleKey, entry handleEntry) {
@@ -1040,8 +1068,8 @@ func (t *handleTracker) setEntry(key handleKey, entry handleEntry) {
 }
 
 // remove forgets the handle key: its entry, its age and its index slot. It
-// is the one removal path of names (store of an empty name, the LRU cap,
-// dropScoped), the counterpart of fdTracker.removeFileKey.
+// is the one removal path of names (clearScoped for an entry that held only
+// the scoped name, the LRU cap), the counterpart of fdTracker.removeFileKey.
 func (t *handleTracker) remove(key handleKey) {
 	t.unindexScoped(key, t.names[key])
 	delete(t.names, key)
@@ -1090,15 +1118,10 @@ func (t *handleTracker) unindexScoped(key handleKey, entry handleEntry) {
 // lookup for the usual process, which never took a handle. Ages are left
 // alone: dropping a name is not a use of the handle.
 func (t *handleTracker) dropScoped(pid uint32) {
-	// Deleting from the set being ranged over is well-defined in Go; remove
-	// and setEntry take each key out of it, and the pid with the last one.
+	// Deleting from the set being ranged over is well-defined in Go;
+	// clearScoped takes each key out of it, and the pid with the last one.
 	for key := range t.scopedKeys[pid] {
-		absolute := t.names[key].absolute
-		if absolute == "" {
-			t.remove(key)
-			continue
-		}
-		t.setEntry(key, handleEntry{absolute: absolute})
+		t.clearScoped(key, pid)
 	}
 }
 

@@ -75,11 +75,14 @@ type FdFile struct {
 	desc             *openFileDesc
 	closeOnExecKnown bool
 	closeOnExec      bool
-	// fromProcFS marks a descriptor whose name is what /proc/<pid>/fd/<fd>
-	// showed when ior looked (NewFdWithPid, NewFdWithProcName), or that
-	// procfs could not answer for: a later look at the number, not the name
-	// a traced call gave the file. A name built from such a link carries it
-	// too (MarkNameFromProcFS). Dup and Detach copy it with the name.
+	// fromProcFS marks a descriptor whose name ior cannot vouch for. It is
+	// what /proc/<pid>/fd/<fd> showed when ior looked (NewFdWithPid,
+	// NewFdWithProcName), or procfs could not answer for it: a later look
+	// at the number, not the name a traced call gave the file. A name built
+	// from such a link carries the mark too, and so does a pathname below a
+	// directory ior has no name for, which no look at procfs was involved
+	// in (MarkNameFromProcFS; the field keeps the name of its first use).
+	// Dup and Detach copy it with the name.
 	fromProcFS bool
 }
 
@@ -155,24 +158,30 @@ func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 	return unknownFlag, fmt.Errorf("flags field not found in fdinfo")
 }
 
-// NameFromProcFS reports whether the name was read from /proc/<pid>/fd rather
-// than learned from a traced call. Such a name describes whatever the number
-// was when the event loop got to look, which is a newer file once the task
-// closed and reused the number; it is good enough for the row it was read
-// for, but must not be passed on as the identity of the file (the handle
-// names of internal/eventloop_handle.go refuse it). It is also true of a
-// name that was built from such a link, by joining a pathname to it or by
-// naming another descriptor after it (MarkNameFromProcFS).
+// NameFromProcFS reports whether ior cannot vouch for the name: it was read
+// from /proc/<pid>/fd rather than learned from a traced call. Such a name
+// describes whatever the number was when the event loop got to look, which
+// is a newer file once the task closed and reused the number; it is good
+// enough for the row it was read for, but must not be passed on as the
+// identity of the file (the handle names of internal/eventloop_handle.go
+// refuse it). It is also true of a name that was built from such a link, by
+// joining a pathname to it or by naming another descriptor after it, and of
+// one that is unvouched for without any look at procfs: the bare pathname
+// of a descriptor opened below a directory ior could not name
+// (MarkNameFromProcFS). The method is named after the first and usual case.
 func (f *FdFile) NameFromProcFS() bool {
 	return f.fromProcFS
 }
 
-// MarkNameFromProcFS records that the name f was built with derives from a
-// /proc/<pid>/fd link: it is such a link under another descriptor number, or
-// a pathname joined to one (resolveDirfdPath and the open exit handlers in
-// internal/eventloop_exit.go). The constructors that read procfs themselves
-// set the mark; this is for a name the caller put together. There is no way
-// to take the mark off again: the name of an FdFile never changes.
+// MarkNameFromProcFS records that ior cannot vouch for the name f was built
+// with. Either it derives from a /proc/<pid>/fd link - it is such a link
+// under another descriptor number, or a pathname joined to one
+// (resolveDirfdPath, fsmountFdFile and the open exit handlers in
+// internal/eventloop_exit.go) - or it is a pathname whose directory ior
+// could not name at all (unvouchedBarePathname there). The constructors
+// that read procfs themselves set the mark; this is for a name the caller
+// put together. There is no way to take the mark off again: the name of an
+// FdFile never changes.
 func (f *FdFile) MarkNameFromProcFS() {
 	f.fromProcFS = true
 }

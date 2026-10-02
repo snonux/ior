@@ -343,15 +343,17 @@ func (e *eventLoop) attachPathExitFd(ep *event.Pair, pathEv *types.PathEvent,
 	return true
 }
 
-// fdFileNamedAs builds the descriptor fd that is named after resolved, the
-// file a pathname resolved to (resolveDirfdPath) or the directory such a
-// pathname was joined to. The name is copied, and with it the mark that says
-// it came from a look at procfs rather than from a traced call
-// (FdFile.NameFromProcFS, task 523): a name does not get better by being
-// given to another descriptor, or by having a pathname appended. Without it
-// the fd table entry of an openat below a dirfd ior did not see being opened
-// passed for a traced name, and a file handle taken through that entry was
-// filed under it for every later open (takenHandleName).
+// fdFileNamedAs builds the descriptor fd that is named after resolved: the
+// file a pathname resolved to (resolveDirfdPath), or the descriptor another
+// one takes its name from (fsmountFdFile). The name is copied, and with it
+// the mark that says ior cannot vouch for it - it came from a look at procfs
+// rather than from a traced call, or is a pathname below a directory ior
+// has no name for (FdFile.NameFromProcFS, task 523): a name does not get
+// better by being given to another descriptor, or by having a pathname
+// appended. Without it the fd table entry of an openat below a dirfd ior
+// did not see being opened passed for a traced name, and a file handle
+// taken through that entry was filed under it for every later open
+// (takenHandleName).
 func fdFileNamedAs(fd int32, resolved file.File, flags int32) *file.FdFile {
 	return fdFileNamedAfter(fd, resolved.Name(), flags, resolved)
 }
@@ -403,11 +405,15 @@ func trimCutPathname(pathname string) string {
 // a newer file once the task closed and reused the number. An answer that
 // is such a look at procfs, or a table entry that was one, carries the mark
 // (FdFile.NameFromProcFS), and so does what is returned for it: the
-// directory itself for an empty pathname, and the joined name, including
-// the bare pathname left when the directory has no name. An absolute or
+// directory itself for an empty pathname, and the joined name. The bare
+// pathname left when the directory has no name is marked whatever the
+// directory is - procfs without an answer, or a table entry ior tracks
+// without a name (an openat whose filename BPF could not read): nothing
+// vouches for it either way (unvouchedBarePathname). An absolute or
 // AT_FDCWD pathname is the caller's own and a pathname-only file, which has
-// no mark; a name joined to a tracked, unmarked directory has none either.
-// The exit handlers that store the result pass the mark on (fdFileNamedAs).
+// no mark; a name joined to a tracked, unmarked, named directory has none
+// either. The exit handlers that store the result pass the mark on
+// (fdFileNamedAs).
 func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
 	pathname = trimCutPathname(pathname)
 	if !dirfdPathNeedsResolution(dirfd, pathname) {
@@ -419,9 +425,22 @@ func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) f
 		return dir
 	}
 	if dir.Name() == "" {
-		return fdFileNamedAfter(dirfd, pathname, int32(dir.Flags()), dir)
+		return unvouchedBarePathname(dirfd, pathname, int32(dir.Flags()))
 	}
 	return fdFileNamedAfter(dirfd, filepath.Join(dir.Name(), pathname), int32(dir.Flags()), dir)
+}
+
+// unvouchedBarePathname is what resolveDirfdPath answers for a pathname
+// below a directory ior has no name for: the pathname alone, marked
+// (FdFile.NameFromProcFS) wherever the directory came from. The mark is
+// about the name, not about procfs: "below.txt" is all a row can show, but
+// it is not the file's name, and unmarked it reads as a path relative to
+// the working directory, which a file handle taken through the descriptor
+// was then filed under.
+func unvouchedBarePathname(dirfd int32, pathname string, flags int32) *file.FdFile {
+	bare := file.NewFd(dirfd, pathname, flags)
+	bare.MarkNameFromProcFS()
+	return bare
 }
 
 // resolveCapturedDirfdPath applies dirfd semantics only when BPF observed a
@@ -890,15 +909,32 @@ func (e *eventLoop) registerEventfdResult(eventfdEv *types.EventfdEvent, fd, fla
 	if eventfdReusesExistingFD(traceID, eventfdEv.Fd) {
 		return e.fdState().resolve(fd, eventfdEv.Pid)
 	}
+	openFlags := eventfdOpenFlags(traceID, flags)
+	fdFile := file.NewFd(fd, descriptorName, openFlags)
 	if traceID == types.SYS_ENTER_FSMOUNT && eventfdEv.Fd >= 0 {
-		descriptorName = e.fdState().resolve(eventfdEv.Fd, eventfdEv.Pid).Name()
-		if descriptorName == "" {
-			descriptorName = eventfdDescriptorName(traceID, flags, "", false)
-		}
+		context := e.fdState().resolve(eventfdEv.Fd, eventfdEv.Pid)
+		className := eventfdDescriptorName(traceID, flags, "", false)
+		fdFile = fsmountFdFile(fd, context, className, openFlags)
 	}
-	fdFile := file.NewFd(fd, descriptorName, eventfdOpenFlags(traceID, flags))
 	e.fdState().set(fd, eventfdEv.Pid, fdFile)
 	return fdFile
+}
+
+// fsmountFdFile builds the descriptor fd an fsmount(fsfd) returned. It is
+// named after context, the fs-context descriptor it was made from as the fd
+// table or, for an fsfd ior did not see being opened, /proc/<pid>/fd calls
+// that one now. The name is copied together with its procfs mark
+// (fdFileNamedAs): an fsmount descriptor is an O_PATH one on the root of
+// the new mount, so name_to_handle_at(fd, "", AT_EMPTY_PATH) succeeds on it,
+// and an unmarked copy of the lagging link of a reused fsfd number was filed
+// as the handle's name for every opener (found in the task 523 review). A
+// context without a name leaves className, the call's class name, which is
+// ior's own and carries no mark.
+func fsmountFdFile(fd int32, context file.File, className string, openFlags int32) *file.FdFile {
+	if context.Name() == "" {
+		return file.NewFd(fd, className, openFlags)
+	}
+	return fdFileNamedAs(fd, context, openFlags)
 }
 
 // isLandlockRulesetProbe reports whether a landlock_create_ruleset call is a

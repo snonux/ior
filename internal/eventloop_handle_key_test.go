@@ -154,22 +154,32 @@ func TestHandleTrackerEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
-// TestHandleTrackerEmptyNameSupersedes: a handle returned again by a call ior
-// has no name for must not keep its old name.
-func TestHandleTrackerEmptyNameSupersedes(t *testing.T) {
+// TestHandleTrackerUnnamedTakeKeepsTheAbsoluteName pins the decision of the
+// task 523 review (k03 had the opposite, "an empty name supersedes"): a
+// handle returned again by a call ior has no name for keeps its absolute
+// name, for the taker and everyone else - such a take is no evidence
+// against it. What it ends is the taker's own scoped name, nobody else's;
+// an entry that held only that goes, age and index slot included, and a
+// handle that had no entry gets none.
+func TestHandleTrackerUnnamedTakeKeepsTheAbsoluteName(t *testing.T) {
 	tracker := newHandleTracker()
-	tracker.store(testHandleA.key(), newHandleName("/a", 1))
-	tracker.store(testHandleB.key(), newHandleName("/b", 1))
-	tracker.store(testHandleA.key(), newHandleName("", 1))
+	both, scopedOnly, unknown := testHandleA.key(), testHandleB.key(), defaultTestHandle.key()
+	tracker.store(both, newHandleName("/data/a.txt", 1))
+	tracker.store(both, newHandleName("rel-a.txt", 2))
+	tracker.store(scopedOnly, newHandleName("rel-b.txt", 2))
 
-	if name, ok := tracker.lookup(testHandleA.key(), 2); ok {
-		t.Fatalf("handle kept the superseded name %q", name)
-	}
-	if name, ok := tracker.lookup(testHandleB.key(), 2); !ok || name != "/b" {
-		t.Fatalf("another handle lost its name: (%q, %v)", name, ok)
-	}
-	if len(tracker.nameAges) != 1 {
-		t.Fatalf("age map holds %d entries, want 1", len(tracker.nameAges))
+	tracker.store(both, newHandleName("", 3))
+	tracker.store(scopedOnly, newHandleName("", 3))
+	assertNamedFor(t, tracker, both, map[uint32]string{1: "/data/a.txt", 2: "rel-a.txt", 3: "/data/a.txt"})
+	assertNamedFor(t, tracker, scopedOnly, map[uint32]string{2: "rel-b.txt", 3: ""})
+
+	tracker.store(both, newHandleName("", 2))
+	tracker.store(scopedOnly, newHandleName("", 2))
+	tracker.store(unknown, newHandleName("", 2))
+	assertNamedFor(t, tracker, both, map[uint32]string{1: "/data/a.txt", 2: "/data/a.txt", 3: "/data/a.txt"})
+	assertNamedFor(t, tracker, scopedOnly, map[uint32]string{2: ""})
+	if _, ok := tracker.names[both]; !ok || len(tracker.names) != 1 {
+		t.Fatalf("names after the unnamed takes = %v, want the absolute one alone", tracker.names)
 	}
 }
 
@@ -232,7 +242,8 @@ func TestHandleTrackerScopedTakeKeepsTheGlobalName(t *testing.T) {
 
 // TestHandleTrackerLatestTakeWinsWithinItsAudience: one scoped name is kept
 // per handle, the latest, and an absolute take replaces the whole entry, the
-// scoped name of an earlier taker included. An unnamed take drops it all.
+// scoped name of an earlier taker included. An unnamed take is the latest
+// for its taker alone: it ends that process's scoped name and nothing else.
 func TestHandleTrackerLatestTakeWinsWithinItsAudience(t *testing.T) {
 	tracker := newHandleTracker()
 	key := testHandleA.key()
@@ -247,10 +258,10 @@ func TestHandleTrackerLatestTakeWinsWithinItsAudience(t *testing.T) {
 
 	tracker.store(key, newHandleName("again.txt", 4))
 	tracker.store(key, newHandleName("", 1))
-	assertNamedFor(t, tracker, key, map[uint32]string{1: "", 2: "", 4: ""})
-	if len(tracker.names) != 0 {
-		t.Fatalf("an unnamed take left %v", tracker.names)
-	}
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/b.txt", 2: "/data/b.txt", 4: "again.txt"})
+
+	tracker.store(key, newHandleName("", 4))
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/b.txt", 2: "/data/b.txt", 4: "/data/b.txt"})
 }
 
 // TestHandleTrackerDropScopedTakesOnlyThatProcesssNames: the end of a

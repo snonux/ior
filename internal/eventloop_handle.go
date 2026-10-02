@@ -56,18 +56,39 @@ import (
 //     removed from the open: a task that closed the descriptor and reused the
 //     number in the meantime would have the NEWER file filed under the
 //     handle, and every later open of it, by any process, named after the
-//     wrong file. No name is filed then, and the open falls back like one of
-//     an unknown handle.
+//     wrong file. No name is filed then; what the handle was already known
+//     as stays (handleTracker.store), and without that the open falls back
+//     like one of an unknown handle.
 //   - a table entry is no better than that /proc link when its name was
-//     made from one, and says so (FdFile.NameFromProcFS): the look itself
-//     that a call stored (an open_by_handle_at of an unknown handle, an
-//     io_uring_setup, a procfs-resolved descriptor an fcntl promoted), a
-//     duplicate or a forked child's copy of such an entry, and - since task
-//     523 - a descriptor opened by a pathname that was resolved against
-//     one: openat, openat2, open_tree, open_tree_attr and fspick below a
-//     dirfd ior did not see being opened, or of that dirfd itself with an
-//     empty pathname (resolveDirfdPath, fdFileNamedAs). No name is filed
-//     through such an entry either.
+//     made from one, and says so (FdFile.NameFromProcFS, the mark of a name
+//     ior cannot vouch for). The entries that carry it are the ones whose
+//     name is the look itself or was built from it:
+//       - the look a call stored: an open_by_handle_at of an unknown handle
+//         (procFdFile, the unnamed answer included), an io_uring_setup, a
+//         procfs-resolved descriptor an fcntl or an ioctl FIOCLEX/FIONCLEX
+//         promoted (the cache entry fdTracker.resolve made is stored as it
+//         is);
+//       - a duplicate (registerDup) or a forked child's copy (inherit) of
+//         a marked entry - FdFile.Dup copies the mark - and a table moved
+//         to another pid, which moves the entries themselves;
+//       - since task 523, a descriptor opened by a pathname that was
+//         resolved against a marked name: openat, openat2, open_tree,
+//         open_tree_attr and fspick below a dirfd ior did not see being
+//         opened or below a marked entry, or of that dirfd itself with an
+//         empty pathname (resolveDirfdPath, fdFileNamedAs);
+//       - an fsmount descriptor named after an fs-context descriptor of
+//         either kind (fsmountFdFile).
+//     One marked name is not a look at procfs at all: the bare pathname of
+//     a descriptor opened below a directory ior has no name for, be that
+//     procfs without an answer or a table entry with an empty name
+//     (unvouchedBarePathname). No name is filed through a marked entry.
+//     Every other call that stores a descriptor names it without a look at
+//     procfs - from its own arguments (socket, socketpair, pipe, the
+//     eventfd family, perf_event_open, bpf, an open by an absolute or
+//     AT_FDCWD pathname), from an unmarked table entry, or, for accept,
+//     from a listener's class name only when that is ior's own
+//     ("socket:<family>:<type>:<protocol>", never a "socket:[N]" link) -
+//     and is unmarked. bpf does read /proc/<pid>/fdinfo, for the flags.
 //
 // Whom the name is given to (handleName, handleEntry). An absolute pathname
 // names every open of the handle. A name that is not one - relative to the
@@ -116,17 +137,12 @@ import (
 //     one that could not be read (handleKeyOf); and one taken through a
 //     descriptor only procfs could name (above).
 //   - The fd table is trusted for every entry that is not marked. The mark
-//     says where a name came from, not whether it is right, and two kinds of
-//     unmarked entry can still give a handle a name ior should not vouch
-//     for. A descriptor opened by a pathname below a TRACKED dirfd whose own
-//     name ior never read (an entry with an empty name) is stored under the
-//     bare pathname, which a take through it files as if it were relative
-//     to the working directory - scoped to the taker, so no other process
-//     sees it. And an entry outlives what made it true: the fd table itself
-//     can be behind (a close ior did not see, a number reused through an
-//     untraced call), and a take through such an entry files the old name.
-//     The mark also changes no row: a row on a marked descriptor shows the
-//     lagging name as before; only the handle names refuse it.
+//     says where a name came from, not whether it is right, and an unmarked
+//     entry outlives what made it true: the fd table itself can be behind
+//     (a close ior did not see, a number reused through an untraced call),
+//     and a take through such an entry files the old name. The mark also
+//     changes no row: a row on a marked descriptor shows the lagging name,
+//     or the bare pathname, as before; only the handle names refuse it.
 //   - The absolute name of a handle survives a scoped take of it (task 523).
 //     If the file was renamed in between, the processes that are not the
 //     scoped taker keep the old pathname where they used to fall back to
@@ -134,12 +150,15 @@ import (
 //     without the second take. Only one scoped name is kept per handle: a
 //     second process taking it by a scoped name displaces the first one's,
 //     and the first is named by the absolute name, or falls back.
-//   - A take ior has no name for still drops the whole entry, the absolute
-//     name included (handleTracker.store; the k03 decision, pinned by
-//     TestHandleTrackerEmptyNameSupersedes). The reasoning that keeps the
-//     absolute name past a scoped take applies to it as well - such a take
-//     is no evidence against the name either - so the two cases are not
-//     treated alike. It degrades to procfs and never misnames; left as it is.
+//   - The absolute name survives a take ior has no name for as well
+//     (handleTracker.store has the reasoning; until the task 523 review
+//     such a take dropped the entry). The cost is the same stale name: if
+//     the file was renamed before that take, or the take was of another
+//     filesystem's file with an equal handle, every opener keeps the older
+//     pathname - as it would had nobody taken the handle again. Dropping
+//     the entry was no way out of a wrong name either: the fallback is the
+//     lagging look at procfs. The taker's own scoped name does end with
+//     such a take.
 //   - An entry evicted by the LRU cap is such an unknown handle again.
 //   - An IOR_BPF_OBJECT built before task k03 emits no handle record and a
 //     handle-less open record, so every open_by_handle_at is named from
@@ -288,15 +307,16 @@ func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent
 
 // takenHandleName returns the name to file the handle of a successful
 // name_to_handle_at under, or "" when ior has none it can vouch for (store
-// then files nothing and drops what the handle was known as). See "What the
-// name is" at the top of this file.
+// then files nothing; of what the handle was known as, only the taker's own
+// scoped name goes). See "What the name is" at the top of this file.
 //
 // It resolves the pathname as resolvePathEvent does for the row of any other
 // path syscall, with one difference: the dirfd is looked up in the fd table
 // only (fdTracker.get), never read from procfs (fdTracker.resolve), and a
-// table entry that was itself named from procfs, or built from such a name,
-// is refused. A row may show what procfs says now; a name that will label
-// other calls may not.
+// table entry whose name ior cannot vouch for - one that was itself named
+// from procfs, or built from such a name, or a bare pathname below an
+// unnamed directory - is refused. A row may show what procfs says now; a
+// name that will label other calls may not.
 func (e *eventLoop) takenHandleName(pathEv *types.PathEvent) string {
 	if !pathEventTargetRequired(pathEv) || pathEv.PathnameStatus != types.PATH_READ_OK {
 		return ""
@@ -318,13 +338,12 @@ func (e *eventLoop) takenHandleName(pathEv *types.PathEvent) string {
 	return filepath.Join(dir.Name(), pathname)
 }
 
-// namedFromProcfs reports whether f is a descriptor whose name is a
-// /proc/<pid>/fd link ior read, or was built from one, rather than the name
-// a traced call gave it. Such entries do get into the fd table: an
-// open_by_handle_at of an unknown handle (procFdFile), an io_uring_setup, a
-// procfs-resolved descriptor an fcntl promoted (storeFcntlFdFile), and a
-// descriptor opened by a pathname resolved against any of these or against
-// a dirfd that is not in the table at all (fdFileNamedAs).
+// namedFromProcfs reports whether f is a descriptor whose name ior cannot
+// vouch for (FdFile.NameFromProcFS): a /proc/<pid>/fd link ior read, or a
+// name built from one, rather than the name a traced call gave it - or the
+// bare pathname of a descriptor opened below a directory without a name.
+// Such entries do get into the fd table; "What the name is" at the top of
+// this file lists every way.
 //
 // It has two callers, and they are all that reacts to the mark:
 // takenHandleName, which refuses the name, and fdFileNamedAfter, which
