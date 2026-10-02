@@ -270,7 +270,8 @@ func TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram(t *testing.T) {
 			t.Fatalf("print the body of GetProgram: %v", err)
 		}
 		if got := body.String(); got != libbpfGetProgramBody {
-			t.Errorf("libbpfTracepointModule.GetProgram is no longer the reviewed body.\n  is:\n%s\n  want:\n%s",
+			t.Errorf("libbpfTracepointModule.GetProgram is no longer the reviewed body; "+
+				"review the change, then update libbpfGetProgramBody (ior_bpflink_test.go).\n  is:\n%s\n  want:\n%s",
 				got, libbpfGetProgramBody)
 		}
 	}
