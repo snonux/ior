@@ -1613,10 +1613,13 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   until the call's exit record claims it a few records later, so an entry
   outlives its task only when that exit record was lost. It cannot mislabel
   the recycled tid - a claim needs the exit record's exact time - so dropping
-  it is hygiene. What the exit record must **not** drop are the handle
+  it is hygiene. What a task's exit record must **not** drop are the handle
   *names* (`handleTracker.names`): they are keyed by the handle itself, and
   taking a handle for another thread or process to open is what the API is
-  for, so a name outlives the task that took the handle. (While the pathname
+  for, so a name outlives the task that took the handle. (The one exception
+  is tgid-keyed, not tid-keyed: a name scoped to the taker's process goes
+  with that process's group-dead record, task 523, `dropScoped`.) (While
+  the pathname
   was parked per tid, until task k03, it had to be dropped here, or the
   recycled tid's next `open_by_handle_at` was labelled, row and fd table
   entry, with the dead task's path.) Pinned by
@@ -1764,7 +1767,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       call's enter record.
 
     Userspace keeps `handleTracker.names`: handle key (`handleKey`: type,
-    length, bytes) -> `handleName`. `handleFileHandleEvent` parks the handle
+    length, bytes) -> `handleEntry` (the absolute name and, next to it, the
+    latest scoped one). `handleFileHandleEvent` parks the handle
     per tid (`handleTracker.taken`) while the call's enter is still pending;
     `recordNameToHandleAt` claims it at the exit record and files the name.
     `handleOpenByHandleAtExit` looks the name up by the key of its enter
@@ -1788,9 +1792,22 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       and a table entry that was itself named from procfs
       (`FdFile.NameFromProcFS`: an `open_by_handle_at` of an unknown handle,
       `io_uring_setup`, a procfs-resolved descriptor an `fcntl` promoted) is
-      refused. Otherwise the only name is the `/proc/<pid>/fd` link as it is
-      when the loop handles the exit: a task that closed the descriptor and
-      reused the number would have the *newer* file filed under the handle,
+      refused. So is an entry whose name was *built* from such a look (task
+      523): `resolveDirfdPath` passes the mark of the directory it resolved
+      - an untracked dirfd read from procfs, or a marked table entry - on to
+      the joined name, the bare pathname left when the directory has no
+      name, and the directory itself for an empty pathname, and the exit
+      handlers that store the result keep it (`fdFileNamedAs`:
+      `handleOpenExit` for `openat`, `openat2`, `open_tree`,
+      `open_tree_attr`; `attachPathExitFd` for `fspick` and `creat`). An
+      absolute or `AT_FDCWD` pathname is the caller's own and unmarked, as
+      is a name joined to a tracked, unmarked directory. Nothing but the
+      handle names reacts to the mark (`namedFromProcfs` has two callers:
+      `takenHandleName` refuses, `fdFileNamedAfter` propagates); rows are
+      named as before. Otherwise the only name is the `/proc/<pid>/fd` link
+      as it is when the loop handles the exit: a task that closed the
+      descriptor and reused the number would have the *newer* file filed
+      under the handle,
       and every later open of it, in any process, named after the wrong
       file - the lagging look this design removed from the open, moved to
       the take. No name is filed then (and an older one is dropped); the
@@ -1802,13 +1819,37 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       and a descriptor name without a path (`memfd:x`, `pidfd:0`) names one
       of the taker's descriptors; either names the opens of every thread of
       that process (`pid`) and none of another, which falls back.
+    - *A scoped name is kept next to the absolute one, not instead of it*
+      (task 523, `handleEntry`, `handleTracker.store`). Process B taking, by
+      a relative pathname, a handle process A filed under an absolute one
+      used to replace the entry, and A and every other process fell back to
+      procfs - the lagging look, and no name for a failed call. Now B is
+      named by its own take and everyone else still by the absolute name. A
+      scoped take is no evidence against that name (the same file spelled
+      relative to a working directory is the likeliest reason for the two to
+      differ), and what it can be wrong about - a rename in between, a
+      cross-filesystem collision - it is equally wrong about when nobody
+      takes the handle again. One scoped name is kept per handle (the latest
+      scoped take), an absolute take replaces the whole entry, and a take
+      without a name ior can vouch for still drops it (see the residuals).
+    - *A scoped name lives as long as its process* (task 523,
+      `handleTracker.dropScoped`, O(names of the pid) through the
+      `scopedKeys` index). It goes with the fd table, on the same trigger
+      (`dropProcessState`): the **group-dead** exit record, not the leader's
+      - a leader that calls `pthread_exit` dies before its threads - and,
+      for a pid whose exit record was lost, the task record of the next
+      process handed the number (`retireRecycledPid`). A thread's exit and
+      a new thread leave it. So does an `execve`, leader's or not: the pid
+      and the working directory are the same, and the handle opens the same
+      file whether or not the descriptor it was taken through survived. A
+      forked child gets none of its creator's scoped names.
     - *The map is global and an entry is never consumed.* A handle is valid
       system-wide, is passed between threads and processes and can be opened
       any number of times; a failed open says nothing against the name. The
-      latest `name_to_handle_at` of a handle wins (one without a name ior can
-      vouch for drops the entry), a lookup that names an open refreshes the
-      entry, and above `defaultMaxHandleEntries` the least recently used are
-      evicted.
+      latest `name_to_handle_at` of a handle wins within its audience (see
+      above; one without a name ior can vouch for drops the entry), a lookup
+      that names an open refreshes the entry, and above
+      `defaultMaxHandleEntries` the least recently used are evicted.
     - *No handle, no guess.* An enter record that identifies no handle
       (`handleKeyOf`: status other than OK, zero bytes, a count beyond the
       field) and a handle ior has no name for are named from
@@ -1856,9 +1897,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     Still wrong, and accepted:
     - *Stale names.* The name is the one the handle was *taken* by: a file
       renamed or unlinked since keeps it, as an fd table entry does. A
-      scoped relative name survives a `chdir` of its process, and a pid
-      recycled while the entry lives inherits the scoped names of its
-      predecessor.
+      scoped relative name survives a `chdir` of its process. A recycled pid
+      inherits its predecessor's scoped names only if both that process's
+      group-dead exit record and its own task record were lost.
     - *Mount namespaces and chroots.* An absolute pathname is a path in the
       taker's root and mount namespace, and ior tracks neither (no path row
       does): an opener in another one - a container opening a handle the
@@ -1888,30 +1929,24 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       exit probe not attached (detached at runtime, a failed attach); with a
       lost control record; through a descriptor only procfs could name; or
       evicted by the LRU cap.
-    - *The fd table is trusted as it is.* The procfs mark
-      (`FdFile.NameFromProcFS`) covers only an entry that is itself the look
-      at procfs. It is lost where a call opens a descriptor by a pathname
-      resolved against a dirfd ior did not see being opened:
-      `resolveDirfdPath` reads the dirfd's `/proc` link and the exit handler
-      stores the result as a new, unmarked entry (`file.NewFd`) -
-      `handleOpenExit` for `openat`, `openat2`, `open_tree` and
-      `open_tree_attr`, `attachPathExitFd` for `fspick` (and `creat`, which
-      has no dirfd). A relative pathname is joined to the link; an empty one
-      (`open_tree(fd, "", AT_EMPTY_PATH)`, `fspick(fd, "",
-      FSPICK_EMPTY_PATH)`) is the bare link, with no join at all. Either way
-      the entry carries that lagging answer, a handle taken through it
-      inherits it, and since the `/proc` link of a file that has a path is
-      an absolute pathname the name is filed for every opener, not only the
-      taker's process. Carrying the mark through `resolveDirfdPath` is task
-      523.
-    - *A scoped take replaces a global name.* `handleTracker.store` keeps one
-      entry per handle and the latest take wins, whoever made it. Process B
-      taking, by a relative pathname, a handle process A filed under an
-      absolute one takes the global name away: A and every other process
-      fall back to procfs for that handle, and only B is named. It degrades,
-      never misnames; whether a scoped name may replace another process's
-      absolute one is left to task 523 (pinned as it is by
-      `TestHandleTrackerScopedTakeReplacesAGlobalName`).
+    - *The fd table is trusted for every unmarked entry.* The mark says
+      where a name came from, not whether it is right. A descriptor opened
+      below a *tracked* dirfd whose own name ior never read (an entry with
+      an empty name) is stored under the bare pathname, and a take through
+      it files that as if it were relative to the working directory (scoped
+      to the taker). And the table itself can be behind - a close ior did
+      not see, a number reused through an untraced call - so a take through
+      such an entry files the old name. The mark changes no row either: a
+      row on a marked descriptor shows the lagging name as before.
+    - *An absolute name survives a scoped take.* If the file was renamed in
+      between, every process but the scoped taker keeps the old pathname
+      where it used to fall back to procfs - the stale name of the first
+      residual, no staler than without the second take. A second process
+      taking the handle by a scoped name displaces the first one's.
+    - *An unnamed take still drops the whole entry*, the absolute name
+      included (the k03 decision, `TestHandleTrackerEmptyNameSupersedes`),
+      although the reasoning that keeps the name past a scoped take applies
+      to it as well. It degrades to procfs and never misnames; left as is.
     - *A coarse clock.* The two time checks compare clock reads of one tid
       that are at least a syscall entry or exit apart. A clocksource too
       coarse to move in that time (the jiffies fallback) makes two calls
@@ -1938,7 +1973,13 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     cross-process, not consumed, latest wins),
     `internal/eventloop_handle_key_test.go` (type/byte/length sensitivity,
     unusable statuses, legacy record, LRU, claim-by-time, a scoped take
-    replacing a global name),
+    keeping the absolute name, `dropScoped` and the scoped index),
+    `internal/eventloop_handle_dirfd_test.go` (the mark of a name built
+    from a look at procfs, per call and pathname form, and its absence for
+    a tracked directory and the caller's own pathname),
+    `internal/eventloop_handle_exit_test.go` (scoped names end with the
+    group-dead record and a recycled pid's task record, not with a thread
+    exit or an `execve`; absolute names outlive their taker),
     `internal/eventloop_handle_name_test.go` (failed and size-probe calls,
     refused control records, a lost exit, `AT_EMPTY_PATH` names),
     `internal/eventloop_handle_source_test.go` (no name from an untracked or

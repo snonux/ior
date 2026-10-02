@@ -393,11 +393,17 @@ func TestNewFdWithProcNameKeepsTheGivenName(t *testing.T) {
 // carry the name of their source, so they must also say where that name came
 // from. A copy that dropped the mark would pass a look at procfs off as a
 // name a traced call gave (task k03: a handle taken through the duplicate
-// would be filed under it for every later open).
+// would be filed under it for every later open). A name the event loop
+// built from a link and marked itself (MarkNameFromProcFS, task 523) is
+// copied the same way.
 func TestFdFileCopiesKeepTheProcfsMark(t *testing.T) {
+	built := NewFd(3, "/proc/link/below.txt", syscall.O_RDONLY)
+	built.MarkNameFromProcFS()
 	sources := map[string]*FdFile{
 		"read from procfs":       NewFdWithProcName(3, uint32(os.Getpid()), "/proc/link"),
 		"procfs had no answer":   NewFdWithPid(1<<20, uint32(os.Getpid())),
+		"refused procfs answer":  NewUnresolvedFd(3),
+		"built from a link":      built,
 		"given by a traced call": NewFd(3, "/traced", syscall.O_RDONLY),
 	}
 	for name, source := range sources {

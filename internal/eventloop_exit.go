@@ -118,7 +118,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		openEventAllowsEmptyPath(openEv, !event.IsErrnoRet(retEvent.Ret)))
 	ep.Comm = comm
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		fdFile := file.NewFd(fd, filename.Name(), openEventFlags(openEv))
+		fdFile := fdFileNamedAs(fd, filename, openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -337,10 +337,33 @@ func (e *eventLoop) attachPathExitFd(ep *event.Pair, pathEv *types.PathEvent,
 		ep.File = pathname
 		return true
 	}
-	fdFile := file.NewFd(fd, pathname.Name(), fdFlags)
+	fdFile := fdFileNamedAs(fd, pathname, fdFlags)
 	e.fdState().set(fd, pathEv.Pid, fdFile)
 	ep.File = fdFile
 	return true
+}
+
+// fdFileNamedAs builds the descriptor fd that is named after resolved, the
+// file a pathname resolved to (resolveDirfdPath) or the directory such a
+// pathname was joined to. The name is copied, and with it the mark that says
+// it came from a look at procfs rather than from a traced call
+// (FdFile.NameFromProcFS, task 523): a name does not get better by being
+// given to another descriptor, or by having a pathname appended. Without it
+// the fd table entry of an openat below a dirfd ior did not see being opened
+// passed for a traced name, and a file handle taken through that entry was
+// filed under it for every later open (takenHandleName).
+func fdFileNamedAs(fd int32, resolved file.File, flags int32) *file.FdFile {
+	return fdFileNamedAfter(fd, resolved.Name(), flags, resolved)
+}
+
+// fdFileNamedAfter is fdFileNamedAs for a name that is not source's own but
+// was built from it (a pathname joined to it).
+func fdFileNamedAfter(fd int32, name string, flags int32, source file.File) *file.FdFile {
+	fdFile := file.NewFd(fd, name, flags)
+	if namedFromProcfs(source) {
+		fdFile.MarkNameFromProcFS()
+	}
+	return fdFile
 }
 
 // maxCapturedPathname is the longest pathname the BPF side captures: the
@@ -373,6 +396,18 @@ func trimCutPathname(pathname string) string {
 // identity names, events that do not need a target path, and non-OK path
 // statuses. Parquet and CSV output stay valid regardless, because
 // textsafe.SanitizePath trims the cut itself.
+//
+// Where the name came from travels with it (task 523). The directory is
+// whatever fdTracker.resolve answers: an fd table entry, or - for a dirfd ior
+// did not see being opened - the /proc/<pid>/fd link as it is now, which is
+// a newer file once the task closed and reused the number. An answer that
+// is such a look at procfs, or a table entry that was one, carries the mark
+// (FdFile.NameFromProcFS), and so does what is returned for it: the
+// directory itself for an empty pathname, and the joined name, including
+// the bare pathname left when the directory has no name. An absolute or
+// AT_FDCWD pathname is the caller's own and a pathname-only file, which has
+// no mark; a name joined to a tracked, unmarked directory has none either.
+// The exit handlers that store the result pass the mark on (fdFileNamedAs).
 func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) file.File {
 	pathname = trimCutPathname(pathname)
 	if !dirfdPathNeedsResolution(dirfd, pathname) {
@@ -384,9 +419,9 @@ func (e *eventLoop) resolveDirfdPath(dirfd int32, pid uint32, pathname string) f
 		return dir
 	}
 	if dir.Name() == "" {
-		return file.NewFd(dirfd, pathname, int32(dir.Flags()))
+		return fdFileNamedAfter(dirfd, pathname, int32(dir.Flags()), dir)
 	}
-	return file.NewFd(dirfd, filepath.Join(dir.Name(), pathname), int32(dir.Flags()))
+	return fdFileNamedAfter(dirfd, filepath.Join(dir.Name(), pathname), int32(dir.Flags()), dir)
 }
 
 // resolveCapturedDirfdPath applies dirfd semantics only when BPF observed a

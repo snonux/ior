@@ -78,7 +78,8 @@ type FdFile struct {
 	// fromProcFS marks a descriptor whose name is what /proc/<pid>/fd/<fd>
 	// showed when ior looked (NewFdWithPid, NewFdWithProcName), or that
 	// procfs could not answer for: a later look at the number, not the name
-	// a traced call gave the file. Dup and Detach copy it with the name.
+	// a traced call gave the file. A name built from such a link carries it
+	// too (MarkNameFromProcFS). Dup and Detach copy it with the name.
 	fromProcFS bool
 }
 
@@ -159,9 +160,21 @@ func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 // was when the event loop got to look, which is a newer file once the task
 // closed and reused the number; it is good enough for the row it was read
 // for, but must not be passed on as the identity of the file (the handle
-// names of internal/eventloop_handle.go refuse it).
+// names of internal/eventloop_handle.go refuse it). It is also true of a
+// name that was built from such a link, by joining a pathname to it or by
+// naming another descriptor after it (MarkNameFromProcFS).
 func (f *FdFile) NameFromProcFS() bool {
 	return f.fromProcFS
+}
+
+// MarkNameFromProcFS records that the name f was built with derives from a
+// /proc/<pid>/fd link: it is such a link under another descriptor number, or
+// a pathname joined to one (resolveDirfdPath and the open exit handlers in
+// internal/eventloop_exit.go). The constructors that read procfs themselves
+// set the mark; this is for a name the caller put together. There is no way
+// to take the mark off again: the name of an FdFile never changes.
+func (f *FdFile) MarkNameFromProcFS() {
+	f.fromProcFS = true
 }
 
 // Name returns the file's path, or the empty string when it was never

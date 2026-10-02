@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"reflect"
 	"syscall"
 	"testing"
 
@@ -172,31 +173,133 @@ func TestHandleTrackerEmptyNameSupersedes(t *testing.T) {
 	}
 }
 
-// TestHandleTrackerScopedTakeReplacesAGlobalName pins an accepted residual
-// so that changing it is deliberate (task 523 decides): a handle has one
-// entry and the latest take wins, whoever made it. Process 2 taking, by a
-// relative pathname, a handle process 1 filed under an absolute one leaves
-// only process 2 named; process 1 and everyone else fall back to procfs. No
-// process is given a name that is not its own.
-func TestHandleTrackerScopedTakeReplacesAGlobalName(t *testing.T) {
+// assertScopedIndex checks the tracker's bookkeeping: the scoped index names
+// exactly the entries that hold a scoped name, under the pid that owns it,
+// and every name has an age. dropScoped only consults the index, so an entry
+// missing from it would outlive its process, and a slot without an entry
+// would grow the index for good.
+func assertScopedIndex(t *testing.T, tracker *handleTracker) {
+	t.Helper()
+	want := map[uint32]map[handleKey]struct{}{}
+	for key, entry := range tracker.names {
+		if entry.scoped == "" {
+			continue
+		}
+		if want[entry.scopedPid] == nil {
+			want[entry.scopedPid] = map[handleKey]struct{}{}
+		}
+		want[entry.scopedPid][key] = struct{}{}
+	}
+	if !reflect.DeepEqual(tracker.scopedKeys, want) {
+		t.Fatalf("scoped index = %v, want %v", tracker.scopedKeys, want)
+	}
+	if len(tracker.nameAges) != len(tracker.names) {
+		t.Fatalf("tracker holds %d ages for %d names", len(tracker.nameAges), len(tracker.names))
+	}
+}
+
+// assertNamedFor checks what each process is given for the handle key; an
+// empty want means the process is given no name.
+func assertNamedFor(t *testing.T, tracker *handleTracker, key handleKey, want map[uint32]string) {
+	t.Helper()
+	for pid, wantName := range want {
+		name, ok := tracker.lookup(key, pid)
+		if name != wantName || ok != (wantName != "") {
+			t.Fatalf("process %d is given (%q, %v), want %q", pid, name, ok, wantName)
+		}
+	}
+	assertScopedIndex(t, tracker)
+}
+
+// TestHandleTrackerScopedTakeKeepsTheGlobalName pins the decision of task
+// 523 (it used to be the opposite, "the latest take wins whoever made it"):
+// process 2 taking, by a relative pathname, a handle process 1 filed under an
+// absolute one is named by its own take, and process 1 and everyone else
+// keep the absolute name instead of falling back to procfs. No process is
+// given a name that is not its own or everyone's.
+func TestHandleTrackerScopedTakeKeepsTheGlobalName(t *testing.T) {
 	tracker := newHandleTracker()
 	key := testHandleA.key()
 	tracker.store(key, newHandleName("/data/a.txt", 1))
-	if name, ok := tracker.lookup(key, 3); !ok || name != "/data/a.txt" {
-		t.Fatalf("an absolute name is not global: (%q, %v)", name, ok)
-	}
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/a.txt", 2: "/data/a.txt", 3: "/data/a.txt"})
 
 	tracker.store(key, newHandleName("rel.txt", 2))
-	if name, ok := tracker.lookup(key, 2); !ok || name != "rel.txt" {
-		t.Fatalf("the latest taker is not named by its own take: (%q, %v)", name, ok)
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/a.txt", 2: "rel.txt", 3: "/data/a.txt"})
+	if len(tracker.names) != 1 {
+		t.Fatalf("tracker holds %d entries for one handle, want 1", len(tracker.names))
 	}
-	for _, pid := range []uint32{1, 3} {
-		if name, ok := tracker.lookup(key, pid); ok {
-			t.Fatalf("process %d is still named %q after another process's scoped take", pid, name)
-		}
+}
+
+// TestHandleTrackerLatestTakeWinsWithinItsAudience: one scoped name is kept
+// per handle, the latest, and an absolute take replaces the whole entry, the
+// scoped name of an earlier taker included. An unnamed take drops it all.
+func TestHandleTrackerLatestTakeWinsWithinItsAudience(t *testing.T) {
+	tracker := newHandleTracker()
+	key := testHandleA.key()
+	tracker.store(key, newHandleName("/data/a.txt", 1))
+	tracker.store(key, newHandleName("rel.txt", 2))
+
+	tracker.store(key, newHandleName("other.txt", 4))
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/a.txt", 2: "/data/a.txt", 4: "other.txt"})
+
+	tracker.store(key, newHandleName("/data/b.txt", 3))
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "/data/b.txt", 2: "/data/b.txt", 4: "/data/b.txt"})
+
+	tracker.store(key, newHandleName("again.txt", 4))
+	tracker.store(key, newHandleName("", 1))
+	assertNamedFor(t, tracker, key, map[uint32]string{1: "", 2: "", 4: ""})
+	if len(tracker.names) != 0 {
+		t.Fatalf("an unnamed take left %v", tracker.names)
 	}
-	if len(tracker.names) != 1 || len(tracker.nameAges) != 1 {
-		t.Fatalf("tracker holds %d names and %d ages, want one entry", len(tracker.names), len(tracker.nameAges))
+}
+
+// TestHandleTrackerDropScopedTakesOnlyThatProcesssNames: the end of a
+// process takes its scoped names and nothing else - not the absolute name
+// next to one, not another process's scoped name - and an entry that held
+// only the scoped name is gone, age and index slot included.
+func TestHandleTrackerDropScopedTakesOnlyThatProcesssNames(t *testing.T) {
+	tracker := newHandleTracker()
+	both, scopedOnly, other := testHandleA.key(), testHandleB.key(), defaultTestHandle.key()
+	tracker.store(both, newHandleName("/data/a.txt", 1))
+	tracker.store(both, newHandleName("rel-a.txt", 2))
+	tracker.store(scopedOnly, newHandleName("rel-b.txt", 2))
+	tracker.store(other, newHandleName("rel-c.txt", 5))
+
+	tracker.dropScoped(99)
+	assertNamedFor(t, tracker, both, map[uint32]string{2: "rel-a.txt"})
+	assertNamedFor(t, tracker, scopedOnly, map[uint32]string{2: "rel-b.txt"})
+
+	tracker.dropScoped(2)
+	assertNamedFor(t, tracker, both, map[uint32]string{1: "/data/a.txt", 2: "/data/a.txt"})
+	assertNamedFor(t, tracker, scopedOnly, map[uint32]string{2: ""})
+	assertNamedFor(t, tracker, other, map[uint32]string{5: "rel-c.txt", 2: ""})
+	if _, ok := tracker.names[scopedOnly]; ok || len(tracker.names) != 2 {
+		t.Fatalf("names after the drop = %v, want the absolute and the other process's", tracker.names)
+	}
+}
+
+// TestHandleTrackerEvictionAndInjectionKeepTheScopedIndex: a scoped name
+// that leaves through the LRU cap leaves the index too, and a tracker handed
+// names without an index (the loop's injection seam) builds it, so that the
+// process's end still finds them.
+func TestHandleTrackerEvictionAndInjectionKeepTheScopedIndex(t *testing.T) {
+	tracker := newHandleTracker()
+	tracker.maxCacheSize = 2
+	tracker.store(testHandleA.key(), newHandleName("rel-a.txt", 1))
+	tracker.store(testHandleB.key(), newHandleName("rel-b.txt", 2))
+	tracker.store(defaultTestHandle.key(), newHandleName("rel-c.txt", 3))
+	if _, ok := tracker.names[testHandleA.key()]; ok {
+		t.Fatal("the least recently used handle survived the cap")
+	}
+	assertScopedIndex(t, tracker)
+
+	injected := &handleTracker{names: map[handleKey]handleEntry{
+		testHandleA.key(): {scoped: "rel-a.txt", scopedPid: 7},
+	}}
+	injected.ensureInit()
+	injected.dropScoped(7)
+	if len(injected.names) != 0 {
+		t.Fatalf("an injected scoped name outlived its process: %v", injected.names)
 	}
 }
 

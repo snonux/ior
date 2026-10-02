@@ -203,8 +203,9 @@ func (e *eventLoop) lostExecRecord(entered uint64) (adopt, proven bool) {
 // dead leader (its exit record normally evicted it; this covers a lost one).
 // No thread will ever report under oldTid again - the number was released
 // with the dead leader - so leaving entries behind would only wait for a
-// recycled owner. (The handle NAMES are not per-tid state and stay: a handle
-// is as valid after the exec as before, see handleTracker.)
+// recycled owner. (The handle NAMES are not per-tid state and stay, the
+// scoped ones of the process included: a handle is as valid after the exec
+// as before, see handleTracker and dropProcessState.)
 func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 	e.pairs.moveExecCaller(oldTid, newTid)
 	e.evictCachedComm(oldTid)

@@ -6,8 +6,8 @@ import (
 )
 
 // handleProcessExitEvent applies a sched:sched_process_exit control record to
-// the four pieces of state that would otherwise outlive the task the kernel
-// just reported dead, and reports whole-process exits to the stats engine.
+// the pieces of state that would otherwise outlive the task the kernel just
+// reported dead, and reports whole-process exits to the stats engine.
 //
 // The fd table: when the record says the whole thread group is dead
 // (ev.IsGroupDead), every (pid, fd) entry of tgid ev.Pid is dropped from the
@@ -17,6 +17,12 @@ import (
 // note on defaultMaxFdTableEntries). A record for a thread whose siblings
 // still live leaves the table alone: the descriptors belong to the process,
 // which still holds them.
+//
+// The scoped handle names: a name a name_to_handle_at filed for the opens of
+// its own process only (a relative pathname, a descriptor name; see
+// handleTracker) is keyed by that tgid, and goes with the fd table, on the
+// same record and for the same reason: the next process handed the number
+// would be named by it (dropProcessState).
 //
 // The comm cache: it is keyed by tid, and tids are recycled, so the entry for
 // ev.Tid would otherwise label the *next* process handed that tid number with
@@ -128,9 +134,11 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// tid until the call's exit record claims it; if that record was lost the
 	// entry would wait for the recycled tid. It could not mislabel anything
 	// there - a claim needs the exit record's exact time - so this is
-	// hygiene. The handle NAMES stay: they are keyed by the handle, which a
-	// task routinely takes for another thread or process to open, and which
-	// stays valid after the task that took it is gone (handleTracker).
+	// hygiene. The handle NAMES are not this thread's: an absolute one is
+	// keyed by the handle alone, which a task routinely takes for another
+	// thread or process to open and which stays valid after the task that
+	// took it is gone, and a scoped one belongs to the process and goes when
+	// the whole thread group has (applyProcessDeath, dropProcessState).
 	e.handleState().dropTaken(ev.Tid)
 	// Last: every piece of state the exit retires is gone before a -tid trace
 	// is told to end, so the shutdown statistics see the final picture (the
@@ -140,23 +148,29 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	e.endTraceOnTargetThreadExit(ev)
 }
 
-// applyProcessDeath performs the tgid-keyed half of an exit record: fd-table
-// eviction, the group-dead counter, stats retirement and, for the -pid target
-// of a headless run, ending the trace (endTraceOnTargetExit).
+// applyProcessDeath performs the tgid-keyed half of an exit record: eviction
+// of the process's state (dropProcessState: fd table, program break, scoped
+// handle names), the group-dead counter, stats retirement and, for the -pid
+// target of a headless run, ending the trace (endTraceOnTargetExit).
 //
-// A known group-dead record does all three. A record whose flag is unknown
-// (legacy 24-byte layout) still evicts the fd entries, as every exit did
-// before group_dead existed: keeping them would leave a dead process's
-// descriptors until LRU trimming, while a wrong eviction only costs the
-// surviving threads a /proc/<pid>/fd fallback. It neither counts nor retires,
+// Which record means "the process is gone" is the kernel's group_dead flag,
+// not the leader's exit: a leader that calls pthread_exit dies first and
+// leaves its threads running under the same tgid, with the same descriptors
+// and working directory, and a non-leader execve keeps the tgid as well.
+//
+// A known group-dead record does all of it. A record whose flag is unknown
+// (legacy 24-byte layout) still evicts that state, as every exit did before
+// group_dead existed: keeping it would leave a dead process's descriptors
+// until LRU trimming, while a wrong eviction only costs the surviving
+// threads a /proc/<pid>/fd fallback (and, for a scoped handle name, the
+// procfs fallback of an unknown handle). It neither counts nor retires,
 // though: retiring on every thread exit would split a live multi-threaded
 // process into one Processes-table lifetime row per exited thread, and the
 // counter reports only exits the kernel confirmed as whole-process.
 func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	if !ev.IsGroupDead() {
 		if !ev.IsGroupDeadKnown() {
-			e.fdState().deletePid(ev.Pid)
-			e.brkState.forget(ev.Pid)
+			e.dropProcessState(ev.Pid)
 		}
 		return
 	}
@@ -168,12 +182,30 @@ func (e *eventLoop) applyProcessDeath(ev *types.ProcessExitEvent) {
 	// exits that reached userspace observable, including those of untraced
 	// threads forwarded by the -tid bypass (ior_process_exit_in_scope).
 	e.numGroupDeadExits++
-	e.fdState().deletePid(ev.Pid)
-	e.brkState.forget(ev.Pid)
+	e.dropProcessState(ev.Pid)
 	e.retireStatsProcess(ev.Pid)
 	// Last: the process's state is fully retired before the trace is told to
 	// end, so the shutdown statistics see the final picture.
 	e.endTraceOnTargetExit(ev)
+}
+
+// dropProcessState forgets what is keyed by the process pid and means
+// nothing once that process is gone: its descriptor table, its program break
+// and the handle names scoped to it (task 523). The three go together so
+// that "the process is gone" is decided in one place for all of them; a new
+// process's leftovers from a lost exit record are cleared the same way when
+// its number comes up again (inheritFdTable, retireRecycledPid).
+//
+// An execve is not such an end, and drops no scoped name
+// (handleProcessExecEvent): the new program runs under the same tgid in the
+// same working directory, so a relative pathname still names the same file,
+// and a descriptor name ("memfd:x") is what ior called the file the handle
+// belongs to, which the handle still opens whether or not the descriptor it
+// was taken through survived the exec.
+func (e *eventLoop) dropProcessState(pid uint32) {
+	e.fdState().deletePid(pid)
+	e.brkState.forget(pid)
+	e.handleState().dropScoped(pid)
 }
 
 // isDuplicateGroupDead reports whether ev repeats the group-dead record of a

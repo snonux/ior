@@ -58,20 +58,39 @@ import (
 //     handle, and every later open of it, by any process, named after the
 //     wrong file. No name is filed then, and the open falls back like one of
 //     an unknown handle.
+//   - a table entry is no better than that /proc link when its name was
+//     made from one, and says so (FdFile.NameFromProcFS): the look itself
+//     that a call stored (an open_by_handle_at of an unknown handle, an
+//     io_uring_setup, a procfs-resolved descriptor an fcntl promoted), a
+//     duplicate or a forked child's copy of such an entry, and - since task
+//     523 - a descriptor opened by a pathname that was resolved against
+//     one: openat, openat2, open_tree, open_tree_attr and fspick below a
+//     dirfd ior did not see being opened, or of that dirfd itself with an
+//     empty pathname (resolveDirfdPath, fdFileNamedAs). No name is filed
+//     through such an entry either.
 //
-// Whom the name is given to (handleName). An absolute pathname names every
-// open of the handle. A name that is not one - relative to the taker's
-// working directory, which ior does not track, or a descriptor name without a
-// path - means nothing in another process, so it names only the opens of the
-// process that took the handle; any other opener falls back.
+// Whom the name is given to (handleName, handleEntry). An absolute pathname
+// names every open of the handle. A name that is not one - relative to the
+// taker's working directory, which ior does not track, or a descriptor name
+// without a path - means nothing in another process, so it names only the
+// opens of the process that took the handle; any other opener falls back.
+// Such a scoped name is kept next to the absolute name of the handle, not in
+// its place: the process that took it is named by its own take and everyone
+// else still by the absolute one (handleTracker.store has the reasoning). It
+// lives as long as its process: the group-dead exit record drops it, and so
+// does the task record of a new process that is handed the pid (dropScoped).
+// An execve does not - same pid, same working directory, same file behind
+// the handle.
 //
 // What is still wrong, and accepted:
 //
 //   - The name is the one the handle was taken by. A file renamed or unlinked
 //     since keeps its old pathname on the row, as an fd table entry keeps the
 //     name its descriptor was opened by. A relative name likewise survives a
-//     chdir of its process, and a pid recycled while the entry lives inherits
-//     the scoped names of the process that had it before.
+//     chdir of its process. It does not survive the process, unless both its
+//     group-dead exit record and the task record of the pid's next owner are
+//     lost; a forked child, which does share the working directory, is not
+//     given its creator's scoped names and falls back.
 //   - An absolute pathname is a path in the taker's root and mount namespace.
 //     ior tracks neither (no path row does), so an opener in another mount
 //     namespace or chroot - a container opening a handle the host took, or
@@ -95,28 +114,31 @@ import (
 //     attach); one whose control record was lost to ring-buffer backpressure;
 //     one that could not be read (handleKeyOf); and one taken through a
 //     descriptor only procfs could name (above).
-//   - The fd table is trusted as it is, and the procfs mark
-//     (FdFile.NameFromProcFS) covers only an entry that is itself the look at
-//     procfs. It is lost where a call opens a descriptor by a pathname
-//     resolved against a dirfd ior did not see being opened: resolveDirfdPath
-//     reads the dirfd's /proc link, and the exit handler stores the result
-//     as a new, unmarked entry (file.NewFd) - handleOpenExit for openat,
-//     openat2, open_tree and open_tree_attr, attachPathExitFd for fspick
-//     (and creat, which has no dirfd). A relative pathname is joined to the
-//     link; an empty one - open_tree(fd, "", AT_EMPTY_PATH), fspick(fd, "",
-//     FSPICK_EMPTY_PATH) - is the bare link, with no join at all. Either
-//     way the entry carries that lagging answer, a handle taken through it
-//     inherits it, and since the /proc link of a file that has a path is
-//     an absolute pathname the name is filed for every opener, not only the
-//     taker's process. Carrying the mark through resolveDirfdPath is task
-//     523.
-//   - A handle has one entry, and the latest take replaces it whoever made
-//     it (handleTracker.store). A take that yields a scoped name - process B
-//     taking, by a relative pathname, a handle process A filed under an
-//     absolute one - therefore takes the global name away: A and every other
-//     process fall back to procfs for that handle, and only B is named. It
-//     degrades and never misnames. Whether a scoped name may replace another
-//     process's absolute one is left to task 523.
+//   - The fd table is trusted for every entry that is not marked. The mark
+//     says where a name came from, not whether it is right, and two kinds of
+//     unmarked entry can still give a handle a name ior should not vouch
+//     for. A descriptor opened by a pathname below a TRACKED dirfd whose own
+//     name ior never read (an entry with an empty name) is stored under the
+//     bare pathname, which a take through it files as if it were relative
+//     to the working directory - scoped to the taker, so no other process
+//     sees it. And an entry outlives what made it true: the fd table itself
+//     can be behind (a close ior did not see, a number reused through an
+//     untraced call), and a take through such an entry files the old name.
+//     The mark also changes no row: a row on a marked descriptor shows the
+//     lagging name as before; only the handle names refuse it.
+//   - The absolute name of a handle survives a scoped take of it (task 523).
+//     If the file was renamed in between, the processes that are not the
+//     scoped taker keep the old pathname where they used to fall back to
+//     procfs. That is the stale name of the first residual, no staler than
+//     without the second take. Only one scoped name is kept per handle: a
+//     second process taking it by a scoped name displaces the first one's,
+//     and the first is named by the absolute name, or falls back.
+//   - A take ior has no name for still drops the whole entry, the absolute
+//     name included (handleTracker.store; the k03 decision, pinned by
+//     TestHandleTrackerEmptyNameSupersedes). The reasoning that keeps the
+//     absolute name past a scoped take applies to it as well - such a take
+//     is no evidence against the name either - so the two cases are not
+//     treated alike. It degrades to procfs and never misnames; left as it is.
 //   - An entry evicted by the LRU cap is such an unknown handle again.
 //   - An IOR_BPF_OBJECT built before task k03 emits no handle record and a
 //     handle-less open record, so every open_by_handle_at is named from
@@ -271,8 +293,9 @@ func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent
 // It resolves the pathname as resolvePathEvent does for the row of any other
 // path syscall, with one difference: the dirfd is looked up in the fd table
 // only (fdTracker.get), never read from procfs (fdTracker.resolve), and a
-// table entry that was itself named from procfs is refused. A row may show
-// what procfs says now; a name that will label other calls may not.
+// table entry that was itself named from procfs, or built from such a name,
+// is refused. A row may show what procfs says now; a name that will label
+// other calls may not.
 func (e *eventLoop) takenHandleName(pathEv *types.PathEvent) string {
 	if !pathEventTargetRequired(pathEv) || pathEv.PathnameStatus != types.PATH_READ_OK {
 		return ""
@@ -295,10 +318,16 @@ func (e *eventLoop) takenHandleName(pathEv *types.PathEvent) string {
 }
 
 // namedFromProcfs reports whether f is a descriptor whose name is a
-// /proc/<pid>/fd link ior read, rather than the name a traced call gave it.
-// Such entries do get into the fd table: an open_by_handle_at of an unknown
-// handle (procFdFile), an io_uring_setup, a procfs-resolved descriptor an
-// fcntl promoted (storeFcntlFdFile).
+// /proc/<pid>/fd link ior read, or was built from one, rather than the name
+// a traced call gave it. Such entries do get into the fd table: an
+// open_by_handle_at of an unknown handle (procFdFile), an io_uring_setup, a
+// procfs-resolved descriptor an fcntl promoted (storeFcntlFdFile), and a
+// descriptor opened by a pathname resolved against any of these or against
+// a dirfd that is not in the table at all (fdFileNamedAs).
+//
+// It has two callers, and they are all that reacts to the mark:
+// takenHandleName, which refuses the name, and fdFileNamedAfter, which
+// passes the mark on to a name built from f. Rows are named as before.
 func namedFromProcfs(f file.File) bool {
 	fdFile, ok := f.(*file.FdFile)
 	return ok && fdFile.NameFromProcFS()
@@ -306,8 +335,8 @@ func namedFromProcfs(f file.File) bool {
 
 // openedHandleName returns the name the handle of an open_by_handle_at was
 // taken of. named is false when the enter record identifies no handle
-// (handleKeyOf), ior has no name for it, or the name it has is one that only
-// holds in another process (handleName).
+// (handleKeyOf), ior has no name for it, or the only name it has is one
+// that holds in another process (handleEntry.nameFor).
 func (e *eventLoop) openedHandleName(openByHandleEv *types.OpenByHandleAtEvent) (name string, named bool) {
 	key, ok := handleKeyOf(openByHandleEv.HandleStatus, openByHandleEv.HandleBytes,
 		openByHandleEv.HandleType, &openByHandleEv.FHandle)

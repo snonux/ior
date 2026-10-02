@@ -133,26 +133,43 @@ type takenHandle struct {
 	time uint64
 }
 
-// handleName is what a handle is filed as: the name, and whom it may be given
-// to. An absolute pathname is given to every opener of the handle. Any other
-// name - a relative pathname, which is relative to the taker's working
-// directory, or what ior calls a descriptor that has no path ("memfd:x",
-// "pidfd:0") - means something only in the process that took the handle, so
-// it is scoped: only opens by the thread group pid are named by it.
+// handleName is what one name_to_handle_at files a handle as: the name, and
+// whom it may be given to. An absolute pathname is given to every opener of
+// the handle. Any other name - a relative pathname, which is relative to the
+// taker's working directory, or what ior calls a descriptor that has no path
+// ("memfd:x", "pidfd:0") - means something only in the process that took the
+// handle, so it is scoped: only opens by the thread group pid are named by
+// it.
 type handleName struct {
 	name   string
 	pid    uint32
 	scoped bool
 }
 
-// newHandleName builds the entry for a handle the process pid took of name.
+// newHandleName builds the take of a handle the process pid took of name.
 func newHandleName(name string, pid uint32) handleName {
 	return handleName{name: name, pid: pid, scoped: !filepath.IsAbs(name)}
 }
 
-// namesOpensBy reports whether an open by the process pid is given the name.
-func (n handleName) namesOpensBy(pid uint32) bool {
-	return !n.scoped || n.pid == pid
+// handleEntry is what a handle is known as: the absolute pathname every
+// opener is given, and next to it the latest scoped name, which only the
+// process that took it (scopedPid) is given. Either may be missing (""), not
+// both: an entry without a name is removed.
+type handleEntry struct {
+	absolute  string
+	scoped    string
+	scopedPid uint32
+}
+
+// nameFor returns the name an open by the process pid is given: its own
+// scoped name when the entry holds one, else the absolute one. The scoped
+// name goes first because it is the later take whenever both are there
+// (an absolute take clears it, see handleTracker.store).
+func (n handleEntry) nameFor(pid uint32) (string, bool) {
+	if n.scoped != "" && n.scopedPid == pid {
+		return n.scoped, true
+	}
+	return n.absolute, n.absolute != ""
 }
 
 // handleTracker remembers which pathname a file handle was taken of, so that
@@ -162,9 +179,16 @@ func (n handleName) namesOpensBy(pid uint32) bool {
 // valid system-wide, is routinely passed to another thread or process, and can
 // be opened any number of times, so an entry is never consumed by an open. It
 // is replaced when name_to_handle_at returns the same handle again (the latest
-// name wins) and evicted least-recently-used first above the cap; a lookup
-// that names an open counts as use. Whom an entry names is the entry's own
-// business (handleName).
+// name wins, the absolute and the scoped one each for those it names; see
+// store) and evicted least-recently-used first above the cap; a lookup that
+// names an open counts as use. Whom an entry names is the entry's own
+// business (handleEntry).
+//
+// scopedKeys is the index of the scoped names by the process that owns them:
+// pid -> the keys whose entry holds a scoped name of that pid. It is what
+// lets the end of a process drop its scoped names (dropScoped) without a
+// scan of names, and it is kept in step by the two places that change an
+// entry's scoped half (setEntry, remove).
 //
 // taken is the short-lived per-thread half: see takenHandle. An entry normally
 // lives from the control record to the exit record a few records later, and
@@ -172,8 +196,9 @@ func (n handleName) namesOpensBy(pid uint32) bool {
 // stays until the thread's next name_to_handle_at exit, which discards it
 // because the times differ.
 type handleTracker struct {
-	names        map[handleKey]handleName
+	names        map[handleKey]handleEntry
 	nameAges     map[handleKey]uint64
+	scopedKeys   map[uint32]map[handleKey]struct{}
 	taken        map[uint32]takenHandle
 	maxCacheSize int
 	age          uint64
@@ -246,16 +271,25 @@ func newHandleTracker() *handleTracker {
 // ensureInit makes any handle tracker usable by allocating its maps. The
 // constructor and the mutators all go through it, so a zero value is safe
 // too; the method exists so the loop's injection seam (configured* helpers)
-// can complete a hand-built tracker without spelling out its map fields.
+// can complete a hand-built tracker without spelling out its map fields. A
+// tracker that comes with names but no index gets the index built from
+// them, as fdTracker.ensureInit does for its per-pid index: dropScoped only
+// consults the index.
 func (t *handleTracker) ensureInit() {
 	if t.names == nil {
-		t.names = make(map[handleKey]handleName)
+		t.names = make(map[handleKey]handleEntry)
 	}
 	if t.nameAges == nil {
 		t.nameAges = make(map[handleKey]uint64)
 	}
 	if t.taken == nil {
 		t.taken = make(map[uint32]takenHandle)
+	}
+	if t.scopedKeys == nil {
+		t.scopedKeys = make(map[uint32]map[handleKey]struct{})
+		for key, entry := range t.names {
+			t.indexScoped(key, entry)
+		}
 	}
 }
 
@@ -954,30 +988,118 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 	t.unindexKey(key, true)
 }
 
-// store files name under the handle key, replacing what the handle was known
-// as: name_to_handle_at returned it again, and the pathname of the latest call
-// is the freshest name ior has for that file. An empty name (the caller has
-// none it can vouch for, see takenHandleName) is no name to give a row, but
-// it still supersedes the old entry, which is dropped rather than left to be
-// mistaken for the current one: a missing name leaves the row to procfs, a
-// stale one would be wrong.
+// store files the take name under the handle key: name_to_handle_at returned
+// the handle again, and the pathname of the latest call is the freshest name
+// ior has for that file.
 //
-// There is one entry per handle, whoever took it. A scoped name (handleName)
-// filed by one process thus replaces the absolute name another process filed,
-// and every process but the latest taker loses the name and falls back to
-// procfs: a degradation, not a wrong name, accepted for now (see "What is
-// still wrong" in eventloop_handle.go; task 523 decides whether to keep it).
+//   - An absolute name replaces the whole entry. It is the name for every
+//     opener, the taker of an older scoped name included: that process is
+//     better served by the later, absolute one.
+//   - A scoped name (handleName) replaces the scoped half only. It names
+//     nobody but its taker, so it has nothing to give the others in exchange
+//     for the absolute name they are named by, and it is no evidence against
+//     that name: the same file spelled relative to a working directory is by
+//     far the likeliest reason for the two to differ. Until task 523 it
+//     replaced the absolute name too, and the first process, and every other,
+//     fell back to procfs for the rest of the entry's life - the lagging look
+//     this design exists to avoid - and had no name for a failed call. The
+//     absolute name kept this way can be stale (the file was renamed before
+//     the scoped take) or another file's (a cross-filesystem collision), but
+//     no more than it is while nobody takes the handle again; both are
+//     accepted residuals of eventloop_handle.go. One scoped name is kept per
+//     handle, the latest: a second process taking it by a scoped name
+//     replaces the first one's, which falls back to the absolute name.
+//   - An empty name (the caller has none it can vouch for, see
+//     takenHandleName) is no name to give a row, but it still supersedes the
+//     entry, which is dropped rather than left to be mistaken for the
+//     current one. (That is the k03 decision, unchanged. The argument for
+//     keeping the absolute name past a scoped take would keep it here as
+//     well; see the residuals in eventloop_handle.go.)
 func (t *handleTracker) store(key handleKey, name handleName) {
 	if name.name == "" {
-		delete(t.names, key)
-		delete(t.nameAges, key)
+		t.remove(key)
 		return
 	}
 	t.ensureInit()
+	entry := handleEntry{absolute: name.name}
+	if name.scoped {
+		entry = handleEntry{absolute: t.names[key].absolute, scoped: name.name, scopedPid: name.pid}
+	}
+	t.setEntry(key, entry)
 	t.age++
-	t.names[key] = name
 	t.nameAges[key] = t.age
 	t.prune()
+}
+
+// setEntry writes entry under key and keeps the scoped index in step with
+// it; with remove it is the only writer of names.
+func (t *handleTracker) setEntry(key handleKey, entry handleEntry) {
+	t.unindexScoped(key, t.names[key])
+	t.names[key] = entry
+	t.indexScoped(key, entry)
+}
+
+// remove forgets the handle key: its entry, its age and its index slot. It
+// is the one removal path of names (store of an empty name, the LRU cap,
+// dropScoped), the counterpart of fdTracker.removeFileKey.
+func (t *handleTracker) remove(key handleKey) {
+	t.unindexScoped(key, t.names[key])
+	delete(t.names, key)
+	delete(t.nameAges, key)
+}
+
+// indexScoped records that the entry under key holds a scoped name of
+// entry.scopedPid; an entry without one is not indexed.
+func (t *handleTracker) indexScoped(key handleKey, entry handleEntry) {
+	if entry.scoped == "" {
+		return
+	}
+	keys := t.scopedKeys[entry.scopedPid]
+	if keys == nil {
+		keys = make(map[handleKey]struct{})
+		t.scopedKeys[entry.scopedPid] = keys
+	}
+	keys[key] = struct{}{}
+}
+
+// unindexScoped is the inverse of indexScoped for the entry key held so far.
+// A pid with no scoped name left leaves the index, so the index is bounded
+// by the names (at most one pid per entry).
+func (t *handleTracker) unindexScoped(key handleKey, entry handleEntry) {
+	if entry.scoped == "" {
+		return
+	}
+	keys := t.scopedKeys[entry.scopedPid]
+	delete(keys, key)
+	if len(keys) == 0 {
+		delete(t.scopedKeys, entry.scopedPid)
+	}
+}
+
+// dropScoped forgets the scoped names of the process pid: the process is
+// gone (its group-dead exit record), or its number is being handed to a new
+// process and whatever is left under it is a dead owner's (see
+// eventLoop.dropProcessState and retireRecycledPid for the two triggers).
+// A scoped name is given to the opens of pid and of nobody else, so without
+// this the next process to get the number was named by its predecessor's
+// relative pathnames and descriptor names. An entry that also holds an
+// absolute name keeps it - that name was never the process's own - and one
+// that held only the scoped name goes.
+//
+// It costs O(scoped names of pid) through the index, and one failed map
+// lookup for the usual process, which never took a handle. Ages are left
+// alone: dropping a name is not a use of the handle.
+func (t *handleTracker) dropScoped(pid uint32) {
+	// Deleting from the set being ranged over is well-defined in Go; remove
+	// and setEntry take each key out of it, and the pid with the last one.
+	for key := range t.scopedKeys[pid] {
+		absolute := t.names[key].absolute
+		if absolute == "" {
+			t.remove(key)
+			continue
+		}
+		t.setEntry(key, handleEntry{absolute: absolute})
+	}
 }
 
 // lookup returns the name an open of the handle key by the process pid is
@@ -988,16 +1110,21 @@ func (t *handleTracker) store(key handleKey, name handleName) {
 // failed in the common cases (a bad mount fd, a missing capability), and a
 // retry should be named.
 //
-// A scoped name asked for by another process is a miss, and leaves the entry
-// alone: it is still right for the process that took the handle.
+// An entry with nothing for pid - only a scoped name, of another process -
+// is a miss, and is left alone: it is still right for the process that took
+// the handle.
 func (t *handleTracker) lookup(key handleKey, pid uint32) (string, bool) {
 	entry, ok := t.names[key]
-	if !ok || !entry.namesOpensBy(pid) {
+	if !ok {
+		return "", false
+	}
+	name, named := entry.nameFor(pid)
+	if !named {
 		return "", false
 	}
 	t.age++
 	t.nameAges[key] = t.age
-	return entry.name, true
+	return name, true
 }
 
 // park records the handle a name_to_handle_at of tid returned, as its control
@@ -1050,7 +1177,8 @@ func (t *handleTracker) claim(tid uint32, time uint64) (handleKey, bool) {
 
 // dropTaken forgets the handle parked for tid. It is the tracker's only
 // per-thread state, so it is all a dead or recycled tid has to give up; the
-// names stay, because a handle outlives the task that took it.
+// names stay, because a handle outlives the thread that took it. (The scoped
+// names of a whole process that is gone are dropScoped's.)
 func (t *handleTracker) dropTaken(tid uint32) {
 	delete(t.taken, tid)
 }
@@ -1060,7 +1188,10 @@ func (t *handleTracker) prune() {
 	if len(t.names) <= limit {
 		return
 	}
-	trimLRU(t.names, t.nameAges, trimTarget(limit), nil)
+	// Each victim leaves through remove, which also clears its index slot.
+	for _, key := range lruVictims(t.names, t.nameAges, trimTarget(limit)) {
+		t.remove(key)
+	}
 }
 
 func (t *handleTracker) limit() int {

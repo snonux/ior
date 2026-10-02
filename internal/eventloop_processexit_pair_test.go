@@ -207,7 +207,9 @@ func TestProcessExitEvictsOnlyTheExitedTasksPairState(t *testing.T) {
 // lost leaves it parked, and the task's own death drops it. The names, in
 // contrast, are filed under the handle itself: handing a handle to another
 // process is what the API is for, so a name outlives the task that took the
-// handle and still names the open another process makes. (While the stash was
+// handle and still names the open another process makes. That is an absolute
+// name; one scoped to the taker's process ends with the PROCESS, on its
+// group-dead record (eventloop_handle_exit_test.go). (While the stash was
 // keyed by tid it had to be dropped here, or the recycled tid's next
 // open_by_handle_at was named after the dead task's path.)
 func TestTaskExitDropsTheParkedHandleAndKeepsTheHandleNames(t *testing.T) {
