@@ -78,6 +78,17 @@ type fdTracker struct {
 	// share maps the tgids that share a table (CLONE_FILES) onto it, and
 	// records the tables no longer tracked because an invisible task writes them.
 	share fdTableShare
+	// identOn says the run's BPF object reports which file a descriptor
+	// named (eventLoop.trustFileIdents): rows and entries are then compared
+	// by that identity, and procfs answers record theirs
+	// (eventloop_fileident.go, task 603). Off, nothing reads an identity.
+	identOn bool
+	// staleBindings counts the fd table entries dropped because a row showed
+	// the number naming another file; rejectedAnswers the procfs answers not
+	// used for a row because they described another file. Printed in the
+	// end-of-run statistics when non-zero (eventLoop.fileIdentStatLine).
+	staleBindings   uint64
+	rejectedAnswers uint64
 }
 
 // maxIdlePidKeys bounds how many emptied entries fdTracker.idlePidKeys holds.
@@ -823,7 +834,7 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		return cached
 	}
-	discovered := file.NewFdWithPid(fd, pid)
+	discovered := t.readProcFd(fd, pid)
 	// Cache a successful resolution to avoid repeated /proc lookups for hot
 	// unknown FDs. A failed one (readlink error: empty name, unknown flags) is
 	// returned for this row but never cached: the number was not open at that

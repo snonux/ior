@@ -1071,6 +1071,11 @@ type traceInfra struct {
 	// exec exit without an enter by whether an exec record can be missing.
 	execProbeAttached bool
 
+	// fileIdentCaptured records that the loaded BPF object writes the file
+	// identity words of its records (bpfSetupLog.fileIdent); runTraceSetup
+	// hands it to the event loop (eventLoop.trustFileIdents).
+	fileIdentCaptured bool
+
 	cleanups []func()
 }
 
@@ -1258,6 +1263,7 @@ func runTraceSetup(
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	el.trustExecRecords(infra.execProbeAttached)
+	el.trustFileIdents(infra.fileIdentCaptured)
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1288,13 +1294,16 @@ func setupTraceInfraBPF(
 	defer endLibbpfRouting()
 	var handAttach handProbeAttachRecorder
 	noteAttached := handAttach.note
+	var fileIdentCaptured bool
+	noteFileIdent := func(captured bool) { fileIdentCaptured = captured }
 	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes,
-		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached})
+		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached, fileIdent: noteFileIdent})
 	if err != nil {
 		return nil, nil, err
 	}
 
 	infra := newTraceInfra(mgr, hooks.shutdown, logln)
+	infra.fileIdentCaptured = fileIdentCaptured
 	infra.renameProbeAttached = handAttach.rename.attached
 	infra.signalProbeAttached = handAttach.signal.attached
 	infra.exitProbeAttached = handAttach.exit.attached

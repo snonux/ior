@@ -73,6 +73,56 @@ func setTidFilterTgid(cfg flags.Config, setGlobal func(name string, value any) e
 	return nil
 }
 
+// fileIdentEnv switches the BPF file-identity capture off for a run when set
+// to 0, no, false or off (task 603; internal/c/fileident.c). The capture is
+// on by default and costs a few dozen instructions per single-descriptor
+// syscall; the switch is the way out should its kernel-side walk ever be
+// refused by a verifier this tree was not loaded on (it is compiled out of
+// the programs when the global is 0), or cost too much for a workload.
+const fileIdentEnv = "IOR_FILE_IDENT"
+
+// fileIdentWanted parses the fileIdentEnv value: unset or empty means on, as
+// do 1, yes, true and on; 0, no, false and off switch the capture off. Any
+// other value is reported through warn and leaves the capture on, so a typo
+// cannot silently change what the rows mean.
+func fileIdentWanted(value string, warn func(args ...any)) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "1", "yes", "true", "on":
+		return true
+	case "0", "no", "false", "off":
+		return false
+	}
+	warn(fmt.Sprintf("%s=%q is not understood (use 0 or 1): file identity capture stays on", fileIdentEnv, value))
+	return true
+}
+
+// fileIdentWantedByEnv is fileIdentWanted of this process's environment.
+func fileIdentWantedByEnv(warn func(args ...any)) bool {
+	return fileIdentWanted(os.Getenv(fileIdentEnv), warn)
+}
+
+// setFileIdentGlobal writes the IOR_FILE_IDENT global through setGlobal (the
+// module's InitGlobalVariable) and reports whether the object will write the
+// file identity words of its records: it has the global and want switched it
+// on. An object built before the capture has no such symbol - a missing
+// symbol is therefore not an error, it is the answer "no": such an object
+// leaves stale padding where the identity would be, and the event loop must
+// not read it (eventLoop.trustFileIdents). Any other failure is an error.
+func setFileIdentGlobal(want bool, setGlobal func(name string, value any) error) (bool, error) {
+	value := uint32(0)
+	if want {
+		value = 1
+	}
+	err := setGlobal("IOR_FILE_IDENT", value)
+	if err == nil {
+		return want, nil
+	}
+	if isMissingSymbol(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("unable to set up IOR_FILE_IDENT global variable: %w", err)
+}
+
 // noTgid is the BPF-side "unset" value of TID_FILTER_TGID, matching the -1
 // convention of PID_FILTER and TID_FILTER.
 const noTgid = ^uint32(0)

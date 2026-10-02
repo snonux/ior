@@ -70,7 +70,11 @@ func appendText(dst []byte, s string, text func(string) string) []byte {
 // is the table slot, and the name is what that slot was opened (or last
 // resolved) as. See fdfile_desc.go for the sharing operations.
 type FdFile struct {
-	fd               int32
+	fd int32
+	// ident says which file the descriptor stands for (fdfile_ident.go), 0
+	// when unknown. It sits in what was padding after fd, so the per-row
+	// files keep their size.
+	ident            uint32
 	name             string
 	desc             *openFileDesc
 	closeOnExecKnown bool
@@ -192,8 +196,10 @@ func (f *FdFile) Name() string {
 	return f.name
 }
 
-// String renders the file for the plain-mode CSV row: the name (or "E:name"
-// when empty) followed by "%(fd,flags)".
+// String renders the file for the plain-mode CSV row: the name followed by
+// "%(fd,flags)". A file without a name renders as "E:name", or as
+// "E:ino:<n>" when ior knows which file it was but not what it is called
+// (appendUnnamed in fdfile_ident.go).
 func (f *FdFile) String() string {
 	// The scratch buffer stays on the stack, so String costs only the string copy.
 	var scratch [128]byte
@@ -203,7 +209,7 @@ func (f *FdFile) String() string {
 // AppendString implements StringAppender.
 func (f *FdFile) AppendString(dst []byte, text func(string) string) []byte {
 	if len(f.name) == 0 {
-		dst = append(dst, "E:name"...) // Empty name string
+		dst = f.appendUnnamed(dst)
 	} else {
 		dst = appendText(dst, f.name, text)
 	}

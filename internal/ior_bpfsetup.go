@@ -96,6 +96,12 @@ type bpfSetupLog struct {
 	// exec record means a counted drop (eventLoop.trustExecRecords, task
 	// v13). nil means nobody listens.
 	attached func(probeName string)
+	// fileIdent receives, once the object is loaded, whether it writes the
+	// file identity words of its records (setFileIdentGlobal): the object has
+	// the IOR_FILE_IDENT global and the run did not switch the capture off.
+	// Trace setup hands that to the event loop (eventLoop.trustFileIdents,
+	// task 603). nil means nobody listens.
+	fileIdent func(captured bool)
 }
 
 // withDefaults returns l with every nil sink replaced by the stderr logger.
@@ -111,6 +117,9 @@ func (l bpfSetupLog) withDefaults() bpfSetupLog {
 	}
 	if l.attached == nil {
 		l.attached = func(string) {}
+	}
+	if l.fileIdent == nil {
+		l.fileIdent = func(bool) {}
 	}
 	return l
 }
@@ -146,7 +155,7 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 		return nil, nil, noRelease, err
 	}
 
-	bpfModule, stage, err := loadSessionBPFModule(cfg, log.warn)
+	bpfModule, stage, err := loadSessionBPFModule(cfg, log)
 	if err != nil {
 		if bpfModule != nil {
 			bpfModule.Close()
@@ -188,11 +197,14 @@ func attachSessionProbes(ctx context.Context, attacher probemanager.Attacher, cf
 }
 
 // loadConfiguredBPFModule opens the embedded BPF object, sizes its maps, sets
-// its globals, loads it into the kernel and applies the sampling rates. warn
-// receives non-fatal setup degradations (see setTidFilterTgid). On
-// failure it returns the failed stage and, when the module was already opened,
-// the module itself so the caller can close it (nil otherwise).
-func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Module, string, error) {
+// its globals, loads it into the kernel and applies the sampling rates.
+// log.warn receives non-fatal setup degradations (see setTidFilterTgid) and
+// log.fileIdent, once everything succeeded, whether the object captures file
+// identities (setFileIdentGlobal). On failure it returns the failed stage
+// and, when the module was already opened, the module itself so the caller
+// can close it (nil otherwise).
+func loadConfiguredBPFModule(cfg flags.Config, log bpfSetupLog) (*bpf.Module, string, error) {
+	log = log.withDefaults()
 	bpfModule, stage, err := loadBPFModule()
 	if err != nil {
 		return nil, stage, err
@@ -200,7 +212,11 @@ func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Mod
 	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
 		return bpfModule, "resize maps", err
 	}
-	if err := setBPFGlobals(cfg, bpfModule, warn); err != nil {
+	if err := setBPFGlobals(cfg, bpfModule, log.warn); err != nil {
+		return bpfModule, "set globals", err
+	}
+	identCaptured, err := setFileIdentGlobal(fileIdentWantedByEnv(log.warn), bpfModule.InitGlobalVariable)
+	if err != nil {
 		return bpfModule, "set globals", err
 	}
 	if err := bpfModule.BPFLoadObject(); err != nil {
@@ -209,6 +225,7 @@ func loadConfiguredBPFModule(cfg flags.Config, warn func(args ...any)) (*bpf.Mod
 	if err := applySyscallSamplingRates(cfg, bpfModule); err != nil {
 		return bpfModule, "configure sampling rates", err
 	}
+	log.fileIdent(identCaptured)
 	return bpfModule, "", nil
 }
 

@@ -149,7 +149,7 @@ func TestLibbpfLinkHelperProcess(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	wrapped := scenario != linkScenarioBareFailed
-	module, stage, err := loadConfiguredBPFModule(flags.NewFlags(), func(...any) {})
+	module, stage, err := loadConfiguredBPFModule(flags.NewFlags(), bpfSetupLog{warn: func(...any) {}})
 	if err != nil {
 		t.Fatalf("load the BPF object: %s: %v", stage, err)
 	}

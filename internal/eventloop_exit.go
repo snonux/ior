@@ -119,6 +119,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	ep.Comm = comm
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		fdFile := fdFileNamedAs(fd, filename, openEventFlags(openEv))
+		e.fdState().identifyOpened(fdFile, retEvent)
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -338,6 +339,8 @@ func (e *eventLoop) attachPathExitFd(ep *event.Pair, pathEv *types.PathEvent,
 		return true
 	}
 	fdFile := fdFileNamedAs(fd, pathname, fdFlags)
+	// creat's exit says which file it opened; fspick's reports none.
+	e.fdState().identifyOpened(fdFile, retEvent)
 	e.fdState().set(fd, pathEv.Pid, fdFile)
 	ep.File = fdFile
 	return true
@@ -558,7 +561,9 @@ func dirfdPathNeedsResolution(dirfd int32, pathname string) bool {
 // value printed genuinely differed.
 func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
-	ep.File = e.resolveOnExit(ep, fd, fdEv.Pid)
+	// The record says which file fd named at enter; the name must be that
+	// file's (eventloop_fileident.go).
+	ep.File = e.resolveIdentifiedOnExit(ep, fd, fdEv.Pid, e.fdState().rowIdent(fdEv))
 	e.applyFdCloseState(ep, fd, fdEv.Pid)
 	ep.Comm = e.comm(fdEv.GetTid())
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
@@ -667,6 +672,7 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	name, named := e.openedHandleName(openByHandleEv)
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
 		fdFile := openedHandleFile(name, named, openByHandleEv.Pid, fd, openByHandleEv.Flags)
+		e.fdState().identifyOpened(fdFile, retEvent)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {

@@ -330,7 +330,7 @@ func TestSetupTraceInfraWiresConsoleSinks(t *testing.T) {
 	if !ok || !isIdentifier(literal.Type, "bpfSetupLog") {
 		t.Fatal("setupBPFModule's log argument must be a bpfSetupLog literal")
 	}
-	wantSinks := map[string]string{"status": "logln", "warn": "warnSetup", "teardown": "logTeardown", "attached": "noteAttached"}
+	wantSinks := map[string]string{"status": "logln", "warn": "warnSetup", "teardown": "logTeardown", "attached": "noteAttached", "fileIdent": "noteFileIdent"}
 	gotSinks := map[string]string{}
 	for _, element := range literal.Elts {
 		kv, ok := element.(*ast.KeyValueExpr)

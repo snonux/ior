@@ -419,7 +419,7 @@ func (e *eventLoop) stats() string {
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine(),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine()+e.fileIdentStatLine(),
 		e.samplingStatLines(),
 	)
 }

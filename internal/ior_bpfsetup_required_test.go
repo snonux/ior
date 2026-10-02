@@ -321,7 +321,7 @@ func failLoad(t *testing.T) *bool {
 	t.Helper()
 	ran := new(bool)
 	orig := loadSessionBPFModule
-	loadSessionBPFModule = func(flags.Config, func(...any)) (*bpf.Module, string, error) {
+	loadSessionBPFModule = func(flags.Config, bpfSetupLog) (*bpf.Module, string, error) {
 		*ran = true
 		return nil, "load object", errors.New("stub load failure")
 	}
