@@ -1862,7 +1862,12 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       looked. Row and fd table entry are then unnamed with the call's flags,
       exactly as when procfs has no answer - the entry is kept, unnamed and
       marked, because dropping it would send the next row on the number
-      back to procfs for the name just refused. It is a deny list with one
+      back to procfs for the name just refused. The kept entry lasts like
+      any other: rows on the number are unnamed, with the call's flags,
+      until a close of it is processed (the next row then asks procfs
+      afresh, `TestRefusedProcfsNameLastsUntilTheClose`) or the LRU cap
+      evicts it - also if that close was never seen; the entry kept when
+      procfs has no answer has the same exposure. It is a deny list with one
       exact exemption, `anon_inode:[pidfd]` (pidfs exports; the text is what
       7.2.5 shows, and a `pidfd:[N]` spelling would pass anyway); paths,
       namespaces (`net:[N]`, `mnt:[N]`, ...; nsfs exports) and anything
@@ -1992,8 +1997,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `name_to_handle_at` passes a held restart row),
     `internal/eventloop_handle_fail_test.go`,
     `internal/eventloop_handle_reach_test.go` (the fallback's deny list: each
-    handle-less kind unnamed, pidfd and namespace kept, and the kernel asked
-    again whether the denied kinds really cannot be exported), the decoder
+    handle-less kind unnamed until its close, pidfd and namespace kept, and
+    the kernel asked again whether the denied kinds really cannot be
+    exported - only an answer that they can fails, a kernel that cannot be
+    asked is logged), the decoder
     tests in
     `internal/types/fastdecode_test.go`, the generator, harness and oracle
     tests (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,

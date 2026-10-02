@@ -105,7 +105,8 @@ import (
 //     file of a kind no handle can open is recognised (reachableByHandle);
 //     the row and the fd table entry are then unnamed, as when procfs has
 //     no answer. A reuse by a file, a directory, a pidfd or a namespace
-//     still names the row after the newer one. A failed call
+//     still names the row after the newer one. The unnamed entry stays
+//     until its close is processed (procFdFile). A failed call
 //     with such a handle has an empty name. That is a handle taken before the
 //     trace started; by a task outside a -pid/-tid scope; by a call the enter
 //     filter shed (-path, -comm); by a call BPF did not report - sampled out
@@ -386,6 +387,13 @@ func failedHandleFile(name string) file.File {
 // up in the ring the rows on the number are that descriptor's, whose name
 // ior does not have. The entry is marked as a look at procfs like any other
 // answer of this function (FdFile.NameFromProcFS).
+//
+// The price is that the unnamed entry lasts as long as any table entry: the
+// rows on the number stay unnamed, with this call's flags, until a close of
+// the number is processed (the next row then asks procfs afresh) or the LRU
+// cap evicts the entry - also when the close was never seen and the number
+// is somebody else's by now. The entry kept for "procfs had no answer" has
+// the same exposure.
 func procFdFile(pid uint32, fd int32, eventFlags int32) *file.FdFile {
 	fdFile := file.NewFdWithPid(fd, pid)
 	if !reachableByHandle(fdFile.Name()) {
