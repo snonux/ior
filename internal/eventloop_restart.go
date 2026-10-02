@@ -248,9 +248,9 @@ import (
 // (runTraceSetup, traceSetupHooks.probes): the probes modal is the one place
 // probes change at runtime. A headless run installs no hook, takes no stamp
 // and refuses nothing on this account. Installing the hook counts as a change
-// itself (watchProbeChanges: stamp, clear, stamp and wake, like any report): the TUI
-// is handed the probe manager before the loop exists, and a change it makes in
-// between is reported to nobody.
+// itself (watchProbeChanges: stamp, clear, stamp and wake, like any report):
+// the TUI is handed the probe manager before the loop exists, and a change it
+// makes in between is reported to nobody.
 //
 // Why an attach reports as well, and twice.
 //
