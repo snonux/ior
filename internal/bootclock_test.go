@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"go/ast"
 	"math"
 	"os"
 	"path/filepath"
@@ -131,8 +132,10 @@ func TestResolveBootClockDomainTakesTheOffsetOfItsOwnNamespace(t *testing.T) {
 }
 
 // TestResolveBootClockDomainWithoutTimeNamespaces: a kernel without time
-// namespaces has no timens_offsets file. That is the host's clock, not a
-// failure, so nothing is warned about (the ns links are absent too).
+// namespaces has neither a timens_offsets file nor an ns/time link in an
+// otherwise present /proc/self. That is the host's clock, not a failure, so
+// nothing is warned about. (A missing file next to an ns/time link, or no
+// /proc/self at all, is an unknown offset: see the test below.)
 func TestResolveBootClockDomainWithoutTimeNamespaces(t *testing.T) {
 	got := resolveBootClockDomain(fakeProcSelf(t, "-", "", ""))
 	if got != (bootClockDomain{}) {
@@ -158,6 +161,12 @@ func TestResolveBootClockDomainWarnsWhenTheOffsetIsUnknown(t *testing.T) {
 		"own link missing":       {fakeProcSelf(t, ahead, "", otherTimeNs), "ns/time:"},
 		"children link missing":  {fakeProcSelf(t, ahead, otherTimeNs, ""), "time_for_children"},
 		"unreadable file":        {procSelfWithUnreadableOffsets(t), "timens_offsets"},
+		// A kernel with time namespaces always has the file: without it the
+		// directory read is not this process's /proc/self.
+		"file missing, in a namespace": {fakeProcSelf(t, "-", otherTimeNs, otherTimeNs), "timens_offsets"},
+		"file missing, own link only":  {fakeProcSelf(t, "-", hostTimeNs, ""), "timens_offsets"},
+		// /proc not mounted, or the /proc of another PID namespace.
+		"no /proc/self": {filepath.Join(t.TempDir(), "self"), "timens_offsets"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -262,12 +271,66 @@ func rawBootClockNs(t *testing.T) int64 {
 // TestTraceSetupWarnsAboutAnUnknownBootClock pins the one call that makes the
 // unknown offset visible: without it ior would compare its uncorrected clock
 // with record times and say nothing. It must go to the setup warnings, which
-// reach the terminal headless and the TUI's warning line alike.
+// reach the terminal headless and the TUI's warning line alike - and it must
+// get there before wireEventLoopLogging hands them to the loop: the first
+// version of this call came after it, into a collector nothing read again, so
+// the warning was never shown.
 func TestTraceSetupWarnsAboutAnUnknownBootClock(t *testing.T) {
-	decl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	calls := callsNamed(decl, "warnUnknownBootClock")
 	if len(calls) != 1 {
 		t.Fatalf("trace setup calls warnUnknownBootClock %d times, want exactly once", len(calls))
 	}
 	assertCallArguments(t, calls[0], []string{"warnSetup"})
+	drain := singleBareCall(t, decl, "wireEventLoopLogging")
+	if calls[0].Pos() >= drain.Pos() {
+		t.Fatalf("warnUnknownBootClock at %s must precede wireEventLoopLogging at %s, "+
+			"which drains the setup warnings", fset.Position(calls[0].Pos()), fset.Position(drain.Pos()))
+	}
+}
+
+// TestTraceSetupCollectsNoWarningAfterTheDrain is the general form of the
+// order above: on success the collector is read exactly once, by
+// wireEventLoopLogging, so runTraceSetup must not hand warnSetup to anything
+// after that call - whatever it added would be lost without a trace.
+func TestTraceSetupCollectsNoWarningAfterTheDrain(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	drain := singleBareCall(t, decl, "wireEventLoopLogging")
+	uses := 0
+	ast.Inspect(decl.Body, func(node ast.Node) bool {
+		ident, isIdent := node.(*ast.Ident)
+		if !isIdent || ident.Name != "warnSetup" {
+			return true
+		}
+		uses++
+		if ident.Pos() > drain.End() {
+			t.Errorf("warnSetup is used at %s, after wireEventLoopLogging drained the setup warnings",
+				fset.Position(ident.Pos()))
+		}
+		return true
+	})
+	if uses == 0 {
+		t.Fatal("runTraceSetup no longer names its warning sink warnSetup; this test checks nothing")
+	}
+}
+
+// TestUnknownBootClockWarningIsReplayedByTheLoop follows the warning along the
+// path trace setup gives it: collected, handed to the loop by
+// wireEventLoopLogging, and replayed when the loop starts - to stderr in a
+// headless run, exactly once.
+func TestUnknownBootClockWarningIsReplayedByTheLoop(t *testing.T) {
+	domain := resolveBootClockDomain(fakeProcSelf(t, "boottime x y\n", hostTimeNs, hostTimeNs))
+	warnings := &setupWarnings{}
+	domain.report(warnings.add)
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	wireEventLoopLogging(el, newLogger(true), warnings)
+
+	stdout, stderr := captureConsole(t, func() { runCancelledEventLoop(t, el) })
+
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want it empty", stdout)
+	}
+	if n := strings.Count(stderr, "boottime offset of ior's time namespace"); n != 1 {
+		t.Fatalf("the warning was printed %d times, want once; stderr:\n%s", n, stderr)
+	}
 }

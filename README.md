@@ -253,10 +253,12 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   more. ior reads the offset of its own namespace from `/proc/self/timens_offsets` at
   startup and takes it out of its own clock readings, so its bookkeeping (naming the close of
   a descriptor opened before the trace, folding an interrupted call with its restart) works
-  as it does on the host. If the offset cannot be determined (the file is unreadable or
-  malformed, or it describes another namespace than the one ior runs in), ior prints one
-  warning and assumes none; with an actual offset such closes may then be unnamed or named
-  after the file that reused the number, and interrupted calls may stay two rows.
+  as it does on the host. If the offset cannot be determined (the file is unreadable,
+  malformed or missing although the kernel has time namespaces, or it describes another
+  namespace than the one ior runs in), ior assumes none and warns once per trace session
+  (on stderr in the headless modes, as a warning row in the TUI, again after each restart of
+  the trace); with an actual offset such closes may then be unnamed or named after the file
+  that reused the number, and interrupted calls may stay two rows.
 
 ## Bytes Classification
 

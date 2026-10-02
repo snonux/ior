@@ -53,8 +53,11 @@ import (
 // therefore used only when /proc/self/ns/time and time_for_children name the
 // same namespace; otherwise it is unknown, taken as 0 and warned about once
 // (warnUnknownBootClock), as it is when the file cannot be read or parsed.
-// Without the file (no CONFIG_TIME_NS, or a kernel before 5.6) there is no
-// time namespace and the offset is 0, without a warning.
+// A kernel without time namespaces (no CONFIG_TIME_NS, or before 5.6) has
+// neither the file nor the ns/time link: the offset is 0, without a warning.
+// A missing file is read that way only then. If the link exists, or /proc/self
+// itself does not (/proc not mounted, or mounted from another PID namespace),
+// the offset is unknown as well (kernelHasNoTimeNamespaces).
 
 const (
 	// procSelfDir is where the running process's time namespace is described.
@@ -93,7 +96,10 @@ var ownBootClockDomain = sync.OnceValue(func() bootClockDomain {
 
 // warnUnknownBootClock reports, through warn, that the boottime offset of
 // ior's time namespace could not be determined; it says nothing when the
-// offset is known. Trace setup calls it once per run.
+// offset is known. Trace setup calls it once per trace session, before the
+// collected warnings are handed to the event loop: a headless run warns once,
+// a TUI run once for each trace it starts (a restart of the trace runs the
+// setup again, and its warning rows start empty).
 func warnUnknownBootClock(warn func(...any)) {
 	ownBootClockDomain().report(warn)
 }
@@ -108,10 +114,22 @@ func (d bootClockDomain) report(warn func(...any)) {
 // bootClockNs reads CLOCK_BOOTTIME and converts it to the host's boot clock,
 // the one bpf_ktime_get_boot_ns stamps the ring-buffer records with, so its
 // readings order against record times also when ior runs inside a time
-// namespace (see the file comment). A failed read (not expected on Linux)
-// returns the maximum value: every seed then counts as possibly predating a
-// lost record and keeps its /proc read, the conservative side of
-// provisionalSeedNeedsRecheck.
+// namespace (see the file comment). A failed read (not expected on Linux),
+// like a reading the offset turns into no time at all (hostBootNs), returns
+// the maximum value, which is the refusing side of all four comparisons:
+//   - comm recheck: every seed counts as possibly predating a lost record and
+//     keeps its /proc read, until the next drop is stamped
+//     (provisionalSeedNeedsRecheck);
+//   - close row: a procfs answer stamped with it was read before no close, so
+//     the row stays unnamed rather than take a reuser's name;
+//   - drop watch: a total first seen at it is older than no interruption, so
+//     folds are refused until the total next changes and gets a real stamp;
+//   - probe stamp: every row was interrupted before it, so folds are refused
+//     for the rest of the run (a later change's stamp is never smaller).
+//
+// With an offset that was read from a namespace ior really runs in (matching
+// ns links) the subtraction cannot produce such a value: the reading is the
+// host's clock plus that offset.
 func bootClockNs() uint64 {
 	var ts unix.Timespec
 	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
@@ -142,9 +160,8 @@ func hostBootNs(readingNs, offsetNs int64) uint64 {
 // process described by procDir runs in (procDir is /proc/self outside tests).
 func resolveBootClockDomain(procDir string) bootClockDomain {
 	content, err := os.ReadFile(filepath.Join(procDir, "timens_offsets"))
-	if errors.Is(err, fs.ErrNotExist) {
-		// No time namespaces on this kernel: the clocks are the host's.
-		return bootClockDomain{}
+	if errors.Is(err, fs.ErrNotExist) && kernelHasNoTimeNamespaces(procDir) {
+		return bootClockDomain{} // the clocks are the host's
 	}
 	if err != nil {
 		return unknownBootClockDomain(err)
@@ -157,6 +174,22 @@ func resolveBootClockDomain(procDir string) bootClockDomain {
 		return unknownBootClockDomain(err)
 	}
 	return bootClockDomain{offsetNs: offsetNs}
+}
+
+// kernelHasNoTimeNamespaces tells the one harmless reason for a missing
+// timens_offsets from the others. A kernel without time namespaces (no
+// CONFIG_TIME_NS, or older than 5.6) has no ns/time link either, in a
+// /proc/self that is otherwise there. The file is also missing when procDir
+// is not this process's entry at all - /proc not mounted, or the /proc of
+// another PID namespace, where /proc/self does not resolve - and ior may well
+// run in a time namespace then; and a kernel that has the link always has the
+// file. Both of those are an unknown offset, not "none".
+func kernelHasNoTimeNamespaces(procDir string) bool {
+	if _, err := os.Stat(procDir); err != nil {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(procDir, "ns", "time"))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // unknownBootClockDomain is the domain when the offset could not be

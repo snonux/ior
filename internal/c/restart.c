@@ -136,9 +136,10 @@
  * when it cannot read that counter. With that, a lost record fails towards
  * "not folded", and a fold refused after the re-executed enter was already
  * taken for it still leaves two rows, the interrupted one and the
- * re-execution; the remaining assumption is the one all of ior's record-time
- * comparisons make, that ior does not run in a time namespace with a boottime
- * offset.
+ * re-execution. Userspace compares these record times with clock readings of
+ * its own; it takes a time namespace's boottime offset out of them
+ * (bootClockNs, task y13), so the remaining assumption is only that the
+ * offset could be determined - where it could not, ior says so at startup.
  *
  * Runtime probe changes (task o03). Step 4 takes the task's first traced
  * enter for the continuation, which is true only while the continuation's own

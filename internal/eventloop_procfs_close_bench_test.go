@@ -24,8 +24,9 @@ import (
 //     row of an untracked descriptor no longer reads procfs.
 //   - BenchmarkCloseTrackedFd: unchanged, 4-8 us, 2 allocs (fd-table path).
 //   - BenchmarkProcfsResolveMiss: unchanged allocations (21, 6235 B) and time
-//     within noise; the read stamp is one vDSO clock call and a map write next
-//     to the procfs reads.
+//     within noise; the read stamp is one clock_gettime syscall (x/sys's
+//     unix.ClockGettime does not go through the vDSO) and a map write next to
+//     the procfs reads.
 
 // benchClosePair encodes one close(fd) pair of this process returning ret.
 func benchClosePair(b *testing.B, fd int32, ret int64) (enterRaw, exitRaw []byte) {
@@ -90,7 +91,7 @@ func BenchmarkCloseTrackedFd(b *testing.B) {
 }
 
 // BenchmarkProcfsResolveMiss is one successful procfs resolution that is then
-// cached, which jr2 stamps with a CLOCK_BOOTTIME reading.
+// cached, which jr2 stamps with a boot-clock reading (bootClockNs).
 func BenchmarkProcfsResolveMiss(b *testing.B) {
 	pid := uint32(os.Getpid())
 	n := benchPipeOnFreeNumber(b)

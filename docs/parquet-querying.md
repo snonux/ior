@@ -540,7 +540,8 @@ mean for a TUI recording:
   kernel-only invocations could not be counted under it.
 
 `time_ns` is a boot-relative clock, so join it to wall time only if you have an independent
-boot-time reference.
+boot-time reference, and it must be the host's (inside a time namespace `uptime` and
+`CLOCK_BOOTTIME` are shifted by the namespace's offset, `time_ns` is not).
 
 ## Check a recording
 

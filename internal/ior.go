@@ -1171,7 +1171,12 @@ func setupTraceInfraWithEventLoop(
 //   - Non-fatal setup degradations are collected (warnSetup) and replayed as
 //     event-loop warnings once output is wired (see setupWarnings); on failure
 //     the caller appends them to the returned error instead.
-//   - Load and attach (setupTraceInfraBPF), start the runtime, build the loop.
+//   - Load and attach (setupTraceInfraBPF), start the runtime.
+//   - Warn if the boottime offset of ior's time namespace is unknown
+//     (warnUnknownBootClock, task y13), then build the loop. Both add to the
+//     collected warnings, so both come before the wiring that drains them: a
+//     warning added after wireEventLoopLogging is shown to nobody when setup
+//     succeeds (pinned by TestTraceSetupCollectsNoWarningAfterTheDrain).
 //   - Wire the loop: logging right after it is stored; sampling reported only
 //     for syscalls that really attached (raw modes; a no-op for the TUI, which
 //     has no tally); the probe manager's runtime changes reported to the
@@ -1211,6 +1216,11 @@ func runTraceSetup(
 		infra.Close()
 		return nil, err
 	}
+	// The loop orders its own boot-clock readings against record times; say so
+	// if a time namespace's offset between the two is unknown. Here and not
+	// further down: wireEventLoopLogging drains the collector, and nothing
+	// replays what is added after that.
+	warnUnknownBootClock(warnSetup)
 	el, err := buildEventLoop(cfg, bpfModule, warnSetup)
 	if err != nil {
 		infra.Close()
@@ -1227,9 +1237,6 @@ func runTraceSetup(
 	if infra.mgr != nil && hooks.probes == nil {
 		el.traceSetIsFinal(infra.mgr.IsActive)
 	}
-	// The loop orders its own boot-clock readings against record times; say so
-	// once if a time namespace's offset between the two is unknown.
-	warnUnknownBootClock(warnSetup)
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	signalTraceStarted(started)
