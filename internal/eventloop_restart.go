@@ -636,6 +636,12 @@ import (
 //     could read "detached" for a call interrupted and resumed while the
 //     probes were on and lose a fold it would have completed before the
 //     stamp arrived.
+//     All of this compares T with a stamp, so it holds where the two are
+//     on one clock: with the stamps in the records' past ("What is left
+//     open" above) a T from before the detach can be younger than its
+//     stamp, and a loop that lags then reads "detached" for a sleep stopped
+//     and resumed while the probes were on, which it held and folded before
+//     this rule and now emits as two rows, both right.
 //   - No row stays held behind a detach. A row the loop held because it read
 //     another state was read, and so interrupted, before "detached" was
 //     stored. The report's second stamp is taken after that, so it is
@@ -643,6 +649,10 @@ import (
 //     (releaseRestartsBehindProbeChange). Were the state stored after the
 //     second stamp, a row interrupted and read between the two writes would
 //     be held with nothing to release it: the delay this is about.
+//     On one clock, again: a stamp in the records' past ("What is left
+//     open" above) can be older than a row held just before the detach, and
+//     that row is not released by it but waits for its thread's next record,
+//     the delay as it was.
 //   - The loop asks for the stamps before the state (holdable). Neither
 //     point depends on that order: each compares the row with a stamp that
 //     is stored by the time it matters.

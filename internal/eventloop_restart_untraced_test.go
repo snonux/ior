@@ -2,6 +2,7 @@ package internal
 
 import (
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"ior/internal/globalfilter"
@@ -324,6 +325,26 @@ func TestInstallDoesNotOverwriteAReportThatRacedIt(t *testing.T) {
 	requireFoldedSleep(t, f.foldSleep(restartBase), restartBase, "restart_syscall was attached while the hook was installed")
 }
 
+// TestInstallAsksAboutRestartSyscallOnlyOnceTheHookIsSet pins the other half
+// of that order (watchProbeChanges): the manager is asked after the hook is
+// set, not before. SetChangeHook waits for the changes that began without the
+// hook, here an attach of restart_syscall that is committed - IsActive says
+// so - only when the wait is over. Asked ahead of it the manager still calls
+// the probe inactive, the attach has reported to nobody, and the state would
+// be "detached" with the probes attached: every stopped sleep two rows, until
+// the next change of restart_syscall.
+func TestInstallAsksAboutRestartSyscallOnlyOnceTheHookIsSet(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.clockAt(restartBase - 1000)
+	hookSet := false
+	f.el.watchProbeChanges(func(func(probemanager.Change)) { hookSet = true },
+		func(string) bool { return hookSet })
+	if f.el.restarts.probes.restartSyscallOff() {
+		t.Fatal("the install asked about restart_syscall before SetChangeHook had waited for its attach")
+	}
+	requireFoldedSleep(t, f.foldSleep(restartBase), restartBase, "an attach SetChangeHook waited for")
+}
+
 // reportReading is what one reading inside a report finds on the watch.
 type reportReading struct {
 	off      bool   // restart_syscall counts as detached
@@ -410,5 +431,93 @@ func TestRestartSyscallMayBeAttachedBeforeItsAttachReadsTheClock(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Fatalf("%d readings in the report, want 3: two clock readings around one clear", len(seen))
+	}
+}
+
+// detachOrderWatch is the two goroutines of the test below. The reporter
+// switches restart_syscall's probes off and on again, over and over, on a
+// clock that ticks at every reading, and publishes the first reading of each
+// detach's report in firstStamp - when it is read, so before it is stored as
+// the change stamp. The reader asks the watch as the loop does for a -516
+// row: is restart_syscall detached, and which stamp stands.
+type detachOrderWatch struct {
+	watch      *restartProbeWatch
+	firstStamp atomic.Uint64
+	done       atomic.Bool
+	// tick and detaching are the reporter's own: the clock, and that its
+	// next reading is the first one of a detach's report.
+	tick      uint64
+	detaching bool
+}
+
+// clock is the loop's boot clock, read on the reporter's goroutine.
+func (o *detachOrderWatch) clock() uint64 {
+	o.tick++
+	if o.detaching {
+		o.detaching = false
+		o.firstStamp.Store(o.tick)
+	}
+	return o.tick
+}
+
+// report makes the reports of n rounds through el's hook: the detach of
+// restart_syscall's probes, then the two reports of their attach.
+func (o *detachOrderWatch) report(el *eventLoop, n int) {
+	defer o.done.Store(true)
+	for range n {
+		o.detaching = true
+		el.probesChanged(probemanager.Change{Syscall: restartSyscallProbe, Phase: probemanager.Changed})
+		el.probesChanged(probemanager.Change{Syscall: restartSyscallProbe, Phase: probemanager.ChangeBegins})
+		el.probesChanged(probemanager.Change{Syscall: restartSyscallProbe, Phase: probemanager.ChangeEnds, Attached: true})
+	}
+}
+
+// read returns how often the watch said "detached" with a change stamp older
+// than the first reading of the latest detach's report, until the reporter
+// is done. The reading is taken first: an attach's begin stores "may be
+// attached" between two detaches, so a "detached" read afterwards was stored
+// by the detach that took that reading, or by a later one.
+func (o *detachOrderWatch) read() (wrong int) {
+	for !o.done.Load() {
+		want := o.firstStamp.Load()
+		if o.watch.restartSyscallOff() && o.watch.changedAt.Load() < want {
+			wrong++
+		}
+	}
+	return wrong
+}
+
+// TestRestartSyscallIsCalledDetachedOnlyOnceItsFirstStampIsStored: "detached"
+// is stored after the first stamp of its report is stored, not merely after
+// the clock was read for it (noteProbeChange; "Output order" in
+// eventloop_restart.go). A loop that reads "detached" must find a stamp taken
+// with the probes already off, or it does not hold, and so does not fold, a
+// sleep stopped and resumed while they were on.
+//
+// No test code runs between the reading and its store, so one goroutine
+// cannot tell the orders apart
+// (TestRestartSyscallIsCalledDetachedBetweenTheTwoStampsOfItsReport), and the
+// moment can only be met, not arranged: a reader asks in a tight loop while
+// the changes are reported, as in
+// TestEndOfAProbeAttachStoresItsStampBeforeItLowersTheCount. The test is
+// probabilistic in that direction only. With "detached" stored between the
+// first reading and its store, or ahead of the reading, the reader caught it
+// in every run on a machine with several CPUs, also under -race; with
+// GOMAXPROCS=1 it may not get to run in between, and the test then proves
+// nothing. It cannot fail for the correct order on any machine.
+func TestRestartSyscallIsCalledDetachedOnlyOnceItsFirstStampIsStored(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	o := &detachOrderWatch{watch: &f.el.restarts.probes}
+	f.el.dropStampClock = o.clock
+
+	wrong := make(chan int, 1)
+	go func() { wrong <- o.read() }()
+	o.report(f.el, 100_000)
+	if n := <-wrong; n != 0 {
+		t.Fatalf("%d times restart_syscall was called detached with a change stamp older than its report's first: "+
+			"\"detached\" was stored before that stamp", n)
+	}
+	if o.firstStamp.Load() == 0 {
+		t.Fatal("no detach read the clock: the reader had nothing to compare")
 	}
 }
