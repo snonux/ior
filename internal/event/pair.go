@@ -2,6 +2,7 @@ package event
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"unicode"
@@ -37,6 +38,7 @@ const NoFileName = "N:file"
 //     folds the continuation into the pair (task fs2, internal/eventloop_restart.go): ExitEv
 //     then carries the final return and time, so Duration spans the whole call, stopped
 //     time included.
+//     Restarts counts the continuations folded that way (task 203).
 //   - DurationToPrev is the inter-syscall gap on the same thread: enter(current) - exit(previous).
 //   - DurationToPrev is tracked per TID; the first observed Pair for a TID has DurationToPrev == 0
 //     and FirstOnTID set, so aggregations can tell "no previous pair" from a measured 0ns gap.
@@ -66,6 +68,15 @@ type Pair struct {
 	// Latency aggregates count such a pair as untimed (statsengine).
 	// DurationToPrev is a real gap, measured to the enter like any pair's.
 	NoReturn bool
+	// Restarts counts the kernel restarts the event loop folded into this pair
+	// (task 203; foldRestartExit in internal/eventloop_restart.go): one for
+	// each restart_syscall continuation of a call stopped with -516 and one for
+	// each re-execution after -512/-513/-514. Such a pair shows the call's
+	// final return only, so this is the one place that says it was interrupted
+	// at all. 0 for every other pair, including one that kept its restart code
+	// because the fold was refused, and for the continuation's own pair then.
+	// It saturates at 255 (NoteRestart).
+	Restarts uint8
 	Bytes    uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 	// AddressSpaceBytes is the virtual address space a memory syscall added,
 	// removed or moved, in whole host pages: the page-rounded length of
@@ -174,6 +185,16 @@ func (e *Pair) CalculateDurations(prevPairTime uint64) {
 		} else {
 			e.DurationToPrev = 0
 		}
+	}
+}
+
+// NoteRestart counts one kernel restart folded into the pair (Restarts). The
+// count stays at 255 once it is there: a call restarted more often than that
+// (a sleep stopped and continued in a loop) must not wrap around to a small
+// number, least of all to the 0 that means "never interrupted".
+func (e *Pair) NoteRestart() {
+	if e.Restarts < math.MaxUint8 {
+		e.Restarts++
 	}
 }
 

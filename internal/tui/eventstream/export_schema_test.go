@@ -245,6 +245,8 @@ func distinctRow() StreamEvent {
 		Nfds: 1011, TimeoutNs: 1012, AddressSpaceBytes: 1013,
 		OldName: "/old-file-v", EpollOp: "epoll-op-v",
 		EpollTargetFD: 1014, EpollEvents: 1015,
+		// A uint8: below the 1001.. range, so it is distinct all the same.
+		Restarts: 216,
 	}
 }
 

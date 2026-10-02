@@ -2,6 +2,7 @@ package parquet
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,6 +11,8 @@ import (
 	"ior/internal/streamrow"
 	"ior/internal/textsafe"
 	"ior/internal/types"
+
+	parquetgo "github.com/parquet-go/parquet-go"
 )
 
 // TestRecordFromStreamProducesValidUTF8 pins that RecordFromStream applies
@@ -220,5 +223,123 @@ func TestFilelessRowPersistsEmptyFileAndNegativeFD(t *testing.T) {
 	}
 	if withFile != 2 {
 		t.Errorf("rows with a file = %d, want 2 (placeholder row counted as a file?)", withFile)
+	}
+}
+
+// TestRestartsColumnRoundTrips covers task 203: the count of kernel restarts
+// folded into a row is written as the `restarts` column and read back exactly,
+// from 0 (an uninterrupted call, or one that kept its restart code) to the
+// saturated 255. Checked through a written file, so the column the query
+// engines see is what is pinned.
+func TestRestartsColumnRoundTrips(t *testing.T) {
+	counts := []uint8{0, 1, 2, 255, 0}
+	var rows []Record
+	for i, n := range counts {
+		row := streamrow.Row{Seq: uint64(i + 1), Syscall: "clock_nanosleep", Restarts: n}
+		if i == len(counts)-1 {
+			row.RetVal = -516 // not folded: the restart code stays, the count is 0
+		}
+		rows = append(rows, RecordFromStream(row, 0))
+	}
+	got := writeAndReadBack(t, rows)
+	if len(got) != len(counts) {
+		t.Fatalf("read %d rows, want %d", len(got), len(counts))
+	}
+	for i, n := range counts {
+		if got[i].Restarts != n {
+			t.Errorf("row %d restarts = %d, want %d", i+1, got[i].Restarts, n)
+		}
+	}
+	if got[4].Ret != -516 {
+		t.Errorf("unfolded row ret = %d, want -516", got[4].Ret)
+	}
+}
+
+// TestRestartsIsTheLastUInt8Column pins how the column reaches a reader:
+// under the name `restarts`, as an unsigned 8-bit integer (ClickHouse UInt8,
+// DuckDB UTINYINT), required like every other column, and appended after the
+// columns that existed before it, whose order must not change.
+func TestRestartsIsTheLastUInt8Column(t *testing.T) {
+	schema := parquetgo.SchemaOf(Record{})
+	fields := schema.Fields()
+	wantOrder := []string{
+		"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall",
+		"family", "fd", "ret", "bytes", "address_space_bytes", "requested_sleep_ns",
+		"nfds", "timeout_ns", "file", "is_error", "filter_epoch", "old_file",
+		"epoll_op", "epoll_target_fd", "epoll_events", "restarts",
+	}
+	var names []string
+	for _, f := range fields {
+		names = append(names, f.Name())
+	}
+	if !slices.Equal(names, wantOrder) {
+		t.Fatalf("columns = %v, want %v", names, wantOrder)
+	}
+	last := fields[len(fields)-1]
+	if last.Optional() || last.Repeated() {
+		t.Errorf("restarts is optional/repeated, want a required column like the others")
+	}
+	if got, want := last.Type().String(), parquetgo.Uint(8).Type().String(); got != want {
+		t.Errorf("restarts type = %s, want %s", got, want)
+	}
+}
+
+// recordBeforeRestarts is the schema as recordings made before task 203 have
+// it: parquet.Record without its last column.
+type recordBeforeRestarts struct {
+	Seq               uint64 `parquet:"seq"`
+	TimeNS            uint64 `parquet:"time_ns"`
+	GapNS             uint64 `parquet:"gap_ns"`
+	LatencyNS         uint64 `parquet:"latency_ns"`
+	Comm              string `parquet:"comm"`
+	PID               uint32 `parquet:"pid"`
+	TID               uint32 `parquet:"tid"`
+	Syscall           string `parquet:"syscall"`
+	Family            string `parquet:"family"`
+	FD                int32  `parquet:"fd"`
+	Ret               int64  `parquet:"ret"`
+	Bytes             uint64 `parquet:"bytes"`
+	AddressSpaceBytes uint64 `parquet:"address_space_bytes"`
+	RequestedSleepNS  int64  `parquet:"requested_sleep_ns"`
+	Nfds              int32  `parquet:"nfds"`
+	TimeoutNS         int64  `parquet:"timeout_ns"`
+	File              string `parquet:"file"`
+	IsError           bool   `parquet:"is_error"`
+	FilterEpoch       uint64 `parquet:"filter_epoch"`
+	OldFile           string `parquet:"old_file"`
+	EpollOp           string `parquet:"epoll_op"`
+	EpollTargetFD     int32  `parquet:"epoll_target_fd"`
+	EpollEvents       uint32 `parquet:"epoll_events"`
+}
+
+// TestRecordingsAcrossTheRestartsColumnStayReadable is the compatibility
+// check of the appended column, both ways. A recording made before it has no
+// `restarts` column: read with today's Record its rows come back whole, with
+// restarts 0. A recording made now, read by a reader that only knows the
+// earlier columns, gives those columns unchanged and ignores the new one.
+func TestRecordingsAcrossTheRestartsColumnStayReadable(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.parquet")
+	old := []recordBeforeRestarts{{Seq: 1, Syscall: "read", Ret: 9, File: "/f", EpollEvents: 5}}
+	if err := parquetgo.WriteFile(oldPath, old); err != nil {
+		t.Fatalf("write a recording without the column: %v", err)
+	}
+	got := readAllRecords(t, oldPath)
+	want := Record{Seq: 1, Syscall: "read", Ret: 9, File: "/f", EpollEvents: 5}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("old recording read as %+v, want %+v", got, want)
+	}
+
+	newPath := filepath.Join(dir, "new.parquet")
+	if err := parquetgo.WriteFile(newPath, []Record{{Seq: 2, Syscall: "poll", Ret: 1, EpollEvents: 6, Restarts: 3}}); err != nil {
+		t.Fatalf("write a recording with the column: %v", err)
+	}
+	legacy, err := parquetgo.ReadFile[recordBeforeRestarts](newPath)
+	if err != nil {
+		t.Fatalf("read a recording with the column through the old schema: %v", err)
+	}
+	wantLegacy := recordBeforeRestarts{Seq: 2, Syscall: "poll", Ret: 1, EpollEvents: 6}
+	if len(legacy) != 1 || legacy[0] != wantLegacy {
+		t.Fatalf("new recording read through the old schema as %+v, want %+v", legacy, wantLegacy)
 	}
 }

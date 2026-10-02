@@ -38,6 +38,7 @@ Use an absolute `recording_dir` if the file is elsewhere. The file schema comes 
 | `epoll_op` | String | `epoll_ctl` ADD, MOD or DEL |
 | `epoll_target_fd` | Int32 | Target descriptor of `epoll_ctl` |
 | `epoll_events` | UInt32 | Requested epoll event mask |
+| `restarts` | UInt8 | How many kernel restarts ior folded into the row: `0` for an ordinary call, `1` or more for a call that was [stopped and resumed](#a-stopped-sleep-is-one-row) or [re-executed](#a-re-executed-call-is-one-row) after a signal. See [Finding the calls that were interrupted](#finding-the-calls-that-were-interrupted) |
 
 Fields that do not apply to a row use zero or an empty string, except `fd` (`-1`) and
 `timeout_ns` (`-1`/`-2`), where zero is a real value. In particular, `file` is the
@@ -60,7 +61,7 @@ The TUI stream CSV export (`e`, and `x`/`X` on the paused Stream tab; `E` only o
 export in an editor) carries the same per-event fields as the recording, in this order:
 `seq, time_ns, gap_ns, latency_ns, comm, pid, tid, syscall, fd, ret, bytes, file, error, family,
 requested_sleep_ns, nfds, timeout_ns, address_space_bytes, old_file, epoll_op, epoll_target_fd,
-epoll_events`. The names match the Parquet columns above, except that `error` is the Parquet
+epoll_events, restarts`. The names match the Parquet columns above, except that `error` is the Parquet
 `is_error`; `filter_epoch` exists only in recordings. New columns are only ever appended, so a
 script that indexes by position keeps working. `old_file` (rename/link source, `file` being the
 destination), `address_space_bytes` and the `epoll_*` columns follow the same zero/empty rules
@@ -126,6 +127,9 @@ row for it:
   stop shorter than the sleep does not lengthen it: `latency_ns` is about `requested_sleep_ns`.
 - `gap_ns` is the gap before the original call. The call is counted once, and filters (for
   example `-latency`, `-ret`, `-syscall`) judge the folded row.
+- `restarts` counts the `restart_syscall` continuations folded into the row: `1` for a call
+  stopped once, `2` for one stopped again while it was being resumed, and so on. The -516 is no
+  longer in `ret`, so this is what tells the row from a sleep nobody stopped.
 
 ior does not go by the order of the rows for this. `restart_syscall` resumes nothing but a
 -516 call, but the `restart_syscall` that follows a -516 row in a recording need not be that
@@ -206,6 +210,7 @@ single row for it, shaped exactly like the stopped sleep above:
   `is_error`) is what the call finally returned, and `latency_ns` spans the whole call from
   its first enter to the final return, including the time stopped or spent in the handler.
 - The call is counted once, and filters judge the folded row.
+- `restarts` counts the re-executions folded into the row, `1` for a call interrupted once.
 - The syscalls a signal handler makes before the call is re-executed (its `rt_sigreturn`
   included, when traced) are rows of their own. They complete before the call they
   interrupted, so they are listed before its row; their `gap_ns` is measured from the
@@ -219,6 +224,46 @@ above; only when they say the kernel re-executes the call - and, after a handler
 that handler has returned through `rt_sigreturn` - is the thread's next syscall enter marked
 as the re-execution. The mark carries that enter's timestamp, and only the enter with exactly
 that timestamp is accepted for it. Without the mark, or without its enter, nothing is folded.
+
+#### Finding the calls that were interrupted
+
+A folded row holds the call's final return, so `ret` no longer shows that a signal interrupted
+it. The `restarts` column does: it is the number of continuations ior folded into the row, of
+either kind (a `restart_syscall` after -516, a re-execution after -512/-513/-514).
+
+```sql
+SELECT syscall, restarts, count(*) AS calls, max(latency_ns) AS max_latency_ns
+FROM file('/data/recording.parquet', Parquet)
+WHERE restarts > 0
+GROUP BY syscall, restarts
+ORDER BY calls DESC;
+```
+
+- `restarts = 0` and an ordinary `ret`: the call was not interrupted, as far as ior saw.
+- `restarts > 0` and an ordinary `ret`: the kernel interrupted the call that many times and
+  carried it on each time; the program noticed nothing. `latency_ns` includes the time the
+  process was stopped or spent in the signal handler, which is the usual reason such a row
+  stands out in a latency query.
+- `restarts = 0` and a restart code in `ret`: the interruption was not folded (the program got
+  `EINTR`, or the proof was missing; next section). A continuation that became a row of its
+  own - the `restart_syscall`, or the re-executed call - has `restarts = 0` as well.
+- `restarts > 0` and a restart code in `ret`: the call was carried on that many times and then
+  interrupted once more, and that last interruption was not folded.
+- A `restart_syscall` row can have `restarts > 0` too: when it is a row of its own (the call it
+  resumed is not in the recording, or that fold was refused) and was stopped in turn, the
+  `restart_syscall` calls that followed are folded into it.
+
+The count stops at 255: a call restarted more often than that (a sleep in a process that is
+stopped and continued in a loop) reads 255, never a small number again. Every interruption that
+is folded is counted, and nothing else is: `restarts` says how often ior joined pieces of one
+call, not how many signals the thread received. The syscalls of a signal handler, a program's
+own retry after `EINTR` and the calls of a run that folds nothing (see below) all have 0.
+
+The column was appended to the schema after the others. A recording made before it has no
+`restarts` column, so a query that names the column fails on such a file with an unknown-column
+error; every other query is unaffected, and a recording with the column reads as before in a
+tool that does not know it. The stream CSV export has `restarts` as its last column for the
+same reason. `-plain` output and the Stream tab do not show it.
 
 #### When a restart is not folded
 

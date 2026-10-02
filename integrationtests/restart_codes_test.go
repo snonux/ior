@@ -47,6 +47,11 @@ func TestKernelRestartCodesAreNotErrors(t *testing.T) {
 		if row.Syscall == "read" && row.Ret == -512 {
 			t.Errorf("read ret=-512 was not folded into its re-execution: %+v", row)
 		}
+		// Task 203: the sleep the handler ended was carried on by nothing, so
+		// its -516 row counts no restart.
+		if row.Syscall == "clock_nanosleep" && row.Ret == -516 && row.Restarts != 0 {
+			t.Errorf("clock_nanosleep ret=-516 has restarts=%d, want 0: nothing was folded into it", row.Restarts)
+		}
 	}
 }
 
@@ -76,7 +81,8 @@ func reexecRows(t *testing.T, syscalls string) []iorparquet.Record {
 
 // requireReexecReads checks the scenario's reads among judged: exactly four
 // rows returning 1, 2, -512 and 3, in that order and none flagged an error,
-// and returns their indexes in judged.
+// each with the restarts count of its kind (requireReexecRestarts), and
+// returns their indexes in judged.
 func requireReexecReads(t *testing.T, judged []iorparquet.Record) []int {
 	t.Helper()
 	var reads []int
@@ -96,7 +102,27 @@ func requireReexecReads(t *testing.T, judged []iorparquet.Record) []int {
 		t.Fatalf("the reading thread's reads returned %v, want %v: a kernel-restarted read is one row, "+
 			"the program's own retry after EINTR is a second one. Rows: %+v", rets, want, judged)
 	}
+	requireReexecRestarts(t, judged, reads)
 	return reads
+}
+
+// requireReexecRestarts checks the restarts column (task 203) of the
+// scenario's four reads, reads being their indexes in judged: the two the
+// kernel re-executed count that one restart, and the EINTR pair counts none -
+// neither the row that kept its -512 nor the program's own retry - and nor do
+// the handlers' rt_sigreturn rows, which were never interrupted.
+func requireReexecRestarts(t *testing.T, judged []iorparquet.Record, reads []int) {
+	t.Helper()
+	for n, want := range []uint8{1, 1, 0, 0} {
+		if row := judged[reads[n]]; row.Restarts != want {
+			t.Errorf("read ret=%d has restarts=%d, want %d: %+v", row.Ret, row.Restarts, want, row)
+		}
+	}
+	for _, row := range judged {
+		if row.Syscall == "rt_sigreturn" && row.Restarts != 0 {
+			t.Errorf("rt_sigreturn has restarts=%d, want 0: %+v", row.Restarts, row)
+		}
+	}
 }
 
 // TestSignalRestartedReadIsOneRow covers task 103 end to end. The signal-reexec
@@ -179,12 +205,18 @@ func reexecManyRows(t *testing.T, extraArgs ...string) [][]iorparquet.Record {
 // exactly one row, on its own descriptor and with its own byte count - the
 // descriptor comes from the call's first enter and the count from the
 // re-execution's exit, so a row with both right is that call and no other.
+// Each row also says that it was folded from one restart (task 203).
 func TestSignalStoppedReadsEachFoldIntoOneRow(t *testing.T) {
 	for i, rows := range reexecManyRows(t) {
 		want := int64(i + 1)
 		if len(rows) != 1 || rows[0].Ret != want || rows[0].Bytes != uint64(want) || rows[0].IsError {
 			t.Errorf("read %d (fd %d): rows %+v, want exactly one row returning %d bytes",
 				i, reexecManyFdBase+int32(i), rows, want)
+			continue
+		}
+		if rows[0].Restarts != 1 {
+			t.Errorf("read %d (fd %d): restarts=%d, want 1: the read was stopped and re-executed once",
+				i, reexecManyFdBase+int32(i), rows[0].Restarts)
 		}
 	}
 }
@@ -221,6 +253,13 @@ func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
 			if row.IsError {
 				t.Errorf("read %d: row flagged is_error=true: %+v", i, row)
 			}
+			// Task 203: a row left with -512 took no continuation; a row
+			// with the result is the folded call (1) or its re-execution
+			// alone (0).
+			if row.Restarts > 1 || (row.Ret == -512 && row.Restarts != 0) {
+				t.Errorf("read %d: ret=%d restarts=%d, want 0 for an unfolded row and at most 1: %+v",
+					i, row.Ret, row.Restarts, row)
+			}
 		}
 		if finals > 1 || interrupted > 1 {
 			t.Errorf("read %d (fd %d): %d rows returning %d and %d returning -512, want at most one each: %+v",
@@ -237,18 +276,16 @@ func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
 // stopRestartSleepNs mirrors cmd/ioworkload's stopRestartSleepNs.
 const stopRestartSleepNs = int64(600_000_000)
 
-// TestStoppedSleepIsOneRow covers task fs2. The stop-restart workload sleeps
-// 600ms in clock_nanosleep while an external stopper sends SIGSTOP and, 200ms
-// later, SIGCONT. The kernel ends the call with -516 and resumes it through
-// restart_syscall; before the fold ior reported two rows for the one call
-// (clock_nanosleep ret=-516, then restart_syscall ret=0 without the requested
-// sleep). Now the sleeping thread must show exactly one clock_nanosleep row:
-// ret 0, the requested 600ms, and a latency covering the whole call. Other
-// Go runtime threads also get stopped inside timed futex waits, whose
-// restart_syscall continuations stay rows of their own because futex is not
-// traced here, so only the sleeping (main) thread is checked for leftovers.
-func TestStoppedSleepIsOneRow(t *testing.T) {
-	rows, pid := runParquetScenarioRows(t, "stop-restart", defaultDuration,
+// stoppedSleepRow runs scenario, whose main thread makes one clock_nanosleep
+// of requestNs that is stopped and continued, and returns that thread's
+// clock_nanosleep row. There must be exactly one, and no restart_syscall row
+// left on the thread. Other Go runtime threads also get stopped inside timed
+// futex waits, whose restart_syscall continuations stay rows of their own
+// because futex is not traced here, so only the sleeping (main) thread is
+// checked for leftovers.
+func stoppedSleepRow(t *testing.T, scenario string, requestNs int64) iorparquet.Record {
+	t.Helper()
+	rows, pid := runParquetScenarioRows(t, scenario, defaultDuration,
 		[]string{"-trace-syscalls", "clock_nanosleep,restart_syscall"},
 		[]string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 
@@ -268,19 +305,58 @@ func TestStoppedSleepIsOneRow(t *testing.T) {
 	if len(sleeps) != 1 {
 		t.Fatalf("sleeping thread has %d clock_nanosleep rows, want exactly 1: %+v", len(sleeps), sleeps)
 	}
-	sleep := sleeps[0]
+	if sleeps[0].RequestedSleepNS != requestNs {
+		t.Errorf("folded row requested_sleep_ns=%d, want %d", sleeps[0].RequestedSleepNS, requestNs)
+	}
+	return sleeps[0]
+}
+
+// requireResumedSleep checks the folded row of a stopped sleep: the final
+// return 0, a latency covering the whole call, and restarts continuations
+// folded into it (task 203).
+func requireResumedSleep(t *testing.T, sleep iorparquet.Record, restarts uint8) {
+	t.Helper()
 	if sleep.Ret != 0 || sleep.IsError {
 		t.Errorf("folded row ret=%d is_error=%t, want ret=0 is_error=false", sleep.Ret, sleep.IsError)
-	}
-	if sleep.RequestedSleepNS != stopRestartSleepNs {
-		t.Errorf("folded row requested_sleep_ns=%d, want %d", sleep.RequestedSleepNS, stopRestartSleepNs)
 	}
 	// The resumed sleep ends at the original deadline, so the whole call
 	// lasts at least the request (unless the stop outlasted it, which only
 	// makes it longer).
-	if sleep.LatencyNS < uint64(stopRestartSleepNs) {
-		t.Errorf("folded row latency_ns=%d, want >= the requested %d", sleep.LatencyNS, stopRestartSleepNs)
+	if sleep.LatencyNS < uint64(sleep.RequestedSleepNS) {
+		t.Errorf("folded row latency_ns=%d, want >= the requested %d", sleep.LatencyNS, sleep.RequestedSleepNS)
 	}
+	if sleep.Restarts != restarts {
+		t.Errorf("folded row restarts=%d, want %d: one per restart_syscall that resumed the sleep: %+v",
+			sleep.Restarts, restarts, sleep)
+	}
+}
+
+// TestStoppedSleepIsOneRow covers task fs2. The stop-restart workload sleeps
+// 600ms in clock_nanosleep while an external stopper sends SIGSTOP and, 200ms
+// later, SIGCONT. The kernel ends the call with -516 and resumes it through
+// restart_syscall; before the fold ior reported two rows for the one call
+// (clock_nanosleep ret=-516, then restart_syscall ret=0 without the requested
+// sleep). Now the sleeping thread must show exactly one clock_nanosleep row:
+// ret 0, the requested 600ms, and a latency covering the whole call. The -516
+// is gone from that row, so its restarts column (task 203) is what says the
+// sleep was stopped: 1, for the one restart_syscall folded into it.
+func TestStoppedSleepIsOneRow(t *testing.T) {
+	requireResumedSleep(t, stoppedSleepRow(t, "stop-restart", stopRestartSleepNs), 1)
+}
+
+// stopRestartTwiceSleepNs mirrors cmd/ioworkload's stopRestartTwiceSleepNs.
+const stopRestartTwiceSleepNs = int64(1_500_000_000)
+
+// TestTwiceStoppedSleepCountsBothRestarts covers the chained fold of task 203
+// end to end. The stop-restart-twice workload has one clock_nanosleep stopped
+// and continued twice, the second time while the thread is inside the
+// restart_syscall that resumed it: that restart_syscall exits -516 in turn and
+// a second one finishes the sleep. It is still one row returning 0, and it
+// counts both continuations. The workload sends each stop only once /proc
+// shows the thread blocked in the call it is meant for, so the count does not
+// depend on timing.
+func TestTwiceStoppedSleepCountsBothRestarts(t *testing.T) {
+	requireResumedSleep(t, stoppedSleepRow(t, "stop-restart-twice", stopRestartTwiceSleepNs), 2)
 }
 
 // handledSleepNs mirrors cmd/ioworkload's handledSleepNs.
@@ -336,6 +412,13 @@ func TestSignalHandledSleepIsNotFoldedWithALaterStoppedCall(t *testing.T) {
 	if restart.Ret != 0 || restart.IsError {
 		t.Errorf("restart_syscall ret=%d is_error=%t, want the stopped nanosleep's result 0: %+v",
 			restart.Ret, restart.IsError, restart)
+	}
+	// Task 203: neither row was folded from anything. The sleep kept its
+	// restart code, and the restart_syscall is the whole of a call the trace
+	// does not otherwise show.
+	if sleep.Restarts != 0 || restart.Restarts != 0 {
+		t.Errorf("restarts = %d (sleep) and %d (restart_syscall), want 0 and 0: no fold happened",
+			sleep.Restarts, restart.Restarts)
 	}
 	if restart.TimeNS < sleep.TimeNS+sleep.LatencyNS {
 		t.Errorf("restart_syscall starts at %d, before the sleep row ends at %d: the sleep row spans the later call",

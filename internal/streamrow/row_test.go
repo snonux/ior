@@ -98,6 +98,28 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	}
 }
 
+// TestNewCarriesTheRestartCount covers task 203: the row carries the pair's
+// count of folded kernel restarts, and a pair that was never folded gives 0 -
+// also one whose return is still a restart code (the fold was refused), so the
+// count is taken from the pair and never guessed from the return value.
+func TestNewCarriesTheRestartCount(t *testing.T) {
+	for _, tt := range []struct {
+		ret      int64
+		restarts uint8
+	}{
+		{0, 0}, {0, 1}, {0, 2}, {7, 255}, {-516, 0}, {-512, 0}, {-516, 1},
+	} {
+		enter := &types.OpenEvent{TraceId: types.SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2, Ret: tt.ret, Pid: 1, Tid: 1}
+		pair.Restarts = tt.restarts
+		got := New(1, pair)
+		if got.Restarts != tt.restarts || got.RetVal != tt.ret {
+			t.Errorf("ret %d restarts %d: row RetVal/Restarts = %d/%d", tt.ret, tt.restarts, got.RetVal, got.Restarts)
+		}
+	}
+}
+
 // TestNewDoesNotFlagRestartCodesAsErrors covers task aq2: the raw kernel
 // restart codes stay visible in RetVal but the row is not an error.
 func TestNewDoesNotFlagRestartCodesAsErrors(t *testing.T) {

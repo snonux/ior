@@ -1293,12 +1293,18 @@ func (e *eventLoop) holdRestart(ep *event.Pair, ch chan<- *event.Pair) bool {
 
 // foldRestartExit completes a fold with the continuation's exit: the held
 // row takes its outcome, and is completed - or held again when the
-// continuation was itself interrupted (a restart code once more).
+// continuation was itself interrupted (a restart code once more). This is the
+// only place a fold is accepted, so it is where the row's Restarts count
+// grows; every refusal goes through releaseTakenRestart, which leaves the
+// count, and the continuation's own row, as they were.
 func (e *eventLoop) foldRestartExit(exitEv event.Event, ch chan<- *event.Pair) {
 	held, _ := e.restarts.take(exitEv.GetTid())
 	// The fold is accepted: the continuation is part of this row now and its
-	// enter is not needed any more.
+	// enter is not needed any more. The row counts it (task 203), since the
+	// restart code it replaces is otherwise gone without a trace; a row held
+	// again below is counted once per continuation it takes.
 	held.dropContinuation()
+	held.pair.NoteRestart()
 	if held.reexecuted() {
 		// The same syscall's exit record, of whatever kind: it replaces the
 		// interrupted one.

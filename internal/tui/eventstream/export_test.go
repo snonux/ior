@@ -421,7 +421,7 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	}
 	// Spelled out (not streamCSVHeader) so a reorder or rename fails here:
 	// the first 17 columns are a positional contract, the rest are appended.
-	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns", "address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events"}
+	wantHeader := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns", "address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events", "restarts"}
 	if !reflect.DeepEqual(records[0], wantHeader) {
 		t.Fatalf("header = %#v, want %#v", records[0], wantHeader)
 	}
@@ -430,6 +430,39 @@ func TestWriteStreamCSVAppendsExtendedColumns(t *testing.T) {
 	}
 	if records[1][15] != "8" || records[1][16] != "-1" {
 		t.Fatalf("poll metadata = %q/%q, want 8/-1", records[1][15], records[1][16])
+	}
+}
+
+// TestWriteStreamCSVAppendsRestartsLast covers task 203: the count of kernel
+// restarts folded into a row is the 23rd and last column, appended behind the
+// 22 the export had, so no earlier column moved. A folded row writes its
+// count, an ordinary row and a row that kept its restart code write 0.
+func TestWriteStreamCSVAppendsRestartsLast(t *testing.T) {
+	rows := []StreamEvent{
+		{Seq: 1, Syscall: "clock_nanosleep", RetVal: 0, Restarts: 2, EpollEvents: 77, FD: -1},
+		{Seq: 2, Syscall: "read", RetVal: 5, FD: 3},
+		{Seq: 3, Syscall: "clock_nanosleep", RetVal: -516, FD: -1},
+		{Seq: 4, Syscall: "poll", RetVal: 1, Restarts: 255, FD: -1},
+	}
+	var buf bytes.Buffer
+	if err := writeStreamCSV(csv.NewWriter(&buf), rows); err != nil {
+		t.Fatalf("writeStreamCSV() error = %v", err)
+	}
+	records, err := csv.NewReader(&buf).ReadAll()
+	if err != nil || len(records) != len(rows)+1 {
+		t.Fatalf("read CSV: %d records, err = %v; want header + %d rows", len(records), err, len(rows))
+	}
+	const restartsCol, epollEventsCol = 22, 21
+	if len(records[0]) != restartsCol+1 || records[0][restartsCol] != "restarts" || records[0][epollEventsCol] != "epoll_events" {
+		t.Fatalf("header = %#v, want restarts as column %d right behind epoll_events", records[0], restartsCol+1)
+	}
+	for i, want := range []string{"2", "0", "0", "255"} {
+		if got := records[i+1][restartsCol]; got != want {
+			t.Errorf("row %d restarts = %q, want %q", i+1, got, want)
+		}
+	}
+	if records[1][epollEventsCol] != "77" || records[3][9] != "-516" {
+		t.Errorf("earlier columns moved: epoll_events = %q, ret of row 3 = %q", records[1][epollEventsCol], records[3][9])
 	}
 }
 

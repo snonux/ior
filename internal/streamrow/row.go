@@ -51,6 +51,13 @@ type Row struct {
 	// (Parquet, the stream CSV export, which must agree with it), and the
 	// Stream tab shows "-" in both cells instead.
 	NoReturn bool
+	// Restarts is the number of kernel restarts folded into the row
+	// (event.Pair.Restarts): restart_syscall continuations of a stopped call
+	// and re-executions after a signal. 0 for a call that was not interrupted
+	// and for one whose restart was not folded (its RetVal is then the restart
+	// code). Data outputs carry it (Parquet, the stream CSV export); the Stream
+	// tab does not show it.
+	Restarts uint8
 	FD       int32
 	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
 	// empty for non-epoll_ctl rows. EpollTargetFD and EpollEvents hold the
@@ -209,6 +216,7 @@ func New(seq uint64, pair *event.Pair) Row {
 		NoFile:            pair.File == nil,
 		DurationNs:        pair.Duration,
 		NoReturn:          pair.NoReturn,
+		Restarts:          pair.Restarts,
 		GapNs:             pair.DurationToPrev,
 		Bytes:             pair.Bytes,
 		AddressSpaceBytes: pair.AddressSpaceBytes,

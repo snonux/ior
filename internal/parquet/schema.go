@@ -65,6 +65,15 @@ type Record struct {
 	EpollOp       string `parquet:"epoll_op"`
 	EpollTargetFD int32  `parquet:"epoll_target_fd"`
 	EpollEvents   uint32 `parquet:"epoll_events"`
+	// Restarts is the number of kernel restarts folded into the row (task 203;
+	// streamrow.Row.Restarts): each restart_syscall continuation of a call
+	// stopped with -516 and each re-execution after -512/-513/-514 counts one,
+	// saturating at 255. Such a row holds the call's final return, so this
+	// column is what tells it from an uninterrupted call. 0 for every other
+	// row. It is the last column on purpose: columns are only appended, and a
+	// recording made before it simply has no such column (readers that select
+	// by name see it as missing, parquet-go fills in 0).
+	Restarts uint8 `parquet:"restarts"`
 }
 
 // Footer key/value keys that mark a recording as sampled (see
@@ -141,6 +150,7 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		EpollOp:       row.EpollOp,
 		EpollTargetFD: row.EpollTargetFD,
 		EpollEvents:   row.EpollEvents,
+		Restarts:      row.Restarts,
 	}
 }
 

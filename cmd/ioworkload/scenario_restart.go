@@ -158,3 +158,59 @@ func stopRestart() error {
 	}
 	return sleepErr
 }
+
+// stopRestartTwiceSleepNs is the relative clock_nanosleep request of the
+// stop-restart-twice scenario. It only has to outlast two stopper handshakes
+// (milliseconds each); the scenario fails when the sleep ends before the
+// second stop found it.
+const stopRestartTwiceSleepNs = 1_500_000_000
+
+// stopRestartTwice has one sleep stopped and continued twice (task 203). The
+// first SIGSTOP/SIGCONT ends the clock_nanosleep with -516 and the kernel
+// resumes it through restart_syscall; the second one finds the thread inside
+// that restart_syscall, which exits -516 in turn and is resumed by another
+// restart_syscall. The program sees one sleep that returns 0. ior must report
+// ONE clock_nanosleep row that counts two folded restarts.
+//
+// Nothing relies on timing: each stop is sent only once /proc shows the main
+// thread blocked in the call it is meant for - the scenario's own
+// clock_nanosleep (told by its request pointer, rawSleep.procState), then
+// restart_syscall, which the thread can only be in while that sleep is being
+// resumed - and the stopper reports back that it saw the thread stopped. The
+// stopper stays alive until the sleep is over, so its SIGCHLD (which the Go
+// runtime handles) cannot interrupt it. The sleep runs on the main thread,
+// which main.go's init() pins, so its tid is the pid.
+func stopRestartTwice() error {
+	tid := syscall.Gettid()
+	stopper, err := startStopper()
+	if err != nil {
+		return err
+	}
+	sleep := newRawSleep(unix.SYS_CLOCK_NANOSLEEP, stopRestartTwiceSleepNs)
+	stopped := make(chan error, 1)
+	go func() { stopped <- stopTwice(tid, sleep, stopper) }()
+	errno := sleep.run()
+	err = <-stopped
+	if errno != 0 {
+		err = errors.Join(err, fmt.Errorf("clock_nanosleep returned errno %d, want 0: no handler ran", errno))
+	}
+	return errors.Join(err, stopper.close())
+}
+
+// stopTwice stops and continues the thread tid once while it is blocked in
+// sleep and once more while it is blocked in the restart_syscall that resumes
+// it. /proc shows a thread resumed that way under restart_syscall's number,
+// not the interrupted call's.
+func stopTwice(tid int, sleep *rawSleep, stopper *reexecStopper) error {
+	if err := waitBlockedIn(tid, sleep.procState(), "clock_nanosleep"); err != nil {
+		return err
+	}
+	if err := stopper.stopAndContinue(); err != nil {
+		return err
+	}
+	resumed := fmt.Sprintf("%d ", unix.SYS_RESTART_SYSCALL)
+	if err := waitBlockedIn(tid, resumed, "restart_syscall"); err != nil {
+		return err
+	}
+	return stopper.stopAndContinue()
+}

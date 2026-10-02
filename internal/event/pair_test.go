@@ -117,6 +117,45 @@ func TestPairRecycleClearsFirstOnTID(t *testing.T) {
 	}
 }
 
+// TestPairNoteRestartCountsAndSaturates covers task 203: every folded restart
+// counts one, and the count stops at 255 instead of wrapping to a small number
+// (the 256th would read 0, "never interrupted").
+func TestPairNoteRestartCountsAndSaturates(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	defer pair.Recycle()
+	if pair.Restarts != 0 {
+		t.Fatalf("new pair Restarts = %d, want 0", pair.Restarts)
+	}
+	pair.NoteRestart()
+	pair.NoteRestart()
+	if pair.Restarts != 2 {
+		t.Fatalf("Restarts after two folds = %d, want 2", pair.Restarts)
+	}
+	for i := 0; i < 400; i++ {
+		pair.NoteRestart()
+	}
+	if pair.Restarts != 255 {
+		t.Fatalf("Restarts after 402 folds = %d, want 255 (saturated)", pair.Restarts)
+	}
+}
+
+// A pooled pair must not carry the count of the folded call it last was into
+// its next use: Recycle clears it, and the next pair starts at 0. Inspected
+// right after Recycle, as in the FirstOnTID test above.
+func TestPairRecycleClearsRestarts(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	pair.NoteRestart()
+	pair.Recycle()
+	if pair.Restarts != 0 {
+		t.Fatalf("Recycle kept Restarts = %d", pair.Restarts)
+	}
+	fresh := NewPair(&types.OpenEvent{Time: 3000, Tid: 3})
+	defer fresh.Recycle()
+	if fresh.Restarts != 0 {
+		t.Fatalf("NewPair Restarts = %d, want 0", fresh.Restarts)
+	}
+}
+
 func TestPairRecycleHandlesMissingExitEvent(t *testing.T) {
 	pair := NewPair(&types.OpenEvent{
 		Time: 1000,

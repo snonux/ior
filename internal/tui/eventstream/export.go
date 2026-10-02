@@ -214,20 +214,22 @@ func probeExportPath(path string, generated bool) error {
 
 // streamCSVHeader is the stream CSV export's column order. The first 17
 // columns are the original layout and must never move: later columns are only
-// ever appended, so a script indexing by position keeps working. The trailing
-// five (address_space_bytes, old_file, epoll_op, epoll_target_fd,
-// epoll_events) complete the export to the per-event schema of the Parquet
-// recording, under the same names (docs/parquet-querying.md); only `error`
-// (Parquet: is_error) keeps its historical name, and the Parquet-internal
-// filter_epoch is not exported. TestStreamCSVHeaderMatchesParquetSchema ties
-// this list to the parquet.Record tags, so a column added on one side fails
-// the test of the other. streamCSVRecord must emit the cells in exactly this
-// order.
+// ever appended, so a script indexing by position keeps working. The next five
+// (address_space_bytes, old_file, epoll_op, epoll_target_fd, epoll_events)
+// complete the export to the per-event schema of the Parquet recording, under
+// the same names (docs/parquet-querying.md); only `error` (Parquet: is_error)
+// keeps its historical name, and the Parquet-internal filter_epoch is not
+// exported. `restarts` (task 203: the kernel restarts folded into the row)
+// was appended after them, together with the Parquet column.
+// TestStreamCSVHeaderMatchesParquetSchema ties this list to the
+// parquet.Record tags, so a column added on one side fails the test of the
+// other. streamCSVRecord must emit the cells in exactly this order.
 var streamCSVHeader = []string{
 	"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall",
 	"fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns",
 	"nfds", "timeout_ns",
 	"address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events",
+	"restarts",
 }
 
 // writeStreamCSV writes the CSV header and the syscall rows to w and flushes
@@ -297,6 +299,8 @@ func streamCSVRecord(ev *StreamEvent) []string {
 		ev.EpollOp,
 		fmt.Sprintf("%d", ev.EpollTargetFD),
 		fmt.Sprintf("%d", ev.EpollEvents),
+		// Kernel restarts folded into the row; 0 for an uninterrupted call.
+		fmt.Sprintf("%d", ev.Restarts),
 	}
 }
 

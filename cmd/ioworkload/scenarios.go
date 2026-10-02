@@ -69,6 +69,7 @@ var scenarios = map[string]func() error{
 	"sleep-syscalls":                sleepSyscalls,
 	"signal-restart":                signalRestart,
 	"stop-restart":                  stopRestart,
+	"stop-restart-twice":            stopRestartTwice,
 	"signal-reexec":                 signalReexec,
 	"signal-reexec-many":            signalReexecMany,
 	"signal-handled-sleep":          signalHandledSleep,

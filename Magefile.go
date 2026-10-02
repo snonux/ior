@@ -1207,6 +1207,7 @@ var expectedParquetColumns = []string{
 	"nfds", "timeout_ns",
 	"file", "old_file", "is_error", "filter_epoch",
 	"epoll_op", "epoll_target_fd", "epoll_events",
+	"restarts",
 }
 
 // parquetSchemaCheck verifies that all expectedParquetColumns appear in the
