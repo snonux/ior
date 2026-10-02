@@ -240,11 +240,29 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   `IORING_OP_OPENAT` (and the other ring operations that open or close a descriptor) are
   executed by the kernel from `io_uring_enter` (or a worker thread) and fire no
   `sys_enter`/`sys_exit` tracepoint, so ior never sees the descriptor change. If a program
-  closes an fd through the ring and the number is reused by another open, later rows on
-  that fd keep the file ior last bound to it (for example `pread64` rows still show the old
-  path while the kernel reads the new file). Descriptors the program opens and closes with
+  closes an fd through the ring and the number is reused by another open, ior notices on
+  the next row that says which file the descriptor is (see the next item) and looks the
+  name up in `/proc/<pid>/fd`; without that check, later rows on that fd keep the file ior
+  last bound to it (for example `pread64` rows still show the old path while the kernel
+  reads the new file). Descriptors the program opens and closes with
   ordinary syscalls are tracked correctly; the `io_uring_setup`, `io_uring_enter` and
   `io_uring_register` calls themselves are traced as usual.
+- **Rows are checked against the file behind the descriptor only on Linux 6.2 and newer,
+  and only for some syscalls.** On such a kernel the records of the single-descriptor
+  syscalls (`read`, `write`, `pread64`, `close`, `fsync`, `fstat`, ...) say which file the
+  descriptor named when the call entered (the low 32 bits of its inode number), and the
+  `open` family says which file it returned. A row is named only after that file: a
+  descriptor that was rebound behind ior's back (io_uring, an untraced or lost call) is
+  looked up again, and a `/proc/<pid>/fd` answer that describes another file - the number
+  was closed and reused before ior got to the row - is not used. Such a row has no name;
+  the plain output shows `E:ino:<n>` (the identity) instead of `E:name`, also for the close
+  of a descriptor ior never saw opened and for rows of a process that exited first. ior
+  cannot name a file that is no longer open when it looks. Not checked, so still named by
+  descriptor number alone: every row on an older kernel (RHEL 8 and 9 included), rows of
+  syscalls whose record has no identity (`recvfrom`, `ioctl`, `fcntl`, `mmap`, `epoll_ctl`,
+  `dup3`, ...), files with the same inode number on different filesystems, and the
+  descriptors that share the kernel's anonymous inode (eventfd, epoll, io_uring, timerfd).
+  `IOR_FILE_IDENT=0` in ior's environment switches the check off.
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either.
