@@ -214,7 +214,8 @@ func renderedBody(t *testing.T, file, function string) string {
 // loadBPFObject sets the global before the load; the load stage reports what
 // the (possibly retried) load captured, once and after it;
 // setupTraceInfraBPF records it in the infra; runTraceSetup passes exactly
-// that field to trustFileIdents, once.
+// that field to trustFileIdents, once (through applyProbeCapabilities, see
+// capabilityCall).
 func TestTraceSetupCarriesTheFileIdentCaptureToTheLoop(t *testing.T) {
 	object := renderedBody(t, "ior_bpfsetup.go", "loadBPFObject")
 	set := strings.Index(object, "identCaptured, err := setFileIdentGlobal(wantIdent, bpfModule.InitGlobalVariable)")
@@ -248,10 +249,5 @@ func TestTraceSetupCarriesTheFileIdentCaptureToTheLoop(t *testing.T) {
 		}
 	}
 
-	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(setupDecl, "trustFileIdents")
-	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls trustFileIdents %d times, want once", len(calls))
-	}
-	assertCallArguments(t, calls[0], []string{"infra.fileIdentCaptured"})
+	assertCallArguments(t, capabilityCall(t, "trustFileIdents"), []string{"infra.fileIdentCaptured"})
 }

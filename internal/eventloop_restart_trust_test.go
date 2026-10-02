@@ -135,12 +135,8 @@ func TestTraceSetupCarriesTheExecAttachToTheLoop(t *testing.T) {
 	if want := "infra.execProbeAttached = handAttach.exec.attached"; !bytes.Contains(body.Bytes(), []byte(want)) {
 		t.Fatalf("setupTraceInfraBPF must contain %q", want)
 	}
-	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(setupDecl, "trustExecRecords")
-	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls trustExecRecords %d times, want once", len(calls))
-	}
-	assertCallArguments(t, calls[0], []string{"infra.execProbeAttached"})
+	// Once, through applyProbeCapabilities (capabilityCall).
+	assertCallArguments(t, capabilityCall(t, "trustExecRecords"), []string{"infra.execProbeAttached"})
 }
 
 // TestTraceSetupCarriesTheSignalAttachToTheLoop pins the rest of the chain,
@@ -171,12 +167,9 @@ func TestTraceSetupCarriesTheSignalAttachToTheLoop(t *testing.T) {
 		t.Fatal("handProbeAttachRecorder.note(sched_process_exit) did not reach the exit recorder")
 	}
 
-	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(setupDecl, "foldProvenRestarts")
-	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls foldProvenRestarts %d times, want once", len(calls))
-	}
-	assertCallArguments(t, calls[0], []string{"infra.signalProbeAttached", "infra.exitProbeAttached"})
+	// Once, through applyProbeCapabilities (capabilityCall).
+	assertCallArguments(t, capabilityCall(t, "foldProvenRestarts"),
+		[]string{"infra.signalProbeAttached", "infra.exitProbeAttached"})
 }
 
 // TestFoldProvenRestartsNeedsTheWholeProof: the loop holds -512/-513/-514

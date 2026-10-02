@@ -1073,7 +1073,8 @@ type traceInfra struct {
 
 	// fileIdentCaptured records that the loaded BPF object writes the file
 	// identity words of its records (bpfSetupLog.fileIdent); runTraceSetup
-	// hands it to the event loop (eventLoop.trustFileIdents).
+	// hands it to the event loop (applyProbeCapabilities,
+	// eventLoop.trustFileIdents).
 	fileIdentCaptured bool
 
 	cleanups []func()
@@ -1201,18 +1202,19 @@ func setupTraceInfraWithEventLoop(
 //     with a stamp that refuses the folds of every call interrupted before
 //     it; a manager published to nobody is the other case, a trace set that
 //     is final, which the loop is told so that it does not hold a stopped
-//     sleep's row for a restart_syscall the run does not trace (task u13);
-//     rename-record trust after the factory, which wires the drop counter
-//     the trust also depends on (task xr2).
-//   - Tell the loop which of the hand-attached probes attached, for the two
-//     decisions that rest on them and on that drop counter, so both come
-//     after the factory as well: the restart folds are on only when the
+//     sleep's row for a restart_syscall the run does not trace (task u13).
+//   - Tell the loop what the BPF setup can vouch for
+//     (applyProbeCapabilities), after the factory because two of those
+//     decisions rest on the drop counter it wires: whether the rename
+//     records are complete (task xr2), which of the hand-attached
+//     probes attached - the restart folds are on only when the
 //     signal_deliver and sched_process_exit probes attached, the
-//     re-execution fold only with the counter besides
-//     (foldProvenRestarts, tasks 103 and t13), and exec records count as
-//     complete only when the sched_process_exec probe did (trustExecRecords,
-//     task v13), which is what lets a successful exec exit without an enter
-//     adopt another thread's enter only on a counted drop.
+//     re-execution fold only with the counter besides (foldProvenRestarts,
+//     tasks 103 and t13), and exec records count as complete only when the
+//     sched_process_exec probe did (trustExecRecords, task v13), which is
+//     what lets a successful exec exit without an enter adopt another
+//     thread's enter only on a counted drop - and whether the loaded object
+//     writes the file identity words (trustFileIdents, task 603).
 //   - Signal the start last. Nothing fallible may follow: every step above
 //     still reaches the caller through err, and in TUI mode that is the only
 //     path an error has - once started is closed the starter has already
@@ -1260,12 +1262,29 @@ func runTraceSetup(
 	if infra.mgr != nil && hooks.probes == nil {
 		el.traceSetIsFinal(infra.mgr.IsActive)
 	}
+	applyProbeCapabilities(el, infra)
+	signalTraceStarted(started)
+	return infra, nil
+}
+
+// applyProbeCapabilities tells the loop what this run's BPF setup can vouch
+// for, each a decision the loop makes per record and gets wrong if it
+// assumes: the rename records are complete only when the task_rename probe
+// attached (trustRenameRecords, task xr2); the restart folds are on only when
+// the signal_deliver and sched_process_exit probes attached, the
+// re-execution fold only with the drop counter besides (foldProvenRestarts,
+// tasks 103 and t13); exec records count as complete only when the
+// sched_process_exec probe did (trustExecRecords, task v13); and the file
+// identity words are read only when the loaded object writes them
+// (trustFileIdents, task 603). runTraceSetup calls it after the factory,
+// which wires the drop counter two of them read, and before the start
+// signal, after which the loop may already consume records. Nothing here can
+// fail.
+func applyProbeCapabilities(el *eventLoop, infra *traceInfra) {
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	el.trustExecRecords(infra.execProbeAttached)
 	el.trustFileIdents(infra.fileIdentCaptured)
-	signalTraceStarted(started)
-	return infra, nil
 }
 
 // setupTraceInfraBPF loads the BPF module, attaches the probes (publishing the

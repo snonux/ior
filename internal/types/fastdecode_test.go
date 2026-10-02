@@ -1853,6 +1853,16 @@ func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
 	}
 }
 
+// fdLayoutCase is one wire layout of the fd record: its size and, for the
+// wide layouts, where the requested size sits and what it holds.
+type fdLayoutCase struct {
+	name          string
+	payloadSize   int
+	sizeOffset    int
+	requestedSize uint64
+	sizeValid     uint32
+}
+
 func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 	// The Go struct holds the fields of both wire layouts: the wide layout's
 	// 48 bytes plus the identity word only the lean record carries (task
@@ -1865,44 +1875,44 @@ func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
 		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventSize)
 	}
 
-	tests := []struct {
-		name          string
-		payloadSize   int
-		sizeOffset    int
-		requestedSize uint64
-		sizeValid     uint32
-	}{
+	tests := []fdLayoutCase{
 		{name: "lean compact", payloadSize: fdEventCompactSize},
 		{name: "lean kernel", payloadSize: fdEventSize},
 		{name: "wide compact", payloadSize: fdEventLegacyCompactSize, sizeOffset: 28, requestedSize: 4096, sizeValid: 1},
 		{name: "wide kernel", payloadSize: fdEventLegacyKernelSize, sizeOffset: 32, requestedSize: 8192, sizeValid: 1},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			raw := make([]byte, tc.payloadSize)
-			fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
-			binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
-			if tc.sizeOffset != 0 {
-				binary.LittleEndian.PutUint64(raw[tc.sizeOffset:tc.sizeOffset+8], tc.requestedSize)
-				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+8:tc.sizeOffset+12], tc.sizeValid)
-				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+12:tc.sizeOffset+16], FD_EVENT_SCHEMA_VERSION)
-			}
+		t.Run(tc.name, func(t *testing.T) { requireFdLayoutDecodes(t, tc) })
+	}
+}
 
-			fast := NewFdEventFast(raw)
-			if fast == nil {
-				t.Fatal("expected fd payload to decode")
-			}
-			defer fast.Recycle()
-			regular := NewFdEvent(raw)
-			if regular == nil || !fast.Equals(regular) {
-				t.Fatalf("regular constructor disagrees with fast decoder: %#v / %#v", regular, fast)
-			}
-			defer regular.Recycle()
-			if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
-				fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
-				t.Fatalf("unexpected fd decode: %#v", fast)
-			}
-		})
+// requireFdLayoutDecodes builds a read record in tc's layout and fails unless
+// the fast decoder and the regular constructor both decode it to the same
+// event with the header, the descriptor and tc's requested size.
+func requireFdLayoutDecodes(t *testing.T, tc fdLayoutCase) {
+	t.Helper()
+	raw := make([]byte, tc.payloadSize)
+	fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
+	if tc.sizeOffset != 0 {
+		binary.LittleEndian.PutUint64(raw[tc.sizeOffset:tc.sizeOffset+8], tc.requestedSize)
+		binary.LittleEndian.PutUint32(raw[tc.sizeOffset+8:tc.sizeOffset+12], tc.sizeValid)
+		binary.LittleEndian.PutUint32(raw[tc.sizeOffset+12:tc.sizeOffset+16], FD_EVENT_SCHEMA_VERSION)
+	}
+
+	fast := NewFdEventFast(raw)
+	if fast == nil {
+		t.Fatal("expected fd payload to decode")
+	}
+	defer fast.Recycle()
+	regular := NewFdEvent(raw)
+	if regular == nil || !fast.Equals(regular) {
+		t.Fatalf("regular constructor disagrees with fast decoder: %#v / %#v", regular, fast)
+	}
+	defer regular.Recycle()
+	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
+		fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
+		t.Fatalf("unexpected fd decode: %#v", fast)
 	}
 }
 

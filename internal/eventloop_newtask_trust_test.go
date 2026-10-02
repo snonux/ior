@@ -71,12 +71,8 @@ func TestTraceSetupCarriesTheRenameAttachToTheLoop(t *testing.T) {
 		t.Fatalf("setupTraceInfraBPF must carry the attach into the infra: %s", carry)
 	}
 
-	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(setupDecl, "trustRenameRecords")
-	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls trustRenameRecords %d times, want once", len(calls))
-	}
-	assertCallArguments(t, calls[0], []string{"infra.renameProbeAttached"})
+	// Once, through applyProbeCapabilities (capabilityCall).
+	assertCallArguments(t, capabilityCall(t, "trustRenameRecords"), []string{"infra.renameProbeAttached"})
 }
 
 // TestFailedDropReadKeepsTheNewtaskRecheck: while the drop counter cannot be

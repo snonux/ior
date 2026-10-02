@@ -304,16 +304,11 @@ func TestDropResultStampsTheBootClock(t *testing.T) {
 // ior.go: the trust is handed to the event loop exactly once, after the factory
 // that wires the drop counter (trustRenameRecords reads dropSrc) and before the
 // start signal, after which the loop may already consume records. Structural,
-// like the other setup tests: the setup cannot run unprivileged.
+// like the other setup tests: the setup cannot run unprivileged. The call sits
+// in applyProbeCapabilities; capabilityCall checks all of the above through
+// it and fails the test otherwise.
 func TestRunTraceSetupTrustsRenameRecordsBeforeTheStart(t *testing.T) {
-	decl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(decl, "trustRenameRecords")
-	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls trustRenameRecords %d times, want exactly once", len(calls))
-	}
-	build := firstCallPosition(decl, "buildEventLoop")
-	signal := firstCallPosition(decl, "signalTraceStarted")
-	if !build.IsValid() || !signal.IsValid() || calls[0].Pos() < build || calls[0].Pos() > signal {
-		t.Fatal("trustRenameRecords must run after buildEventLoop and before signalTraceStarted")
+	if call := capabilityCall(t, "trustRenameRecords"); call == nil {
+		t.Fatal("trace setup does not hand the rename-record trust to the loop")
 	}
 }
