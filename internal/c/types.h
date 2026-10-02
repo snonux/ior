@@ -681,9 +681,11 @@ struct task_rename_event {
 
 // syscall_restart_event is a control record, not a syscall event: restart.c
 // emits it for a task whose last traced syscall exit carried -ERESTARTSYS,
-// -ERESTARTNOINTR or -ERESTARTNOHAND (-512/-513/-514), so userspace can fold
-// the interrupted row and the kernel's re-execution of the call into one row
-// (task 103, internal/eventloop_restart.go). It is never rendered as a row.
+// -ERESTARTNOINTR, -ERESTARTNOHAND or -ERESTART_RESTARTBLOCK
+// (-512/-513/-514/-516), so userspace can fold the interrupted row and the
+// kernel's continuation of the call - its re-execution, or for -516 its
+// restart_syscall - into one row (tasks 103 and t13,
+// internal/eventloop_restart.go). It is never rendered as a row.
 //
 // phase says which of two things happened:
 //   - RESTART_PHASE_HANDLER: the signal:signal_deliver probe saw the first
@@ -693,14 +695,17 @@ struct task_rename_event {
 //     the call still restarts once the handler returns or the program gets
 //     EINTR.
 //   - RESTART_PHASE_RESUME: the task's syscall enter that follows this record
-//     is the kernel's re-execution of the interrupted call. It is the only
-//     record that licenses a fold; sa_restart is 0.
+//     is the kernel's continuation of the interrupted call: the same syscall
+//     again, or restart_syscall after -516 (when restart_syscall is traced;
+//     otherwise the record precedes some later enter, which userspace tells
+//     by its syscall). It is the only record that licenses a fold; sa_restart
+//     is 0.
 //
 // time is the boot clock, as in every record. For RESUME it is more than a
 // timestamp: it equals the time field of the enter record the RESUME
 // announces, bit for bit (both are the enter handler's single clock read).
 // That enter may be sampled out or lost after RESUME was emitted, so
-// userspace accepts as the re-execution only an enter with this exact time;
+// userspace accepts as the continuation only an enter with this exact time;
 // the task's next call of the same syscall has a later one. For HANDLER it is
 // the time of the delivery.
 //

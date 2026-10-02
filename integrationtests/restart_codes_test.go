@@ -282,3 +282,63 @@ func TestStoppedSleepIsOneRow(t *testing.T) {
 		t.Errorf("folded row latency_ns=%d, want >= the requested %d", sleep.LatencyNS, stopRestartSleepNs)
 	}
 }
+
+// handledSleepNs mirrors cmd/ioworkload's handledSleepNs.
+const handledSleepNs = int64(3_000_000_000)
+
+// TestSignalHandledSleepIsNotFoldedWithALaterStoppedCall covers task t13. The
+// signal-handled-sleep workload has a 3s clock_nanosleep cut short by a
+// handled SIGUSR1 (the program gets EINTR) and then a nanosleep(2) that is
+// stopped and continued, which the kernel resumes through restart_syscall. The
+// trace records clock_nanosleep and restart_syscall only, so the handler's
+// rt_sigreturn and the nanosleep are silent: the sleeping thread's records are
+// the clock_nanosleep with its -516 exit and then the restart_syscall of the
+// OTHER call. Folding by "the thread's next record is restart_syscall" made
+// one clock_nanosleep row of them, returning 0 and lasting until the later
+// call ended.
+//
+// The thread must show the sleep as it was - ret -516, not an error, shorter
+// than its request - and the later call's restart_syscall as a row of its own
+// that starts after the sleep row ended. The workload checks what the program
+// saw (EINTR, then 0) and sends each signal only once the thread is blocked in
+// the call it is meant for, so nothing here depends on timing.
+func TestSignalHandledSleepIsNotFoldedWithALaterStoppedCall(t *testing.T) {
+	rows, pid := runParquetScenarioRows(t, "signal-handled-sleep", defaultDuration,
+		[]string{"-trace-syscalls", "clock_nanosleep,restart_syscall"},
+		[]string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
+
+	var sleeps, restarts []iorparquet.Record
+	for _, row := range rows {
+		// main.go pins the scenario to the main thread, so its tid is the pid.
+		if row.TID != uint32(pid) {
+			continue
+		}
+		switch {
+		case row.Syscall == "clock_nanosleep" && row.RequestedSleepNS == handledSleepNs:
+			sleeps = append(sleeps, row)
+		case row.Syscall == "restart_syscall":
+			restarts = append(restarts, row)
+		}
+	}
+	if len(sleeps) != 1 || len(restarts) != 1 {
+		t.Fatalf("sleeping thread has %d rows of the handled sleep and %d restart_syscall rows, want 1 and 1: %+v %+v",
+			len(sleeps), len(restarts), sleeps, restarts)
+	}
+	sleep, restart := sleeps[0], restarts[0]
+	if sleep.Ret != -516 || sleep.IsError {
+		t.Errorf("handled sleep ret=%d is_error=%t, want ret=-516 is_error=false: the program got EINTR, "+
+			"nothing resumed the call: %+v", sleep.Ret, sleep.IsError, sleep)
+	}
+	if sleep.LatencyNS >= uint64(handledSleepNs) {
+		t.Errorf("handled sleep latency_ns=%d, want less than the requested %d: the signal cut it short",
+			sleep.LatencyNS, handledSleepNs)
+	}
+	if restart.Ret != 0 || restart.IsError {
+		t.Errorf("restart_syscall ret=%d is_error=%t, want the stopped nanosleep's result 0: %+v",
+			restart.Ret, restart.IsError, restart)
+	}
+	if restart.TimeNS < sleep.TimeNS+sleep.LatencyNS {
+		t.Errorf("restart_syscall starts at %d, before the sleep row ends at %d: the sleep row spans the later call",
+			restart.TimeNS, sleep.TimeNS+sleep.LatencyNS)
+	}
+}

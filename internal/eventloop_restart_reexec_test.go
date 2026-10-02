@@ -49,7 +49,7 @@ type reexecDrops struct {
 func newReexecFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
 	t.Helper()
 	f := newDropCountedFixture(t, filter)
-	f.el.foldReexecutedRestarts(true, true)
+	f.el.foldProvenRestarts(true, true)
 	return f
 }
 
@@ -563,6 +563,7 @@ func TestReleaseAfterTheEnterWasTakenParksItAgain(t *testing.T) {
 
 	f = newReexecFixture(t, globalfilter.Filter{})
 	f.interrupt(restartBase, restartTid)
+	f.resume(restartBase+1500, restartTid)
 	f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 	if sleep := f.feedOne(rename, "task_rename record"); sleep.name != "clock_nanosleep" || sleep.ret != -516 {
 		t.Fatalf("released row = %+v, want the unchanged -516 sleep", sleep)
@@ -1085,20 +1086,28 @@ func TestReexecutionInterruptedAgainFoldsIntoOneRow(t *testing.T) {
 	f.requireNothingHeld()
 }
 
-// TestTheTwoFoldsDoNotMix: each restart code has its own continuation. A
-// -516 row is resumed by restart_syscall only - a RESUME record releases it -
-// and still folds with re-execution folding on; a -512 row is continued by
-// re-execution only, so a restart_syscall enter releases it.
+// TestTheTwoFoldsDoNotMix: both folds go by a RESUME record, but each restart
+// code has its own continuation. A -516 row is resumed by restart_syscall
+// only: the announced enter of its own syscall (what follows RESUME when
+// restart_syscall is not traced and the thread's next traced call happens to
+// be another sleep) releases it. A -512 row is continued by re-execution
+// only, so an announced restart_syscall enter releases it.
 func TestTheTwoFoldsDoNotMix(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.interrupt(restartBase, restartTid)
-	released := f.feedOne(f.resumeRecord(restartBase+800, restartTid), "RESUME for a -516 row")
+	f.resume(restartBase+800, restartTid)
+	released := f.feedOne(f.sleepEnter(restartBase+800, restartTid), "announced clock_nanosleep enter for a -516 row")
 	if released.name != "clock_nanosleep" || released.ret != -516 {
 		t.Fatalf("released row = %+v, want the unchanged -516 sleep", released)
+	}
+	next := f.feedOne(f.sleepExit(restartBase+2000, restartTid, 0), "the next sleep's exit")
+	if next.name != "clock_nanosleep" || next.ret != 0 || next.enterTime != restartBase+800 || f.el.numSyscalls != 2 {
+		t.Fatalf("row = %+v numSyscalls=%d, want the next sleep as its own row and 2", next, f.el.numSyscalls)
 	}
 
 	f = newReexecFixture(t, globalfilter.Filter{})
 	f.interrupt(restartBase, restartTid)
+	f.resume(restartBase+1500, restartTid)
 	f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 	row := f.feedOne(f.restartExit(restartBase+3000, restartTid, 0), "restart_syscall exit")
 	if row.name != "clock_nanosleep" || row.ret != 0 || row.duration != 3000 {
@@ -1107,7 +1116,8 @@ func TestTheTwoFoldsDoNotMix(t *testing.T) {
 
 	f = newReexecFixture(t, globalfilter.Filter{})
 	f.interruptRead(restartBase, restartTid, restartSys)
-	released = f.feedOne(f.restartEnter(restartBase+900, restartTid), "restart_syscall enter for a -512 row")
+	f.resume(restartBase+900, restartTid)
+	released = f.feedOne(f.restartEnter(restartBase+900, restartTid), "announced restart_syscall enter for a -512 row")
 	requireInterruptedRow(t, released, restartSys)
 }
 
@@ -1124,6 +1134,7 @@ func TestCallInterruptedInsideTheHandlerTakesTheRowsPlace(t *testing.T) {
 	if outer.name != "read" || outer.ret != restartSys {
 		t.Fatalf("released row = %+v, want the outer interrupted read", outer)
 	}
+	f.resume(restartBase+900, restartTid)
 	f.feedNone(f.restartEnter(restartBase+900, restartTid), "restart_syscall enter")
 	inner := f.feedOne(f.restartExit(restartBase+1200, restartTid, 0), "restart_syscall exit")
 	if inner.name != "clock_nanosleep" || inner.ret != 0 || inner.duration != 600 {
@@ -1134,7 +1145,7 @@ func TestCallInterruptedInsideTheHandlerTakesTheRowsPlace(t *testing.T) {
 
 // TestReexecRowsStayUnfoldedWithoutTheProbe: when the signal_deliver probe
 // did not attach (or the exit probe, or the drop counter is missing: see
-// TestFoldReexecutedRestartsNeedsTheWholeProof), a RESUME record proves
+// TestFoldProvenRestartsNeedsTheWholeProof), a RESUME record proves
 // nothing - without signal_deliver it would also precede a program's own retry.
 // The rows are then not held at all: the interrupted row is emitted at its
 // exit and the re-execution is a second row, exactly as before task 103.
@@ -1618,6 +1629,7 @@ func TestNameFixupReachesTheKeptEnter(t *testing.T) {
 func TestNameFixupIsNoStepOfTheRestartSyscallFold(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.interrupt(restartBase, restartTid)
+	f.resume(restartBase+1500, restartTid)
 	f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 	sleep := f.feedOne(makeOpenNameFixupEvent(t, restartTid, types.SYS_ENTER_OPENAT, "/stray"), "a stray name fixup")
 	if sleep.name != "clock_nanosleep" || sleep.ret != -516 {

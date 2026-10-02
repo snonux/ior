@@ -1056,13 +1056,13 @@ type traceInfra struct {
 
 	// signalProbeAttached records that the signal_deliver probe attached
 	// during setup (signalAttachRecorder); runTraceSetup hands it to the
-	// event loop (eventLoop.foldReexecutedRestarts).
+	// event loop (eventLoop.foldProvenRestarts).
 	signalProbeAttached bool
 
 	// exitProbeAttached records that the sched_process_exit probe attached
-	// during setup (exitAttachRecorder). The re-execution fold needs it too:
+	// during setup (exitAttachRecorder). The restart folds need it too:
 	// that probe is what makes BPF forget a task that died with a call
-	// pending (eventLoop.foldReexecutedRestarts).
+	// pending (eventLoop.foldProvenRestarts).
 	exitProbeAttached bool
 
 	cleanups []func()
@@ -1213,7 +1213,7 @@ func runTraceSetup(
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
-	el.foldReexecutedRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
+	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1302,9 +1302,10 @@ func (r *renameAttachRecorder) note(probeName string) {
 // signalAttachRecorder is the same for the signal_deliver probe: it remembers
 // whether that probe was among the probes that attached. Only then does BPF
 // see every handler delivered to an interrupted task, which is what makes its
-// RESUME record a proof (eventLoop.foldReexecutedRestarts, task 103); a sink
-// that turned it on for any other probe would fold a program's own retry
-// after EINTR into the interrupted call. Pinned by
+// RESUME record a proof (eventLoop.foldProvenRestarts, tasks 103 and t13); a
+// sink that turned it on for any other probe would fold a program's own retry
+// after EINTR into the interrupted call, or a later call's restart_syscall
+// into a sleep a handled signal ended. Pinned by
 // TestSignalAttachRecorderNotesOnlyTheSignalProbe.
 type signalAttachRecorder struct {
 	attached bool
@@ -1321,8 +1322,8 @@ func (r *signalAttachRecorder) note(probeName string) {
 // the probes that attached. Its program is where BPF forgets the pending
 // restart of a dying task (ior_restart_forget in internal/c/restart.c); a run
 // without it would let a recycled tid inherit the dead task's entry, so the
-// re-execution fold is switched on only when it attached as well
-// (eventLoop.foldReexecutedRestarts, task 103). Pinned by
+// restart folds are switched on only when it attached as well
+// (eventLoop.foldProvenRestarts, tasks 103 and t13). Pinned by
 // TestExitAttachRecorderNotesOnlyTheExitProbe.
 type exitAttachRecorder struct {
 	attached bool

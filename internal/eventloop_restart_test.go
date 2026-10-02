@@ -11,14 +11,17 @@ import (
 )
 
 // Tests for folding restart_syscall into the -516 row it resumes (task fs2,
-// eventloop_restart.go). Both fixtures leave BPF's re-execution proof off, as
-// a run without the signal_deliver probe has it. Every test that drives an
-// event loop runs on each of them (eachRestartFixture): without a drop
-// counter, as a run on an older BPF object, where the fold goes by the syscall
-// stream alone, and with a counter that never moves, which is the run ior
-// normally makes and sends each fold through the drop check
-// (restartProofLost). What the check does when the counter moves (task p03) is
-// tested in eventloop_restart_drops_test.go, and the re-execution fold of
+// eventloop_restart.go). The fold goes by BPF's RESUME record (task t13), so
+// every fixture has the two probes that make it a proof attached, and a
+// stream that folds carries the record right before the restart_syscall enter
+// (resume). Every test that drives an event loop runs on each kind of run
+// (eachRestartFixture): without a drop counter, where the fold is not checked
+// for lost records; with a counter that never moves, which sends each fold
+// through the drop check (restartProofLost); and that with the re-execution
+// fold on as well, the run ior normally makes. What the check does when the
+// counter moves (task p03) is tested in eventloop_restart_drops_test.go, the
+// handled-signal streams of task t13 and the run without the probes in
+// eventloop_restart_handled_test.go, and the re-execution fold of
 // -512/-513/-514 (task 103) in eventloop_restart_reexec_test.go.
 
 const (
@@ -82,6 +85,10 @@ func newRestartFixtureFor(t *testing.T, cfg eventLoopConfig) *restartFixture {
 	cfg.commResolver = newHermeticCommResolver()
 	el := mustNewEventLoop(t, cfg)
 	t.Cleanup(el.commResolver.shutdown)
+	// Both probes attached, as in every normal run: BPF announces the
+	// restart_syscall of a stopped call, so -516 rows are held. The loop has
+	// no drop counter yet, which keeps the re-execution fold off.
+	el.foldProvenRestarts(true, true)
 	el.setCachedComm(restartTid, "sleeper")
 	el.setCachedComm(restartOtherTid, "other")
 	// As many slots as processRawEvents has: a record may release held rows
@@ -94,9 +101,10 @@ type restartFixtureMaker func(*testing.T, globalfilter.Filter) *restartFixture
 
 // eachRestartFixture runs test once per kind of run the restart_syscall fold
 // must behave the same in: without a drop counter (newRestartFixture), where
-// the fold is unchecked, and with a counter on which nothing is ever lost
+// the fold is unchecked, with a counter on which nothing is ever lost
 // (newDropCountedFixture), where every fold step asks the drop watch first and
-// is told that nothing was lost. The counter and the fixture's boot clock both
+// is told that nothing was lost, and with that counter and the re-execution
+// fold on (newReexecFixture). The counter and the fixture's boot clock both
 // stay at 0, which is enough for that answer: the watch has stood at "0, first
 // seen at time 0" since before any record, and an unchanged total is never
 // stamped again.
@@ -108,6 +116,7 @@ func eachRestartFixture(t *testing.T, test func(t *testing.T, newFixture restart
 	}{
 		{"no drop counter", newRestartFixture},
 		{"drop counter that never moves", newDropCountedFixture},
+		{"drop counter and re-execution fold", newReexecFixture},
 	}
 	for _, run := range runs {
 		t.Run(run.name, func(t *testing.T) { test(t, run.make) })
@@ -185,6 +194,14 @@ func (f *restartFixture) interrupt(at uint64, tid uint32) {
 	f.feedNone(f.sleepExit(at+500, tid, -516), "clock_nanosleep -516 exit")
 }
 
+// resume feeds the RESUME record BPF emits right before the enter that carries
+// tid's interrupted call on (for a stopped sleep: its restart_syscall enter),
+// stamped `at` like that enter. It must stay silent: the row stays held.
+func (f *restartFixture) resume(at uint64, tid uint32) {
+	f.t.Helper()
+	f.feedNone(f.resumeRecord(at, tid), "RESUME record")
+}
+
 func (f *restartFixture) requireNothingHeld() {
 	f.t.Helper()
 	if n := len(f.el.restarts.held); n != 0 {
@@ -201,6 +218,7 @@ func TestRestartSyscallFoldsIntoTheInterruptedCall(t *testing.T) {
 	eachRestartFixture(t, func(t *testing.T, newFixture restartFixtureMaker) {
 		f := newFixture(t, globalfilter.Filter{})
 		f.interrupt(restartBase, restartTid)
+		f.resume(restartBase+1500, restartTid)
 		f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 		row := f.feedOne(f.restartExit(restartBase+3000, restartTid, 0), "restart_syscall exit")
 
@@ -223,8 +241,10 @@ func TestRestartSyscallFoldsRepeatedStops(t *testing.T) {
 	eachRestartFixture(t, func(t *testing.T, newFixture restartFixtureMaker) {
 		f := newFixture(t, globalfilter.Filter{})
 		f.interrupt(restartBase, restartTid)
+		f.resume(restartBase+1000, restartTid)
 		f.feedNone(f.restartEnter(restartBase+1000, restartTid), "first restart_syscall enter")
 		f.feedNone(f.restartExit(restartBase+1500, restartTid, -516), "first restart_syscall -516 exit")
+		f.resume(restartBase+2000, restartTid)
 		f.feedNone(f.restartEnter(restartBase+2000, restartTid), "second restart_syscall enter")
 		row := f.feedOne(f.restartExit(restartBase+4000, restartTid, 0), "second restart_syscall exit")
 
@@ -338,6 +358,7 @@ func TestRestartRowReleasedWhenTheContinuationIsCutShort(t *testing.T) {
 	eachRestartFixture(t, func(t *testing.T, newFixture restartFixtureMaker) {
 		f := newFixture(t, globalfilter.Filter{})
 		f.interrupt(restartBase, restartTid)
+		f.resume(restartBase+1000, restartTid)
 		f.feedNone(f.restartEnter(restartBase+1000, restartTid), "restart_syscall enter")
 		row := f.feedOne(f.sleepEnter(restartBase+2000, restartTid), "next clock_nanosleep enter")
 		if row.name != "clock_nanosleep" || row.ret != -516 || row.duration != 500 {
@@ -394,6 +415,7 @@ func TestRestartFoldIsFilteredAsOneRow(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				f := newFixture(t, tc.filter)
 				f.interrupt(restartBase, restartTid)
+				f.resume(restartBase+1500, restartTid)
 				f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 				rows := f.feed(f.restartExit(restartBase+3000, restartTid, 0))
 				if len(rows) != tc.want {
@@ -473,6 +495,7 @@ func TestRestartRowBeyondTheBoundIsNotFolded(t *testing.T) {
 		if sleep.name != "clock_nanosleep" || sleep.ret != -516 || sleep.duration != 500 {
 			t.Fatalf("row = %+v, want the -516 row, completed unfolded", sleep)
 		}
+		f.resume(restartBase+1500, restartTid)
 		f.feedNone(f.restartEnter(restartBase+1500, restartTid), "restart_syscall enter")
 		restart := f.feedOne(f.restartExit(restartBase+3000, restartTid, 0), "restart_syscall exit")
 		if restart.name != "restart_syscall" || restart.ret != 0 || restart.duration != 1500 {
@@ -487,15 +510,22 @@ func TestRestartRowBeyondTheBoundIsNotFolded(t *testing.T) {
 // TestRestartHoldIsBounded: rows beyond maxHeldRestarts are not held (they
 // are completed at once, unfolded), so lost release records cannot grow the
 // map without bound. Without BPF's re-execution proof only -516 RetEvent
-// exits are held at all; with it (foldReexecutedRestarts) -512/-513/-514 are
+// exits are held at all; with it (foldProvenRestarts) -512/-513/-514 are
 // held too, never an ordinary errno or a success, and under the same bound.
+// A tracker that was told nothing holds nothing.
 func TestRestartHoldIsBounded(t *testing.T) {
-	var tracker restartTracker
+	tracker := restartTracker{restartBlock: true}
 	heldFor := func(tid uint32, ret int64) *heldRestart {
 		return &heldRestart{pair: &event.Pair{
 			EnterEv: &types.NullEvent{TraceId: types.SYS_ENTER_NANOSLEEP, Tid: tid},
 			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_NANOSLEEP, Tid: tid, Ret: ret},
 		}}
+	}
+	var untold restartTracker
+	for _, ret := range []int64{-512, -513, -514, -516, -4, 0} {
+		if untold.hold(heldFor(1, ret)) {
+			t.Fatalf("a ret=%d row was held by a tracker whose run has no restart proof", ret)
+		}
 	}
 	for _, ret := range []int64{-512, -513, -514, -4, 0} {
 		if tracker.hold(heldFor(1, ret)) {
@@ -511,7 +541,7 @@ func TestRestartHoldIsBounded(t *testing.T) {
 		t.Fatal("a row beyond maxHeldRestarts was held")
 	}
 
-	proven := restartTracker{reexec: true}
+	proven := restartTracker{restartBlock: true, reexec: true}
 	for _, ret := range []int64{-4, 0, -515} {
 		if proven.hold(heldFor(1, ret)) {
 			t.Fatalf("a ret=%d row was held; it is not a restart code", ret)

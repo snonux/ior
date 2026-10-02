@@ -595,7 +595,7 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		return
 	}
 	// A call interrupted with a restart code may still be carried on by the
-	// kernel (restart_syscall for -516, a proven re-execution for
+	// kernel (a proven restart_syscall for -516, a proven re-execution for
 	// -512/-513/-514): it is held, not completed, until its tid's next
 	// records decide (eventloop_restart.go). Everything that judges the row -
 	// exit handler, derived values, pair filter - waits for that, so it sees

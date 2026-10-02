@@ -10,15 +10,21 @@ import (
 	"testing"
 )
 
-// The restart fold's kernel side (internal/c/restart.c, task 103) decides
-// whether userspace may fold an interrupted syscall and its re-execution into
-// one row: it must announce a re-execution (the RESUME record) exactly when
-// the kernel re-executes the call, never for a program's own retry after
-// EINTR, and stamped with the announced enter's own time. As with the syscall accounting (enterstate_fallback_test.go), these
+// The restart fold's kernel side (internal/c/restart.c, tasks 103 and t13)
+// decides whether userspace may fold an interrupted syscall and its
+// continuation into one row: it must announce the continuation (the RESUME
+// record) exactly when the kernel carries the call on - by re-executing it,
+// or for -516 through restart_syscall - never for a program's own retry or
+// next call after EINTR, and stamped with the announced enter's own time. As
+// with the syscall accounting (enterstate_fallback_test.go), these
 // tests cut the real functions out of restart.c, compile them with the host C
 // compiler against a simulated map and ring buffer, and drive them through
 // the signal sequences that matter. Each scenario is also run against mutated
 // sources, so the suite is shown to catch the regressions it exists for.
+
+// restartFilterFunction is the one filter.c function restart.c calls that the
+// harness takes from the real source too: what counts as a restart code.
+const restartFilterFunction = "ior_is_restart_ret"
 
 // restartFunctions are the restart.c functions the harness compiles, in
 // dependency order.
@@ -196,12 +202,45 @@ const (
 // SIG_IGN.
 var restartScenarios = []restartScenario{
 	// No handler: the first enter after the interrupted exit is the
-	// re-execution, for each of the three codes, and it is announced once.
+	// continuation, for each of the four codes, and it is announced once.
 	{name: "no handler restarts every code", steps: []restartStep{
 		{"exit 9 -512 1", rsEmit1}, {"slot 9", "tid=9 code=512 decided=0 depth=0"},
 		{"enter 9", rsResume}, {"slot 9", rsFree}, {"enter 9", rsNone},
 		{"exit 9 -513 1", rsEmit1}, {"enter 9", rsResume},
 		{"exit 9 -514 1", rsEmit1}, {"slot 9", "tid=9 code=514 decided=0 depth=0"}, {"enter 9", rsResume},
+		{"exit 9 -516 1", rsEmit1}, {"slot 9", "tid=9 code=516 decided=0 depth=0"},
+		{"enter 9", rsResume}, {"slot 9", rsFree}, {"enter 9", rsNone},
+	}},
+	// Task t13. A sleep stopped and continued (SIGSTOP and SIGCONT are
+	// delivered with SIG_DFL) is resumed by restart_syscall, the task's first
+	// enter, and so is each further hop: restart_syscall's own -516 exit makes
+	// the task pending again.
+	{name: "a stopped -516 call is announced at every hop", steps: []restartStep{
+		{"exit 9 -516 1", rsEmit1}, {"deliver 9 0 0", rsNone}, {"deliver 9 0 0", rsNone},
+		{"slot 9", "tid=9 code=516 decided=0 depth=0"}, {"enter 9", rsResume},
+		{"exit 9 -516 1", rsEmit1}, {"deliver 9 0 0", rsNone}, {"enter 9", rsResume},
+		{"exit 9 0 1", rsEmit1}, {"slot 9", rsFree}, {"enter 9", rsNone},
+	}},
+	// Task t13, the defect. A handler delivered to a -516 call gives the
+	// program EINTR, with or without SA_RESTART: the handler is reported and
+	// the task forgotten at once, so the task's next traced enter - the
+	// restart_syscall of a later, silent call that was stopped - is not
+	// announced, whether the handler returns or leaves by siglongjmp.
+	{name: "a handler ends a -516 call", steps: []restartStep{
+		{"exit 9 -516 1", rsEmit1}, {"deliver 9 " + rsHandler + " " + rsRestart, "handler sa_restart=1"},
+		{"slot 9", rsFree}, {"sigreturn 9", rsNone}, {"deliver 9 0 0", rsNone}, {"enter 9", rsNone},
+		{"exit 9 -516 1", rsEmit1}, {"deliver 9 " + rsHandler + " " + rsNoRestart, "handler sa_restart=0"},
+		{"slot 9", rsFree}, {"enter 9", rsNone},
+	}},
+	// The same when the HANDLER record is lost to a full ring buffer: the
+	// state is not lossy, the later restart_syscall is still not announced.
+	// And a handler the signal probe did not see is caught at its
+	// rt_sigreturn, which a pending task cannot reach otherwise.
+	{name: "a -516 call is forgotten without its handler record", steps: []restartStep{
+		{"exit 9 -516 1", rsEmit1}, {"drop 1", rsNone},
+		{"deliver 9 " + rsHandler + " " + rsNoRestart, "lost"}, {"slot 9", rsFree},
+		{"drop 0", rsNone}, {"sigreturn 9", rsNone}, {"enter 9", rsNone},
+		{"exit 9 -516 1", rsEmit1}, {"sigreturn 9", rsNone}, {"slot 9", rsFree}, {"enter 9", rsNone},
 	}},
 	// SIGSTOP/SIGCONT and ignored signals are delivered with SIG_DFL or
 	// SIG_IGN: no handler runs, the call restarts.
@@ -248,17 +287,19 @@ var restartScenarios = []restartScenario{
 		{"enter 9", rsNone}, {"enter 9", rsNone}, {"enter 9", rsNone},
 		{"slot 9", "tid=9 code=512 decided=1 depth=1"},
 	}},
-	// Only an emitted exit with -512/-513/-514 makes a task pending. An exit
-	// that is not emitted, -516 (restart_syscall's business), -515 and an
-	// ordinary errno do not, and the first three drop a leftover entry.
+	// Only an emitted exit with -512/-513/-514/-516 makes a task pending. An
+	// exit that is not emitted, -515 (ENOIOCTLCMD, no restart code) and an
+	// ordinary errno do not, and the first two drop a leftover entry.
 	{name: "what makes a task pending", steps: []restartStep{
 		{"exit 9 -512 0", rsEmit0}, {"slot 9", rsFree}, {"enter 9", rsNone},
-		{"exit 9 -516 1", rsEmit1}, {"slot 9", rsFree},
+		{"exit 9 -516 0", rsEmit0}, {"slot 9", rsFree}, {"enter 9", rsNone},
+		{"exit 9 -515 1", rsEmit1}, {"slot 9", rsFree},
 		{"exit 9 -4 1", rsEmit1}, {"slot 9", rsFree}, {"exit 9 0 1", rsEmit1}, {"slot 9", rsFree},
 		{"exit 9 -511 1", rsEmit1}, {"slot 9", rsFree}, {"exit 9 -517 1", rsEmit1}, {"slot 9", rsFree},
-		{"exit 9 -512 1", rsEmit1}, {"exit 9 -516 1", rsEmit1}, {"slot 9", rsFree},
-		{"exit 9 -512 1", rsEmit1}, {"exit 9 -515 1", rsEmit1}, {"slot 9", rsFree},
+		{"exit 9 -512 1", rsEmit1}, {"exit 9 -516 0", rsEmit0}, {"slot 9", rsFree},
+		{"exit 9 -516 1", rsEmit1}, {"exit 9 -515 1", rsEmit1}, {"slot 9", rsFree},
 		{"exit 9 -512 1", rsEmit1}, {"exit 9 -513 0", rsEmit0}, {"slot 9", rsFree},
+		{"exit 9 -516 1", rsEmit1}, {"exit 9 -512 1", rsEmit1}, {"slot 9", "tid=9 code=512 decided=0 depth=0"},
 	}},
 	// A signal, an rt_sigreturn or an exit of a task that is not pending
 	// changes nothing, and neither does another task's.
@@ -266,7 +307,7 @@ var restartScenarios = []restartScenario{
 		{"deliver 9 " + rsHandler + " " + rsRestart, rsNone}, {"sigreturn 9", rsNone}, {"enter 9", rsNone},
 		{"exit 9 -512 1", rsEmit1},
 		{"deliver 10 " + rsHandler + " " + rsNoRestart, rsNone}, {"sigreturn 10", rsNone},
-		{"enter 10", rsNone}, {"forget 10", rsNone}, {"exit 10 -516 1", rsEmit1},
+		{"enter 10", rsNone}, {"forget 10", rsNone}, {"exit 10 -516 0", rsEmit0},
 		{"slot 9", "tid=9 code=512 decided=0 depth=0"}, {"enter 9", rsResume},
 	}},
 	// Tids 9 and 4105 share a slot: the later interrupted exit evicts the
@@ -276,7 +317,7 @@ var restartScenarios = []restartScenario{
 		{"exit 9 -512 1", rsEmit1}, {"exit 4105 -514 1", rsEmit1},
 		{"slot 9", "tid=4105 code=514 decided=0 depth=0"},
 		{"enter 9", rsNone}, {"deliver 9 " + rsHandler + " " + rsNoRestart, rsNone},
-		{"sigreturn 9", rsNone}, {"forget 9", rsNone}, {"exit 9 -516 1", rsEmit1},
+		{"sigreturn 9", rsNone}, {"forget 9", rsNone}, {"exit 9 -516 0", rsEmit0},
 		{"slot 4105", "tid=4105 code=514 decided=0 depth=0"}, {"enter 4105", rsResume},
 	}},
 	// An exiting task takes its pending state with it; an rt_sigreturn with no
@@ -386,12 +427,33 @@ var restartMutations = map[string][2]string{
 		"    if (ior_restart_depth(entry))\n",
 	},
 	"unemitted exit becomes pending": {
-		"    if (emits && ret >= -IOR_ERESTARTNOHAND)",
-		"    if (ret >= -IOR_ERESTARTNOHAND)",
+		"    if (emits && ior_is_restart_ret(ret))",
+		"    if (ior_is_restart_ret(ret))",
 	},
-	"-516 becomes pending": {
-		"    if (emits && ret >= -IOR_ERESTARTNOHAND)",
+	"-515 becomes pending": {
+		"    if (emits && ior_is_restart_ret(ret))",
 		"    if (emits)",
+	},
+	// Task t13: restart.c as it was before, when -516 was left to the syscall
+	// stream. Nothing announces restart_syscall then, and nothing reports the
+	// handler that ended the call.
+	"-516 is not pending": {
+		"    if (emits && ior_is_restart_ret(ret))",
+		"    if (emits && ret >= -IOR_ERESTARTNOHAND)",
+	},
+	"-516 survives an SA_RESTART handler": {
+		"    return code == IOR_ERESTARTSYS && sa_restart;",
+		"    return (code == IOR_ERESTARTSYS || code == IOR_ERESTART_RESTARTBLOCK) && sa_restart;",
+	},
+	// The word's layout: -516 is code 5 and needs the third bit, and the
+	// decided bit must lie above it.
+	"code field too narrow for -516": {
+		"#define IOR_RESTART_CODE_MASK 0x7ULL",
+		"#define IOR_RESTART_CODE_MASK 0x3ULL",
+	},
+	"decided bit inside the code field": {
+		"#define IOR_RESTART_DECIDED (1ULL << 35)",
+		"#define IOR_RESTART_DECIDED (1ULL << 34)",
 	},
 	"stale entry survives another exit": {
 		"    else if ((__u32)*slot == tid)\n        *slot = 0;\n    return emits;",
@@ -584,8 +646,8 @@ var (
 )
 
 // restartHarnessSource assembles the harness from the defines, functions and
-// SEC programs of restart.c, the restart codes of filter.c and the record of
-// types.h.
+// SEC programs of restart.c, the restart codes of filter.c with the function
+// that recognises them, and the record of types.h.
 func restartHarnessSource(sources restartSources) (string, error) {
 	defines := strings.Join(restartCodeDefineRE.FindAllString(sources.filterC, -1), "\n") + "\n" +
 		strings.Join(restartTypeDefineRE.FindAllString(sources.typesH, -1), "\n") + "\n" +
@@ -596,7 +658,10 @@ func restartHarnessSource(sources restartSources) (string, error) {
 	}
 	// Comments may hold braces that would derail extractCFunction.
 	code := stripCComments(sources.restartC)
-	var functions []string
+	functions := []string{extractCFunction(stripCComments(sources.filterC), restartFilterFunction)}
+	if functions[0] == "" {
+		return "", fmt.Errorf("function %s not found in filter.c", restartFilterFunction)
+	}
 	for _, name := range restartFunctions {
 		fn := extractCFunction(code, name)
 		if fn == "" {

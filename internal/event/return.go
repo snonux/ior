@@ -35,7 +35,8 @@ func IsRestartRet(ret int64) bool {
 // runs, the kernel re-enters the task through restart_syscall instead of
 // re-executing the interrupted call, so restart_syscall is the only sys_enter
 // that can resume it. The event loop folds that continuation into the
-// interrupted row (task fs2, internal/eventloop_restart.go).
+// interrupted row when BPF announced it (tasks fs2 and t13,
+// internal/eventloop_restart.go).
 func IsRestartBlockRet(ret int64) bool {
 	return ret == -errRestartRestartBl
 }

@@ -133,8 +133,9 @@ struct {
 } ringbuf_drop_map SEC(".maps");
 
 // restart_pending_map remembers, per task, that its last traced syscall exit
-// carried a restart code the kernel may answer by re-executing the call
-// (-512/-513/-514), until the signal path has decided (restart.c, task 103).
+// carried a restart code the kernel may answer by carrying the call on - by
+// re-executing it (-512/-513/-514) or through restart_syscall (-516) - until
+// the signal path has decided (restart.c, tasks 103 and t13).
 //
 // It is a direct-mapped ARRAY indexed by the low bits of the tid, each slot
 // one __u64 word holding the owning tid and its state (ior_restart_entry in

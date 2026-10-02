@@ -7,13 +7,15 @@ import (
 	"testing"
 )
 
-// Task 103: what turns the re-execution fold on. BPF's RESUME record is a
+// Tasks 103 and t13: what turns the restart folds on. BPF's RESUME record is a
 // proof only while the signal_deliver probe sees every handler delivered to
-// an interrupted task, the sched_process_exit probe makes BPF forget a dying
-// task, and the drop counter can vouch for the stream, so the fold must be on
-// exactly when all three hold. Each test here fails when the corresponding line in production
-// code is removed; the fold itself is covered in
-// eventloop_restart_reexec_test.go.
+// an interrupted task and the sched_process_exit probe makes BPF forget a
+// dying task, so -516 rows are held exactly when both attached; the
+// re-execution fold of -512/-513/-514 also needs the drop counter to vouch for
+// the stream. Each test here fails when the corresponding line in production
+// code is removed; the folds themselves are covered in
+// eventloop_restart_reexec_test.go, eventloop_restart_test.go and
+// eventloop_restart_handled_test.go.
 
 // TestSignalAttachRecorderNotesOnlyTheSignalProbe pins the attach sink: only
 // the signal_deliver probe's announcement sets it. The restart fold's second
@@ -89,7 +91,7 @@ func TestExitProbeAnnouncesItsRecorderName(t *testing.T) {
 // structurally because the setup cannot run unprivileged: setupTraceInfraBPF
 // hands the hand-probe recorder's note to BPF setup, that note reaches the
 // signal and exit recorders, their results are copied into the infra, and
-// runTraceSetup passes exactly those fields to foldReexecutedRestarts, once.
+// runTraceSetup passes exactly those fields to foldProvenRestarts, once.
 func TestTraceSetupCarriesTheSignalAttachToTheLoop(t *testing.T) {
 	bpfDecl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
 	var body bytes.Buffer
@@ -114,47 +116,54 @@ func TestTraceSetupCarriesTheSignalAttachToTheLoop(t *testing.T) {
 	}
 
 	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
-	calls := callsNamed(setupDecl, "foldReexecutedRestarts")
+	calls := callsNamed(setupDecl, "foldProvenRestarts")
 	if len(calls) != 1 {
-		t.Fatalf("runTraceSetup calls foldReexecutedRestarts %d times, want once", len(calls))
+		t.Fatalf("runTraceSetup calls foldProvenRestarts %d times, want once", len(calls))
 	}
 	assertCallArguments(t, calls[0], []string{"infra.signalProbeAttached", "infra.exitProbeAttached"})
 }
 
-// TestFoldReexecutedRestartsNeedsTheWholeProof: the loop holds -512/-513/-514
+// TestFoldProvenRestartsNeedsTheWholeProof: the loop holds -512/-513/-514
 // rows only when told both probes attached and with a drop counter to read,
-// and never by default. Each missing piece is a way to a wrong fold: without
-// signal_deliver a program's own retry is announced, without
-// sched_process_exit a recycled tid inherits a dead task's pending call, and
-// without the drop counter lost records go unnoticed.
-func TestFoldReexecutedRestartsNeedsTheWholeProof(t *testing.T) {
+// -516 rows (restartBlock) when told both probes attached, with or without a
+// counter, and neither by default. Each missing piece is a way to a wrong
+// fold: without signal_deliver a program's own retry is announced (and, after
+// a handler that siglongjmps out of a -516 call, a later call's
+// restart_syscall), without sched_process_exit a recycled tid inherits a dead
+// task's pending call, and without the drop counter lost records go
+// unnoticed, which only the restart_syscall fold accepts.
+func TestFoldProvenRestartsNeedsTheWholeProof(t *testing.T) {
 	counter := ringbufDropSourceFunc(func() (uint64, error) { return 0, nil })
 	for _, tc := range []struct {
 		name         string
 		signal, exit bool
 		drops        ringbufDropSource
 		want         bool
+		wantBlock    bool
 	}{
-		{"everything", true, true, counter, true},
-		{"no signal probe", false, true, counter, false},
-		{"no exit probe", true, false, counter, false},
-		{"no drop counter", true, true, nil, false},
-		{"nothing", false, false, nil, false},
+		{"everything", true, true, counter, true, true},
+		{"no signal probe", false, true, counter, false, false},
+		{"no exit probe", true, false, counter, false, false},
+		{"no drop counter", true, true, nil, false, true},
+		{"only the signal probe, no counter", true, false, nil, false, false},
+		{"only the exit probe, no counter", false, true, nil, false, false},
+		{"nothing", false, false, nil, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver()})
 			t.Cleanup(el.commResolver.shutdown)
-			if el.restarts.reexec {
-				t.Fatal("a fresh event loop folds re-executions without being told the probes attached")
+			if el.restarts.reexec || el.restarts.restartBlock {
+				t.Fatal("a fresh event loop folds restarted calls without being told the probes attached")
 			}
 			el.dropSrc = tc.drops
-			el.foldReexecutedRestarts(tc.signal, tc.exit)
-			if el.restarts.reexec != tc.want {
-				t.Fatalf("reexec = %t, want %t", el.restarts.reexec, tc.want)
+			el.foldProvenRestarts(tc.signal, tc.exit)
+			if el.restarts.reexec != tc.want || el.restarts.restartBlock != tc.wantBlock {
+				t.Fatalf("reexec = %t restartBlock = %t, want %t and %t",
+					el.restarts.reexec, el.restarts.restartBlock, tc.want, tc.wantBlock)
 			}
-			el.foldReexecutedRestarts(false, false)
-			if el.restarts.reexec {
-				t.Fatal("foldReexecutedRestarts(false, false) left the fold on")
+			el.foldProvenRestarts(false, false)
+			if el.restarts.reexec || el.restarts.restartBlock {
+				t.Fatal("foldProvenRestarts(false, false) left a fold on")
 			}
 		})
 	}

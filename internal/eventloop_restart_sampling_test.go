@@ -12,9 +12,12 @@ import (
 // Tests for the restart_syscall fold in a run that samples restart_syscall
 // itself (task s13, "Sampling" in eventloop_restart.go). A sampled-out
 // restart_syscall is missing from the stream without any record lost, so the
-// drop check of task p03 cannot see it; such a run must not hold -516 rows at
+// drop check of task p03 cannot see it; such a run does not hold -516 rows at
 // all. The fold of every other run, including one that samples the
-// interrupted syscall, must be what it was.
+// interrupted syscall, must be what it was. Since task t13 the RESUME record
+// keeps a sampled-out restart_syscall from handing the row a later one by
+// itself (TestSampledOutRestartSyscallIsNotFoldedWithoutTheGuard in
+// eventloop_restart_handled_test.go); the guard tested here stays on top.
 
 // samplingConfig is a flags.Config with the given sampling rates on top of
 // the built-in defaults of its output mode: a raw mode (-plain) promotes the
@@ -61,18 +64,22 @@ func samplingFixtures(cfg flags.Config) map[string]func(*testing.T) *restartFixt
 		"re-execution proof on": func(t *testing.T) *restartFixture {
 			f := build(t)
 			f.countDrops()
-			f.el.foldReexecutedRestarts(true, true)
+			f.el.foldProvenRestarts(true, true)
 			return f
 		},
 	}
 }
 
 // stoppedSleepThenRestart feeds a clock_nanosleep at base that exits -516
-// 500ns later, then a restart_syscall of the same thread from enterAt to
-// exitAt returning ret, and returns every row the four records emitted. Each
-// record is processed 50ns after it was stamped when the fixture has a clock.
-// The drop counter, if any, is never moved: nothing is lost in this stream.
-func stoppedSleepThenRestart(f *restartFixture, base, enterAt, exitAt uint64, ret int64) []restartRow {
+// 500ns later, BPF's RESUME record for the sleep's own restart_syscall at
+// resumeAt, then a restart_syscall of the same thread from enterAt to exitAt
+// returning ret, and returns every row the five records emitted. resumeAt is
+// enterAt when the restart_syscall is the sleep's own, and earlier when that
+// one was sampled out (RESUME is emitted before the sampling decision) and the
+// restart_syscall that arrives is a later call's. Each record is processed
+// 50ns after it was stamped when the fixture has a clock. The drop counter, if
+// any, is never moved: nothing is lost in this stream.
+func stoppedSleepThenRestart(f *restartFixture, base, resumeAt, enterAt, exitAt uint64, ret int64) []restartRow {
 	f.t.Helper()
 	feedAt := func(at uint64, raw []byte) []restartRow {
 		if f.drops != nil {
@@ -82,6 +89,7 @@ func stoppedSleepThenRestart(f *restartFixture, base, enterAt, exitAt uint64, re
 	}
 	rows := feedAt(base, f.sleepEnter(base, restartTid))
 	rows = append(rows, feedAt(base+500, f.sleepExit(base+500, restartTid, -516))...)
+	rows = append(rows, feedAt(resumeAt, f.resumeRecord(resumeAt, restartTid))...)
 	rows = append(rows, feedAt(enterAt, f.restartEnter(enterAt, restartTid))...)
 	return append(rows, feedAt(exitAt, f.restartExit(exitAt, restartTid, ret))...)
 }
@@ -90,8 +98,9 @@ func stoppedSleepThenRestart(f *restartFixture, base, enterAt, exitAt uint64, re
 // Call A, a stopped sleep, is recorded; its restart_syscall is sampled out; a
 // later stopped call B of the thread is sampled out too; B's restart_syscall
 // is sampled in. What arrives is a -516 exit followed, on the same thread, by
-// a restart_syscall - the stream of an ordinary stopped sleep, with no record
-// lost and a drop counter that never moves - and before the fix B's result
+// a restart_syscall (and, since task t13, the RESUME record of A's own
+// restart_syscall in between) - with no record lost and a drop counter that
+// never moves - and before the fix B's result
 // and end time were folded into A's row. With restart_syscall sampled (by its
 // own rate, by its family's, or aggregate-only in a mode that keeps the 0)
 // the two rows stay apart, and A's row does not wait for anything.
@@ -105,7 +114,7 @@ func TestSampledRestartSyscallNeverFoldsAStranger(t *testing.T) {
 			t.Run(cfg.name+"/"+kind, func(t *testing.T) {
 				f := newFixture(t)
 				const laterEnter, laterExit = restartBase + 8000, restartBase + 9000
-				rows := stoppedSleepThenRestart(f, restartBase, laterEnter, laterExit, -4)
+				rows := stoppedSleepThenRestart(f, restartBase, restartBase+1500, laterEnter, laterExit, -4)
 				want := []restartRow{
 					{name: "clock_nanosleep", tid: restartTid, ret: -516, enterTime: restartBase, duration: 500,
 						sleepNs: restartSleepNs},
@@ -163,7 +172,7 @@ func TestRestartSyscallAtRateOneStillFolds(t *testing.T) {
 		for kind, newFixture := range samplingFixtures(cfg.flags()) {
 			t.Run(cfg.name+"/"+kind, func(t *testing.T) {
 				f := newFixture(t)
-				rows := stoppedSleepThenRestart(f, restartBase, restartBase+1500, restartBase+3000, 0)
+				rows := stoppedSleepThenRestart(f, restartBase, restartBase+1500, restartBase+1500, restartBase+3000, 0)
 				requireFoldedSleep(t, rows, restartBase, "restart_syscall is at rate 1")
 				f.requireNothingHeld()
 				if f.el.numSyscalls != 1 {
@@ -237,7 +246,7 @@ func TestSampledRestartSyscallHoldsOnlyReexecutedRows(t *testing.T) {
 		}}
 	}
 	for _, reexec := range []bool{false, true} {
-		sampled := restartTracker{reexec: reexec, restartSyscallSampled: true}
+		sampled := restartTracker{restartBlock: true, reexec: reexec, restartSyscallSampled: true}
 		if sampled.hold(heldFor(1, -516)) {
 			t.Fatalf("a -516 row was held although restart_syscall is sampled (reexec %t)", reexec)
 		}
@@ -246,7 +255,7 @@ func TestSampledRestartSyscallHoldsOnlyReexecutedRows(t *testing.T) {
 				t.Fatalf("hold(ret=%d) = %t with reexec %t; sampling restart_syscall must not change it", ret, got, reexec)
 			}
 		}
-		unsampled := restartTracker{reexec: reexec}
+		unsampled := restartTracker{restartBlock: true, reexec: reexec}
 		if !unsampled.hold(heldFor(1, -516)) {
 			t.Fatalf("a -516 row was not held although restart_syscall is at rate 1 (reexec %t)", reexec)
 		}

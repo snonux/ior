@@ -77,8 +77,9 @@ type bpfSetupLog struct {
 	// decides whether a new task's inherited comm still needs a corrective
 	// /proc read (eventLoop.trustRenameRecords, task xr2), and whether the
 	// signal_deliver and sched_process_exit probes attached, which decides
-	// whether re-executed syscalls are folded
-	// (eventLoop.foldReexecutedRestarts, task 103). nil means nobody listens.
+	// whether kernel-restarted syscalls are folded
+	// (eventLoop.foldProvenRestarts, tasks 103 and t13). nil means nobody
+	// listens.
 	attached func(probeName string)
 }
 
@@ -424,8 +425,8 @@ func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // eventLoop.handleProcessExitEvent). Same attach policy as the exec probe:
 // direct attach, whole run, independent of -trace-* selection. Its program
 // also drops a dying task's pending restart in BPF (ior_restart_forget), so
-// without it kernel-re-executed calls are left unfolded
-// (eventLoop.foldReexecutedRestarts).
+// without it kernel-restarted calls are left unfolded
+// (eventLoop.foldProvenRestarts).
 func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
 	return attachHandTracepoint(attacher, processExitProgName, "sched", processExitProbeName, log)
 }
@@ -476,12 +477,13 @@ const signalDeliverProgName = "handle_signal_deliver"
 const signalDeliverProbeName = "signal_deliver"
 
 // attachSignalDeliverProbe attaches signal:signal_deliver, the probe that
-// makes BPF's proof of a re-executed syscall sound (see internal/c/restart.c
-// and eventLoop.foldReexecutedRestarts). Same attach policy as the other hand
-// probes: direct attach, whole run, independent of -trace-* selection.
-// Without it a handler that turns an interrupted call into EINTR would go
-// unseen, so trace setup then leaves -512/-513/-514 rows unfolded, exactly as
-// before the fold existed (and likewise without the sched_process_exit probe).
+// makes BPF's proof of a kernel-restarted syscall sound (see
+// internal/c/restart.c and eventLoop.foldProvenRestarts). Same attach policy
+// as the other hand probes: direct attach, whole run, independent of -trace-*
+// selection. Without it a handler that turns an interrupted call into EINTR
+// would go unseen, so trace setup then leaves -512/-513/-514 and -516 rows
+// unfolded, exactly as before the folds existed (and likewise without the
+// sched_process_exit probe).
 func attachSignalDeliverProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
 	return attachHandTracepoint(attacher, signalDeliverProgName, "signal", signalDeliverProbeName, log)
 }
@@ -500,7 +502,8 @@ const restartSigreturnProbeName = "restart rt_sigreturn"
 // syscalls:sys_enter_rt_sigreturn, for the whole run and whether or not
 // rt_sigreturn is selected for tracing. Without it BPF never sees a handler
 // return, so a call restarted after an SA_RESTART handler is not folded;
-// calls restarted without any handler still are.
+// calls restarted without any handler - a stopped sleep resumed by
+// restart_syscall among them - still are.
 func attachRestartSigreturnProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
 	return attachHandProbe(attacher, restartSigreturnProgName, restartSigreturnProbeName, log,
 		func(prog probemanager.Program) (probemanager.Link, error) {

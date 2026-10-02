@@ -71,6 +71,7 @@ var scenarios = map[string]func() error{
 	"stop-restart":                  stopRestart,
 	"signal-reexec":                 signalReexec,
 	"signal-reexec-many":            signalReexecMany,
+	"signal-handled-sleep":          signalHandledSleep,
 	"posix-timer-lifecycle":         posixTimerLifecycle,
 	"interval-timer-noop":           intervalTimerNoop,
 	"process-exec-lifecycle":        processExecLifecycle,

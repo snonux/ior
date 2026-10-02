@@ -10,39 +10,72 @@ import (
 	"ior/internal/types"
 )
 
-// Folding a kernel-restarted call into one row (tasks fs2 and 103).
+// Folding a kernel-restarted call into one row (tasks fs2, 103 and t13).
 //
 // A signal that interrupts a blocked syscall makes it exit with a
 // kernel-internal restart code, and the kernel may then carry the call on
 // without the program ever learning it was interrupted. ior used to show such
 // a call as two or more rows; here the pieces are folded back into the one
-// call the program made. There are two ways the kernel carries a call on, and
-// each has its own proof.
+// call the program made. There are two ways the kernel carries a call on.
+// Each has its own continuation, and both are folded only on a proof BPF
+// keeps (internal/c/restart.c).
 //
-// (1) restart_syscall, for -ERESTART_RESTARTBLOCK (-516; task fs2). A blocked
-// nanosleep, clock_nanosleep, poll or timed futex wait exits with -516. When
-// no handler runs (SIGSTOP/SIGCONT, a ptrace or freezer stop), the kernel does
-// not re-execute the call: it re-enters the task through restart_syscall,
-// which finishes the same call from the restart block (for a relative sleep,
-// against the original absolute expiry). restart_syscall can only resume a
-// -516: the kernel sets it up in exactly that case, and only when no handler
-// runs (a handled signal turns -516 into EINTR and the next record of the tid
-// is the handler's work or its rt_sigreturn, never restart_syscall). So a -516
-// row whose tid's very next record is a restart_syscall enter is provably the
-// same call, and the syscall stream alone proves it - as long as the stream
-// holds every record the thread produced in between. Two things take records
-// out of it. A full ring buffer: the drop counter says whether that happened
-// ("Lost records" below), and a run without one folds on the stream alone.
-// And sampling of restart_syscall itself, which no counter reports: a run
-// that samples it does not hold -516 rows at all ("Sampling" below).
+// (1) restart_syscall, for -ERESTART_RESTARTBLOCK (-516; tasks fs2 and t13).
+// A blocked nanosleep, clock_nanosleep, poll or timed futex wait exits with
+// -516. When no handler runs (SIGSTOP/SIGCONT, a ptrace or freezer stop), the
+// kernel does not re-execute the call: it re-enters the task through
+// restart_syscall, which finishes the same call from the restart block (for a
+// relative sleep, against the original absolute expiry). When a handler runs,
+// the program gets EINTR and nothing resumes the call (x86 handle_signal
+// treats -516 like -514).
 //
-// Open hole (task t13): "the handler's work or its rt_sigreturn" has to be
-// RECORDED to release the row. When a handled signal cut the call (the program
-// got EINTR) and the handler's records are silent - rt_sigreturn outside the
-// trace set, sampled out or detached, a handler leaving by siglongjmp - a
-// later, equally silent call of the thread that gets stopped has its
-// restart_syscall folded into this row, with no record lost and nothing
-// sampled. The fix is the BPF proof of task 103 extended to -516.
+// restart_syscall can only resume a -516, so this fold used to go by the
+// syscall stream alone: a -516 row whose tid's very next record is a
+// restart_syscall enter. That is a proof only while the next record that
+// ARRIVES is the next thing the thread did, and after a handled signal it need
+// not be (task t13). The records that would release the row - the handler's
+// syscalls, its rt_sigreturn - are silent when rt_sigreturn is outside the
+// trace set, sampled out, aggregate-only or detached, or when the handler
+// leaves by siglongjmp. A later call of the thread that is silent too and gets
+// stopped then has its restart_syscall arrive right behind the -516 exit, and
+// it was folded into a call that had returned EINTR long before, with no
+// record lost and nothing sampled.
+//
+// So this fold takes BPF's proof as well (internal/c/restart.c). An emitted
+// -516 exit makes the task pending there; a user handler delivered to it
+// forgets the task and is reported (HANDLER: the row is released at once, the
+// call got EINTR); and the first syscall enter of a task still pending - the
+// restart_syscall the kernel set up - is preceded by a RESUME record stamped
+// with that enter's time. A -516 row is resumed only by a restart_syscall
+// enter that RESUME announced (isAnnouncedEnter); one that comes unannounced
+// is some other call's and releases the row. Nothing is concluded from a
+// record that is absent: a HANDLER record that never arrived (lost to
+// backpressure, or the task's BPF entry evicted by a colliding tid before the
+// signal) leaves the row waiting, and then no RESUME comes for it either.
+//
+// Without the probes. RESUME is a proof only while BPF sees every handler
+// delivered to a pending task (the signal_deliver probe: a handler it misses
+// that leaves by siglongjmp would leave the task pending, and the next
+// restart_syscall of the thread would be announced) and forgets a task that
+// dies pending (the sched_process_exit probe). When either did not attach,
+// -516 rows are not held at all (foldProvenRestarts, restartBlock): a stopped
+// sleep is then the two rows it was before task fs2, the -516 row and a
+// restart_syscall row. The same holds, with the probes attached, for an
+// IOR_BPF_OBJECT override that predates task t13: it never announces a
+// restart_syscall, so the held row is released by the tid's next record. The
+// fold ran without any probe until then, so this takes it away from such runs
+// on purpose. The alternatives were to keep the stream-only fold there, which
+// keeps the wrong row this is about, or to hold -516 rows only while
+// rt_sigreturn is traced at rate 1, so that a returning handler always leaves
+// a record: that still folds a stranger after a handler that siglongjmps, and
+// it makes a stopped sleep fold or not depending on whether rt_sigreturn is in
+// the trace set. A run without the probes is rare - an object override older
+// than the probes, or a kernel that refuses the attach, each with a startup
+// warning - and two correct rows are what every refused fold degrades to.
+//
+// A full ring buffer can still take records out of the stream between a hold
+// and its fold; the drop counter says whether that happened ("Lost records"
+// below).
 //
 // (2) Re-execution, for -ERESTARTSYS, -ERESTARTNOINTR and -ERESTARTNOHAND
 // (-512/-513/-514; task 103). The kernel rewinds the instruction pointer and
@@ -59,16 +92,20 @@ import (
 // licenses a fold here; without it (the probe did not attach, the record was
 // lost to ring-buffer backpressure, the program got EINTR) the row stays as
 // it was. Such rows are held only when BPF's proof is complete for the run
-// (foldReexecutedRestarts).
+// (foldProvenRestarts): the two probes above, and a drop counter.
 //
-// RESUME names its enter by time. BPF emits RESUME before it knows whether
-// the enter itself will be recorded: the enter may be sampled out (1-in-N
-// sampling suppresses it with probability (N-1)/N) or lost to a full ring
-// buffer. Both records are stamped with the handler's one clock read, so the
-// fold takes only an enter whose time equals the RESUME record's
-// (heldRestart.resumeTime); a later call of the same syscall, which is what
-// follows RESUME when the re-execution went unrecorded, has a later time and
-// releases the row. Carrying the interrupted call's sampling decision over to
+// RESUME names its enter by time, for both folds. BPF emits RESUME before it
+// knows whether the enter itself will be recorded: the enter may be sampled
+// out (1-in-N sampling suppresses it with probability (N-1)/N) or lost to a
+// full ring buffer. Both records are stamped with the handler's one clock
+// read, so the fold takes only an enter whose time equals the RESUME record's
+// (heldRestart.resumeTime); a later call of the same syscall - a later stopped
+// call's restart_syscall, for a -516 row - which is what follows RESUME when
+// the continuation went unrecorded, has a later time and releases the row.
+// BPF does not know which syscall an enter belongs to, so RESUME precedes the
+// task's first traced enter whatever it is; the enter must also be the
+// continuation's syscall (continuationEnterID), which after -516 it is
+// whenever restart_syscall is traced. Carrying the interrupted call's sampling decision over to
 // the re-execution in BPF instead would fold more calls at rates above 1, but
 // it would put a second verdict on the enter hot path, emit rows the
 // configured rate did not select, and still not cover an enter the ring
@@ -82,105 +119,100 @@ import (
 // let that call's exit complete the fold; a lost exit of a call interrupted
 // inside the handler leaves BPF tracking the inner call while the outer row is
 // still held here). The restart_syscall fold has the same hole (task p03):
-// "the tid's very next record" is the next record that ARRIVED. When a
-// stopped sleep's restart_syscall exit is lost together with the thread's
-// records up to a later stopped call's restart_syscall (that call's enter,
-// its -516 exit, and its restart_syscall enter - or, with the first
-// restart_syscall lost whole, everything up to that enter), a -516 row is
-// followed by a restart_syscall that resumes another call, and its return
-// value and end time would be written into the row. The check is host-wide,
-// so under ring-buffer backpressure nothing is folded - the direction every
-// doubt is resolved in. A refused fold costs no row: the call shows as it did
-// before it was folded at all, the interrupted row and the continuation's row.
+// what it reasons about is the records that ARRIVED. When a stopped sleep's
+// restart_syscall exit is lost together with the thread's records up to a
+// later stopped call's restart_syscall enter (that call's enter, its -516
+// exit, its RESUME and the enter), the kept enter is followed by an exit that
+// resumes another call, and its return value and end time would be written
+// into the row; with the first restart_syscall lost whole, RESUME included,
+// the later call's RESUME and enter arrive in its place. The check is
+// host-wide, so under ring-buffer backpressure nothing is folded - the
+// direction every doubt is resolved in. A refused fold costs no row: the call
+// shows as it did before it was folded at all, the interrupted row and the
+// continuation's row.
 //
-// The two folds differ in what they do WITHOUT a drop counter (an older BPF
-// object without the counter map, a map that could not be opened; ior warns
-// at startup). The re-execution fold is then off altogether
-// (foldReexecutedRestarts): it is the newer one and never ran unchecked. The
-// restart_syscall fold predates the counter and keeps folding, unchecked
-// (restartProofLost): refusing would turn every stopped sleep of such a run
-// back into two rows, in order to avoid a wrong row that needs a burst of
-// consecutive lost records of one stopped-and-stopped-again thread that ends
-// exactly inside a later restart_syscall - in a run that cannot report any of
-// its losses in the first place. The burst is four records when the later
-// stopped call is itself recorded (the first restart_syscall's exit, the later
-// call's enter and -516 exit, its restart_syscall's enter; or the first
-// restart_syscall whole and the later call's enter and exit), and two when
-// the later call emits nothing because its syscall is not traced or was
-// sampled out (the first restart_syscall's exit and the later one's enter, or
-// the first restart_syscall whole). That is the residual, pinned by
+// The two folds differ in what they do WITHOUT a drop counter (the counter
+// map could not be opened, or an object override without it; ior warns at
+// startup). The re-execution fold is then off altogether
+// (foldProvenRestarts): it never ran unchecked. The restart_syscall fold
+// predates the counter and keeps folding, on RESUME alone (restartProofLost):
+// refusing would turn every stopped sleep of such a run back into two rows,
+// in order to avoid a wrong row that needs a burst of five consecutive lost
+// records of one stopped-and-stopped-again thread that ends exactly inside
+// the later call's restart_syscall (the two shapes above) - in a run that
+// cannot report any of its losses in the first place. The later call must
+// itself be recorded for that: BPF announces a restart_syscall only after an
+// emitted -516 exit, so the restart_syscall of a call that is not traced or
+// was sampled out comes unannounced and releases the row (before task t13 two
+// lost records were enough there). That is the residual, pinned by
 // TestRestartSyscallFoldWithoutADropCounterIsUnchecked. A counter that exists
 // but cannot be read is not that case: it refuses both folds.
 //
 // Sampling (task s13). A sampled-out record is not a lost one: BPF never
 // reserves it, the drop counter does not move, and the check above cannot see
 // it. restart_syscall is a traced syscall like any other. It has no built-in
-// rate, so by default every one is emitted and the proof holds, but
+// rate, so by default every one is emitted, but
 // -syscall-sampling-syscalls restart_syscall=N or its family's rate
 // (-syscall-sampling-families Process=N) samples it, per invocation, enter
-// and exit together (ior_on_syscall_enter_impl in internal/c/filter.c). At a
-// rate above 1 the stream would then fold a stranger with no record lost and
-// with a counter that never moved: a stopped call is recorded and held, its
-// restart_syscall is sampled out, the thread's next stopped call emits
-// nothing, and that call's restart_syscall is sampled in, so its enter is the
-// tid's next record after the held exit. "Emits nothing" has several causes:
-// the later call's syscall was sampled out, is aggregate-only (a timed futex
-// wait at the TUI's default rate 0) or is not traced.
+// and exit together (ior_on_syscall_enter_impl in internal/c/filter.c). The
+// stream-only fold then took a stranger with no record lost: a stopped call
+// is recorded and held, its restart_syscall is sampled out, the thread's next
+// stopped call emits nothing (sampled out, aggregate-only like a timed futex
+// wait at the TUI's default rate 0, or not traced), and that call's
+// restart_syscall is sampled in.
 //
 // So a run whose restart_syscall is not at rate 1 holds no -516 row
-// (restartTracker.restartSyscallSampled, holdable): "the tid's next record is
-// restart_syscall" proves nothing when the row's own restart_syscall may have
-// been left out, and nothing in the stream or in BPF says which invocation
-// was. The rows of such a run are the unfolded ones: the -516 row at once,
-// and restart_syscall as a row of its own whenever it is sampled in. Rate 0
-// is refused with the rest; no restart_syscall is emitted there, so there
-// was nothing to fold and the -516 row merely stops waiting for its tid's
-// next record. The rate is the effective one BPF applies (default < family <
-// syscall, a family's 0 promoted to 1 in the raw output modes), in every
-// output mode.
+// (restartTracker.restartSyscallSampled, holdable). The rows of such a run
+// are the unfolded ones: the -516 row at once, and restart_syscall as a row
+// of its own whenever it is sampled in. Rate 0 is refused with the rest; no
+// restart_syscall is emitted there, so there was nothing to fold. The rate is
+// the effective one BPF applies (default < family < syscall, a family's 0
+// promoted to 1 in the raw output modes), in every output mode.
 //
-// restart_syscall's rate is the only one that needs the guard. The
-// interrupted syscall's own rate does not open the hole: with
-// restart_syscall at rate 1 a recorded -516 row always meets its own
-// restart_syscall as the tid's next record (or another record that releases
-// it), and a sampled-out interrupted call holds no row - its restart_syscall
-// is a row of its own. That rate only matters as one of the ways the later
-// call above stays silent, which is harmless once the first restart_syscall
-// cannot go missing. The re-execution fold needs no such guard either: it
-// does not go by "the tid's next enter" but by the RESUME record, which BPF
-// emits before any sampling decision and which names its enter by time (see
-// (2) above), so a sampled-out re-execution releases the row instead of
-// handing it the next call, and a sampled-out interrupted exit is never
-// pending in BPF (ior_restart_on_exit takes emitted exits only).
+// Since task t13 the guard is no longer what keeps the stranger out. RESUME
+// is emitted before the sampling decision and names its enter by time, so a
+// sampled-out restart_syscall leaves a RESUME whose time no later enter
+// carries, and the later call's restart_syscall releases the row
+// (TestSampledOutRestartSyscallIsNotFoldedWithoutTheGuard) - exactly how the
+// re-execution fold has always dealt with a sampled-out re-execution. The
+// guard is kept on top of that: it costs the folds a sampled run could make
+// when both halves of a restart_syscall happen to be sampled in, which such a
+// run never made, and it leaves the one case the time rule cannot tell (a
+// clocksource too coarse to give two enters of a thread different readings,
+// see restart.c) to the re-execution fold alone. The interrupted syscall's
+// own rate needs no guard under either rule: a sampled-out interrupted call
+// holds no row and is not pending in BPF (ior_restart_on_exit takes emitted
+// exits only), so its restart_syscall is a row of its own.
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
 //   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent, in
-//     a run that does not sample restart_syscall), or -512/-513/-514 when
-//     re-execution folding is on, is parked here instead
-//     of being completed (tracepointExited). Its exit handler, derived values
-//     and pair filter all wait for the outcome. At most maxHeldRestarts rows
-//     are held; beyond that the row is completed at once, unfolded.
-//   - Handler (-512/-513 only): a HANDLER control record says a user handler
-//     runs for the interrupted call. If the call survives it by the rules
-//     above (restartSurvivesHandler; BPF applied the same rule and will send
-//     RESUME only then), the row stays held while the handler's own syscalls
-//     pass through as ordinary rows; otherwise the program gets EINTR and the
-//     row is released at once. At most maxHandlerRecords records may pass (a
-//     handler that leaves through siglongjmp never returns, and a lost RESUME
-//     must not park the row for good).
-//   - Resume: the continuation's enter arrives and is taken out of the
-//     stream (no row, no raw enter filter: the decision must not depend on
-//     what this run would show). For -516 it is the tid's restart_syscall
-//     enter, right after the hold, and - with a drop counter - only when no
-//     record may have been lost since the interrupted exit; otherwise it
-//     releases the row and is an ordinary enter. For re-execution it is an
-//     enter of the same syscall, and only as the tid's very next record after
-//     a RESUME control record and stamped with that record's time (RESUME
-//     itself is where the re-execution fold asks about lost records). The
-//     enter is kept with the row (heldRestart.continuation), not recycled:
-//     the fold can still be refused, and then the continuation needs it to
-//     become a row.
+//     a run whose probes make RESUME a proof and that does not sample
+//     restart_syscall), or -512/-513/-514 when re-execution folding is on, is
+//     parked here instead of being completed (tracepointExited). Its exit
+//     handler, derived values and pair filter all wait for the outcome. At
+//     most maxHeldRestarts rows are held; beyond that the row is completed at
+//     once, unfolded.
+//   - Handler: a HANDLER control record says a user handler runs for the
+//     interrupted call. If the call survives it by the rules above
+//     (restartSurvivesHandler, -513 and -512 with SA_RESTART; BPF applied the
+//     same rule and will send RESUME only then), the row stays held while the
+//     handler's own syscalls pass through as ordinary rows; otherwise (-514,
+//     -516, -512 without SA_RESTART) the program gets EINTR and the row is
+//     released at once. At most maxHandlerRecords records may pass (a handler
+//     that leaves through siglongjmp never returns, and a lost RESUME must
+//     not park the row for good).
+//   - Resume: a RESUME control record announces the continuation - unless
+//     records may have been lost since the interrupted exit, in which case it
+//     releases the row - and the continuation's enter must be the tid's very
+//     next record, stamped with the RESUME record's time: an enter of
+//     restart_syscall for -516, of the same syscall for a re-execution. It is
+//     taken out of the stream (no row, no raw enter filter: the decision must
+//     not depend on what this run would show) and kept with the row
+//     (heldRestart.continuation), not recycled: the fold can still be
+//     refused, and then the continuation needs it to become a row. A
+//     restart_syscall enter, or one of the same syscall, that no RESUME
+//     announced releases the row and is an ordinary enter.
 //   - Fold: the tid's next record is the continuation's exit, and no record
 //     may have been lost since the interrupted exit (asked again: the enter
 //     and the exit can be a long sleep apart). For -516 its return value
@@ -195,7 +227,7 @@ import (
 //     (any enter, another exit, a control record such as the task's exit, a
 //     fresh task with the recycled tid, a restart record that does not fit
 //     the phase) first completes the held row unchanged, then is processed
-//     normally. So does a RESUME record, a restart_syscall enter or a
+//     normally. So does a RESUME record or a
 //     continuation's exit that arrives after the kernel may have dropped
 //     records (see "Lost records" above), and an exit of the tid with a
 //     restart code while its handler runs, paired or not: BPF tracks the
@@ -237,7 +269,8 @@ import (
 // gone from the folded row (ret is what the call finally returned); a row
 // still showing one was not provably continued: the program got EINTR, the
 // proof was lost or unavailable, the continuation was sampled out (or, for
-// -516, restart_syscall is sampled at all), or the trace ended first.
+// -516, restart_syscall is sampled at all or not traced), or the trace ended
+// first.
 //
 // Counting: numSyscalls counts the call once (at its first exit; the
 // continuation's exit is not counted again), the pair filter and every
@@ -248,24 +281,28 @@ import (
 // Output order: rows are emitted when the call completes, as always. A held
 // row is delayed until its tid's next record; for a folded call that is its
 // real completion, and for a row released unchanged (the handled-signal
-// case) it is the HANDLER record or the handler's first syscall, typically
-// microseconds later. Rows of other tids emitted meanwhile may therefore
+// case) it is the HANDLER record, emitted as the handler is delivered,
+// typically microseconds later. Rows of other tids emitted meanwhile may therefore
 // precede it although they exited later, and so do the rows of a restarting
 // handler's own syscalls: they complete before the call they interrupted.
 // Those rows measure their gap from the interrupted exit, and the folded row
 // keeps the gap it had at its first enter (heldRestart.gapBase).
 type restartTracker struct {
 	held map[uint32]*heldRestart // keyed by tid
-	// reexec is set by trace setup (foldReexecutedRestarts) before the loop
-	// starts: the signal_deliver and sched_process_exit probes attached and
-	// the drop counter is readable, so BPF can prove a re-execution and
-	// -512/-513/-514 rows are worth holding. False in every other case, which
-	// leaves those rows exactly as they were before task 103.
-	reexec bool
+	// restartBlock and reexec are set by trace setup (foldProvenRestarts)
+	// before the loop starts. restartBlock: the signal_deliver and
+	// sched_process_exit probes attached, so a RESUME record of BPF means
+	// what it says and -516 rows are worth holding. reexec: that, and the
+	// drop counter is readable, so -512/-513/-514 rows are worth holding too.
+	// Both are false in every other case, which leaves the rows unfolded: the
+	// interrupted row at its exit, the continuation as a row of its own.
+	restartBlock bool
+	reexec       bool
 	// restartSyscallSampled is set by newEventLoop from the run's sampling
 	// configuration (restartSyscallSampled): restart_syscall is not at rate 1,
 	// so a -516 row's own restart_syscall may be missing from the stream
-	// without any record lost, and such rows are not held ("Sampling" above).
+	// without any record lost, and such rows are not held ("Sampling" above:
+	// a guard on top of the RESUME record's time rule).
 	restartSyscallSampled bool
 	// drops knows since when the kernel's drop counter has stood at its
 	// current value, which is what proves that no record was lost while a row
@@ -287,9 +324,9 @@ type restartTracker struct {
 // observation that returned that same total (firstSeenAt). Observations come
 // from two places: the periodic drop monitor (handleRingbufDropResult, on its
 // own goroutine, hence the mutex), which keeps the watch current while no call
-// is interrupted, and the fold itself, which reads the counter at RESUME (for
-// -516: at the restart_syscall enter) and at the folding exit (lostSince),
-// because the monitor's next poll may be a second away.
+// is interrupted, and the fold itself, which reads the counter at RESUME and
+// at the folding exit (lostSince), because the monitor's next poll may be a
+// second away.
 //
 // The invariant: the counter returned `total` in a read that finished at or
 // before firstSeenAt. The counter only grows, so if a read made now returns
@@ -377,9 +414,10 @@ const (
 	// restartInHandler: a handler the call survives is running; the tid's
 	// syscalls are the handler's and pass through.
 	restartInHandler
-	// restartResumed: BPF announced the re-execution; the tid's next record
-	// must be the enter of the same syscall, stamped with the announcement's
-	// time (heldRestart.resumeTime).
+	// restartResumed: BPF announced the continuation; the tid's next record
+	// must be the enter of its syscall (restart_syscall for -516, else the
+	// same syscall), stamped with the announcement's time
+	// (heldRestart.resumeTime).
 	restartResumed
 	// restartContinuing: the continuation's enter arrived (restart_syscall,
 	// or the re-executed call); the tid's next record must be its exit.
@@ -399,7 +437,7 @@ type heldRestart struct {
 	// resumeTime is the time of the RESUME record that put the row into
 	// restartResumed. BPF stamps that record and the enter it announces with
 	// the same clock read, so only an enter carrying exactly this time is the
-	// announced one (isReexecutedEnter).
+	// announced one (isAnnouncedEnter).
 	resumeTime uint64
 	// continuation is the continuation's enter while the row stands in
 	// restartContinuing: taken out of the stream for the fold, but kept, so a
@@ -435,11 +473,9 @@ const (
 	restartRelease restartAction = iota
 	// restartConsume: the record was a step of the fold and is dropped.
 	restartConsume
-	// restartKeepEnter: the record is the continuation's enter. It leaves the
-	// stream but is kept with the row until the fold is accepted or refused.
-	// A restart_syscall enter is not taken when records may have been lost
-	// since the interrupted exit (restartProofLost): it releases the row and
-	// is parked as the ordinary enter it then is.
+	// restartKeepEnter: the record is the continuation's enter, the one
+	// RESUME announced. It leaves the stream but is kept with the row until
+	// the fold is accepted or refused.
 	restartKeepEnter
 	// restartResume: the record is BPF's RESUME; it is dropped like a consumed
 	// step, unless records were lost since the interrupted exit
@@ -487,13 +523,12 @@ func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
 }
 
 // holdable reports whether ep is an interrupted row worth parking: a -516
-// exit of the kind the restart_syscall fold can patch, or - when BPF proves
-// re-executions - any exit carrying -512/-513/-514. A -516 row is not worth
-// parking in a run that samples restart_syscall: the fold's proof is that the
-// tid's next record is the row's own restart_syscall, and that one may have
-// been sampled out ("Sampling" in the file comment), so the row is emitted as
-// it is. The bound is checked against the rows held now, so a caller that
-// replaces a tid's row releases that row first (holdRestart).
+// exit of the kind the restart_syscall fold can patch, when BPF announces
+// restart_syscall continuations (restartBlock), or - when it proves
+// re-executions - any exit carrying -512/-513/-514. A run that samples
+// restart_syscall parks no -516 row either ("Sampling" in the file comment).
+// The bound is checked against the rows held now, so a caller that replaces a
+// tid's row releases that row first (holdRestart).
 func (r *restartTracker) holdable(ep *event.Pair) bool {
 	ret, ok := restartRetOf(ep)
 	if !ok || len(r.held) >= maxHeldRestarts {
@@ -501,7 +536,7 @@ func (r *restartTracker) holdable(ep *event.Pair) bool {
 	}
 	if event.IsRestartBlockRet(ret) {
 		_, isRet := ep.ExitEv.(*types.RetEvent)
-		return isRet && !r.restartSyscallSampled
+		return isRet && r.restartBlock && !r.restartSyscallSampled
 	}
 	return r.reexec && event.IsReexecutedRestartRet(ret)
 }
@@ -571,21 +606,19 @@ func restartSurvivesHandler(ret int64, saRestart bool) bool {
 }
 
 // step applies one record of the held tid to the row and returns what the
-// loop has to do with the record.
+// loop has to do with the record. A row that waits (restartWaiting) takes a
+// control record of the restart-fold probes and nothing else: every syscall
+// record of the tid releases it, a restart_syscall enter included - a
+// continuation BPF did not announce is some other call's.
 func (h *heldRestart) step(direction rawEventDirection, ev runtimeDecodedEvent) restartAction {
 	if rec, ok := ev.(*types.SyscallRestartEvent); ok {
 		return h.stepRestartRecord(rec)
 	}
 	switch h.phase {
-	case restartWaiting:
-		if h.isRestartSyscallEnter(direction, ev) {
-			h.phase = restartContinuing
-			return restartKeepEnter
-		}
 	case restartInHandler:
 		return h.stepHandlerRecord(direction, ev)
 	case restartResumed:
-		if h.isReexecutedEnter(direction, ev) {
+		if h.isAnnouncedEnter(direction, ev) {
 			h.phase = restartContinuing
 			return restartKeepEnter
 		}
@@ -595,15 +628,13 @@ func (h *heldRestart) step(direction rawEventDirection, ev runtimeDecodedEvent) 
 	return restartRelease
 }
 
-// stepRestartRecord applies a control record of the restart-fold probes. Only
-// a row interrupted with a re-execution code takes one; a -516 row's
-// continuation is restart_syscall, so a record for it is a stray and
-// releases the row like any other unexpected record.
+// stepRestartRecord applies a control record of the restart-fold probes: a
+// HANDLER record to a row that waits, which a -516 row never survives
+// (restartSurvivesHandler), and a RESUME record to a row that waits or whose
+// handler runs. A record that does not fit the phase releases the row like
+// any other unexpected record.
 func (h *heldRestart) stepRestartRecord(rec *types.SyscallRestartEvent) restartAction {
 	ret, _ := restartRetOf(h.pair)
-	if !event.IsReexecutedRestartRet(ret) {
-		return restartRelease
-	}
 	switch {
 	case rec.Phase == types.RESTART_PHASE_HANDLER && h.phase == restartWaiting:
 		if !restartSurvivesHandler(ret, rec.SaRestart != 0) {
@@ -685,27 +716,31 @@ func (h *heldRestart) continuationExitID() types.TraceId {
 	return types.SYS_EXIT_RESTART_SYSCALL
 }
 
-// isRestartSyscallEnter reports whether ev is the restart_syscall enter that
-// resumes a -516 row.
-func (h *heldRestart) isRestartSyscallEnter(direction rawEventDirection, ev runtimeDecodedEvent) bool {
-	enterEv, ok := ev.(event.Event)
-	return ok && direction == rawEnterEvent && !h.reexecuted() &&
-		enterEv.GetTraceId() == types.SYS_ENTER_RESTART_SYSCALL
+// continuationEnterID is the trace ID of the enter that carries the row on:
+// restart_syscall for a -516 row, the row's own syscall for a re-execution.
+func (h *heldRestart) continuationEnterID() types.TraceId {
+	if h.reexecuted() {
+		return h.pair.EnterEv.GetTraceId()
+	}
+	return types.SYS_ENTER_RESTART_SYSCALL
 }
 
-// isReexecutedEnter reports whether ev is the enter the RESUME record
-// announced: an enter of the held row's own syscall that carries the RESUME
-// record's time. BPF stamps both with one clock read (ior_restart_on_enter in
-// internal/c/restart.c), and the announced enter may never arrive - sampled
-// out, or refused by a full ring buffer - so the syscall alone does not
-// identify it: the tid's next call of that syscall would pass too, and a
-// stranger's result would be folded into the row. A later enter has a later
-// time (a clock too coarse to tell two enters of one thread apart is the one
+// isAnnouncedEnter reports whether ev is the enter the RESUME record
+// announced: an enter of the continuation's syscall (continuationEnterID)
+// that carries the RESUME record's time. BPF stamps both with one clock read
+// (ior_restart_on_enter in internal/c/restart.c), and the announced enter may
+// never arrive - sampled out, or refused by a full ring buffer - so the
+// syscall alone does not identify it: the tid's next call of that syscall (a
+// later stopped call's restart_syscall) would pass too, and a stranger's
+// result would be folded into the row. A later enter has a later time (a
+// clock too coarse to tell two enters of one thread apart is the one
 // exception, see "A time rule that cannot tell" under "Known wrong folds" in
-// restart.c).
-func (h *heldRestart) isReexecutedEnter(direction rawEventDirection, ev runtimeDecodedEvent) bool {
+// restart.c). The syscall is checked as well because BPF announces the first
+// traced enter of the task whatever it is: after -516 that is restart_syscall
+// only when restart_syscall is traced.
+func (h *heldRestart) isAnnouncedEnter(direction rawEventDirection, ev runtimeDecodedEvent) bool {
 	enterEv, ok := ev.(event.Event)
-	return ok && direction == rawEnterEvent && enterEv.GetTraceId() == h.pair.EnterEv.GetTraceId() &&
+	return ok && direction == rawEnterEvent && enterEv.GetTraceId() == h.continuationEnterID() &&
 		enterEv.GetTime() == h.resumeTime
 }
 
@@ -767,24 +802,23 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 // restartProofLost reports whether a step towards a fold must be refused
 // because the kernel may have dropped records since the interrupted exit (see
 // "Lost records" in the file comment and restartDropWatch). It is asked at the
-// two steps of each fold that commit (heldRestart.commitsToFold): where the
-// continuation is recognised - RESUME, or the restart_syscall enter - a
-// refusal releases the row before an enter is taken for it, and at the
-// continuation's exit it keeps a result that may belong to another call out
-// of the row. Either way the call ends up as two rows, the interrupted one and
-// the continuation: at the exit, the release parks the enter taken for the
-// fold again and the exit pairs with it. Each question is one read of the drop
-// counter, paid only by interrupted calls.
+// two steps of a fold that commit (commitsToFold): at RESUME, where the
+// continuation is announced, a refusal releases the row before an enter is
+// taken for it, and at the continuation's exit it keeps a result that may
+// belong to another call out of the row. Either way the call ends up as two
+// rows, the interrupted one and the continuation: at the exit, the release
+// parks the enter taken for the fold again and the exit pairs with it. Each
+// question is one read of the drop counter, paid only by interrupted calls.
 //
 // Without a drop counter the restart_syscall fold is not asked and folds on
-// the stream alone, as it did before the counter existed; the stranger it can
-// then fold is the residual described under "Lost records". A sampled
-// restart_syscall is not this function's business: such a run holds no -516
-// row in the first place (holdable; "Sampling" in the file comment), with or
-// without a counter. A re-execution row is never held without a counter
-// (foldReexecutedRestarts), and would be refused here if it were.
+// RESUME alone; the stranger it can then fold is the residual described under
+// "Lost records". A sampled restart_syscall is not this function's business:
+// such a run holds no -516 row in the first place (holdable; "Sampling" in
+// the file comment), with or without a counter. A re-execution row is never
+// held without a counter (foldProvenRestarts), and would be refused here if
+// it were.
 func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bool {
-	if !held.commitsToFold(action) {
+	if !commitsToFold(action) {
 		return false
 	}
 	if e.dropSrc == nil && !held.reexecuted() {
@@ -793,19 +827,12 @@ func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bo
 	return e.restarts.drops.lostSince(held.pair.ExitEv.GetTime(), e.dropSrc, e.readDropStampClock)
 }
 
-// commitsToFold reports whether action is a step at which the row's fold asks
-// for proof that no record was lost: the continuation's exit for both folds,
-// and the record that announces the continuation - RESUME for a re-execution,
-// the restart_syscall enter for a -516 row. The re-executed enter is not such
-// a step: RESUME, which names it by time, was asked just before it.
-func (h *heldRestart) commitsToFold(action restartAction) bool {
-	switch action {
-	case restartResume, restartFold:
-		return true
-	case restartKeepEnter:
-		return !h.reexecuted()
-	}
-	return false
+// commitsToFold reports whether action is a step at which a fold asks for
+// proof that no record was lost: the record that announces the continuation
+// (RESUME) and the continuation's exit. The announced enter between them is
+// not such a step: RESUME, which names it by time, was asked just before it.
+func commitsToFold(action restartAction) bool {
+	return action == restartResume || action == restartFold
 }
 
 // detourGapBaseline prepares the tid's gap baseline for the rows of a signal
@@ -958,28 +985,38 @@ func (h *heldRestart) dropContinuation() {
 // handleSyscallRestartEvent is the control handler of the restart-fold
 // records. routeHeldRestart has already applied the record to the row its tid
 // holds; a record that arrives here belongs to a tid without one (the row was
-// released, never held, or evicted) or has done its work, so it is recycled.
+// released, never held, or evicted; BPF announces a continuation whether or
+// not userspace holds the row) or has done its work, so it is recycled.
 func (e *eventLoop) handleSyscallRestartEvent(ev *types.SyscallRestartEvent) {
 	ev.Recycle()
 }
 
-// foldReexecutedRestarts tells the loop whether BPF proves re-executions for
-// this run (trace setup, before the loop starts). Three things have to hold,
-// and without any of them the rows are not held at all and stay exactly as
-// they were:
+// foldProvenRestarts tells the loop what BPF proves for this run (trace
+// setup, before the loop starts), which decides the rows it holds. Without
+// the proof the rows are not held at all and stay as they were before either
+// fold existed: the interrupted row, and the continuation as a row of its own.
+//
+// Both folds need the two probes (restartBlock; -516 rows):
 //
 //   - the signal_deliver probe attached, so every handler delivered to an
 //     interrupted task is seen and a RESUME record means what it says.
 //     Without it a RESUME record would also precede a program's own retry
-//     after EINTR.
+//     after EINTR, and - after a handler that ended a -516 call and left by
+//     siglongjmp - the restart_syscall of a later call.
 //   - the sched_process_exit probe attached, so BPF forgets a task that dies
 //     with a call pending (ior_restart_forget). Without it a later task with
 //     the recycled tid would inherit the entry and its first syscall would be
-//     announced as the dead task's re-execution.
+//     announced as the dead task's continuation.
+//
+// The re-execution fold (reexec; -512/-513/-514 rows) needs a third thing:
+//
 //   - the drop counter can be read (dropSrc), so a fold can be refused when
-//     records were lost while the row was held (restartProofLost).
-func (e *eventLoop) foldReexecutedRestarts(signalProbeAttached, exitProbeAttached bool) {
-	e.restarts.reexec = signalProbeAttached && exitProbeAttached && e.dropSrc != nil
+//     records were lost while the row was held (restartProofLost). The
+//     restart_syscall fold runs without it, unchecked ("Lost records" in the
+//     file comment).
+func (e *eventLoop) foldProvenRestarts(signalProbeAttached, exitProbeAttached bool) {
+	e.restarts.restartBlock = signalProbeAttached && exitProbeAttached
+	e.restarts.reexec = e.restarts.restartBlock && e.dropSrc != nil
 }
 
 // releaseAllHeldRestarts releases every row still held when the event loop

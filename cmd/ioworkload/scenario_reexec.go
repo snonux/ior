@@ -257,12 +257,19 @@ func blockingRead(fd, n int) (eintrs int, err error) {
 }
 
 // waitBlockedInRead returns once the thread tid sleeps inside read(2) on the
-// descriptor fd. /proc/<pid>/task/<tid>/syscall shows the syscall
-// number and arguments of a thread that is blocked in the kernel ("running"
-// while it is on a CPU), which is exactly the state a signal has to find.
+// descriptor fd.
 func waitBlockedInRead(tid, fd int) error {
+	return waitBlockedIn(tid, fmt.Sprintf("%d 0x%x ", syscall.SYS_READ, fd), "the read")
+}
+
+// waitBlockedIn returns once the thread tid sleeps inside the syscall whose
+// /proc state starts with want: the syscall number followed by a space, and
+// optionally leading arguments. /proc/<pid>/task/<tid>/syscall shows the
+// syscall number and arguments of a thread that is blocked in the kernel
+// ("running" while it is on a CPU), which is exactly the state a signal has to
+// find. what names the call in the error.
+func waitBlockedIn(tid int, want, what string) error {
 	path := fmt.Sprintf("/proc/self/task/%d/syscall", tid)
-	want := fmt.Sprintf("%d 0x%x ", syscall.SYS_READ, fd)
 	deadline := time.Now().Add(reexecHandshakeTimeout)
 	for {
 		state, err := os.ReadFile(path)
@@ -273,7 +280,7 @@ func waitBlockedInRead(tid, fd int) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("thread %d never blocked in the read (last state %q)", tid, state)
+			return fmt.Errorf("thread %d never blocked in %s (last state %q)", tid, what, state)
 		}
 		time.Sleep(time.Millisecond) // poll interval
 	}
