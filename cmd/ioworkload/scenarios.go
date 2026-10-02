@@ -199,6 +199,7 @@ var scenarios = map[string]func() error{
 	"iouring-enter":                 iouringEnter,
 	"iouring-register":              iouringRegister,
 	"iouring-registered-ring":       iouringRegisteredRing,
+	"iouring-reopen":                iouringReopen,
 	"iouring-enter-ebadf":           iouringEnterEbadf,
 	"iouring-register-ebadf":        iouringRegisterEbadf,
 	"aio-setup":                     aioSetup,
