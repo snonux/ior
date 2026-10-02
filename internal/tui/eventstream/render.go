@@ -7,6 +7,7 @@ import (
 
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/common"
+	"ior/internal/types"
 
 	"charm.land/lipgloss/v2"
 )
@@ -25,7 +26,7 @@ type columnLayout struct {
 }
 
 // columnShrinkSteps lists, in order, which column gives up width (and down to
-// which floor) when a narrow row still exceeds the available width. Less
+// which floor) when the compact layout still exceeds the available width. Less
 // telling columns (TID, Gap, Bytes) go first; the final pass takes every
 // column down to a single cell so the row fits whenever width allows it.
 var columnShrinkSteps = []struct{ col, floor int }{
@@ -35,6 +36,55 @@ var columnShrinkSteps = []struct{ col, floor int }{
 	{streamColTID, 1}, {streamColGap, 1}, {streamColBytes, 1}, {streamColLatency, 1},
 	{streamColComm, 1}, {streamColPID, 1}, {streamColSyscall, 1}, {streamColRet, 1},
 	{streamColFD, 1}, {streamColFile, 1},
+}
+
+// syscallCommonWidth is the Syscall column's first growth target: it holds
+// all but a handful of the generated syscall names (clock_nanosleep,
+// name_to_handle_at, process_vm_writev, ...; the exceptions are a few sched_*
+// and landlock_* names and set_mempolicy_home_node), so a mid-sized terminal
+// shows practically every name whole without taking the 23 cells of the
+// longest one from the File column. A test pins that it keeps covering the
+// generated table.
+const syscallCommonWidth = 17
+
+// syscallFullWidth is the widest name a traced row can carry in its Syscall
+// cell, the bound of that column: no terminal width makes it wider.
+var syscallFullWidth = longestSyscallNameWidth()
+
+// longestSyscallNameWidth measures the generated syscall table, the names
+// streamrow.New stores in a row (TraceId.Name of the sys_enter tracepoint;
+// they are ASCII, one cell per byte). The bound is the table and not the rows
+// in view or the names seen so far: a column sized by its rows changes width,
+// and shifts every column right of it, whenever a longer name scrolls in.
+func longestSyscallNameWidth() int {
+	longest := 0
+	for _, id := range types.EnterTraceIDs() {
+		longest = max(longest, len(id.Name()))
+	}
+	return longest
+}
+
+// columnGrowSteps lists, in order, which column takes the width a terminal
+// has beyond the compact layout, and up to which width; the File column takes
+// whatever the last step leaves. It is the counterpart of columnShrinkSteps
+// and, like it, depends on the width only, so the table is stable while rows
+// scroll. The order is by what a cut cell costs: a readable File cell first,
+// whole PIDs and TIDs (7 digits with the default pid_max), then whole syscall
+// names - the Syscall column used to stay at 9 or 11 cells at any width, so
+// a 200-column terminal showed "cloc...leep" beside a hundred-cell File
+// column (task 923) - then, alternating with more room for paths, the less
+// often cut Comm, FD, Ret and Bytes cells, the few names longer than
+// syscallCommonWidth, and the roomier Comm/PID/TID of very wide terminals.
+var columnGrowSteps = []struct{ col, ceil int }{
+	{streamColFile, 20},
+	{streamColPID, 7}, {streamColTID, 7},
+	{streamColSyscall, syscallCommonWidth},
+	{streamColFile, 28},
+	{streamColComm, 10}, {streamColFD, 4}, {streamColRet, 5}, {streamColBytes, 8},
+	{streamColFile, 40},
+	{streamColSyscall, syscallFullWidth},
+	{streamColFile, 60},
+	{streamColComm, 12}, {streamColPID, 8}, {streamColTID, 8},
 }
 
 // RenderStreamTable renders the stream tab's main panel: status line, filter
@@ -149,7 +199,12 @@ func streamColumns(width int) []common.TableColumn {
 	}
 }
 
+// renderEventRow renders one row of the stream or fd-trace table: the ten
+// cells of a syscall row, or the spanning line of a warning row.
 func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool, selectedCol int) string {
+	if ev.IsWarning {
+		return renderWarningRow(ev, columns, selected)
+	}
 	fd := "-"
 	if ev.FD >= 0 {
 		fd = strconv.FormatInt(int64(ev.FD), 10)
@@ -179,30 +234,66 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 	return common.RenderTableRow(columns, cells, selected, selectedCol, lipgloss.Style{})
 }
 
+// renderWarningRow renders a synthetic warning row (streamrow.NewWarning) as
+// one line across the whole row: its label ("warning", the row's Syscall
+// text), a colon and the message, cut at the END when it is too long. The
+// row has nothing else to show - its other cells are placeholders (pid 0,
+// ret -1, 0 bytes) - and a message drawn in the File column alone was cut to
+// that column and, like a path, in the middle, which removed exactly the
+// cause a warning names early on: "(t...may be unnamed" at 220 columns (task
+// 923). A row is one terminal line (model.visibleRows), so the message
+// cannot wrap; what the end cut drops is the trailing advice. The message is
+// foreign text (libbpf output, error strings) and is sanitised like a cell.
+//
+// The line is exactly as wide as the columns with their separators, so it
+// fills the panel like every other row. Selected, it takes the row
+// selection style as a whole: it has no cells to mark, and Enter builds no
+// filter from it (requestGlobalFilterFromSelectedCell).
+func renderWarningRow(ev StreamEvent, columns []common.TableColumn, selected bool) string {
+	width := len(columns) - 1
+	for _, col := range columns {
+		width += col.Width
+	}
+	line := common.FitRight(common.Sanitize(ev.Syscall+": "+ev.FileName), width, common.ASCIIEllipsis)
+	theme := common.Current()
+	if selected {
+		return theme.TableSelectedRowStyle.Render(line)
+	}
+	return theme.ErrorStyle.Render(line)
+}
+
+// computeColumnLayout sizes the columns for a row of width cells. It starts
+// from the compact layout (78 cells: every column at the smallest width that
+// still reads well, File at 12) and then either shrinks it (shrinkToFit) so
+// that a narrow row fits exactly and the panel never wraps it onto a second
+// line, or hands out the spare width (growToFill).
 func computeColumnLayout(width int) columnLayout {
 	if width <= 0 {
 		width = 100
 	}
-
-	// Keep non-file columns compact so file paths can use most of the row.
-	cols := columnLayout{gap: 7, latency: 8, comm: 10, pid: 7, tid: 7, syscall: 9, fd: 4, ret: 5, bytes: 8}
-	cols.file = width - nonFileWidth(cols)
-	if cols.file >= 28 {
-		// On wider terminals, give a little more room back to descriptive columns.
-		if width >= 140 {
-			cols.comm, cols.syscall, cols.pid, cols.tid = 12, 11, 8, 8
-			cols.file = width - nonFileWidth(cols)
-		}
+	cols := columnLayout{gap: 7, latency: 8, comm: 8, pid: 6, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7, file: 12}
+	if rowWidth(&cols) > width {
+		shrinkToFit(&cols, width)
 		return cols
 	}
-
-	// Narrow widths: compress the fixed columns, keep the file column readable
-	// where possible, then shrink further until the row fits width exactly so
-	// the panel never wraps a row onto a second line.
-	cols = columnLayout{gap: 7, latency: 8, comm: 8, pid: 6, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7}
-	cols.file = max(width-nonFileWidth(cols), 12)
-	shrinkToFit(&cols, width)
+	growToFill(&cols, width)
 	return cols
+}
+
+// growToFill widens the columns following columnGrowSteps while the row is
+// narrower than width, then gives what is left to the File column, so the row
+// is exactly width cells wide.
+func growToFill(cols *columnLayout, width int) {
+	fields := columnFields(cols)
+	for _, step := range columnGrowSteps {
+		spare := width - rowWidth(cols)
+		if spare <= 0 {
+			return
+		}
+		field := fields[step.col]
+		*field += max(min(spare, step.ceil-*field), 0)
+	}
+	cols.file += max(width-rowWidth(cols), 0)
 }
 
 // shrinkToFit reduces column widths following columnShrinkSteps until the row

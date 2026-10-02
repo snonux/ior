@@ -1073,12 +1073,18 @@ func (m *Model) ensureSelectedCol() {
 // set, so it reads exactly like the filter summary. A cell that yields no
 // filter (a blank string cell, a placeholder cell - the File of a fileless
 // row, the Latency or Ret of a noreturn row - or an unknown column) is not
-// handled, so no empty undo layer is pushed.
+// handled, so no empty undo layer is pushed. Nor is a warning row: it is
+// drawn as one spanning line without cells (renderWarningRow), every value
+// behind it is a placeholder (pid 0, ret -1, the "warning" label), and a
+// filter built from one would select by a value the user cannot see.
 func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false, nil
 	}
 	ev := &m.filtered[m.selectedIdx]
+	if ev.IsWarning {
+		return false, nil
+	}
 	next := m.filter.Clone()
 	dim, ok := setStringCellFilter(&next, ev, m.selectedCol)
 	if !ok {

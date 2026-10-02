@@ -130,10 +130,19 @@ func TestRenderEventRowShowsDashesForNoReturn(t *testing.T) {
 	}
 }
 
+// TestComputeColumnLayoutGivesFileMoreSpace: at 120 cells the File column is
+// by far the widest column. It was 46 cells while the Syscall column stayed
+// at 9; since task 923 the Syscall column takes 8 of those to show syscall
+// names whole, and the File column still gets twice what any other has.
 func TestComputeColumnLayoutGivesFileMoreSpace(t *testing.T) {
 	cols := computeColumnLayout(120)
-	if cols.file < 44 {
-		t.Fatalf("expected file column to get most width, got %d", cols.file)
+	if cols.file != 38 {
+		t.Fatalf("file column is %d cells at 120, want 38", cols.file)
+	}
+	for i, f := range columnFields(&cols) {
+		if i != streamColFile && *f*2 > cols.file {
+			t.Fatalf("column %d is %d wide, more than half the file column's %d", i, *f, cols.file)
+		}
 	}
 }
 
