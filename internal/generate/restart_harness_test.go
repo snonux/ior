@@ -595,7 +595,8 @@ func TestRestartHooksAreWiredIntoEverySyscallHook(t *testing.T) {
 			t.Errorf("%s must call ior_restart_on_enter(tid, now) before ior_on_syscall_enter_impl:\n%s", hook, body)
 		}
 	}
-	for _, hook := range []string{"ior_on_syscall_exit", "ior_on_syscall_exit_take_filename", "ior_on_syscall_exit_take_filenames"} {
+	for _, hook := range []string{"ior_on_syscall_exit", "ior_on_syscall_exit_take_filename",
+		"ior_on_syscall_exit_take_filenames", "ior_on_syscall_exit_take_handle"} {
 		body := strings.Join(strings.Fields(extractCFunction(code, hook)), " ")
 		if !strings.Contains(body, "return ior_restart_on_exit(tid, ret, ior_on_syscall_exit_impl(") {
 			t.Errorf("%s must return ior_restart_on_exit(tid, ret, ior_on_syscall_exit_impl(...)):\n%s", hook, body)

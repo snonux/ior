@@ -3934,15 +3934,16 @@ int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
         return 0;
 
     __u64 pending_filename;
-    __u64 pending_filename2;
+    __u64 pending_handle;
+    __u64 enter_ns;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_filename2))
+    if (!ior_on_syscall_exit_take_handle(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_handle, &enter_ns))
         return 0;
 
     ior_emit_open_name_fixup(tid, SYS_ENTER_NAME_TO_HANDLE_AT, pending_filename);
     if (ctx->ret == 0)
-        ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename2);
+        ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT, now, enter_ns, pending_handle);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {

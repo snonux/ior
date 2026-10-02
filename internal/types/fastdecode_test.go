@@ -2202,9 +2202,12 @@ func TestNewOpenByHandleAtEventFastLegacyLayouts(t *testing.T) {
 }
 
 // TestNewFileHandleEventFastKernelLayout pins the control record, which
-// shares the handle offsets with open_by_handle_at_event.
+// shares the handle offsets with open_by_handle_at_event and carries the
+// time of its call's enter behind them (offset 168). A record without that
+// time is refused, not decoded with a zero.
 func TestNewFileHandleEventFastKernelLayout(t *testing.T) {
 	raw := handleRecordBytes(FILE_HANDLE_EVENT, SYS_ENTER_NAME_TO_HANDLE_AT)
+	raw = binary.LittleEndian.AppendUint64(raw, 99)
 	slow := NewFileHandleEvent(raw)
 	fast := NewFileHandleEventFast(raw)
 	if slow == nil || fast == nil {
@@ -2216,12 +2219,14 @@ func TestNewFileHandleEventFastKernelLayout(t *testing.T) {
 		t.Fatalf("file handle decode mismatch: slow=%v fast=%v", slow, fast)
 	}
 	if fast.EventType != FILE_HANDLE_EVENT || fast.TraceId != SYS_ENTER_NAME_TO_HANDLE_AT ||
-		fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Reserved != 3 {
+		fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Reserved != 3 || fast.EnterTime != 99 {
 		t.Fatalf("unexpected file handle decode: %#v", fast)
 	}
 	assertHandleFields(t, fast.HandleStatus, fast.HandleBytes, fast.HandleType, fast.FHandle)
-	if ev := NewFileHandleEventFast(raw[:fileHandleEventSize-1]); ev != nil {
-		t.Fatalf("a truncated file handle record decoded: %#v", ev)
+	for _, size := range []int{fileHandleEventSize - 1, fileHandleEnterTimeOffset} {
+		if ev := NewFileHandleEventFast(raw[:size]); ev != nil {
+			t.Fatalf("a %d-byte file handle record decoded: %#v", size, ev)
+		}
 	}
 }
 

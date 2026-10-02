@@ -76,7 +76,7 @@
 // with a call a signal interrupted.
 #define SYSCALL_RESTART_EVENT 64
 // Control record carrying the file handle a successful name_to_handle_at
-// returned (ior_emit_file_handle, filter.c).
+// returned (ior_emit_file_handle, handle.c).
 #define FILE_HANDLE_EVENT 65
 
 #define UNCLASSIFIED 0
@@ -378,21 +378,35 @@ struct open_by_handle_at_event {
 // file_handle_event is a control record, not a syscall event: the exit handler
 // of name_to_handle_at emits it after a successful return, with the handle the
 // kernel wrote into the caller's buffer, and reserves it before the exit
-// record of the same call (ior_emit_file_handle, filter.c). Userspace files
+// record of the same call (ior_emit_file_handle, handle.c). Userspace files
 // the pathname of the still-pending enter under that handle, so that an
 // open_by_handle_at carrying the same handle - on any thread or process - can
 // be named (handleFileHandleEvent, internal/eventloop_handle.go). It is never
 // rendered as a row.
 //
 // trace_id is the ENTER trace ID of the call (SYS_ENTER_NAME_TO_HANDLE_AT).
-// time is the exit handler's single clock read and therefore equals the time
-// of the exit record that follows, bit for bit; userspace accepts the handle
-// only for an exit with that time, so a record whose exit was lost can never
-// be claimed by a later call of the tid. Only a handle that was read
-// completely is submitted, so handle_status is always FILE_HANDLE_OK; the
-// word is kept so that the handle fields sit at the offsets they have in
-// open_by_handle_at_event (reserved is where that record has flags, and is 0).
-// No implicit padding, 168 bytes.
+// The record names both ends of its call by their clock reads, because
+// userspace must not pair it by position:
+//   - time is the exit handler's single clock read and therefore equals the
+//     time of the exit record that follows, bit for bit; userspace accepts the
+//     handle only for an exit with that time, so a record whose exit was lost
+//     is not claimed by a later call of the tid.
+//   - enter_time is the start_ns of the enter state the exit handler found,
+//     i.e. the time of the call's own enter record (the enter handler stamps
+//     both with one clock read). Userspace accepts the record only while the
+//     enter it has pending for the tid carries that time: the pathname it
+//     files is the pending enter's, and that enter is an EARLIER call's when
+//     that call's exit record and this call's enter record were both lost (or
+//     the enter was shed by the raw path filter).
+// Both checks compare clock reads of one tid that have at least a syscall
+// entry or exit between them; a clock too coarse to tell those apart could
+// make two calls look alike, which is accepted.
+//
+// Only a handle that was read completely is submitted, so handle_status is
+// always FILE_HANDLE_OK; the word is kept so that the handle fields sit at
+// the offsets they have in open_by_handle_at_event (reserved is where that
+// record has flags, and is 0). enter_time was appended behind them for the
+// same reason. No implicit padding, 176 bytes.
 struct file_handle_event {
     __u32 event_type;
     __u32 trace_id;
@@ -404,6 +418,7 @@ struct file_handle_event {
     __u32 handle_bytes;
     __s32 handle_type;
     __u8 f_handle[IOR_MAX_HANDLE_SZ];
+    __u64 enter_time;
 };
 
 struct socket_event {

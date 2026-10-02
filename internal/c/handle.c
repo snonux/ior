@@ -44,6 +44,17 @@ struct ior_user_file_handle {
 // needs for a variable-length read into the record. A zero length reads
 // nothing and is reported as it is; userspace takes it for no handle.
 //
+// What the verifier is given (llvm-objdump -d of both callers, clang 22.1,
+// at -mcpu=v1, v2 and the default v3): the length is loaded from the stack
+// copy of the header by a zero-extending 32-bit load into the register that
+// becomes the helper's size argument, and "> 0x80" and "== 0" are tested on
+// that same register right before the call - 64-bit compares at v1/v2,
+// 32-bit ones at v3 - with nothing in between that could lose the bounds
+// (no spill, no copy to another register). So the size reaches the helper
+// bounded to [1, 128], never as an unbounded or possibly-zero scalar. The
+// object has been loaded on Linux 7.2 only; for the 4.18 and 5.14 verifiers
+// this is an argument from the instruction sequence, not a test.
+//
 // The two reads are not atomic with the kernel's own copy: a caller that
 // rewrites the buffer in between could make the record differ from what the
 // kernel used. That only misnames that caller's own row.
@@ -79,7 +90,7 @@ static __always_inline __u32 ior_read_file_handle(__u64 handle_ptr, __u32 *handl
 // single-path kind, so its faulted-pathname recovery occupies only the first,
 // and reusing the free slot keeps struct syscall_enter_state - zeroed and
 // written on every stateful enter - at its size and the exit hook at one
-// lookup (the pointer comes back through ior_on_syscall_exit_take_filenames).
+// lookup (the pointer comes back through ior_on_syscall_exit_take_handle).
 // The generated enter handler calls it on every emitted enter, right after
 // ior_on_syscall_enter_stateful created the entry.
 static __always_inline void ior_stash_pending_handle(__u32 tid, __u64 handle_ptr) {
@@ -90,15 +101,18 @@ static __always_inline void ior_stash_pending_handle(__u32 tid, __u64 handle_ptr
 // wrote to handle_ptr as a FILE_HANDLE_EVENT control record. The generated exit
 // handler calls it only for ctx->ret == 0 and before it reserves its own exit
 // record, so the ring buffer hands userspace the handle while the enter event
-// of the call is still pending; now is that handler's single clock read, the
-// time its exit record carries too (see struct file_handle_event).
+// of the call is still pending. The record names both ends of the call: now is
+// that handler's single clock read, the time its exit record carries too, and
+// enter_ns is the start time on the enter state its exit hook just took, the
+// time of the call's enter record (see struct file_handle_event for what
+// userspace does with the two).
 //
 // A handle that cannot be read completely, or that is empty, is discarded
 // rather than submitted: it identifies nothing, and userspace then simply
 // files no name for the call. So is a record the ring buffer has no room for
 // (counted like every other drop).
 static __always_inline void ior_emit_file_handle(__u32 pid, __u32 tid, __u32 enter_trace_id, __u64 now,
-                                                 __u64 handle_ptr) {
+                                                 __u64 enter_ns, __u64 handle_ptr) {
     struct file_handle_event *ev;
 
     if (!handle_ptr)
@@ -116,6 +130,7 @@ static __always_inline void ior_emit_file_handle(__u32 pid, __u32 tid, __u32 ent
     ev->pid = pid;
     ev->tid = tid;
     ev->reserved = 0;
+    ev->enter_time = enter_ns;
     ev->handle_status = ior_read_file_handle(handle_ptr, &ev->handle_bytes, &ev->handle_type, ev->f_handle);
     if (ev->handle_status != FILE_HANDLE_OK || ev->handle_bytes == 0) {
         bpf_ringbuf_discard(ev, 0);

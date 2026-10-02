@@ -1859,10 +1859,11 @@ type FileHandleEvent struct {
 	HandleBytes  uint32
 	HandleType   int32
 	FHandle      [IOR_MAX_HANDLE_SZ]byte
+	EnterTime    uint64
 }
 
 func (f FileHandleEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Reserved:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Reserved, f.HandleStatus, f.HandleBytes, f.HandleType, hex.EncodeToString(f.FHandle[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Reserved:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v EnterTime:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Reserved, f.HandleStatus, f.HandleBytes, f.HandleType, hex.EncodeToString(f.FHandle[:]), f.EnterTime)
 }
 
 func (f FileHandleEvent) Equals(other any) bool {
@@ -1870,7 +1871,7 @@ func (f FileHandleEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Reserved == otherConcrete.Reserved && f.HandleStatus == otherConcrete.HandleStatus && f.HandleBytes == otherConcrete.HandleBytes && f.HandleType == otherConcrete.HandleType && f.FHandle == otherConcrete.FHandle
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Reserved == otherConcrete.Reserved && f.HandleStatus == otherConcrete.HandleStatus && f.HandleBytes == otherConcrete.HandleBytes && f.HandleType == otherConcrete.HandleType && f.FHandle == otherConcrete.FHandle && f.EnterTime == otherConcrete.EnterTime
 }
 
 func (f *FileHandleEvent) GetEventType() EventType {

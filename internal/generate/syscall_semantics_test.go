@@ -2894,12 +2894,12 @@ func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, erro
 // parseOutputHandleCapture recognizes the output-handle capture
 // (name_to_handle_at): the enter handler stashes the struct file_handle
 // pointer once, after ior_on_syscall_enter_stateful created the enter state
-// and before its own reserve; the exit handler takes it as the second slot of
-// its exit hook and publishes it once, only for ret == 0 (the one return that
-// wrote a handle), with the handler's own clock read - the time its exit
-// record carries, which is what ties the two records together - and before
-// its own reserve. It returns the handle's argument index and whether the
-// capture is present.
+// and before its own reserve; the exit handler takes it, together with the
+// enter time on the same state, through its exit hook and publishes it once,
+// only for ret == 0 (the one return that wrote a handle), with the handler's
+// own clock read - the time its exit record carries - and that enter time,
+// which tie the record to both ends of its call, and before its own reserve.
+// It returns the handle's argument index and whether the capture is present.
 func parseOutputHandleCapture(name, enterBody, exitBody string) (int, bool, error) {
 	stashes := outputHandleStashRE.FindAllStringSubmatchIndex(enterBody, -1)
 	if len(stashes) == 0 && !strings.Contains(enterBody, "ior_stash_pending_handle") &&
@@ -2927,9 +2927,9 @@ func parseOutputHandleCapture(name, enterBody, exitBody string) (int, bool, erro
 // validateOutputHandleExit checks the exit half of parseOutputHandleCapture.
 func validateOutputHandleExit(name, exitBody string) error {
 	enterConst := regexp.QuoteMeta("SYS_ENTER_" + strings.ToUpper(name))
-	decls := regexp.MustCompile(`(?m)^    __u64 pending_filename2;$`).FindAllStringIndex(exitBody, -1)
-	takes := regexp.MustCompile(`(?m)^    if \(!ior_on_syscall_exit_take_filenames\(tid, `+enterConst+`, ctx->ret, now, &pending_filename, &pending_filename2\)\)\n        return 0;$`).FindAllStringIndex(exitBody, -1)
-	emits := regexp.MustCompile(`(?m)^    if \(ctx->ret == 0\)\n        ior_emit_file_handle\(pid, tid, `+enterConst+`, now, pending_filename2\);$`).FindAllStringIndex(exitBody, -1)
+	decls := regexp.MustCompile(`(?m)^    __u64 pending_handle;\n    __u64 enter_ns;$`).FindAllStringIndex(exitBody, -1)
+	takes := regexp.MustCompile(`(?m)^    if \(!ior_on_syscall_exit_take_handle\(tid, `+enterConst+`, ctx->ret, now, &pending_filename, &pending_handle, &enter_ns\)\)\n        return 0;$`).FindAllStringIndex(exitBody, -1)
+	emits := regexp.MustCompile(`(?m)^    if \(ctx->ret == 0\)\n        ior_emit_file_handle\(pid, tid, `+enterConst+`, now, enter_ns, pending_handle\);$`).FindAllStringIndex(exitBody, -1)
 	allEmits := strings.Count(exitBody, "ior_emit_file_handle(")
 	allHooks := regexp.MustCompile(`\bior_on_syscall_exit\w*\s*\(`).FindAllStringIndex(exitBody, -1)
 	if len(decls) != 1 || len(takes) != 1 || len(allHooks) != 1 || len(emits) != 1 || allEmits != 1 ||

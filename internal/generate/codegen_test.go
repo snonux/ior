@@ -2435,7 +2435,7 @@ func TestGenerateNameToHandleAtCapturesItsOutputHandle(t *testing.T) {
 	requireContains(t, enterBody, "            ior_stash_pending_filename(tid, ctx->args[1]);\n")
 
 	exitBody := handlerBody(t, out, "sys_exit_name_to_handle_at")
-	hook, emits := openNameHookLine2(enterConst), []string{openNameEmitLine(enterConst), outputHandleEmitLines(enterConst)}
+	hook, emits := outputHandleHookLine(enterConst), []string{openNameEmitLine(enterConst), outputHandleEmitLines(enterConst)}
 	for _, line := range append([]string{hook}, emits...) {
 		requireContains(t, exitBody, line)
 	}
@@ -2446,7 +2446,8 @@ func TestGenerateNameToHandleAtCapturesItsOutputHandle(t *testing.T) {
 	for _, name := range []string{"sys_enter_mkdir", "sys_exit_mkdir"} {
 		body := handlerBody(t, out, name)
 		requireNotContains(t, body, "pending_filename2")
-		requireNotContains(t, body, "ior_stash_pending_handle")
+		requireNotContains(t, body, "pending_handle")
+		requireNotContains(t, body, "enter_ns")
 		requireNotContains(t, body, "ior_emit_file_handle")
 	}
 }
@@ -3627,9 +3628,10 @@ func TestGeneratePathHandlersRecoverAFaultedPath(t *testing.T) {
 // recovers stashed pointers (task 0t2). The pointers are read by the exit hook
 // out of the enter-state entry it looked up itself, so: the locals are declared
 // ahead of the hook; the handler calls exactly that hook variant (hook, one of
-// openNameHookLine/openNameHookLine2) and neither the plain
-// ior_on_syscall_exit (a second lookup would be needed to get the pointers) nor
-// a standalone ior_take_pending_filename*; and each emit follows the hook (an
+// openNameHookLine/openNameHookLine2/outputHandleHookLine) and neither the
+// plain ior_on_syscall_exit (a second lookup would be needed to get the
+// pointers) nor a standalone ior_take_pending_filename*; and each emit
+// follows the hook (an
 // event it suppressed needs no fixup, and the pointers only exist after it)
 // but precedes the handler's own ring-buffer reserve (so userspace sees the
 // name while the enter event is still pending).
@@ -3646,6 +3648,9 @@ func checkRecoveryOrdering(t *testing.T, exit, body, hook string, emits ...strin
 	decls := []string{openNameDeclLine}
 	if strings.Contains(hook, "&pending_filename2") {
 		decls = append(decls, openNameDeclLine2)
+	}
+	if strings.Contains(hook, "&pending_handle") {
+		decls = append(decls, outputHandleDeclLines)
 	}
 	for _, decl := range decls {
 		if declAt := strings.Index(body, decl); declAt < 0 || declAt > hookAt {
@@ -3778,10 +3783,12 @@ func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, se
 	for helper, want := range map[string]int{
 		// Every recovering exit takes through exactly one hook call: the
 		// single-slot hook for the one-path handlers, the two-slot one for the
-		// rename/link family, move_mount and name_to_handle_at. No standalone
-		// take remains.
+		// rename/link family and move_mount, and the handle hook, which also
+		// returns the enter time, for name_to_handle_at. No standalone take
+		// remains.
 		"ior_on_syscall_exit_take_filename(":  firstSlot - secondSlot - handles,
-		"ior_on_syscall_exit_take_filenames(": secondSlot + handles,
+		"ior_on_syscall_exit_take_filenames(": secondSlot,
+		"ior_on_syscall_exit_take_handle(":    handles,
 		"ior_emit_open_name_fixup(":           firstSlot,
 		"ior_stash_pending_filename(":         firstSlot,
 		"ior_emit_second_name_fixup(":         secondSlot,
@@ -3836,7 +3843,7 @@ func checkPathFilenameRecovery(t *testing.T, artifact, enter string, second bool
 	}
 	handleArg, returnsHandle := outputHandleSyscalls[syscallName]
 	if returnsHandle {
-		hook, emits = openNameHookLine2(enterConst), append(emits, outputHandleEmitLines(enterConst))
+		hook, emits = outputHandleHookLine(enterConst), append(emits, outputHandleEmitLines(enterConst))
 		checkOutputHandleCapture(t, artifact, syscallName, handleArg)
 	}
 	for _, line := range append([]string{hook}, emits...) {
@@ -3845,7 +3852,7 @@ func checkPathFilenameRecovery(t *testing.T, artifact, enter string, second bool
 		}
 	}
 	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, hook, emits...)
-	if !second && !returnsHandle && strings.Contains(exitBody, "pending_filename2") {
+	if !second && strings.Contains(exitBody, "pending_filename2") {
 		t.Errorf("sys_exit_%s uses the second slot but captures a single path", syscallName)
 	}
 }
@@ -3880,10 +3887,23 @@ func outputHandleStashLine(argIdx int) string {
 
 // outputHandleEmitLines publishes the returned handle only for ret == 0, the
 // one return that wrote a complete handle, and stamps the record with the
-// handler's own clock read: the exit record carries the same time, which is
-// how userspace knows the two belong to one call.
+// handler's own clock read and with the enter time the exit hook took: the
+// exit record carries the first and the enter record the second, which is how
+// userspace knows the three belong to one call.
 func outputHandleEmitLines(enterConst string) string {
-	return "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, " + enterConst + ", now, pending_filename2);\n"
+	return "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, " + enterConst + ", now, enter_ns, pending_handle);\n"
+}
+
+// outputHandleDeclLines are the locals the handle-taking exit hook fills
+// besides pending_filename: the output handle pointer from the second pending
+// slot and the time of the enter that wrote the state.
+const outputHandleDeclLines = "    __u64 pending_handle;\n    __u64 enter_ns;\n"
+
+// outputHandleHookLine is the exit hook of name_to_handle_at: the one lookup
+// that takes the pathname pointer, the handle pointer and the enter time.
+func outputHandleHookLine(enterConst string) string {
+	return "    if (!ior_on_syscall_exit_take_handle(tid, " + enterConst +
+		", ctx->ret, now, &pending_filename, &pending_handle, &enter_ns))\n        return 0;\n"
 }
 
 // checkOutputHandleCapture asserts the enter half of the output-handle
@@ -4057,6 +4077,7 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 		"static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr)",
 		"static __always_inline int ior_on_syscall_exit_take_filename(",
 		"static __always_inline int ior_on_syscall_exit_take_filenames(",
+		"static __always_inline int ior_on_syscall_exit_take_handle(",
 		"static __always_inline void ior_emit_name_fixup(__u32 tid, __u32 enter_trace_id,",
 		"static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,",
 		"static __always_inline void ior_emit_second_name_fixup(__u32 tid, __u32 enter_trace_id,",
@@ -4199,14 +4220,17 @@ func checkExitHookTakesPendingPointers(t *testing.T, filterC string) {
 	zero2At := strings.Index(body, "*pending_filename2 = 0;")
 	takeAt := strings.Index(body, "*pending_filename = state->pending_filename;")
 	take2At := strings.Index(body, "*pending_filename2 = state->pending_filename2;")
+	zeroNsAt := strings.Index(body, "*enter_ns = 0;")
+	takeNsAt := strings.Index(body, "*enter_ns = state->start_ns;")
 	deleteAt := strings.LastIndex(body, "bpf_map_delete_elem(&syscall_enter_state_map, &tid);")
-	if lookupAt < 0 || guardAt < 0 || zeroAt < 0 || zero2At < 0 || takeAt < 0 || take2At < 0 || deleteAt < 0 {
+	if lookupAt < 0 || guardAt < 0 || zeroAt < 0 || zero2At < 0 || takeAt < 0 || take2At < 0 || deleteAt < 0 ||
+		zeroNsAt < 0 || takeNsAt < 0 {
 		t.Fatalf("ior_on_syscall_exit_impl lacks the lookup, the guard, the zeroing, the takes or the delete:\n%s", body)
 	}
-	if zeroAt > lookupAt || zero2At > lookupAt {
+	if zeroAt > lookupAt || zero2At > lookupAt || zeroNsAt > lookupAt {
 		t.Error("the pending outputs must be zeroed before the lookup so a stateless exit yields 0")
 	}
-	for _, at := range []int{takeAt, take2At} {
+	for _, at := range []int{takeAt, take2At, takeNsAt} {
 		if at < guardAt {
 			t.Error("a pending pointer is taken before the enter_trace_id guard: a foreign entry could leak a path")
 		}

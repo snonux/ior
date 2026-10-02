@@ -104,11 +104,11 @@ int main(void) {
             __u32 status = ior_read_file_handle(ptr, &ev->handle_bytes, &ev->handle_type, ev->f_handle);
             printf("status=%%u bytes=%%u type=%%d", status, ev->handle_bytes, ev->handle_type);
         } else {
-            ior_emit_file_handle(7, 8, 9, 1234, ptr);
+            ior_emit_file_handle(7, 8, 9, 1234, 1111, ptr);
             printf("submitted=%%u discarded=%%u drops=%%u", submitted, discarded, drops);
             if (submitted)
-                printf(" event=%%u id=%%u time=%%llu pid=%%u tid=%%u reserved=%%u status=%%u bytes=%%u type=%%d",
-                       ev->event_type, ev->trace_id, ev->time, ev->pid, ev->tid, ev->reserved,
+                printf(" event=%%u id=%%u time=%%llu enter=%%llu pid=%%u tid=%%u reserved=%%u status=%%u bytes=%%u type=%%d",
+                       ev->event_type, ev->trace_id, ev->time, ev->enter_time, ev->pid, ev->tid, ev->reserved,
                        ev->handle_status, ev->handle_bytes, ev->handle_type);
         }
         handle_report(ev->f_handle, bytes);
@@ -159,10 +159,11 @@ var handleReadCases = []handleCase{
 }
 
 // handleEmitCases cover ior_emit_file_handle, called with pid 7, tid 8,
-// enter trace ID 9 and clock read 1234. Event type 65 is FILE_HANDLE_EVENT.
+// enter trace ID 9, clock read 1234 and enter time 1111. Event type 65 is
+// FILE_HANDLE_EVENT.
 var handleEmitCases = []handleCase{
 	{name: "handle published", op: "emit", mapped: 4096, bytes: 8, handleType: 1,
-		want: "submitted=1 discarded=0 drops=0 event=65 id=9 time=1234 pid=7 tid=8 reserved=0 status=1 bytes=8 type=1" +
+		want: "submitted=1 discarded=0 drops=0 event=65 id=9 time=1234 enter=1111 pid=7 tid=8 reserved=0 status=1 bytes=8 type=1" +
 			" prefix=8 clean=1 guard=1 maxread=8"},
 	{name: "null pointer reserves nothing", op: "emit", nullPtr: true, mapped: 4096, bytes: 8, handleType: 1,
 		want: "submitted=0 discarded=0 drops=0 prefix=0 clean=0 guard=1 maxread=0"},
@@ -206,6 +207,8 @@ var handleMutations = []handleMutation{
 	{"empty handle published", " || ev->handle_bytes == 0) {", ") {", "empty handle discarded"},
 	{"unreadable handle published", "ev->handle_status != FILE_HANDLE_OK || ", "", "unreadable handle discarded"},
 	{"record not stamped with the caller's clock read", "    ev->time = now;\n", "    ev->time = 0;\n", "handle published"},
+	{"record stamped with the exit time as its enter time", "    ev->enter_time = enter_ns;\n", "    ev->enter_time = now;\n",
+		"handle published"},
 	{"full ring buffer not counted", "        ior_count_ringbuf_drop();\n", "", "ring buffer full"},
 }
 

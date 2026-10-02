@@ -27,8 +27,8 @@ var enterHookCall = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(`)
 // pointer, not the closing parenthesis).
 var (
 	enterHookWithNow = regexp.MustCompile(`ior_on_syscall_enter(_stateful)?\(tid, \w+, now\)`)
-	exitHookCall     = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?)?\(`)
-	exitHookWithNow  = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?)?\(tid, \w+, ctx->ret, now[,)]`)
+	exitHookCall     = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?|_take_handle)?\(`)
+	exitHookWithNow  = regexp.MustCompile(`ior_on_syscall_exit(_take_filenames?|_take_handle)?\(tid, \w+, ctx->ret, now[,)]`)
 )
 
 // splitGeneratedHandlers returns each generated handler body keyed by its
@@ -171,11 +171,13 @@ func TestSyscallHooksDoNotReadTheClock(t *testing.T) {
 		"ior_on_noreturn_syscall_enter": "(__u32 enter_trace_id)",
 		"ior_on_syscall_exit":           "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now)",
 		"ior_on_syscall_exit_impl": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
-			"__u64 *pending_filename, __u64 *pending_filename2)",
+			"__u64 *pending_filename, __u64 *pending_filename2, __u64 *enter_ns)",
 		"ior_on_syscall_exit_take_filename": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
 			"__u64 *pending_filename)",
 		"ior_on_syscall_exit_take_filenames": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
 			"__u64 *pending_filename, __u64 *pending_filename2)",
+		"ior_on_syscall_exit_take_handle": "(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now, " +
+			"__u64 *pending_filename, __u64 *pending_handle, __u64 *enter_ns)",
 	}
 	for hook, params := range hooks {
 		re := regexp.MustCompile(`(?s)static __always_inline int ` + hook + `(\(.*?\)) \{\n(.*?)\n\}\n`)

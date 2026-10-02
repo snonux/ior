@@ -42,6 +42,7 @@ var accountingFunctions = []string{
 	"ior_on_syscall_exit",
 	"ior_on_syscall_exit_take_filename",
 	"ior_on_syscall_exit_take_filenames",
+	"ior_on_syscall_exit_take_handle",
 	"ior_stash_pending_filename",
 	"ior_stash_pending_filename2",
 	"ior_on_exec_tid_change",
@@ -205,6 +206,12 @@ int main(void) {
             __u64 p1 = 0xdeadbeef, p2 = 0xfeedface;
             int emit = ior_on_syscall_exit_take_filenames(a, b, ret, d, &p1, &p2);
             printf("emit=%%d p1=%%llu p2=%%llu\n", emit, p1, p2);
+        } else if (!strcmp(cmd, "exith") && scanf("%%llu %%llu %%lld %%llu", &a, &b, &ret, &d) == 4) {
+            /* name_to_handle_at's exit: both pointers and the time of the
+             * enter that wrote the entry, all preset to garbage. */
+            __u64 p1 = 0xdeadbeef, p2 = 0xfeedface, ns = 0xabad1dea;
+            int emit = ior_on_syscall_exit_take_handle(a, b, ret, d, &p1, &p2, &ns);
+            printf("emit=%%d p1=%%llu p2=%%llu enter=%%llu\n", emit, p1, p2, ns);
         } else if (!strcmp(cmd, "stash") && scanf("%%llu %%llu %%llu", &a, &b, &c) == 3) {
             ior_stash_pending_filename(a, b);
             ior_stash_pending_filename2(a, c);
@@ -443,6 +450,18 @@ var accountingScenarios = []accountingScenario{
 		// The foreign entry was dropped, not paired: the next exit is stateless.
 		{"exitf2 1 200 0 6000", "emit=1 p1=0 p2=0"},
 	}},
+	// Task k03: name_to_handle_at's exit hook also returns the time of the
+	// enter that wrote the entry (start_ns, 1000 here - not the exit's 6000),
+	// which its handle record carries. Like the pointers it is 0 without an
+	// entry and for an entry of another syscall.
+	{name: "handle exit hook returns the enter time", steps: []accountingStep{
+		{"rate 100 0", accOK},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exith 1 200 0 6000", "emit=1 p1=4096 p2=8192 enter=1000"}, {"state 1", "nostate"},
+		{"exith 1 200 0 6000", "emit=1 p1=0 p2=0 enter=0"},
+		{"entersf 1 200 1000", accEmit1}, {"stash 1 4096 8192", accOK},
+		{"exith 1 100 0 6000", "emit=0 p1=0 p2=0 enter=0"}, {"state 1", "nostate"},
+	}},
 	// A not-emitted syscall (rate 0) still gets its aggregate count from the
 	// same hook that hands the pointers back; the handler then returns before
 	// using them.
@@ -547,6 +566,14 @@ func accountingMutations() map[string][2]string {
 		"untimed count touches the histogram": {
 			"        existing->count += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
 			"        existing->count += 1;\n        existing->duration_histogram[0] += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
+		},
+		"enter time not zeroed without an entry": {
+			"    if (enter_ns)\n        *enter_ns = 0;\n",
+			"",
+		},
+		"exit time handed back as the enter time": {
+			"        *enter_ns = state->start_ns;",
+			"        *enter_ns = now;",
 		},
 		"zero duration not clamped": {
 			"duration = now > state->start_ns ? now - state->start_ns : 1;",

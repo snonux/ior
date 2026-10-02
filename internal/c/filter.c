@@ -419,8 +419,14 @@ static __always_inline int ior_on_noreturn_syscall_enter(__u32 enter_trace_id) {
 // the handler has no such slot; the callers pass compile-time constants, so
 // the dead stores and branches vanish after inlining and the non-path handlers
 // cost what they did.
+//
+// enter_ns, when asked for, is the entry's start_ns from the same lookup: the
+// clock read the enter handler also stamped its enter record with. Only
+// name_to_handle_at's exit asks (ior_on_syscall_exit_take_handle); it is 0 on
+// the stateless path, like the pointers.
 static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
-                                                    __u64 *pending_filename, __u64 *pending_filename2) {
+                                                    __u64 *pending_filename, __u64 *pending_filename2,
+                                                    __u64 *enter_ns) {
     __u64 duration;
     __u8 emit_event = 1;
     struct syscall_enter_state *state;
@@ -429,6 +435,8 @@ static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace
         *pending_filename = 0;
     if (pending_filename2)
         *pending_filename2 = 0;
+    if (enter_ns)
+        *enter_ns = 0;
 
     state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
     if (!state)
@@ -447,6 +455,8 @@ static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace
         *pending_filename = state->pending_filename;
     if (pending_filename2)
         *pending_filename2 = state->pending_filename2;
+    if (enter_ns)
+        *enter_ns = state->start_ns;
 
     // A completed invocation always has a duration of at least 1ns in the
     // aggregate. A coarse clocksource can return the same reading at enter
@@ -489,13 +499,13 @@ static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace
 // ior_on_syscall_exit is the exit hook of every handler that recovers no
 // pending filename.
 //
-// All three exit hooks pass the verdict through ior_restart_on_exit
+// All four exit hooks pass the verdict through ior_restart_on_exit
 // (restart.c), which notes an emitted exit that carries a restart code the
 // kernel may answer by continuing the call - re-executing it, or after -516
 // resuming it through restart_syscall; for any other return value it costs
 // one range check.
 static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
-    return ior_restart_on_exit(tid, ret, ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, 0, 0));
+    return ior_restart_on_exit(tid, ret, ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, 0, 0, 0));
 }
 
 // ior_on_syscall_exit_take_filename is the exit hook of the path-capturing
@@ -505,17 +515,31 @@ static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, 
 static __always_inline int ior_on_syscall_exit_take_filename(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
                                                              __u64 *pending_filename) {
     return ior_restart_on_exit(tid, ret,
-                               ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename, 0));
+                               ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename, 0, 0));
 }
 
 // ior_on_syscall_exit_take_filenames is the same for the two-path kinds
-// (rename/link, move_mount): it also returns the second slot. So does
-// name_to_handle_at's exit, whose second slot holds its output handle pointer.
+// (rename/link, move_mount): it also returns the second slot.
 static __always_inline int ior_on_syscall_exit_take_filenames(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
                                                               __u64 *pending_filename, __u64 *pending_filename2) {
     return ior_restart_on_exit(tid, ret,
                                ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename,
-                                                        pending_filename2));
+                                                        pending_filename2, 0));
+}
+
+// ior_on_syscall_exit_take_handle is the exit hook of name_to_handle_at
+// (outputHandleSyscalls in internal/generate/classify.go). Its second slot
+// holds the output struct file_handle pointer (ior_stash_pending_handle in
+// handle.c) rather than a second path, and it also returns the time of the
+// enter that wrote the entry: the handle record carries it so that userspace
+// can tell whether the enter it has pending is this call's
+// (struct file_handle_event in types.h). Still one lookup.
+static __always_inline int ior_on_syscall_exit_take_handle(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
+                                                           __u64 *pending_filename, __u64 *pending_handle,
+                                                           __u64 *enter_ns) {
+    return ior_restart_on_exit(tid, ret,
+                               ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, pending_filename,
+                                                        pending_handle, enter_ns));
 }
 
 // ior_on_exec_tid_change carries an in-flight execve's enter state across the

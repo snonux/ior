@@ -123,14 +123,6 @@ func (h handlerSpec) takesPendingFilename() bool {
 	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0 || h.outputHandleArg >= 0)
 }
 
-// takesSecondPendingSlot reports whether this exit handler also takes the
-// second stashed pointer: the second path of the two-path kinds, or the
-// output file handle of name_to_handle_at, which borrows that slot because
-// its syscall has only one path.
-func (h handlerSpec) takesSecondPendingSlot() bool {
-	return !h.isEnter && (h.recoverSecondFilename || h.outputHandleArg >= 0)
-}
-
 // keepsEnterState reports whether this enter handler needs its per-tid
 // enter-state entry at every sampling rate, rate 1 included: a handler that
 // stashes a pending pointer (the faulted-path recovery in its kind body, the
@@ -170,11 +162,11 @@ func enterConstForHandler(name string, isEnter bool) string {
 // in the kind emitters: the enter-side stash must follow
 // ior_on_syscall_enter_stateful (which creates this tid's enter-state entry
 // at every rate), the take is part of the exit hook itself
-// (ior_on_syscall_exit_take_filename(s) copies the pointers out of the entry
-// it already looked up, before it deletes it; see renderTakingExitHook) and the
-// fixup must precede this handler's own reserve, so the ring buffer hands
-// userspace the name while the enter event of the same syscall is still
-// pending and unpaired.
+// (ior_on_syscall_exit_take_filename(s) and _take_handle copy the pointers
+// out of the entry they already looked up, before they delete it; see
+// renderTakingExitHook) and the fixup must precede this handler's own reserve,
+// so the ring buffer hands userspace the name while the enter event of the
+// same syscall is still pending and unpaired.
 func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 	name := h.name
 	fmt.Fprintf(b, "/// %s is a struct %s\n", name, h.comment)
@@ -242,7 +234,16 @@ func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
 	b.WriteString("    __u64 pending_filename;\n")
 	hook := "ior_on_syscall_exit_take_filename"
 	out := "&pending_filename"
-	if h.takesSecondPendingSlot() {
+	switch {
+	case h.outputHandleArg >= 0:
+		// name_to_handle_at: the second slot is its output handle pointer,
+		// and the hook also hands back the time of the enter that wrote the
+		// state, which the handle record carries (ior_emit_file_handle).
+		b.WriteString("    __u64 pending_handle;\n")
+		b.WriteString("    __u64 enter_ns;\n")
+		hook = "ior_on_syscall_exit_take_handle"
+		out = "&pending_filename, &pending_handle, &enter_ns"
+	case h.recoverSecondFilename:
 		b.WriteString("    __u64 pending_filename2;\n")
 		hook = "ior_on_syscall_exit_take_filenames"
 		out = "&pending_filename, &pending_filename2"
@@ -268,9 +269,11 @@ func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
 // An output-handle enter (name_to_handle_at) parks its struct file_handle
 // pointer the same unconditional way, in the second slot; its kind body may
 // still stash the pathname in the first. Its exit publishes the handle only
-// for ret == 0, the one return that wrote a complete handle, and passes the
-// handler's clock read along: the control record and the exit record that
-// follows then carry the same time, which is how userspace ties them together.
+// for ret == 0, the one return that wrote a complete handle, and passes two
+// times along: the handler's clock read, which the exit record that follows
+// carries too, and the enter time its hook took from the enter state, which
+// the call's enter record carries. Userspace ties the control record to both
+// ends of its call by them (struct file_handle_event in internal/c/types.h).
 func renderPendingFilenameUse(b *strings.Builder, h handlerSpec) {
 	switch {
 	case h.isEnter && !h.noreturn && h.outputPathArg >= 0:
@@ -300,7 +303,7 @@ func renderExitPointerUse(b *strings.Builder, h handlerSpec) {
 	}
 	if h.outputHandleArg >= 0 {
 		b.WriteString("    if (ctx->ret == 0)\n")
-		fmt.Fprintf(b, "        ior_emit_file_handle(pid, tid, %s, now, pending_filename2);\n", h.enterName)
+		fmt.Fprintf(b, "        ior_emit_file_handle(pid, tid, %s, now, enter_ns, pending_handle);\n", h.enterName)
 	}
 	b.WriteString("\n")
 }

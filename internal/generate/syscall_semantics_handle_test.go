@@ -13,8 +13,9 @@ type semanticMutation struct {
 
 const (
 	handleStashLine = "    ior_stash_pending_handle(tid, ctx->args[2]);\n"
-	handleEmitLines = "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename2);\n"
-	handleTakeCall  = "ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_filename2)"
+	handleEmitLines = "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT, now, enter_ns, pending_handle);\n"
+	handleEmitTail  = "SYS_ENTER_NAME_TO_HANDLE_AT, now, enter_ns, pending_handle);"
+	handleTakeCall  = "ior_on_syscall_exit_take_handle(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_handle, &enter_ns)"
 	handleReadLine  = "    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);\n"
 )
 
@@ -43,7 +44,7 @@ func outputHandleEnterMutations() []semanticMutation {
 }
 
 // outputHandleExitMutations break the exit half: when the handle is
-// published, with which time and pointer, and how the pointer is taken.
+// published, with which times and pointer, and how they are taken.
 func outputHandleExitMutations() []semanticMutation {
 	exit := func(old, replacement string) func(*testing.T, string) string {
 		return func(t *testing.T, source string) string {
@@ -54,12 +55,19 @@ func outputHandleExitMutations() []semanticMutation {
 		{"output handle never published", exit(handleEmitLines, "")},
 		{"output handle published on failure", exit("    if (ctx->ret == 0)\n        ior_emit_file_handle", "    if (1)\n        ior_emit_file_handle")},
 		{"output handle published for any non-negative return", exit("    if (ctx->ret == 0)\n        ior_emit_file_handle", "    if (ctx->ret >= 0)\n        ior_emit_file_handle")},
-		{"output handle stamped with another clock read", exit("SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename2);", "SYS_ENTER_NAME_TO_HANDLE_AT, bpf_ktime_get_boot_ns(), pending_filename2);")},
-		{"output handle read through the pathname pointer", exit("SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename2);", "SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename);")},
+		{"output handle stamped with another clock read", exit(handleEmitTail,
+			"SYS_ENTER_NAME_TO_HANDLE_AT, bpf_ktime_get_boot_ns(), enter_ns, pending_handle);")},
+		{"output handle stamped with the exit time as its enter time", exit(handleEmitTail,
+			"SYS_ENTER_NAME_TO_HANDLE_AT, now, now, pending_handle);")},
+		{"output handle read through the pathname pointer", exit(handleEmitTail,
+			"SYS_ENTER_NAME_TO_HANDLE_AT, now, enter_ns, pending_filename);")},
 		{"output handle published for the wrong syscall", exit("ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT,", "ior_emit_file_handle(pid, tid, SYS_ENTER_READ,")},
 		{"output handle pointer never taken", exit(handleTakeCall,
 			"ior_on_syscall_exit_take_filename(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename)")},
-		{"output handle taken for the wrong syscall", exit("ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_NAME_TO_HANDLE_AT,", "ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_READ,")},
+		{"output handle taken without the enter time", exit(handleTakeCall,
+			"ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_handle)")},
+		{"output handle taken for the wrong syscall", exit("ior_on_syscall_exit_take_handle(tid, SYS_ENTER_NAME_TO_HANDLE_AT,",
+			"ior_on_syscall_exit_take_handle(tid, SYS_ENTER_READ,")},
 		{"output handle published before the exit hook", func(t *testing.T, source string) string {
 			source = replaceInHandler(t, source, "exit", "name_to_handle_at", handleEmitLines, "")
 			return replaceInHandler(t, source, "exit", "name_to_handle_at",

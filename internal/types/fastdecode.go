@@ -50,7 +50,8 @@ const (
 	openByHandleAtEventSize      = 168
 	openByHandleAtEventLegacy    = 32
 	openByHandleAtEventSizeV1    = 28
-	fileHandleEventSize          = 168
+	fileHandleEventSize          = 176
+	fileHandleEnterTimeOffset    = 168
 	fileHandleFieldsOffset       = 28
 	socketEventSize              = 40
 	socketEventSizeV1            = 36
@@ -524,6 +525,11 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 //     kernel's sizeof and the binary.Write form). It decodes with
 //     FILE_HANDLE_NONE and no handle - by its length, never by the bytes at
 //     the status offset, which in the 32-byte record are unwritten padding.
+//     Decoding it keeps such an IOR_BPF_OBJECT override working, but not as
+//     it worked before: the event loop names a handle-less open from procfs
+//     alone, where before task k03 it used the thread's last
+//     name_to_handle_at (that stash is gone; see "What is still wrong" in
+//     internal/eventloop_handle.go).
 //
 // Every other size returns nil rather than being decoded at the wrong
 // offsets. The events are pooled, so every field is written on every path.
@@ -561,8 +567,11 @@ func decodeFileHandleFields(raw []byte, fHandle *[IOR_MAX_HANDLE_SZ]byte) (statu
 }
 
 // NewFileHandleEventFast decodes the control record that carries the handle a
-// successful name_to_handle_at returned. There is one layout, 168 bytes; a
-// longer payload decodes its prefix and a shorter one returns nil.
+// successful name_to_handle_at returned. There is one layout, 176 bytes: the
+// handle fields at the offsets open_by_handle_at_event has them, then the
+// time of the call's enter. A longer payload decodes its prefix and a shorter
+// one returns nil - no released object ever emitted this record without the
+// enter time, and without it the record cannot be tied to its enter.
 func NewFileHandleEventFast(raw []byte) *FileHandleEvent {
 	if len(raw) < fileHandleEventSize {
 		return nil
@@ -575,6 +584,8 @@ func NewFileHandleEventFast(raw []byte) *FileHandleEvent {
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Reserved = binary.LittleEndian.Uint32(raw[24:28])
 	f.HandleStatus, f.HandleBytes, f.HandleType = decodeFileHandleFields(raw, &f.FHandle)
+	at := fileHandleEnterTimeOffset
+	f.EnterTime = binary.LittleEndian.Uint64(raw[at : at+8])
 	return f
 }
 

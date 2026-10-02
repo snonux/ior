@@ -270,9 +270,12 @@ func TestFileHandleFieldRendersAsHex(t *testing.T) {
 		FileHandleEvent{FHandle: fHandle},
 	}
 	for _, ev := range events {
+		// The handle is the last field of the open record and is followed
+		// by the enter time in the control record: the whole field, to the
+		// last byte, either ends the string or ends at the next field.
 		got := ev.String()
-		if !strings.HasSuffix(got, want) {
-			t.Errorf("%T renders its handle as %q, want the suffix %q", ev, got, want)
+		if !strings.HasSuffix(got, want) && !strings.Contains(got, want+" ") {
+			t.Errorf("%T renders its handle as %q, want it to hold %q", ev, got, want)
 		}
 		if strings.ContainsAny(got, "\x1b\x00") {
 			t.Errorf("%T: raw handle bytes reached String(): %q", ev, got)
