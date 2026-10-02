@@ -90,18 +90,24 @@ func NewManager(attacher Attacher) *Manager {
 //     attempt: with both tracepoints attached, or with the attach failed. A
 //     failed attach is reported twice as well because it may have had the
 //     enter tracepoint attached for a moment (the exit attach failed and the
-//     enter link was destroyed again, or could not be): for the kernel that
-//     is an attach followed by a detach, and a detach is reported when it is
-//     over.
+//     enter link was destroyed again): for the kernel that is an attach
+//     followed by a detach, and a detach is reported when it is over. If that
+//     enter link could not be destroyed either, there was no detach: the
+//     enter tracepoint stays attached while the probe counts as inactive with
+//     no links. For the listener that is the enter-only state described under
+//     Detach below, and as harmless.
 //   - Detach calls it AFTER both links were destroyed, and only when the
 //     probe had a link to destroy. A destroy that failed is reported like one
 //     that succeeded. It leaves the pair half attached, and with the enter
 //     link gone and the exit link left the syscall's calls do run unseen at
 //     their enter; the pair stays that way until the next Detach of the
 //     syscall, which reports again (an Attach of a probe that still has a
-//     link is a no-op). Why the listener's outcome is right meanwhile is its
-//     business ("Runtime probe changes" in internal/eventloop_restart.go: the
-//     exit tracepoint that is still attached ends the wait of the row).
+//     link is a no-op). The mirror state, the enter link left and the exit
+//     link gone, lasts as long. Why the listener's outcome is right meanwhile
+//     is its business ("Runtime probe changes" in
+//     internal/eventloop_restart.go: the exit tracepoint that is still
+//     attached ends the wait of the row; with only the enter tracepoint left
+//     the syscall emits no exit, so nothing of it becomes pending).
 //
 // So what the listener notes in hook - the event loop clears the kernel's
 // restart_pending_map and stamps the boot clock - is noted after the old

@@ -113,11 +113,13 @@
  * happen to be sampled in; otherwise the interrupted row keeps its restart
  * code.
  *
- * Lost records. The state in restart_pending_map is not lossy (userspace
- * clears it at a runtime probe change, see below, and nothing else takes an
- * entry away); the records are. A lost RESUME means no fold. A lost HANDLER makes the handler's first
- * syscall release the row (for -516: whatever record of the task comes next;
- * no RESUME follows, the task was forgotten when the handler was delivered).
+ * Lost records. The state in restart_pending_map is not lossy (an entry goes
+ * only when a program here takes or overwrites it - a colliding tid's later
+ * interrupted exit included - or when userspace clears the map at a runtime
+ * probe change, see below); the records are. A lost RESUME means no fold. A
+ * lost HANDLER makes the handler's first syscall release the row (for -516:
+ * whatever record of the task comes next; no RESUME follows, the task was
+ * forgotten when the handler was delivered).
  * A lost announced enter is caught by the time rule.
  * What neither catches is a loss that leaves a well-formed stream behind: the
  * re-executed exit and the next call's enter lost together (that call's exit

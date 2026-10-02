@@ -380,7 +380,14 @@ func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	f.el.restartPending = pending
 	f.clockAt(restartBase + 600)
 	var hook func()
-	f.el.watchProbeChanges(func(registered func()) { hook = registered })
+	f.el.watchProbeChanges(func(registered func()) {
+		hook = registered
+		// The hook must exist before the install is reported: a change that
+		// races the install is then reported by one or the other.
+		if pending.clears.Load() != 0 || f.el.restarts.probes.changedAt.Load() != 0 {
+			t.Error("the install was reported before the hook was registered")
+		}
+	})
 	if hook == nil {
 		t.Fatal("watchProbeChanges registered no hook")
 	}

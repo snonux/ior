@@ -281,7 +281,9 @@ import (
 // exit that only a later call can deliver.) The second report's stamp is
 // younger than that row and its clear takes the entry. A failed attach is
 // reported twice all the same: it may have had the enter tracepoint attached
-// for a moment, which is an attach and a detach in one.
+// for a moment, which is an attach and a detach in one - or, when that enter
+// link could not be destroyed again, have left it attached for good, the
+// enter-only state of the next paragraph.
 //
 // A detach that failed half-way and left the exit tracepoint attached, with
 // the enter tracepoint gone, needs no report of its own while it lasts. A held
@@ -293,6 +295,13 @@ import (
 // which cannot be one of that syscall, or until the probe is detached for
 // good, which reports and clears it (an attach of a probe that still has a
 // link is a no-op in the manager and reports nothing).
+//
+// The mirror state - the enter tracepoint left attached, the exit tracepoint
+// gone - needs no report while it lasts either. The syscall emits no exit, so
+// no call of it becomes pending and nothing of it is held. Only as
+// restart_syscall can it be a continuation: its enter is announced and taken,
+// its exit never arrives, and the row waits in restartContinuing until the
+// tid's next record releases it or the next report does.
 //
 // What is left open. A report is made when the attach call has returned, not
 // at the instant the kernel attaches, so the fresh pair produces records
@@ -1408,6 +1417,7 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 // The wake token it leaves is taken by the loop when it starts and finds
 // nothing held.
 func (e *eventLoop) watchProbeChanges(listen func(hook func())) {
+	// The order is the point: see above.
 	listen(e.probesChanged)
 	e.probesChanged()
 }

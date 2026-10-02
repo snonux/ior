@@ -294,7 +294,10 @@ syscall takes the mark and the row stays as it was):
   never sees the re-execution: a tracer that cancels it or changes its syscall number at the
   syscall-entry stop (`strace --inject` with `error=` or `retval=`), a seccomp
   user-notification supervisor, or syscall user dispatch;
-- a kernel or driver bug returns the restart code to the program with no signal pending.
+- a kernel or driver bug returns the restart code to the program with no signal pending;
+- the `restart_syscall` probes are switched on in the TUI probes view while a thread is
+  stopped and continued twice within that one switch (switching probes off and on is
+  otherwise safe: calls interrupted before a switch are not folded at all).
 
 One situation is different: the kernel did re-execute the call and the mark was right, but
 the enter it announced was sampled out, and the timestamp that should tell that enter from
