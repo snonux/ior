@@ -268,19 +268,18 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 //
 // A parked caller is preferred over a held row when both exist: only one
 // thread can have won the exec, and the other's exit record is missing either
-// way. Preferred means asked alone (lostExecCaller): when the parked caller
-// is refused, the held row is not asked in its place. The refusal says that
+// way. Preferred means asked alone (lostExecCaller): when the parked caller is
+// refused, the held row is not asked in its place. The refusal says that
 // nothing was dropped since the parked caller's enter, and that proves more
-// than "this thread did not exec": the parked caller was alive at its
-// enter, so an exec by any thread of the process that this exit could
-// complete passed de_thread, and reserved its exec record, after that
-// enter. Not dropped, that record would have moved the exec'ing thread's
-// enter under the leader tid, and the exit would have found it. So no
-// thread exec'd, and the exit is a filter's answer. Falling through adopted the held thread's enter
-// whenever that enter predated a drop the watch had first seen before the
-// parked caller's: a wrong execve row, its -513 row, and - the pair
-// counting as a proof - the held rows of the process's live threads
-// released.
+// than "this thread did not exec": the parked caller was alive at its enter,
+// so an exec by any thread of the process that this exit could complete passed
+// de_thread, and reserved its exec record, after that enter. Not dropped, that
+// record would have moved the exec'ing thread's enter under the leader tid,
+// and the exit would have found it. So no thread exec'd, and the exit is a
+// filter's answer. Falling through adopted the held thread's enter whenever
+// that enter predated a drop the watch had first seen before the parked
+// caller's: a wrong execve row, its -513 row, and - the pair counting as a
+// proof - the held rows of the process's live threads released.
 //
 // The held-row lookup has the residual of the parked one: adopting the
 // wrong thread needs the exec record AND a killed sibling's exit record to be
