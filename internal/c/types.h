@@ -75,6 +75,9 @@
 // Control record of the restart-fold probes (restart.c): what the kernel does
 // with a call a signal interrupted.
 #define SYSCALL_RESTART_EVENT 64
+// Control record carrying the file handle a successful name_to_handle_at
+// returned (ior_emit_file_handle, filter.c).
+#define FILE_HANDLE_EVENT 65
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -322,6 +325,43 @@ struct dup3_event {
     __s32 flags;
 };
 
+// A struct file_handle as the handle syscalls pass it: handle_bytes says how
+// many bytes of f_handle are the handle, handle_type how the filesystem encoded
+// them, and the two together are what the kernel resolves to a file.
+// IOR_MAX_HANDLE_SZ is the kernel's MAX_HANDLE_SZ: name_to_handle_at never
+// returns a longer handle and open_by_handle_at rejects one with EINVAL.
+//
+// handle_status says what the record's handle fields hold:
+//   - FILE_HANDLE_NONE: nothing; the record predates the capture (the value an
+//     older, shorter record decodes with).
+//   - FILE_HANDLE_OK: handle_bytes (0..IOR_MAX_HANDLE_SZ) and handle_type are
+//     the caller's, and the first handle_bytes bytes of f_handle are the
+//     handle. A zero handle_bytes is reported as it is; no file has such a
+//     handle and the kernel rejects it.
+//   - FILE_HANDLE_NULL: the handle pointer was NULL.
+//   - FILE_HANDLE_READ_FAILED: the nofault read of the header or of the bytes
+//     failed (the page is not resident). handle_bytes and handle_type are the
+//     header's when only the bytes could not be read, else 0.
+//   - FILE_HANDLE_TOO_LARGE: handle_bytes (reported) exceeds
+//     IOR_MAX_HANDLE_SZ, so no bytes were read.
+//
+// Only FILE_HANDLE_OK identifies a handle; userspace treats every other status
+// as "handle unknown". f_handle is zero-filled before the read, so a record
+// holds the handle and zeros and never stale ring-buffer bytes: these syscalls
+// are rare, and the bytes are binary, so there is no terminator a reader could
+// stop at (compare "String fields in ring-buffer records" in filter.c).
+#define IOR_MAX_HANDLE_SZ 128
+#define FILE_HANDLE_NONE 0
+#define FILE_HANDLE_OK 1
+#define FILE_HANDLE_NULL 2
+#define FILE_HANDLE_READ_FAILED 3
+#define FILE_HANDLE_TOO_LARGE 4
+
+// The handle fields were appended (task k03): handle_status sits in what was
+// the implicit tail pad of the 32-byte record, which an older object leaves
+// unwritten, so a record of that size is decoded by its length as
+// FILE_HANDLE_NONE rather than by that word. The layout has no implicit
+// padding: 168 bytes for the kernel record and a binary.Write payload alike.
 struct open_by_handle_at_event {
     __u32 event_type;
     __u32 trace_id;
@@ -329,6 +369,41 @@ struct open_by_handle_at_event {
     __u32 pid;
     __u32 tid;
     __s32 flags;
+    __u32 handle_status;
+    __u32 handle_bytes;
+    __s32 handle_type;
+    __u8 f_handle[IOR_MAX_HANDLE_SZ];
+};
+
+// file_handle_event is a control record, not a syscall event: the exit handler
+// of name_to_handle_at emits it after a successful return, with the handle the
+// kernel wrote into the caller's buffer, and reserves it before the exit
+// record of the same call (ior_emit_file_handle, filter.c). Userspace files
+// the pathname of the still-pending enter under that handle, so that an
+// open_by_handle_at carrying the same handle - on any thread or process - can
+// be named (handleFileHandleEvent, internal/eventloop_handle.go). It is never
+// rendered as a row.
+//
+// trace_id is the ENTER trace ID of the call (SYS_ENTER_NAME_TO_HANDLE_AT).
+// time is the exit handler's single clock read and therefore equals the time
+// of the exit record that follows, bit for bit; userspace accepts the handle
+// only for an exit with that time, so a record whose exit was lost can never
+// be claimed by a later call of the tid. Only a handle that was read
+// completely is submitted, so handle_status is always FILE_HANDLE_OK; the
+// word is kept so that the handle fields sit at the offsets they have in
+// open_by_handle_at_event (reserved is where that record has flags, and is 0).
+// No implicit padding, 168 bytes.
+struct file_handle_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 reserved;
+    __u32 handle_status;
+    __u32 handle_bytes;
+    __s32 handle_type;
+    __u8 f_handle[IOR_MAX_HANDLE_SZ];
 };
 
 struct socket_event {

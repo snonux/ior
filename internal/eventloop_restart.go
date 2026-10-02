@@ -1173,7 +1173,8 @@ func (h *heldRestart) stepRestartRecord(rec *types.SyscallRestartEvent) restartA
 }
 
 // stepHandlerRecord lets the syscalls of a running signal handler through:
-// its enters and exits and the name fixups between them. Any other record of
+// its enters and exits and the records that amend a call between the two (a
+// name fixup, a returned file handle: amendsPendingEnter). Any other record of
 // the tid (its exit, a new task with its tid, an exec) ends the wait, and so
 // does a handler that outlasts maxHandlerRecords.
 //
@@ -1187,10 +1188,8 @@ func (h *heldRestart) stepRestartRecord(rec *types.SyscallRestartEvent) restartA
 // to backpressure - and the outer row would then take the inner call's
 // re-execution for its own when both are the same syscall.
 func (h *heldRestart) stepHandlerRecord(direction rawEventDirection, ev runtimeDecodedEvent) restartAction {
-	if direction == rawControlEvent {
-		if _, isFixup := ev.(*types.OpenNameFixupEvent); !isFixup {
-			return restartRelease
-		}
+	if direction == rawControlEvent && !amendsPendingEnter(ev) {
+		return restartRelease
 	}
 	if carrier, ok := ev.(event.RetCarrier); ok && direction == rawExitEvent && event.IsRestartRet(carrier.GetRet()) {
 		return restartRelease
@@ -1200,6 +1199,18 @@ func (h *heldRestart) stepHandlerRecord(direction rawEventDirection, ev runtimeD
 		return restartRelease
 	}
 	return restartPass
+}
+
+// amendsPendingEnter reports whether a control record only adds to a syscall
+// the task has in flight - a path recovered at sys_exit, or the handle a
+// name_to_handle_at returned - and therefore belongs between that call's
+// enter and exit like the two of them.
+func amendsPendingEnter(ev runtimeDecodedEvent) bool {
+	switch ev.(type) {
+	case *types.OpenNameFixupEvent, *types.FileHandleEvent:
+		return true
+	}
+	return false
 }
 
 // stepContinuation expects the exit of the continuation whose enter was

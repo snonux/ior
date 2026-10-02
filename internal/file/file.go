@@ -69,18 +69,13 @@ func appendText(dst []byte, s string, text func(string) string) []byte {
 // in the FdFile. Name and number are per descriptor too: the number
 // is the table slot, and the name is what that slot was opened (or last
 // resolved) as. See fdfile_desc.go for the sharing operations.
-//
-// namedAfterTmpfileDir says where the name came from, not what the descriptor
-// is: see MarkNamedAfterTmpfileDir. It sits with the other one-byte fields, in
-// what was padding, so it does not grow the struct.
 type FdFile struct {
-	fd                   int32
-	name                 string
-	desc                 *openFileDesc
-	closeOnExecKnown     bool
-	closeOnExec          bool
-	flagsFromProcFS      bool
-	namedAfterTmpfileDir bool
+	fd               int32
+	name             string
+	desc             *openFileDesc
+	closeOnExecKnown bool
+	closeOnExec      bool
+	flagsFromProcFS  bool
 }
 
 // NewFd constructs an FdFile from explicit descriptor metadata.
@@ -210,33 +205,6 @@ func (f *FdFile) Flags() Flags {
 // "may have been closed".
 func (f *FdFile) CloseOnExec() (set, known bool) {
 	return f.closeOnExec, f.closeOnExecKnown
-}
-
-// MarkNamedAfterTmpfileDir records that the name is the pathname of an
-// O_TMPFILE open ior saw, which is the directory the unnamed file was created
-// in and not a name of the file itself. The event loop sets it where it gives
-// that name: in the open's exit handler, and on a descriptor an
-// open_by_handle_at returned that it names by the stash taken from such an
-// entry. No constructor sets it: a descriptor named from procfs carries its
-// link text ("<dir>/#<inode> (deleted)"), which is a name of the file, whatever
-// its flags say.
-//
-// The mark belongs to the name, so it travels wherever the name is copied. Dup
-// (dup*, F_DUPFD*, fork) keeps it, and the event loop relies on that: a handle
-// taken through a duplicate is as opaque as one taken through the original.
-// Detach keeps it too, only because a snapshot is a copy of the whole FdFile:
-// no caller reads the mark of a snapshot (it is asked of fd table entries, a
-// snapshot is an emitted row's file). Nothing clears it, because nothing
-// renames an FdFile - a descriptor that is resolved again gets a new, unmarked
-// one.
-func (f *FdFile) MarkNamedAfterTmpfileDir() {
-	f.namedAfterTmpfileDir = true
-}
-
-// NamedAfterTmpfileDir reports whether the name is the directory of an
-// O_TMPFILE open rather than a name of the file (MarkNamedAfterTmpfileDir).
-func (f *FdFile) NamedAfterTmpfileDir() bool {
-	return f.namedAfterTmpfileDir
 }
 
 // FD returns the descriptor number the metadata was recorded for.

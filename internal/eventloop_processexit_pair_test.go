@@ -198,68 +198,74 @@ func TestProcessExitEvictsOnlyTheExitedTasksPairState(t *testing.T) {
 	}
 }
 
-// TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle covers the fourth
-// piece of tid-keyed state the exit record has to clear.
+// TestTaskExitDropsTheParkedHandleAndKeepsTheHandleNames covers the fourth
+// piece of tid-keyed state the exit record has to clear, and the piece of
+// handle state it must NOT clear.
 //
-// name_to_handle_at parks its pathname under the tid until the matching
-// open_by_handle_at consumes it, and the two need not be the same task at all:
-// handing the handle to another process is what the API is for. So an
-// unconsumed pathname outliving its task is ordinary, and left behind it does
-// more damage than the parked enter above - handleOpenByHandleAtExit both
-// labels the row with the dead task's path and registers that path in the fd
-// table for the *new* process, so every later read, write and close on the
-// descriptor reports it too.
-func TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle(t *testing.T) {
+// A handle a name_to_handle_at returned is parked under the tid from its
+// control record until the call's exit record; a task whose exit record was
+// lost leaves it parked, and the task's own death drops it. The names, in
+// contrast, are filed under the handle itself: handing a handle to another
+// process is what the API is for, so a name outlives the task that took the
+// handle and still names the open another process makes. (While the stash was
+// keyed by tid it had to be dropped here, or the recycled tid's next
+// open_by_handle_at was named after the dead task's path.)
+func TestTaskExitDropsTheParkedHandleAndKeepsTheHandleNames(t *testing.T) {
 	el := newPairEvictionEventLoop(t)
 	out := make(chan *event.Pair, 4)
 
-	// The dead task resolves a handle for its own path, then dies without ever
-	// opening it.
-	_, enterName := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
-		deadTaskPath, types.SYS_ENTER_NAME_TO_HANDLE_AT)
-	el.processRawEvent(enterName, out)
-	_, exitName := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
-		types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
-	el.processRawEvent(exitName, out)
+	// The dead task takes handle A of its own path, then starts a second
+	// name_to_handle_at whose handle record arrives but whose exit is lost.
+	for _, raw := range makeNameToHandleAtRecords(t, defaulTime, execCommPid, execCommTid,
+		deadTaskPath, testHandleA) {
+		el.processRawEvent(raw, out)
+	}
+	lost := makeNameToHandleAtRecords(t, defaulTime+150, execCommPid, execCommTid, siblingTaskPath, testHandleB)
+	el.processRawEvent(lost[0], out)
+	el.processRawEvent(lost[1], out)
 	drainRows(out)
+	if _, ok := el.handleState().taken[execCommTid]; !ok {
+		t.Fatal("fixture: the second call's handle is not parked")
+	}
 
-	feedTaskExit(t, el, out, defaulTime+200, execCommTid)
+	feedTaskExit(t, el, out, defaulTime+400, execCommTid)
+	if _, ok := el.handleState().taken[execCommTid]; ok {
+		t.Fatal("the dead task's parked handle survived its exit record")
+	}
 
-	// The tid is recycled and its new owner opens a handle of its own.
+	assertRecycledTidOpensByHandle(t, el, out, testHandleA, deadTaskPath)
+	assertRecycledTidOpensByHandle(t, el, out, testHandleB, "")
+}
+
+// assertRecycledTidOpensByHandle has the task that now owns execCommTid open
+// handle h and checks the name of the row and of the fd table entry.
+//
+// get, not resolve: resolve falls back to /proc/<pid>/fd and returns a File
+// built around the fd it was handed either way, so its FD() is the argument
+// and asserting on it proves nothing.
+func assertRecycledTidOpensByHandle(t *testing.T, el *eventLoop, out chan *event.Pair, h testHandle, want string) {
+	t.Helper()
 	const recycledFd = 77
-	_, enterOpen := makeEnterOpenByHandleAtEvent(t, defaulTime+300, execCommPid, execCommTid, 0)
+	_, enterOpen := makeEnterOpenByHandleEvent(t, defaulTime+500, execCommPid, execCommTid, 0, h)
 	el.processRawEvent(enterOpen, out)
-	_, exitOpen := makeExitRetEvent(t, defaulTime+400, execCommPid, execCommTid,
+	_, exitOpen := makeExitRetEvent(t, defaulTime+600, execCommPid, execCommTid,
 		types.SYS_EXIT_OPEN_BY_HANDLE_AT, recycledFd)
 	el.processRawEvent(exitOpen, out)
 
-	// The row is still emitted - the eviction must cost the recycled task
-	// nothing but the dead path. Asserting only "not the dead path" would be
-	// satisfied by a handler that emits nothing at all.
 	ep := nextRow(out)
 	if ep == nil {
-		t.Fatal("the recycled task's own open_by_handle_at pair was not emitted")
+		t.Fatal("the open_by_handle_at pair was not emitted")
 	}
 	defer ep.Recycle()
-	if got := rowFile(ep); got == deadTaskPath {
-		t.Fatalf("recycled tid's open_by_handle_at row inherited the dead task's parked pathname: file=%s", got)
+	if got := ep.File.Name(); got != want {
+		t.Fatalf("open_by_handle_at row named %q, want %q", got, want)
 	}
-
-	// The lasting half: the descriptor must still be registered - the eviction
-	// costs the recycled task the dead path, not its fd-table entry - and that
-	// entry must not carry the dead path, or every later read, write and close
-	// on this descriptor reports it too.
-	//
-	// get, not resolve: resolve falls back to /proc/<pid>/fd and returns a
-	// File built around the fd it was handed either way, so its FD() is the
-	// argument and asserting on it proves nothing.
 	fdFile, ok := el.fdState().get(recycledFd, execCommPid)
 	if !ok {
 		t.Fatalf("fd %d was never registered in the fd table for pid %d", recycledFd, execCommPid)
 	}
-	if got := fdFile.Name(); got == deadTaskPath {
-		t.Fatalf("fd table entry for (pid=%d, fd=%d) = %s; the dead task's path now labels the new process's descriptor",
-			execCommPid, recycledFd, got)
+	if got := fdFile.Name(); got != want {
+		t.Fatalf("fd table entry for (pid=%d, fd=%d) = %q, want %q", execCommPid, recycledFd, got, want)
 	}
 }
 

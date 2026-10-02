@@ -776,17 +776,15 @@ func TestPathKindsApplyTheFullPairFilter(t *testing.T) {
 // feedOpenByHandleAtPair drives a full name_to_handle_at + open_by_handle_at
 // sequence through the raw event path and returns the emitted open_by_handle_at
 // pair, or nil when it was filtered. name_to_handle_at itself never produces a
-// row: handlePathExit only parks its pathname for the correlation.
+// row: handlePathExit only files its pathname under the returned handle.
 func feedOpenByHandleAtPair(t *testing.T, el *eventLoop, pathname string, fd int32) *event.Pair {
 	t.Helper()
 	out := make(chan *event.Pair, 2)
 
-	_, enterNameRaw := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
-		pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
-	_, exitNameRaw := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
-		types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
-	el.processRawEvent(enterNameRaw, out)
-	el.processRawEvent(exitNameRaw, out)
+	for _, raw := range makeNameToHandleAtRecords(t, defaulTime, execCommPid, execCommTid,
+		pathname, defaultTestHandle) {
+		el.processRawEvent(raw, out)
+	}
 
 	_, enterOpenRaw := makeEnterOpenByHandleAtEvent(t, defaulTime+200, execCommPid, execCommTid,
 		syscall.O_RDONLY)

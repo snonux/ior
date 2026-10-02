@@ -69,21 +69,19 @@ func namePairRecords(oldname, newname string, enter, exit types.TraceId) func(t 
 }
 
 // openByHandleAtRecords is the name_to_handle_at + open_by_handle_at sequence.
-// name_to_handle_at never produces a row of its own (handlePathExit only parks
-// its pathname for the correlation), so the whole sequence yields at most the
-// open_by_handle_at row.
+// name_to_handle_at never produces a row of its own (handlePathExit only files
+// its pathname under the returned handle), so the whole sequence yields at
+// most the open_by_handle_at row.
 func openByHandleAtRecords(pathname string, fd int64) func(t *testing.T) [][]byte {
 	return func(t *testing.T) [][]byte {
 		t.Helper()
-		_, enterName := makeEnterPathEvent(t, defaulTime, execCommPid, execCommTid,
-			pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
-		_, exitName := makeExitRetEvent(t, defaulTime+100, execCommPid, execCommTid,
-			types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+		nameRecords := makeNameToHandleAtRecords(t, defaulTime, execCommPid, execCommTid,
+			pathname, defaultTestHandle)
 		_, enterOpen := makeEnterOpenByHandleAtEvent(t, defaulTime+200, execCommPid, execCommTid,
 			syscall.O_RDONLY)
 		_, exitOpen := makeExitRetEvent(t, defaulTime+300, execCommPid, execCommTid,
 			types.SYS_EXIT_OPEN_BY_HANDLE_AT, fd)
-		return [][]byte{enterName, exitName, enterOpen, exitOpen}
+		return append(nameRecords, enterOpen, exitOpen)
 	}
 }
 

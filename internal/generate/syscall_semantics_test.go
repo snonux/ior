@@ -74,6 +74,14 @@ var (
 	// stash of the open kinds sits nested inside its failed-read branch and is
 	// validated by validateFilenameFallback instead.
 	outputBufferStashRE = regexp.MustCompile(`(?m)^    ior_stash_pending_filename\(tid,\s*ctx->args\[([0-9]+)\]\);$`)
+	// outputHandleStashRE matches the unconditional, top-level stash of the
+	// output struct file_handle pointer of name_to_handle_at
+	// (outputHandleSyscalls).
+	outputHandleStashRE = regexp.MustCompile(`(?m)^    ior_stash_pending_handle\(tid,\s*ctx->args\[([0-9]+)\]\);$`)
+	// handleReadRE matches the one way an enter handler may capture an input
+	// struct file_handle: all three handle fields of the event are written by
+	// the reader and its status lands in ev->handle_status.
+	handleReadRE = regexp.MustCompile(`(?m)^    ev->handle_status = ior_read_file_handle\(ctx->args\[([0-9]+)\], &ev->handle_bytes, &ev->handle_type, ev->f_handle\);$`)
 )
 
 // syscallSemanticExpectations is reviewed data from Linux syscall signatures.
@@ -292,21 +300,31 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"msync": {
 		kind: "mem", args: map[string]int{"addr": 0, "flags": 2, "length": 1}, ret: "UNCLASSIFIED", family: "FS",
 	},
-	"munlock":           {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
-	"munlockall":        {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
-	"munmap":            {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
-	"name_to_handle_at": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"nanosleep":         {kind: "sleep", args: map[string]int{"requested_ns": 0}, ret: "UNCLASSIFIED", family: "Time"},
-	"newfstat":          {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"newfstatat":        {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 3, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"newlstat":          {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"newstat":           {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
-	"newuname":          {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
-	"open":              {kind: "open", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS"},
-	"open_by_handle_at": {kind: "open-by-handle-at", args: map[string]int{"flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
-	"open_tree":         {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
-	"open_tree_attr":    {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
-	"openat":            {kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
+	"munlock":    {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
+	"munlockall": {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Memory"},
+	"munmap":     {kind: "mem", args: map[string]int{"addr": 0, "length": 1}, ret: "UNCLASSIFIED", family: "Memory"},
+	// name_to_handle_at(dirfd, pathname, handle, mount_id, flags): the handle
+	// is the output buffer args[2], read back at sys_exit after a successful
+	// return (outputHandleSyscalls).
+	"name_to_handle_at": {
+		kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 4, "handle": 2, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS",
+	},
+	"nanosleep":  {kind: "sleep", args: map[string]int{"requested_ns": 0}, ret: "UNCLASSIFIED", family: "Time"},
+	"newfstat":   {kind: "fd", args: map[string]int{"fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"newfstatat": {kind: "pathname", args: map[string]int{"dirfd": 0, "flags": 3, "pathname": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	"newlstat":   {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"newstat":    {kind: "pathname", args: map[string]int{"pathname": 0}, ret: "UNCLASSIFIED", family: "FS"},
+	"newuname":   {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
+	"open":       {kind: "open", args: map[string]int{"filename": 0, "flags": 1}, ret: "UNCLASSIFIED", family: "FS"},
+	// open_by_handle_at(mount_fd, handle, flags): the handle is the input
+	// struct file_handle at args[1], read at sys_enter into the handle fields
+	// of the event; handle_status is the field the read's result lands in.
+	"open_by_handle_at": {
+		kind: "open-by-handle-at", args: map[string]int{"flags": 2, "handle_status": 1}, ret: "UNCLASSIFIED", family: "FS",
+	},
+	"open_tree":      {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
+	"open_tree_attr": {kind: "open-tree", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
+	"openat":         {kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS"},
 	"openat2": {
 		kind: "open", args: map[string]int{"dirfd": 0, "filename": 1, "flags": 2}, ret: "UNCLASSIFIED", family: "FS",
 	},
@@ -2180,11 +2198,48 @@ func addCaptureArgSources(name, enterBody, exitBody string, result map[string]in
 	if err := addMatches(pendingMatches); err != nil {
 		return err
 	}
+	if err := validateHandleRead(name, enterBody); err != nil {
+		return err
+	}
+	return addOutputCaptureArgSources(name, enterBody, exitBody, result)
+}
+
+// addOutputCaptureArgSources records the captures of output buffers, which
+// the exit handler reads back: an output path ("buf") and an output file
+// handle ("handle").
+func addOutputCaptureArgSources(name, enterBody, exitBody string, result map[string]int) error {
 	argIndex, ok, err := parseOutputBufferCapture(name, enterBody, exitBody)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if err := addArgSource(name, result, "buf", argIndex); err != nil {
+			return err
+		}
+	}
+	argIndex, ok, err = parseOutputHandleCapture(name, enterBody, exitBody)
 	if err != nil || !ok {
 		return err
 	}
-	return addArgSource(name, result, "buf", argIndex)
+	return addArgSource(name, result, "handle", argIndex)
+}
+
+// validateHandleRead checks the capture of an input file handle: a handler
+// that touches any handle field of its event must do so through exactly one
+// ior_read_file_handle call that writes all of them (handleReadRE), so no
+// field can be left as stale ring-buffer memory or be filled from a second
+// pointer.
+func validateHandleRead(name, enterBody string) error {
+	reads := handleReadRE.FindAllStringIndex(enterBody, -1)
+	mentions := regexp.MustCompile(`\bev->(handle_status|handle_bytes|handle_type|f_handle)\b`).FindAllStringIndex(enterBody, -1)
+	calls := strings.Count(enterBody, "ior_read_file_handle(")
+	if len(mentions) == 0 && calls == 0 {
+		return nil
+	}
+	if len(reads) != 1 || calls != 1 || len(mentions) != 4 {
+		return fmt.Errorf("sys_enter_%s must capture its file handle through one ior_read_file_handle call that writes every handle field", name)
+	}
+	return validateBeforeSubmit("sys_enter_"+name, enterBody, reads[0][1])
 }
 
 // collectLocalArgSources finds the locals assigned (or user-read) from a
@@ -2834,6 +2889,59 @@ func parseOutputBufferCapture(name, enterBody, exitBody string) (int, bool, erro
 		return 0, false, fmt.Errorf("sys_exit_%s takes or publishes its output buffer out of order", name)
 	}
 	return argIndex, true, nil
+}
+
+// parseOutputHandleCapture recognizes the output-handle capture
+// (name_to_handle_at): the enter handler stashes the struct file_handle
+// pointer once, after ior_on_syscall_enter_stateful created the enter state
+// and before its own reserve; the exit handler takes it as the second slot of
+// its exit hook and publishes it once, only for ret == 0 (the one return that
+// wrote a handle), with the handler's own clock read - the time its exit
+// record carries, which is what ties the two records together - and before
+// its own reserve. It returns the handle's argument index and whether the
+// capture is present.
+func parseOutputHandleCapture(name, enterBody, exitBody string) (int, bool, error) {
+	stashes := outputHandleStashRE.FindAllStringSubmatchIndex(enterBody, -1)
+	if len(stashes) == 0 && !strings.Contains(enterBody, "ior_stash_pending_handle") &&
+		!strings.Contains(exitBody, "ior_emit_file_handle") {
+		return 0, false, nil
+	}
+	if len(stashes) != 1 || strings.Count(enterBody, "ior_stash_pending_handle(") != 1 {
+		return 0, false, fmt.Errorf("sys_enter_%s must stash its output handle exactly once, unconditionally", name)
+	}
+	stash := stashes[0]
+	enterHook := strings.Index(enterBody, "ior_on_syscall_enter_stateful(")
+	enterReserve := ringbufReserveRE.FindStringIndex(enterBody)
+	if enterHook < 0 || stash[0] < enterHook || enterReserve == nil || stash[0] > enterReserve[0] {
+		return 0, false, fmt.Errorf("sys_enter_%s stashes its output handle outside the enter hook..reserve window", name)
+	}
+	if strings.Contains(enterBody, "ior_stash_pending_filename2") {
+		return 0, false, fmt.Errorf("sys_enter_%s uses the second pending slot for a path and a handle", name)
+	}
+	if err := validateOutputHandleExit(name, exitBody); err != nil {
+		return 0, false, err
+	}
+	return mustArgIndex(enterBody[stash[2]:stash[3]]), true, nil
+}
+
+// validateOutputHandleExit checks the exit half of parseOutputHandleCapture.
+func validateOutputHandleExit(name, exitBody string) error {
+	enterConst := regexp.QuoteMeta("SYS_ENTER_" + strings.ToUpper(name))
+	decls := regexp.MustCompile(`(?m)^    __u64 pending_filename2;$`).FindAllStringIndex(exitBody, -1)
+	takes := regexp.MustCompile(`(?m)^    if \(!ior_on_syscall_exit_take_filenames\(tid, `+enterConst+`, ctx->ret, now, &pending_filename, &pending_filename2\)\)\n        return 0;$`).FindAllStringIndex(exitBody, -1)
+	emits := regexp.MustCompile(`(?m)^    if \(ctx->ret == 0\)\n        ior_emit_file_handle\(pid, tid, `+enterConst+`, now, pending_filename2\);$`).FindAllStringIndex(exitBody, -1)
+	allEmits := strings.Count(exitBody, "ior_emit_file_handle(")
+	allHooks := regexp.MustCompile(`\bior_on_syscall_exit\w*\s*\(`).FindAllStringIndex(exitBody, -1)
+	if len(decls) != 1 || len(takes) != 1 || len(allHooks) != 1 || len(emits) != 1 || allEmits != 1 ||
+		strings.Contains(exitBody, "ior_emit_second_name_fixup") {
+		return fmt.Errorf("sys_exit_%s must take its output handle once through its exit hook and publish it once, only after a successful return", name)
+	}
+	exitHook := takes[0][0]
+	exitReserve := ringbufReserveRE.FindStringIndex(exitBody)
+	if decls[0][0] > exitHook || emits[0][0] < exitHook || exitReserve == nil || emits[0][0] > exitReserve[0] {
+		return fmt.Errorf("sys_exit_%s takes or publishes its output handle out of order", name)
+	}
+	return nil
 }
 
 func validateLocalNotWrittenAfter(name, local, body string, sourceEnd int) error {

@@ -44,8 +44,14 @@ const (
 	fdPathEventCompactSize       = 300
 	fcntlEventSize               = 40
 	dup3EventSize                = 32
-	openByHandleAtEventSize      = 32
+	// open_by_handle_at_event carries the file handle since task k03. The
+	// legacy record is the flags-only layout: 32 bytes as the kernel wrote it
+	// (4 bytes of tail padding) and 28 as binary.Write did.
+	openByHandleAtEventSize      = 168
+	openByHandleAtEventLegacy    = 32
 	openByHandleAtEventSizeV1    = 28
+	fileHandleEventSize          = 168
+	fileHandleFieldsOffset       = 28
 	socketEventSize              = 40
 	socketEventSizeV1            = 36
 	socketpairEventSize          = 56
@@ -508,16 +514,23 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 	return d
 }
 
-// NewOpenByHandleAtEventFast decodes one open_by_handle_at ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// NewOpenByHandleAtEventFast decodes one open_by_handle_at ring-buffer payload
+// in a single pass. Three layouts are accepted:
+//
+//   - 168 bytes or more: the current record, whose prefix is decoded (forward
+//     compatible with appended fields). It carries the file handle the call
+//     opens and the status of reading it.
+//   - 32 and 28 bytes: the record of an object that predates the handle (the
+//     kernel's sizeof and the binary.Write form). It decodes with
+//     FILE_HANDLE_NONE and no handle - by its length, never by the bytes at
+//     the status offset, which in the 32-byte record are unwritten padding.
+//
+// Every other size returns nil rather than being decoded at the wrong
+// offsets. The events are pooled, so every field is written on every path.
 func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
-	if len(raw) < openByHandleAtEventSizeV1 {
+	legacy := len(raw) == openByHandleAtEventLegacy || len(raw) == openByHandleAtEventSizeV1
+	if !legacy && len(raw) < openByHandleAtEventSize {
 		return nil
-	}
-	if len(raw) != openByHandleAtEventSize && len(raw) != openByHandleAtEventSizeV1 {
-		return NewOpenByHandleAtEvent(raw)
 	}
 	o := poolOfOpenByHandleAtEvents.Get().(*OpenByHandleAtEvent)
 	o.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -526,7 +539,43 @@ func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 	o.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	o.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	o.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	if legacy {
+		o.HandleStatus, o.HandleBytes, o.HandleType = FILE_HANDLE_NONE, 0, 0
+		o.FHandle = [IOR_MAX_HANDLE_SZ]byte{}
+		return o
+	}
+	o.HandleStatus, o.HandleBytes, o.HandleType = decodeFileHandleFields(raw, &o.FHandle)
 	return o
+}
+
+// decodeFileHandleFields reads the handle fields open_by_handle_at_event and
+// file_handle_event share at the same offsets: status, byte count, type and
+// the IOR_MAX_HANDLE_SZ handle bytes. raw must hold a full record.
+func decodeFileHandleFields(raw []byte, fHandle *[IOR_MAX_HANDLE_SZ]byte) (status, handleBytes uint32, handleType int32) {
+	at := fileHandleFieldsOffset
+	status = binary.LittleEndian.Uint32(raw[at : at+4])
+	handleBytes = binary.LittleEndian.Uint32(raw[at+4 : at+8])
+	handleType = int32(binary.LittleEndian.Uint32(raw[at+8 : at+12]))
+	copy(fHandle[:], raw[at+12:at+12+IOR_MAX_HANDLE_SZ])
+	return status, handleBytes, handleType
+}
+
+// NewFileHandleEventFast decodes the control record that carries the handle a
+// successful name_to_handle_at returned. There is one layout, 168 bytes; a
+// longer payload decodes its prefix and a shorter one returns nil.
+func NewFileHandleEventFast(raw []byte) *FileHandleEvent {
+	if len(raw) < fileHandleEventSize {
+		return nil
+	}
+	f := poolOfFileHandleEvents.Get().(*FileHandleEvent)
+	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	f.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	f.Time = binary.LittleEndian.Uint64(raw[8:16])
+	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	f.Reserved = binary.LittleEndian.Uint32(raw[24:28])
+	f.HandleStatus, f.HandleBytes, f.HandleType = decodeFileHandleFields(raw, &f.FHandle)
+	return f
 }
 
 // NewSocketEventFast decodes one socket ring-buffer payload in a

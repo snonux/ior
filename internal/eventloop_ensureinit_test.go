@@ -8,7 +8,7 @@ import (
 
 // The trackers own their invariants: the loop's injection seam
 // (configuredFDTracker/configuredCommResolver) and the state accessors
-// (fdState/commState/pendingHandleState) must be able to complete ANY
+// (fdState/commState/handleState) must be able to complete ANY
 // tracker - including a hand-built one carrying entries without its
 // metadata - without the loop spelling out the tracker's map fields. These
 // tests pin exactly that, because the field-poking they replace is what
@@ -56,23 +56,30 @@ func TestFDTrackerEnsureInitCompletesHandBuiltState(t *testing.T) {
 	}
 }
 
-// TestPendingHandleTrackerZeroValueIsUsable pins the usable-zero-value
-// contract: a tracker that never went through ensureInit must still be safe
-// to read from, and its first set() must complete the initialization.
-func TestPendingHandleTrackerZeroValueIsUsable(t *testing.T) {
-	var tracker pendingHandleTracker
+// TestHandleTrackerZeroValueIsUsable pins the usable-zero-value contract: a
+// tracker that never went through ensureInit must still be safe to read
+// from, and its first store() or park() must complete the initialization.
+func TestHandleTrackerZeroValueIsUsable(t *testing.T) {
+	var tracker handleTracker
+	key := testHandleA.key()
 
-	if _, ok := tracker.peek(1); ok {
-		t.Fatal("peeking a zero-value tracker must not report a hit")
+	if _, ok := tracker.lookup(key); ok {
+		t.Fatal("looking a handle up in a zero-value tracker must not report a hit")
 	}
-	tracker.delete(1) // deleting from nil maps must be a no-op, not a panic
-	tracker.set(1, "/tmp/handle.txt")
-	if pathname, ok := tracker.peek(1); !ok || pathname != "/tmp/handle.txt" {
-		t.Fatalf("peek after set = (%q, %v), want the stored pathname", pathname, ok)
+	if _, ok := tracker.claim(1, 100); ok {
+		t.Fatal("claiming from a zero-value tracker must not report a hit")
 	}
-	tracker.delete(1)
-	if _, ok := tracker.peek(1); ok {
-		t.Fatal("a deleted entry must not be peekable")
+	tracker.dropTaken(1)   // deleting from nil maps must be a no-op, not a panic
+	tracker.store(key, "") // so must superseding a name that was never stored
+	tracker.store(key, "/tmp/handle.txt")
+	if name, ok := tracker.lookup(key); !ok || name != "/tmp/handle.txt" {
+		t.Fatalf("lookup after store = (%q, %v), want the stored pathname", name, ok)
+	}
+
+	var parking handleTracker
+	parking.park(1, key, 100)
+	if got, ok := parking.claim(1, 100); !ok || got != key {
+		t.Fatalf("claim after park on a zero value = (%+v, %v), want the parked handle", got, ok)
 	}
 }
 

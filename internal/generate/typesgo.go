@@ -115,6 +115,7 @@ func AddTypesImports(code string) string {
 	importBlock := `import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 )
@@ -400,6 +401,11 @@ func writeStringMethod(b *strings.Builder, goName, selfRef string, members []CMe
 			// the terminator are stale ring-buffer data from earlier records
 			// and must never reach a warning, a log line or a stream row.
 			ref = fmt.Sprintf("StringValue(%s[:])", ref)
+		}
+		if m.TypeName == "__u8" && m.ArraySize != "" {
+			// A byte array is binary (a file handle), not a string: render it
+			// as hex instead of as one decimal number per byte.
+			ref = fmt.Sprintf("hex.EncodeToString(%s[:])", ref)
 		}
 		argParts = append(argParts, ref)
 	}
@@ -741,7 +747,7 @@ func snakeToCamel(s string) string {
 
 func cTypeToGoType(t string) string {
 	switch t {
-	case "char":
+	case "char", "__u8":
 		return "byte"
 	case "__s32":
 		return "int32"

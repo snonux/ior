@@ -86,8 +86,8 @@ func newNonLeaderExecLoop(t *testing.T) *eventLoop {
 func TestNonLeaderExecPairsUnderLeaderTid(t *testing.T) {
 	el := newNonLeaderExecLoop(t)
 	completeCallerAccess(t, el, 1000, 1100)
-	el.pendingHandleState().set(nleExecCaller, "/some/handle/path")
-	el.pendingHandleState().set(nleExecPid, "/dead/leader/handle/path")
+	el.handleState().park(nleExecCaller, testHandleA.key(), 1400)
+	el.handleState().park(nleExecPid, testHandleB.key(), 1400)
 	el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecCaller), make(chan *event.Pair, 1))
 	mismatches := el.numTracepointMismatches
 
@@ -122,7 +122,7 @@ func TestNonLeaderExecPairsUnderLeaderTid(t *testing.T) {
 }
 
 // assertNoCallerState checks that nothing is keyed by the pre-exec tid any
-// more, that no enter or name_to_handle_at pathname stays parked for either
+// more, that no enter or name_to_handle_at handle stays parked for either
 // tid, and that the exec caller index holds no hint.
 func assertNoCallerState(t *testing.T, el *eventLoop) {
 	t.Helper()
@@ -138,8 +138,8 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 		t.Error("comm left cached under the pre-exec tid")
 	}
 	for _, tid := range []uint32{nleExecCaller, nleExecPid} {
-		if _, ok := el.pendingHandleState().peek(tid); ok {
-			t.Errorf("pending handle path left under tid %d", tid)
+		if _, ok := el.handleState().taken[tid]; ok {
+			t.Errorf("parked handle left under tid %d", tid)
 		}
 	}
 	if len(el.pairs.execCallers) != 0 {
@@ -149,16 +149,16 @@ func assertNoCallerState(t *testing.T, el *eventLoop) {
 
 // TestNonLeaderExecDropsStaleEnters covers the lost-record cases: a non-exec
 // enter parked under the caller's tid (its exit record was lost) must not be
-// moved onto the leader tid, and a leader enter or handle pathname whose exit
-// record was lost must not be consumed after the exec. Neither may produce a
+// moved onto the leader tid, and a leader enter or parked handle whose exit
+// record was lost must not be kept after the exec. Neither may produce a
 // row or a mismatch.
 func TestNonLeaderExecDropsStaleEnters(t *testing.T) {
 	el := newNonLeaderExecLoop(t)
 	el.setCachedCommFromKernel(nleExecPid, "caller", math.MaxUint64)
-	// The dead leader's parked name_to_handle_at pathname: with its exit
-	// record lost, only the exec record can drop it before the new
-	// program's first open_by_handle_at would consume it.
-	el.pendingHandleState().set(nleExecPid, "/dead/leader/handle/path")
+	// The dead leader's parked name_to_handle_at handle: with its exit
+	// record lost, only the exec record drops it before the tid's next
+	// name_to_handle_at exit (which would discard it by its time).
+	el.handleState().park(nleExecPid, testHandleB.key(), 800)
 	out := make(chan *event.Pair, 1)
 	_, staleCaller := makeEnterPathEvent(t, 900, nleExecPid, nleExecCaller, "/etc/hosts", types.SYS_ENTER_ACCESS)
 	el.processRawEvent(staleCaller, out)

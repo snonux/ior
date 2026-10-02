@@ -86,10 +86,11 @@ import (
 //     pipe:[N], splitting one fd's rows across names in aggregates and -path
 //     filters), yields nothing for an fd closed in the meantime, and under
 //     event-loop lag can resolve a reused fd number to the wrong file.
-//   - For the comm cache, the pair tracker and the pending-handle tracker, all
-//     keyed by tid, per-task is exactly the right granularity: only the name,
-//     parked enter, gap baseline and unconsumed name_to_handle_at pathname of
-//     the thread that actually died are dropped, and its siblings keep theirs.
+//   - For the comm cache, the pair tracker and the handle tracker's parked
+//     handles, all keyed by tid, per-task is exactly the right granularity:
+//     only the name, parked enter, gap baseline and parked name_to_handle_at
+//     handle of the thread that actually died are dropped, and its siblings
+//     keep theirs.
 //
 // The stats engine: a group-dead exit also ends the process's row in the
 // Processes table (retireStatsProcess), so a later process handed the same
@@ -123,15 +124,14 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// sentinel, while here it is simply a key no live task uses, so deleting
 	// it is a no-op rather than a hazard.
 	e.pairs.evictTid(ev.Tid)
-	// name_to_handle_at parks a pathname under the tid for the matching
-	// open_by_handle_at to consume, and a task that resolves a handle and dies
-	// - or simply hands it to another process, which is what the API is for -
-	// leaves it parked. Left behind, the recycled tid's next open_by_handle_at
-	// takes the dead task's path, and handleOpenByHandleAtExit then registers
-	// that path in the fd table for the *new* process, so every later read,
-	// write and close on the descriptor reports it too: a wrong row rather
-	// than a missing one, and a persistent one.
-	e.pendingHandleState().delete(ev.Tid)
+	// A handle a name_to_handle_at of this task returned is parked under the
+	// tid until the call's exit record claims it; if that record was lost the
+	// entry would wait for the recycled tid. It could not mislabel anything
+	// there - a claim needs the exit record's exact time - so this is
+	// hygiene. The handle NAMES stay: they are keyed by the handle, which a
+	// task routinely takes for another thread or process to open, and which
+	// stays valid after the task that took it is gone (handleTracker).
+	e.handleState().dropTaken(ev.Tid)
 	// Last: every piece of state the exit retires is gone before a -tid trace
 	// is told to end, so the shutdown statistics see the final picture (the
 	// -pid half does the same at the end of applyProcessDeath). An inherited

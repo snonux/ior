@@ -64,9 +64,9 @@ const (
 // lookup already in flight for the old owner), a parked syscall enter that the
 // new owner's own exit would otherwise pair with (a row for a syscall that never
 // happened, with a fabricated latency), the -gap baseline of the previous
-// owner's last syscall, and an unconsumed name_to_handle_at pathname. It is
-// retired before the seed is written, and regardless of whether the record
-// carries a usable comm.
+// owner's last syscall, and a name_to_handle_at handle still parked for its
+// exit record. It is retired before the seed is written, and regardless of
+// whether the record carries a usable comm.
 //
 // An empty comm carries no name: nothing is seeded and the tid falls back to
 // the procfs lookup on first use. A lost record or a failed probe attach
@@ -172,7 +172,7 @@ func (e *eventLoop) trustRenameRecords(renameProbeAttached bool) {
 func (e *eventLoop) retireRecycledTid(tid uint32) {
 	e.evictCachedComm(tid)
 	e.pairs.evictTid(tid)
-	e.pendingHandleState().delete(tid)
+	e.handleState().dropTaken(tid)
 }
 
 // inheritFdTable models what the kernel does with the descriptor table of a new

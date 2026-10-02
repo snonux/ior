@@ -3891,6 +3891,8 @@ int handle_sys_enter_name_to_handle_at(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter_stateful(tid, SYS_ENTER_NAME_TO_HANDLE_AT, now))
         return 0;
 
+    ior_stash_pending_handle(tid, ctx->args[2]);
+
     struct path_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct path_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -3932,12 +3934,15 @@ int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
         return 0;
 
     __u64 pending_filename;
+    __u64 pending_filename2;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_exit_take_filename(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename))
+    if (!ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_NAME_TO_HANDLE_AT, ctx->ret, now, &pending_filename, &pending_filename2))
         return 0;
 
     ior_emit_open_name_fixup(tid, SYS_ENTER_NAME_TO_HANDLE_AT, pending_filename);
+    if (ctx->ret == 0)
+        ior_emit_file_handle(pid, tid, SYS_ENTER_NAME_TO_HANDLE_AT, now, pending_filename2);
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
     if (!ev) {
@@ -3980,6 +3985,7 @@ int handle_sys_enter_open_by_handle_at(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->flags = (__s32)ctx->args[2];
+    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

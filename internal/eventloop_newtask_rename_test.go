@@ -235,8 +235,8 @@ func TestTaskNewtaskRecordRetiresARecycledTidsState(t *testing.T) {
 
 // leaveDeadOwnerState makes execCommTid carry everything a task that died
 // without an exit record would leave: a gap baseline (one completed pair), a
-// parked enter (killed inside the next access()), an unconsumed
-// name_to_handle_at pathname and a cached name.
+// parked enter (killed inside the next access()), a name_to_handle_at handle
+// still parked for its exit record and a cached name.
 func leaveDeadOwnerState(t *testing.T, el *eventLoop, out chan *event.Pair) {
 	t.Helper()
 	feedAccessEnter(t, el, out, defaulTime, execCommTid, siblingTaskPath)
@@ -246,12 +246,12 @@ func leaveDeadOwnerState(t *testing.T, el *eventLoop, out chan *event.Pair) {
 		t.Fatal("the dead owner's first pair was not emitted")
 	}
 	feedAccessEnter(t, el, out, defaulTime+300, execCommTid, deadTaskPath)
-	el.pendingHandleState().set(execCommTid, deadTaskPath)
+	el.handleState().park(execCommTid, testHandleA.key(), defaulTime+250)
 	el.setCachedComm(execCommTid, "victim")
 }
 
 // assertRecycledTidIsClean checks the new owner's view after its record: own
-// row without a gap from the dead owner, no leftover handle pathname, and its
+// row without a gap from the dead owner, no leftover parked handle, and its
 // own name rather than the dead owner's.
 func assertRecycledTidIsClean(t *testing.T, el *eventLoop, out chan *event.Pair) {
 	t.Helper()
@@ -268,8 +268,8 @@ func assertRecycledTidIsClean(t *testing.T, el *eventLoop, out chan *event.Pair)
 	if ep.DurationToPrev != 0 {
 		t.Errorf("first row gap = %dns, want 0 (no baseline from the dead owner)", ep.DurationToPrev)
 	}
-	if path, ok := el.pendingHandleState().peek(execCommTid); ok {
-		t.Errorf("pending handle pathname %q survived the record", path)
+	if _, ok := el.handleState().taken[execCommTid]; ok {
+		t.Error("the dead owner's parked handle survived the record")
 	}
 	if ep.Comm != "fresh" {
 		t.Errorf("row comm = %q, want the new task's \"fresh\", not the dead owner's", ep.Comm)

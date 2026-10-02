@@ -743,6 +743,31 @@ func outputPathArgIndex(syscall string) (int, bool) {
 	return idx, ok
 }
 
+// outputHandleSyscalls maps each syscall that returns a file handle through
+// an OUTPUT struct file_handle to that buffer's argument index. Like an output
+// path, the handle only exists once the call has returned, so the generated
+// enter handler parks the buffer pointer on the tid's enter state
+// (ior_stash_pending_handle) and the exit handler, after a successful return,
+// reads the handle back and publishes it as a FILE_HANDLE_EVENT control record
+// ahead of its exit record (ior_emit_file_handle; see renderHandlerPrologue
+// and internal/c/handle.c).
+//
+// name_to_handle_at is the only such syscall. Userspace files the pathname of
+// the call under the handle, which is what lets an open_by_handle_at - whose
+// enter record carries the handle it opens - be named after the right file
+// (internal/eventloop_handle.go, task k03). The pointer travels in the second
+// pending slot, so a syscall listed here must be a single-path kind.
+var outputHandleSyscalls = map[string]int{
+	"name_to_handle_at": 2,
+}
+
+// outputHandleArgIndex returns the argument index of syscall's output file
+// handle, or false when the syscall has none (see outputHandleSyscalls).
+func outputHandleArgIndex(syscall string) (int, bool) {
+	idx, ok := outputHandleSyscalls[syscall]
+	return idx, ok
+}
+
 var retClassifications = map[string]RetClassification{
 	"fgetxattr":  ReadClassified,
 	"flistxattr": ReadClassified,

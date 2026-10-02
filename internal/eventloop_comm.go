@@ -669,7 +669,7 @@ func (r *commResolver) commsLimit() int {
 	if r.maxComms > 0 {
 		return r.maxComms
 	}
-	return defaultMaxPendingHandleEntries
+	return defaultMaxHandleEntries
 }
 
 func (r *commResolver) queueLookup(tid uint32) {

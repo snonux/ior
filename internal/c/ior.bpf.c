@@ -21,6 +21,10 @@
 // select timeout normalisation used by the generated select handler.
 #include "poll.c"
 
+// File-handle capture used by the generated name_to_handle_at and
+// open_by_handle_at handlers.
+#include "handle.c"
+
 // Restart fold: the pending-restart state behind filter.c's enter/exit hooks
 // and its two probes (signal:signal_deliver, a second sys_enter_rt_sigreturn).
 #include "restart.c"

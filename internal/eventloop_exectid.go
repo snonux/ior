@@ -86,19 +86,19 @@ func (e *eventLoop) releaseExecCallerRestart(ev *types.ProcessExecEvent, ch chan
 // made the call, and only the pairing key changes. Everything else is
 // dropped for both tids rather than moved. Under oldTid: its comm is the
 // pre-exec name, which the exec record replaces for newTid anyway, and a
-// pathname parked by name_to_handle_at belongs to the old program. Under
-// newTid: whatever is still there belongs to the dead leader (its exit record
-// normally evicted it; this covers a lost one), and a leader's parked
-// name_to_handle_at pathname must not be consumed by the new program's first
-// open_by_handle_at. No thread will ever report under oldTid again - the number
-// was released with the dead leader - so leaving entries behind would only
-// wait for a recycled owner to inherit them.
+// handle parked by a name_to_handle_at whose exit record never came belongs
+// to no call any more. Under newTid: whatever is still there belongs to the
+// dead leader (its exit record normally evicted it; this covers a lost one).
+// No thread will ever report under oldTid again - the number was released
+// with the dead leader - so leaving entries behind would only wait for a
+// recycled owner. (The handle NAMES are not per-tid state and stay: a handle
+// is as valid after the exec as before, see handleTracker.)
 func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 	e.pairs.moveExecCaller(oldTid, newTid)
 	e.evictCachedComm(oldTid)
-	handles := e.pendingHandleState()
-	handles.delete(oldTid)
-	handles.delete(newTid)
+	handles := e.handleState()
+	handles.dropTaken(oldTid)
+	handles.dropTaken(newTid)
 }
 
 // adoptLostExecCaller is the fallback pairing for a non-leader execve whose

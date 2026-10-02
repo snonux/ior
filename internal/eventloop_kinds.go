@@ -174,7 +174,7 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 			typedRuntimePairControl((*eventLoop).handleProcessExecEvent)),
 		// sched:sched_process_exit fires for every exiting task. Every exit
 		// drops that thread's cached comm, pending pairs and parked
-		// name_to_handle_at path; the fdTracker
+		// name_to_handle_at handle; the fdTracker
 		// evicts the process's (pid, fd) entries only when the record marks
 		// the exit that ends the thread group (group_dead), or when the flag
 		// is unknown because the record uses the legacy pre-group_dead layout
@@ -206,6 +206,12 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// the much larger open syscall payload.
 		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenNameFixupEvent](types.NewOpenNameFixupEventFast),
 			typedRuntimeControl((*eventLoop).handleOpenNameFixupEvent)),
+		// The file-handle record carries the handle a successful
+		// name_to_handle_at returned, reserved ahead of that call's exit
+		// record; the pathname of the call is filed under it for
+		// open_by_handle_at to look up (internal/eventloop_handle.go).
+		controlRaw(types.FILE_HANDLE_EVENT, rawDecoder[types.FileHandleEvent](types.NewFileHandleEventFast),
+			typedRuntimeControl((*eventLoop).handleFileHandleEvent)),
 	}
 }
 

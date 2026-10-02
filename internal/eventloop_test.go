@@ -2761,33 +2761,20 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	return td
 }
 
+// makeEnterOpenByHandleAtEvent builds an open_by_handle_at enter for tests
+// whose subject is not the handle: it opens defaultTestHandle, the handle
+// makeNameToHandleAtRecords callers take in these tests.
 func makeEnterOpenByHandleAtEvent(t *testing.T, time uint64, pid, tid uint32, flags int32) (types.OpenByHandleAtEvent, []byte) {
-	ev := types.OpenByHandleAtEvent{
-		EventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT,
-		TraceId:   types.SYS_ENTER_OPEN_BY_HANDLE_AT,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     flags,
-	}
-
-	bytes, err := ev.Bytes()
-	if err != nil {
-		t.Error(err)
-	}
-	return ev, bytes
+	return makeEnterOpenByHandleEvent(t, time, pid, tid, flags, defaultTestHandle)
 }
 
 func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/handle_test.txt"
 	fd := int32(70)
 
-	// Step 1: name_to_handle_at syscall
-	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
-	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
-
-	_, exitNameBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
-	td.rawTracepoints = append(td.rawTracepoints, exitNameBytes)
+	// Step 1: name_to_handle_at syscall, returning defaultTestHandle
+	td.rawTracepoints = append(td.rawTracepoints,
+		makeNameToHandleAtRecords(t, defaulTime, defaultPid, defaultTid, pathname, defaultTestHandle)...)
 
 	// Step 2: open_by_handle_at syscall
 	_, enterOpenBytes := makeEnterOpenByHandleAtEvent(t, defaulTime+200, defaultPid, defaultTid, syscall.O_RDWR)
@@ -2813,9 +2800,13 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 		// Verify that the fd is now tracked
 		verifyFileDescriptor(t, el, defaultPid, fd, pathname)
 
-		// Verify that the pending handle has been consumed
-		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
-			t.Errorf("Expected pending handle for tid %d to be consumed", defaultTid)
+		// The name stays filed under the handle (a handle can be opened
+		// again), and nothing stays parked for the thread.
+		if name, ok := el.handleState().names[defaultTestHandle.key()]; !ok || name != pathname {
+			t.Errorf("Expected the handle to stay named %q, got %q (known=%v)", pathname, name, ok)
+		}
+		if _, ok := el.handleState().taken[defaultTid]; ok {
+			t.Errorf("Expected no handle to stay parked for tid %d", defaultTid)
 		}
 	})
 
@@ -2825,6 +2816,8 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/handle_failure.txt"
 
+	// A failed name_to_handle_at returns no handle, so BPF emits no handle
+	// record between its enter and exit.
 	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
 	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
 
@@ -2851,8 +2844,8 @@ func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected open_by_handle_at to not use failed name_to_handle_at path")
 		}
 
-		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
-			t.Errorf("Expected no pending handle for tid %d after failure", defaultTid)
+		if len(el.handleState().names) != 0 || len(el.handleState().taken) != 0 {
+			t.Errorf("Expected no handle name or parked handle after the failure")
 		}
 	})
 

@@ -482,46 +482,6 @@ func TestFdFileDetachSharesNothing(t *testing.T) {
 	}
 }
 
-// TestFdFileTmpfileDirMarkTravelsWithTheName: the mark says that the name is an
-// O_TMPFILE open's directory, so no constructor sets it (a name given from
-// procfs or by the caller is taken for a name of the file until the event loop
-// says otherwise) and every copy of the name carries it: a duplicate, which a
-// handle can be taken through just as well, and a snapshot, which is a copy of
-// the whole FdFile. Marking one descriptor does not reach back to another.
-func TestFdFileTmpfileDirMarkTravelsWithTheName(t *testing.T) {
-	pid := uint32(os.Getpid())
-	fresh := map[string]*FdFile{
-		"NewFd":             NewFd(3, "/dir", syscall.O_RDWR),
-		"NewFdWithPid":      NewFdWithPid(0, pid),
-		"NewFdWithProcName": NewFdWithProcName(0, pid, "/dir"),
-		"unresolved":        NewFdWithPid(1<<20, pid),
-	}
-	for name, f := range fresh {
-		if f.NamedAfterTmpfileDir() {
-			t.Errorf("%s starts marked as named after an O_TMPFILE directory", name)
-		}
-	}
-
-	orig := fresh["NewFd"]
-	before := orig.Dup(4)
-	orig.MarkNamedAfterTmpfileDir()
-	if !orig.NamedAfterTmpfileDir() {
-		t.Fatal("MarkNamedAfterTmpfileDir did not set the mark")
-	}
-	if before.NamedAfterTmpfileDir() {
-		t.Error("marking a descriptor marked a duplicate made before")
-	}
-	if !orig.Dup(5).NamedAfterTmpfileDir() {
-		t.Error("Dup dropped the mark")
-	}
-	if !orig.Detach().NamedAfterTmpfileDir() {
-		t.Error("Detach dropped the mark")
-	}
-	if !orig.Dup(5).Detach().Dup(6).NamedAfterTmpfileDir() {
-		t.Error("the mark did not survive a chain of copies")
-	}
-}
-
 func TestZeroFdFileKeepsItsHistoricalMeaning(t *testing.T) {
 	var f FdFile
 	if f.Flags() != Flags(syscall.O_RDONLY) {

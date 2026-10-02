@@ -134,6 +134,7 @@ func TestCTypeToGoType(t *testing.T) {
 		input, want string
 	}{
 		{"char", "byte"},
+		{"__u8", "byte"},
 		{"__s32", "int32"},
 		{"__u32", "uint32"},
 		{"__s64", "int64"},
@@ -218,6 +219,23 @@ func TestGenerateTypesGoMethods(t *testing.T) {
 	requireContains(t, output, "func (o *OpenEvent) GetPid() uint32")
 	requireContains(t, output, "func (o *OpenEvent) GetTid() uint32")
 	requireContains(t, output, "func (o *OpenEvent) GetTime() uint64")
+}
+
+// TestGenerateTypesGoByteArrayIsBinary: a __u8 array (a file handle) maps to
+// a byte array like a char array does, but it is binary data, so String()
+// renders it whole and as hex instead of as a NUL-terminated string.
+func TestGenerateTypesGoByteArrayIsBinary(t *testing.T) {
+	input := "#define HANDLE_SZ 4\nstruct blob_event {\n    __u32 event_type;\n    __u8 f_handle[HANDLE_SZ];\n};\n"
+	structs, constants, err := ParseCTypesInput(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := AddTypesImports(GenerateTypesGo(structs, constants))
+
+	requireContains(t, output, "FHandle [HANDLE_SZ]byte")
+	requireContains(t, output, "hex.EncodeToString(b.FHandle[:])")
+	requireNotContains(t, output, "StringValue(b.FHandle[:])")
+	requireContains(t, output, `"encoding/hex"`)
 }
 
 func TestGenerateTypesGoSyncPool(t *testing.T) {

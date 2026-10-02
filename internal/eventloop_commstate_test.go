@@ -70,7 +70,7 @@ func TestCommStateWarmCacheDoesNotAllocate(t *testing.T) {
 		{"cached", func() { _, _ = el.commState().cached(tid) }},
 		{"setCachedComm", func() { el.setCachedComm(tid, "warm") }},
 		{"fdState", func() { _ = el.fdState() }},
-		{"pendingHandleState", func() { _ = el.pendingHandleState() }},
+		{"handleState", func() { _ = el.handleState() }},
 	}
 	for _, check := range checks {
 		if allocs := testing.AllocsPerRun(1000, check.fn); allocs != 0 {

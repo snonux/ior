@@ -1826,6 +1826,12 @@ func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "struct open_by_handle_at_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_BY_HANDLE_AT_EVENT;")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+	// The handle the call opens is its input struct file_handle at args[1];
+	// the reader writes all three handle fields and returns the status.
+	requireContains(t, output, "    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);\n")
+	// A plain input needs no enter state: the stateless hook stays.
+	requireContains(t, output, "ior_on_syscall_enter(tid, SYS_ENTER_OPEN_BY_HANDLE_AT, now)")
+	requireNotContains(t, output, "pending_filename")
 }
 
 func TestGenerateSocketHandler(t *testing.T) {
@@ -2411,6 +2417,38 @@ func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+}
+
+// TestGenerateNameToHandleAtCapturesItsOutputHandle pins the generator
+// emission for the handle name_to_handle_at returns (task k03): the handle
+// only exists once the call has returned, so the enter parks the struct
+// file_handle pointer (args[2]) in the second pending slot and the exit reads
+// it back after a successful return, ahead of its own record. The pathname's
+// own faulted-read recovery in the first slot is untouched.
+func TestGenerateNameToHandleAtCapturesItsOutputHandle(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t,
+		FormatNameToHandleAt+"\n"+FormatExitNameToHandleAt+"\n"+FormatMkdir+"\n"+FormatExitMkdir+"\n"))
+	const enterConst = "SYS_ENTER_NAME_TO_HANDLE_AT"
+
+	checkOutputHandleCapture(t, out, "name_to_handle_at", 2)
+	enterBody := handlerBody(t, out, "sys_enter_name_to_handle_at")
+	requireContains(t, enterBody, "            ior_stash_pending_filename(tid, ctx->args[1]);\n")
+
+	exitBody := handlerBody(t, out, "sys_exit_name_to_handle_at")
+	hook, emits := openNameHookLine2(enterConst), []string{openNameEmitLine(enterConst), outputHandleEmitLines(enterConst)}
+	for _, line := range append([]string{hook}, emits...) {
+		requireContains(t, exitBody, line)
+	}
+	checkRecoveryOrdering(t, "sys_exit_name_to_handle_at", exitBody, hook, emits...)
+	requireNotContains(t, exitBody, "ior_emit_second_name_fixup")
+
+	// Other single-path syscalls must not pay for the capture.
+	for _, name := range []string{"sys_enter_mkdir", "sys_exit_mkdir"} {
+		body := handlerBody(t, out, name)
+		requireNotContains(t, body, "pending_filename2")
+		requireNotContains(t, body, "ior_stash_pending_handle")
+		requireNotContains(t, body, "ior_emit_file_handle")
+	}
 }
 
 func TestGenerateFallbackNullHandler(t *testing.T) {
@@ -3731,20 +3769,28 @@ func checkArtifactRecoveringHandlers(t *testing.T, artifact string) (firstSlot, 
 // checkArtifactRecoveryCallSites pins exactly the reviewed recovery pairs,
 // nothing else: an over-broad splice would make every exit handler pay extra
 // map operations. Every recovering handler uses the first slot; only the
-// two-path kinds (rename/link, move_mount) also use the second.
+// two-path kinds (rename/link, move_mount) also use the second for a path,
+// and the output-handle syscalls (name_to_handle_at) use it for their handle
+// pointer. The handle capture is pinned to its two syscalls the same way.
 func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, secondSlot int) {
 	t.Helper()
+	handles := len(outputHandleSyscalls)
 	for helper, want := range map[string]int{
 		// Every recovering exit takes through exactly one hook call: the
 		// single-slot hook for the one-path handlers, the two-slot one for the
-		// rename/link family and move_mount. No standalone take remains.
-		"ior_on_syscall_exit_take_filename(":  firstSlot - secondSlot,
-		"ior_on_syscall_exit_take_filenames(": secondSlot,
+		// rename/link family, move_mount and name_to_handle_at. No standalone
+		// take remains.
+		"ior_on_syscall_exit_take_filename(":  firstSlot - secondSlot - handles,
+		"ior_on_syscall_exit_take_filenames(": secondSlot + handles,
 		"ior_emit_open_name_fixup(":           firstSlot,
 		"ior_stash_pending_filename(":         firstSlot,
 		"ior_emit_second_name_fixup(":         secondSlot,
 		"ior_stash_pending_filename2(":        secondSlot,
 		"ior_take_pending_filename":           0,
+		"ior_stash_pending_handle(":           handles,
+		"ior_emit_file_handle(":               handles,
+		// open_by_handle_at alone reads an input handle.
+		"ior_read_file_handle(": 1,
 	} {
 		if got := strings.Count(artifact, helper); got != want {
 			t.Errorf("%d %s) call sites, want %d", got, helper, want)
@@ -3774,11 +3820,40 @@ func artifactEnters(t *testing.T, artifact, structKind string) []string {
 // stashes exactly the pointer it read - into the first slot, or for newname
 // into the second - inside its failure branch, and the exit takes and emits
 // each slot ahead of its own record. second says the syscall has a newname.
+//
+// A single-path syscall that returns a file handle (outputHandleSyscalls:
+// name_to_handle_at) uses the second slot too, for its output handle pointer:
+// checkOutputHandleCapture covers that half.
 func checkPathFilenameRecovery(t *testing.T, artifact, enter string, second bool) {
 	t.Helper()
 	syscallName := strings.TrimPrefix(enter, "sys_enter_")
 	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-	enterBody := handlerBody(t, artifact, enter)
+	checkPathStashes(t, enter, handlerBody(t, artifact, enter), second)
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	hook, emits := openNameHookLine(enterConst), []string{openNameEmitLine(enterConst)}
+	if second {
+		hook, emits = openNameHookLine2(enterConst), append(emits, openNameEmitLine2(enterConst))
+	}
+	handleArg, returnsHandle := outputHandleSyscalls[syscallName]
+	if returnsHandle {
+		hook, emits = openNameHookLine2(enterConst), append(emits, outputHandleEmitLines(enterConst))
+		checkOutputHandleCapture(t, artifact, syscallName, handleArg)
+	}
+	for _, line := range append([]string{hook}, emits...) {
+		if !strings.Contains(exitBody, line) {
+			t.Errorf("sys_exit_%s lacks %q:\n%s", syscallName, line, exitBody)
+		}
+	}
+	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, hook, emits...)
+	if !second && !returnsHandle && strings.Contains(exitBody, "pending_filename2") {
+		t.Errorf("sys_exit_%s uses the second slot but captures a single path", syscallName)
+	}
+}
+
+// checkPathStashes is the enter half of checkPathFilenameRecovery: each path
+// field's failed read stashes the pointer that was read, in its own slot.
+func checkPathStashes(t *testing.T, enter, enterBody string, second bool) {
+	t.Helper()
 	fields := map[string]string{"pathname": "ior_stash_pending_filename"}
 	if second {
 		fields = map[string]string{"oldname": "ior_stash_pending_filename", "newname": "ior_stash_pending_filename2"}
@@ -3795,19 +3870,39 @@ func checkPathFilenameRecovery(t *testing.T, artifact, enter string, second bool
 			t.Errorf("%s: %s is read from args[%s] but args[%s] is stashed", enter, field, probe[1], probe[2])
 		}
 	}
-	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-	hook, emits := openNameHookLine(enterConst), []string{openNameEmitLine(enterConst)}
-	if second {
-		hook, emits = openNameHookLine2(enterConst), append(emits, openNameEmitLine2(enterConst))
+}
+
+// outputHandleStashLine is the unconditional enter-side stash of the output
+// struct file_handle pointer of name_to_handle_at (outputHandleSyscalls).
+func outputHandleStashLine(argIdx int) string {
+	return fmt.Sprintf("    ior_stash_pending_handle(tid, ctx->args[%d]);\n", argIdx)
+}
+
+// outputHandleEmitLines publishes the returned handle only for ret == 0, the
+// one return that wrote a complete handle, and stamps the record with the
+// handler's own clock read: the exit record carries the same time, which is
+// how userspace knows the two belong to one call.
+func outputHandleEmitLines(enterConst string) string {
+	return "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, " + enterConst + ", now, pending_filename2);\n"
+}
+
+// checkOutputHandleCapture asserts the enter half of the output-handle
+// capture: the pointer is stashed unconditionally, after
+// ior_on_syscall_enter_stateful created the enter state and before the
+// handler's own reserve, and never through the path helper of the same slot.
+// The exit half (hook, emit, ordering) is checked by the caller.
+func checkOutputHandleCapture(t *testing.T, artifact, syscallName string, argIdx int) {
+	t.Helper()
+	enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
+	stashAt := strings.Index(enterBody, outputHandleStashLine(argIdx))
+	hookAt := strings.Index(enterBody, "ior_on_syscall_enter_stateful(")
+	reserveAt := strings.Index(enterBody, "bpf_ringbuf_reserve(&event_map,")
+	if stashAt < 0 || hookAt < 0 || stashAt < hookAt || stashAt > reserveAt {
+		t.Errorf("sys_enter_%s does not stash its output handle between the stateful enter hook and its reserve:\n%s",
+			syscallName, enterBody)
 	}
-	for _, line := range append([]string{hook}, emits...) {
-		if !strings.Contains(exitBody, line) {
-			t.Errorf("sys_exit_%s lacks %q:\n%s", syscallName, line, exitBody)
-		}
-	}
-	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, hook, emits...)
-	if !second && strings.Contains(exitBody, "pending_filename2") {
-		t.Errorf("sys_exit_%s uses the second slot but captures a single path", syscallName)
+	if strings.Contains(enterBody, "ior_stash_pending_filename2") {
+		t.Errorf("sys_enter_%s puts a path and a handle in the second slot:\n%s", syscallName, enterBody)
 	}
 }
 

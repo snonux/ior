@@ -51,6 +51,7 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		// with its own slot.
 		recoverSecondFilename: !isEnter && kindRecoversSecondFilename(tp.EnterKind),
 		outputPathArg:         outputPathArgForHandler(f.Name),
+		outputHandleArg:       outputHandleArgForHandler(f.Name),
 	})
 }
 
@@ -59,6 +60,15 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 // the enter handler stashes the pointer, the exit handler reads it back.
 func outputPathArgForHandler(name string) int {
 	if idx, ok := outputPathArgIndex(syscallName(name)); ok {
+		return idx
+	}
+	return -1
+}
+
+// outputHandleArgForHandler is outputPathArgForHandler for the output file
+// handle of name_to_handle_at (outputHandleSyscalls).
+func outputHandleArgForHandler(name string) int {
+	if idx, ok := outputHandleArgIndex(syscallName(name)); ok {
 		return idx
 	}
 	return -1
@@ -99,29 +109,44 @@ type handlerSpec struct {
 	// outputPathArg is the argument index of an output path buffer the exit
 	// handler captures (outputPathSyscalls), or -1 for every other syscall.
 	outputPathArg int
+	// outputHandleArg is the argument index of an output struct file_handle
+	// the exit handler captures (outputHandleSyscalls), or -1 for every other
+	// syscall. Its pointer occupies the second pending slot.
+	outputHandleArg int
 }
 
 // takesPendingFilename reports whether this exit handler takes the pointer the
 // enter handler stashed: the faulted-path recovery and the output-path
-// capture share the enter-state slot and the fixup record.
+// capture share the enter-state slot and the fixup record, and the
+// output-handle capture travels in the second slot of the same state.
 func (h handlerSpec) takesPendingFilename() bool {
-	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0)
+	return !h.isEnter && (h.recoverFilename || h.outputPathArg >= 0 || h.outputHandleArg >= 0)
+}
+
+// takesSecondPendingSlot reports whether this exit handler also takes the
+// second stashed pointer: the second path of the two-path kinds, or the
+// output file handle of name_to_handle_at, which borrows that slot because
+// its syscall has only one path.
+func (h handlerSpec) takesSecondPendingSlot() bool {
+	return !h.isEnter && (h.recoverSecondFilename || h.outputHandleArg >= 0)
 }
 
 // keepsEnterState reports whether this enter handler needs its per-tid
 // enter-state entry at every sampling rate, rate 1 included: a handler that
-// stashes a pending filename (the faulted-path recovery in its kind body, the
-// output-path capture in the prologue) writes the user pointer onto that entry
-// and its exit reads it back. The kind body is searched rather than a kind
-// table consulted, so a new kind that stashes keeps its entry without anyone
-// remembering to flag it. Every other enter handler uses ior_on_syscall_enter,
-// which writes no entry at rate 1 (internal/c/filter.c, task 2s2: it removes
-// the hash update, lookup and delete from the hot path of the common syscall).
+// stashes a pending pointer (the faulted-path recovery in its kind body, the
+// output-path and output-handle captures in the prologue) writes the user
+// pointer onto that entry and its exit reads it back. The kind body is
+// searched rather than a kind table consulted, so a new kind that stashes
+// keeps its entry without anyone remembering to flag it. Every other enter
+// handler uses ior_on_syscall_enter, which writes no entry at rate 1
+// (internal/c/filter.c, task 2s2: it removes the hash update, lookup and
+// delete from the hot path of the common syscall).
 func (h handlerSpec) keepsEnterState() bool {
 	if !h.isEnter || h.noreturn {
 		return false
 	}
-	return h.outputPathArg >= 0 || strings.Contains(h.extra, "ior_stash_pending_filename")
+	return h.outputPathArg >= 0 || h.outputHandleArg >= 0 ||
+		strings.Contains(h.extra, "ior_stash_pending_filename")
 }
 
 // enterConstForHandler returns the C #define constant name for the
@@ -138,12 +163,13 @@ func enterConstForHandler(name string, isEnter bool) string {
 
 // renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
 // scope gate, the per-tid enter/exit hook, and - for the path-capturing kinds
-// and the output-path syscalls (outputPathSyscalls) only - the stash/take/emit
-// of a user pointer (two for rename/link and move_mount) carried on the enter
-// state. Those lines are position-critical,
-// which is why they live here rather than in the kind emitters: the enter-side
-// stash must follow ior_on_syscall_enter_stateful (which creates this tid's
-// enter-state entry at every rate), the take is part of the exit hook itself
+// and the output-path and output-handle syscalls (outputPathSyscalls,
+// outputHandleSyscalls) only - the stash/take/emit of a user pointer (two for
+// rename/link, move_mount and name_to_handle_at) carried on the enter state.
+// Those lines are position-critical, which is why they live here rather than
+// in the kind emitters: the enter-side stash must follow
+// ior_on_syscall_enter_stateful (which creates this tid's enter-state entry
+// at every rate), the take is part of the exit hook itself
 // (ior_on_syscall_exit_take_filename(s) copies the pointers out of the entry
 // it already looked up, before it deletes it; see renderTakingExitHook) and the
 // fixup must precede this handler's own reserve, so the ring buffer hands
@@ -216,7 +242,7 @@ func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
 	b.WriteString("    __u64 pending_filename;\n")
 	hook := "ior_on_syscall_exit_take_filename"
 	out := "&pending_filename"
-	if h.recoverSecondFilename {
+	if h.takesSecondPendingSlot() {
 		b.WriteString("    __u64 pending_filename2;\n")
 		hook = "ior_on_syscall_exit_take_filenames"
 		out = "&pending_filename, &pending_filename2"
@@ -238,22 +264,45 @@ func renderTakingExitHook(b *strings.Builder, h handlerSpec) {
 // left there. The faulted-path recovery instead always emits, because its
 // pointers are only stashed when the enter-side read failed (a slot whose read
 // succeeded holds 0, for which ior_emit_name_fixup emits nothing).
+//
+// An output-handle enter (name_to_handle_at) parks its struct file_handle
+// pointer the same unconditional way, in the second slot; its kind body may
+// still stash the pathname in the first. Its exit publishes the handle only
+// for ret == 0, the one return that wrote a complete handle, and passes the
+// handler's clock read along: the control record and the exit record that
+// follows then carry the same time, which is how userspace ties them together.
 func renderPendingFilenameUse(b *strings.Builder, h handlerSpec) {
 	switch {
 	case h.isEnter && !h.noreturn && h.outputPathArg >= 0:
 		fmt.Fprintf(b, "    ior_stash_pending_filename(tid, ctx->args[%d]);\n", h.outputPathArg)
+		b.WriteString("\n")
+	case h.isEnter && !h.noreturn && h.outputHandleArg >= 0:
+		fmt.Fprintf(b, "    ior_stash_pending_handle(tid, ctx->args[%d]);\n", h.outputHandleArg)
 		b.WriteString("\n")
 	case !h.isEnter && h.outputPathArg >= 0:
 		b.WriteString("    if (ctx->ret > 0)\n")
 		fmt.Fprintf(b, "        ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
 		b.WriteString("\n")
 	case h.takesPendingFilename():
-		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
-		if h.recoverSecondFilename {
-			fmt.Fprintf(b, "    ior_emit_second_name_fixup(tid, %s, pending_filename2);\n", h.enterName)
-		}
-		b.WriteString("\n")
+		renderExitPointerUse(b, h)
 	}
+}
+
+// renderExitPointerUse writes the exit-side use of the taken pointers for the
+// path-capturing kinds: the fixup of the first path, then what the second slot
+// holds - the second path's fixup, or name_to_handle_at's output handle.
+func renderExitPointerUse(b *strings.Builder, h handlerSpec) {
+	if h.recoverFilename {
+		fmt.Fprintf(b, "    ior_emit_open_name_fixup(tid, %s, pending_filename);\n", h.enterName)
+	}
+	if h.recoverSecondFilename {
+		fmt.Fprintf(b, "    ior_emit_second_name_fixup(tid, %s, pending_filename2);\n", h.enterName)
+	}
+	if h.outputHandleArg >= 0 {
+		b.WriteString("    if (ctx->ret == 0)\n")
+		fmt.Fprintf(b, "        ior_emit_file_handle(pid, tid, %s, now, pending_filename2);\n", h.enterName)
+	}
+	b.WriteString("\n")
 }
 
 func renderHandler(h handlerSpec) string {
@@ -393,9 +442,15 @@ func generateExtraDup3() string {
 	return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
 }
 
-// generateExtraOpenByHandleAt emits flags from argument position 2.
+// generateExtraOpenByHandleAt emits flags from argument position 2 and the
+// file handle the call opens, read from the struct file_handle at argument
+// position 1 (ior_read_file_handle in internal/c/handle.c writes all three
+// handle fields and returns the status). The handle is an input, so it is
+// complete at sys_enter; userspace looks the name of the opened file up by it
+// (internal/eventloop_handle.go).
 func generateExtraOpenByHandleAt() string {
-	return "    ev->flags = (__s32)ctx->args[2];\n"
+	return "    ev->flags = (__s32)ctx->args[2];\n" +
+		"    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);\n"
 }
 
 // generateExtraFd returns the fd-capture line for fd-family events.

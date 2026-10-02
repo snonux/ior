@@ -172,7 +172,8 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("OpenByHandleAtEvent", func(t *testing.T) {
-		ev := &OpenByHandleAtEvent{EventType: ENTER_OPEN_BY_HANDLE_AT_EVENT, TraceId: SYS_ENTER_OPEN_BY_HANDLE_AT, Time: 1, Pid: 2, Tid: 3, Flags: 4}
+		ev := &OpenByHandleAtEvent{EventType: ENTER_OPEN_BY_HANDLE_AT_EVENT, TraceId: SYS_ENTER_OPEN_BY_HANDLE_AT, Time: 1, Pid: 2, Tid: 3, Flags: 4,
+			HandleStatus: FILE_HANDLE_OK, HandleBytes: 3, HandleType: -5, FHandle: [IOR_MAX_HANDLE_SZ]byte{7, 8, 9}}
 		raw := rawBytes(t, ev)
 
 		slow := NewOpenByHandleAtEvent(raw)
@@ -2059,18 +2060,105 @@ func TestNewSocketEventFastKernelLayout(t *testing.T) {
 	}
 }
 
-func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, openByHandleAtEventSize) // 32: sizeof(struct open_by_handle_at_event)
-	fillCommonHeader(raw, ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+// handleRecordBytes builds a 168-byte record with the shared handle fields:
+// a full-size handle of type -7 whose bytes count up from 1, so every byte of
+// the field is distinguishable from a zeroed or shifted one.
+func handleRecordBytes(eventType EventType, traceID TraceId) []byte {
+	raw := make([]byte, openByHandleAtEventSize)
+	fillCommonHeader(raw, eventType, traceID)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(3)))
-
-	fast := NewOpenByHandleAtEventFast(raw)
-	if fast == nil {
-		t.Fatalf("expected decoded open_by_handle_at event for padded kernel payload")
+	binary.LittleEndian.PutUint32(raw[28:32], FILE_HANDLE_OK)
+	binary.LittleEndian.PutUint32(raw[32:36], IOR_MAX_HANDLE_SZ)
+	binary.LittleEndian.PutUint32(raw[36:40], uint32(0xfffffff9))
+	for i := 0; i < IOR_MAX_HANDLE_SZ; i++ {
+		raw[40+i] = byte(i + 1)
 	}
+	return raw
+}
+
+func assertHandleFields(t *testing.T, status, handleBytes uint32, handleType int32, fHandle [IOR_MAX_HANDLE_SZ]byte) {
+	t.Helper()
+	if status != FILE_HANDLE_OK || handleBytes != IOR_MAX_HANDLE_SZ || handleType != -7 {
+		t.Fatalf("handle fields = status %d, bytes %d, type %d", status, handleBytes, handleType)
+	}
+	for i, b := range fHandle {
+		if b != byte(i+1) {
+			t.Fatalf("f_handle[%d] = %#x, want %#x", i, b, byte(i+1))
+		}
+	}
+}
+
+// TestNewOpenByHandleAtEventFastKernelLayout pins the current 168-byte
+// record at the offsets BPF writes: flags at 24, then status, byte count,
+// type and the handle bytes from 40. A longer payload decodes the same prefix.
+func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
+	raw := handleRecordBytes(ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+	for _, payload := range [][]byte{raw, append(append([]byte{}, raw...), 0xaa, 0xbb, 0xcc, 0xdd)} {
+		fast := NewOpenByHandleAtEventFast(payload)
+		if fast == nil {
+			t.Fatalf("a %d-byte open_by_handle_at record did not decode", len(payload))
+		}
+		if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != 3 {
+			t.Fatalf("unexpected open_by_handle_at decode: %#v", fast)
+		}
+		assertHandleFields(t, fast.HandleStatus, fast.HandleBytes, fast.HandleType, fast.FHandle)
+		fast.Recycle()
+	}
+}
+
+// TestNewOpenByHandleAtEventFastLegacyLayouts: the flags-only record of an
+// object that predates the handle decodes with FILE_HANDLE_NONE and no
+// handle, whatever its padding bytes hold and whatever the pooled event
+// decoded before. Sizes between the legacy and the current layout are
+// rejected rather than read at the wrong offsets.
+func TestNewOpenByHandleAtEventFastLegacyLayouts(t *testing.T) {
+	current := handleRecordBytes(ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+	for _, size := range []int{openByHandleAtEventLegacy, openByHandleAtEventSizeV1} {
+		// Warm the pool with an event that carries a handle.
+		NewOpenByHandleAtEventFast(current).Recycle()
+		// current[28:32] is FILE_HANDLE_OK: in the 32-byte record those bytes
+		// are unwritten padding and must not be read as a status.
+		fast := NewOpenByHandleAtEventFast(current[:size])
+		if fast == nil {
+			t.Fatalf("a %d-byte legacy open_by_handle_at record did not decode", size)
+		}
+		if fast.Time != 111 || fast.Tid != 33 || fast.Flags != 3 {
+			t.Fatalf("unexpected legacy decode: %#v", fast)
+		}
+		if fast.HandleStatus != FILE_HANDLE_NONE || fast.HandleBytes != 0 || fast.HandleType != 0 ||
+			fast.FHandle != [IOR_MAX_HANDLE_SZ]byte{} {
+			t.Fatalf("a %d-byte legacy record decoded with a handle: %#v", size, fast)
+		}
+		fast.Recycle()
+	}
+	for _, size := range []int{27, 29, 36, 40, openByHandleAtEventSize - 1} {
+		if ev := NewOpenByHandleAtEventFast(current[:size]); ev != nil {
+			t.Fatalf("a %d-byte open_by_handle_at record decoded: %#v", size, ev)
+		}
+	}
+}
+
+// TestNewFileHandleEventFastKernelLayout pins the control record, which
+// shares the handle offsets with open_by_handle_at_event.
+func TestNewFileHandleEventFastKernelLayout(t *testing.T) {
+	raw := handleRecordBytes(FILE_HANDLE_EVENT, SYS_ENTER_NAME_TO_HANDLE_AT)
+	slow := NewFileHandleEvent(raw)
+	fast := NewFileHandleEventFast(raw)
+	if slow == nil || fast == nil {
+		t.Fatalf("file handle record did not decode: slow=%v fast=%v", slow, fast)
+	}
+	defer slow.Recycle()
 	defer fast.Recycle()
-	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != 3 {
-		t.Fatalf("unexpected open_by_handle_at decode: %#v", fast)
+	if !slow.Equals(fast) {
+		t.Fatalf("file handle decode mismatch: slow=%v fast=%v", slow, fast)
+	}
+	if fast.EventType != FILE_HANDLE_EVENT || fast.TraceId != SYS_ENTER_NAME_TO_HANDLE_AT ||
+		fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Reserved != 3 {
+		t.Fatalf("unexpected file handle decode: %#v", fast)
+	}
+	assertHandleFields(t, fast.HandleStatus, fast.HandleBytes, fast.HandleType, fast.FHandle)
+	if ev := NewFileHandleEventFast(raw[:fileHandleEventSize-1]); ev != nil {
+		t.Fatalf("a truncated file handle record decoded: %#v", ev)
 	}
 }
 
@@ -2172,6 +2260,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "FcntlEvent", decode: func(raw []byte) bool { return NewFcntlEventFast(raw) == nil }},
 		{name: "Dup3Event", decode: func(raw []byte) bool { return NewDup3EventFast(raw) == nil }},
 		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
+		{name: "FileHandleEvent", decode: func(raw []byte) bool { return NewFileHandleEventFast(raw) == nil }},
 		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
 		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
 		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},

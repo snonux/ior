@@ -110,30 +110,47 @@ type pidFdKeys struct {
 	peakCache int
 }
 
-// handleStash is one stashed name_to_handle_at name. opaque says that ior has
-// no way to recognise the descriptor a handle of that name opens (see
-// comparableHandleName), so a descriptor that contradicts the name proves
-// nothing about which handle was opened.
+// handleKey identifies a file handle the way the kernel does: by the type the
+// filesystem encoded it with and the size bytes that are the handle. It is the
+// key the name of a handle is filed under, and it is comparable, so two
+// records carry the same handle exactly when their keys are equal. bytes past
+// size are always zero (handleKeyOf), which is what makes that hold.
 //
-// tmpfileDir keeps the reason for the one opaque name whose reason has to be
-// passed on: the name is the directory a tracked O_TMPFILE descriptor is named
-// after (takenFromTrackedTmpfile). A descriptor such a stash names is then
-// named after that directory too and must carry the mark that says so
-// (openedHandleFile). No other reason is kept: a relative path and a traced
-// name are opaque by their form, wherever they are copied.
-type handleStash struct {
-	name       string
-	opaque     bool
-	tmpfileDir bool
+// The mount is deliberately not part of the key; see handleKeyOf.
+type handleKey struct {
+	handleType int32
+	size       uint32
+	bytes      [types.IOR_MAX_HANDLE_SZ]byte
 }
 
-// pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
-// TID (the thread's last one only) until an open_by_handle_at exit claims
-// them; the claim verifies the entry against the returned descriptor (see
-// openedHandleFile) because the key cannot say which handle was opened.
-type pendingHandleTracker struct {
-	paths        map[uint32]handleStash
-	pathAges     map[uint32]uint64
+// takenHandle is the handle a name_to_handle_at returned, parked under the
+// calling thread from the FILE_HANDLE_EVENT control record until the call's
+// exit record claims it. time is the control record's, which equals the exit
+// record's (both are the BPF exit handler's single clock read).
+type takenHandle struct {
+	key  handleKey
+	time uint64
+}
+
+// handleTracker remembers which pathname a file handle was taken of, so that
+// an open_by_handle_at can be named after the file its handle belongs to.
+//
+// names is keyed by the handle itself, not by a thread or process: a handle is
+// valid system-wide, is routinely passed to another thread or process, and can
+// be opened any number of times, so an entry is never consumed by an open. It
+// is replaced when name_to_handle_at returns the same handle again (the latest
+// name wins) and evicted least-recently-used first above the cap; a lookup
+// counts as use.
+//
+// taken is the short-lived per-thread half: see takenHandle. An entry normally
+// lives from the control record to the exit record a few records later, and
+// is dropped with its thread (dropTaken). One whose exit record was lost
+// stays until the thread's next name_to_handle_at exit, which discards it
+// because the times differ.
+type handleTracker struct {
+	names        map[handleKey]string
+	nameAges     map[handleKey]uint64
+	taken        map[uint32]takenHandle
 	maxCacheSize int
 	age          uint64
 }
@@ -196,23 +213,25 @@ func newFDTracker(files map[uint64]file.File) *fdTracker {
 	return t
 }
 
-func newPendingHandleTracker() *pendingHandleTracker {
-	t := &pendingHandleTracker{}
+func newHandleTracker() *handleTracker {
+	t := &handleTracker{}
 	t.ensureInit()
 	return t
 }
 
-// ensureInit makes any pending-handle tracker usable by allocating its maps.
-// The constructor and the set() method both go through it, so a zero value
-// is safe too; the method exists so the loop's injection seam
-// (configured* helpers) can complete a hand-built tracker without spelling
-// out its map fields.
-func (t *pendingHandleTracker) ensureInit() {
-	if t.paths == nil {
-		t.paths = make(map[uint32]handleStash)
+// ensureInit makes any handle tracker usable by allocating its maps. The
+// constructor and the mutators all go through it, so a zero value is safe
+// too; the method exists so the loop's injection seam (configured* helpers)
+// can complete a hand-built tracker without spelling out its map fields.
+func (t *handleTracker) ensureInit() {
+	if t.names == nil {
+		t.names = make(map[handleKey]string)
 	}
-	if t.pathAges == nil {
-		t.pathAges = make(map[uint32]uint64)
+	if t.nameAges == nil {
+		t.nameAges = make(map[handleKey]uint64)
+	}
+	if t.taken == nil {
+		t.taken = make(map[uint32]takenHandle)
 	}
 }
 
@@ -911,87 +930,99 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 	t.unindexKey(key, true)
 }
 
-// set records pathname as the thread's latest name_to_handle_at path. An empty
-// pathname (resolvePathEvent produced no name) is not a stash: storing it would
-// make openedHandleFile consume it as an "unverified" name and emit an unnamed
-// row even when procfs could name the descriptor. It still supersedes the
-// thread's previous stash - the slot means "the last handle taken", and that
-// handle is unnamed - so the old entry is dropped rather than left to be
-// mistaken for it (when procfs cannot verify, a stale name would be wrong, an
-// absent one is merely unknown; when procfs can, the row is named from it
-// either way).
-func (t *pendingHandleTracker) set(tid uint32, pathname string) {
-	t.store(tid, handleStash{name: pathname})
-}
-
-// setOpaque is set for a name ior cannot compare with any descriptor (see
-// handleStash). An empty name is no stash here either.
-func (t *pendingHandleTracker) setOpaque(tid uint32, pathname string) {
-	t.store(tid, handleStash{name: pathname, opaque: true})
-}
-
-// setTmpfileDir is setOpaque for the directory a tracked O_TMPFILE descriptor
-// is named after, the opaque name whose origin the stash remembers (see
-// handleStash).
-func (t *pendingHandleTracker) setTmpfileDir(tid uint32, pathname string) {
-	t.store(tid, handleStash{name: pathname, opaque: true, tmpfileDir: true})
-}
-
-// store is the one insertion path behind set, setOpaque and setTmpfileDir.
-func (t *pendingHandleTracker) store(tid uint32, stash handleStash) {
-	if stash.name == "" {
-		t.delete(tid)
+// store files name under the handle key, replacing what the handle was known
+// as: name_to_handle_at returned it again, and the pathname of the latest call
+// is the freshest name ior has for that file. An empty name (resolvePathEvent
+// produced none) is no name to give a row, but it still supersedes the old
+// entry, which is dropped rather than left to be mistaken for the current
+// one: a missing name leaves the row to procfs, a stale one would be wrong.
+func (t *handleTracker) store(key handleKey, name string) {
+	if name == "" {
+		delete(t.names, key)
+		delete(t.nameAges, key)
 		return
 	}
 	t.ensureInit()
 	t.age++
-	t.paths[tid] = stash
-	t.pathAges[tid] = t.age
+	t.names[key] = name
+	t.nameAges[key] = t.age
 	t.prune()
 }
 
-// peek returns the stashed pathname without removing it or refreshing its LRU
-// age. Together with isOpaque and namesTmpfileDir it is the only read path:
-// the claimer must verify the entry against the opened descriptor first and
-// only then delete it (see openedHandleFile).
-func (t *pendingHandleTracker) peek(tid uint32) (string, bool) {
-	stash, ok := t.paths[tid]
-	return stash.name, ok
-}
-
-// isOpaque reports whether the thread's stash is one ior cannot compare with a
-// descriptor; false without a stash.
-func (t *pendingHandleTracker) isOpaque(tid uint32) bool {
-	return t.paths[tid].opaque
-}
-
-// namesTmpfileDir reports whether the thread's stash is the directory a
-// tracked O_TMPFILE descriptor is named after; false without a stash.
-func (t *pendingHandleTracker) namesTmpfileDir(tid uint32) bool {
-	return t.paths[tid].tmpfileDir
-}
-
-func (t *pendingHandleTracker) delete(tid uint32) {
-	delete(t.paths, tid)
-	delete(t.pathAges, tid)
-}
-
-func (t *pendingHandleTracker) prune() {
-	if t.paths == nil {
-		return
+// lookup returns the name the handle key was taken of. A hit refreshes the
+// entry's LRU age: a handle that is still being opened is worth keeping, and
+// the entry stays where it is, because the next open of the same handle - by
+// this thread or any other - is the same file. A failed open is no reason to
+// drop it either: the handle itself is not what failed in the common cases
+// (a bad mount fd, a missing capability), and a retry should be named.
+func (t *handleTracker) lookup(key handleKey) (string, bool) {
+	name, ok := t.names[key]
+	if !ok {
+		return "", false
 	}
+	t.age++
+	t.nameAges[key] = t.age
+	return name, true
+}
+
+// park records the handle a name_to_handle_at of tid returned, as its control
+// record reported it at time, for claim to pick up at the call's exit record.
+// It replaces what the tid had parked: one thread runs one syscall at a time,
+// so an older entry is a leftover of a call whose exit record was lost.
+//
+// The map is capped like names. Overflowing it takes that many threads with a
+// lost exit record and no exit of their own, so the whole map is dropped
+// rather than tracked by age: what is lost is at most the name of handles
+// whose exit records are in flight at that moment.
+func (t *handleTracker) park(tid uint32, key handleKey, time uint64) {
+	t.ensureInit()
+	if len(t.taken) >= t.limit() {
+		clear(t.taken)
+	}
+	t.taken[tid] = takenHandle{key: key, time: time}
+}
+
+// claim removes and returns the handle parked for tid, provided it was parked
+// by the call whose exit record carries time. The parked entry is dropped in
+// any case: the exit of a name_to_handle_at ends the only call it could
+// belong to.
+//
+// The time check is what makes the pairing exact rather than positional. The
+// control record and the exit record of one call carry the same clock read,
+// and a later call of the tid has a later one, so a handle whose own exit
+// record was lost can never be filed under the pathname of the next call.
+func (t *handleTracker) claim(tid uint32, time uint64) (handleKey, bool) {
+	parked, ok := t.taken[tid]
+	if !ok {
+		return handleKey{}, false
+	}
+	delete(t.taken, tid)
+	if parked.time != time {
+		return handleKey{}, false
+	}
+	return parked.key, true
+}
+
+// dropTaken forgets the handle parked for tid. It is the tracker's only
+// per-thread state, so it is all a dead or recycled tid has to give up; the
+// names stay, because a handle outlives the task that took it.
+func (t *handleTracker) dropTaken(tid uint32) {
+	delete(t.taken, tid)
+}
+
+func (t *handleTracker) prune() {
 	limit := t.limit()
-	if len(t.paths) <= limit {
+	if len(t.names) <= limit {
 		return
 	}
-	trimOldestPendingHandles(t.paths, t.pathAges, trimTarget(limit))
+	trimLRU(t.names, t.nameAges, trimTarget(limit), nil)
 }
 
-func (t *pendingHandleTracker) limit() int {
+func (t *handleTracker) limit() int {
 	if t.maxCacheSize > 0 {
 		return t.maxCacheSize
 	}
-	return defaultMaxPendingHandleEntries
+	return defaultMaxHandleEntries
 }
 
 // pairTracker holds the state for matching sys_enter events to their sys_exit
@@ -1313,10 +1344,6 @@ func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64
 			pair.Recycle()
 		}
 	})
-}
-
-func trimOldestPendingHandles(state map[uint32]handleStash, ages map[uint32]uint64, targetSize int) {
-	trimLRU(state, ages, targetSize, nil)
 }
 
 func trimTarget(limit int) int {

@@ -4,6 +4,7 @@ package types
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 )
@@ -145,6 +146,7 @@ const EXIT_EVENTFD_NAME_EVENT = 61
 const TASK_NEWTASK_EVENT = 62
 const TASK_RENAME_EVENT = 63
 const SYSCALL_RESTART_EVENT = 64
+const FILE_HANDLE_EVENT = 65
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -173,6 +175,12 @@ const POLL_TIMEOUT_INFINITE_NS = -1
 const POLL_TIMEOUT_UNKNOWN_NS = -2
 const OPEN_NAME_FIXUP_SLOT_FIRST = 0
 const OPEN_NAME_FIXUP_SLOT_SECOND = 1
+const IOR_MAX_HANDLE_SZ = 128
+const FILE_HANDLE_NONE = 0
+const FILE_HANDLE_OK = 1
+const FILE_HANDLE_NULL = 2
+const FILE_HANDLE_READ_FAILED = 3
+const FILE_HANDLE_TOO_LARGE = 4
 const RESTART_PHASE_HANDLER = 1
 const RESTART_PHASE_RESUME = 2
 const SYS_ENTER_SOCKET TraceId = 1899
@@ -1769,16 +1777,20 @@ func (d *Dup3Event) Recycle() {
 }
 
 type OpenByHandleAtEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Flags     int32
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Flags        int32
+	HandleStatus uint32
+	HandleBytes  uint32
+	HandleType   int32
+	FHandle      [IOR_MAX_HANDLE_SZ]byte
 }
 
 func (o OpenByHandleAtEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, o.HandleStatus, o.HandleBytes, o.HandleType, hex.EncodeToString(o.FHandle[:]))
 }
 
 func (o OpenByHandleAtEvent) Equals(other any) bool {
@@ -1786,7 +1798,7 @@ func (o OpenByHandleAtEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags && o.HandleStatus == otherConcrete.HandleStatus && o.HandleBytes == otherConcrete.HandleBytes && o.HandleType == otherConcrete.HandleType && o.FHandle == otherConcrete.FHandle
 }
 
 func (o *OpenByHandleAtEvent) GetEventType() EventType {
@@ -1834,6 +1846,78 @@ func (o *OpenByHandleAtEvent) Bytes() ([]byte, error) {
 
 func (o *OpenByHandleAtEvent) Recycle() {
 	poolOfOpenByHandleAtEvents.Put(o)
+}
+
+type FileHandleEvent struct {
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Reserved     uint32
+	HandleStatus uint32
+	HandleBytes  uint32
+	HandleType   int32
+	FHandle      [IOR_MAX_HANDLE_SZ]byte
+}
+
+func (f FileHandleEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Reserved:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Reserved, f.HandleStatus, f.HandleBytes, f.HandleType, hex.EncodeToString(f.FHandle[:]))
+}
+
+func (f FileHandleEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FileHandleEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Reserved == otherConcrete.Reserved && f.HandleStatus == otherConcrete.HandleStatus && f.HandleBytes == otherConcrete.HandleBytes && f.HandleType == otherConcrete.HandleType && f.FHandle == otherConcrete.FHandle
+}
+
+func (f *FileHandleEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FileHandleEvent) GetTraceId() TraceId {
+	return f.TraceId
+}
+
+func (f *FileHandleEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FileHandleEvent) GetTid() uint32 {
+	return f.Tid
+}
+
+func (f *FileHandleEvent) GetTime() uint64 {
+	return f.Time
+}
+
+var poolOfFileHandleEvents = sync.Pool{
+	New: func() any { return &FileHandleEvent{} },
+}
+
+func NewFileHandleEvent(raw []byte) *FileHandleEvent {
+	f := poolOfFileHandleEvents.Get().(*FileHandleEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		*f = FileHandleEvent{}
+		poolOfFileHandleEvents.Put(f)
+		return nil
+	}
+	return f
+}
+
+func (f *FileHandleEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *FileHandleEvent) Recycle() {
+	poolOfFileHandleEvents.Put(f)
 }
 
 type SocketEvent struct {

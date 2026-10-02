@@ -16,11 +16,11 @@ import (
 const sysEnterNameToHandleAtName = "name_to_handle_at"
 
 const (
-	defaultCommLookupWorkers       = 4
-	defaultCommLookupQueueSize     = 512
-	defaultMaxPendingEnterEvs      = 16384
-	defaultMaxPendingHandleEntries = 8192
-	defaultMaxProcFdCacheSize      = 8192
+	defaultCommLookupWorkers   = 4
+	defaultCommLookupQueueSize = 512
+	defaultMaxPendingEnterEvs  = 16384
+	defaultMaxHandleEntries    = 8192
+	defaultMaxProcFdCacheSize  = 8192
 	// defaultMaxFdTableEntries caps the fdTracker's (pid, fd) table. The flat
 	// per-fd map it replaced had no cap at all, but its key space was bounded
 	// by the number of distinct descriptor *numbers* (a few hundred per
@@ -90,12 +90,12 @@ type eventLoop struct {
 	// the TUI can swap filters in place via SetFilter without tearing down
 	// and reattaching the BPF probes (the previous behavior caused a multi-
 	// second 'Attaching tracepoints' overlay every time the filter changed).
-	filterPtr      atomic.Pointer[globalfilter.Filter]
-	pairs          pairTracker           // enter/exit pairing state and inter-syscall duration tracking
-	restarts       restartTracker        // interrupted rows held for the kernel's continuation of the call, by tid (eventloop_restart.go)
-	pendingHandles *pendingHandleTracker // TID → pathname from name_to_handle_at, for open_by_handle_at correlation
-	fdTracker      *fdTracker            // fd table and procfs resolution cache
-	commResolver   *commResolver
+	filterPtr    atomic.Pointer[globalfilter.Filter]
+	pairs        pairTracker    // enter/exit pairing state and inter-syscall duration tracking
+	restarts     restartTracker // interrupted rows held for the kernel's continuation of the call, by tid (eventloop_restart.go)
+	handles      *handleTracker // file handle → pathname from name_to_handle_at, for open_by_handle_at naming
+	fdTracker    *fdTracker     // fd table and procfs resolution cache
+	commResolver *commResolver
 	// commWired is the resolver commState last completed and wired to this
 	// loop's warning sink. While it still equals commResolver, commState
 	// skips that one-time wiring: evaluating the method value
@@ -275,10 +275,10 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 
 	plainSink := newPlainStdoutSink(cfg.escapeMode)
 	el := &eventLoop{
-		pairs:          newPairTracker(),
-		pendingHandles: newPendingHandleTracker(),
-		fdTracker:      fdState,
-		commResolver:   commState,
+		pairs:        newPairTracker(),
+		handles:      newHandleTracker(),
+		fdTracker:    fdState,
+		commResolver: commState,
 		// Default printCb prints each pair to stdout as a CSV row (escaped
 		// as -escape selects) then recycles it. The rows are buffered, so
 		// the sink is also the loop's flusher; callers (e.g. TUI,
@@ -347,11 +347,11 @@ func (e *eventLoop) fdState() *fdTracker {
 	return e.fdTracker
 }
 
-func (e *eventLoop) pendingHandleState() *pendingHandleTracker {
-	if e.pendingHandles == nil {
-		e.pendingHandles = newPendingHandleTracker()
+func (e *eventLoop) handleState() *handleTracker {
+	if e.handles == nil {
+		e.handles = newHandleTracker()
 	}
-	return e.pendingHandles
+	return e.handles
 }
 
 // commState returns the loop's comm resolver, creating and wiring it on first

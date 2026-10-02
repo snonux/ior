@@ -211,7 +211,10 @@ func TestGeneratedStringShowsAMissingTerminator(t *testing.T) {
 }
 
 // TestStringBearingEventsListIsComplete fails when generated_types.go gains a
-// struct with a byte-array field that stringBearingEvents does not list.
+// struct with a byte-array field that stringBearingEvents does not list. A
+// file handle field ([IOR_MAX_HANDLE_SZ]byte, a C __u8 array) is not a
+// string: it is binary, has no terminator, is zero-filled by BPF and rendered
+// whole, as hex (TestFileHandleFieldRendersAsHex).
 func TestStringBearingEventsListIsComplete(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "generated_types.go", nil, 0)
 	if err != nil {
@@ -233,6 +236,9 @@ func TestStringBearingEventsListIsComplete(t *testing.T) {
 		}
 		for _, field := range st.Fields.List {
 			if arr, ok := field.Type.(*ast.ArrayType); ok && arr.Len != nil {
+				if size, ok := arr.Len.(*ast.Ident); ok && size.Name == "IOR_MAX_HANDLE_SZ" {
+					continue
+				}
 				if ident, ok := arr.Elt.(*ast.Ident); ok && ident.Name == "byte" {
 					found[spec.Name.Name] = true
 				}
@@ -248,6 +254,28 @@ func TestStringBearingEventsListIsComplete(t *testing.T) {
 	for name := range listed {
 		if !found[name] {
 			t.Errorf("%s is listed in stringBearingEvents but has no string field", name)
+		}
+	}
+}
+
+// TestFileHandleFieldRendersAsHex: the handle bytes are binary, so String()
+// must not hand them to a log line or a terminal raw, nor cut them at the
+// first zero byte as it does a string.
+func TestFileHandleFieldRendersAsHex(t *testing.T) {
+	var fHandle [IOR_MAX_HANDLE_SZ]byte
+	copy(fHandle[:], []byte{0x1b, 0x00, 0xff, 0x41})
+	want := "FHandle:1b00ff41" + strings.Repeat("00", IOR_MAX_HANDLE_SZ-4)
+	events := []fmt.Stringer{
+		OpenByHandleAtEvent{FHandle: fHandle},
+		FileHandleEvent{FHandle: fHandle},
+	}
+	for _, ev := range events {
+		got := ev.String()
+		if !strings.HasSuffix(got, want) {
+			t.Errorf("%T renders its handle as %q, want the suffix %q", ev, got, want)
+		}
+		if strings.ContainsAny(got, "\x1b\x00") {
+			t.Errorf("%T: raw handle bytes reached String(): %q", ev, got)
 		}
 	}
 }

@@ -118,7 +118,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		openEventAllowsEmptyPath(openEv, !event.IsErrnoRet(retEvent.Ret)))
 	ep.Comm = comm
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		fdFile := openedFdFile(fd, filename.Name(), openEventFlags(openEv))
+		fdFile := file.NewFd(fd, filename.Name(), openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -139,35 +139,6 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	// checked. A concrete dirfd-relative path deferred that dimension until
 	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPair(ep)
-}
-
-// openedFdFile builds the fd table entry of a successful open under the
-// pathname it was called with. For an O_TMPFILE open that pathname is the
-// directory the unnamed file was created in, not a name of the file, and the
-// entry is marked so: a name_to_handle_at(fd, "", AT_EMPTY_PATH) on it stashes
-// a path that leads to another inode (takenFromTrackedTmpfile). The mark is
-// set here, where the name is given, because the flags alone do not tell the
-// two origins apart later - a descriptor promoted from procfs carries
-// O_TMPFILE in its fdinfo flags too, under its link text.
-//
-// O_PATH with the O_TMPFILE bits is no O_TMPFILE open and is not marked. For
-// open and openat the kernel keeps only the flags O_PATH allows, so the call
-// succeeds as an O_PATH|O_DIRECTORY descriptor on the directory itself
-// (observed on Linux 7.2.5: the link is the directory, fdinfo flags
-// 012200000), while BPF reports the flags as the caller passed them. The
-// pathname is then a real name of the descriptor, and a handle taken of it is
-// comparable like that of any directory. openat2 strips nothing and rejects
-// the combination with EINVAL, so no successful open is excluded wrongly.
-//
-// Unknown flags (-1: an openat2 whose open_how BPF could not read) match
-// nothing, so such an O_TMPFILE open stays unmarked; nothing in the event says
-// what it was. An ordinary open pays one flag test and no memory for this.
-func openedFdFile(fd int32, name string, flags int32) *file.FdFile {
-	fdFile := file.NewFd(fd, name, flags)
-	if opened := fdFile.Flags(); opened.Is(unix.O_TMPFILE) && !opened.Is(unix.O_PATH) {
-		fdFile.MarkNamedAfterTmpfileDir()
-	}
-	return fdFile
 }
 
 func openEventFlags(openEv *types.OpenEvent) int32 {
@@ -305,11 +276,11 @@ func (e *eventLoop) handleNameExit(ep *event.Pair, nameEv *types.NameEvent) bool
 }
 
 // handlePathExit finishes a pathname-only syscall pair. name_to_handle_at is
-// never emitted itself (see recordNameToHandleAt); fspick and creat create a
-// descriptor on success and register it in the fd table; every other path
-// syscall simply carries its resolved pathname.
+// never emitted itself (see recordNameToHandleAt in eventloop_handle.go);
+// fspick and creat create a descriptor on success and register it in the fd
+// table; every other path syscall simply carries its resolved pathname.
 func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool {
-	if pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName {
+	if isNameToHandleAt(pathEv) {
 		return e.recordNameToHandleAt(ep, pathEv)
 	}
 
@@ -334,23 +305,6 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 	// matched. Concrete dirfd-relative paths defer the path dimension until
 	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPairForTid(ep, pathEv.GetTid())
-}
-
-// recordNameToHandleAt stashes the resolved pathname of a successful
-// name_to_handle_at per thread so a later open_by_handle_at can name the file
-// it opens (stashHandleName also notes whether that name can be compared with
-// a descriptor at all). The pair itself is always recycled (never emitted); it
-// always returns false so the caller drops it.
-func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent) bool {
-	retEv, ok := ep.ExitEv.(*types.RetEvent)
-	if !ok || event.IsErrnoRet(retEv.Ret) {
-		ep.Recycle()
-		return false
-	}
-	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
-	e.stashHandleName(pathEv, pathname.Name())
-	ep.Recycle()
-	return false
 }
 
 // fspickFdFlags returns the tracked flags of an fspick descriptor. fspick
@@ -645,20 +599,20 @@ func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool
 	return e.finishPair(ep)
 }
 
+// handleOpenByHandleAtExit finishes an open_by_handle_at pair. The file is
+// named by the handle the enter record carries (openedHandleName); see
+// "Naming an open_by_handle_at" in eventloop_handle.go.
 func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *types.OpenByHandleAtEvent) bool {
 	tid := openByHandleEv.GetTid()
 	retEvent, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok {
-		e.pendingHandleState().delete(tid)
 		e.recyclePair(ep, "Dropped malformed open_by_handle_at exit event")
 		return false
 	}
 
+	name, named := e.openedHandleName(openByHandleEv)
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		// The stash is only the thread's LAST name_to_handle_at path, so
-		// openedHandleFile checks it against what procfs shows under the
-		// returned number and decides which of the two names the row.
-		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
+		fdFile := openedHandleFile(name, named, openByHandleEv.Pid, fd, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -666,23 +620,22 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		// like a failed open in handleOpenExit: it used to be recycled here,
 		// so it never reached any sink and was never counted as an error or
 		// in "syscalls after filter".
-		ep.File = e.failedHandleFile(tid)
+		ep.File = failedHandleFile(name)
 	}
 	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
 	// without a checkpoint here NO filter dimension - comm included - was ever
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
 	// emit rows carrying a different comm. The full pair filter is the right
 	// checkpoint: ep.File is in every branch exactly the name the row reports
-	// (the stashed name_to_handle_at pathname - verified, unverifiable, or
-	// contradicted only by a descriptor that could not be confirmed - the
-	// /proc/<pid>/fd readlink, or for a failed call the stashed pathname or
-	// an empty one), so filter and displayed value can never disagree, and
+	// (the pathname the handle was taken of, the /proc/<pid>/fd readlink for
+	// a handle ior has no name for, or for a failed call that pathname or an
+	// empty one), so filter and displayed value can never disagree, and
 	// unlike the rename kinds there is no raw match to contradict. Applying
 	// -path to a procfs-resolved name is also not new: every fd-based kind
 	// already does that (handleFdExit -> fdTracker.resolve ->
 	// file.NewFdWithPid, then finishPair). A failed row carries no descriptor
 	// (FD() is -1, as for a failed open's pathname), so -path matches it only
-	// through the stash and -fd never matches it.
+	// through the handle's name and -fd never matches it.
 	return e.finishPairForTid(ep, tid)
 }
 
@@ -1122,9 +1075,9 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, 
 		return "fsopen:" + identity
 	case types.SYS_ENTER_MEMFD_CREATE:
 		if !identityKnown {
-			return fmt.Sprintf(tracedMemfdPrefix+"%d", flags)
+			return fmt.Sprintf("memfd:%d", flags)
 		}
-		return tracedMemfdPrefix + identity
+		return "memfd:" + identity
 	case types.SYS_ENTER_MEMFD_SECRET:
 		return fmt.Sprintf("memfd-secret:%d", flags)
 	case types.SYS_ENTER_USERFAULTFD:
@@ -1134,7 +1087,7 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, 
 	case types.SYS_ENTER_TIMERFD_CREATE:
 		return fmt.Sprintf("timerfd:%d", flags)
 	case types.SYS_ENTER_PIDFD_OPEN:
-		return fmt.Sprintf(tracedPidfdPrefix+"%d", flags)
+		return fmt.Sprintf("pidfd:%d", flags)
 	default:
 		return fmt.Sprintf("eventfd:%d", flags)
 	}

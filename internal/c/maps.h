@@ -19,7 +19,10 @@ struct {
 // internal/generate/classify.go), whose path the kernel only writes during the
 // call. pending_filename2 is the same for the second path of the rename/link
 // family (newname) and of move_mount (to_pathname); either of the two reads
-// can fault, both or neither. 0 means "nothing to read" and is the state
+// can fault, both or neither. For name_to_handle_at, a single-path kind, the
+// second slot instead carries the output struct file_handle pointer its exit
+// handler reads the returned handle through (ior_stash_pending_handle in
+// handle.c). 0 means "nothing to read" and is the state
 // ior_on_syscall_enter leaves behind for every other syscall (the struct is
 // zero-initialised there).
 struct syscall_enter_state {

@@ -509,7 +509,8 @@ static __always_inline int ior_on_syscall_exit_take_filename(__u32 tid, __u32 en
 }
 
 // ior_on_syscall_exit_take_filenames is the same for the two-path kinds
-// (rename/link, move_mount): it also returns the second slot.
+// (rename/link, move_mount): it also returns the second slot. So does
+// name_to_handle_at's exit, whose second slot holds its output handle pointer.
 static __always_inline int ior_on_syscall_exit_take_filenames(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
                                                               __u64 *pending_filename, __u64 *pending_filename2) {
     return ior_restart_on_exit(tid, ret,
@@ -647,6 +648,9 @@ static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename
 // ior_stash_pending_filename above. The exit side reads both slots through
 // ior_on_syscall_exit_take_filename(s); there is no separate take helper any
 // more, because it cost an extra map lookup per slot (task 0t2).
+//
+// name_to_handle_at, which has one path, puts a different pointer in this
+// slot: its output struct file_handle (ior_stash_pending_handle in handle.c).
 static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr) {
     struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
 
