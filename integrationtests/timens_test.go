@@ -75,8 +75,9 @@ func timeNamespaceWrapper(t *testing.T, offsetSec string) []string {
 // starts readlink(1) the way the harness starts ior and has it print its own
 // two time namespace links. They differ when the exec'd program was left in
 // the old namespace while only its children would enter the new one, which is
-// what kernels that do not switch on exec do (reported for those before about
-// 6.1; not seen here, Linux 7.2 switches). ior then rightly reports an unknown
+// what kernels that do not switch on exec do (older ones, reportedly; which
+// release began to switch was not checked - not seen here, Linux 7.2
+// switches). ior then rightly reports an unknown
 // offset, so the test's premise - ior inside the namespace - does not hold and
 // it is skipped rather than failed.
 func programInsideNewTimeNamespace(wrapper []string) error {

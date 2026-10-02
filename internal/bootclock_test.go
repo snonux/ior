@@ -291,26 +291,27 @@ func TestTraceSetupWarnsAboutAnUnknownBootClock(t *testing.T) {
 
 // TestTraceSetupCollectsNoWarningAfterTheDrain is the general form of the
 // order above: on success the collector is read exactly once, by
-// wireEventLoopLogging, so runTraceSetup must not hand warnSetup to anything
-// after that call - whatever it added would be lost without a trace.
+// wireEventLoopLogging, so runTraceSetup must not hand warnSetup - or the
+// collector itself, warnings - to anything after that call: whatever it
+// added would be lost without a trace.
 func TestTraceSetupCollectsNoWarningAfterTheDrain(t *testing.T) {
 	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	drain := singleBareCall(t, decl, "wireEventLoopLogging")
 	uses := 0
 	ast.Inspect(decl.Body, func(node ast.Node) bool {
 		ident, isIdent := node.(*ast.Ident)
-		if !isIdent || ident.Name != "warnSetup" {
+		if !isIdent || (ident.Name != "warnSetup" && ident.Name != "warnings") {
 			return true
 		}
 		uses++
 		if ident.Pos() > drain.End() {
-			t.Errorf("warnSetup is used at %s, after wireEventLoopLogging drained the setup warnings",
-				fset.Position(ident.Pos()))
+			t.Errorf("%s is used at %s, after wireEventLoopLogging drained the setup warnings",
+				ident.Name, fset.Position(ident.Pos()))
 		}
 		return true
 	})
 	if uses == 0 {
-		t.Fatal("runTraceSetup no longer names its warning sink warnSetup; this test checks nothing")
+		t.Fatal("runTraceSetup no longer names its warning sink warnSetup or warnings; this test checks nothing")
 	}
 }
 
