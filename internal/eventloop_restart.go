@@ -248,7 +248,7 @@ import (
 // (runTraceSetup, traceSetupHooks.probes): the probes modal is the one place
 // probes change at runtime. A headless run installs no hook, takes no stamp
 // and refuses nothing on this account. Installing the hook counts as a change
-// itself (watchProbeChanges: clear, stamp and wake, like any report): the TUI
+// itself (watchProbeChanges: stamp, clear, stamp and wake, like any report): the TUI
 // is handed the probe manager before the loop exists, and a change it makes in
 // between is reported to nobody.
 //
@@ -282,8 +282,8 @@ import (
 // younger than that row and its clear takes the entry. A failed attach is
 // reported twice all the same: it may have had the enter tracepoint attached
 // for a moment, which is an attach and a detach in one - or, when that enter
-// link could not be destroyed again, have left it attached for good, the
-// enter-only state of the next paragraph.
+// link could not be destroyed again, have left it attached for good: the
+// enter-only (mirror) state described two paragraphs below.
 //
 // A detach that failed half-way and left the exit tracepoint attached, with
 // the enter tracepoint gone, needs no report of its own while it lasts. A held
