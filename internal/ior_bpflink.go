@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"ior/internal/probemanager"
@@ -17,6 +18,66 @@ var errNoLibbpfLink = errors.New("libbpfgo returned neither a link nor an error"
 // on a link. It is a variable only so that tests can count the calls and make
 // one fail without a kernel (ior_bpflink_test.go).
 var destroyBPFLink = (*bpf.BPFLink).Destroy
+
+// attachBPFTracepoint and attachBPFRawTracepoint are libbpfgo's two attach
+// calls, the only ones ior makes (attachLibbpfTracepoint,
+// attachLibbpfRawTracepoint). They are variables for the same reason as
+// destroyBPFLink: tests watch the calls without a kernel.
+var (
+	attachBPFTracepoint    = (*bpf.BPFProg).AttachTracepoint
+	attachBPFRawTracepoint = (*bpf.BPFProg).AttachRawTracepoint
+)
+
+// libbpfAttachMu serialises every attach ior makes through libbpfgo (task
+// 223).
+//
+// libbpfgo v0.9.2-libbpf-1.5.1 keeps the links of a module on a list and
+// appends to it in each attach, without a lock (prog.go, lines 385 and 405:
+// `p.module.links = append(p.module.links, bpfLink)`). Two attaches at once
+// are therefore a data race on that slice: at best one of the two entries is
+// lost, at worst the list's header is written half and half and the next
+// append lands outside its array.
+//
+// ior can attach two programs at once. The probe manager holds only the
+// attach mutex of the probe it changes, and the TUI runs each single toggle
+// of the probes modal as a command of its own, on a goroutine of its own:
+// two probes toggled on one after the other are two attaches of different
+// syscalls under way together (the modal refuses a single toggle only while
+// a family batch or an all-on/all-off walk runs, which are loops on one
+// goroutine, as the startup attach is).
+//
+// It is one mutex for the process, not one per module. A process has one
+// module per trace session, and two only while a TUI restart tears the old
+// session down; attaches of one session ran one after the other already
+// except for those toggles, so nothing that mattered ran in parallel before.
+// A package variable also needs no constructor that a struct literal of the
+// seam's types could forget.
+//
+// Destroys are not serialised. libbpfgo's BPFLink.Destroy touches the link
+// alone (link.go, lines 70-81: bpf_link__destroy on its C link, then its own
+// pointer) and never the module's list, and the probe manager destroys the
+// two links of a pair, and at Close hundreds of them, at the same time on
+// purpose: their grace periods merge only when they overlap
+// (probemanager.destroyLinkPair). GetProgram takes no lock either: it looks
+// the program up in the loaded object and allocates a BPFProg of its own.
+var libbpfAttachMu sync.Mutex
+
+// attachLibbpfTracepoint attaches prog to the classic tracepoint
+// category/name, one attach at a time (libbpfAttachMu), and hands out the
+// link wrapped (libbpfLink).
+func attachLibbpfTracepoint(prog *bpf.BPFProg, category, name string) (probemanager.Link, error) {
+	libbpfAttachMu.Lock()
+	defer libbpfAttachMu.Unlock()
+	return newLibbpfLink(attachBPFTracepoint(prog, category, name))
+}
+
+// attachLibbpfRawTracepoint is attachLibbpfTracepoint for the raw tracepoint
+// name.
+func attachLibbpfRawTracepoint(prog *bpf.BPFProg, name string) (probemanager.Link, error) {
+	libbpfAttachMu.Lock()
+	defer libbpfAttachMu.Unlock()
+	return newLibbpfLink(attachBPFRawTracepoint(prog, name))
+}
 
 // libbpfLink is the probemanager.Link ior hands out for every link it attaches
 // through libbpfgo (libbpfTracepointProgram). It keeps libbpfgo's Module.Close

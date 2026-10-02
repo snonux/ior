@@ -18,18 +18,24 @@ import (
 // Every link it hands out is a libbpfLink, never a bare *bpf.BPFLink: after a
 // Destroy that reported an error libbpfgo's Module.Close would destroy the
 // bare one a second time (task 123; see libbpfLink).
+//
+// Its methods only pass the program on to the two attach functions of
+// ior_bpflink.go, which wrap the link and let one attach run at a time
+// (libbpfAttachMu). Nothing else may use the program, a *bpf.BPFLink or the
+// module's GetProgram: the scans in ior_bpflink_test.go pin all of that
+// (task 223).
 type libbpfTracepointProgram struct {
 	prog *bpf.BPFProg
 }
 
 func (p libbpfTracepointProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
-	return newLibbpfLink(p.prog.AttachTracepoint(category, name))
+	return attachLibbpfTracepoint(p.prog, category, name)
 }
 
 // AttachRawTracepoint makes libbpfTracepointProgram a
 // probemanager.RawTracepointProgram.
 func (p libbpfTracepointProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
-	return newLibbpfLink(p.prog.AttachRawTracepoint(name))
+	return attachLibbpfRawTracepoint(p.prog, name)
 }
 
 // libbpfTracepointModule wraps a libbpf BPF module as a probemanager.Module.
