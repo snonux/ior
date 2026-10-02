@@ -231,7 +231,8 @@ type restartTracker struct {
 // and the snapshot would include them. Two observers may also report out of
 // order (the monitor's read overtaken by the loop's): a total that differs
 // from the watched one is always taken as a change and stamped with its own
-// reading, which keeps the invariant and at worst refuses one fold more.
+// reading, which keeps the invariant and refuses the folds of the calls
+// interrupted before the next read of the real total (usually one).
 //
 // The comparison of a record time with a user-space clock reading assumes no
 // time-namespace boottime offset, like every other use of bootClockNs.
