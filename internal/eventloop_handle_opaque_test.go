@@ -350,6 +350,77 @@ func TestOpenByHandleAtStashNamedTmpfileRowKeepsTheMark(t *testing.T) {
 	assertStashSpentOnItsOwnOpen(t, feed, opened, syscall.O_RDWR, link)
 }
 
+// tmpfileDirMark reports whether the fd table entry of fd is marked as named
+// after an O_TMPFILE open's directory.
+func tmpfileDirMark(t *testing.T, feed *handleFeed, fd int) bool {
+	t.Helper()
+	entry, ok := feed.el.fdState().get(int32(fd), feed.pid)
+	if !ok {
+		t.Fatalf("fd %d is not tracked", fd)
+	}
+	return entry.(*file.FdFile).NamedAfterTmpfileDir()
+}
+
+// TestOpenByHandleAtProcfsNamedTmpfileRowIsNotMarked: the mark belongs to a
+// name that is the tmpfile's DIRECTORY. A row procfs names (the confirmed
+// open of a tracked tmpfile's handle) carries the file's own link text, which
+// is comparable: marking it would spend a handle taken through the new
+// descriptor on another handle's open.
+func TestOpenByHandleAtProcfsNamedTmpfileRowIsNotMarked(t *testing.T) {
+	dir := tempDir(t)
+	source, opened, link := tmpfileFds(t, dir)
+
+	feed := newHandleFeed(t)
+	feed.open(source, dir, tmpfileOpenFlags)
+	stashFromEmptyPath(t, feed, source, dir)
+	assertStashSpentOnItsOwnOpen(t, feed, opened, syscall.O_RDWR, link)
+	if tmpfileDirMark(t, feed, opened) {
+		t.Fatal("the procfs-named descriptor is marked as named after the tmpfile directory")
+	}
+	stashFromEmptyPath(t, feed, opened, link)
+	if feed.el.pendingHandleState().isOpaque(feed.pid) {
+		t.Fatalf("a stash that is the descriptor's own link %q was recorded as opaque", link)
+	}
+}
+
+// TestOpenByHandleAtDirectoryMatchingATmpfileStashIsNotMarked: the thread took
+// a handle of a tracked tmpfile (stash: its directory) and then opened another
+// handle, of the directory itself. Procfs agrees with the stash - the
+// descriptor IS that directory - so the row keeps the name and the entry is
+// not marked: its name is its own path.
+func TestOpenByHandleAtDirectoryMatchingATmpfileStashIsNotMarked(t *testing.T) {
+	dir := tempDir(t)
+	source, _, _ := tmpfileFds(t, dir)
+	directory := openReusingDirFd(t, dir)
+
+	feed := newHandleFeed(t)
+	feed.open(source, dir, tmpfileOpenFlags)
+	stashFromEmptyPath(t, feed, source, dir)
+	if got := feed.openByHandle(directory).File.Name(); got != dir {
+		t.Fatalf("row named %q, want the directory %q", got, dir)
+	}
+	if tmpfileDirMark(t, feed, directory) {
+		t.Fatal("a descriptor that is the directory itself is marked as named after a tmpfile directory")
+	}
+}
+
+// TestRelativeTmpfileDirectoryStashRemembersItsOrigin pins the order in
+// stashHandleName: the tmpfile origin is asked before the form of the name, so
+// a tmpfile opened under a relative directory is recorded as a tmpfile
+// directory, not merely as an opaque relative path.
+func TestRelativeTmpfileDirectoryStashRemembersItsOrigin(t *testing.T) {
+	source, _, _ := tmpfileFds(t, tempDir(t))
+
+	feed := newHandleFeed(t)
+	feed.open(source, ".", tmpfileOpenFlags)
+	stashFromEmptyPath(t, feed, source, ".")
+	handles := feed.el.pendingHandleState()
+	if !handles.namesTmpfileDir(feed.pid) || !handles.isOpaque(feed.pid) {
+		t.Fatalf("stash of a relative tmpfile directory: tmpfileDir=%v opaque=%v, want both",
+			handles.namesTmpfileDir(feed.pid), handles.isOpaque(feed.pid))
+	}
+}
+
 // TestOpenByHandleAtOtherOpaqueStashDoesNotMarkTheRow is the negative side:
 // the mark says that a name is an O_TMPFILE open's directory, not that the
 // stash was opaque. A relative path and an fsmount descriptor's traced name

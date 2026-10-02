@@ -366,6 +366,13 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 // on. Only this origin is passed on; a relative path or a traced name is
 // opaque by its form, in whichever entry it ends up, and sets no mark.
 //
+// The mark goes only on a row the stash names WITHOUT procfs agreeing
+// (unverifiable or unconfirmed). When the probe matches the stash the
+// descriptor is the file at that path - the directory itself, opened by
+// another handle - and its name is its own, comparable path: marking it would
+// make a later handle of that directory opaque for nothing. A procfs-named row
+// (confirmed mismatch) is likewise never marked: its name is the link.
+//
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
 // caller asked for). A procfs-named row takes the kernel's own view from
@@ -381,7 +388,8 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 		return procFdFile(pid, fd, eventFlags)
 	}
 	probe := probeHandleFd(pid, fd)
-	if classifyHandlePath(probe, pathname) == handleMismatch {
+	verdict := classifyHandlePath(probe, pathname)
+	if verdict == handleMismatch {
 		if procFile, ok := confirmedHandleFd(probe, pid, fd, eventFlags); ok {
 			if handles.isOpaque(tid) {
 				handles.delete(tid)
@@ -390,7 +398,7 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 		}
 	}
 	fdFile := file.NewFd(fd, pathname, eventFlags)
-	if handles.namesTmpfileDir(tid) {
+	if verdict != handleMatches && handles.namesTmpfileDir(tid) {
 		fdFile.MarkNamedAfterTmpfileDir()
 	}
 	handles.delete(tid)
