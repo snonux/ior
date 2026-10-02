@@ -309,8 +309,9 @@ func (e *eventLoop) handlePathExit(ep *event.Pair, pathEv *types.PathEvent) bool
 
 // recordNameToHandleAt stashes the resolved pathname of a successful
 // name_to_handle_at per thread so a later open_by_handle_at can name the file
-// it opens. The pair itself is always recycled (never emitted); it always
-// returns false so the caller drops it.
+// it opens (stashHandleName also notes whether that name can be compared with
+// a descriptor at all). The pair itself is always recycled (never emitted); it
+// always returns false so the caller drops it.
 func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent) bool {
 	retEv, ok := ep.ExitEv.(*types.RetEvent)
 	if !ok || event.IsErrnoRet(retEv.Ret) {
@@ -318,7 +319,7 @@ func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent
 		return false
 	}
 	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
-	e.pendingHandleState().set(pathEv.GetTid(), pathname.Name())
+	e.stashHandleName(pathEv, pathname.Name())
 	ep.Recycle()
 	return false
 }
@@ -634,7 +635,9 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		// proven). A contradiction from a descriptor that vanished, is a
 		// socket, pipe or other anonymous inode, or has other flags (a reused
 		// number, certainly or most likely) leaves the row to the stash (see
-		// openedHandleFile).
+		// openedHandleFile). A stash ior cannot compare with any descriptor
+		// (a relative path, say) is spent on this call whichever names the
+		// row.
 		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile

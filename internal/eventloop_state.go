@@ -109,12 +109,21 @@ type pidFdKeys struct {
 	peakCache int
 }
 
+// handleStash is one stashed name_to_handle_at name. opaque says that ior has
+// no way to recognise the descriptor a handle of that name opens (see
+// comparableHandleName), so a descriptor that contradicts the name proves
+// nothing about which handle was opened.
+type handleStash struct {
+	name   string
+	opaque bool
+}
+
 // pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
 // TID (the thread's last one only) until an open_by_handle_at exit claims
 // them; the claim verifies the entry against the returned descriptor (see
 // openedHandleFile) because the key cannot say which handle was opened.
 type pendingHandleTracker struct {
-	paths        map[uint32]string
+	paths        map[uint32]handleStash
 	pathAges     map[uint32]uint64
 	maxCacheSize int
 	age          uint64
@@ -191,7 +200,7 @@ func newPendingHandleTracker() *pendingHandleTracker {
 // out its map fields.
 func (t *pendingHandleTracker) ensureInit() {
 	if t.paths == nil {
-		t.paths = make(map[uint32]string)
+		t.paths = make(map[uint32]handleStash)
 	}
 	if t.pathAges == nil {
 		t.pathAges = make(map[uint32]uint64)
@@ -903,26 +912,41 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 // absent one is merely unknown; when procfs can, the row is named from it
 // either way).
 func (t *pendingHandleTracker) set(tid uint32, pathname string) {
-	if pathname == "" {
+	t.store(tid, handleStash{name: pathname})
+}
+
+// setOpaque is set for a name ior cannot compare with any descriptor (see
+// handleStash). An empty name is no stash here either.
+func (t *pendingHandleTracker) setOpaque(tid uint32, pathname string) {
+	t.store(tid, handleStash{name: pathname, opaque: true})
+}
+
+// store is the one insertion path behind set and setOpaque.
+func (t *pendingHandleTracker) store(tid uint32, stash handleStash) {
+	if stash.name == "" {
 		t.delete(tid)
 		return
 	}
-	if t.paths == nil {
-		t.paths = make(map[uint32]string)
-		t.pathAges = make(map[uint32]uint64)
-	}
+	t.ensureInit()
 	t.age++
-	t.paths[tid] = pathname
+	t.paths[tid] = stash
 	t.pathAges[tid] = t.age
 	t.prune()
 }
 
 // peek returns the stashed pathname without removing it or refreshing its LRU
-// age. It is the only read path: the claimer must verify the entry against the
-// opened descriptor first and only then delete it (see openedHandleFile).
+// age. Together with isOpaque it is the only read path: the claimer must
+// verify the entry against the opened descriptor first and only then delete it
+// (see openedHandleFile).
 func (t *pendingHandleTracker) peek(tid uint32) (string, bool) {
-	pathname, ok := t.paths[tid]
-	return pathname, ok
+	stash, ok := t.paths[tid]
+	return stash.name, ok
+}
+
+// isOpaque reports whether the thread's stash is one ior cannot compare with a
+// descriptor; false without a stash.
+func (t *pendingHandleTracker) isOpaque(tid uint32) bool {
+	return t.paths[tid].opaque
 }
 
 func (t *pendingHandleTracker) delete(tid uint32) {
@@ -1269,7 +1293,7 @@ func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64
 	})
 }
 
-func trimOldestPendingHandles(state map[uint32]string, ages map[uint32]uint64, targetSize int) {
+func trimOldestPendingHandles(state map[uint32]handleStash, ages map[uint32]uint64, targetSize int) {
 	trimLRU(state, ages, targetSize, nil)
 }
 

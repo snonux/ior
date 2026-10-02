@@ -389,7 +389,7 @@ func TestOpenedHandleFileTreatsAnInjectedEmptyStashAsAbsent(t *testing.T) {
 	feed := newHandleFeed(t)
 	handles := feed.el.pendingHandleState()
 	handles.set(feed.pid, "/placeholder") // allocates the maps
-	handles.paths[feed.pid] = ""
+	handles.paths[feed.pid] = handleStash{}
 	if got := feed.openByHandle(fd).File.Name(); got != real {
 		t.Fatalf("row named %q, want procfs's %q", got, real)
 	}

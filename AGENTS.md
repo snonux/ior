@@ -1725,7 +1725,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `openedHandleFile`: the stash is one slot per tid (the thread's last
     `name_to_handle_at`), so it is checked against the returned descriptor
     through `/proc/<pid>/fd/<fd>` (inode, then link text) and a contradicted
-    stash is left alone while procfs names the row. The link-text rule
+    stash is left alone while procfs names the row (unless it is opaque, see
+    below). The link-text rule
     (`compareHandleLinkText`) accepts three things. The link minus one
     trailing ` (deleted)`: a file unlinked after its handle was taken (clean
     stash, row shows the clean path). The link as it stands: a stash that was
@@ -1754,13 +1755,42 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     (the row's name is still that descriptor's); a relative path stash
     literally spelled `memfd:x` or `pidfd:0` is translated too and matches
     such a memfd or any pidfd. A matching traced row carries the source's
-    traced name, for a pidfd including the source's flags suffix. Still
-    unmatched, stash left behind: a traced memfd whose name BPF could not
-    read (`memfd:<flags>`), an fsmount descriptor (tracked as `fsopen:<fs>`,
-    its link is the mount root), an `O_TMPFILE` descriptor (named after its
-    directory) and every relative stash (task m03). Pinned by
-    `internal/eventloop_handle_deleted_test.go` and
-    `internal/eventloop_handle_traced_test.go`. The `/proc/<pid>/fd/<fd>`
+    traced name, for a pidfd including the source's flags suffix. Some
+    stashes can match no descriptor at all, their own included, and used to
+    stay in the slot after their own open, naming a later unrelated
+    `open_by_handle_at` of the thread (task m03). They are *opaque*
+    (`comparableHandleName`, decided when the stash is taken, from the name's
+    form and without a `/proc` read): a relative path
+    (`name_to_handle_at(AT_FDCWD, "rel.txt")`, a relative name under a dirfd
+    whose tracked name is relative or unknown, `AT_EMPTY_PATH` on a file ior
+    saw opened by a relative path - ior does not know a task's cwd); a traced
+    name no link can be derived from (an fsmount descriptor, tracked as
+    `fsopen:<fs>` while its link is the mount root); `memfd:<number>` (a
+    traced memfd whose name BPF could not read carries its flags; a memfd
+    really named by a number still matches); and, the one case the form
+    cannot show, the directory a tracked `O_TMPFILE` descriptor is named
+    after (`takenFromTrackedTmpfile` asks the fd table, which is in event
+    order). An opaque stash never outlives the thread's next
+    `open_by_handle_at`: a confirmed descriptor names the row from procfs, as
+    before, and the stash is now consumed with it; an unconfirmed one leaves
+    the row to the stash, as before. A relative name under a dirfd tracked by
+    an absolute name is not opaque - `resolveDirfdPath` stashes it joined.
+    Rejected alternatives: resolving against `/proc/<pid>/cwd` when the open
+    is handled (a second lagging procfs read, of a directory the task may
+    have left, plus a stat below it on the event loop) and accepting a link
+    that ends in the relative name (matches that name in any directory). The
+    price: an opaque stash is spent on *another* handle's confirmed open too,
+    so with handles A and B (B opaque) taken and A opened first, B's own open
+    is named from procfs only. Still mismatching, stash left behind until the
+    thread's next `name_to_handle_at`: a relative path spelled like a
+    comparable name (`memfd:x`, `pidfd:0`, `net:[1]`), and an absolute stash
+    that does not lead to its file from where ior stands - a path renamed
+    since the handle was taken, a path of another mount namespace, the
+    unlinked `<path>` shadowed by a live file literally named
+    `<path> (deleted)`. Only handle bytes in the events close those (task
+    k03). Pinned by `internal/eventloop_handle_deleted_test.go`,
+    `internal/eventloop_handle_traced_test.go` and
+    `internal/eventloop_handle_opaque_test.go`. The `/proc/<pid>/fd/<fd>`
     probe that check rests on is taken when the loop handles the exit, not
     when the syscall returned, so a task that closed the descriptor and
     opened something else under the same number makes procfs describe the

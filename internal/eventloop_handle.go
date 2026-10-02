@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 
 	"ior/internal/file"
+	"ior/internal/types"
 )
 
 // handleVerdict is the outcome of checking a stashed name_to_handle_at
@@ -99,9 +101,11 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 //     os.Stat would resolve it against ior's working directory, which says
 //     nothing about the task's, and the link of a file on a mounted filesystem
 //     is an absolute path, so a relative path stash is a mismatch whenever the
-//     link is readable. The row is then named from procfs if confirmedHandleFd
-//     confirms the descriptor, and after the relative stash, as the task
-//     spelled it, if not.
+//     link is readable - against its own descriptor too. It is therefore an
+//     opaque stash (comparableHandleName): the row is named from procfs if
+//     confirmedHandleFd confirms the descriptor, and after the relative
+//     stash, as the task spelled it, if not, and the stash is spent either
+//     way (openedHandleFile).
 //   - A non-path name resolved from a descriptor: name_to_handle_at(fd, "",
 //     AT_EMPTY_PATH) stashes what fdTracker.resolve calls that descriptor, and
 //     that is one of two spellings. A descriptor ior does not have in its fd
@@ -121,8 +125,8 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 // does not track stashes its /proc link, which for an unlinked file or a memfd
 // ends in " (deleted)". No such path exists, so it is decided by link text as
 // well. (A tracked file stashes the path it was opened by, which is decided
-// like any other path stash - by inode if absolute, never matching if
-// relative.)
+// like any other path stash - by inode if absolute, never matching and
+// therefore opaque if relative.)
 //
 // Mount namespaces: the stash is the string the task passed, procfs is read
 // from ior's own namespace. When ior's namespace has a DIFFERENT file at the
@@ -132,9 +136,11 @@ func probeHandleFd(pid uint32, fd int32) handleFdProbe {
 // descriptor (the normal case: it is still open with the call's flags),
 // exactly as it does for every other fd row ior resolves, at the price that
 // the stash is left unconsumed (it is overwritten by the thread's next
-// name_to_handle_at or evicted with the task). An unconfirmed descriptor, and
-// one procfs cannot describe at all, leave the row to the stash, which is
-// then consumed.
+// name_to_handle_at or evicted with the task): an absolute path is a
+// comparable stash, and nothing tells ior that this one is not comparable from
+// where it stands (see the residual list on comparableHandleName). An
+// unconfirmed descriptor, and one procfs cannot describe at all, leave the row
+// to the stash, which is then consumed.
 //
 // Stalls: os.Stat/Lstat of the stashed path run on the event-loop goroutine,
 // and a stale NFS or FUSE path could block them. open_by_handle_at is the NFS
@@ -180,8 +186,9 @@ func compareHandleInodes(fdInfo os.FileInfo, pathname string) (verdict handleVer
 // traced names that are not the descriptor's link: an fsmount descriptor is
 // tracked under its fs-context's name ("fsopen:<fs>") while its link is the
 // new mount's root, and an O_TMPFILE descriptor is named after its directory;
-// a handle can be taken of both with AT_EMPTY_PATH, and such a stash still
-// contradicts its own open and stays in the slot (task m03).
+// a handle can be taken of both with AT_EMPTY_PATH. No link can be derived
+// from those names, so such a stash is opaque (comparableHandleName,
+// takenFromTrackedTmpfile) and is spent on the thread's next open instead.
 const (
 	tracedMemfdPrefix = "memfd:"
 	tracedPidfdPrefix = "pidfd:"
@@ -214,7 +221,9 @@ const (
 //
 // Not covered: a memfd whose name BPF could not read is tracked as
 // "memfd:<flags>", which translates to a link its descriptor does not have, so
-// that stash still contradicts its own open and is left in the slot.
+// that stash contradicts its own open. comparableHandleName therefore calls a
+// memfd name that is a number opaque, which spends it on the thread's next
+// open (it still matches a memfd really named by that number).
 //
 // A matching row is named by the stash, like every stash-named row, so it and
 // the fd table entry of the returned descriptor carry the SOURCE's traced
@@ -326,9 +335,16 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 //     unverifiable case is the legacy behaviour, for a descriptor procfs
 //     cannot answer for).
 //   - mismatch, and the descriptor procfs showed can be the one this call
-//     returned (confirmedHandleFd): the stash belongs to a different handle,
-//     so it is neither used nor consumed (its own open may still come) and
-//     the row is named from procfs.
+//     returned (confirmedHandleFd): the row is named from procfs. A
+//     comparable stash then belongs to a different handle, so it is neither
+//     used nor consumed (its own open may still come). An opaque stash (see
+//     comparableHandleName) contradicts every descriptor, its own included,
+//     so the mismatch says nothing about which handle was opened; it is taken
+//     for this call's - one handle taken, then opened, is the usual order -
+//     and consumed. Left in the slot, it named a later unrelated
+//     open_by_handle_at of the thread whenever procfs could not answer for
+//     that one (task m03). So an opaque stash never outlives the thread's
+//     next open_by_handle_at, whichever name the row gets.
 //   - mismatch, but that descriptor is gone again, is of a kind no handle can
 //     open (a socket, a pipe, an eventfd: see reachableByHandle) or was opened
 //     with other flags than this call's: procfs described, or most likely
@@ -357,11 +373,147 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 	probe := probeHandleFd(pid, fd)
 	if classifyHandlePath(probe, pathname) == handleMismatch {
 		if procFile, ok := confirmedHandleFd(probe, pid, fd, eventFlags); ok {
+			if handles.isOpaque(tid) {
+				handles.delete(tid)
+			}
 			return procFile
 		}
 	}
 	handles.delete(tid)
 	return file.NewFd(fd, pathname, eventFlags)
+}
+
+// stashHandleName records name as the stash of the thread that made the
+// successful name_to_handle_at pathEv, marking it opaque when ior will not be
+// able to recognise the descriptor a handle of that name opens.
+func (e *eventLoop) stashHandleName(pathEv *types.PathEvent, name string) {
+	handles := e.pendingHandleState()
+	if comparableHandleName(name) && !e.takenFromTrackedTmpfile(pathEv) {
+		handles.set(pathEv.GetTid(), name)
+		return
+	}
+	handles.setOpaque(pathEv.GetTid(), name)
+}
+
+// comparableHandleName reports whether classifyHandlePath can recognise, by
+// the stashed name, the descriptor an open_by_handle_at of that handle
+// returns. Three kinds of name can match a descriptor:
+//
+//   - an absolute path (by inode, or by link text once the path is gone);
+//   - a traced memfd or pidfd name, which tracedHandleLink turns into a link;
+//   - a link text that is not a path but belongs to an object a handle can
+//     open: a pidfd or a namespace, stashed by AT_EMPTY_PATH on a descriptor
+//     ior does not track.
+//
+// Every other name is opaque - it contradicts whatever procfs shows, the
+// handle's own descriptor included - and openedHandleFile spends such a stash
+// on the thread's next open_by_handle_at instead of keeping it for an open it
+// could never be matched with. Opaque are:
+//
+//   - a relative path: name_to_handle_at(AT_FDCWD, "rel.txt"), a relative
+//     name under a dirfd whose tracked name is itself relative or unknown
+//     (resolveDirfdPath joins the two), and AT_EMPTY_PATH on a file ior saw
+//     opened by a relative path. A relative name under a dirfd ior knows by an
+//     absolute name never gets here: it is stashed joined, in event order;
+//   - a traced name no link can be derived from: "fsopen:<fs>" and its
+//     variants for an fsmount descriptor (registerEventfdResult), and any
+//     other name eventfdDescriptorName builds;
+//   - "memfd:<number>": the name BPF could not read, replaced by the flags.
+//     The same spelling is a memfd really named by a number; that one still
+//     matches its own descriptor, which is checked before opacity matters.
+//
+// The form of the name is all this looks at, so that it needs no /proc read
+// (the source descriptor's number may have been reused by the time the loop
+// gets here, see tracedHandleLink). The one opaque name the form cannot show,
+// the directory of a tracked O_TMPFILE descriptor, is found by
+// takenFromTrackedTmpfile.
+//
+// Why not make a relative path comparable instead. ior does not know a task's
+// working directory (no chdir/fchdir tracking, and a thread can have its own),
+// so the absolute form is unknowable in event order. Reading
+// /proc/<pid>/cwd when the open is handled would add a second lagging procfs
+// read, of a directory the task may have left since it took the handle, plus a
+// stat below it on the event loop; accepting a link that merely ends in the
+// relative name would match any file of that name in any directory. Both buy
+// only what the opaque rule does not give: keeping a relative stash across
+// ANOTHER handle's open.
+//
+// That is the price of the rule, and what is still wrong afterwards:
+//
+//   - An opaque stash is spent on another handle's open too. A thread that
+//     takes handles A and B (B opaque) and opens A has A named from procfs
+//     and B's stash gone; B's own open is then named from procfs only, so it
+//     loses its name (or takes a later file's, see handleFdProbe) if its
+//     descriptor is closed before the loop reads it. A comparable B would
+//     have named it.
+//   - A relative path spelled like a comparable name - "memfd:x", "pidfd:0",
+//     "net:[1]" - is taken for comparable and kept across its own open.
+//   - An absolute stash that does not lead to its file from where ior stands
+//     is comparable by form and still contradicts its own open, so it stays
+//     in the slot until the thread's next name_to_handle_at: a path renamed
+//     since the handle was taken (or since ior saw the source descriptor
+//     opened), a path of another mount namespace, and the unlinked "<path>"
+//     shadowed by a live file literally named "<path> (deleted)".
+//
+// Only the handle bytes, which the events do not carry, would close these
+// (task k03).
+func comparableHandleName(name string) bool {
+	if filepath.IsAbs(name) {
+		return true
+	}
+	if _, traced := tracedHandleLink(name); traced {
+		return !unnamedMemfdName(name)
+	}
+	return name == pidfdLinkText || namespaceLinkText(name)
+}
+
+// unnamedMemfdName reports whether name is what eventfdDescriptorName calls a
+// memfd whose name BPF could not read: the prefix followed by the
+// memfd_create flags as a decimal number, negative for the MFD_HUGE_* sizes
+// that set the top bit.
+func unnamedMemfdName(name string) bool {
+	flags, isMemfd := strings.CutPrefix(name, tracedMemfdPrefix)
+	if !isMemfd {
+		return false
+	}
+	_, err := strconv.ParseInt(flags, 10, 32)
+	return err == nil
+}
+
+// namespaceLinkText reports whether name reads like the /proc link of a
+// namespace descriptor, "<kind>:[<inode>]" ("net:[4026531833]"). Sockets and
+// pipes share the shape and are excluded by reachableByHandle: no handle can
+// be taken of them, so such a name is not a link ior read but a relative path
+// spelled that way.
+func namespaceLinkText(name string) bool {
+	kind, inode, found := strings.Cut(name, ":[")
+	number, closed := strings.CutSuffix(inode, "]")
+	if !found || !closed || kind == "" || strings.Contains(kind, "/") {
+		return false
+	}
+	_, err := strconv.ParseUint(number, 10, 64)
+	return err == nil && reachableByHandle(name)
+}
+
+// takenFromTrackedTmpfile reports whether the handle of pathEv was taken with
+// AT_EMPTY_PATH from a descriptor ior tracks as an O_TMPFILE open.
+// handleOpenExit names such a descriptor by the pathname of its open, which is
+// the directory the unnamed file was created in. As a stash that is an
+// absolute path naming another inode than the file the handle opens (whose
+// link is "<dir>/#<inode> (deleted)"), so it is opaque although its form is
+// comparable.
+//
+// The fd table is asked, not procfs: it is in event order, and it is the only
+// source of the misleading name - an O_TMPFILE descriptor ior does not track
+// is stashed as its link text, which matches. An empty captured pathname is
+// what says the name came from the descriptor itself (a non-empty one under
+// an O_TMPFILE dirfd fails with ENOTDIR and is never stashed).
+func (e *eventLoop) takenFromTrackedTmpfile(pathEv *types.PathEvent) bool {
+	if types.StringValue(pathEv.Pathname[:]) != "" {
+		return false
+	}
+	source, tracked := e.fdState().get(pathEv.Dirfd, pathEv.Pid)
+	return tracked && source.Flags().Is(unix.O_TMPFILE)
 }
 
 // confirmedHandleFd returns the procfs-named file for a descriptor whose probe

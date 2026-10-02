@@ -145,23 +145,34 @@ func TestOpenByHandleAtTracedStashButOtherHandleOpened(t *testing.T) {
 	}
 }
 
-// TestOpenByHandleAtUnnamedTracedMemfdStashIsNotMatched pins the documented
-// gap: a memfd whose name BPF could not read is tracked as "memfd:<flags>",
-// which translates to no link its descriptor has. The row is right (procfs),
-// the stash is left behind.
-func TestOpenByHandleAtUnnamedTracedMemfdStashIsNotMatched(t *testing.T) {
+// TestOpenByHandleAtUnnamedTracedMemfdStashIsSpentOnItsOpen: a memfd whose name
+// BPF could not read is tracked as "memfd:<flags>", which translates to no
+// link its descriptor has, so the stash contradicts its own open. The row is
+// right (procfs); the stash used to be left behind and is now spent, because a
+// memfd name that is a number is opaque (comparableHandleName, task m03).
+func TestOpenByHandleAtUnnamedTracedMemfdStashIsSpentOnItsOpen(t *testing.T) {
 	source, opened := memfdPair(t, "handlebuf")
 	feed := newHandleFeed(t)
 	stash := feed.traceSource(source, types.SYS_ENTER_MEMFD_CREATE, "")
+	if stash != "memfd:0" {
+		t.Fatalf("unnamed traced memfd = %q, want %q", stash, "memfd:0")
+	}
 
 	stashFromEmptyPath(t, feed, source, stash)
-	const want = "/memfd:handlebuf" + deletedSuffix
-	if got := feed.openByHandleWithFlags(opened, syscall.O_RDWR).File.Name(); got != want {
-		t.Errorf("row named %q, want procfs's %q", got, want)
-	}
-	if got, ok := feed.el.pendingHandleState().peek(feed.pid); !ok || got != stash {
-		t.Errorf("stash = %q (ok=%v), want %q left in the slot", got, ok, stash)
-	}
+	assertStashSpentOnItsOwnOpen(t, feed, opened, syscall.O_RDWR, "/memfd:handlebuf"+deletedSuffix)
+}
+
+// TestOpenByHandleAtMemfdNamedByANumberStillMatches is the other reading of
+// the same spelling: a memfd really called "7" is tracked as "memfd:7". The
+// stash is opaque by form, but a match is found before opacity is asked, so
+// the row keeps the traced name like every traced memfd's.
+func TestOpenByHandleAtMemfdNamedByANumberStillMatches(t *testing.T) {
+	source, opened := memfdPair(t, "7")
+	feed := newHandleFeed(t)
+	want := feed.traceSource(source, types.SYS_ENTER_MEMFD_CREATE, "7")
+
+	stashFromEmptyPath(t, feed, source, want)
+	assertStashSpentOnItsOwnOpen(t, feed, opened, syscall.O_RDWR, want)
 }
 
 // TestTracedHandleLink pins the translation against the names
