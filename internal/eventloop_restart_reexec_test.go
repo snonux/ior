@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
 )
@@ -1323,6 +1325,35 @@ func TestNonLeaderExecFromARestartingHandlerReleasesTheHeldRow(t *testing.T) {
 		t.Fatalf("numSyscalls = %d, want 2 (the read and the execve)", f.el.numSyscalls)
 	}
 	f.requireNoEnterPending(restartTid, restartPid)
+}
+
+// TestExecReleasesTheHeldRowBeforeTheCloexecEviction pins the order inside
+// handleProcessExecEvent: the row held under the caller's old tid is released
+// before the exec record evicts the process's FD_CLOEXEC descriptors. The held
+// call completed before the exec, so its row must name the file its descriptor
+// had then - what it would have shown without the hold. Released after the
+// eviction, a read on a close-on-exec descriptor came out without its path.
+func TestExecReleasesTheHeldRowBeforeTheCloexecEviction(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.fdState().set(restartReadFd, restartPid,
+		file.NewFd(restartReadFd, "/cloexec", syscall.O_RDONLY|syscall.O_CLOEXEC))
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
+	f.feedNone(f.execEnter(restartBase+800, restartTid), "the handler's execve enter")
+
+	f.el.processRawEvent(f.execRecord(restartBase+2100, restartPid, restartTid, false), f.out)
+	select {
+	case released := <-f.out:
+		defer released.Recycle()
+		if got := released.FileName(); got != "/cloexec" {
+			t.Fatalf("released read names %q, want the pre-exec file /cloexec", got)
+		}
+	default:
+		t.Fatal("the exec record released no row")
+	}
+	if _, tracked := f.el.fdState().get(restartReadFd, restartPid); tracked {
+		t.Fatal("the close-on-exec descriptor survived the exec record")
+	}
 }
 
 // TestNonLeaderExecWithALostExecRecordReleasesTheHeldRow is the case above

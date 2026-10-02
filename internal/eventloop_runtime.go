@@ -156,7 +156,8 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	// taken before the loop's own read saw a newer total and delivered after
 	// it. The watch takes any differing total for a change and stamps it now,
 	// and the next read of the real total stamps once more, so the invariant
-	// holds and the price is at most one refused fold. One clock read serves
+	// holds and the price is the folds of the calls interrupted before that next
+	// read (usually one). One clock read serves
 	// both users of the stamp.
 	if result.delta == 0 {
 		e.restarts.drops.observe(result.total, e.readDropStampClock())

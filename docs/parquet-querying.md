@@ -192,7 +192,9 @@ followed by a second row for the continuation (if that was recorded at all), whe
   `execve`, in between ends it. Both rows are recorded: the restart-code row, then the
   continuation with the real result. An `execve` that was interrupted and restarted (-513: a
   signal arrived while it waited for a concurrent exec or a ptrace attach in its thread group)
-  and then succeeded is therefore always two rows, `execve ret=-513` and `execve ret=0`, also
+  and then succeeded is therefore two rows rather than one folded row, `execve ret=-513` and
+  `execve ret=0` (as long as both calls were recorded: not sampled out, and the exec record
+  itself not lost), also
   when a thread other than the main thread made the call (both rows carry that thread's id);
 - a restarting signal handler replaced the program with `execve` instead of returning: the
   interrupted call is never re-executed and keeps its restart-code row, listed before the
