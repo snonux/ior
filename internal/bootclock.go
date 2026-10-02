@@ -32,7 +32,9 @@ import (
 // before a close, so those close rows lost their name; a TUI run refused
 // every restart fold for the length of the offset after a probe change), and
 // a negative one put it in their past (a close row took the name of the file
-// that reused its number; a comm recheck that was needed was skipped).
+// that reused its number; a comm recheck that was needed was skipped; a
+// restart fold that lost records or a probe change should have refused was
+// made - restartDropWatch, noteProbeChange).
 //
 // So bootClockNs subtracts the offset, read once from /proc/self/
 // timens_offsets. Reading it once is sound: the kernel refuses to change the
@@ -199,7 +201,8 @@ func unknownBootClockDomain(cause error) bootClockDomain {
 		"Could not determine the boottime offset of ior's time namespace (%v); "+
 			"assuming none. If ior runs inside a time namespace with such an "+
 			"offset, close rows of descriptors opened before the trace may be "+
-			"unnamed or misnamed and interrupted calls may not be folded.", cause)}
+			"unnamed or misnamed, and interrupted calls may stay unfolded or be "+
+			"folded with a later call.", cause)}
 }
 
 // ownTimeNamespaceIsChildrens checks that timens_offsets, which describes the

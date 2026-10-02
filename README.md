@@ -258,7 +258,8 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   namespace than the one ior runs in), ior assumes none and warns once per trace session
   (on stderr in the headless modes, as a warning row in the TUI, again after each restart of
   the trace); with an actual offset such closes may then be unnamed or named after the file
-  that reused the number, and interrupted calls may stay two rows.
+  that reused the number, and interrupted calls may stay two rows or, with a negative offset,
+  be folded with a later call (after lost records, or after a probe change in the TUI).
 
 ## Bytes Classification
 

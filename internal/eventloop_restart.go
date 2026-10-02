@@ -729,7 +729,7 @@ func (w *restartProbeWatch) clearFailedWith(err error) {
 		return
 	}
 	message := fmt.Sprintf(
-		"Could not clear the kernel's pending syscall restarts after a probe change (interrupted calls from before it stay unfolded all the same): %v", err)
+		"Could not clear the kernel's pending syscall restarts after a probe change (interrupted calls from before it are refused by time all the same): %v", err)
 	w.clearWarning.Store(&message)
 }
 
