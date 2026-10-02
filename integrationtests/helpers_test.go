@@ -84,8 +84,26 @@ func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIo
 func runParquetScenarioRowsAllowingComms(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string, comms ...string) ([]iorparquet.Record, int) {
 	t.Helper()
 	enableParallelIfRequested(t)
+	run := parquetScenarioRun(t, scenario, duration, extraIorArgs, workloadEnv, comms...)
+	return run.rows, run.pid
+}
+
+// parquetRun is one headless Parquet run of a scenario: its rows, the
+// workload's pid and everything ior printed, the statistics block included.
+type parquetRun struct {
+	rows   []iorparquet.Record
+	pid    int
+	logged string
+}
+
+// parquetScenarioRun runs scenario once in headless Parquet mode, with a
+// harness of its own, and fails the test when the run fails, records nothing
+// or records a row of another process or comm.
+func parquetScenarioRun(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string, comms ...string) parquetRun {
+	t.Helper()
 	h := newTestHarness(t)
 	h.WorkloadEnv = workloadEnv
+	h.IorOutput = &OutputCapture{}
 	path, pid, err := h.RunParquetWithIorArgs(scenario, duration, extraIorArgs)
 	if err != nil {
 		t.Fatalf("run parquet scenario %s: %v", scenario, err)
@@ -96,7 +114,43 @@ func runParquetScenarioRowsAllowingComms(t *testing.T, scenario string, duration
 		t.Fatalf("scenario %s produced no parquet rows", scenario)
 	}
 	assertParquetRowsOwnedBy(t, rows, uint32(pid), comms...)
-	return rows, pid
+	return parquetRun{rows: rows, pid: pid, logged: h.IorOutput.String()}
+}
+
+// foldRunAttempts is how often a scenario whose test requires folded rows is
+// run before the test gives up on this host: once, and once more.
+const foldRunAttempts = 2
+
+// runFoldScenarioRows is runParquetScenarioRows for a test that requires an
+// interrupted call to come out FOLDED into one row. ior refuses a fold when
+// a record may have been lost between the call's halves - a ring-buffer
+// drop, or a probe run the kernel skipped, which on a host with real-time
+// tasks happens for real and for tasks that have nothing to do with the
+// trace (task 723). Such a run cannot show what the test wants to see, and
+// it is no failure either. So the rows of the first run whose statistics
+// report no kernel-side loss are returned; a run that reports one is logged
+// and the scenario run once more, and when that run lost something too the
+// test is SKIPPED with the counts - never passed, and never failed for what
+// the environment did.
+func runFoldScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
+	t.Helper()
+	enableParallelIfRequested(t)
+	run, lost, err := FirstRunWithoutKernelLoss(foldRunAttempts, func() (parquetRun, KernelLoss, error) {
+		run := parquetScenarioRun(t, scenario, duration, extraIorArgs, workloadEnv, "ioworkload")
+		loss, err := ParseKernelLoss(run.logged)
+		return run, loss, err
+	})
+	if err != nil {
+		t.Fatalf("scenario %s: %v", scenario, err)
+	}
+	for i, loss := range lost {
+		t.Logf("run %d of scenario %s lost or may have lost records (%s): ior refuses folds across that", i+1, scenario, loss)
+	}
+	if len(lost) == foldRunAttempts {
+		t.Skipf("scenario %s: every one of %d runs reported kernel-side loss (last: %s); "+
+			"folds cannot be required on this host right now", scenario, foldRunAttempts, lost[len(lost)-1])
+	}
+	return run.rows, run.pid
 }
 
 func runParquetErrorScenario(t *testing.T, scenario string, errno syscall.Errno, exp ExpectedRow, extraIorArgs []string) {

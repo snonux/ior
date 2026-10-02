@@ -27,9 +27,10 @@ var restartTraceArgs = []string{
 // handler, and since task 103 that re-execution is folded: the read is ONE
 // row with the final return value, and no -512 read row is left. (A -512 row
 // that must stay - the program really got EINTR - is covered by
-// TestSignalRestartedReadIsOneRow.)
+// TestSignalRestartedReadIsOneRow.) The fold is required, so the scenario
+// runs through runFoldScenarioRows, like every test here that requires one.
 func TestKernelRestartCodesAreNotErrors(t *testing.T) {
-	rows, _ := runParquetScenarioRows(t, "signal-restart", defaultDuration,
+	rows, _ := runFoldScenarioRows(t, "signal-restart", defaultDuration,
 		restartTraceArgs, []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 
 	notError := false
@@ -64,7 +65,7 @@ const reexecReadFd = int32(200)
 // the scenario's descriptor and, when traced, the rt_sigreturn calls.
 func reexecRows(t *testing.T, syscalls string) []iorparquet.Record {
 	t.Helper()
-	rows, pid := runParquetScenarioRows(t, "signal-reexec", defaultDuration,
+	rows, pid := runFoldScenarioRows(t, "signal-reexec", defaultDuration,
 		[]string{"-trace-syscalls", syscalls}, []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 	var judged []iorparquet.Record
 	for _, row := range rows {
@@ -181,12 +182,17 @@ const (
 	reexecManyFdBase = int32(300)
 )
 
-// reexecManyRows runs the signal-reexec-many workload with read traced (plus
-// extraArgs) and returns the reading thread's rows on the scenario's
-// descriptors, grouped by read index, in emission order.
-func reexecManyRows(t *testing.T, extraArgs ...string) [][]iorparquet.Record {
+// scenarioRows is how a test gets the rows of a scenario: any run
+// (runParquetScenarioRows), or one that lost nothing in the kernel, for a
+// test that requires folds (runFoldScenarioRows).
+type scenarioRows func(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int)
+
+// reexecManyRows runs the signal-reexec-many workload through run with read
+// traced (plus extraArgs) and returns the reading thread's rows on the
+// scenario's descriptors, grouped by read index, in emission order.
+func reexecManyRows(t *testing.T, run scenarioRows, extraArgs ...string) [][]iorparquet.Record {
 	t.Helper()
-	rows, pid := runParquetScenarioRows(t, "signal-reexec-many", defaultDuration,
+	rows, pid := run(t, "signal-reexec-many", defaultDuration,
 		append([]string{"-trace-syscalls", "read"}, extraArgs...), []string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 	byRead := make([][]iorparquet.Record, reexecManyReads)
 	for _, row := range rows {
@@ -207,7 +213,7 @@ func reexecManyRows(t *testing.T, extraArgs ...string) [][]iorparquet.Record {
 // re-execution's exit, so a row with both right is that call and no other.
 // Each row also says that it was folded from one restart (task 203).
 func TestSignalStoppedReadsEachFoldIntoOneRow(t *testing.T) {
-	for i, rows := range reexecManyRows(t) {
+	for i, rows := range reexecManyRows(t, runFoldScenarioRows) {
 		want := int64(i + 1)
 		if len(rows) != 1 || rows[0].Ret != want || rows[0].Bytes != uint64(want) || rows[0].IsError {
 			t.Errorf("read %d (fd %d): rows %+v, want exactly one row returning %d bytes",
@@ -233,10 +239,11 @@ func TestSignalStoppedReadsEachFoldIntoOneRow(t *testing.T) {
 // descriptor i can only be read i: it returns i+1 bytes (the call, folded or
 // its re-execution alone) or -512 (the interrupted half alone), each at most
 // once. Which rows exist at all is the sampler's choice, so only their
-// presence in general is required.
+// presence in general is required. No fold is required either, so a run in
+// which the kernel lost or skipped records is judged like any other.
 func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
 	total := 0
-	for i, rows := range reexecManyRows(t, "-syscall-sampling-syscalls", "read=2") {
+	for i, rows := range reexecManyRows(t, runParquetScenarioRows, "-syscall-sampling-syscalls", "read=2") {
 		want := int64(i + 1)
 		finals, interrupted := 0, 0
 		for _, row := range rows {
@@ -285,7 +292,7 @@ const stopRestartSleepNs = int64(600_000_000)
 // checked for leftovers.
 func stoppedSleepRow(t *testing.T, scenario string, requestNs int64) iorparquet.Record {
 	t.Helper()
-	rows, pid := runParquetScenarioRows(t, scenario, defaultDuration,
+	rows, pid := runFoldScenarioRows(t, scenario, defaultDuration,
 		[]string{"-trace-syscalls", "clock_nanosleep,restart_syscall"},
 		[]string{"IOR_WORKLOAD_STARTUP_DELAY_MS=500"})
 

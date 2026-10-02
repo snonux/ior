@@ -35,9 +35,6 @@ const (
 var (
 	threadExitTraceArgs = []string{"-trace-syscalls", "pipe2,write,close"}
 	groupDeadExitsLine  = regexp.MustCompile(`group-dead exits: (\d+)`)
-	// skippedRunsLine captures the figure of the statistics line for the
-	// program runs the kernel skipped (eventLoop.skippedRunStatLine).
-	skippedRunsLine = regexp.MustCompile(`probe runs skipped by the kernel: ([^\n]+)`)
 )
 
 // TestThreadExitKeepsFdName pins the sched_process_exit group_dead gate end to
@@ -174,25 +171,31 @@ func assertExitProbeEffective(t *testing.T, out *OutputCapture) {
 	if !strings.Contains(logged, zeroDropsLine) {
 		t.Fatalf("ior output lacks %q: ring-buffer records were lost or the statistics are missing", zeroDropsLine)
 	}
-	assertNoSkippedProbeRuns(t, logged)
+	assertSkippedProbeRunsReported(t, logged)
 }
 
-// assertNoSkippedProbeRuns is the other half of "no record was lost": the
-// kernel skipped none of ior's programs (task 723). A kernel that does not
-// count skipped runs (before 6.7) prints "not counted", which is accepted;
-// one that should count them must have been read, so the setup warning about
-// an unreadable count fails the test as well.
-func assertNoSkippedProbeRuns(t *testing.T, logged string) {
+// assertSkippedProbeRunsReported checks that the run said what it knows of
+// the probe runs the kernel skipped (task 723): the statistics line is there
+// and states a figure ("not counted" on a kernel before 6.7 is one), and ior
+// did not warn at setup that it cannot read them on a kernel that counts
+// them.
+//
+// A count above zero does not fail the test and is only logged. The kernel
+// counts a skipped run for every task on the host, before ior's filter, so
+// on a host where a real-time task preempts BPF programs the count moves
+// although no record of this trace is missing; and a record that IS missing
+// shows in the assertions on the rows.
+func assertSkippedProbeRunsReported(t *testing.T, logged string) {
 	t.Helper()
-	m := skippedRunsLine.FindStringSubmatch(logged)
-	if m == nil {
-		t.Fatalf("ior output lacks a %q statistics line", "probe runs skipped by the kernel")
-	}
-	if m[1] != "0" && m[1] != "not counted" {
-		t.Fatalf("probe runs skipped by the kernel: %s, want 0: records were lost without a ring-buffer drop", m[1])
+	loss, err := ParseKernelLoss(logged)
+	if err != nil {
+		t.Fatalf("%v:\n%s", err, logged)
 	}
 	if strings.Contains(logged, skippedRunsUncounted) {
 		t.Fatalf("ior could not read the skipped probe runs on a kernel that counts them:\n%s", logged)
+	}
+	if loss.SkippedRuns > 0 {
+		t.Logf("the kernel skipped %d probe runs during this run (any task on the host, traced or not)", loss.SkippedRuns)
 	}
 }
 
