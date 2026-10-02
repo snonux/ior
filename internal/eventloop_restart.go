@@ -33,8 +33,8 @@ import (
 // holds every record the thread produced in between. Two things take records
 // out of it. A full ring buffer: the drop counter says whether that happened
 // ("Lost records" below), and a run without one folds on the stream alone.
-// And sampling, which no counter reports and nothing here checks yet
-// ("Sampling" below).
+// And sampling of restart_syscall itself, which no counter reports: a run
+// that samples it does not hold -516 rows at all ("Sampling" below).
 //
 // (2) Re-execution, for -ERESTARTSYS, -ERESTARTNOINTR and -ERESTARTNOHAND
 // (-512/-513/-514; task 103). The kernel rewinds the instruction pointer and
@@ -104,29 +104,52 @@ import (
 // TestRestartSyscallFoldWithoutADropCounterIsUnchecked. A counter that exists
 // but cannot be read is not that case: it refuses both folds.
 //
-// Sampling (open, task s13). A sampled-out record is not a lost one: BPF
-// never reserves it, the drop counter does not move, and the check above
-// cannot see it. restart_syscall is a traced syscall like any other. It has
-// no built-in rate, so by default every one is emitted and the proof holds,
-// but -syscall-sampling-syscalls restart_syscall=N or its family's rate
+// Sampling (task s13). A sampled-out record is not a lost one: BPF never
+// reserves it, the drop counter does not move, and the check above cannot see
+// it. restart_syscall is a traced syscall like any other. It has no built-in
+// rate, so by default every one is emitted and the proof holds, but
+// -syscall-sampling-syscalls restart_syscall=N or its family's rate
 // (-syscall-sampling-families Process=N) samples it, per invocation, enter
 // and exit together (ior_on_syscall_enter_impl in internal/c/filter.c). At a
-// rate above 1 a stranger is folded with no record lost and with a counter
-// that never moved: a stopped call is recorded and held, its restart_syscall
-// is sampled out, the thread's next stopped call emits nothing, and that
-// call's restart_syscall is sampled in, so its enter is the tid's next
-// record after the held exit. "Emits nothing" has several causes: the later
-// call's syscall was sampled out, is aggregate-only (a timed futex wait at
-// the TUI's default rate 0) or is not traced. Only restart_syscall's own rate
-// opens the hole. At rate 1 a recorded -516 row always meets its own
-// restart_syscall, whatever the rate of the interrupted syscall (a
-// sampled-out interrupted call holds no row, and its restart_syscall is a
-// row of its own); at rate 0 no restart_syscall is emitted and nothing folds.
+// rate above 1 the stream would then fold a stranger with no record lost and
+// with a counter that never moved: a stopped call is recorded and held, its
+// restart_syscall is sampled out, the thread's next stopped call emits
+// nothing, and that call's restart_syscall is sampled in, so its enter is the
+// tid's next record after the held exit. "Emits nothing" has several causes:
+// the later call's syscall was sampled out, is aggregate-only (a timed futex
+// wait at the TUI's default rate 0) or is not traced.
+//
+// So a run whose restart_syscall is not at rate 1 holds no -516 row
+// (restartTracker.restartSyscallSampled, holdable): "the tid's next record is
+// restart_syscall" proves nothing when the row's own restart_syscall may have
+// been left out, and nothing in the stream or in BPF says which invocation
+// was. The rows of such a run are the unfolded ones: the -516 row at once,
+// and restart_syscall as a row of its own whenever it is sampled in. Rate 0
+// is refused with the rest; no restart_syscall is emitted there, so there
+// was nothing to fold and the -516 row merely stops waiting for its tid's
+// next record. The rate is the effective one BPF applies (default < family <
+// syscall, a family's 0 promoted to 1 in the raw output modes), in every
+// output mode.
+//
+// restart_syscall's rate is the only one that needs the guard. The
+// interrupted syscall's own rate does not open the hole: with
+// restart_syscall at rate 1 a recorded -516 row always meets its own
+// restart_syscall as the tid's next record (or another record that releases
+// it), and a sampled-out interrupted call holds no row - its restart_syscall
+// is a row of its own. That rate only matters as one of the ways the later
+// call above stays silent, which is harmless once the first restart_syscall
+// cannot go missing. The re-execution fold needs no such guard either: it
+// does not go by "the tid's next enter" but by the RESUME record, which BPF
+// emits before any sampling decision and which names its enter by time (see
+// (2) above), so a sampled-out re-execution releases the row instead of
+// handing it the next call, and a sampled-out interrupted exit is never
+// pending in BPF (ior_restart_on_exit takes emitted exits only).
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
-//   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent), or
-//     -512/-513/-514 when re-execution folding is on, is parked here instead
+//   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent, in
+//     a run that does not sample restart_syscall), or -512/-513/-514 when
+//     re-execution folding is on, is parked here instead
 //     of being completed (tracepointExited). Its exit handler, derived values
 //     and pair filter all wait for the outcome. At most maxHeldRestarts rows
 //     are held; beyond that the row is completed at once, unfolded.
@@ -205,8 +228,8 @@ import (
 // and is not a time the kernel or the program knows. The restart code is
 // gone from the folded row (ret is what the call finally returned); a row
 // still showing one was not provably continued: the program got EINTR, the
-// proof was lost or unavailable, the continuation was sampled out, or the
-// trace ended first.
+// proof was lost or unavailable, the continuation was sampled out (or, for
+// -516, restart_syscall is sampled at all), or the trace ended first.
 //
 // Counting: numSyscalls counts the call once (at its first exit; the
 // continuation's exit is not counted again), the pair filter and every
@@ -231,6 +254,11 @@ type restartTracker struct {
 	// -512/-513/-514 rows are worth holding. False in every other case, which
 	// leaves those rows exactly as they were before task 103.
 	reexec bool
+	// restartSyscallSampled is set by newEventLoop from the run's sampling
+	// configuration (restartSyscallSampled): restart_syscall is not at rate 1,
+	// so a -516 row's own restart_syscall may be missing from the stream
+	// without any record lost, and such rows are not held ("Sampling" above).
+	restartSyscallSampled bool
 	// drops knows since when the kernel's drop counter has stood at its
 	// current value, which is what proves that no record was lost while a row
 	// was held. Both folds ask it (restartProofLost); it stays at its zero
@@ -438,11 +466,26 @@ func interrupted(ep *event.Pair) bool {
 	return ok && event.IsRestartRet(ret)
 }
 
+// restartSyscallSampled reports whether the run samples restart_syscall, given
+// the trace IDs whose effective sampling rate is not 1
+// (eventLoopConfig.aggregateIngestTraceIDs, built from the same rates
+// applySyscallSamplingRates loads into BPF, keyed by enter trace ID). True for
+// 1-in-N and for aggregate-only (rate 0) alike; false when nothing configures
+// it, when its rate is 1, and when a family's 0 was promoted to 1 for a raw
+// output mode.
+func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
+	_, sampled := notAtRateOne[types.SYS_ENTER_RESTART_SYSCALL]
+	return sampled
+}
+
 // holdable reports whether ep is an interrupted row worth parking: a -516
 // exit of the kind the restart_syscall fold can patch, or - when BPF proves
-// re-executions - any exit carrying -512/-513/-514. The bound is checked
-// against the rows held now, so a caller that replaces a tid's row releases
-// that row first (holdRestart).
+// re-executions - any exit carrying -512/-513/-514. A -516 row is not worth
+// parking in a run that samples restart_syscall: the fold's proof is that the
+// tid's next record is the row's own restart_syscall, and that one may have
+// been sampled out ("Sampling" in the file comment), so the row is emitted as
+// it is. The bound is checked against the rows held now, so a caller that
+// replaces a tid's row releases that row first (holdRestart).
 func (r *restartTracker) holdable(ep *event.Pair) bool {
 	ret, ok := restartRetOf(ep)
 	if !ok || len(r.held) >= maxHeldRestarts {
@@ -450,7 +493,7 @@ func (r *restartTracker) holdable(ep *event.Pair) bool {
 	}
 	if event.IsRestartBlockRet(ret) {
 		_, isRet := ep.ExitEv.(*types.RetEvent)
-		return isRet
+		return isRet && !r.restartSyscallSampled
 	}
 	return r.reexec && event.IsReexecutedRestartRet(ret)
 }
@@ -727,9 +770,10 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 //
 // Without a drop counter the restart_syscall fold is not asked and folds on
 // the stream alone, as it did before the counter existed; the stranger it can
-// then fold is the residual described under "Lost records". With or without
-// a counter, nothing here knows about a sampled restart_syscall ("Sampling"
-// in the file comment). A re-execution row is never held without a counter
+// then fold is the residual described under "Lost records". A sampled
+// restart_syscall is not this function's business: such a run holds no -516
+// row in the first place (holdable; "Sampling" in the file comment), with or
+// without a counter. A re-execution row is never held without a counter
 // (foldReexecutedRestarts), and would be refused here if it were.
 func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bool {
 	if !held.commitsToFold(action) {

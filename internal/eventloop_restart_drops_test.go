@@ -22,11 +22,17 @@ import (
 func newDropCountedFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
 	t.Helper()
 	f := newRestartFixture(t, filter)
+	f.countDrops()
+	return f
+}
+
+// countDrops gives the fixture's loop the scripted drop counter and boot
+// clock, both at 0 until the test moves them.
+func (f *restartFixture) countDrops() {
 	f.drops = &reexecDrops{}
 	f.el.dropSrc = ringbufDropSourceFunc(func() (uint64, error) { return f.drops.total, f.drops.err })
 	f.drops.monitor = newRingbufDropMonitor(f.el.dropSrc)
 	f.el.dropStampClock = func() uint64 { return f.drops.now }
-	return f
 }
 
 // dropCountedFixtures are the two kinds of run that have a drop counter: with

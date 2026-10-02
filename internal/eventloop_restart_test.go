@@ -70,7 +70,17 @@ type restartFixture struct {
 
 func newRestartFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
 	t.Helper()
-	el := mustNewEventLoop(t, eventLoopConfig{commResolver: newHermeticCommResolver(), filter: filter})
+	return newRestartFixtureFor(t, eventLoopConfig{filter: filter})
+}
+
+// newRestartFixtureFor is newRestartFixture for a loop built from cfg, which
+// is how a test gives the run a sampling configuration
+// (eventloop_restart_sampling_test.go). The comm resolver is replaced by a
+// hermetic one.
+func newRestartFixtureFor(t *testing.T, cfg eventLoopConfig) *restartFixture {
+	t.Helper()
+	cfg.commResolver = newHermeticCommResolver()
+	el := mustNewEventLoop(t, cfg)
 	t.Cleanup(el.commResolver.shutdown)
 	el.setCachedComm(restartTid, "sleeper")
 	el.setCachedComm(restartOtherTid, "other")

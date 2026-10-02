@@ -154,16 +154,19 @@ stopped sleeps are still folded, without this check. In such a run a burst of lo
 can, rarely, leave one row that starts with one stopped sleep and ends with the result of a
 later one of the same thread.
 
-Sampling is not record loss, and this check does not cover it. By default every
+Sampling is not record loss, and the drop counter says nothing about it. By default every
 `restart_syscall` is recorded and the above holds. If you sample `restart_syscall` itself
 (`-syscall-sampling-syscalls restart_syscall=N`, or a rate for its family,
-`-syscall-sampling-families Process=N`, with N above 1), a thread that is stopped in one call
-and later in another can produce the same wrong row with nothing lost and the drop counter at
-zero: the first call's `restart_syscall` is sampled out, the later call leaves no record at
-all (its syscall is sampled out, aggregate-only or not traced), and the later call's
-`restart_syscall` is sampled in and taken for the first call's. Sampling the interrupted
-syscall alone (`clock_nanosleep=N`) does not do this. Leave `restart_syscall` at rate 1 when
-stopped calls matter in a sampled recording.
+`-syscall-sampling-families Process=N`; any effective rate other than 1), no stopped sleep of
+that run is folded: every -516 row stays as it is, and each `restart_syscall` that is sampled
+in is a row of its own. ior cannot fold there, because the `restart_syscall` that follows a
+-516 row need not be that call's: the call's own may have been sampled out, and a later
+stopped call of the thread, itself leaving no record (sampled out, aggregate-only or not
+traced), may have had its `restart_syscall` sampled in. Nothing is lost in that sequence and
+nothing tells the two apart, so the run keeps the rows separate. Sampling the interrupted
+syscall alone (`clock_nanosleep=N`) does not turn the fold off: the sleeps that are recorded
+are still one row each. Leave `restart_syscall` at rate 1 when stopped calls matter in a
+sampled recording. (An explicit `restart_syscall=1` wins over a family rate.)
 
 #### A re-executed call is one row
 
@@ -206,6 +209,11 @@ followed by a second row for the continuation (if that was recorded at all), whe
   the thread exited first. With 1-in-N sampling of the syscall this is the common case: both
   halves are sampled independently, so a re-executed call is folded only when both happen to be
   recorded; otherwise you see the restart-code row alone, the continuation alone, or neither;
+- the run samples `restart_syscall` (its effective rate, from
+  `-syscall-sampling-syscalls restart_syscall=N` or `-syscall-sampling-families Process=N`,
+  is not 1). Then no stopped sleep (-516) is folded, not even one whose `restart_syscall`
+  happens to be recorded: see "A stopped sleep is one row". Re-executed calls
+  (-512/-513/-514) are not affected by that rate;
 - ior cannot rule out that the kernel dropped a record, any record of any process, between
   the interruption and the continuation's exit (see the drop counter). This applies to both
   folds, the stopped sleep (-516, continued by `restart_syscall`) and the re-executed call;

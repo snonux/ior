@@ -294,6 +294,10 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	// trace and makes the run exit non-zero (outputFailed).
 	plainSink.onErr = el.outputFailed
 	el.initSamplingTally(cfg.samplingRates, cfg.samplingFamilyRates)
+	// A run that samples restart_syscall must not fold on its arrival (task
+	// s13, "Sampling" in eventloop_restart.go); the rates are fixed for the
+	// run, so the tracker is told once, here.
+	el.restarts.restartSyscallSampled = restartSyscallSampled(cfg.aggregateIngestTraceIDs)
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.initRuntimeEventKinds()
