@@ -331,6 +331,7 @@ func TestEventfdDescriptorNameByTraceID(t *testing.T) {
 		{name: "empty fsopen name", traceID: types.SYS_ENTER_FSOPEN, flags: 15, identityKnown: true, want: "fsopen:"},
 		{name: "empty memfd name", traceID: types.SYS_ENTER_MEMFD_CREATE, flags: 2, identityKnown: true, want: "memfd:"},
 		{name: "legacy fsopen", traceID: types.SYS_ENTER_FSOPEN, flags: 15, want: "fsopenfd:15"},
+		{name: "fsmount", traceID: types.SYS_ENTER_FSMOUNT, flags: 1, want: "fsmountfd:1"},
 		{name: "legacy memfd_create", traceID: types.SYS_ENTER_MEMFD_CREATE, flags: 2, want: "memfd:2"},
 		{name: "memfd_secret", traceID: types.SYS_ENTER_MEMFD_SECRET, flags: 3, want: "memfd-secret:3"},
 		{name: "userfaultfd", traceID: types.SYS_ENTER_USERFAULTFD, flags: 4, want: "userfaultfd:4"},

@@ -82,8 +82,8 @@ func TestLegacyFsmountPayloadUsesStableFallbackIdentity(t *testing.T) {
 	if ok := el.handleEventfdExit(ep, enter); !ok {
 		t.Fatal("handleEventfdExit returned false")
 	}
-	if ep.File == nil || ep.File.Name() != "eventfd:1" {
-		t.Fatalf("legacy fsmount identity = %v, want eventfd:1", ep.File)
+	if ep.File == nil || ep.File.Name() != "fsmountfd:1" {
+		t.Fatalf("legacy fsmount identity = %v, want fsmountfd:1", ep.File)
 	}
 }
 
@@ -261,8 +261,8 @@ func TestHandleFsmountFallsBackWhenSourceIdentityCannotBeResolved(t *testing.T) 
 	if ok := el.handleEventfdExit(ep, enter); !ok {
 		t.Fatal("handleEventfdExit returned false")
 	}
-	if ep.File == nil || ep.File.Name() != "eventfd:1" {
-		t.Fatalf("fsmount fallback = %v, want eventfd:1", ep.File)
+	if ep.File == nil || ep.File.Name() != "fsmountfd:1" {
+		t.Fatalf("fsmount fallback = %v, want fsmountfd:1", ep.File)
 	}
 }
 

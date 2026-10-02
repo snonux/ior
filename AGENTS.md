@@ -1805,7 +1805,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       `open_tree_attr`; `attachPathExitFd` for `fspick` and `creat`);
       `fsmount` copies the name of its fs-context descriptor the same way
       (`fsmountFdFile` - the result is an `O_PATH` descriptor on the new
-      mount's root, so a handle *can* be taken through it). One marked name
+      mount's root, so a handle *can* be taken through it); a context
+      without a name leaves fsmount's own unmarked class name
+      `fsmountfd:<flags>` (task 823 - it used to fall to the default
+      `eventfd:<flags>`, so such rows read `eventfd:0`). One marked name
       involves no look at procfs: the bare pathname of a descriptor opened
       below a directory ior has no name for is marked whatever that
       directory is - procfs without an answer, or a *tracked* entry with an

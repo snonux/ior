@@ -941,8 +941,9 @@ func (e *eventLoop) registerEventfdResult(eventfdEv *types.EventfdEvent, fd, fla
 // the new mount, so name_to_handle_at(fd, "", AT_EMPTY_PATH) succeeds on it,
 // and an unmarked copy of the lagging link of a reused fsfd number was filed
 // as the handle's name for every opener (found in the task 523 review). A
-// context without a name leaves className, the call's class name, which is
-// ior's own and carries no mark.
+// context without a name leaves className, the call's class name
+// ("fsmountfd:<flags>", eventfdDescriptorName), which is ior's own and
+// carries no mark.
 func fsmountFdFile(fd int32, context file.File, className string, openFlags int32) *file.FdFile {
 	if context.Name() == "" {
 		return file.NewFd(fd, className, openFlags)
@@ -1157,6 +1158,13 @@ func eventfdDescriptorName(traceID types.TraceId, flags int32, identity string, 
 			return fmt.Sprintf("fsopenfd:%d", flags)
 		}
 		return "fsopen:" + identity
+	case types.SYS_ENTER_FSMOUNT:
+		// The mount descriptor's own class name, with the flags word
+		// (FSMOUNT_CLOEXEC) as fsopenfd shows fsopen's. It names the fd only
+		// when there is no fs-context name to copy (fsmountFdFile) or no
+		// fsfd in the record (legacy payload); before task 823 it fell to
+		// the default "eventfd:<flags>" and such rows read eventfd:0.
+		return fmt.Sprintf("fsmountfd:%d", flags)
 	case types.SYS_ENTER_MEMFD_CREATE:
 		if !identityKnown {
 			return fmt.Sprintf("memfd:%d", flags)

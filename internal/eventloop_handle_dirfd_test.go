@@ -312,8 +312,9 @@ func TestFsmountOfAProcfsNamedContextIsMarked(t *testing.T) {
 // TestFsmountOfATrackedContextIsNotMarked is the other side: an fsfd ior saw
 // being opened has a traced name, the mount descriptor copies it unmarked,
 // and a handle taken through it is filed (scoped: it is a descriptor name).
-// An fsfd without any name leaves the call's class name, which is ior's own
-// and unmarked as well.
+// An fsfd without any name leaves the call's class name, fsmount's own
+// "fsmountfd:<flags>" (task 823; it used to read eventfd:0), which is ior's
+// own and unmarked as well.
 func TestFsmountOfATrackedContextIsNotMarked(t *testing.T) {
 	feed := newHandleFeed(t, globalfilter.Filter{})
 	feed.el.fdState().set(5, feed.pid, file.NewFd(5, "fsopen:ext4", syscall.O_RDWR))
@@ -322,7 +323,22 @@ func TestFsmountOfATrackedContextIsNotMarked(t *testing.T) {
 	feed.nameToHandleOfFd(70, testHandleA)
 	assertHandleRow(t, feed, feed.openByHandle(testHandleA, 71), 71, "fsopen:ext4")
 
-	assertEntry(t, feed.fsmount(6, 72), "eventfd:0", false)
+	assertEntry(t, feed.fsmount(6, 72), "fsmountfd:0", false)
+}
+
+// TestFsmountOfAnUnnamedContextShowsItsClassName: the mount descriptor of
+// an fsfd without a name is named after fsmount itself (task 823), not the
+// default eventfd class it used to fall to; the fsmount row shows it (the
+// feed checks the row against the entry), and so does the row of a handle
+// taken through it, for the taker only, as for any descriptor name.
+func TestFsmountOfAnUnnamedContextShowsItsClassName(t *testing.T) {
+	feed := newHandleFeed(t, globalfilter.Filter{})
+
+	assertEntry(t, feed.fsmount(8, 74), "fsmountfd:0", false)
+	feed.nameToHandleOfFd(74, testHandleA)
+	assertHandleRow(t, feed, feed.openByHandle(testHandleA, 75), 75, "fsmountfd:0")
+	feed.asOtherProcess()
+	assertHandleRow(t, feed, feed.openByHandle(testHandleA, 76), 76, "")
 }
 
 // TestOpenBelowAnUnnamedTrackedDirfdIsMarked: the dirfd IS in the fd table,
