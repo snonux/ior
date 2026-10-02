@@ -2,6 +2,7 @@ package internal
 
 import (
 	"path/filepath"
+	"strings"
 
 	"ior/internal/event"
 	"ior/internal/file"
@@ -35,8 +36,11 @@ import (
 // the newer file; a failed call had no descriptor to check at all, and a
 // handle opened by another thread was never matched. None of that checking is
 // left: a handle ior knows is named by its pathname, and one it does not know
-// is named from procfs without a second opinion, like any descriptor ior did
-// not see being created.
+// is named from procfs, like any descriptor ior did not see being created.
+// One rule of the old check survives there (task 423, reachableByHandle): a
+// link that reads as a socket, a pipe or a generic anonymous inode is not
+// believed, because no file handle opens one. It refuses an answer; it does
+// not pick one.
 //
 // What the name is (takenHandleName). A name is filed for every later open of
 // the handle, so it has to be one ior got from a traced call, not from a look
@@ -78,7 +82,11 @@ import (
 //     handleKeyOf for why the mount cannot be had and which handles collide).
 //   - A handle ior did not see being taken is named from procfs, with the lag
 //     every procfs-resolved descriptor has: a number the task closed and
-//     reused before the loop reads it shows the newer file. A failed call
+//     reused before the loop reads it shows the newer file. Only a newer
+//     file of a kind no handle can open is recognised (reachableByHandle);
+//     the row and the fd table entry are then unnamed, as when procfs has
+//     no answer. A reuse by a file, a directory, a pidfd or a namespace
+//     still names the row after the newer one. A failed call
 //     with such a handle has an empty name. That is a handle taken before the
 //     trace started; by a task outside a -pid/-tid scope; by a call the enter
 //     filter shed (-path, -comm); by a call BPF did not report - sampled out
@@ -317,7 +325,8 @@ func (e *eventLoop) openedHandleName(openByHandleEv *types.OpenByHandleAtEvent) 
 // number is by now. The flags are the ones the event captured at enter (what
 // the caller asked for).
 //
-// An unnamed one falls back to procfs, name and flags alike (procFdFile).
+// An unnamed one falls back to procfs, name and flags alike, unless what
+// procfs shows is something no handle can open (procFdFile).
 func openedHandleFile(name string, named bool, pid uint32, fd int32, eventFlags int32) *file.FdFile {
 	if named {
 		return file.NewFd(fd, name, eventFlags)
@@ -335,12 +344,81 @@ func failedHandleFile(name string) file.File {
 }
 
 // procFdFile names a descriptor ior has no handle name for from procfs. An
-// unreadable descriptor yields an unnamed file, and unreadable flags are
-// replaced by the event's (what the caller asked for).
+// unreadable descriptor yields an unnamed file, and so does one whose link
+// reads as something no file handle can open (reachableByHandle): the number
+// was closed and reused before the loop looked. Unknown flags are replaced by
+// the event's (what the caller asked for); the fdinfo of a reused number is
+// the newer file's and is not used either.
+//
+// The unnamed file is what the row reports and what the fd table keeps, as
+// for the unreadable descriptor. Keeping nothing instead would send the next
+// row on the number back to procfs, which would then give that row the very
+// name refused here; and until the close of the call's own descriptor comes
+// up in the ring the rows on the number are that descriptor's, whose name
+// ior does not have. The entry is marked as a look at procfs like any other
+// answer of this function (FdFile.NameFromProcFS).
 func procFdFile(pid uint32, fd int32, eventFlags int32) *file.FdFile {
 	fdFile := file.NewFdWithPid(fd, pid)
+	if !reachableByHandle(fdFile.Name()) {
+		fdFile = file.NewUnresolvedFd(fd)
+	}
 	if fdFile.Flags() == file.Flags(-1) {
 		fdFile.SetFlags(eventFlags)
 	}
 	return fdFile
+}
+
+// pidfdLinkText is the /proc/<pid>/fd link of a pidfd, as Linux 7.2.5 spells
+// it. pidfs has export operations, so it is the one "anon_inode:" link a
+// file handle can open. A kernel that spelled the link "pidfd:[N]" instead
+// would not need the exemption: that text passes the deny list below.
+const pidfdLinkText = "anon_inode:[pidfd]"
+
+// handleLessLinkPrefixes are the /proc/<pid>/fd link texts of descriptors
+// that no open_by_handle_at can have returned: sockets ("socket:[N]",
+// sockfs), pipes ("pipe:[N]", pipefs) and the kernel's generic anonymous
+// inodes ("anon_inode:[eventfd]", "anon_inode:[eventpoll]",
+// "anon_inode:inotify", ...). pidfdLinkText shares the last prefix and is
+// exempted by reachableByHandle.
+var handleLessLinkPrefixes = []string{"socket:[", "pipe:[", "anon_inode:"}
+
+// reachableByHandle reports whether a descriptor whose /proc link reads
+// target can be the result of an open_by_handle_at at all.
+//
+// A file handle can only be decoded on a filesystem with export operations,
+// and sockfs, pipefs and the generic anonymous-inode filesystem have none. A
+// link of one of those kinds under the returned number is therefore proof
+// that the number was closed and reused, and the row must not be named after
+// it. This is the one rule of the procfs arbitration tasks j03 to m03 had
+// that is kept (task 423): it does not guess which file the call opened, it
+// only refuses an answer that cannot be it.
+//
+// It is a deny list. Every other link text - a path, a pidfd, a namespace
+// ("net:[N]", "mnt:[N]", "ipc:[N]", "uts:[N]", "pid:[N]", "user:[N]",
+// "cgroup:[N]", "time:[N]"; nsfs has export operations) and anything a
+// future kernel adds outside the three prefixes - is believed, so a new
+// exportable object is at worst named too readily, never denied its name.
+// One whose link starts with "anon_inode:" would be denied and need its own
+// exemption, as the pidfd did. The exemption is the exact text, not a
+// prefix: pidfs names its dentry itself, so nothing is ever appended to it.
+// An unreadable link (the empty text) passes; the caller already has an
+// unnamed file for it.
+//
+// That the three filesystems have no export operations is kernel knowledge
+// ior cannot ask for at run time. Checked on Linux 7.2.5 (x86_64) with
+// name_to_handle_at(fd, "", AT_EMPTY_PATH): EOPNOTSUPP for a socket, both
+// ends of a pipe, eventfd, epoll, timerfd, signalfd and inotify; success for
+// a pidfd and for every /proc/self/ns/* descriptor. The tests in
+// eventloop_handle_reach_test.go ask the kernel they run on again and fail
+// if one of the denied kinds turns out to be exportable.
+func reachableByHandle(target string) bool {
+	if target == pidfdLinkText {
+		return true
+	}
+	for _, prefix := range handleLessLinkPrefixes {
+		if strings.HasPrefix(target, prefix) {
+			return false
+		}
+	}
+	return true
 }

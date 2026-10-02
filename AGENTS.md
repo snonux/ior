@@ -1813,7 +1813,22 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       (`handleKeyOf`: status other than OK, zero bytes, a count beyond the
       field) and a handle ior has no name for are named from
       `/proc/<pid>/fd/<fd>` (`procFdFile`), as an `open_by_handle_at` without
-      a stash always was; a failed call is then unnamed.
+      a stash always was; a failed call is then unnamed. One answer is not
+      believed (task 423, `reachableByHandle`): a link that reads
+      `socket:[N]`, `pipe:[N]` or `anon_inode:...` is a file no handle can
+      open (sockfs, pipefs and the generic anonymous inodes have no export
+      operations), so the number was closed and reused before the loop
+      looked. Row and fd table entry are then unnamed with the call's flags,
+      exactly as when procfs has no answer - the entry is kept, unnamed and
+      marked, because dropping it would send the next row on the number
+      back to procfs for the name just refused. It is a deny list with one
+      exact exemption, `anon_inode:[pidfd]` (pidfs exports; the text is what
+      7.2.5 shows, and a `pidfd:[N]` spelling would pass anyway); paths,
+      namespaces (`net:[N]`, `mnt:[N]`, ...; nsfs exports) and anything
+      unknown are believed. Checked on 7.2.5 with
+      `name_to_handle_at(fd, "", AT_EMPTY_PATH)`: `EOPNOTSUPP` for a socket,
+      both pipe ends, eventfd, epoll, timerfd, signalfd and inotify; success
+      for a pidfd and every `/proc/self/ns/*`.
     - *The mount is not part of the key.* `name_to_handle_at` returns a mount
       ID but `open_by_handle_at` takes a mount *fd*; mapping one to the other
       needs `/proc/<pid>/fdinfo` (the lagging look this design removes) or
@@ -1823,9 +1838,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
 
     This replaced the per-tid stash and its procfs arbitration (tasks j03,
     l03, m03: `classifyHandlePath`, `compareHandleLinkText`,
-    `tracedHandleLink`, `confirmedHandleFd`, `reachableByHandle`,
+    `tracedHandleLink`, `confirmedHandleFd`,
     `fixedFlagsMask`/`sameFixedFlags`, the opaque-stash rules and
-    `FdFile.NamedAfterTmpfileDir`, all deleted). That design could only ask
+    `FdFile.NamedAfterTmpfileDir`, all deleted; `reachableByHandle` went
+    with them and came back alone in task 423, see above). That design
+    could only ask
     what the returned *number* is when the loop handles the exit, which is a
     later file once the task closed and reused it: a reuse with the same fixed
     flags named the row and the fd table entry after the newer file
@@ -1861,7 +1878,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       that took such a handle last; a program working on one filesystem,
       the usual case, never sees it.
     - *Handles ior did not see being taken* fall back to procfs with its
-      lag (a failed call is then unnamed): taken before the trace started;
+      lag (a failed call is then unnamed; a number reused by a file, a
+      directory, a pidfd or a namespace still names the row after the newer
+      one - only a socket, pipe or anonymous inode is recognised and left
+      unnamed): taken before the trace started;
       outside a `-pid`/`-tid` scope; by a `name_to_handle_at` the raw enter
       filter shed under `-path`/`-comm`; by one BPF did not report - sampled
       out (the N-1 of 1-in-N), aggregate-only (rate 0), or with its enter or
@@ -1929,7 +1949,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     names, a record whose own enter never arrived, a malformed exit),
     `internal/eventloop_restart_handle_test.go` (a handler's
     `name_to_handle_at` passes a held restart row),
-    `internal/eventloop_handle_fail_test.go`, the decoder tests in
+    `internal/eventloop_handle_fail_test.go`,
+    `internal/eventloop_handle_reach_test.go` (the fallback's deny list: each
+    handle-less kind unnamed, pidfd and namespace kept, and the kernel asked
+    again whether the denied kinds really cannot be exported), the decoder
+    tests in
     `internal/types/fastdecode_test.go`, the generator, harness and oracle
     tests (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,
     `TestFileHandleCapture`,

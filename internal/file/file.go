@@ -93,7 +93,7 @@ func NewFd(fd int32, name string, flags int32) *FdFile {
 func NewFdWithPid(fd int32, pid uint32) *FdFile {
 	name, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
 	if err != nil {
-		return unresolvedFd(fd)
+		return NewUnresolvedFd(fd)
 	}
 	return NewFdWithProcName(fd, pid, name)
 }
@@ -116,9 +116,11 @@ func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
 	return f
 }
 
-// unresolvedFd is the descriptor procfs could not answer for: no name and
-// unknown flags.
-func unresolvedFd(fd int32) *FdFile {
+// NewUnresolvedFd is the descriptor procfs could not answer for: no name and
+// unknown flags. It is also what a caller makes of an answer it cannot
+// believe (procFdFile in internal/eventloop_handle.go: a link text that the
+// call which returned the descriptor can never have produced).
+func NewUnresolvedFd(fd int32) *FdFile {
 	f := newFdFile(fd, "")
 	f.SetFlags(-1)
 	f.fromProcFS = true
