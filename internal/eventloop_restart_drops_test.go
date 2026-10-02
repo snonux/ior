@@ -273,60 +273,64 @@ func TestUnreadableDropCounterRefusesTheRestartSyscallFold(t *testing.T) {
 // returning 0 - and each hop asks about the time since ITS interruption, the
 // exit the row carries after the hop before.
 func TestRepeatedStopsFoldEachFromItsOwnInterruption(t *testing.T) {
-	// The first hop folds. A loss first seen after the second interruption
-	// refuses the second hop only: the row keeps what the first hop proved (it
-	// ran until the second interruption), and the second restart_syscall is a
-	// row of its own.
-	t.Run("loss after the second interruption", func(t *testing.T) {
-		f := newDropCountedFixture(t, globalfilter.Filter{})
-		f.interrupt(restartBase, restartTid)
-		f.clockAt(restartBase + 1050)
-		f.resume(restartBase+1000, restartTid)
-		f.feedNone(f.restartEnter(restartBase+1000, restartTid), "first restart_syscall enter")
-		f.clockAt(restartBase + 1550)
-		f.feedNone(f.restartExit(restartBase+1500, restartTid, -516), "first restart_syscall -516 exit")
-		f.loseRecords(1)
-		f.monitorPoll(restartBase + 1700)
-		f.clockAt(restartBase + 2050)
-		sleep := f.feedOne(f.resumeRecord(restartBase+2000, restartTid), "second RESUME record")
-		if sleep.name != "clock_nanosleep" || sleep.ret != -516 || sleep.enterTime != restartBase || sleep.duration != 1500 {
-			t.Fatalf("released row = %+v, want the sleep from its enter to the second interruption", sleep)
-		}
-		f.feedNone(f.restartEnter(restartBase+2000, restartTid), "second restart_syscall enter")
-		restart := f.feedOne(f.restartExit(restartBase+4000, restartTid, 0), "second restart_syscall exit")
-		want := restartRow{name: "restart_syscall", tid: restartTid, enterTime: restartBase + 2000, duration: 2000, gap: 500}
-		if restart != want || f.el.numSyscalls != 2 {
-			t.Fatalf("row = %+v numSyscalls=%d, want %+v and 2", restart, f.el.numSyscalls, want)
-		}
-	})
-	// The first hop is refused over a loss seen after the first interruption.
-	// Its restart_syscall, now a row of its own, is stopped in turn (-516) and
-	// held; the loss lies before THAT interruption, so the second
-	// restart_syscall folds into the first.
-	t.Run("loss between the two interruptions", func(t *testing.T) {
-		f := newDropCountedFixture(t, globalfilter.Filter{})
-		f.interrupt(restartBase, restartTid)
-		f.loseRecords(1)
-		f.monitorPoll(restartBase + 600)
-		f.clockAt(restartBase + 1050)
-		sleep := f.feedOne(f.resumeRecord(restartBase+1000, restartTid), "first RESUME record")
-		if sleep.name != "clock_nanosleep" || sleep.ret != -516 || sleep.duration != 500 {
-			t.Fatalf("released row = %+v, want the unchanged -516 sleep", sleep)
-		}
-		f.feedNone(f.restartEnter(restartBase+1000, restartTid), "first restart_syscall enter")
-		f.clockAt(restartBase + 1550)
-		f.feedNone(f.restartExit(restartBase+1500, restartTid, -516), "first restart_syscall -516 exit")
-		f.clockAt(restartBase + 2050)
-		f.resume(restartBase+2000, restartTid)
-		f.feedNone(f.restartEnter(restartBase+2000, restartTid), "second restart_syscall enter")
-		f.clockAt(restartBase + 4050)
-		restart := f.feedOne(f.restartExit(restartBase+4000, restartTid, 0), "second restart_syscall exit")
-		want := restartRow{name: "restart_syscall", tid: restartTid, enterTime: restartBase + 1000, duration: 3000, gap: 500}
-		if restart != want || f.el.numSyscalls != 2 {
-			t.Fatalf("row = %+v numSyscalls=%d, want %+v and 2", restart, f.el.numSyscalls, want)
-		}
-		f.requireNothingHeld()
-	})
+	t.Run("loss after the second interruption", repeatedStopsLossAfterTheSecondInterruption)
+	t.Run("loss between the two interruptions", repeatedStopsLossBetweenTheInterruptions)
+}
+
+// repeatedStopsLossAfterTheSecondInterruption: the first hop folds. A loss
+// first seen after the second interruption refuses the second hop only: the
+// row keeps what the first hop proved (it ran until the second interruption),
+// and the second restart_syscall is a row of its own.
+func repeatedStopsLossAfterTheSecondInterruption(t *testing.T) {
+	f := newDropCountedFixture(t, globalfilter.Filter{})
+	f.interrupt(restartBase, restartTid)
+	f.clockAt(restartBase + 1050)
+	f.resume(restartBase+1000, restartTid)
+	f.feedNone(f.restartEnter(restartBase+1000, restartTid), "first restart_syscall enter")
+	f.clockAt(restartBase + 1550)
+	f.feedNone(f.restartExit(restartBase+1500, restartTid, -516), "first restart_syscall -516 exit")
+	f.loseRecords(1)
+	f.monitorPoll(restartBase + 1700)
+	f.clockAt(restartBase + 2050)
+	sleep := f.feedOne(f.resumeRecord(restartBase+2000, restartTid), "second RESUME record")
+	if sleep.name != "clock_nanosleep" || sleep.ret != -516 || sleep.enterTime != restartBase || sleep.duration != 1500 {
+		t.Fatalf("released row = %+v, want the sleep from its enter to the second interruption", sleep)
+	}
+	f.feedNone(f.restartEnter(restartBase+2000, restartTid), "second restart_syscall enter")
+	restart := f.feedOne(f.restartExit(restartBase+4000, restartTid, 0), "second restart_syscall exit")
+	want := restartRow{name: "restart_syscall", tid: restartTid, enterTime: restartBase + 2000, duration: 2000, gap: 500}
+	if restart != want || f.el.numSyscalls != 2 {
+		t.Fatalf("row = %+v numSyscalls=%d, want %+v and 2", restart, f.el.numSyscalls, want)
+	}
+}
+
+// repeatedStopsLossBetweenTheInterruptions: the first hop is refused over a
+// loss seen after the first interruption. Its restart_syscall, now a row of
+// its own, is stopped in turn (-516) and held; the loss lies before THAT
+// interruption, so the second restart_syscall folds into the first.
+func repeatedStopsLossBetweenTheInterruptions(t *testing.T) {
+	f := newDropCountedFixture(t, globalfilter.Filter{})
+	f.interrupt(restartBase, restartTid)
+	f.loseRecords(1)
+	f.monitorPoll(restartBase + 600)
+	f.clockAt(restartBase + 1050)
+	sleep := f.feedOne(f.resumeRecord(restartBase+1000, restartTid), "first RESUME record")
+	if sleep.name != "clock_nanosleep" || sleep.ret != -516 || sleep.duration != 500 {
+		t.Fatalf("released row = %+v, want the unchanged -516 sleep", sleep)
+	}
+	f.feedNone(f.restartEnter(restartBase+1000, restartTid), "first restart_syscall enter")
+	f.clockAt(restartBase + 1550)
+	f.feedNone(f.restartExit(restartBase+1500, restartTid, -516), "first restart_syscall -516 exit")
+	f.clockAt(restartBase + 2050)
+	f.resume(restartBase+2000, restartTid)
+	f.feedNone(f.restartEnter(restartBase+2000, restartTid), "second restart_syscall enter")
+	f.clockAt(restartBase + 4050)
+	restart := f.feedOne(f.restartExit(restartBase+4000, restartTid, 0), "second restart_syscall exit")
+	want := restartRow{name: "restart_syscall", tid: restartTid, enterTime: restartBase + 1000, duration: 3000, gap: 500}
+	if restart != want || f.el.numSyscalls != 2 {
+		t.Fatalf("row = %+v numSyscalls=%d, want %+v and 2", restart, f.el.numSyscalls, want)
+	}
+	f.requireNothingHeld()
 }
 
 // TestSleepInterruptedInAHandlerFoldsFromItsOwnInterruption is the

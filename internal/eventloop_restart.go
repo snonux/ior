@@ -287,6 +287,24 @@ import (
 // handler's own syscalls: they complete before the call they interrupted.
 // Those rows measure their gap from the interrupted exit, and the folded row
 // keeps the gap it had at its first enter (heldRestart.gapBase).
+//
+// One held row has no such bound: a -516 row that no handler ends, in a run
+// where restart_syscall emits nothing because it is outside the attached
+// trace set (-trace-syscalls without it, or its probes switched off in the
+// TUI). It can never fold, yet it is held like any other: holdable goes by
+// the probes and the sampling rate, and the loop is not told which syscalls
+// are attached. No record marks the resumption then, so the row waits for
+// whatever the thread's next record is - the RESUME ahead of its next traced
+// enter (the BPF entry waits for that enter, restart.c), its exit record, or
+// the end of the run. For a thread that goes on sleeping that is as long as
+// the rest of the stopped call takes (2.5 s in a live run), and for one that
+// makes no further traced call it is the thread's exit. The row is right (ret
+// -516, the latency up to the stop); only the time it appears at and its
+// place in the output are off. Not holding -516 rows while restart_syscall is
+// not attached would end the delay, and is left open (task u13): the loop
+// would have to know the attached set, which the TUI's probes modal changes
+// while the loop runs, so a row held under one set can be released under
+// another.
 type restartTracker struct {
 	held map[uint32]*heldRestart // keyed by tid
 	// restartBlock and reexec are set by trace setup (foldProvenRestarts)

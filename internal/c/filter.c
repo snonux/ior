@@ -12,9 +12,11 @@
 // Kernel-internal restart codes (include/linux/errno.h: ERESTARTSYS,
 // ERESTARTNOINTR, ERESTARTNOHAND, ERESTART_RESTARTBLOCK). A signal that
 // interrupts a blocked syscall makes it exit with one of these; the signal
-// path then re-executes the call (a new sys_enter follows) or turns the value
-// into -EINTR, so user space never sees them. vmlinux.h carries no errno
-// macros. -515 (ENOIOCTLCMD) is not a restart marker and is not listed.
+// path then continues the call - by re-executing it (a new sys_enter of the
+// same syscall follows) or, after -516, through restart_syscall (a sys_enter
+// of that syscall follows) - or turns the value into -EINTR, so user space
+// never sees them. vmlinux.h carries no errno macros. -515 (ENOIOCTLCMD) is
+// not a restart marker and is not listed.
 #define IOR_ERESTARTSYS 512
 #define IOR_ERESTARTNOINTR 513
 #define IOR_ERESTARTNOHAND 514
@@ -295,8 +297,10 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 // A third user depends on it: the restart fold's RESUME record is stamped with
 // the enter handler's `now` (ior_restart_on_enter below) and userspace matches
 // it to the enter record by that time alone, so an enter handler that stamped
-// ev->time from a second clock read would silently end all re-execution folds
-// (restart.c, "RESUME names its enter by time").
+// ev->time from a second clock read would silently end every restart fold,
+// that of a re-executed call (-512/-513/-514) and that of a -516 call resumed
+// through restart_syscall alike (restart.c, "RESUME names its enter by
+// time").
 //
 // Enter state is elided for most syscalls at rate 1 (task 2s2). The hash
 // update here and the lookup + delete in ior_on_syscall_exit were the bulk of
@@ -348,13 +352,14 @@ static __always_inline int ior_on_syscall_enter_impl(__u32 tid, __u32 enter_trac
 //
 // Both enter hooks first let the restart fold look at the enter
 // (ior_restart_on_enter, restart.c): the first enter of a task whose
-// interrupted call the kernel re-executes is announced by a control record
-// that has to precede the enter's own record. It goes out before the sampling
-// decision, so the enter it announces may be sampled out; the record carries
-// `now` so that userspace can tell (restart.c). The noreturn hook below does
-// not consult the restart fold: exit and exit_group are never a
-// re-execution, and rt_sigreturn is the restart fold's own business
-// (handle_restart_sigreturn).
+// interrupted call the kernel continues - the call's re-execution, or after
+// -516 its restart_syscall - is announced by a control record that has to
+// precede the enter's own record. It goes out before the sampling decision,
+// so the enter it announces may be sampled out; the record carries `now` so
+// that userspace can tell (restart.c). The noreturn hook below does not
+// consult the restart fold: exit and exit_group are never the continuation
+// of an interrupted call, and rt_sigreturn is the restart fold's own
+// business (handle_restart_sigreturn).
 static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id, __u64 now) {
     ior_restart_on_enter(tid, now);
     return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 0);
@@ -486,8 +491,9 @@ static __always_inline int ior_on_syscall_exit_impl(__u32 tid, __u32 enter_trace
 //
 // All three exit hooks pass the verdict through ior_restart_on_exit
 // (restart.c), which notes an emitted exit that carries a restart code the
-// kernel may answer by re-executing the call; for any other return value it
-// costs one range check.
+// kernel may answer by continuing the call - re-executing it, or after -516
+// resuming it through restart_syscall; for any other return value it costs
+// one range check.
 static __always_inline int ior_on_syscall_exit(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now) {
     return ior_restart_on_exit(tid, ret, ior_on_syscall_exit_impl(tid, enter_trace_id, ret, now, 0, 0));
 }

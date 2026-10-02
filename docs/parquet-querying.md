@@ -140,16 +140,25 @@ that.
 
 A -516 row therefore stays as it is when a handler ran and the program got `EINTR`, when the
 trace ended (or the thread exited) while the call was stopped, and when `restart_syscall` is
-not traced. A `restart_syscall` row whose interrupted call was not traced (the trace started
-while the process was stopped, or the original syscall is not traced) also stays. And when
-some other record of the thread arrives between the `restart_syscall` enter and its exit
-(another thread wrote this thread's `comm` through `/proc/<pid>/task/<tid>/comm`), ior no
-longer treats what follows as the continuation: the -516 row stays as it is and is followed
-directly by a `restart_syscall` row with the final return value.
+not traced. In that last case the row is also late: nothing ior records marks the moment the
+call is resumed, so the -516 row appears only with the thread's next traced syscall or its
+exit, which can be seconds after the stop (typically the rest of the sleep). The row itself is
+correct; only its place in the output and the time it shows up are affected. Trace
+`restart_syscall` along with the sleeping syscalls to avoid the delay. A `restart_syscall` row
+whose interrupted call was not traced (the trace started while the process was stopped, or the
+original syscall is not traced) also stays. And when some other record of the thread arrives
+between the `restart_syscall` enter and its exit (another thread wrote this thread's `comm`
+through `/proc/<pid>/task/<tid>/comm`), ior no longer treats what follows as the continuation:
+the -516 row stays as it is and is followed directly by a `restart_syscall` row with the final
+return value.
 
 The kernel-side decision needs two probes, on `signal:signal_deliver` and
 `sched:sched_process_exit`. When either cannot be attached (ior warns at startup), no stopped
-sleep is folded: each is its -516 row, followed by a `restart_syscall` row.
+sleep is folded: each is its -516 row, followed by a `restart_syscall` row. The same holds,
+without a warning, when ior runs with a BPF object built before this kernel-side decision
+existed (an `IOR_BPF_OBJECT` override): such an object never announces a `restart_syscall`,
+so a sleep stopped twice is three correct rows: the sleep and a `restart_syscall`, both with
+`ret` -516, and a `restart_syscall` with the final return value.
 
 The same two rows are what you get under record loss. When the kernel drops records
 (ring-buffer backpressure, see the drop counter), the announced `restart_syscall` that
@@ -294,7 +303,10 @@ are not folded.
 Because ior waits for the thread's next records to decide whether an interrupted row is
 carried on, such a row appears in the stream only when ior sees the thread's next traced
 syscall, the signal handler being delivered, or the thread's exit (for a folded call, when
-the call completes), so rows of other threads may be listed before it.
+the call completes), so rows of other threads may be listed before it. For a row that
+stays as it is the wait is usually microseconds, except for a stopped sleep (-516) in a
+recording that does not trace `restart_syscall`: that row appears only with the thread's next
+traced syscall or its exit, seconds later for a long sleep (see "A stopped sleep is one row").
 
 ### Syscalls that never return
 
