@@ -34,12 +34,17 @@ import (
 // bound, the hand-built trackers) is built the same way, also where no
 // procfs read is in reach, so that no restart fixture names a tid that a
 // host could hand out. restartPid is the leader's tid as well.
+// restartStrangerPid is another process (and its leader's tid),
+// restartStrangerTid a non-leader thread of it.
 const (
-	restartPid      = uint32(absentPidBase + 4100)
-	restartTid      = uint32(absentPidBase + 4101)
-	restartOtherTid = uint32(absentPidBase + 4102)
-	restartSleepNs  = int64(2_000_000_000)
-	restartBase     = uint64(1_000_000)
+	restartPid         = uint32(absentPidBase + 4100)
+	restartTid         = uint32(absentPidBase + 4101)
+	restartOtherTid    = uint32(absentPidBase + 4102)
+	restartThirdTid    = uint32(absentPidBase + 4103)
+	restartStrangerPid = uint32(absentPidBase + 4200)
+	restartStrangerTid = uint32(absentPidBase + 4201)
+	restartSleepNs     = int64(2_000_000_000)
+	restartBase        = uint64(1_000_000)
 )
 
 // restartRow is what a test needs from an emitted row, copied out so the pair
@@ -133,20 +138,52 @@ func eachRestartFixture(t *testing.T, test func(t *testing.T, newFixture restart
 	}
 }
 
-// feed processes one raw record and returns the rows it emitted, in order.
+// feed processes one raw record as the loop does (consumeRaw) and returns the
+// rows it emitted, in order: the pairs the record's handler completed, then
+// the rows the loop releases behind it (afterRecord).
 func (f *restartFixture) feed(raw []byte) []restartRow {
 	f.t.Helper()
 	f.el.processRawEvent(raw, f.out)
 	var rows []restartRow
+	for _, ep := range f.takePairs() {
+		rows = append(rows, rowOf(ep))
+		ep.Recycle()
+	}
+	return append(rows, f.afterRecord()...)
+}
+
+// takePairs takes the pairs waiting in the fixture's pair channel, in order.
+// It never waits: a handler has sent everything it sends by the time it
+// returns.
+func (f *restartFixture) takePairs() []*event.Pair {
+	var pairs []*event.Pair
 	for {
 		select {
 		case ep := <-f.out:
-			rows = append(rows, rowOf(ep))
-			ep.Recycle()
+			pairs = append(pairs, ep)
 		default:
-			return rows
+			return pairs
 		}
 	}
+}
+
+// afterRecord is the loop's step behind every record (consumeRaw): the rows
+// of the threads an exec ended are released there, one at a time and each
+// emitted before the next (releaseRestartsBehindExec), so they reach the print
+// callback rather than the fixture's channel. It returns them in order.
+func (f *restartFixture) afterRecord() []restartRow {
+	f.t.Helper()
+	var rows []restartRow
+	// The test's own callback and sink are put back: only this step's rows
+	// are collected here.
+	printCb, flusher := f.el.printCb, f.el.flusher
+	defer func() { f.el.printCb, f.el.flusher = printCb, flusher }()
+	f.el.SetPrintCallback(func(ep *event.Pair) {
+		rows = append(rows, rowOf(ep))
+		ep.Recycle()
+	})
+	f.el.releaseRestartsBehindExec(f.out)
+	return rows
 }
 
 // feedNone feeds raw and fails when it emitted a row.

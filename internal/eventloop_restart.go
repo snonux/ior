@@ -486,6 +486,20 @@ import (
 //     record is lost, the successful execve's exit under the leader tid is
 //     what is left, and it releases the same row (adoptLostExecCaller, which
 //     finds a re-executed execve by reexecutingExecCaller; task r13).
+//   - Nor is the release of the rows an exec leaves behind under the tids of
+//     the threads it ended (task v13). de_thread kills every other thread of
+//     the process, and each releases its row with its own exit record; with
+//     that record lost, no record names the tid again. The record that proves
+//     the exec releases them: the exec record that names its caller, or the
+//     execve's successful exit once it has found its enter (noteExec). An
+//     exit without an enter proves nothing - a seccomp filter can make execve
+//     return 0 without running it (completedExec) - and leaves them held.
+//     The loop releases them behind that record, one at a time
+//     (releaseRestartsBehindExec): a process may lose more threads in one
+//     exec than a record's handler may complete pairs. The enter of a
+//     continuation is recycled with its row, and the tid retired. A row the
+//     leader tid still holds then - a call whose restarting handler exec'd,
+//     with the exec record lost - is released with them.
 //   - A release never costs the continuation its row either. When the
 //     continuation's enter was already taken (restartContinuing), the release
 //     parks it again as the tid's pending enter, through the path every enter
@@ -499,12 +513,21 @@ import (
 //     runs its exit handler (fd tracking for an accept or an open) and is
 //     counted.
 //   - Except when the releasing record says the task is gone (reportsTaskGone,
-//     task r13): its sched_process_exit record, or a task_newtask record that
-//     hands the tid to a new task. The continuation's call was cut short and
-//     never returns, so its enter is recycled instead of parked - what
-//     handleProcessExitEvent does with any enter of a task that died inside a
-//     syscall. Parked, it was a dead task's enter under a tid that is free or
-//     already someone else's.
+//     task r13): its sched_process_exit record, a task_newtask record that
+//     hands the tid to a new task, or the exec record of a non-leader thread,
+//     whose tid was the dead leader's until then (task v13). The
+//     continuation's call was cut short and never returns, so its enter is
+//     recycled instead of parked - what handleProcessExitEvent does with any
+//     enter of a task that died inside a syscall. Parked, it was a dead
+//     task's enter under a tid that is free or already someone else's.
+//   - And except at an exec (task v13, continuationCutShortBy). The successful
+//     exit of an exec under the held tid ends every other call entered under
+//     that tid before: a kept enter that is not the exec's own is recycled.
+//     The exit then does not pair with it (a mismatch, and no row for the
+//     exec) but goes on to the thread that made the call
+//     (adoptLostExecCaller). And the exec record of a non-leader thread parks
+//     the enter kept under the caller's old tid again only when it is the
+//     execve the thread is inside (releaseExecCallerRestart).
 //
 // How the folded row looks: the original enter (name, arguments, requested
 // sleep, enter time, gap to the previous row) with the final return value
@@ -603,6 +626,18 @@ type restartTracker struct {
 	// value - no change, nothing refused - in a run nobody changes probes in,
 	// which is every headless run: only a TUI run listens (watchProbeChanges).
 	probes restartProbeWatch
+	// execed is the process whose exec the record being processed proved
+	// (noteExec), left for the loop's step behind that record, which releases
+	// the rows the exec left behind (releaseRestartsBehindExec). Unset
+	// between records.
+	execed execedProcess
+}
+
+// execedProcess names a process that completed an exec. Its one surviving
+// task runs under the leader's tid, which equals the pid.
+type execedProcess struct {
+	pid   uint32
+	noted bool
 }
 
 // restartProbeWatch answers "were syscall probes attached or detached at
@@ -882,8 +917,11 @@ type heldRestart struct {
 	// release can park it again (reparkContinuation) and the continuation
 	// still becomes a row. continuationKind is the registered kind it arrived
 	// as, which carries its raw enter filter. An accepted fold recycles it
-	// (dropContinuation), and so does a release by a record that says the task
-	// is gone (reportsTaskGone). nil in every other phase.
+	// (dropContinuation), and so does a release that knows the continuation's
+	// call will not return: by a record that says so (continuationCutShortBy),
+	// by the exec record of the thread's own exec for a call that is not that
+	// execve (releaseExecCallerRestart), or behind an exec that ended the
+	// thread (releaseRestartsBehindExec). nil in every other phase.
 	continuation     event.Event
 	continuationKind rawRuntimeEvent
 }
@@ -1096,18 +1134,109 @@ func (r *restartTracker) takeAll() []*heldRestart {
 // interrupted again that exit is the continuation's (foldRestartExit), so the
 // row is judged by its latest interruption, as the drop watch judges it.
 func (r *restartTracker) takeInterruptedBy(at uint64) []*heldRestart {
+	return r.takeWhere(func(held *heldRestart) bool { return held.pair.ExitEv.GetTime() <= at })
+}
+
+// takeProcess removes the rows held under any thread of process pid and
+// returns them oldest exit first: the rows an exec of that process leaves
+// behind (releaseRestartsBehindExec).
+func (r *restartTracker) takeProcess(pid uint32) []*heldRestart {
+	return r.takeWhere(func(held *heldRestart) bool { return held.pair.ExitEv.GetPid() == pid })
+}
+
+// takeWhere removes the held rows that match and returns them oldest exit
+// first; rows interrupted at the same instant come in the order of their tids,
+// so the order never depends on the map's.
+func (r *restartTracker) takeWhere(match func(*heldRestart) bool) []*heldRestart {
 	rows := make([]*heldRestart, 0, len(r.held))
 	for tid, held := range r.held {
-		if held.pair.ExitEv.GetTime() > at {
-			continue
+		if match(held) {
+			rows = append(rows, held)
+			delete(r.held, tid)
 		}
-		rows = append(rows, held)
-		delete(r.held, tid)
 	}
 	slices.SortFunc(rows, func(a, b *heldRestart) int {
-		return cmp.Compare(a.pair.ExitEv.GetTime(), b.pair.ExitEv.GetTime())
+		return cmp.Or(cmp.Compare(a.pair.ExitEv.GetTime(), b.pair.ExitEv.GetTime()),
+			cmp.Compare(a.pair.ExitEv.GetTid(), b.pair.ExitEv.GetTid()))
 	})
 	return rows
+}
+
+// completedExec returns ev as the exit of an exec that succeeded, as far as
+// the record itself can tell: an execve or execveat exit that returned 0 under
+// the leader tid (tid == pid). A successful exec always returns there,
+// whichever thread called it: de_thread hands a non-leader caller the leader's
+// tid.
+//
+// The record alone is not a proof that the process exec'd (task v13). A
+// seccomp filter that answers execve with SECCOMP_RET_ERRNO and errno 0, or a
+// user-notification supervisor that reports success, makes the call return 0
+// without running it: sys_exit_execve fires with ret 0 and tid == pid when the
+// leader made the call, the process is the program it was and its other
+// threads live on. (Checked live: such a call leaves an exit record and
+// nothing else.) The filter runs before the sys_enter tracepoint, so that
+// exit has no enter. What proves an exec is therefore the exit together with
+// the exec enter it pairs with - the call ran - or the exec record; see
+// noteExec for what follows from the proof.
+//
+// One thing holds even for an exit that proves no exec: a thread has one call
+// in flight, so an enter of another syscall still kept under the exit's tid
+// is a call that is over (continuationCutShortBy).
+func completedExec(ev any) (*types.RetEvent, bool) {
+	exit, ok := ev.(*types.RetEvent)
+	if !ok || exit.Ret != 0 || exit.Tid != exit.Pid {
+		return nil, false
+	}
+	if exit.TraceId != types.SYS_EXIT_EXECVE && exit.TraceId != types.SYS_EXIT_EXECVEAT {
+		return nil, false
+	}
+	return exit, true
+}
+
+// noteExec remembers that process pid provably completed an exec, for the
+// loop's step behind the record that proved it (releaseRestartsBehindExec).
+// The callers are the three places a proof arrives at:
+//
+//   - the exec record, when it names the thread that exec'd (noteExecRecord);
+//   - the successful exit of an exec paired with its enter, whether that
+//     enter was parked under the leader tid or adopted from the non-leader
+//     thread that made the call (tracepointExited, noteExecExit);
+//   - that exit folded into the leader's own interrupted exec, whose
+//     re-executed enter was kept with the row (foldRestartExit).
+//
+// The pairing is what makes an exit a proof (completedExec). It can be wrong
+// only together with another fault: an exec enter left parked under the
+// leader tid by a lost exit record, or a non-leader thread inside a real
+// execve when the leader's is answered by a filter (adoptLostExecCaller pairs
+// that exit with the wrong enter in the first place).
+//
+// What the proof says: the kernel's de_thread killed every other thread of
+// the process and waited for each to be gone before the exec went on. The
+// process has one task left, under the leader tid, and every record of the
+// others was reserved before the proving record, so a row still held under
+// another tid of the process is a dead thread's (or the caller's old tid's)
+// and no record will come for it. And the program that made the calls is
+// gone: a row still held under the leader tid behind the proving record - it
+// can only be one whose restarting handler is running, which lets the tid's
+// syscalls pass - is a call that handler ended by exec'ing, or the dead
+// leader's, and will not be re-executed. It says nothing about another
+// process.
+func (r *restartTracker) noteExec(pid uint32) {
+	r.execed = execedProcess{pid: pid, noted: true}
+}
+
+// noteExecExit is noteExec for an exit that found its enter: exitEv proves an
+// exec when it is the successful exit of one (completedExec). The caller has
+// paired it with an enter of its own syscall, or folds it into the row of
+// that syscall. It is called for every paired exit, so it asks the record
+// only while a row is held: without one there is nothing to release.
+func (r *restartTracker) noteExecExit(exitEv event.Event) {
+	if len(r.held) == 0 {
+		return
+	}
+	if exit, ok := completedExec(exitEv); ok {
+		r.noteExec(exit.Pid)
+	}
 }
 
 // restartSurvivesHandler is the kernel's handle_signal rule for an
@@ -1288,15 +1417,17 @@ type tidRecord interface {
 // step of a held row's continuation), in which case the caller must not
 // process it further. A record that releases the held row is not taken: the
 // row is completed (and sent on ch) and a continuation enter taken earlier is
-// parked again first - or recycled, when the record says the task that made
-// the call is gone (reportsTaskGone) - then the record goes its usual way.
-// Records of tids without a held row cost one length check. rawEvent is the
-// registered kind ev was decoded as.
+// parked again first - or recycled, when the record says that the
+// continuation's call will never return (continuationCutShortBy) - then the
+// record goes its usual way. Records of tids without a held row cost one
+// length check. rawEvent is the registered kind ev was decoded as.
 //
 // The row is found by the record's own tid. The records that settle a row held
 // under another tid do so in their own handlers: the exec record of a
 // non-leader thread (releaseExecCallerRestart) and, when that record was lost,
-// the execve's exit under the leader tid (adoptLostExecCaller).
+// the execve's exit under the leader tid (adoptLostExecCaller). The rows of
+// the threads an exec ended are released by the loop behind the record that
+// proves the exec (releaseRestartsBehindExec).
 func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecodedEvent, ch chan<- *event.Pair) bool {
 	if len(e.restarts.held) == 0 {
 		return false
@@ -1330,23 +1461,67 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 	case restartPass:
 		return false
 	}
-	if reportsTaskGone(ev) {
-		// Nothing will pair with the dead task's enter: it must not be parked.
+	if held.continuationCutShortBy(ev) {
+		// Nothing will pair with that enter any more: it must not be parked.
 		held.dropContinuation()
 	}
 	e.releaseHeldRestart(tid, ch)
 	return false
 }
 
+// continuationCutShortBy reports whether ev, a record of the row's tid that
+// releases the row, also says that the continuation whose enter the fold had
+// taken will never return, so that the enter is recycled instead of parked
+// again (routeHeldRestart). Two kinds of record say so:
+//
+//   - one that says the task is gone (reportsTaskGone);
+//   - the successful exit of an exec under this tid (completedExec), unless
+//     the kept enter is the enter of that very exec (task v13). A thread has
+//     one call in flight, so the call of the kept enter is over: it was the
+//     dead leader's when another thread exec'd and took over the tid, and
+//     when the tid's own thread made the call the exit belongs to, the kept
+//     call had returned before (its exit record was lost). That holds for an
+//     exit that proves no exec as well.
+//
+// Parked again, the enter paired with the exec's exit: a trace-ID mismatch
+// and no row for the exec - with an execveat enter kept and an execve exit
+// just the same - and the exit never reached the thread that made the call,
+// whose interrupted row stayed held (adoptLostExecCaller). Any other exit of
+// another syscall would justify the same and is left alone: the mismatch it
+// ends in is how a lost record shows in the statistics, and no row depends on
+// that exit.
+//
+// The kept enter of the exec's own syscall is parked again and pairs with the
+// exit. That is the stream of a leader whose re-executed execve succeeded with
+// its fold refused (restartProofLost) - and the one stream nothing decides,
+// when another thread of the process holds a re-executed exec as well
+// (adoptLostExecCaller).
+func (h *heldRestart) continuationCutShortBy(ev runtimeDecodedEvent) bool {
+	if h.continuation == nil {
+		return false
+	}
+	if reportsTaskGone(ev) {
+		return true
+	}
+	exit, ok := completedExec(ev)
+	if !ok {
+		return false
+	}
+	own, isExec := execExitTraceID(h.continuation.GetTraceId())
+	return !isExec || own != exit.TraceId
+}
+
 // reportsTaskGone reports whether ev says that the task its tid named until
-// now no longer exists: the task's own sched_process_exit record, or a
+// now no longer exists: the task's own sched_process_exit record, a
 // task_newtask record, which gives the number to a brand-new task (the
-// previous owner's exit record was lost). Both release the row held under that
-// tid like any record that is not the next step of the fold - the interrupted
-// call did return, with the restart code, and stays a row - but the
-// continuation whose enter the fold had taken was still inside the kernel when
-// its task died. It never returns, so the enter is recycled rather than parked
-// again (routeHeldRestart).
+// previous owner's exit record was lost), or the exec record of a non-leader
+// thread, which carries the leader's tid: de_thread waited for the old leader
+// to die before it gave the caller that tid (task v13). All three release the
+// row held under that tid like any record that is not the next step of the
+// fold - the interrupted call did return, with the restart code, and stays a
+// row - but the continuation whose enter the fold had taken was still inside
+// the kernel when its task died. It never returns, so the enter is recycled
+// rather than parked again (routeHeldRestart, continuationCutShortBy).
 //
 // A task_newtask record also finds a row under its tid when the previous owner
 // was a non-leader thread that exec'd with the exec record lost (such a thread
@@ -1362,21 +1537,27 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 // push the oldest live enters out of a full pending-enter table
 // (pairTracker.prune), and it seeded the comm cache and resolved an exec
 // target for a task that does not exist. After a task_newtask record flagged
-// ChildOutOfScope nothing evicted it at all: handleTaskNewtaskEvent returns
-// before retiring the tid, since the kernel filter passes none of that task's
-// records. A re-executed execve enter of a non-leader thread then stayed
-// parked under a tid that was no longer its task's, and stayed a
-// parkedExecCaller hint for its process until LRU trimming - a candidate for
-// adoptLostExecCaller to pair with a later, unrelated execve exit of that pid.
+// ChildOutOfScope nothing evicted it at all then: handleTaskNewtaskEvent
+// returned before retiring the tid (it retires it since task v13). A
+// re-executed execve enter of a non-leader thread stayed parked under a tid
+// that was no longer its task's, and stayed a parkedExecCaller hint for its
+// process until LRU trimming - a candidate for adoptLostExecCaller to pair
+// with a later, unrelated execve exit of that pid.
 //
-// The exec record of a non-leader thread is not such a record, although the
-// thread's old tid vanishes with it: the task lives on under the leader's tid
-// and its execve does return there (releaseExecCallerRestart parks the enter
-// for exactly that).
+// After the exec record of a non-leader thread the tid change evicted the
+// dead leader's enter within the same record as well (moveExecCaller), and
+// parking it first could trim live enters in the same way. That record says
+// nothing of the kind about the row held under the caller's old tid
+// (OldTid), which this function is not asked about: the thread's old tid
+// vanishes, but the task lives on under the leader's and its execve does
+// return there (releaseExecCallerRestart parks that enter for exactly that).
+// Nor does the exec record of a leader, which keeps its tid.
 func reportsTaskGone(ev runtimeDecodedEvent) bool {
-	switch ev.(type) {
+	switch rec := ev.(type) {
 	case *types.ProcessExitEvent, *types.TaskNewtaskEvent:
 		return true
+	case *types.ProcessExecEvent:
+		return execChangedTid(rec)
 	}
 	return false
 }
@@ -1478,6 +1659,9 @@ func (e *eventLoop) holdRestart(ep *event.Pair, ch chan<- *event.Pair) bool {
 // grows; every refusal goes through releaseTakenRestart, which leaves the
 // count, and the continuation's own row, as they were.
 func (e *eventLoop) foldRestartExit(exitEv event.Event, ch chan<- *event.Pair) {
+	// The exit of an exec the leader re-executed: with its kept enter it
+	// proves the exec, and the other threads' rows go behind this record.
+	e.restarts.noteExecExit(exitEv)
 	held, _ := e.restarts.take(exitEv.GetTid())
 	// The fold is accepted: the continuation is part of this row now and its
 	// enter is not needed any more. The row counts it (task 203), since the
@@ -1550,8 +1734,8 @@ func (e *eventLoop) releaseTakenRestart(held *heldRestart, ch chan<- *event.Pair
 // seeds the cache, the kind's raw enter filter decides whether this run wants
 // it at all, and an exec enter gets its target snapshot. The exit that
 // follows then pairs with it like any other. It does nothing when the enter is
-// already gone: no continuation was taken, or routeHeldRestart recycled it
-// because the task died inside the call (reportsTaskGone).
+// already gone: no continuation was taken, or the releaser recycled it
+// because its call never returns (heldRestart.continuation lists who does).
 //
 // It sends nothing on ch, which the bound of the pair channel relies on
 // (pairChannelSlots): syscallEntered completes a row only for a syscall that
@@ -1576,12 +1760,13 @@ func (e *eventLoop) reparkContinuation(held *heldRestart, ch chan<- *event.Pair)
 }
 
 // dropContinuation recycles the continuation's enter: once the fold that took
-// it is accepted, or when the record that releases the row says the task died
-// inside the continuation (routeHeldRestart, reportsTaskGone). The field is
-// cleared first, so the enter can never be both recycled here and parked again
-// by a release of the same row - the later one of a fold that ended in a
-// restart code and keeps the heldRestart, or the one that follows at once for
-// a gone task, whose reparkContinuation then finds nothing to park.
+// it is accepted, or when the row is released by something that knows the
+// continuation's call will never return (heldRestart.continuation lists who
+// does). The field is cleared first, so the enter can never be both recycled
+// here and parked again by a release of the same row - the later one of a
+// fold that ended in a restart code and keeps the heldRestart, or the one
+// that follows at once for a call cut short, whose reparkContinuation then
+// finds nothing to park.
 func (h *heldRestart) dropContinuation() {
 	enterEv := h.continuation
 	if enterEv == nil {
@@ -1805,9 +1990,72 @@ func (e *eventLoop) releaseRestartsBehindProbeChange(pairs chan *event.Pair) {
 	}
 }
 
+// releaseRestartsBehindExec is the loop's step behind every record
+// (consumeRaw): when the record proved an exec (noteExec), it releases the
+// rows the process still holds (task v13).
+//
+// Under the other tids of the process those are the rows of threads that are
+// gone - the kernel's de_thread killed them before the exec went on. Each
+// released its row with its own exit record, unless that record was lost:
+// then the row waited under a tid no record names again, until the loop
+// stopped or the number was handed to a new task. The thread that exec'd, if
+// it was not the leader, is among them only when the record did not settle
+// its row itself (releaseExecCallerRestart, adoptLostExecCaller): another
+// thread was taken for the caller. Under the leader tid it is the row of a
+// call whose restarting handler exec'd, when the exec record that would have
+// released it was lost and the execve's exit passed as one of the handler's
+// syscalls (stepHandlerRecord).
+//
+// Each row is emitted as it was, oldest exit first. A continuation enter the
+// fold had taken is recycled, not parked: its call never returns. The tid of
+// a dead thread is then retired as the lost exit record would have retired it
+// (retireRecycledTid): while the row was held, every record of that tid came
+// through routeHeldRestart and would have released it unless it was the held
+// thread's own, so whatever the loop still keeps under the tid - the comm, a
+// parked enter of a handler's call, the gap baseline the release has just
+// written - is the dead thread's too. The leader tid is not retired: the new
+// program runs under it.
+//
+// The rows are not sent by the record's handler: a process may lose any
+// number of threads in one exec, and a handler has pairChannelSlots slots.
+// Like releaseAllHeldRestarts this runs on the loop's goroutine between two
+// records, emits each row before it completes the next and recovers a
+// handler panic per row. The rows therefore follow the record's own rows -
+// the execve's among them - although their calls ended earlier ("Output
+// order" in the file comment), and they are judged by the process's state
+// behind the exec: after a delivered exec record the row of a call on a
+// close-on-exec descriptor has lost its path, as it has when it is released
+// at the end of the run.
+//
+// Not released here: the rows of a process whose exec nothing proved - the
+// exec record lost (or its probe not attached) and the execve's exit without
+// an enter, because the enter record was lost too, or because the thread that
+// exec'd left no enter to adopt (its row still waits for RESUME or for the
+// re-executed enter, both lost). Such an exit is indistinguishable from a
+// call a seccomp filter answered with 0 (completedExec), whose process has
+// all its threads; releasing their rows would cost every continuation its
+// row. They stay held until the loop stops or the tid is handed out again,
+// as before.
+func (e *eventLoop) releaseRestartsBehindExec(pairs chan *event.Pair) {
+	execed := e.restarts.execed
+	if !execed.noted {
+		return
+	}
+	e.restarts.execed = execedProcess{}
+	for _, held := range e.restarts.takeProcess(execed.pid) {
+		tid := held.pair.ExitEv.GetTid()
+		held.dropContinuation()
+		e.releaseTakenRestartSafe(held, pairs)
+		if tid != execed.pid {
+			e.retireRecycledTid(tid)
+		}
+		e.drainPairs(pairs)
+	}
+}
+
 // releaseTakenRestartSafe releases one held row outside the per-record path -
-// at the end of the run, or at a runtime probe change - turning a panic in its
-// exit handler into a warning.
+// at the end of the run, at a runtime probe change or behind an exec - turning
+// a panic in its exit handler into a warning.
 func (e *eventLoop) releaseTakenRestartSafe(held *heldRestart, pairs chan<- *event.Pair) {
 	defer func() {
 		if r := recover(); r != nil {

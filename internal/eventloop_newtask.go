@@ -76,18 +76,27 @@ const (
 // gr2): the fd table is keyed by tgid, so a fork()ed child used to start empty
 // and every inherited descriptor fell back to procfs, which renames it. A record
 // flagged ChildOutOfScope (task hr2) is handled before any of the above: it
-// stands for a task the trace does not follow and only blinds the creator's
-// table.
+// stands for a task the trace does not follow, so nothing is seeded or
+// inherited; it blinds the creator's table and, a brand-new task's record like
+// any other, retires what a dead previous owner left under the tid (task
+// v13).
 func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 	defer ev.Recycle()
 	if ev.ChildOutOfScope() {
-		// Not a task of this trace: only its effect on the creator's table matters
-		// (see inheritFdTable). Nothing of the child's - comm, per-tid state -
-		// is cached, and its tid is not retired: the filter never lets any of its
-		// records through, so there is nothing to seed or to keep from leaking.
-		// A row a dead previous owner of the tid still held has been released by
-		// now, without parking its continuation's enter under the tid
-		// (routeHeldRestart, reportsTaskGone): nothing here would evict it.
+		// Not a task of this trace: only its effect on the creator's table
+		// matters (see inheritFdTable). Nothing of the child's - comm,
+		// per-tid state - is cached: the filter never lets any of its
+		// records through, so there is nothing to seed. Its tid is retired
+		// all the same (task v13). The number is a brand-new task's, so
+		// whatever is kept under it is a dead previous owner's whose exit
+		// record was lost, and no record of the new owner will ever come to
+		// displace it: a parked exec enter of a non-leader thread stayed
+		// parked, and a parkedExecCaller hint of its process for
+		// adoptLostExecCaller to pair with a later, unrelated execve exit,
+		// until LRU trimming. (A row that owner still held has been released
+		// by now, its continuation's enter recycled: routeHeldRestart,
+		// reportsTaskGone.)
+		e.retireRecycledTid(ev.Tid)
 		if ev.CreatorPid != 0 {
 			e.fdState().markBlind(ev.CreatorPid)
 		}

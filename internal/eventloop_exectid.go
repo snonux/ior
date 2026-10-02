@@ -67,6 +67,13 @@ func execChangedTid(ev *types.ProcessExecEvent) bool {
 //   - another call (a read, a wait) whose restarting signal handler exec'd
 //     instead of returning. The call will never be re-executed.
 //
+// Only an exec enter is parked again: it is the execve the thread is inside.
+// A row whose kept enter is any other call's - re-executed, its exit record
+// lost, and the thread has exec'd since - is released with that enter
+// recycled (task v13): no exit will pair with it, the tid change below
+// recycled it within the same record anyway (moveExecCaller), and parking it
+// first could push the oldest live enters out of a full pending-enter table.
+//
 // It runs first of all in handleProcessExecEvent: before rekeyExecCaller, so
 // the enter parked again is there to be moved, and before the FD_CLOEXEC
 // eviction, so that enter's target is resolved against the descriptors the
@@ -75,7 +82,32 @@ func (e *eventLoop) releaseExecCallerRestart(ev *types.ProcessExecEvent, ch chan
 	if !execChangedTid(ev) {
 		return
 	}
-	e.releaseHeldRestart(ev.OldTid, ch)
+	held, ok := e.restarts.take(ev.OldTid)
+	if !ok {
+		return
+	}
+	if _, isExec := held.continuation.(*types.ExecEvent); !isExec {
+		// Not the execve the thread is inside: its call is over.
+		held.dropContinuation()
+	}
+	e.releaseTakenRestart(held, ch)
+}
+
+// noteExecRecord tells the restart fold that ev proves an exec of its process
+// (restartTracker.noteExec), so the rows still held under the threads that
+// exec ended are released behind the record. Only a record that names the
+// thread that exec'd does: with OldTid, the caller's own row is either the
+// one under the record's tid (the leader exec'd) or was released just before
+// (releaseExecCallerRestart). A record without the field - an object that
+// predates it, a synthetic replay - may be a non-leader's, whose row and kept
+// execve enter are still to be found by the execve's exit
+// (adoptLostExecCaller) and must not be taken for a dead thread's; that exit
+// then proves the exec itself. A record whose tid is not the pid does not
+// come from the kernel and proves nothing.
+func (e *eventLoop) noteExecRecord(ev *types.ProcessExecEvent) {
+	if ev.OldTid != 0 && ev.Tid == ev.Pid {
+		e.restarts.noteExec(ev.Pid)
+	}
 }
 
 // applyExecTidChange moves a non-leader exec's per-tid state from the caller's
@@ -165,22 +197,41 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // enter is not such a case: the enter that displaced it pairs with the exit
 // (a trace-ID mismatch), and this function is not asked.
 //
-// One stream never gets here at all. Records are routed by their own tid
-// first (routeHeldRestart), so when the dead leader still holds a row with a
-// kept continuation enter - its exit record lost as well as the exec record -
-// the execve's exit under the leader tid is taken for that row's business:
-// the leader's enter is parked again and the exit pairs with it. That is a
-// trace-ID mismatch (no row for the exec), or, when the leader's kept enter
-// is an execve too, a successful execve row under the dead leader's enter;
-// either way the exit has an enter, this fallback is not asked, and the real
-// caller's -513 row stays held until the loop stops or its tid is reused.
-// Accepted: it takes two lost records and a leader interrupted mid-fold.
+// Records are routed by their own tid first (routeHeldRestart), so when the
+// dead leader still holds a row with a kept continuation enter - its exit
+// record lost as well as the exec record, and the exit of the call it was
+// re-executing - the execve's exit under the leader tid is taken for that
+// row's business before it gets here. It is no step of that fold and releases
+// the row; the kept enter is recycled, not parked again, because a successful
+// exec exit ends every other call entered under its tid
+// (continuationCutShortBy, task v13), and the exit then arrives here without
+// an enter, like any other. Before, the dead leader's enter was parked again
+// and the exit paired with it: a trace-ID mismatch and no row for the exec,
+// and the real caller's -513 row stayed held.
+//
+// One such stream is not decided by anything in it, and goes to the leader:
+// the leader's kept enter is an exec enter of the exit's own syscall, and a
+// non-leader thread holds a re-executed exec as well (or has one parked).
+// Either may have won. The leader, with the other's -513 exit, the other's
+// exit record and the exec record lost; or the other, with the leader's -513
+// exit, the leader's exit record and the exec record lost: three records each
+// way, the same three kinds, and no record that arrives tells the two apart.
+// The exit is the next step of the leader's fold and is taken as that - one
+// row when nothing is known to be lost, the -513 row and the execve's own row
+// when the fold is refused - and this function is not asked. If the other
+// thread was the caller, that is a successful execve under the dead leader's
+// enter, with the leader's filename. The other thread's row is released
+// behind the exit either way (releaseRestartsBehindExec): whoever won, that
+// thread is gone.
+//
+// The exit is taken at its word here: what makes it one of an exec is the
+// enter it adopts (completedExec). An execve of the leader that a seccomp
+// filter answered with 0 while a non-leader thread is inside a real execve
+// would adopt that thread's enter; that needs a filter faking a success, and
+// was so before task v13.
 func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
-	ret, ok := exitEv.(*types.RetEvent)
-	if !ok || ret.Ret != 0 || ret.Tid != ret.Pid {
-		return nil, false
-	}
-	if ret.TraceId != types.SYS_EXIT_EXECVE && ret.TraceId != types.SYS_EXIT_EXECVEAT {
+	ret, ok := completedExec(exitEv)
+	if !ok {
 		return nil, false
 	}
 	callerTid, ok := e.pairs.parkedExecCaller(ret.Pid)

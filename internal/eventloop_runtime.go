@@ -352,9 +352,11 @@ func (e *eventLoop) consumeReadyRaw(ctx context.Context, rawCh <-chan []byte, pa
 	return true
 }
 
-// consumeRaw decodes one raw record and emits the pair it completed, if any.
-// It is the single per-record step of both the running loop and the drain at
-// stop, so a record counts the same wherever it is taken from.
+// consumeRaw decodes one raw record and emits the pairs it completed, if any,
+// then the rows the loop itself releases behind the record
+// (releaseRestartsBehindExec). It is the single per-record step of both the
+// running loop and the drain at stop, so a record counts the same wherever it
+// is taken from.
 func (e *eventLoop) consumeRaw(raw []byte, pairs chan *event.Pair, flush *flushTimer) {
 	if len(raw) == 0 {
 		return
@@ -363,6 +365,9 @@ func (e *eventLoop) consumeRaw(raw []byte, pairs chan *event.Pair, flush *flushT
 	// event cannot crash the entire process.
 	e.processRawEventSafe(raw, pairs)
 	e.drainPairs(pairs)
+	// Behind a record that proved an exec: the rows still held under the
+	// threads that exec ended (task v13).
+	e.releaseRestartsBehindExec(pairs)
 	flush.armIfPending()
 }
 
@@ -566,24 +571,30 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 	e.pairs.setWithFile(enterEv, e.snapshotExecTarget(execEv))
 }
 
-func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
-	ep, ok := e.pairs.consume(exitEv.GetTid())
-	if !ok {
-		// A non-leader execve whose exec record was lost: see
-		// adoptLostExecCaller.
-		ep, ok = e.adoptLostExecCaller(exitEv, ch)
+// enterOfExit takes the pending enter exitEv completes: the one parked under
+// its tid or, for a non-leader execve whose exec record was lost, the one
+// parked under the caller's (adoptLostExecCaller, which may send that
+// caller's interrupted row on ch first).
+//
+// An exit with no enter is dropped by the caller without a row and without a
+// count (it is neither a mismatch nor a syscall ior saw start). Besides a
+// lost enter record it is ordinary kernel behaviour: the first return of a
+// clone/fork child, a call already in flight when the probes attached, and a
+// call a seccomp filter denies with an errno - the filter runs before
+// sys_enter, so only sys_exit fires and there is nothing to build the row's
+// arguments from (task qr2; such calls are invisible in the trace, but they
+// no longer consume a parked enter and inflate the mismatch count now that
+// noreturn enters are not parked, task pr2).
+func (e *eventLoop) enterOfExit(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
+	if ep, ok := e.pairs.consume(exitEv.GetTid()); ok {
+		return ep, true
 	}
+	return e.adoptLostExecCaller(exitEv, ch)
+}
+
+func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
+	ep, ok := e.enterOfExit(exitEv, ch)
 	if !ok {
-		// An exit with no enter is dropped without a row and without a count
-		// (it is neither a mismatch nor a syscall ior saw start). Besides a
-		// lost enter record it is ordinary kernel behaviour: the first return
-		// of a clone/fork child, a call already in flight when the probes
-		// attached, and a call a seccomp filter denies with an errno - the
-		// filter runs before sys_enter, so only sys_exit fires and there is
-		// nothing to build the row's arguments from (task qr2; such calls are
-		// invisible in the trace, but they no longer consume a parked enter
-		// and inflate the mismatch count now that noreturn enters are not
-		// parked, task pr2).
 		exitEv.Recycle()
 		return
 	}
@@ -602,6 +613,10 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		ep.Recycle()
 		return
 	}
+	// A successful exec that found its enter proves the process's other
+	// threads gone; the rows they still hold are released behind this record
+	// (task v13). One length check unless a row is held.
+	e.restarts.noteExecExit(exitEv)
 	// A call interrupted with a restart code may still be carried on by the
 	// kernel (a proven restart_syscall for -516, a proven re-execution for
 	// -512/-513/-514): it is held, not completed, until its tid's next
@@ -664,13 +679,17 @@ func (e *eventLoop) completeTracepointPair(ep *event.Pair, ch chan<- *event.Pair
 // (reparkContinuation), and the exit that then pairs with it is that record's
 // one pair of its own.
 //
-// Two senders are not handlers of a record: the release of every row still
-// held when the loop stops (releaseAllHeldRestarts) and the release, in the
-// loop woken by a runtime probe change, of the rows interrupted before it
-// (releaseRestartsBehindProbeChange, task o03). Either may release thousands
-// of rows, and neither needs a slot per row: both run on the loop's goroutine
-// between two records, with the channel empty, send one row and drain it
-// before they complete the next. One slot would do for them.
+// Three senders are not handlers of a record: the release of every row still
+// held when the loop stops (releaseAllHeldRestarts), the release, in the loop
+// woken by a runtime probe change, of the rows interrupted before it
+// (releaseRestartsBehindProbeChange, task o03), and the release, behind a
+// record that proved an exec, of the rows still held under the threads that
+// exec ended (releaseRestartsBehindExec, task v13). Each may release
+// thousands of rows, and none needs a slot per row: they run on the loop's
+// goroutine between two records, with the channel empty, send one row and
+// drain it before they complete the next. One slot would do for them. The
+// third is why an exec does not raise the bound above: a process can lose any
+// number of threads in one exec, so their rows are not the handler's to send.
 const pairChannelSlots = 3
 
 // extraPairPanic is the panic message of sendPair on a full channel.

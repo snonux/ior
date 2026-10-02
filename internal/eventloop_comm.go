@@ -916,10 +916,13 @@ func (e *eventLoop) queueCommLookup(tid uint32) {
 // pre-exec tid is released (releaseExecCallerRestart): this record is the last
 // one that can, and an execve enter the fold had taken has to be parked again
 // while the fd table is still the old program's and before the re-keying
-// looks for it.
+// looks for it. The rows the process's other threads still hold - threads
+// de_thread killed, whose exit records were lost - are released by the loop
+// behind this record (noteExecRecord, releaseRestartsBehindExec, task v13).
 func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
 	defer ev.Recycle()
 	e.releaseExecCallerRestart(ev, ch)
+	e.noteExecRecord(ev)
 	e.fdState().dropOnExec(ev.Pid)
 	// The new program has a fresh address space and so a fresh program break.
 	e.brkState.forget(ev.Pid)

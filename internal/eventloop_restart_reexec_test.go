@@ -3,10 +3,12 @@ package internal
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"ior/internal/event"
 	"ior/internal/file"
@@ -1617,21 +1619,16 @@ func (f *restartFixture) interruptedExecve(resumed bool) {
 // only when the exit is a successful one and that row is a re-executed exec of
 // the same syscall in the same process. In every other stream
 // (lostExecNegatives) the exit stays the unpaired exit it was - no row, not
-// counted - and the held row stays where it is.
+// counted - and the held row stays where it is. That goes for a successful
+// exit under the row's own leader tid as well (task v13): without an enter it
+// does not prove an exec, and the row's thread may be alive.
 func TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve(t *testing.T) {
 	for _, tc := range lostExecNegatives() {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReexecFixture(t, globalfilter.Filter{})
 			tc.hold(f)
 			f.feedNone(tc.exit(f), "an unpaired exec exit")
-			held, ok := f.el.restarts.lookup(restartTid)
-			if !ok || held.phase != tc.phase || len(f.el.restarts.held) != 1 {
-				t.Fatalf("held = %+v (held=%t, %d rows), want the row untouched in phase %d",
-					held, ok, len(f.el.restarts.held), tc.phase)
-			}
-			if (held.continuation != nil) != (tc.phase == restartContinuing) {
-				t.Fatalf("kept enter = %+v in phase %d, want it kept exactly while continuing", held.continuation, tc.phase)
-			}
+			f.requireRowUntouched(tc.phase)
 			if f.el.numSyscalls != 1 || f.el.numTracepointMismatches != 0 {
 				t.Fatalf("numSyscalls=%d mismatches=%d, want 1 (the interrupted call) and 0",
 					f.el.numSyscalls, f.el.numTracepointMismatches)
@@ -1641,20 +1638,37 @@ func TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve(t *testing.T) {
 	}
 }
 
+// requireRowUntouched fails unless restartTid's row is the only one held, in
+// phase, with its continuation's enter kept exactly while it is continuing.
+func (f *restartFixture) requireRowUntouched(phase restartPhase) {
+	f.t.Helper()
+	held, ok := f.el.restarts.lookup(restartTid)
+	if !ok || held.phase != phase || len(f.el.restarts.held) != 1 {
+		f.t.Fatalf("held = %+v (held=%t, %d rows), want the row untouched in phase %d",
+			held, ok, len(f.el.restarts.held), phase)
+	}
+	if (held.continuation != nil) != (phase == restartContinuing) {
+		f.t.Fatalf("kept enter = %+v in phase %d, want it kept exactly while continuing", held.continuation, phase)
+	}
+}
+
 // TestParkedExecCallerWinsOverAReexecutedOne: when the process has both a
 // parked exec caller and a thread holding a re-executed execve, the lost-record
 // adoption takes the parked one, as it did before task r13. Only one of the two
-// threads can have won the exec; the other's row waits for its own records.
+// threads can have won the exec; the other died in it, so its row is released
+// as it was behind the execve's row, and its kept enter goes with it (task
+// v13; before, the row waited for records that could not come).
 func TestParkedExecCallerWinsOverAReexecutedOne(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.interruptExecve(restartTid)
 	f.feedNone(f.execEnter(restartBase+900, restartOtherTid), "a sibling's execve enter")
-	row := f.feedOne(f.execExit(restartBase+3000, restartPid, 0), "execve exit under the leader tid")
-	want := restartRow{name: "execve", tid: restartOtherTid, ret: 0, enterTime: restartBase + 900, duration: 2100}
-	if row != want {
-		t.Fatalf("row = %+v, want the sibling's parked execve %+v", row, want)
+	rows := f.feed(f.execExit(restartBase+3000, restartPid, 0))
+	want := []restartRow{{name: "execve", tid: restartOtherTid, ret: 0, enterTime: restartBase + 900, duration: 2100},
+		interruptedExecveRow}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("rows = %+v, want the sibling's parked execve, then the loser's -513 row: %+v", rows, want)
 	}
-	f.requireExecveStillContinuing(restartTid)
+	f.requireNothingHeld()
 	f.requireNoEnterPending(restartTid, restartPid, restartOtherTid)
 }
 
@@ -1702,6 +1716,559 @@ func TestReexecutingExecCallerChoosesOneRow(t *testing.T) {
 	}
 }
 
+// TestTakeProcessOrdersItsRowsByExitThenTid pins the order in which the rows
+// an exec leaves behind are released, on trackers built by hand: oldest exit
+// first, the lower tid first among rows interrupted at the same instant,
+// whatever the map order - and only the rows of that process are taken.
+func TestTakeProcessOrdersItsRowsByExitThenTid(t *testing.T) {
+	const pid, stranger = uint32(absentPidBase + 7), uint32(absentPidBase + 60)
+	row := func(pid, tid uint32, exitAt uint64) *heldRestart {
+		return &heldRestart{pair: &event.Pair{
+			EnterEv: &types.FdEvent{TraceId: types.SYS_ENTER_READ, Pid: pid, Tid: tid},
+			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: exitAt, Pid: pid, Tid: tid, Ret: restartSys},
+		}}
+	}
+	// Go randomizes map iteration: the order must hold for every one.
+	for range 32 {
+		tracker := restartTracker{held: make(map[uint32]*heldRestart)}
+		want := []uint32{pid + 9}
+		tracker.held[pid+9] = row(pid, pid+9, 100)
+		for tid := pid; tid < pid+8; tid++ {
+			tracker.held[tid] = row(pid, tid, 200)
+			want = append(want, tid)
+		}
+		tracker.held[stranger] = row(stranger, stranger, 50)
+		var got []uint32
+		for _, held := range tracker.takeProcess(pid) {
+			got = append(got, held.pair.ExitEv.GetTid())
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("taken tids = %v, want %v", got, want)
+		}
+		if _, ok := tracker.lookup(stranger); !ok || len(tracker.held) != 1 {
+			t.Fatalf("held afterwards = %v, want the other process's row alone", tracker.held)
+		}
+	}
+}
+
+// holdDeadThreadsRows leaves two rows held under non-leader threads of the
+// fixture's process, in the two states a lost record can leave them in: the
+// interrupted execve of restartTid, whose RESUME record arrived but not its
+// re-executed enter, and a re-executed read of restartOtherTid with its enter
+// kept. It returns them as the rows they must be released as, oldest exit
+// first - which is the higher tid's here.
+func (f *restartFixture) holdDeadThreadsRows() []restartRow {
+	f.t.Helper()
+	f.interruptedExecve(true)
+	f.interruptRead(restartBase-300, restartOtherTid, restartSys)
+	f.feedNone(f.resumeRecord(restartBase+900, restartOtherTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+900, restartOtherTid), "re-executed read enter")
+	return []restartRow{{name: "read", tid: restartOtherTid, ret: restartSys, enterTime: restartBase - 300, duration: 500},
+		interruptedExecveRow}
+}
+
+// strangerReadEnter is a read enter of a thread of another process
+// (restartStrangerPid).
+func (f *restartFixture) strangerReadEnter(at uint64, tid uint32) []byte {
+	f.t.Helper()
+	_, raw := makeEnterFdEvent(f.t, at, restartStrangerPid, tid, restartReadFd, types.SYS_ENTER_READ)
+	return raw
+}
+
+// strangerReadExit is the exit of strangerReadEnter's read.
+func (f *restartFixture) strangerReadExit(at uint64, tid uint32, ret int64) []byte {
+	f.t.Helper()
+	_, raw := makeExitRetEvent(f.t, at, restartStrangerPid, tid, types.SYS_EXIT_READ, ret)
+	return raw
+}
+
+// requireHeldUnder fails unless the rows held are exactly those of tids.
+func (f *restartFixture) requireHeldUnder(tids ...uint32) {
+	f.t.Helper()
+	if len(f.el.restarts.held) != len(tids) {
+		f.t.Fatalf("%d rows held, want those of tids %v", len(f.el.restarts.held), tids)
+	}
+	for _, tid := range tids {
+		if _, ok := f.el.restarts.lookup(tid); !ok {
+			f.t.Fatalf("no row held under tid %d, want those of tids %v", tid, tids)
+		}
+	}
+}
+
+// requireTidsRetired fails when a dead thread left anything under its tid: a
+// parked enter, a gap baseline or a cached comm.
+func (f *restartFixture) requireTidsRetired(tids ...uint32) {
+	f.t.Helper()
+	f.requireNoEnterPending(tids...)
+	for _, tid := range tids {
+		if _, ok := f.el.pairs.prevTimes[tid]; ok {
+			f.t.Fatalf("a gap baseline stayed under the dead tid %d", tid)
+		}
+		if comm, ok := f.el.commState().cached(tid); ok {
+			f.t.Fatalf("comm %q is still cached under the dead tid %d", comm, tid)
+		}
+	}
+}
+
+// execProof is one record that proves an exec of the fixture's process:
+// prepare feeds what precedes it under the leader tid, record is the record,
+// own are the rows its handler completes, and counted is numSyscalls
+// afterwards, with three interrupted calls held before.
+type execProof struct {
+	name    string
+	prepare func(f *restartFixture)
+	record  func(f *restartFixture) []byte
+	own     []restartRow
+	counted uint
+}
+
+// execProofs lists the records that prove every other thread of the process
+// gone: a successful exec exit under the leader tid that finds its enter -
+// parked there, or kept with the leader's own interrupted execve, which the
+// exit folds into - and the exec record that names the thread that exec'd.
+// (An exit that adopts a non-leader caller's enter is the third pairing:
+// TestParkedExecCallerWinsOverAReexecutedOne.)
+func execProofs() []execProof {
+	const exitAt = restartBase + 3000
+	exit := func(f *restartFixture) []byte { return f.execExit(exitAt, restartPid, 0) }
+	return []execProof{
+		{"the exit of the leader's own execve", func(f *restartFixture) {
+			f.feedNone(f.execEnter(restartBase+2000, restartPid), "the leader's execve enter")
+		}, exit, []restartRow{{name: "execve", tid: restartPid, enterTime: restartBase + 2000, duration: 1000}}, 4},
+		{"the exit of the leader's own execveat", func(f *restartFixture) {
+			f.feedNone(f.execEnterOf(types.SYS_ENTER_EXECVEAT, restartBase+2000, restartPid), "the leader's execveat enter")
+		}, func(f *restartFixture) []byte { return f.execExitOf(types.SYS_EXIT_EXECVEAT, exitAt, restartPid, 0) },
+			[]restartRow{{name: "execveat", tid: restartPid, enterTime: restartBase + 2000, duration: 1000}}, 4},
+		{"the exit of the leader's re-executed execve", func(f *restartFixture) { f.interruptExecve(restartPid) },
+			exit, []restartRow{{name: "execve", tid: restartPid, enterTime: restartBase, duration: 3000}}, 4},
+		{"the exec record", func(*restartFixture) {}, func(f *restartFixture) []byte {
+			return f.execRecord(exitAt, restartPid, restartPid, false)
+		}, nil, 3},
+	}
+}
+
+// TestSuccessfulExecReleasesTheRowsOfItsDeadThreads is the first residual of
+// task v13. An exec that succeeded left its process with one task: de_thread
+// killed every other thread before the exec returned. Each of them released
+// its held row with its own exit record - and when that record was lost, the
+// row stayed held under a tid no record would ever name again, until the loop
+// stopped or the number was handed out anew. The record that proves the exec
+// (execProofs) now releases them: unchanged, oldest exit first, behind the
+// record's own rows, a kept continuation enter recycled and the tid retired
+// as its exit record would have retired it. A row of another process stays
+// held.
+func TestSuccessfulExecReleasesTheRowsOfItsDeadThreads(t *testing.T) {
+	for _, tc := range execProofs() {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.el.setCachedComm(restartPid, "leader")
+			want := append(slices.Clone(tc.own), f.holdDeadThreadsRows()...)
+			f.interruptStrangersRead()
+			tc.prepare(f)
+			if rows := f.feed(tc.record(f)); !slices.Equal(rows, want) {
+				t.Fatalf("rows = %+v, want %+v", rows, want)
+			}
+			f.requireHeldUnder(restartStrangerTid)
+			f.requireTidsRetired(restartTid, restartOtherTid)
+			if f.el.numSyscalls != tc.counted || f.el.numTracepointMismatches != 0 {
+				t.Fatalf("numSyscalls=%d mismatches=%d, want %d and 0",
+					f.el.numSyscalls, f.el.numTracepointMismatches, tc.counted)
+			}
+		})
+	}
+}
+
+// interruptStrangersRead leaves an interrupted read held under a non-leader
+// thread of another process.
+func (f *restartFixture) interruptStrangersRead() {
+	f.t.Helper()
+	f.feedNone(f.strangerReadEnter(restartBase+200, restartStrangerTid), "the stranger's read enter")
+	f.feedNone(f.strangerReadExit(restartBase+700, restartStrangerTid, restartSys), "the stranger's interrupted read exit")
+}
+
+// recordsThatProveNoExec lists records that look like an exec of the fixture's
+// process and prove none. A successful exec exit under the leader tid that
+// finds no enter is what a seccomp filter answering execve with errno 0
+// leaves behind: the call never ran and every thread lives on. A failed
+// execve returns to the program that called it, another process's exec says
+// nothing about this one, a successful exit of any other syscall is just
+// that, a successful execve never returns under a tid other than the
+// leader's, and an exec record that does not name the thread that exec'd may
+// be the held thread's own.
+func recordsThatProveNoExec() map[string]func(f *restartFixture) []byte {
+	const at = restartBase + 3000
+	return map[string]func(f *restartFixture) []byte{
+		"a successful execve exit without an enter": func(f *restartFixture) []byte {
+			return f.execExit(at, restartPid, 0)
+		},
+		"a successful execveat exit without an enter": func(f *restartFixture) []byte {
+			return f.execExitOf(types.SYS_EXIT_EXECVEAT, at, restartPid, 0)
+		},
+		"an exec record that does not name its caller": func(f *restartFixture) []byte {
+			return f.execRecord(at, restartPid, 0, false)
+		},
+		"a failed execve exit under the leader tid": func(f *restartFixture) []byte {
+			return f.execExit(at, restartPid, -int64(syscall.ENOENT))
+		},
+		"another process's successful execve exit": func(f *restartFixture) []byte {
+			_, raw := makeExitRetEvent(f.t, at, restartStrangerPid, restartStrangerPid, types.SYS_EXIT_EXECVE, 0)
+			return raw
+		},
+		"another process's exec record": func(f *restartFixture) []byte {
+			return mustRaw(f.t, &types.ProcessExecEvent{EventType: types.PROCESS_EXEC_EVENT, Time: at,
+				Pid: restartStrangerPid, Tid: restartStrangerPid})
+		},
+		"a successful read exit under the leader tid": func(f *restartFixture) []byte {
+			return f.readExit(at, restartPid, 0)
+		},
+		"a successful execve exit under another tid": func(f *restartFixture) []byte {
+			return f.execExit(at, restartThirdTid, 0)
+		},
+		"an exec record under a tid that is not the pid": func(f *restartFixture) []byte {
+			return f.execRecord(at, restartThirdTid, restartThirdTid, false)
+		},
+	}
+}
+
+// TestOnlyAProvenExecOfTheProcessReleasesItsThreadsRows: the negatives of the
+// release above. After a record that proves no exec of the process
+// (recordsThatProveNoExec) both rows are held as they were, the kept enter
+// with its row.
+func TestOnlyAProvenExecOfTheProcessReleasesItsThreadsRows(t *testing.T) {
+	for name, record := range recordsThatProveNoExec() {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.holdDeadThreadsRows()
+			f.feedNone(record(f), name)
+			f.requireHeldUnder(restartTid, restartOtherTid)
+			resumed, _ := f.el.restarts.lookup(restartTid)
+			continuing, _ := f.el.restarts.lookup(restartOtherTid)
+			if resumed.phase != restartResumed || continuing.phase != restartContinuing || continuing.continuation == nil {
+				t.Fatalf("held rows = %+v and %+v, want them untouched", resumed, continuing)
+			}
+			f.requireNoEnterPending(restartTid, restartOtherTid, restartPid)
+		})
+	}
+}
+
+// TestDeadThreadsKeptEnterIsNotParkedBehindAnExec: the re-executed call of a
+// thread the exec killed never returns, so the enter kept with its row is
+// recycled at the release, not parked. Parked, it would be evicted a moment
+// later with the rest of the dead tid's state - after it had pushed the oldest
+// enter of a live thread out of a full pending-enter table.
+func TestDeadThreadsKeptEnterIsNotParkedBehindAnExec(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.pairs.maxSize = 2
+	f.interruptRead(restartBase+100, restartOtherTid, restartSys)
+	f.feedNone(f.resumeRecord(restartBase+900, restartOtherTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+900, restartOtherTid), "re-executed read enter")
+	f.feedNone(f.strangerReadEnter(restartBase+950, restartStrangerPid), "a live thread's read enter")
+	f.feedNone(f.strangerReadEnter(restartBase+960, restartStrangerTid), "another live thread's read enter")
+
+	released := f.feedOne(f.execRecord(restartBase+3000, restartPid, restartPid, false), "the leader's exec record")
+	if released.tid != restartOtherTid || released.ret != restartSys || released.enterTime != restartBase+100 {
+		t.Fatalf("released row = %+v, want the dead thread's interrupted read", released)
+	}
+	f.requireNothingHeld()
+	f.requireTidsRetired(restartOtherTid)
+	for _, tid := range []uint32{restartStrangerPid, restartStrangerTid} {
+		if _, ok := f.el.pairs.pending(tid); !ok {
+			t.Fatalf("the enter of live tid %d was trimmed to park the dead thread's enter", tid)
+		}
+	}
+}
+
+// runToTheEnd runs the fixture's loop over stream until the raw channel is
+// closed and returns the rows it emitted and the warnings it raised. The wait
+// is bounded: a loop that hangs fails the test by name.
+func (f *restartFixture) runToTheEnd(stream [][]byte) (rows []restartRow, warnings []string) {
+	f.t.Helper()
+	f.el.SetPrintCallback(func(ep *event.Pair) {
+		rows = append(rows, rowOf(ep))
+		ep.Recycle()
+	})
+	f.el.SetWarningCallback(func(message string) { warnings = append(warnings, message) })
+	rawCh := filledRawChannel(stream)
+	close(rawCh)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.t.Cleanup(cancel)
+	go f.el.run(ctx, rawCh)
+	select {
+	case <-f.el.done:
+	case <-time.After(emitOrderTestWait):
+		f.t.Fatal("the loop did not reach the end of the stream")
+	}
+	return rows, warnings
+}
+
+// TestExecReleasesMoreRowsThanThePairChannelHolds runs the real loop over an
+// exec that ends more threads holding a row than one record may complete
+// pairs (pairChannelSlots). The rows are not sent by the record's handler: the
+// loop releases them behind the record, each emitted before the next is
+// completed, so none is dropped for want of a slot. They follow the execve's
+// row, oldest exit first and by tid within one instant, and precede the new
+// program's first row - which is what tells this release from the one at the
+// end of the run.
+func TestExecReleasesMoreRowsThanThePairChannelHolds(t *testing.T) {
+	const threads = pairChannelSlots + 3
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.setCachedComm(restartPid, "leader")
+	var stream [][]byte
+	var want []restartRow
+	for i := range uint64(threads) {
+		// Two threads per instant: rows interrupted together come by tid.
+		tid, at := restartThirdTid+uint32(i), restartBase+i/2*10
+		stream = append(stream, f.readEnter(at, tid), f.readExit(at+5, tid, restartSys))
+		want = append(want, restartRow{name: "read", tid: tid, ret: restartSys, enterTime: at, duration: 5})
+	}
+	_, syncEnter := makeEnterNullEvent(t, restartBase+3400, restartPid, restartPid, types.SYS_ENTER_SYNC)
+	_, syncExit := makeExitNullEvent(t, restartBase+3450, restartPid, restartPid, types.SYS_EXIT_SYNC)
+	stream = append(stream, f.execEnter(restartBase+2000, restartPid), f.execExit(restartBase+3000, restartPid, 0),
+		syncEnter, syncExit)
+	execve := restartRow{name: "execve", tid: restartPid, enterTime: restartBase + 2000, duration: 1000}
+	want = append(slices.Insert(want, 0, execve),
+		restartRow{name: "sync", tid: restartPid, enterTime: restartBase + 3400, duration: 50, gap: 400})
+
+	rows, warnings := f.runToTheEnd(stream)
+	if !slices.Equal(rows, want) {
+		t.Fatalf("rows = %+v, want %+v", rows, want)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %q, want none", warnings)
+	}
+	if f.el.numSyscalls != threads+2 || f.el.numSyscallsAfterFilter != threads+2 {
+		t.Fatalf("numSyscalls=%d afterFilter=%d, want %d each", f.el.numSyscalls, f.el.numSyscallsAfterFilter, threads+2)
+	}
+}
+
+// TestProvenExecReleasesTheLeadersRowWhoseHandlerExeced: a read of the leader
+// exits -512, an SA_RESTART handler runs - and execs, and the exec record is
+// lost. The execve's exit passes as one of the handler's syscalls and pairs
+// with the handler's enter, which proves the exec: the read will never be
+// re-executed, and its row is released behind the execve's instead of waiting
+// for whatever the new program does next. The leader tid is the new
+// program's and keeps its state. Without the enter the exit proves nothing,
+// and the row waits on.
+func TestProvenExecReleasesTheLeadersRowWhoseHandlerExeced(t *testing.T) {
+	for name, entered := range map[string]bool{"the execve's enter arrived": true, "and was lost": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.el.setCachedComm(restartPid, "leader")
+			f.interruptRead(restartBase, restartPid, restartSys)
+			f.feedNone(f.handlerRecord(restartBase+510, restartPid, true), "HANDLER record")
+			if !entered {
+				f.feedNone(f.execExit(restartBase+3000, restartPid, 0), "an execve exit without an enter")
+				f.requireHeldUnder(restartPid)
+				return
+			}
+			f.feedNone(f.execEnter(restartBase+800, restartPid), "the handler's execve enter")
+			want := []restartRow{{name: "execve", tid: restartPid, enterTime: restartBase + 800, duration: 2200, gap: 300},
+				{name: "read", tid: restartPid, ret: restartSys, enterTime: restartBase, duration: 500}}
+			if rows := f.feed(f.execExit(restartBase+3000, restartPid, 0)); !slices.Equal(rows, want) {
+				t.Fatalf("rows = %+v, want %+v", rows, want)
+			}
+			f.requireNothingHeld()
+			if _, ok := f.el.commState().cached(restartPid); !ok {
+				t.Fatal("the comm under the leader tid was evicted: the tid is the new program's")
+			}
+			if next := f.syncCall(restartBase+3400, restartPid); next.gap != 400 {
+				t.Fatalf("the new program's first row = %+v, want gap 400 from the execve's exit", next)
+			}
+		})
+	}
+}
+
+// TestExecProofIsSpentWithItsRecord: the proof is about the threads the
+// process had when it exec'd. A thread the new program starts afterwards and
+// that holds a row has nothing to do with it: no later record releases that
+// row on the old proof's account.
+func TestExecProofIsSpentWithItsRecord(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase-300, restartOtherTid, restartSys)
+	released := f.feedOne(f.execRecord(restartBase+1000, restartPid, restartPid, false), "the leader's exec record")
+	if released.tid != restartOtherTid || released.ret != restartSys {
+		t.Fatalf("released row = %+v, want the dead thread's interrupted read", released)
+	}
+	f.interruptRead(restartBase+2000, restartTid, restartSys)
+	f.feedNone(f.strangerReadEnter(restartBase+3000, restartStrangerPid), "another process's record")
+	f.requireHeldUnder(restartTid)
+}
+
+// TestExecRecordWithoutACallerLeavesTheCallersRowToTheExit: an exec record
+// without OldTid (an object that predates the field) does not say which
+// thread exec'd, so it must not take the row held under a non-leader thread
+// for a dead thread's: that thread may be the caller, and its kept enter is
+// what the execve's exit pairs with. The exit adopts it as when the record is
+// lost, and proves the exec itself.
+func TestExecRecordWithoutACallerLeavesTheCallersRowToTheExit(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptExecve(restartTid)
+	f.feedNone(f.execRecord(restartBase+2100, restartPid, 0, false), "exec record without OldTid")
+	f.requireExecveStillContinuing(restartTid)
+	rows := f.feed(f.execExit(restartBase+3000, restartPid, 0))
+	if want := []restartRow{interruptedExecveRow, reexecutedExecveRow}; !slices.Equal(rows, want) {
+		t.Fatalf("rows = %+v, want %+v", rows, want)
+	}
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+}
+
+// deadLeadersKeptEnters drives the leader tid, per kind of continuation, up
+// to the point where the continuation's enter has been taken for the fold - a
+// re-executed read, a stopped sleep's restart_syscall, and a re-executed
+// execveat, which is not the syscall of the execve exit that follows - and
+// returns the interrupted row a release must emit unchanged.
+func deadLeadersKeptEnters() map[string]func(f *restartFixture) restartRow {
+	const base = restartBase - 100
+	return map[string]func(f *restartFixture) restartRow{
+		"a re-executed read": (*restartFixture).holdLeadersReexecutedRead,
+		"a restart_syscall": func(f *restartFixture) restartRow {
+			f.interrupt(base, restartPid)
+			f.resume(base+800, restartPid)
+			f.feedNone(f.restartEnter(base+800, restartPid), "restart_syscall enter")
+			return restartRow{name: "clock_nanosleep", tid: restartPid, ret: -516, enterTime: base,
+				duration: 500, sleepNs: restartSleepNs}
+		},
+		"a re-executed execveat": func(f *restartFixture) restartRow {
+			f.interruptExec(types.SYS_ENTER_EXECVEAT, restartPid)
+			return restartRow{name: "execveat", tid: restartPid, ret: restartNoIntr, enterTime: restartBase, duration: 500}
+		},
+	}
+}
+
+// holdLeadersReexecutedRead drives a read of the leader that exits -512 up to
+// the point where its re-executed enter has been taken for the fold, and
+// returns the interrupted row.
+func (f *restartFixture) holdLeadersReexecutedRead() restartRow {
+	f.t.Helper()
+	const base = restartBase - 100
+	f.interruptRead(base, restartPid, restartSys)
+	f.feedNone(f.resumeRecord(base+800, restartPid), "RESUME record")
+	f.feedNone(f.readEnter(base+800, restartPid), "re-executed read enter")
+	return restartRow{name: "read", tid: restartPid, ret: restartSys, enterTime: base, duration: 500}
+}
+
+// TestLostExecRecordExitIsNotPairedWithTheDeadLeadersEnter is the second
+// residual of task v13. A non-leader thread's re-executed execve succeeds, and
+// three records are lost: the exec record, and the exit of the call the leader
+// was re-executing when de_thread killed it together with the leader's exit
+// record - so the leader's row still stands with its continuation's enter
+// kept. The execve's exit arrives under the leader tid and is routed to that
+// row. It is no step of that fold, so the row is released; the kept enter used
+// to be parked again, the exit paired with it - a trace-ID mismatch, no row
+// for the exec - and the caller's -513 row stayed held. A successful execve
+// exit proves that no other call entered under its tid before will return, so
+// the enter is recycled and the exit finds its caller.
+func TestLostExecRecordExitIsNotPairedWithTheDeadLeadersEnter(t *testing.T) {
+	for name, hold := range deadLeadersKeptEnters() {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.el.setCachedComm(restartPid, "leader")
+			want := []restartRow{hold(f), interruptedExecveRow, reexecutedExecveRow}
+			f.interruptExecve(restartTid)
+			if rows := f.feed(f.execExit(restartBase+3000, restartPid, 0)); !slices.Equal(rows, want) {
+				t.Fatalf("rows = %+v, want %+v", rows, want)
+			}
+			f.requireNothingHeld()
+			f.requireNoEnterPending(restartTid, restartPid)
+			if f.el.numSyscalls != 3 || f.el.numTracepointMismatches != 0 {
+				t.Fatalf("numSyscalls=%d mismatches=%d, want 3 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
+			}
+			f.requireOldTidRetired()
+		})
+	}
+}
+
+// TestLostExecRecordExitFindsAParkedCallerPastTheDeadLeadersEnter is the same
+// stream with a caller whose execve was not interrupted: its enter is parked
+// under its own tid, and the exit adopts it once the dead leader's enter is
+// out of the way. Without any caller - the leader exec'd itself and the enter
+// was lost, with the exit of its re-executed read - the exit stays unpaired:
+// no row, not counted, and no mismatch.
+func TestLostExecRecordExitFindsAParkedCallerPastTheDeadLeadersEnter(t *testing.T) {
+	for name, parked := range map[string]bool{"a parked caller": true, "no caller": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.el.setCachedComm(restartPid, "leader")
+			want := []restartRow{f.holdLeadersReexecutedRead()}
+			if parked {
+				f.feedNone(f.execEnter(restartBase+800, restartTid), "the caller's execve enter")
+				want = append(want, restartRow{name: "execve", tid: restartTid, enterTime: restartBase + 800, duration: 2200})
+			}
+			if rows := f.feed(f.execExit(restartBase+3000, restartPid, 0)); !slices.Equal(rows, want) {
+				t.Fatalf("rows = %+v, want %+v", rows, want)
+			}
+			f.requireNothingHeld()
+			f.requireNoEnterPending(restartTid, restartPid)
+			if f.el.numSyscalls != uint(len(want)) || f.el.numTracepointMismatches != 0 {
+				t.Fatalf("numSyscalls=%d mismatches=%d, want %d and 0",
+					f.el.numSyscalls, f.el.numTracepointMismatches, len(want))
+			}
+		})
+	}
+}
+
+// TestFailedExecExitStillParksTheKeptEnter: the negative of the two tests
+// above. A failed execve returns to the program that called it and proves
+// nothing gone, so it releases the leader's row like any record that is not
+// the fold's next step: the kept enter is parked again. (That this exit then
+// pairs with it, a mismatch, is what an exit whose own enter was lost has
+// always done to the enter parked under its tid.)
+func TestFailedExecExitStillParksTheKeptEnter(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.setCachedComm(restartPid, "leader")
+	want := f.holdLeadersReexecutedRead()
+	f.interruptExecve(restartTid)
+	var warnings []string
+	f.el.SetWarningCallback(func(message string) { warnings = append(warnings, message) })
+	if released := f.feedOne(f.execExit(restartBase+3000, restartPid, -int64(syscall.ENOENT)), "failed execve exit"); released != want {
+		t.Fatalf("released row = %+v, want the leader's unchanged read %+v", released, want)
+	}
+	if f.el.numTracepointMismatches != 1 || len(warnings) != 1 {
+		t.Fatalf("mismatches=%d warnings=%q, want the exit paired with the read enter parked again",
+			f.el.numTracepointMismatches, warnings)
+	}
+	f.requireExecveStillContinuing(restartTid)
+}
+
+// TestLostExecRecordExitWithTwoReexecutedExecvesGoesToItsOwnTid pins the one
+// stream of the second residual that is not decided by what the exit proves.
+// The leader and a non-leader thread both hold an execve re-executed with its
+// enter kept, and a successful execve exit arrives under the leader tid with
+// no exec record before it. Either thread may have won: the leader (the
+// other's -513 exit and exit record lost, with the exec record) or the other
+// (the leader's two and the exec record) - three lost records each way, and
+// nothing in the stream tells them apart. The exit goes to the row of its own
+// tid, as every record does: folded when nothing is known to be lost, the two
+// rows of a refused fold otherwise. The other thread is gone either way and
+// its row is released behind it.
+func TestLostExecRecordExitWithTwoReexecutedExecvesGoesToItsOwnTid(t *testing.T) {
+	leaders := map[string][]restartRow{
+		"folded": {{name: "execve", tid: restartPid, enterTime: restartBase, duration: 3000}},
+		"refused": {{name: "execve", tid: restartPid, ret: restartNoIntr, enterTime: restartBase, duration: 500},
+			{name: "execve", tid: restartPid, enterTime: restartBase + 800, duration: 2200, gap: 300}},
+	}
+	for name, want := range leaders {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.el.setCachedComm(restartPid, "leader")
+			f.interruptExecve(restartPid)
+			f.interruptExecve(restartTid)
+			if name == "refused" {
+				f.loseRecords(3)
+				f.clockAt(restartBase + 9000)
+			}
+			want = append(slices.Clone(want), interruptedExecveRow)
+			if rows := f.feed(f.execExit(restartBase+3000, restartPid, 0)); !slices.Equal(rows, want) {
+				t.Fatalf("rows = %+v, want %+v", rows, want)
+			}
+			f.requireNothingHeld()
+			f.requireTidsRetired(restartTid)
+			f.requireNoEnterPending(restartPid)
+		})
+	}
+}
+
 // newtaskRecord is a task_newtask record that hands tid to a new thread of the
 // fixture's process, or - outOfScope - to a task the trace does not follow.
 func (f *restartFixture) newtaskRecord(at uint64, tid uint32, outOfScope bool) []byte {
@@ -1740,6 +2307,36 @@ func TestOutOfScopeNewtaskDoesNotParkTheDeadTasksEnter(t *testing.T) {
 	if f.el.numSyscalls != 1 || f.el.numTracepointMismatches != 0 {
 		t.Fatalf("numSyscalls=%d mismatches=%d, want 1 (the interrupted execve) and 0",
 			f.el.numSyscalls, f.el.numTracepointMismatches)
+	}
+}
+
+// TestOutOfScopeNewtaskRetiresTheDeadTasksParkedExecEnter is the test above
+// for an enter that was parked all along (task v13): a non-leader thread dies
+// inside an execve that was never interrupted, its records are lost, and its
+// tid is handed to a task the trace does not follow. No record of that task
+// will ever arrive to displace the enter, so it stayed parked - and a parked
+// exec caller of its process, which the next unpaired successful execve exit
+// of the process adopted - until LRU trimming. The record now retires the tid
+// like any task_newtask record. One for another tid leaves the enter alone.
+func TestOutOfScopeNewtaskRetiresTheDeadTasksParkedExecEnter(t *testing.T) {
+	for name, reused := range map[string]uint32{"the dead task's tid": restartTid, "another tid": restartOtherTid} {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.feedNone(f.execEnter(restartBase, restartTid), "execve enter")
+			f.feedNone(f.newtaskRecord(restartBase+2000, reused, true), "out-of-scope task_newtask record")
+			_, parked := f.el.pairs.pending(restartTid)
+			if wantParked := reused != restartTid; parked != wantParked || (f.el.pairs.execCallerHints != 0) != wantParked {
+				t.Fatalf("enter parked=%t, exec caller hints %v, want parked=%t", parked, f.el.pairs.execCallers, wantParked)
+			}
+			if reused == restartTid {
+				f.requireTidsRetired(restartTid)
+			}
+			rows := f.feed(f.execExit(restartBase+9000, restartPid, 0))
+			if adopted := len(rows) == 1; adopted != parked || f.el.numSyscalls != uint(len(rows)) {
+				t.Fatalf("a later unpaired execve exit of the process gave %+v (numSyscalls=%d), want a row only for a live enter",
+					rows, f.el.numSyscalls)
+			}
+		})
 	}
 }
 
@@ -1809,6 +2406,64 @@ func TestDeadTasksEnterDoesNotCrowdOutLiveEnters(t *testing.T) {
 					t.Fatalf("row = %+v, want the live thread's read from its own enter", row)
 				}
 			})
+		}
+	}
+}
+
+// TestNonLeaderExecRecordDoesNotParkTheDeadLeadersEnter is the third residual
+// of task v13. The exec record of a non-leader thread carries the leader's
+// tid, which until then named the old leader - dead by now, de_thread waited
+// for it. When that leader still holds a row with its continuation's enter
+// kept (its exit record was lost), the record releases the row and the enter
+// is recycled: the tid change evicted it within the same record anyway, but
+// parking it first pushed the oldest live enter out of a full pending-enter
+// table. The caller's own execve enter moves to the leader tid as before.
+func TestNonLeaderExecRecordDoesNotParkTheDeadLeadersEnter(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.setCachedComm(restartPid, "leader")
+	f.el.pairs.maxSize = 2
+	want := f.holdLeadersReexecutedRead()
+	f.feedNone(f.strangerReadEnter(restartBase+900, restartStrangerPid), "a live thread's read enter")
+	f.feedNone(f.execEnter(restartBase+950, restartTid), "the caller's execve enter")
+
+	if released := f.feedOne(f.execRecord(restartBase+2100, restartPid, restartTid, false), "exec record"); released != want {
+		t.Fatalf("released row = %+v, want the dead leader's unchanged read %+v", released, want)
+	}
+	f.requireNothingHeld()
+	if _, ok := f.el.pairs.pending(restartStrangerPid); !ok {
+		t.Fatal("the live thread's enter was trimmed to park the dead leader's enter")
+	}
+	row := f.feedOne(f.execExit(restartBase+3000, restartPid, 0), "execve exit under the leader tid")
+	if execve := (restartRow{name: "execve", tid: restartTid, enterTime: restartBase + 950, duration: 2050}); row != execve {
+		t.Fatalf("row = %+v, want the caller's execve %+v", row, execve)
+	}
+	live := f.feedOne(f.strangerReadExit(restartBase+4000, restartStrangerPid, 1), "the live thread's read exit")
+	if live.tid != restartStrangerPid || live.enterTime != restartBase+900 || live.ret != 1 {
+		t.Fatalf("row = %+v, want the live thread's read from its own enter", live)
+	}
+	f.requireNoEnterPending(restartTid, restartPid)
+}
+
+// TestNonLeaderExecRecordDoesNotParkTheCallersDeadEnter: the same for the row
+// held under the caller's old tid. Its kept enter is parked again only when it
+// is an exec enter, the execve the thread is still inside. Any other is a call
+// whose exit record was lost - the thread has exec'd since - and the tid change
+// recycled it within the same record; parked first, it cost a live enter its
+// place in a full table.
+func TestNonLeaderExecRecordDoesNotParkTheCallersDeadEnter(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.pairs.maxSize = 2
+	f.holdReexecutedRead()
+	f.feedNone(f.strangerReadEnter(restartBase+900, restartStrangerPid), "a live thread's read enter")
+	f.feedNone(f.strangerReadEnter(restartBase+950, restartStrangerTid), "another live thread's read enter")
+
+	released := f.feedOne(f.execRecord(restartBase+2100, restartPid, restartTid, false), "exec record")
+	requireInterruptedRow(t, released, restartSys)
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+	for _, tid := range []uint32{restartStrangerPid, restartStrangerTid} {
+		if _, ok := f.el.pairs.pending(tid); !ok {
+			t.Fatalf("the enter of live tid %d was trimmed to park the caller's dead enter", tid)
 		}
 	}
 }
@@ -2042,9 +2697,16 @@ func TestNameFixupReachesTheKeptEnter(t *testing.T) {
 	f.clockAt(restartBase + 9000)
 	exit.Time, exit.Ret = restartBase+3000, 7
 	f.el.processRawEvent(eventBytes(t, &exit), f.out)
-	first, second := <-f.out, <-f.out
-	defer first.Recycle()
-	defer second.Recycle()
+	// Not a blocking receive: a release that costs the continuation its row
+	// must fail here, not hang the package until the test binary times out.
+	pairs := f.takePairs()
+	for _, ep := range pairs {
+		defer ep.Recycle()
+	}
+	if len(pairs) != 2 {
+		t.Fatalf("the refused fold emitted %d rows, want the interrupted row and the continuation's", len(pairs))
+	}
+	first, second := pairs[0], pairs[1]
 	if got := first.FileName(); got != "" {
 		t.Fatalf("interrupted row's file = %q, want none: the fixup belongs to the re-executed enter", got)
 	}
