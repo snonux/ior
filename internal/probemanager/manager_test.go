@@ -726,6 +726,11 @@ func TestAttachReturnsCleanupErrorsWhenManagerClosesMidAttach(t *testing.T) {
 	}
 }
 
+// TestAttachPairReturnsCleanupErrorWhenExitAttachFails: an enter link that
+// cannot be destroyed after the exit attach failed is still attached, so
+// attachPair hands it back with both errors for the manager to keep (task
+// z13; internal/probemanager/half_attached_test.go has the manager's side).
+// Returned as nil, as it once was, nothing could ever destroy it.
 func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	enterDestroyErr := errors.New("enter cleanup failed")
 	exitAttachErr := errors.New("exit attach failed")
@@ -743,14 +748,41 @@ func TestAttachPairReturnsCleanupErrorWhenExitAttachFails(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected attachPair error")
 	}
-	if enterLink != nil || exitLink != nil {
-		t.Fatalf("expected failed attachPair to return nil links, got enter=%v exit=%v", enterLink, exitLink)
+	if enterLink != Link(enter) || exitLink != nil {
+		t.Fatalf("expected failed attachPair to return the undestroyed enter link only, got enter=%v exit=%v", enterLink, exitLink)
 	}
 	if !errors.Is(err, exitAttachErr) {
 		t.Fatalf("expected exit attach error in result, got %v", err)
 	}
 	if !errors.Is(err, enterDestroyErr) {
 		t.Fatalf("expected enter cleanup error in result, got %v", err)
+	}
+	if enter.destroyed != 1 {
+		t.Fatalf("expected enter link cleanup to run once, got %d", enter.destroyed)
+	}
+}
+
+// TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds is the counterpart: the
+// enter link destroyed again after the exit attach failed is gone, and
+// handing it back would have the manager keep, and later destroy again, a
+// link that no longer exists.
+func TestAttachPairReturnsNoLinkWhenItsCleanupSucceeds(t *testing.T) {
+	exitAttachErr := errors.New("exit attach failed")
+	enter := &fakeLink{}
+	attacher := &fakeAttacher{
+		programs: map[string]*fakeProgram{
+			"handle_sys_enter_close": {link: enter},
+			"handle_sys_exit_close":  {err: exitAttachErr},
+		},
+		errs: map[string]error{},
+	}
+
+	enterLink, exitLink, err := attachPair(attacher, "sys_enter_close", "sys_exit_close")
+	if !errors.Is(err, exitAttachErr) {
+		t.Fatalf("expected exit attach error in result, got %v", err)
+	}
+	if enterLink != nil || exitLink != nil {
+		t.Fatalf("expected no links after a successful cleanup, got enter=%v exit=%v", enterLink, exitLink)
 	}
 	if enter.destroyed != 1 {
 		t.Fatalf("expected enter link cleanup to run once, got %d", enter.destroyed)
