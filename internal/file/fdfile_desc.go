@@ -79,8 +79,12 @@ func (f *FdFile) status() Flags {
 // a new FdFile on descriptor number fd that refers to the same open file
 // description as f. The status word is shared, so a later F_SETFL/F_GETFL
 // through either descriptor is seen through both; the name is copied, and with
-// it the mark that says the name is an O_TMPFILE open's directory. FD_CLOEXEC
-// is copied as a starting value only and is the caller's to set on the new
+// it the mark that says the name was read from procfs rather than given by a
+// traced call (fromProcFS): a copy of a lagging answer is that lagging answer
+// under another number, and a handle taken through the duplicate, or through
+// a forked child's copy, must be refused a name like one taken through the
+// source (takenHandleName in internal/eventloop_handle.go). FD_CLOEXEC is
+// copied as a starting value only and is the caller's to set on the new
 // descriptor (dup/dup2/F_DUPFD clear it, dup3(O_CLOEXEC) and F_DUPFD_CLOEXEC
 // set it, a fork keeps it): the two descriptors never share it.
 func (f *FdFile) Dup(fd int32) *FdFile {
@@ -96,9 +100,10 @@ func (f *FdFile) Dup(fd int32) *FdFile {
 // it. A pair that is emitted (printed, aggregated, kept for the TUI) must
 // report the descriptor as it was when its syscall returned, which is why the
 // event loop detaches the file of every pair it freezes (and of a pending exec
-// target). Everything else is copied as it is, the tmpfile-directory mark of
-// the name included, though no caller asks a snapshot for it. Use Dup, not
-// Detach, to model a second descriptor.
+// target). Everything else is copied as it is, the procfs mark of the name
+// (fromProcFS) included: the snapshot has the same name, so where that name
+// came from is as true of it. No caller asks a snapshot for the mark today.
+// Use Dup, not Detach, to model a second descriptor.
 func (f *FdFile) Detach() *FdFile {
 	w := &fdWithDesc{FdFile: *f, own: openFileDesc{status: f.status()}}
 	w.desc = &w.own

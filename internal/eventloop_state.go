@@ -961,6 +961,12 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 // it still supersedes the old entry, which is dropped rather than left to be
 // mistaken for the current one: a missing name leaves the row to procfs, a
 // stale one would be wrong.
+//
+// There is one entry per handle, whoever took it. A scoped name (handleName)
+// filed by one process thus replaces the absolute name another process filed,
+// and every process but the latest taker loses the name and falls back to
+// procfs: a degradation, not a wrong name, accepted for now (see "What is
+// still wrong" in eventloop_handle.go; task 523 decides whether to keep it).
 func (t *handleTracker) store(key handleKey, name handleName) {
 	if name.name == "" {
 		delete(t.names, key)

@@ -1868,10 +1868,30 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       exit probe not attached (detached at runtime, a failed attach); with a
       lost control record; through a descriptor only procfs could name; or
       evicted by the LRU cap.
-    - *The fd table is trusted as it is.* An entry whose own name was built
-      from a procfs-resolved directory (an `openat` relative to a dirfd ior
-      did not see being opened) carries that lagging answer unmarked, and a
-      handle taken through it inherits it.
+    - *The fd table is trusted as it is.* The procfs mark
+      (`FdFile.NameFromProcFS`) covers only an entry that is itself the look
+      at procfs. It is lost where a call opens a descriptor by a pathname
+      resolved against a dirfd ior did not see being opened:
+      `resolveDirfdPath` reads the dirfd's `/proc` link and the exit handler
+      stores the result as a new, unmarked entry (`file.NewFd`) -
+      `handleOpenExit` for `openat`, `openat2`, `open_tree` and
+      `open_tree_attr`, `attachPathExitFd` for `fspick` (and `creat`, which
+      has no dirfd). A relative pathname is joined to the link; an empty one
+      (`open_tree(fd, "", AT_EMPTY_PATH)`, `fspick(fd, "",
+      FSPICK_EMPTY_PATH)`) is the bare link, with no join at all. Either way
+      the entry carries that lagging answer, a handle taken through it
+      inherits it, and since the `/proc` link of a file that has a path is
+      an absolute pathname the name is filed for every opener, not only the
+      taker's process. Carrying the mark through `resolveDirfdPath` is task
+      523.
+    - *A scoped take replaces a global name.* `handleTracker.store` keeps one
+      entry per handle and the latest take wins, whoever made it. Process B
+      taking, by a relative pathname, a handle process A filed under an
+      absolute one takes the global name away: A and every other process
+      fall back to procfs for that handle, and only B is named. It degrades,
+      never misnames; whether a scoped name may replace another process's
+      absolute one is left to task 523 (pinned as it is by
+      `TestHandleTrackerScopedTakeReplacesAGlobalName`).
     - *A coarse clock.* The two time checks compare clock reads of one tid
       that are at least a syscall entry or exit apart. A clocksource too
       coarse to move in that time (the jiffies fallback) makes two calls
@@ -1897,11 +1917,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     reused by another file / directory / pipe, cross-thread and
     cross-process, not consumed, latest wins),
     `internal/eventloop_handle_key_test.go` (type/byte/length sensitivity,
-    unusable statuses, legacy record, LRU, claim-by-time),
+    unusable statuses, legacy record, LRU, claim-by-time, a scoped take
+    replacing a global name),
     `internal/eventloop_handle_name_test.go` (failed and size-probe calls,
     refused control records, a lost exit, `AT_EMPTY_PATH` names),
     `internal/eventloop_handle_source_test.go` (no name from an untracked or
-    procfs-named descriptor, absolute names below a tracked dirfd, scoped
+    procfs-named descriptor, nor from a duplicate or a forked child's copy
+    of one - the mark travels with `FdFile.Dup`, see
+    `TestFdFileCopiesKeepTheProcfsMark` in `internal/file` -, absolute names
+    below a tracked dirfd, scoped
     names, a record whose own enter never arrived, a malformed exit),
     `internal/eventloop_restart_handle_test.go` (a handler's
     `name_to_handle_at` passes a held restart row),

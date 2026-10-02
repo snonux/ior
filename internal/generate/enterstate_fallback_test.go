@@ -497,11 +497,33 @@ func TestSyscallAccountingScenarios(t *testing.T) {
 	}
 }
 
-// TestSyscallAccountingScenariosCatchRegressions compiles plausible
-// regressions of filter.c and requires at least one scenario to fail on each.
 // accountingMutations are plausible regressions of filter.c as {anchor,
-// replacement} pairs; each anchor occurs exactly once in the source.
+// replacement} pairs; each anchor occurs exactly once in the source. They are
+// kept in groups by the part of filter.c they break, so that no group grows
+// into one long literal; a name used by two groups is a mistake in this file.
 func accountingMutations() map[string][2]string {
+	groups := []map[string][2]string{
+		enterStateWriteMutations(),
+		pendingPointerMutations(),
+		handleEnterTimeMutations(),
+		exitAccountingMutations(),
+		execMoveMutations(),
+	}
+	all := make(map[string][2]string)
+	for _, group := range groups {
+		for name, mutation := range group {
+			if _, twice := all[name]; twice {
+				panic("accounting mutation named twice: " + name)
+			}
+			all[name] = mutation
+		}
+	}
+	return all
+}
+
+// enterStateWriteMutations are regressions of the enter hook: when it writes
+// the enter state, and what it does when the write fails.
+func enterStateWriteMutations() map[string][2]string {
 	return map[string][2]string{
 		"enter ignores a failed write": {
 			"        return ior_on_enter_state_lost(enter_trace_id, rate);\n    }",
@@ -527,6 +549,13 @@ func accountingMutations() map[string][2]string {
 			"            bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n",
 			"            (void)tid;\n",
 		},
+	}
+}
+
+// pendingPointerMutations are regressions of the pending pointers the exit
+// hook hands back from the enter state it looked up.
+func pendingPointerMutations() map[string][2]string {
+	return map[string][2]string{
 		"pending pointer not taken": {
 			"*pending_filename = state->pending_filename;",
 			"*pending_filename = 0;",
@@ -547,6 +576,28 @@ func accountingMutations() map[string][2]string {
 			"    bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n    return emit_event != 0;",
 			"    bpf_map_delete_elem(&syscall_enter_state_map, &tid);\n    if (pending_filename)\n        *pending_filename = state->pending_filename;\n    return emit_event != 0;",
 		},
+	}
+}
+
+// handleEnterTimeMutations are regressions of the enter time the exit hook of
+// name_to_handle_at hands back for its handle record (task k03).
+func handleEnterTimeMutations() map[string][2]string {
+	return map[string][2]string{
+		"enter time not zeroed without an entry": {
+			"    if (enter_ns)\n        *enter_ns = 0;\n",
+			"",
+		},
+		"exit time handed back as the enter time": {
+			"        *enter_ns = state->start_ns;",
+			"        *enter_ns = now;",
+		},
+	}
+}
+
+// exitAccountingMutations are regressions of what the exit hook emits and
+// counts: with and without an enter state, timed and untimed.
+func exitAccountingMutations() map[string][2]string {
+	return map[string][2]string{
 		"stateless exit always emits": {
 			"if (!state)\n        return ior_stateless_exit_emits(enter_trace_id);",
 			"if (!state)\n        return 1;",
@@ -567,18 +618,26 @@ func accountingMutations() map[string][2]string {
 			"        existing->count += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
 			"        existing->count += 1;\n        existing->duration_histogram[0] += 1;\n        return;\n    }\n\n    fresh.count = 1;\n    bpf_map_update_elem",
 		},
-		"enter time not zeroed without an entry": {
-			"    if (enter_ns)\n        *enter_ns = 0;\n",
-			"",
-		},
-		"exit time handed back as the enter time": {
-			"        *enter_ns = state->start_ns;",
-			"        *enter_ns = now;",
-		},
 		"zero duration not clamped": {
 			"duration = now > state->start_ns ? now - state->start_ns : 1;",
 			"duration = now > state->start_ns ? now - state->start_ns : 0;",
 		},
+		"restart codes counted as errors": {
+			"    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);",
+			"    return ret >= -IOR_MAX_ERRNO && ret < 0;",
+		},
+		"timed check looks at count": {
+			"    if (agg->max_duration_ns)\n        return 1;",
+			"    if (agg->count)\n        return 1;",
+		},
+	}
+}
+
+// execMoveMutations are regressions of ior_on_exec_tid_change, which moves
+// the enter state of a non-leader thread's execve to the leader's tid, the
+// one the call returns under.
+func execMoveMutations() map[string][2]string {
+	return map[string][2]string{
 		"exec move skipped": {
 			"    if (old_tid == new_tid)\n        return;",
 			"    if (1)\n        return;",
@@ -599,17 +658,11 @@ func accountingMutations() map[string][2]string {
 			"        ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));",
 			"        (void)moved;",
 		},
-		"restart codes counted as errors": {
-			"    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);",
-			"    return ret >= -IOR_MAX_ERRNO && ret < 0;",
-		},
-		"timed check looks at count": {
-			"    if (agg->max_duration_ns)\n        return 1;",
-			"    if (agg->count)\n        return 1;",
-		},
 	}
 }
 
+// TestSyscallAccountingScenariosCatchRegressions compiles plausible
+// regressions of filter.c and requires at least one scenario to fail on each.
 func TestSyscallAccountingScenariosCatchRegressions(t *testing.T) {
 	filterC, mapsH := readAccountingSources(t)
 	mutations := accountingMutations()

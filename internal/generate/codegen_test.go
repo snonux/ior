@@ -4066,13 +4066,38 @@ func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
 
 // TestOpenNameFixupHelpersAreDefinedInBPFSource pins the hand-written kernel
 // side the generated handlers call. None of it can be exercised from a unit
-// test, so the contract is asserted over the source.
+// test, so the contract is asserted over the source: the helpers and the exit
+// hook's take in filter.c, the pending slots in maps.h, and the fixup record
+// and its constants in types.h.
 func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
-	filterC, err := readCSource("filter.c")
+	filterC := mustReadCSource(t, "filter.c")
+	checkFilterCDefinesRecoveryHelpers(t, filterC)
+	checkExitHookTakesPendingPointers(t, filterC)
+	checkNameFixupEmit(t, filterC)
+	checkNameFixupWrappersPassTheirSlot(t, filterC)
+	checkEnterStateHasPendingSlots(t, mustReadCSource(t, "maps.h"))
+
+	typesH := mustReadCSource(t, "types.h")
+	checkFixupConstants(t, typesH)
+	checkFixupRecordLayout(t, typesH)
+}
+
+// mustReadCSource returns the hand-written BPF source file name, or fails
+// the test.
+func mustReadCSource(t *testing.T, name string) string {
+	t.Helper()
+	source, err := readCSource(name)
 	if err != nil {
-		t.Fatalf("read filter.c: %v", err)
+		t.Fatalf("read %s: %v", name, err)
 	}
-	for _, helper := range []string{
+	return source
+}
+
+// recoveryHelperSignatures are the filter.c helpers the generated handlers
+// call to stash a pointer at enter and to take it back, with or without a
+// second pointer or the enter time, at exit.
+func recoveryHelperSignatures() []string {
+	return []string{
 		"static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr)",
 		"static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr)",
 		"static __always_inline int ior_on_syscall_exit_take_filename(",
@@ -4081,7 +4106,14 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 		"static __always_inline void ior_emit_name_fixup(__u32 tid, __u32 enter_trace_id,",
 		"static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,",
 		"static __always_inline void ior_emit_second_name_fixup(__u32 tid, __u32 enter_trace_id,",
-	} {
+	}
+}
+
+// checkFilterCDefinesRecoveryHelpers asserts that filter.c defines every
+// helper of recoveryHelperSignatures, and no standalone take.
+func checkFilterCDefinesRecoveryHelpers(t *testing.T, filterC string) {
+	t.Helper()
+	for _, helper := range recoveryHelperSignatures() {
 		if !strings.Contains(filterC, helper) {
 			t.Errorf("filter.c must define %q", helper)
 		}
@@ -4091,7 +4123,12 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	if strings.Contains(filterC, "static __always_inline __u64 ior_take_pending_filename") {
 		t.Error("filter.c still defines a standalone ior_take_pending_filename helper")
 	}
-	checkExitHookTakesPendingPointers(t, filterC)
+}
+
+// checkNameFixupEmit pins ior_emit_name_fixup: what it reserves and stamps,
+// what it leaves out, and that it gives up a record it could not fill.
+func checkNameFixupEmit(t *testing.T, filterC string) {
+	t.Helper()
 	// A still-failing re-read carries no information; submitting it would only
 	// cost a ring-buffer record.
 	if !strings.Contains(filterC, "bpf_ringbuf_discard(ev, 0);") {
@@ -4123,7 +4160,12 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 			t.Errorf("ior_emit_name_fixup still populates discarded field/call %q", discarded)
 		}
 	}
-	// The two public wrappers must each pass their own slot constant.
+}
+
+// checkNameFixupWrappersPassTheirSlot asserts that the two public wrappers
+// of ior_emit_name_fixup each pass their own slot constant.
+func checkNameFixupWrappersPassTheirSlot(t *testing.T, filterC string) {
+	t.Helper()
 	for wrapper, slot := range map[string]string{
 		"ior_emit_open_name_fixup":   "OPEN_NAME_FIXUP_SLOT_FIRST",
 		"ior_emit_second_name_fixup": "OPEN_NAME_FIXUP_SLOT_SECOND",
@@ -4133,22 +4175,24 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 			t.Errorf("%s must delegate to ior_emit_name_fixup with %s", wrapper, slot)
 		}
 	}
+}
 
-	mapsH, err := readCSource("maps.h")
-	if err != nil {
-		t.Fatalf("read maps.h: %v", err)
-	}
+// checkEnterStateHasPendingSlots asserts that struct syscall_enter_state
+// carries both stashed pointers.
+func checkEnterStateHasPendingSlots(t *testing.T, mapsH string) {
+	t.Helper()
 	if !strings.Contains(mapsH, "__u64 pending_filename;") {
 		t.Error("struct syscall_enter_state must carry the stashed filename pointer")
 	}
 	if !strings.Contains(mapsH, "__u64 pending_filename2;") {
 		t.Error("struct syscall_enter_state must carry the second (newname) stashed pointer")
 	}
+}
 
-	typesH, err := readCSource("types.h")
-	if err != nil {
-		t.Fatalf("read types.h: %v", err)
-	}
+// checkFixupConstants asserts the record type and slot constants types.h
+// defines for the fixup record and the process exit record.
+func checkFixupConstants(t *testing.T, typesH string) {
+	t.Helper()
 	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_EVENT 48") {
 		t.Error("types.h must define OPEN_NAME_FIXUP_EVENT (the Go constant is generated from it)")
 	}
@@ -4159,6 +4203,11 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	if !strings.Contains(typesH, "#define PROCESS_EXIT_EVENT 49") {
 		t.Error("types.h must define PROCESS_EXIT_EVENT (the Go constant is generated from it)")
 	}
+}
+
+// checkFixupRecordLayout pins the members of struct open_name_fixup_event.
+func checkFixupRecordLayout(t *testing.T, typesH string) {
+	t.Helper()
 	structs, _, err := ParseCTypesInput(strings.NewReader(typesH))
 	if err != nil {
 		t.Fatalf("parse types.h: %v", err)

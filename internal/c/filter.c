@@ -317,6 +317,8 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 // What does need the entry at rate 1 is the pending-filename recovery: its
 // stash writes the user pointer onto the state (ior_stash_pending_filename)
 // and the exit hook reads it back (ior_on_syscall_exit_take_filename). The
+// output handle pointer of name_to_handle_at travels the same way, in the
+// second slot (ior_stash_pending_handle, ior_on_syscall_exit_take_handle). The
 // generator emits ior_on_syscall_enter_stateful for those enter handlers
 // (handlerSpec.keepsEnterState in internal/generate/bpfhandler.go), which
 // always writes the entry. Other rates need it everywhere: they carry the
@@ -366,8 +368,11 @@ static __always_inline int ior_on_syscall_enter(__u32 tid, __u32 enter_trace_id,
 }
 
 // ior_on_syscall_enter_stateful is the enter hook of the handlers that stash
-// a pending filename (path-capturing kinds and the output-path syscalls): it
-// writes the enter state at every rate, since the stash needs the entry.
+// a pointer for their exit handler: a pending filename (path-capturing kinds
+// and the output-path syscalls) and, for name_to_handle_at, the output
+// struct file_handle pointer as well (ior_stash_pending_handle in handle.c,
+// which uses the second filename slot). It writes the enter state at every
+// rate, since a stash needs the entry.
 static __always_inline int ior_on_syscall_enter_stateful(__u32 tid, __u32 enter_trace_id, __u64 now) {
     ior_restart_on_enter(tid, now);
     return ior_on_syscall_enter_impl(tid, enter_trace_id, now, 1);

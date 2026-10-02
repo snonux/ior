@@ -29,7 +29,9 @@ func (f *handleFeed) asOtherProcess() {
 }
 
 // untrackedSource is one way a name_to_handle_at can name its file through a
-// descriptor whose only name is the /proc link the loop would read now.
+// descriptor whose only name is the /proc link the loop would read now, or
+// was when the entry it is a copy of was made (a dup, a fork): the copy
+// keeps the mark of its source (FdFile.Dup).
 type untrackedSource struct {
 	name string
 	take func(feed *handleFeed, fd int32)
@@ -44,9 +46,45 @@ func untrackedSources() []untrackedSource {
 			feed.nameToHandleUnder(fd, "below.txt", 0, testHandleA)
 		}},
 		{"a table entry named from procfs", func(feed *handleFeed, fd int32) {
-			feed.el.fdState().set(fd, feed.pid, file.NewFdWithPid(fd, feed.pid))
+			feed.trackFromProcfs(fd)
 			feed.nameToHandleOfFd(fd, testHandleA)
 		}},
+		{"a duplicate of a table entry named from procfs", func(feed *handleFeed, fd int32) {
+			const dupFd = unopenedFd + 1
+			feed.el.registerDup(feed.trackFromProcfs(fd), feed.pid, dupFd, 0)
+			feed.requireNamedEntry(dupFd)
+			feed.nameToHandleOfFd(dupFd, testHandleA)
+		}},
+		{"a forked child's copy of a table entry named from procfs", func(feed *handleFeed, fd int32) {
+			feed.trackFromProcfs(fd)
+			parent := feed.pid
+			feed.asOtherProcess()
+			feed.el.fdState().inherit(parent, feed.pid)
+			feed.requireNamedEntry(fd)
+			feed.nameToHandleOfFd(fd, testHandleA)
+		}},
+	}
+}
+
+// trackFromProcfs puts descriptor fd of the feed's process into the fd table
+// under the name its /proc link has now, as an open_by_handle_at of an
+// unknown handle or an io_uring_setup does, and returns the entry.
+func (f *handleFeed) trackFromProcfs(fd int32) *file.FdFile {
+	f.t.Helper()
+	fdFile := file.NewFdWithPid(fd, f.pid)
+	f.el.fdState().set(fd, f.pid, fdFile)
+	f.requireNamedEntry(fd)
+	return fdFile
+}
+
+// requireNamedEntry fails the test unless the fd table holds a named entry
+// for descriptor fd of the feed's process. The sources that copy an entry
+// need it: a copy that was never made, or has no name, would file nothing
+// for that reason alone, and the test would pass without the mark.
+func (f *handleFeed) requireNamedEntry(fd int32) {
+	f.t.Helper()
+	if tracked, ok := f.el.fdState().get(fd, f.pid); !ok || tracked.Name() == "" {
+		f.t.Fatalf("fd table entry (pid=%d, fd=%d) = %v (ok=%v), want a named one", f.pid, fd, tracked, ok)
 	}
 }
 

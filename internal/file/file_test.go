@@ -389,6 +389,34 @@ func TestNewFdWithProcNameKeepsTheGivenName(t *testing.T) {
 	}
 }
 
+// TestFdFileCopiesKeepTheProcfsMark: a duplicate (dup, fork) and a snapshot
+// carry the name of their source, so they must also say where that name came
+// from. A copy that dropped the mark would pass a look at procfs off as a
+// name a traced call gave (task k03: a handle taken through the duplicate
+// would be filed under it for every later open).
+func TestFdFileCopiesKeepTheProcfsMark(t *testing.T) {
+	sources := map[string]*FdFile{
+		"read from procfs":       NewFdWithProcName(3, uint32(os.Getpid()), "/proc/link"),
+		"procfs had no answer":   NewFdWithPid(1<<20, uint32(os.Getpid())),
+		"given by a traced call": NewFd(3, "/traced", syscall.O_RDONLY),
+	}
+	for name, source := range sources {
+		want := name != "given by a traced call"
+		if got := source.NameFromProcFS(); got != want {
+			t.Fatalf("%s: NameFromProcFS() = %v, want %v", name, got, want)
+		}
+		copies := map[string]*FdFile{
+			"Dup": source.Dup(4), "Dup of a Dup": source.Dup(4).Dup(5),
+			"Detach": source.Detach(), "Detach of a Dup": source.Dup(4).Detach(),
+		}
+		for kind, c := range copies {
+			if got := c.NameFromProcFS(); got != want {
+				t.Errorf("%s, %s: NameFromProcFS() = %v, want %v", name, kind, got, want)
+			}
+		}
+	}
+}
+
 // Task nr2: the status word lives in the open file description that duplicates
 // share; FD_CLOEXEC lives in the descriptor.
 

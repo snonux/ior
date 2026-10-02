@@ -172,6 +172,34 @@ func TestHandleTrackerEmptyNameSupersedes(t *testing.T) {
 	}
 }
 
+// TestHandleTrackerScopedTakeReplacesAGlobalName pins an accepted residual
+// so that changing it is deliberate (task 523 decides): a handle has one
+// entry and the latest take wins, whoever made it. Process 2 taking, by a
+// relative pathname, a handle process 1 filed under an absolute one leaves
+// only process 2 named; process 1 and everyone else fall back to procfs. No
+// process is given a name that is not its own.
+func TestHandleTrackerScopedTakeReplacesAGlobalName(t *testing.T) {
+	tracker := newHandleTracker()
+	key := testHandleA.key()
+	tracker.store(key, newHandleName("/data/a.txt", 1))
+	if name, ok := tracker.lookup(key, 3); !ok || name != "/data/a.txt" {
+		t.Fatalf("an absolute name is not global: (%q, %v)", name, ok)
+	}
+
+	tracker.store(key, newHandleName("rel.txt", 2))
+	if name, ok := tracker.lookup(key, 2); !ok || name != "rel.txt" {
+		t.Fatalf("the latest taker is not named by its own take: (%q, %v)", name, ok)
+	}
+	for _, pid := range []uint32{1, 3} {
+		if name, ok := tracker.lookup(key, pid); ok {
+			t.Fatalf("process %d is still named %q after another process's scoped take", pid, name)
+		}
+	}
+	if len(tracker.names) != 1 || len(tracker.nameAges) != 1 {
+		t.Fatalf("tracker holds %d names and %d ages, want one entry", len(tracker.names), len(tracker.nameAges))
+	}
+}
+
 // TestHandleTrackerClaimNeedsTheParkingCallsTime pins the pairing of the
 // control record with its exit record: only the exit that carries the
 // record's time claims the handle, any exit drops the parked entry, and a

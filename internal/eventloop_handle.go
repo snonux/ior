@@ -87,10 +87,28 @@ import (
 //     attach); one whose control record was lost to ring-buffer backpressure;
 //     one that could not be read (handleKeyOf); and one taken through a
 //     descriptor only procfs could name (above).
-//   - The fd table is trusted as it is. An entry whose own name was built
-//     from a procfs-resolved directory (an openat relative to a dirfd ior did
-//     not see being opened) carries that lagging answer unmarked, and a
-//     handle taken through it inherits it.
+//   - The fd table is trusted as it is, and the procfs mark
+//     (FdFile.NameFromProcFS) covers only an entry that is itself the look at
+//     procfs. It is lost where a call opens a descriptor by a pathname
+//     resolved against a dirfd ior did not see being opened: resolveDirfdPath
+//     reads the dirfd's /proc link, and the exit handler stores the result
+//     as a new, unmarked entry (file.NewFd) - handleOpenExit for openat,
+//     openat2, open_tree and open_tree_attr, attachPathExitFd for fspick
+//     (and creat, which has no dirfd). A relative pathname is joined to the
+//     link; an empty one - open_tree(fd, "", AT_EMPTY_PATH), fspick(fd, "",
+//     FSPICK_EMPTY_PATH) - is the bare link, with no join at all. Either
+//     way the entry carries that lagging answer, a handle taken through it
+//     inherits it, and since the /proc link of a file that has a path is
+//     an absolute pathname the name is filed for every opener, not only the
+//     taker's process. Carrying the mark through resolveDirfdPath is task
+//     523.
+//   - A handle has one entry, and the latest take replaces it whoever made
+//     it (handleTracker.store). A take that yields a scoped name - process B
+//     taking, by a relative pathname, a handle process A filed under an
+//     absolute one - therefore takes the global name away: A and every other
+//     process fall back to procfs for that handle, and only B is named. It
+//     degrades and never misnames. Whether a scoped name may replace another
+//     process's absolute one is left to task 523.
 //   - An entry evicted by the LRU cap is such an unknown handle again.
 //   - An IOR_BPF_OBJECT built before task k03 emits no handle record and a
 //     handle-less open record, so every open_by_handle_at is named from
