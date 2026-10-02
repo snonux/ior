@@ -622,7 +622,7 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 		// in "syscalls after filter".
 		ep.File = failedHandleFile(name)
 	}
-	// This kind has no raw enter filter at all (see rawRuntimeEvents), so
+	// This kind has no raw enter filter at all (see rawSyscallEvents), so
 	// without a checkpoint here NO filter dimension - comm included - was ever
 	// applied to an open_by_handle_at row, and a run filtered by -comm could
 	// emit rows carrying a different comm. The full pair filter is the right

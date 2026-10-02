@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"slices"
+
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
@@ -131,7 +133,18 @@ func runtimeEventKinds() []runtimeEventKind {
 	}
 }
 
+// rawRuntimeEvents is the table of every ring-buffer record kind the loop
+// decodes: the syscall enter and exit records, then the control records,
+// which never become rows. It is assembled from three parts only to keep each
+// readable; the order within and between them is the order it always had.
 func rawRuntimeEvents() []rawRuntimeEvent {
+	return slices.Concat(rawSyscallEvents(), rawTaskControlEvents(), rawCallControlEvents())
+}
+
+// rawSyscallEvents lists the syscall records: each enter kind with its raw
+// enter filter (nil: the completed pair is filtered instead) and each exit
+// kind.
+func rawSyscallEvents() []rawRuntimeEvent {
 	return []rawRuntimeEvent{
 		enterRaw(types.ENTER_OPEN_EVENT, rawDecoder[types.OpenEvent](types.NewOpenEventFast), matchRawOpenEvent),
 		exitRaw(types.EXIT_OPEN_EVENT, rawDecoder[types.RetEvent](types.NewRetEventFast)),
@@ -170,6 +183,13 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PTRACE_EVENT, rawDecoder[types.PtraceEvent](types.NewPtraceEventFast), nil),
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
 		enterRaw(types.ENTER_BPF_EVENT, rawDecoder[types.BpfEvent](types.NewBpfEvent), nil),
+	}
+}
+
+// rawTaskControlEvents lists the control records about a task's life: its
+// exec, exit, creation and rename.
+func rawTaskControlEvents() []rawRuntimeEvent {
+	return []rawRuntimeEvent{
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
 			typedRuntimePairControl((*eventLoop).handleProcessExecEvent)),
 		// sched:sched_process_exit fires for every exiting task. Every exit
@@ -194,6 +214,14 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		// that does not exec (internal/eventloop_taskrename.go).
 		controlRaw(types.TASK_RENAME_EVENT, rawDecoder[types.TaskRenameEvent](types.NewTaskRenameEventFast),
 			typedRuntimeControl((*eventLoop).handleTaskRenameEvent)),
+	}
+}
+
+// rawCallControlEvents lists the control records about one syscall of a
+// task: what the kernel does with an interrupted call, and what a call's
+// exit handler adds to its pending enter.
+func rawCallControlEvents() []rawRuntimeEvent {
+	return []rawRuntimeEvent{
 		// The restart-fold probes report what the kernel does with a call a
 		// signal interrupted. routeHeldRestart applies the record to the row
 		// its tid holds before this dispatch; what arrives here only needs

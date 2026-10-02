@@ -1718,7 +1718,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     the full pair filter at all.
   - The path kinds and `open_by_handle_at` run the full `finishPairForTid`; for
     `open_by_handle_at` that is the *only* filtering it gets, because its raw
-    enter filter is `nil` (see `rawRuntimeEvents`). A *failed*
+    enter filter is `nil` (see `rawSyscallEvents`). A *failed*
     `open_by_handle_at` (EPERM, EBADF, ESTALE, ...) reaches that checkpoint
     too, as a descriptor-less pathname row like a failed open
     (`failedHandleFile`). It used to be recycled in

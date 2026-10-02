@@ -31,7 +31,28 @@ func testFilename(value string) [MAX_FILENAME_LENGTH]byte {
 	return filename
 }
 
+// TestFastDecodersMatchGeneratedDecoders decodes one record of every kind
+// with both decoders and requires the same event from each. The subtests
+// are registered by one helper per group of kinds, only to keep each
+// function short; their names are the event types, as before.
 func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
+	fastMatchesOpenAndExec(t)
+	fastMatchesNullFdAndRet(t)
+	fastMatchesNamePathAndFcntl(t)
+	fastMatchesDup3HandleAndSocket(t)
+	fastMatchesSocketpairAcceptAndPipe(t)
+	fastMatchesEventfdAndEpollCtl(t)
+	fastMatchesTwoFdAndPoll(t)
+	fastMatchesMemAndMmap(t)
+	fastMatchesSleepKeyctlAndPtrace(t)
+	fastMatchesPerfOpen(t)
+	fastMatchesProcessRecords(t)
+	fastMatchesTaskAndRestartRecords(t)
+}
+
+// fastMatchesOpenAndExec registers the subtests of the open, open-name fixup
+// and exec records.
+func fastMatchesOpenAndExec(t *testing.T) {
 	t.Run("OpenEvent", func(t *testing.T) {
 		ev := &OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 2, Tid: 3, Dirfd: 5, Flags: 4, SchemaVersion: OPEN_EVENT_SCHEMA_VERSION}
 		copy(ev.Filename[:], "a")
@@ -76,7 +97,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("exec decode mismatch: %v", fast)
 		}
 	})
+}
 
+// fastMatchesNullFdAndRet registers the subtests of the argument-less, fd
+// and ret records.
+func fastMatchesNullFdAndRet(t *testing.T) {
 	t.Run("NullEvent", func(t *testing.T) {
 		ev := &NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 2, Tid: 3}
 		raw := rawBytes(t, ev)
@@ -115,7 +140,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("ret decode mismatch")
 		}
 	})
+}
 
+// fastMatchesNamePathAndFcntl registers the subtests of the two-name, path
+// and fcntl records.
+func fastMatchesNamePathAndFcntl(t *testing.T) {
 	t.Run("NameEvent", func(t *testing.T) {
 		ev := &NameEvent{EventType: ENTER_NAME_EVENT, TraceId: SYS_ENTER_RENAME, Time: 1, Pid: 2, Tid: 3, Olddirfd: 4, Newdirfd: 5, SchemaVersion: NAME_EVENT_SCHEMA_VERSION}
 		copy(ev.Oldname[:], "old")
@@ -157,7 +186,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("fcntl decode mismatch")
 		}
 	})
+}
 
+// fastMatchesDup3HandleAndSocket registers the subtests of the dup3,
+// open_by_handle_at and socket records.
+func fastMatchesDup3HandleAndSocket(t *testing.T) {
 	t.Run("Dup3Event", func(t *testing.T) {
 		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5}
 		raw := rawBytes(t, ev)
@@ -197,7 +230,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("socket decode mismatch")
 		}
 	})
+}
 
+// fastMatchesSocketpairAcceptAndPipe registers the subtests of the
+// socketpair, accept and pipe records.
+func fastMatchesSocketpairAcceptAndPipe(t *testing.T) {
 	t.Run("SocketpairEvent", func(t *testing.T) {
 		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11, Ret: -1}
 		raw := rawBytes(t, ev)
@@ -236,7 +273,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("pipe decode mismatch")
 		}
 	})
+}
 
+// fastMatchesEventfdAndEpollCtl registers the subtests of the eventfd and
+// epoll_ctl records.
+func fastMatchesEventfdAndEpollCtl(t *testing.T) {
 	t.Run("EventfdEvent", func(t *testing.T) {
 		ev := &EventfdEvent{
 			EventType:      ENTER_EVENTFD_EVENT,
@@ -274,7 +315,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("epoll_ctl decode mismatch")
 		}
 	})
+}
 
+// fastMatchesTwoFdAndPoll registers the subtests of the two-fd and poll
+// records.
+func fastMatchesTwoFdAndPoll(t *testing.T) {
 	t.Run("TwoFdEvent", func(t *testing.T) {
 		ev := &TwoFdEvent{
 			EventType:     ENTER_TWO_FD_EVENT,
@@ -314,7 +359,10 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("poll decode mismatch")
 		}
 	})
+}
 
+// fastMatchesMemAndMmap registers the subtests of the memory and mmap records.
+func fastMatchesMemAndMmap(t *testing.T) {
 	t.Run("MemEvent", func(t *testing.T) {
 		ev := &MemEvent{
 			EventType: ENTER_MEM_EVENT,
@@ -361,7 +409,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("mmap decode mismatch")
 		}
 	})
+}
 
+// fastMatchesSleepKeyctlAndPtrace registers the subtests of the sleep,
+// keyctl and ptrace records.
+func fastMatchesSleepKeyctlAndPtrace(t *testing.T) {
 	t.Run("SleepEvent", func(t *testing.T) {
 		ev := &SleepEvent{
 			EventType:   ENTER_SLEEP_EVENT,
@@ -407,7 +459,10 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("ptrace decode mismatch")
 		}
 	})
+}
 
+// fastMatchesPerfOpen registers the subtests of the perf_event_open record.
+func fastMatchesPerfOpen(t *testing.T) {
 	t.Run("PerfOpenEvent", func(t *testing.T) {
 		ev := &PerfOpenEvent{
 			EventType: ENTER_PERF_OPEN_EVENT,
@@ -433,7 +488,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("perf_open decode mismatch")
 		}
 	})
+}
 
+// fastMatchesProcessRecords registers the subtests of the process exec and
+// exit control records.
+func fastMatchesProcessRecords(t *testing.T) {
 	// ProcessExecEvent is not a syscall event: it is the sched_process_exec
 	// control record that keeps the pid->comm cache correct across execve. It
 	// belongs in this table for the same reason as the others - its fast path
@@ -468,7 +527,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exit decode mismatch")
 		}
 	})
+}
 
+// fastMatchesTaskAndRestartRecords registers the subtests of the task and
+// restart control records.
+func fastMatchesTaskAndRestartRecords(t *testing.T) {
 	// TaskNewtaskEvent is the control record of task:task_newtask that seeds
 	// a new task's comm; same table membership rationale as above.
 	t.Run("TaskNewtaskEvent", func(t *testing.T) {
