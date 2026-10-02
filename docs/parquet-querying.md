@@ -139,22 +139,21 @@ the row it was announced for. Neither `rt_sigreturn` nor the later call has to b
 that.
 
 A -516 row therefore stays as it is when a handler ran and the program got `EINTR`, when the
-trace ended (or the thread exited) while the call was stopped, and when `restart_syscall` is
-not traced. In that last case a headless run (`-parquet`, `-plain`, `-flamegraph`) writes the
--516 row when the call is interrupted: its syscalls are fixed for the whole run, so ior knows
-that nothing will continue the row. In the TUI, where syscalls can be switched on and off
-while tracing, the row is also late: nothing ior records marks the moment the call is resumed,
-so the -516 row appears only with the thread's next traced syscall or its exit, which can be
-seconds after the stop (typically the rest of the sleep). The row itself is correct; only its
-place in the output and the time it shows up are affected. Trace `restart_syscall` along with
-the sleeping syscalls to get one row per sleep, and in the TUI to avoid the delay. A
-`restart_syscall` row
-whose interrupted call was not traced (the trace started while the process was stopped, or the
-original syscall is not traced) also stays. And when some other record of the thread arrives
-between the `restart_syscall` enter and its exit (another thread wrote this thread's `comm`
-through `/proc/<pid>/task/<tid>/comm`), ior no longer treats what follows as the continuation:
-the -516 row stays as it is and is followed directly by a `restart_syscall` row with the final
-return value.
+trace ended (or the thread exited) while the call was stopped, and when `restart_syscall` is not
+traced. In that last case a headless run (`-parquet`, `-plain`, `-flamegraph`) writes the -516
+row when the call is interrupted: its syscalls are fixed for the whole run, so ior knows that
+nothing will continue the row. In the TUI, where syscalls can be switched on and off while
+tracing, the row is also late: nothing ior records marks the moment the call is resumed, so the
+-516 row appears only with the thread's next traced syscall or its exit, which can be seconds
+after the stop (typically the rest of the sleep). The row itself is correct; only its place in
+the output and the time it shows up are affected. Trace `restart_syscall` along with the
+sleeping syscalls to get one row per sleep, and in the TUI to avoid the delay. A
+`restart_syscall` row whose interrupted call was not traced (the trace started while the process
+was stopped, or the original syscall is not traced) also stays. And when some other record of
+the thread arrives between the `restart_syscall` enter and its exit (another thread wrote this
+thread's `comm` through `/proc/<pid>/task/<tid>/comm`), ior no longer treats what follows as the
+continuation: the -516 row stays as it is and is followed directly by a `restart_syscall` row
+with the final return value.
 
 The kernel-side decision needs two probes, on `signal:signal_deliver` and
 `sched:sched_process_exit`. When either cannot be attached (ior warns at startup), no stopped
@@ -185,15 +184,14 @@ Sampling is not record loss, and the drop counter says nothing about it. By defa
 `restart_syscall` is recorded and the above holds. If you sample `restart_syscall` itself
 (`-syscall-sampling-syscalls restart_syscall=N`, or a rate for its family,
 `-syscall-sampling-families Process=N`; any effective rate other than 1), no stopped sleep of
-that run is folded: every -516 row stays as it is, and each `restart_syscall` that is sampled
-in is a row of its own. A stopped call's own `restart_syscall` is then recorded only some of
-the time, so only some stopped sleeps could be folded at all, and waiting for it would hold
-every other -516 row back until the thread's next syscall or its exit; ior keeps the rows of
-such a run separate throughout and writes each -516 row when the call is interrupted.
-Sampling the interrupted syscall alone (`clock_nanosleep=N`) does
-not turn the fold off: the sleeps that are recorded are still one row each. Leave
-`restart_syscall` at rate 1 when stopped calls matter in a sampled recording. (An explicit
-`restart_syscall=1` wins over a family rate.)
+that run is folded: every -516 row stays as it is, and each `restart_syscall` that is sampled in
+is a row of its own. A stopped call's own `restart_syscall` is then recorded only some of the
+time, so only some stopped sleeps could be folded at all, and waiting for it would hold every
+other -516 row back until the thread's next syscall or its exit; ior keeps the rows of such a
+run separate throughout and writes each -516 row when the call is interrupted. Sampling the
+interrupted syscall alone (`clock_nanosleep=N`) does not turn the fold off: the sleeps that are
+recorded are still one row each. Leave `restart_syscall` at rate 1 when stopped calls matter in
+a sampled recording. (An explicit `restart_syscall=1` wins over a family rate.)
 
 #### A re-executed call is one row
 
@@ -325,8 +323,8 @@ listed before it. For a row that
 stays as it is the wait is usually microseconds, except for a stopped sleep (-516) in a TUI
 session that does not trace `restart_syscall`: that row appears only with the thread's next
 traced syscall or its exit, seconds later for a long sleep (see "A stopped sleep is one row").
-A headless run that does not trace `restart_syscall`, or one that samples it, does not wait
-for such a row at all.
+A headless run that does not trace `restart_syscall` does not wait for such a row at all,
+and neither does any run, TUI or headless, that samples `restart_syscall`.
 
 ### Syscalls that never return
 

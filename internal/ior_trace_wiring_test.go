@@ -239,6 +239,9 @@ func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	}
 	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook"})
 	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes != nil")
+	// A headless loop that listens takes the install's stamp and refuses the
+	// folds of the calls interrupted before it, for nothing.
+	assertGuarded(t, decl, call, "watchProbeChanges must not run for a manager that no TUI was given")
 	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
 		t.Fatalf("watchProbeChanges at %s must precede the start signal", fset.Position(call.Pos()))
 	}
@@ -297,13 +300,9 @@ func TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal(t *testing.T) {
 	}
 	assertCallArguments(t, call, []string{"infra.mgr.IsActive"})
 	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes == nil")
-	// That helper also accepts a call no condition guards, which here is the
-	// defect itself: a TUI's loop told that its trace set is final.
-	for _, statement := range decl.Body.List {
-		if expression, ok := statement.(*ast.ExprStmt); ok && expression.X == call {
-			t.Fatal("traceSetIsFinal must not run for a manager that was published to a TUI")
-		}
-	}
+	// An unguarded call is the defect itself: a TUI's loop told that its trace
+	// set is final.
+	assertGuarded(t, decl, call, "traceSetIsFinal must not run for a manager that was published to a TUI")
 	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
 		t.Fatalf("traceSetIsFinal at %s must precede the start signal", fset.Position(call.Pos()))
 	}
@@ -345,6 +344,20 @@ func TestAttachRestartPendingMapWithoutAMapLeavesTheLoopWithout(t *testing.T) {
 	f.changeProbes(restartBase)
 	if got := f.el.restarts.probes.changedAt.Load(); got != restartBase {
 		t.Fatalf("change stamp = %d without a map to clear, want %d", got, restartBase)
+	}
+}
+
+// assertGuarded fails with message when call is a plain statement of decl's
+// body. assertRunsUnconditionallyOnceManagerExists accepts that shape - a call
+// no condition guards runs on every pass, which is what most of its callers
+// want - so a test whose point is the guard itself (the call must NOT run for
+// some setups) asks this as well.
+func assertGuarded(t *testing.T, decl *ast.FuncDecl, call *ast.CallExpr, message string) {
+	t.Helper()
+	for _, statement := range decl.Body.List {
+		if expression, ok := statement.(*ast.ExprStmt); ok && expression.X == call {
+			t.Fatal(message)
+		}
 	}
 }
 

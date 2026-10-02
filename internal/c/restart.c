@@ -81,7 +81,10 @@
  * so RESUME is emitted for whatever traced enter comes first, and userspace
  * takes it for the continuation only when it is a restart_syscall enter with
  * the RESUME record's time. When restart_syscall is not traced, the entry
- * waits for the task's next traced enter, whose RESUME releases the row.
+ * waits for the task's next traced enter, whose RESUME releases the row where
+ * userspace still holds it (a TUI run). A headless run did not hold the row
+ * (task u13: its trace set is final, so the row went out with its own exit),
+ * and the record finds none.
  * What the record adds over the stream: a restart_syscall enter that no
  * RESUME announced - the one of a later, silent call - is not a continuation
  * of anything userspace holds, whether or not the HANDLER record that should

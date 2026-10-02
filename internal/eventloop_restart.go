@@ -103,16 +103,16 @@ import (
 // read, so the fold takes only an enter whose time equals the RESUME record's
 // (heldRestart.resumeTime); a later call of the same syscall - a later stopped
 // call's restart_syscall, for a -516 row - which is what follows RESUME when
-// the continuation went unrecorded, has a later time and releases the row.
-// BPF does not know which syscall an enter belongs to, so RESUME precedes the
+// the continuation went unrecorded, has a later time and releases the row. BPF
+// does not know which syscall an enter belongs to, so RESUME precedes the
 // task's first traced enter whatever it is; the enter must also be the
 // continuation's syscall (continuationEnterID), which after -516 it is
-// whenever restart_syscall is traced. Carrying the interrupted call's sampling decision over to
-// the re-execution in BPF instead would fold more calls at rates above 1, but
-// it would put a second verdict on the enter hot path, emit rows the
-// configured rate did not select, and still not cover an enter the ring
-// buffer refused - the time check is needed either way, so it is the whole
-// mechanism.
+// whenever restart_syscall is traced. Carrying the interrupted call's sampling
+// decision over to the re-execution in BPF instead would fold more calls at
+// rates above 1, but it would put a second verdict on the enter hot path, emit
+// rows the configured rate did not select, and still not cover an enter the
+// ring buffer refused - the time check is needed either way, so it is the
+// whole mechanism.
 //
 // Lost records. A fold also requires proof that the kernel dropped no record
 // since the interrupted exit (restartDropWatch): with records missing, the
@@ -456,25 +456,26 @@ import (
 //
 // Output order: rows are emitted when the call completes, as always. A held
 // row is delayed until its tid's next record; for a folded call that is its
-// real completion, and for a row released unchanged (the handled-signal
-// case) it is the HANDLER record, emitted as the handler is delivered,
-// typically microseconds later. Rows of other tids emitted meanwhile may therefore
+// real completion, and for a row released unchanged (the handled-signal case)
+// it is the HANDLER record, emitted as the handler is delivered, typically
+// microseconds later. Rows of other tids emitted meanwhile may therefore
 // precede it although they exited later, and so do the rows of a restarting
 // handler's own syscalls: they complete before the call they interrupted.
 // Those rows measure their gap from the interrupted exit, and the folded row
 // keeps the gap it had at its first enter (heldRestart.gapBase).
 //
-// One held row has no such bound: a -516 row that no handler ends, while
-// restart_syscall emits nothing because it is outside the attached trace set
-// (-trace-syscalls without it, or its probes switched off in the TUI). It can
-// never fold, and no record marks the resumption, so held it waits for
+// One held row has no such bound, in a TUI run: a -516 row that no handler
+// ends, while restart_syscall emits nothing because it is outside the attached
+// trace set (the TUI started without it, or its probes switched off there). It
+// can never fold, and no record marks the resumption, so held it waits for
 // whatever the thread's next record is - the RESUME ahead of its next traced
 // enter (the BPF entry waits for that enter, restart.c), its exit record, or
 // the end of the run. For a thread that goes on sleeping that is as long as
-// the rest of the stopped call takes (2.5 s in a live run), and for one that
-// makes no further traced call it is the thread's exit. The row is right (ret
-// -516, the latency up to the stop); only the time it appears at and its
-// place in the output are off.
+// the rest of the stopped call takes (2.5 s in a live headless run before task
+// u13, when such a run held the row too), and for one that makes no further
+// traced call it is the thread's exit. The row is right (ret -516, the latency
+// up to the stop); only the time it appears at and its place in the output are
+// off.
 //
 // A run whose trace set is fixed does not hold such a row (task u13,
 // traceSetIsFinal, restartTracker.restartSyscallUntraced): every headless
@@ -1245,9 +1246,10 @@ func (e *eventLoop) restartAcrossProbeChange(held *heldRestart, action restartAc
 
 // commitsToFold reports whether action is a step at which a fold asks for
 // proof that it still stands - no record lost (restartProofLost), no probe
-// changed (restartAcrossProbeChange): the record that announces the continuation
-// (RESUME) and the continuation's exit. The announced enter between them is
-// not such a step: RESUME, which names it by time, was asked just before it.
+// changed (restartAcrossProbeChange): the record that announces the
+// continuation (RESUME) and the continuation's exit. The announced enter
+// between them is not such a step: RESUME, which names it by time, was asked
+// just before it.
 func commitsToFold(action restartAction) bool {
 	return action == restartResume || action == restartFold
 }
