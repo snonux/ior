@@ -156,12 +156,15 @@
  * before an attach attaches any, and again when that attach is over (the two
  * tracepoints are attached one after the other, and a continuation that runs
  * meanwhile is seen in part or not at all) - and from then on folds nothing
- * into a row whose interrupted exit is not younger than that moment. Only a
- * run with a TUI does any of this: nothing else changes probes. Either would
- * do for the case above; the clear keeps a stale RESUME from being emitted at
- * all, and the time rule covers what the clear cannot: it races with the programs
- * on other CPUs, and a signal delivery or rt_sigreturn that read a slot before
- * the clear and writes its changed word back afterwards
+ * into a row whose interrupted exit is not younger than that moment. Between
+ * the two reports of an attach, while the kernel attaches the tracepoints at
+ * moments userspace cannot stamp, it holds no row and folds nothing at all
+ * (task x13, "While an attach is in flight" there). Only a run with a TUI
+ * does any of this: nothing else changes probes. The clear or the time rule
+ * would do for the case above; the clear keeps a stale RESUME from being
+ * emitted at all, and the time rule covers what the clear cannot: it races
+ * with the programs on other CPUs, and a signal delivery or rt_sigreturn that
+ * read a slot before the clear and writes its changed word back afterwards
  * (ior_restart_on_handler, ior_restart_on_sigreturn) keeps that one entry
  * alive. The clear also takes the entries of calls no probe change touched;
  * their rows are the ones userspace has just refused to fold, so nothing more
@@ -190,9 +193,10 @@
  *     nothing to fold with.
  *   - A call that was interrupted before a syscall's probes - any syscall's -
  *     were last attached or detached at runtime (see "Runtime probe changes"
- *     above): its entry is cleared and userspace refuses the fold, also when
- *     the change had nothing to do with it. A family toggle changes one pair
- *     after the other, so for as long as it runs nothing is folded.
+ *     above), or while a syscall's probes were being attached: its entry is
+ *     cleared and userspace refuses the fold, also when the change had
+ *     nothing to do with it. A family toggle changes one pair after the
+ *     other, so for as long as it runs nothing is folded.
  *   - The re-executed call's enter or exit is sampled out or lost, or any
  *     record at all was dropped host-wide while the row was held (above).
  *   - The 32-bit sigreturn of compat tasks is not seen; syscall tracepoints
@@ -242,17 +246,6 @@
  *     had interrupted the call).
  *   - A kernel or driver bug lets -ERESTARTSYS escape with no signal pending:
  *     nothing restarts, the program sees errno 512 and carries on.
- *   - The continuation's probes are attached at runtime while the call is
- *     pending (task o03, "Runtime probe changes" above). Userspace clears the
- *     map and refuses by time before the attach and after it, but it learns
- *     that the attach is over only when the attach call has returned, and the
- *     fresh pair records from the moment the kernel attached it. An entry
- *     made during the attach whose continuation ran before the enter
- *     tracepoint was attached still announces the task's next enter of that
- *     syscall, and userspace folds it if that call's exit is recorded and
- *     processed before the second clear and stamp exist: for -516, one thread
- *     stopped and continued twice within a single attach of restart_syscall's
- *     probes (internal/eventloop_restart.go, "What is left open").
  *
  * A time rule that cannot tell: RESUME is right. Here the kernel did
  * re-execute the call and the entry was cleared when it should be, but the
@@ -275,8 +268,15 @@
  * microseconds younger than the detach, which cannot announce that syscall
  * while its probes are off and is cleared, its row refused, before they are
  * attached again); a call interrupted while such an attach was under way and
- * continued before both tracepoints were attached, outside the corner above
- * (the second clear and stamp); a -516 call cut by a handled signal whose
+ * continued before both tracepoints were attached (the second clear and
+ * stamp) - also when the task's next enter of that syscall, announced from
+ * the entry it left, and that call's exit are recorded by the fresh pair and
+ * read by userspace before the second clear and stamp exist, for -516 one
+ * thread stopped and continued twice within a single attach of
+ * restart_syscall's probes: userspace learns that the attach is over only
+ * when the attach call has returned, so from the first report to the second
+ * it counts the attach as in flight and neither holds the row nor folds (task
+ * x13); a -516 call cut by a handled signal whose
  * handler is silent, followed by a silent stopped call (task t13, see the top
  * of this comment; the stream-only fold took that call's restart_syscall for the
  * continuation); a recycled tid inheriting the entry of a task that died

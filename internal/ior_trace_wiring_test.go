@@ -131,10 +131,12 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 // again at runtime clears the kernel's pending restarts and moves the loop's
 // change stamp at each report - one for the detach, two for the attach - and
 // the startup attach, which ran before the loop listened, is covered by the
-// clear and the stamp taken when the hook was installed.
+// clear and the stamp taken when the hook was installed. The attach is counted
+// as in flight between its two reports and no longer (task x13): the fake
+// program looks at the count while it attaches.
 func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
-	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
-	mgr, err := attachSyscallProbes(attacher, nil, syscallPairNames("read"), failOnLog(t))
+	prog := &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}
+	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: prog}, nil, syscallPairNames("read"), failOnLog(t))
 	if err != nil {
 		t.Fatalf("attachSyscallProbes() error = %v", err)
 	}
@@ -142,6 +144,8 @@ func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	pending := &scriptedPendingClearer{}
 	f.el.restartPending = pending
+	var inFlight []int64
+	prog.during = func(string) { inFlight = append(inFlight, f.el.restarts.probes.inFlight.Load()) }
 
 	f.clockAt(100)
 	f.el.watchProbeChanges(mgr.SetChangeHook)
@@ -159,6 +163,10 @@ func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
 			t.Fatalf("after probe change %d: stamp=%d clears=%d, want %d and %d", i, stamp, clears, at, wantClears[i])
 		}
 	}
+	if !slices.Equal(inFlight, []int64{1, 1}) || f.el.restarts.probes.inFlight.Load() != 0 {
+		t.Fatalf("attaches in flight while the two tracepoints were attached = %v, afterwards %d; want 1, 1 and 0",
+			inFlight, f.el.restarts.probes.inFlight.Load())
+	}
 }
 
 // attachWindowProgram is a probe program whose attach first runs a callback:
@@ -175,46 +183,123 @@ func (p *attachWindowProgram) AttachTracepoint(category, name string) (probemana
 	return p.fakeProbeProgram.AttachTracepoint(category, name)
 }
 
-// TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall: the two
-// tracepoints of a pair are attached one after the other, after the attach was
-// reported. While restart_syscall's are being attached a traced sleep is
-// stopped - after that report, so its row is held and its task pending - and
-// resumed before the enter tracepoint is there: its restart_syscall is never
-// seen. The restart_syscall BPF announces later, from the entry that outlived
-// it, resumes another stopped call of the thread, one that left no record.
-// With the attach reported only beforehand it was folded into the held sleep;
-// the report after the attach is younger than that row, so RESUME releases it
-// and the restart_syscall is a row of its own.
-func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing.T) {
-	f := newReexecFixture(t, globalfilter.Filter{})
-	prog := &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}
+// attachWindowRun is a loop that listens to a real probe manager whose one
+// pair, restart_syscall, is registered and not attached, and whose program
+// lets a test act while the manager attaches it.
+type attachWindowRun struct {
+	f    *restartFixture
+	mgr  *probemanager.Manager
+	prog *attachWindowProgram
+}
+
+// newAttachWindowRun builds that run. listen is what the loop registers its
+// hook through: the manager's SetChangeHook, or a wrapper of it.
+func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(func(probemanager.ChangePhase))) *attachWindowRun {
+	t.Helper()
+	r := &attachWindowRun{f: newReexecFixture(t, globalfilter.Filter{}),
+		prog: &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}}
 	none := func(string) bool { return false }
-	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: prog}, none, syscallPairNames("restart_syscall"), failOnLog(t))
+	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: r.prog}, none, syscallPairNames("restart_syscall"), failOnLog(t))
 	if err != nil {
 		t.Fatalf("attachSyscallProbes() error = %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
-	f.clockAt(restartBase - 1000)
-	f.el.watchProbeChanges(mgr.SetChangeHook)
+	t.Cleanup(func() { _ = mgr.Close() })
+	r.mgr = mgr
+	r.f.clockAt(restartBase - 1000)
+	r.f.el.watchProbeChanges(listen(mgr))
+	return r
+}
 
-	prog.during = func(tracepoint string) {
+// TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall: the two
+// tracepoints of a pair are attached one after the other, after the attach was
+// reported. While restart_syscall's are being attached a traced sleep is
+// stopped - after that report, so its task is pending - and resumed before the
+// enter tracepoint is there: its restart_syscall is never seen. The
+// restart_syscall BPF announces later, from the entry that outlived it,
+// resumes another stopped call of the thread, one that left no record. With
+// the attach reported only beforehand it was folded into the sleep, whose row
+// was held. The loop reads the stopped sleep while the attach is in flight
+// here and does not hold its row; the report after the attach is younger than
+// that row, for a loop that reads it later
+// (TestRowInterruptedDuringAProbeAttachIsNotHeldByALaggingLoop). Either way
+// the restart_syscall is a row of its own.
+func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing.T) {
+	r := newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.ChangePhase)) {
+		return mgr.SetChangeHook
+	})
+	f := r.f
+	var rows []restartRow
+	r.prog.during = func(tracepoint string) {
 		if tracepoint != "sys_enter_restart_syscall" {
 			return
 		}
-		f.interrupt(restartBase, restartTid) // held: interrupted after the first report
-		f.clockAt(restartBase + 1000)        // and resumed unseen before this attach returns
+		// Interrupted after the first report, resumed unseen before this
+		// attach returns.
+		f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+		rows = f.feed(f.sleepExit(restartBase+500, restartTid, -516))
+		f.requireNothingHeld()
+		f.clockAt(restartBase + 1000)
 	}
 	f.clockAt(restartBase - 100)
-	if err := mgr.Attach("restart_syscall"); err != nil {
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	if stamp := f.el.restarts.probes.changedAt.Load(); stamp != restartBase+1000 {
 		t.Fatalf("change stamp = %d after the attach, want %d: a report once both tracepoints are attached", stamp, restartBase+1000)
 	}
 
-	rows := f.foldSleepFrom(restartBase)
+	rows = append(rows, f.foldSleepFrom(restartBase)...)
 	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
 	f.requireNothingHeld()
+}
+
+// TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns is what
+// the two stamps left open (task x13), driven through a real manager: the
+// thread is stopped and continued twice within one attach of restart_syscall's
+// probes - first in a traced sleep, resumed before the enter tracepoint is
+// attached, then in a call that leaves no record - and the fresh pair records
+// the second restart_syscall at both ends before the manager has made its
+// second report. The loop reads that exit before the second report has stored
+// anything (the wrapper below feeds it right ahead of the loop's hook), so no
+// stamp refuses the sleep's row, which the first stamp is older than. It was
+// folded. The attach being in flight is what refuses now: two rows.
+func TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns(t *testing.T) {
+	var rows []restartRow
+	var r *attachWindowRun
+	beforeTheEndIsNoted := func() {
+		rows = append(rows, r.f.feed(r.f.restartExit(restartBase+3000, restartTid, 0))...)
+	}
+	r = newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.ChangePhase)) {
+		return func(hook func(probemanager.ChangePhase)) {
+			mgr.SetChangeHook(func(phase probemanager.ChangePhase) {
+				if phase == probemanager.ChangeEnds {
+					beforeTheEndIsNoted()
+				}
+				hook(phase)
+			})
+		}
+	})
+	f := r.f
+	r.prog.during = func(tracepoint string) {
+		if tracepoint == "sys_enter_restart_syscall" {
+			f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+			rows = append(rows, f.feed(f.sleepExit(restartBase+500, restartTid, -516))...)
+			return
+		}
+		// The enter tracepoint is attached by now: the later call's
+		// restart_syscall is announced and its enter recorded.
+		rows = append(rows, f.feed(f.resumeRecord(restartBase+1500, restartTid))...)
+		rows = append(rows, f.feed(f.restartEnter(restartBase+1500, restartTid))...)
+	}
+	f.clockAt(restartBase - 100)
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+	f.requireNothingHeld()
+	if got := f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after Attach returned, want 0", got)
+	}
 }
 
 // TestSetupTraceInfraReportsProbeChangesToTheLoop pins the call that connects

@@ -11,6 +11,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/globalfilter"
+	"ior/internal/probemanager"
 	"ior/internal/textsafe"
 )
 
@@ -21,14 +22,31 @@ import (
 // are on again the task's next call of that syscall is announced as the
 // continuation. The loop is told of every probe change (probesChanged, on the
 // probe manager's goroutine) and from then on folds nothing into a row
-// interrupted before it.
+// interrupted before it - and, while an attach is in flight between its two
+// reports, holds and folds nothing at all (task x13).
 
-// changeProbes reports a runtime probe change that the probe manager made at
-// boot-clock time at: the hook the manager calls, on this goroutine.
+// changeProbes reports a runtime probe change that is over and that the probe
+// manager made at boot-clock time at (a detach): the hook the manager calls,
+// on this goroutine.
 func (f *restartFixture) changeProbes(at uint64) {
 	f.t.Helper()
 	f.clockAt(at)
-	f.el.probesChanged()
+	f.el.probesChanged(probemanager.Changed)
+}
+
+// beginAttach is the first report of a runtime attach, made at boot-clock
+// time at: from here on the attach is in flight.
+func (f *restartFixture) beginAttach(at uint64) {
+	f.t.Helper()
+	f.clockAt(at)
+	f.el.probesChanged(probemanager.ChangeBegins)
+}
+
+// endAttach is the second report of that attach, made at boot-clock time at.
+func (f *restartFixture) endAttach(at uint64) {
+	f.t.Helper()
+	f.clockAt(at)
+	f.el.probesChanged(probemanager.ChangeEnds)
 }
 
 // noticeProbeChange is the loop's select case for a probe change: it takes the
@@ -45,7 +63,7 @@ func (f *restartFixture) noticeProbeChange() []restartRow {
 		rows = append(rows, rowOf(ep))
 		ep.Recycle()
 	})
-	f.el.releaseRestartsBehindProbeChange(f.out)
+	f.el.probeChangeNoticed(f.out)
 	return rows
 }
 
@@ -157,7 +175,7 @@ func TestRestartSyscallAfterAProbeChangeIsNotFoldedIntoTheHeldSleep(t *testing.T
 		f.el.dropStampClock = func() uint64 { return now }
 		f.interrupt(restartBase, restartTid)
 		now = restartBase + 10_000
-		f.el.probesChanged()
+		f.el.probesChanged(probemanager.Changed)
 
 		now = restartBase + 30_050
 		sleep := f.feedOne(f.resumeRecord(restartBase+30_000, restartTid), "stale RESUME record")
@@ -333,7 +351,7 @@ func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	}
 	f.el.restartPending = pending
 
-	f.el.probesChanged()
+	f.el.probesChanged(probemanager.Changed)
 	if got := pending.clears.Load(); got != 1 || pending.clearedAt[0] != 100 {
 		t.Fatalf("clears = %d at %v, want one clear, begun at 100", got, pending.clearedAt)
 	}
@@ -343,16 +361,17 @@ func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	if got := f.el.restarts.probes.changedAt.Load(); got != 500 {
 		t.Fatalf("change stamp = %d, want 500, the reading taken after the clear", got)
 	}
-	f.el.probesChanged()
+	f.el.probesChanged(probemanager.Changed)
 	if got := pending.clears.Load(); got != 2 {
 		t.Fatalf("clears = %d after a second change, want 2", got)
 	}
 }
 
-// TestFailedClearStillRefusesTheFold: a clear the kernel refuses is reported
-// once, however many probes a family toggle changes, and takes nothing from
-// the guard - the stale announcement the map then still makes is refused by
-// time.
+// TestFailedClearStillRefusesTheFold: a clear the kernel refuses takes nothing
+// from the guard - the stale announcement the map then still makes is refused
+// by time - and is reported once, however many probes a family toggle changes.
+// The loop reports it when it wakes; the goroutine that changed the probe
+// raises nothing itself (TestFailedClearOfPendingRestartsIsReportedByTheLoop).
 func TestFailedClearStillRefusesTheFold(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	var warnings []string
@@ -362,11 +381,52 @@ func TestFailedClearStillRefusesTheFold(t *testing.T) {
 
 	f.changeProbes(restartBase + 10_000)
 	f.changeProbes(restartBase + 20_000)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "bad file descriptor") {
-		t.Fatalf("warnings = %q, want the failed clear reported once", warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %q raised by the probe change itself, want them left for the loop", warnings)
 	}
 	f.clockAt(restartBase + 30_050)
 	requireInterruptedRow(t, f.feedOne(f.resumeRecord(restartBase+30_000, restartTid), "stale RESUME record"), restartSys)
+
+	f.noticeProbeChange()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "bad file descriptor") {
+		t.Fatalf("warnings = %q after the loop woke, want the failed clear reported once", warnings)
+	}
+	f.changeProbes(restartBase + 40_000)
+	f.noticeProbeChange()
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q after a third failed clear, want still one", warnings)
+	}
+}
+
+// TestFailedClearOfPendingRestartsIsReportedByTheLoop: the hook runs on the
+// goroutine that changes a probe, and the TUI can change one as soon as it has
+// the probe manager - while trace setup, which installed the hook, is still
+// wiring the loop's warning sink without a lock. The hook must not read it
+// (task x13): run with -race, a hook that warns by itself is a data race with
+// the SetWarningCallback below, whichever of the two runs first. The warning
+// is left for the loop instead and reaches the sink that is wired by then.
+func TestFailedClearOfPendingRestartsIsReportedByTheLoop(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.restartPending = &scriptedPendingClearer{err: errors.New("bad file descriptor")}
+	f.clockAt(restartBase)
+
+	changed := make(chan struct{})
+	go func() {
+		defer close(changed)
+		f.el.probesChanged(probemanager.Changed)
+	}()
+	// Nothing orders this write with the hook: the channel is read afterwards.
+	var warnings []string
+	f.el.SetWarningCallback(func(message string) { warnings = append(warnings, message) })
+	<-changed
+
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %q raised on the goroutine that changed the probe", warnings)
+	}
+	f.noticeProbeChange()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "bad file descriptor") {
+		t.Fatalf("warnings = %q after the loop woke, want the failed clear reported once", warnings)
+	}
 }
 
 // TestWatchProbeChangesHooksTheManagerAndReportsOnce: trace setup hands the
@@ -379,8 +439,8 @@ func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	pending := &scriptedPendingClearer{}
 	f.el.restartPending = pending
 	f.clockAt(restartBase + 600)
-	var hook func()
-	f.el.watchProbeChanges(func(registered func()) {
+	var hook func(probemanager.ChangePhase)
+	f.el.watchProbeChanges(func(registered func(probemanager.ChangePhase)) {
 		hook = registered
 		// The hook must exist before the install is reported: a change that
 		// races the install is then reported by one or the other.
@@ -401,9 +461,12 @@ func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	requireInterruptedRow(t, f.feedOne(f.readExit(restartBase+500, restartTid, restartSys), "interrupted read exit"), restartSys)
 
 	f.clockAt(restartBase + 5000)
-	hook()
+	hook(probemanager.Changed)
 	if got := f.el.restarts.probes.changedAt.Load(); got != restartBase+5000 {
 		t.Fatalf("change stamp = %d after the registered hook ran, want %d", got, restartBase+5000)
+	}
+	if got := f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after the install and a detach, want none: neither is an attach", got)
 	}
 }
 
@@ -467,7 +530,7 @@ func TestRunningLoopReleasesAHeldRowWhenProbesChange(t *testing.T) {
 	}
 
 	r.now.Store(restartBase + 1000)
-	r.f.el.probesChanged()
+	r.f.el.probesChanged(probemanager.Changed)
 	select {
 	case row := <-r.rows:
 		if row.name != "clock_nanosleep" || row.tid != restartTid || row.ret != -516 {
@@ -475,6 +538,27 @@ func TestRunningLoopReleasesAHeldRowWhenProbesChange(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the idle loop did not release the held row after a probe change")
+	}
+}
+
+// TestRunningLoopReportsAFailedClearOfPendingRestarts: the warning a probe
+// change leaves for the loop is raised by the running loop itself, woken by
+// that change with no record arriving, through the sink the run wired.
+func TestRunningLoopReportsAFailedClearOfPendingRestarts(t *testing.T) {
+	warnings := make(chan string, 8)
+	r := startProbeChangeRunWith(t, func(el *eventLoop) {
+		el.restartPending = &scriptedPendingClearer{err: errors.New("bad file descriptor")}
+		el.SetWarningCallback(func(message string) { warnings <- message })
+	})
+	r.now.Store(restartBase)
+	r.f.el.probesChanged(probemanager.Changed)
+	select {
+	case message := <-warnings:
+		if !strings.Contains(message, "bad file descriptor") {
+			t.Fatalf("warning = %q, want the failed clear", message)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the running loop did not report the failed clear after a probe change")
 	}
 }
 
@@ -505,7 +589,7 @@ func TestRowReleasedByAProbeChangeIsFlushedInAPlainRun(t *testing.T) {
 	})
 	r.holdStoppedSleep()
 	r.now.Store(restartBase + 1000)
-	r.f.el.probesChanged()
+	r.f.el.probesChanged(probemanager.Changed)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -521,8 +605,9 @@ func TestRowReleasedByAProbeChangeIsFlushedInAPlainRun(t *testing.T) {
 }
 
 // changeProbesUntil reports probe changes from two goroutines, each at a new
-// clock reading, until the returned function is called; that function waits
-// for both to finish.
+// clock reading - a detach, then an attach's begin and its end, over and over
+// - until the returned function is called; that function waits for both to
+// finish, each with its last attach ended.
 func (r *probeChangeRun) changeProbesUntil() func() {
 	var changers sync.WaitGroup
 	stopChanging := make(chan struct{})
@@ -535,8 +620,12 @@ func (r *probeChangeRun) changeProbesUntil() func() {
 				case <-stopChanging:
 					return
 				default:
-					r.now.Add(1)
-					r.f.el.probesChanged()
+					for _, phase := range []probemanager.ChangePhase{
+						probemanager.Changed, probemanager.ChangeBegins, probemanager.ChangeEnds,
+					} {
+						r.now.Add(1)
+						r.f.el.probesChanged(phase)
+					}
 				}
 			}
 		}()
@@ -551,7 +640,8 @@ func (r *probeChangeRun) changeProbesUntil() func() {
 // goroutines that make them while the loop holds, folds and releases rows.
 // Run with -race, this is what notices the loop's tracker being touched from
 // the hook. Every stopped sleep ends as one folded row or as two rows, never
-// lost and never three, whatever the interleaving.
+// lost and never three, whatever the interleaving, and when every attach has
+// ended none is counted as in flight.
 func TestProbeChangesRaceWithTheRunningLoop(t *testing.T) {
 	const sleeps = 300
 	r := startProbeChangeRun(t)
@@ -579,4 +669,172 @@ func TestProbeChangesRaceWithTheRunningLoop(t *testing.T) {
 			rows, sleeps, r.f.el.numSyscalls)
 	}
 	r.f.requireNothingHeld()
+	if got := r.f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after every begin was followed by its end, want 0", got)
+	}
+}
+
+// The tests below are about an attach in flight (task x13). The probe manager
+// reports an attach twice, around the attach call, and the kernel attaches the
+// two tracepoints somewhere in between: the fresh pair produces records before
+// the second report has stamped anything. Between the two reports the loop
+// holds no interrupted row and commits to no fold.
+
+// TestCallStoppedTwiceWithinOneProbeAttachIsNotFolded is the case the two
+// stamps of an attach left open. restart_syscall's probes are being attached.
+// A sleep is stopped after the first report - its row was held: the first
+// stamp is older - and resumed before the enter tracepoint is there, unseen.
+// The thread is stopped again in a call that leaves no record, and that call's
+// restart_syscall, announced by BPF from the entry the sleep left, is recorded
+// at both ends by the fresh pair, all before the attach call returns. It was
+// folded into the sleep. Now the sleep's row is not held in the first place:
+// it is emitted by its own exit, and the restart_syscall is a row of its own.
+func TestCallStoppedTwiceWithinOneProbeAttachIsNotFolded(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.beginAttach(restartBase - 100)
+
+	f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+	rows := f.feed(f.sleepExit(restartBase+500, restartTid, -516))
+	f.requireNothingHeld()
+	rows = append(rows, f.foldSleepFrom(restartBase)...)
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+	f.requireNothingHeld()
+	if f.el.numSyscalls != 2 {
+		t.Fatalf("numSyscalls = %d, want 2: the stopped sleep and the later call's restart_syscall", f.el.numSyscalls)
+	}
+
+	f.endAttach(restartBase + 4000)
+	if rows := f.noticeProbeChange(); len(rows) != 0 {
+		t.Fatalf("woken loop emitted %+v after the attach, want nothing: no row was held during it", rows)
+	}
+}
+
+// TestRowInterruptedDuringAProbeAttachIsNotHeldByALaggingLoop: a loop that
+// reads the records of the attach only when the attach is over finds nothing
+// in flight any more. The second report's stamp, taken when the attach call
+// had returned, is what refuses the row then: it is younger than every call
+// interrupted while the tracepoints were being attached.
+func TestRowInterruptedDuringAProbeAttachIsNotHeldByALaggingLoop(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.beginAttach(restartBase - 100)
+	f.endAttach(restartBase + 1000)
+	if got := f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after the attach ended, want 0", got)
+	}
+
+	f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+	rows := f.feed(f.sleepExit(restartBase+500, restartTid, -516))
+	f.requireNothingHeld()
+	rows = append(rows, f.foldSleepFrom(restartBase)...)
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+}
+
+// TestFoldIsRefusedWhileAProbeAttachIsInFlight: a row the loop held just
+// before an attach began must not fold on records it reads while that attach
+// is in flight - at neither step that commits to a fold. The count alone is up
+// here, as in the instant before the first report stores its stamp, so nothing
+// but the count can refuse: RESUME releases the row, and so does the exit of a
+// continuation whose enter was already taken, which then pairs with that enter
+// as a row of its own.
+func TestFoldIsRefusedWhileAProbeAttachIsInFlight(t *testing.T) {
+	t.Run("at RESUME", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interruptRead(restartBase, restartTid, restartSys)
+		f.el.restarts.probes.begin()
+		f.clockAt(restartBase + 850)
+		requireInterruptedRow(t, f.feedOne(f.resumeRecord(restartBase+800, restartTid), "RESUME record"), restartSys)
+		f.requireNothingHeld()
+	})
+	t.Run("at the continuation's exit", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.holdReexecutedRead()
+		f.el.restarts.probes.begin()
+		f.clockAt(restartBase + 3050)
+		requireTwoRows(t, f.feed(f.readExit(restartBase+3000, restartTid, 1)), restartBase, restartBase+3000, 1)
+		f.requireNothingHeld()
+	})
+	t.Run("a stopped sleep", func(t *testing.T) {
+		f := newReexecFixture(t, globalfilter.Filter{})
+		f.interrupt(restartBase, restartTid)
+		f.el.restarts.probes.begin()
+		requireSleepAndRestartRows(t, f.foldSleepFrom(restartBase), restartBase, restartBase+1500, restartBase+3000, 0)
+		f.requireNothingHeld()
+	})
+}
+
+// TestProbeAttachThatIsOverDoesNotBlockTheFold is the negative: an attach
+// refuses nothing once its second report is made, beyond the calls interrupted
+// before that. A call interrupted afterwards is held and folds as in a run
+// whose probes never change - a re-executed read and a stopped sleep alike.
+func TestProbeAttachThatIsOverDoesNotBlockTheFold(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.beginAttach(restartBase - 200)
+	f.endAttach(restartBase - 100)
+	requireFolded(t, f.foldRead(restartBase), restartBase, "the attach was over before the interruption")
+
+	f = newReexecFixture(t, globalfilter.Filter{})
+	f.beginAttach(restartBase - 200)
+	f.endAttach(restartBase - 100)
+	requireFoldedSleep(t, f.foldSleep(restartBase), restartBase, "the attach was over before the interruption")
+}
+
+// TestEveryProbeAttachInFlightIsCounted: a family toggle and single toggles
+// attach several probes at once, each from its own goroutine. The end of one
+// attach must not end the wait for another that is still in flight: a call
+// interrupted then is not held, and only when the last attach has ended does a
+// later call fold again.
+func TestEveryProbeAttachInFlightIsCounted(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.beginAttach(restartBase - 300)
+	f.beginAttach(restartBase - 200)
+	f.endAttach(restartBase - 100)
+
+	f.feedNone(f.readEnter(restartBase, restartTid), "read enter")
+	requireInterruptedRow(t, f.feedOne(f.readExit(restartBase+500, restartTid, restartSys),
+		"read interrupted while the other attach is in flight"), restartSys)
+	f.requireNothingHeld()
+
+	f.endAttach(restartBase + 1000)
+	later := restartBase + 10_000
+	requireFolded(t, f.foldRead(later), later, "both attaches were over before the interruption")
+}
+
+// TestProbeAttachIsCountedBeforeItsFirstStampAndUntilItsLast pins the order
+// inside the two reports, which is what the guard's proof rests on: the count
+// goes up before the first report reads the clock or clears the map, and it
+// comes down only after the second report has taken its last reading. A loop
+// that finds the count at zero is then ahead of the begin or sees the end's
+// stamp. A detach counts nothing.
+func TestProbeAttachIsCountedBeforeItsFirstStampAndUntilItsLast(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	watch := &f.el.restarts.probes
+	var counted []int64
+	now := uint64(100)
+	f.el.dropStampClock = func() uint64 {
+		counted = append(counted, watch.inFlight.Load())
+		now += 100
+		return now
+	}
+	pending := &scriptedPendingClearer{clock: func() uint64 {
+		counted = append(counted, watch.inFlight.Load())
+		return 0
+	}}
+	f.el.restartPending = pending
+
+	for _, phase := range []probemanager.ChangePhase{probemanager.ChangeBegins, probemanager.ChangeEnds} {
+		counted = nil
+		f.el.probesChanged(phase)
+		// Two clock readings around one clear, all with the attach counted.
+		if len(counted) != 3 || counted[0] != 1 || counted[1] != 1 || counted[2] != 1 {
+			t.Fatalf("attaches in flight at the stamps and the clear of report %d = %v, want 1 at each", phase, counted)
+		}
+	}
+	if got, stamp := watch.inFlight.Load(), watch.changedAt.Load(); got != 0 || stamp != now {
+		t.Fatalf("after the end: %d attaches in flight, stamp %d; want 0 and the last reading %d", got, stamp, now)
+	}
+	counted = nil
+	f.el.probesChanged(probemanager.Changed)
+	if len(counted) != 3 || counted[0] != 0 || counted[2] != 0 || watch.inFlight.Load() != 0 {
+		t.Fatalf("attaches in flight during and after a detach's report = %v, want none", counted)
+	}
 }

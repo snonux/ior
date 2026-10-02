@@ -3,27 +3,30 @@ package probemanager
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"ior/internal/parkwait"
 	"ior/internal/types"
 )
 
-// Tests for the change hook (SetChangeHook, task o03). The event loop hangs
-// the restart fold's guard on it, and the guard is sound only if the hook runs
-// at the right moments: before an attach touches a tracepoint and again when
-// the attach is over, after a detach destroyed its links, and each time before
-// the opposite change of the same syscall can begin. The tests below observe
-// the fake programs and links from inside the hook, which is the only place
-// that order can be seen.
+// Tests for the change hook (SetChangeHook, tasks o03 and x13). The event loop
+// hangs the restart fold's guard on it, and the guard is sound only if the
+// hook runs at the right moments and with the right phase: ChangeBegins before
+// an attach touches a tracepoint and ChangeEnds when the attach is over, in
+// pairs, Changed after a detach destroyed its links, and each time before the
+// opposite change of the same syscall can begin. The tests below observe the
+// fake programs and links from inside the hook, which is the only place that
+// order can be seen.
 
 // hookedRead is a manager with one registered syscall, read, whose two
 // programs hand out one link each, and a hook that counts its calls and
-// records what the fakes had seen at each call.
+// records the phase of each and what the fakes had seen at it.
 type hookedRead struct {
 	mgr          *Manager
 	enter, exit  *fakeProgram
 	calls        int
+	phases       []ChangePhase
 	attachesSeen [][2]int // enter and exit AttachTracepoint calls so far
 	destroysSeen [][2]int // enter and exit link Destroy calls so far
 }
@@ -48,27 +51,30 @@ func newHookedRead(t *testing.T, attached bool) *hookedRead {
 	return h
 }
 
-func (h *hookedRead) observe() {
+func (h *hookedRead) observe(phase ChangePhase) {
 	h.calls++
+	h.phases = append(h.phases, phase)
 	h.attachesSeen = append(h.attachesSeen, [2]int{h.enter.attachCalls(), h.exit.attachCalls()})
 	h.destroysSeen = append(h.destroysSeen, [2]int{h.enter.link.destroyCalls(), h.exit.link.destroyCalls()})
 }
 
 // TestChangeHookRunsBeforeAndAfterAnAttach: a runtime attach is reported
-// twice. At the first report neither tracepoint of the syscall has been
-// attached yet: reported only afterwards, the enter probe would already have
-// seen a syscall that the listener's note claims to be older than. At the
-// second both are attached: the two are attached one after the other, and a
-// syscall that ran in between - seen at its enter and not at its exit, or not
-// at all - is younger than the first note. Without the second report the event
-// loop folded a later call into a row interrupted during the attach.
+// twice, as its begin and its end. At the first report neither tracepoint of
+// the syscall has been attached yet: reported only afterwards, the enter probe
+// would already have seen a syscall that the listener's note claims to be
+// older than. At the second both are attached: the two are attached one after
+// the other, and a syscall that ran in between - seen at its enter and not at
+// its exit, or not at all - is younger than the first note. Without the second
+// report the event loop folded a later call into a row interrupted during the
+// attach; without the phases it could not know that an attach is in flight
+// between the two, and folded on the records the fresh pair produced meanwhile.
 func TestChangeHookRunsBeforeAndAfterAnAttach(t *testing.T) {
 	h := newHookedRead(t, false)
 	if err := h.mgr.Attach("read"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if h.calls != 2 {
-		t.Fatalf("hook ran %d times for one attach, want twice", h.calls)
+	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
+		t.Fatalf("one attach was reported as %v, want its begin and then its end", h.phases)
 	}
 	if h.attachesSeen[0] != [2]int{0, 0} {
 		t.Fatalf("first report saw %v tracepoint attaches (enter, exit), want none yet", h.attachesSeen[0])
@@ -89,8 +95,8 @@ func TestChangeHookRunsAfterADetachDestroyedBothLinks(t *testing.T) {
 	if err := h.mgr.Detach("read"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
-	if h.calls != 1 {
-		t.Fatalf("hook ran %d times for one detach, want once", h.calls)
+	if !slices.Equal(h.phases, []ChangePhase{Changed}) {
+		t.Fatalf("one detach was reported as %v, want once, as a change that is over", h.phases)
 	}
 	if h.destroysSeen[0] != [2]int{1, 1} {
 		t.Fatalf("hook saw %v link destroys (enter, exit), want both done", h.destroysSeen[0])
@@ -109,8 +115,9 @@ func TestChangeHookFollowsEveryToggle(t *testing.T) {
 			t.Fatalf("Toggle: %v", err)
 		}
 	}
-	if h.calls != 3 {
-		t.Fatalf("hook ran %d times for a detach and an attach, want 3 (once and twice)", h.calls)
+	if !slices.Equal(h.phases, []ChangePhase{Changed, ChangeBegins, ChangeEnds}) {
+		t.Fatalf("a detach and an attach were reported as %v, want the detach once, then the attach's begin and end",
+			h.phases)
 	}
 	if h.destroysSeen[0] != [2]int{1, 1} {
 		t.Fatalf("the detach was reported with %v link destroys, want both done", h.destroysSeen[0])
@@ -165,9 +172,10 @@ func TestChangeHookReportsFailedChanges(t *testing.T) {
 	if err := h.mgr.Attach("read"); err == nil {
 		t.Fatal("Attach with a failing exit tracepoint returned nil")
 	}
-	if h.calls != 2 || h.attachesSeen[0] != [2]int{0, 0} || h.attachesSeen[1] != [2]int{1, 1} {
-		t.Fatalf("failed attach: hook ran %d times, saw %v; want twice, before any attach and after both attempts",
-			h.calls, h.attachesSeen)
+	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) ||
+		h.attachesSeen[0] != [2]int{0, 0} || h.attachesSeen[1] != [2]int{1, 1} {
+		t.Fatalf("failed attach: reported as %v, saw %v; want its begin before any attach and its end after both attempts",
+			h.phases, h.attachesSeen)
 	}
 	if h.destroysSeen[1] != [2]int{1, 0} {
 		t.Fatalf("failed attach: second report saw %v link destroys (enter, exit), want the enter link already destroyed",
@@ -179,8 +187,8 @@ func TestChangeHookReportsFailedChanges(t *testing.T) {
 	if err := h.mgr.Detach("read"); err == nil {
 		t.Fatal("Detach with a failing exit link returned nil")
 	}
-	if h.calls != 1 || h.destroysSeen[0] != [2]int{1, 1} {
-		t.Fatalf("failed detach: hook ran %d times, saw %v; want once, after both destroys", h.calls, h.destroysSeen)
+	if !slices.Equal(h.phases, []ChangePhase{Changed}) || h.destroysSeen[0] != [2]int{1, 1} {
+		t.Fatalf("failed detach: reported as %v, saw %v; want once, after both destroys", h.phases, h.destroysSeen)
 	}
 	if h.mgr.IsActive("read") {
 		t.Fatal("read is still active after a detach that destroyed both links")
@@ -193,7 +201,7 @@ func TestChangeHookReportsFailedChanges(t *testing.T) {
 func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 	h := newHookedRead(t, true)
 	var activeInHook bool
-	h.mgr.SetChangeHook(func() { activeInHook = h.mgr.IsActive("read") })
+	h.mgr.SetChangeHook(func(ChangePhase) { activeInHook = h.mgr.IsActive("read") })
 	if err := h.mgr.Detach("read"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -206,7 +214,7 @@ func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 		t.Fatalf("Attach without a hook: %v", err)
 	}
 	var none *Manager
-	none.SetChangeHook(func() {}) // a nil manager has nothing to report
+	none.SetChangeHook(func(ChangePhase) {}) // a nil manager has nothing to report
 }
 
 // TestChangeHookHoldsBackTheOppositeChange: the detach's report must be over
@@ -216,7 +224,7 @@ func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 	h := newHookedRead(t, true)
 	inHook, leaveHook := make(chan struct{}), make(chan struct{})
-	h.mgr.SetChangeHook(func() {
+	h.mgr.SetChangeHook(func(ChangePhase) {
 		close(inHook)
 		<-leaveHook
 	})
@@ -252,22 +260,123 @@ func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 // already in the requested state.
 func TestFamilyBatchReportsEachProbeItChanges(t *testing.T) {
 	mgr := newFamilyTestManager(t) // read attached; write, socket, connect, nanosleep not
-	calls := 0
-	mgr.SetChangeHook(func() { calls++ })
+	var phases []ChangePhase
+	mgr.SetChangeHook(func(phase ChangePhase) { phases = append(phases, phase) })
 
 	result, err := mgr.AttachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil || result.Changed != 1 {
 		t.Fatalf("AttachFamily(FS) = %+v, %v; want write attached", result, err)
 	}
-	if calls != 2 {
-		t.Fatalf("hook ran %d times attaching one probe (read was attached), want 2: before and after", calls)
+	if !slices.Equal(phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
+		t.Fatalf("attaching one probe (read was attached) was reported as %v, want its begin and its end", phases)
 	}
 
 	result, err = mgr.DetachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil || result.Changed != 2 {
 		t.Fatalf("DetachFamily(FS) = %+v, %v; want read and write detached", result, err)
 	}
-	if calls != 4 {
-		t.Fatalf("hook ran %d times in all, want 4 (one attach reported twice, two detaches)", calls)
+	if !slices.Equal(phases[2:], []ChangePhase{Changed, Changed}) {
+		t.Fatalf("detaching two probes was reported as %v, want each once, as a change that is over", phases[2:])
+	}
+}
+
+// TestChangeEndsFollowsAnAttachThatPanics: a listener counts the attaches
+// under way from the begins and the ends. An attacher that panics must not
+// leave it counting: the end is reported on the way out, and the panic goes on
+// to the caller.
+func TestChangeEndsFollowsAnAttachThatPanics(t *testing.T) {
+	h := newHookedRead(t, false)
+	h.enter.onAttach = func() { panic("attach failed hard") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("Attach did not pass the attacher's panic on")
+			}
+		}()
+		_ = h.mgr.Attach("read")
+	}()
+	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
+		t.Fatalf("an attach that panicked was reported as %v, want its begin and its end", h.phases)
+	}
+	if h.attachesSeen[1] != [2]int{1, 0} {
+		t.Fatalf("the end saw %v tracepoint attaches (enter, exit), want it reported after the attempt", h.attachesSeen[1])
+	}
+}
+
+// TestChangeEndsReachesTheHookThatWasToldOfTheBegin: the two reports of an
+// attach go to one listener. A hook removed while the attach runs still gets
+// the end - it counted the begin - and nobody else does.
+func TestChangeEndsReachesTheHookThatWasToldOfTheBegin(t *testing.T) {
+	h := newHookedRead(t, false)
+	h.enter.onAttach = func() { h.mgr.SetChangeHook(nil) }
+	if err := h.mgr.Attach("read"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
+		t.Fatalf("the hook removed during the attach was told %v, want the begin and the end of that attach", h.phases)
+	}
+	if err := h.mgr.Detach("read"); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("the removed hook ran %d times, want no report of a change that began after it was removed", h.calls)
+	}
+}
+
+// attachUnderWay starts an Attach of read on a goroutine of the caller's and
+// returns once it is inside the enter tracepoint's attach, after its begin was
+// reported. finish lets the attach go on and returns what it returned.
+func (h *hookedRead) attachUnderWay(t *testing.T) (finish func() error) {
+	t.Helper()
+	inAttach, leaveAttach := make(chan struct{}), make(chan struct{})
+	h.enter.onAttach = func() {
+		close(inAttach)
+		<-leaveAttach
+	}
+	attached := make(chan error, 1)
+	go func() { attached <- h.mgr.Attach("read") }()
+	<-inAttach
+	return func() error {
+		close(leaveAttach)
+		return <-attached
+	}
+}
+
+// TestSetChangeHookWaitsForAnAttachUnderWay: an attach that began before a
+// hook was set reports to the earlier hook, and the new one would learn
+// neither that it is in flight nor when it ends. So setting a hook returns
+// only once that attach is over: whoever installed it then takes note of
+// everything before, and every later change reports to it from its begin.
+func TestSetChangeHookWaitsForAnAttachUnderWay(t *testing.T) {
+	h := newHookedRead(t, false)
+	finish := h.attachUnderWay(t)
+
+	const frame = "(*probeEntry).awaitChange"
+	baseline := parkwait.Count(frame, parkwait.MutexLock, parkwait.Semacquire)
+	var later []ChangePhase
+	installed := make(chan struct{})
+	go func() {
+		defer close(installed)
+		h.mgr.SetChangeHook(func(phase ChangePhase) { later = append(later, phase) })
+	}()
+	parkwait.Await{Frame: frame, Reasons: []string{parkwait.MutexLock, parkwait.Semacquire}, Baseline: baseline,
+		TimeoutMsg: "SetChangeHook did not wait for the attach under way"}.Run(t)
+
+	if err := finish(); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	<-installed
+	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
+		t.Fatalf("the earlier hook was told %v of the attach it saw begin, want its begin and its end", h.phases)
+	}
+	if len(later) != 0 {
+		t.Fatalf("the hook set during the attach was told %v, want nothing of an attach whose begin it missed", later)
+	}
+	if err := h.mgr.Detach("read"); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	if !slices.Equal(later, []ChangePhase{Changed}) || h.calls != 2 {
+		t.Fatalf("the detach was reported as %v to the new hook and the earlier one ran %d times, want Changed and 2",
+			later, h.calls)
 	}
 }

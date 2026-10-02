@@ -302,7 +302,8 @@ followed by a second row for the continuation (if that was recorded at all), whe
   ior cannot see a call being re-executed, and after they come back the thread's next call of
   that syscall would look like the continuation. So every probe change, of any syscall, ends
   the wait for all calls interrupted before it - or while it was under way: a probe's enter
-  and exit side are attached one after the other - and each is recorded as its restart-code
+  and exit side are attached one after the other, and for as long as a probe is being
+  switched on ior folds nothing at all - and each is recorded as its restart-code
   row, and its continuation, if ior sees it, as a row of its own. Toggling a whole family
   changes its probes one after the other, so nothing is folded while that runs. Calls
   interrupted after the change are folded as usual;
@@ -343,11 +344,11 @@ syscall takes the mark and the row stays as it was):
   never sees the re-execution: a tracer that cancels it or changes its syscall number at the
   syscall-entry stop (`strace --inject` with `error=` or `retval=`), a seccomp
   user-notification supervisor, or syscall user dispatch;
-- a kernel or driver bug returns the restart code to the program with no signal pending;
-- the `restart_syscall` probes are switched on in the TUI's probes modal while a thread is
-  stopped and continued twice within that one switch (switching probes off and on is
-  otherwise safe: a call that was interrupted and not yet completed when probes change is
-  not folded at all).
+- a kernel or driver bug returns the restart code to the program with no signal pending.
+
+Switching probes off and on in the TUI's probes modal is not among them: a call that was
+interrupted and not yet completed when probes change, or that is interrupted while a probe
+is being switched on, is not folded at all.
 
 One situation is different: the kernel did re-execute the call and the mark was right, but
 the enter it announced was sampled out, and the timestamp that should tell that enter from
