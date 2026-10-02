@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"math"
 	"os"
 	"syscall"
 	"testing"
@@ -155,5 +156,87 @@ func TestProcfsAnswerIsNotCheckedWithoutTheCapture(t *testing.T) {
 	if !ok || cached.Ident() != 0 || proc.reads != 0 {
 		t.Fatalf("cache = %v (ok=%v, identity %d) after %d identity reads, want a cached answer without identity and no such read",
 			cached, ok, cached.Ident(), proc.reads)
+	}
+}
+
+// A cached answer of another file is kept for a row only when it is known to
+// have been read after the row's call entered. Without a read time, or with
+// one that cannot be ordered against the records (identReadAt), it is not
+// known to be anything, and procfs is read again for the row.
+func TestAnswerWithoutAUsableReadTimeIsReadAgain(t *testing.T) {
+	tests := []struct {
+		name      string
+		readNs    uint64
+		stamped   bool
+		unknown   bool
+		wantReads int
+	}{
+		{name: "no read time", wantReads: 1},
+		{name: "failed clock read", readNs: math.MaxUint64, stamped: true, wantReads: 1},
+		{name: "unknown offset", readNs: 1 << 62, stamped: true, unknown: true, wantReads: 1},
+		{name: "control: read after the row", readNs: 1 << 62, stamped: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pid := uint32(os.Getpid())
+			n := freeFdNumber(t)
+			el, proc := scriptedIdentLoop(t, procAnswer{name: leaderName, ident: 100, stable: true})
+			el.fdState().readClockUnknown = tc.unknown
+			answer := file.NewFd(n, leaderName, syscall.O_RDWR)
+			answer.SetIdent(100)
+			el.fdState().storeProcFdCache(n, pid, answer, tc.readNs, tc.stamped)
+
+			requireUnnamedOf(t, feedIdentRow(t, el, rowAt(n, 200, bootClockNs())).File, 200)
+			if proc.reads != tc.wantReads {
+				t.Fatalf("procfs read %d times, want %d", proc.reads, tc.wantReads)
+			}
+		})
+	}
+}
+
+// Two files used on one number against one procfs answer - two threads on
+// private tables, or one of them and the main table's file - alternate their
+// rows. Each row finds the other file's refusal noted; once rows of a second
+// file were refused, the re-reads are rationed for every file on the key.
+func TestAlternatingFilesDoNotReadProcfsOnEveryRow(t *testing.T) {
+	pid := uint32(os.Getpid())
+	n := freeFdNumber(t)
+	el, proc := scriptedIdentLoop(t, procAnswer{name: leaderName, ident: 100, stable: true})
+	feedIdentRow(t, el, readRow(n, 200))
+	readAt := func() uint64 {
+		readNs, _ := el.fdState().cachedProcFdReadAt(n, pid)
+		return readNs
+	}
+	for i := range 10 {
+		ident := uint32(300 - 100*(i%2)) // 300, 200, 300, ...
+		requireUnnamedOf(t, feedIdentRow(t, el, rowAt(n, ident, readAt()+1000)).File, ident)
+	}
+	if proc.reads != 2 {
+		t.Fatalf("11 alternating rows read procfs %d times, want 2 (the second file once)", proc.reads)
+	}
+	feedIdentRow(t, el, rowAt(n, 200, readAt()+identRereadIntervalNs))
+	feedIdentRow(t, el, rowAt(n, 300, readAt()+1000))
+	if proc.reads != 3 {
+		t.Fatalf("after the interval: %d reads, want 3 (one, and still rationed)", proc.reads)
+	}
+}
+
+// The refusal note belongs to the answer it was taken for: an answer that
+// replaces it under the key starts without one, so a row of the refused
+// file is read for at once.
+func TestReplacedAnswerDoesNotKeepTheRefusalNote(t *testing.T) {
+	pid := uint32(os.Getpid())
+	n := freeFdNumber(t)
+	el := identLoop(t)
+	tr := el.fdState()
+	readNs := bootClockNs()
+	cacheAnswer(el, n, leaderName, 100, readNs)
+	tr.noteRefusal(n, pid, 200)
+	if tr.worthReadingAgain(n, pid, 200, readNs+1000) {
+		t.Fatalf("premise: a refused file is read for again within the interval")
+	}
+	cacheAnswer(el, n, "/data/replacement.txt", 300, readNs)
+	if !tr.worthReadingAgain(n, pid, 200, readNs+1000) {
+		t.Fatalf("the replacement answer kept the old answer's refusal note")
 	}
 }

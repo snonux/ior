@@ -5,6 +5,7 @@ import (
 	"syscall"
 	"testing"
 
+	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
@@ -306,4 +307,30 @@ func TestCloseOfAnotherFileForgetsACachedAnswerWithoutAReadTime(t *testing.T) {
 
 	feedIdentRow(t, el, closeRow(n, 4711, bootClockNs()))
 	verifyProcFdNotCached(t, el, pid, n)
+}
+
+// A flag change stores the entry it changed once more (storeFcntlFdFile, the
+// FIOCLEX/FIONCLEX handler), which binds nothing: a fork's copy stays without
+// a binding time, so a close in the child that entered before the fcntl
+// returned still releases it.
+func TestFlagChangeDoesNotBindAForkedCopy(t *testing.T) {
+	const parent, child = absentPidBase + 7310, absentPidBase + 7311
+	el := identLoop(t)
+	tr := el.fdState()
+	tr.bindNs = 5000
+	opened := file.NewFd(5, "/data/inherited.txt", syscall.O_RDWR)
+	opened.SetIdent(4711)
+	tr.set(5, parent, opened)
+	tr.inherit(parent, child)
+
+	copied, _ := tr.get(5, child)
+	tr.bindNs = 90000
+	el.storeFcntlFdFile(&event.Pair{}, copied.(*file.FdFile), 5, child)
+	if got := copied.(*file.FdFile).BoundAt(); got != 0 {
+		t.Fatalf("forked copy bound at %d by a flag change, want 0", got)
+	}
+	tr.closeIdentified(5, child, 4711, 80000)
+	if _, kept := tr.get(5, child); kept {
+		t.Fatalf("a close of the copy's file left it in the child's table")
+	}
 }

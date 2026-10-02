@@ -1931,25 +1931,8 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 		if !ok {
 			return nil, fmt.Errorf("sys_enter_%s has no kind comment", name)
 		}
-		if err := validateHandlerEventStruct(name, kind, pair.enter); err != nil {
+		if err := validateHandlerPair(name, kind, pair.enter, pair.exit); err != nil {
 			return nil, err
-		}
-		if err := validateSchemaVersionWrite(name, pair.enter); err != nil {
-			return nil, err
-		}
-		if err := validateRequestedSizeInitialization(name, pair.enter); err != nil {
-			return nil, err
-		}
-		if err := validatePathTargetStatus(name, pair.enter); err != nil {
-			return nil, err
-		}
-		if err := validateFileIdentCapture(name, pair.enter, pair.exit); err != nil {
-			return nil, err
-		}
-		if kind == "eventfd" || kind == "pidfd" {
-			if err := validateScalarPendingTransport(name, "flags", pair.enter, pair.exit); err != nil {
-				return nil, err
-			}
 		}
 		ret := "NORETURN"
 		if pair.exit != "" {
@@ -1983,6 +1966,33 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 		return nil, fmt.Errorf("kind comments=%d enter handlers=%d", len(kinds), len(result))
 	}
 	return result, nil
+}
+
+// validateHandlerPair runs the per-syscall checks of the committed enter and
+// exit handler bodies (exitBody is empty for a syscall without an exit
+// handler): the event struct the kind implies, the schema version, the
+// requested size, the path target status, the file identity capture (task
+// 603) and the pending scalar of the eventfd and pidfd kinds.
+func validateHandlerPair(name, kind, enterBody, exitBody string) error {
+	if err := validateHandlerEventStruct(name, kind, enterBody); err != nil {
+		return err
+	}
+	if err := validateSchemaVersionWrite(name, enterBody); err != nil {
+		return err
+	}
+	if err := validateRequestedSizeInitialization(name, enterBody); err != nil {
+		return err
+	}
+	if err := validatePathTargetStatus(name, enterBody); err != nil {
+		return err
+	}
+	if err := validateFileIdentCapture(name, enterBody, exitBody); err != nil {
+		return err
+	}
+	if kind == "eventfd" || kind == "pidfd" {
+		return validateScalarPendingTransport(name, "flags", enterBody, exitBody)
+	}
+	return nil
 }
 
 // validateSchemaVersionWrite pins the ABI discriminator in every committed

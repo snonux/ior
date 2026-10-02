@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"ior/internal/event"
@@ -52,8 +53,9 @@ import (
 //     longer name the row's file - the row stays unnamed, the entry stays
 //     for the rows of the file it does describe. If it was read before, the
 //     entry is the stale one and procfs is read again - but for rows of one
-//     file at most once per identRereadIntervalNs, because a thread on a
-//     private descriptor table gets the same other file every time.
+//     file, or once rows of a second file were refused too, at most once per
+//     identRereadIntervalNs, because a thread on a private descriptor table
+//     gets the same other file every time.
 //   - fresh procfs answer of another file: cached for later rows (it is what
 //     the number holds now) but not used for this one, which stays unnamed.
 //     An answer that changed while it was read (the name differs on a second
@@ -98,8 +100,12 @@ import (
 // does only on a kernel that has the kfunc the capture needs
 // (fileIdentCaptureWanted). Otherwise those bytes are stale padding, or
 // zeroes nobody could match, and must not be read, and no row is checked.
+// It also notes whether ior's procfs read times are on the records' clock
+// (fdTracker.readClockUnknown, identReadAt).
 func (e *eventLoop) trustFileIdents(captured bool) {
-	e.fdState().identOn = captured
+	t := e.fdState()
+	t.identOn = captured
+	t.readClockUnknown = captured && ownBootClockDomain().warning != ""
 }
 
 // rowIdent returns the identity fdEv's record carries for its descriptor, or
@@ -158,11 +164,20 @@ func (t *fdTracker) noteExit(ep *event.Pair) {
 // (file.FdFile.BoundAt): at the exit of the pair being handled, or, for a
 // procfs answer that is promoted into the table (an fcntl on an untracked
 // descriptor), when procfs was read (readNs, known), which is when the
-// number was seen to name the file. An entry that has a time keeps it: set is
-// also called to store an entry again after a flag change, which binds
-// nothing. A duplicate arrives without one (FdFile.Dup) and so gets the
-// dup's; a fork's copy does not come through set and stays unstamped, i.e.
-// older than every row of the child.
+// number was seen to name the file. A promoted answer without a usable read
+// time (identReadAt: none, the failed-clock sentinel, or a clock of unknown
+// offset) takes the exit time like any other entry: a stamp in the records'
+// future would make the entry outlive every close and refuse every row as
+// older than it, while the exit time is at worst too early, and too early
+// only costs a procfs read (a lagging row of the number's previous file then
+// drops the entry, and procfs, which records the identity, names the rows).
+//
+// set does not call this for an object the key already held (a flag change),
+// so a fork's copy, which does not come through set, stays unstamped, i.e.
+// older than every row of the child. An object that has a time keeps it: one
+// that was evicted from the table and comes back through a flag change on an
+// in-flight row is the same binding. A duplicate arrives without one
+// (FdFile.Dup) and so gets the dup's.
 func (t *fdTracker) stampBinding(f file.File, readNs uint64, known bool) {
 	fdFile, isFd := f.(*file.FdFile)
 	if !t.identOn || !isFd || fdFile == nil || fdFile.BoundAt() != 0 {
@@ -255,7 +270,8 @@ func boundAfter(f file.File, ns uint64) bool {
 //     pipe returned the number and was processed before this close's exit);
 //   - a procfs answer that was read after enterNs and describes a file other
 //     than ident. An answer of the closed file, of an unknown file, or one
-//     without a read time goes as before: it may be the closed descriptor's.
+//     without a usable read time (identReadAt) goes as before: it may be the
+//     closed descriptor's, and at worst it is read again.
 //
 // Each map is looked up once and left alone when it has no entry, so this
 // costs no more than the two unconditional removals it replaces. In a run
@@ -279,8 +295,38 @@ func (t *fdTracker) answerOfLaterFile(key uint64, cached *file.FdFile, ident uin
 	if ident == 0 || describes(cached, ident) {
 		return false
 	}
-	readNs, stamped := t.procFdReadAt[key]
+	readNs, stamped := t.identReadAt(key)
 	return stamped && readNs > enterNs
+}
+
+// identReadAt returns the read time of the procfs answer cached under key
+// for the comparisons of this file that keep state because of it - an
+// answer kept through a close (answerOfLaterFile), not read again
+// (worthReadingAgain), an entry's binding time (stampBinding) - or false
+// where it has none they may use. All three treat a read time later than
+// the row as "the number came to name this file later", so a time that is
+// too late makes the state permanent, while "no read time" only costs a
+// procfs read. Left out, therefore:
+//
+//   - the sentinel of a failed clock read (bootClockNs: math.MaxUint64),
+//     which is later than every record;
+//   - every read time while the offset of ior's time namespace is unknown
+//     (fdTracker.readClockUnknown): 0 is assumed then, and in a namespace
+//     whose clock runs ahead of the host's every reading is in the records'
+//     future.
+//
+// Without a read time the re-reads are not rationed either: with a failing
+// clock or an unknown offset a thread on a private table pays a procfs read
+// for each of its rows. The close row's rule (cacheReadBefore, task jr2)
+// reads the stamps directly: it only ever withholds a name for one row, and
+// the sentinel falls on that side; what an unknown offset does to it is
+// what the boot-clock warning says.
+func (t *fdTracker) identReadAt(key uint64) (uint64, bool) {
+	readNs, stamped := t.procFdReadAt[key]
+	if !stamped || readNs == math.MaxUint64 || t.readClockUnknown {
+		return 0, false
+	}
+	return readNs, true
 }
 
 // identRereadIntervalNs bounds how often procfs is read again for rows of one
@@ -299,6 +345,7 @@ const identRereadIntervalNs = 100 * uint64(time.Millisecond)
 // ident: a procfs answer, cached or fresh, that does not describe another
 // file.
 func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs uint64) file.File {
+	note := ident // what a refusal of the fresh answer is noted for
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		if describes(cached, ident) {
 			return cached
@@ -306,6 +353,8 @@ func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs
 		if !t.worthReadingAgain(fd, pid, ident, enterNs) {
 			return t.rejectAnswer(fd, ident)
 		}
+		// Taken before the deletion forgets the old answer's note.
+		note = t.nextRefusal(t.key(pid, fd), ident)
 		t.deleteProcFdCache(fd, pid)
 	}
 	discovered, stable := t.readProcFd(fd, pid)
@@ -321,7 +370,7 @@ func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs
 	}
 	t.setProcFdCacheRead(fd, pid, discovered, bootClockNs())
 	if !describes(discovered, ident) {
-		t.noteRefusal(fd, pid, ident)
+		t.noteRefusal(fd, pid, note)
 		return t.rejectAnswer(fd, ident)
 	}
 	return discovered
@@ -334,13 +383,15 @@ func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs
 //   - Read after the call entered and already another file: the number was
 //     reused since, and a new read can only be later still. Not read again;
 //     the entry stays for the rows of the file it does describe.
-//   - Read before, but read for a row of this very file less than
-//     identRereadIntervalNs earlier and refused then: procfs disagrees with
-//     these rows persistently. Not read again yet.
-//   - Otherwise (also an entry without a read time): read again.
+//   - Read before, but read and refused, less than identRereadIntervalNs
+//     earlier, for a row of this very file - or for rows of more than one
+//     file (refusedSeveral): procfs disagrees with these rows persistently.
+//     Not read again yet.
+//   - Otherwise (also an entry without a usable read time, identReadAt):
+//     read again.
 func (t *fdTracker) worthReadingAgain(fd int32, pid uint32, ident uint32, enterNs uint64) bool {
 	key := t.key(pid, fd)
-	readNs, stamped := t.procFdReadAt[key]
+	readNs, stamped := t.identReadAt(key)
 	if !stamped {
 		return true
 	}
@@ -348,15 +399,37 @@ func (t *fdTracker) worthReadingAgain(fd int32, pid uint32, ident uint32, enterN
 		return false
 	}
 	refused, noted := t.refusedFor[key]
-	return !noted || refused != ident || enterNs-readNs >= identRereadIntervalNs
+	rationed := noted && (refused == ident || refused == refusedSeveral)
+	return !rationed || enterNs-readNs >= identRereadIntervalNs
+}
+
+// refusedSeveral is the refusal note of a cache key whose answers were
+// refused for rows of two or more files. One identity per key is not enough
+// to ration those: two threads on private tables that use the number for two
+// files (or the main table's file and a private one's) alternate, and each
+// row would find the other's note and read procfs again. Identities in the
+// note are never 0 (a row without one is not checked).
+const refusedSeveral = 0
+
+// nextRefusal returns what to note for key should the answer read again for
+// a row of the file ident be refused too: ident when the answer being
+// replaced was refused for that file or not at all, refusedSeveral once two
+// files have been refused. It is read before the old answer goes, because
+// that forgets its note.
+func (t *fdTracker) nextRefusal(key uint64, ident uint32) uint32 {
+	refused, noted := t.refusedFor[key]
+	if !noted || refused == ident {
+		return ident
+	}
+	return refusedSeveral
 }
 
 // noteRefusal remembers that the procfs answer just cached for (pid, fd) was
-// read for a row of the file ident and describes another one
-// (worthReadingAgain). The note lives and dies with the cache entry
-// (storeProcFdCache, deleteCacheKey), so it is only taken when the entry was
-// stored: a blind table keeps none.
-func (t *fdTracker) noteRefusal(fd int32, pid uint32, ident uint32) {
+// read for a row of the file note (or rows of several files,
+// refusedSeveral) and describes another one (worthReadingAgain). The note
+// lives and dies with the cache entry (storeProcFdCache, deleteCacheKey), so
+// it is only taken when the entry was stored: a blind table keeps none.
+func (t *fdTracker) noteRefusal(fd int32, pid uint32, note uint32) {
 	key := t.key(pid, fd)
 	if _, cached := t.procFdCache[key]; !cached {
 		return
@@ -364,7 +437,7 @@ func (t *fdTracker) noteRefusal(fd int32, pid uint32, ident uint32) {
 	if t.refusedFor == nil {
 		t.refusedFor = make(map[uint64]uint32)
 	}
-	t.refusedFor[key] = ident
+	t.refusedFor[key] = note
 }
 
 // forgetRefusal drops the note of noteRefusal for a cache key whose entry is

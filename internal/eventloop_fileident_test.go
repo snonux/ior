@@ -28,11 +28,13 @@ import (
 // before.
 
 // identLoop returns an event loop of a run whose BPF object captures file
-// identities.
+// identities, with procfs read times on the records' clock whatever the
+// test host's time namespace (the tests that need it otherwise say so).
 func identLoop(t *testing.T) *eventLoop {
 	t.Helper()
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
 	el.trustFileIdents(true)
+	el.fdState().readClockUnknown = false
 	return el
 }
 

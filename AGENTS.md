@@ -2550,6 +2550,10 @@ kernel program reports the file, and user space compares.
     record time, `worthReadingAgain`, `fdTracker.refusedFor`): a thread on a
     private table (unshare(CLONE_FILES)) disagrees with `/proc/<tgid>/fd`
     for good, and each of its rows cost two readlinks and an fdinfo read.
+    Once rows of a second file were refused on the key too, the note becomes
+    `refusedSeveral` and every file's rows are rationed: one identity per key
+    let two alternating files (two private-table threads) read procfs on
+    every row.
   - *fresh procfs answer of another file*: cached but not given to the row.
   - *close rows* use a cache entry only if it was read before the close
     began (task jr2's rule, unchanged) and never one of another file. An
@@ -2571,12 +2575,27 @@ kernel program reports the file, and user space compares.
   fork's copy has none, i.e. is older than every row of the child, which
   cannot have entered before the fork; a procfs answer promoted into the
   table (fcntl on an untracked descriptor) takes its read time; an entry
-  stored again after a flag change keeps its time; `rekeyTable` moves the
-  objects. Nothing is stamped in a run without identities. The word is in
+  stored again after a flag change keeps its time, and a fork's copy stays
+  unstamped (`set` looks the key up first and stamps only an object the key
+  did not already hold, `stampStored`); `rekeyTable` moves the objects. Nothing is stamped in a run without identities. The word is in
   `FdFile` because a side map would cost a write per open and a delete per
   close; it did not grow the per-row allocation, since the open file
   description moved from a sibling field of the allocation into the struct
   (`FdFile.own`, 48 bytes, `TestFdFileKeepsItsSize`).
+- **Read times the rules cannot use** (`fdTracker.identReadAt`): every rule
+  above that compares a procfs read time - an answer kept through a close,
+  an answer not read again, a promoted answer's binding time - keeps state
+  when the time is later than the row, so a time that is too late makes the
+  state permanent. `bootClockNs` returns `math.MaxUint64` when the clock
+  read fails, and with an unknown time-namespace offset (the boot-clock
+  warning; 0 is assumed) every reading may be in the records' future. Both
+  count as "no read time" there: the answer goes with a close, procfs is
+  read again (unrationed - a cost, not a wrong name), and a promoted answer
+  is bound at its fcntl's exit like any other entry (at worst too early,
+  which a lagging row of the previous file pays for with a procfs read).
+  Before, an entry stamped with the sentinel survived every close of its own
+  file and every row of another. The close row's own rule (`cacheReadBefore`,
+  task jr2) still reads the stamps: the sentinel withholds that one name.
 - **Procfs answers** carry their identity when `identOn`
   (`file.NewFdWithPidIdent`): the `ino:` line of the fdinfo read that
   supplies the flags anyway. The link is read a second time because the
@@ -2610,8 +2629,10 @@ kernel program reports the file, and user space compares.
   `internal/eventloop_fileident_test.go` (real descriptors and procfs),
   `internal/eventloop_fileident_age_test.go` (both orders of row and
   binding, per way an entry is made), `internal/eventloop_fileident_procfs_test.go`
-  (re-read rationing and torn answers through a scripted reader,
-  `fdTracker.readFdIdent`), `internal/bpfsetup_fileident_test.go`,
+  (re-read rationing, also for alternating files, and torn answers through a
+  scripted reader, `fdTracker.readFdIdent`),
+  `internal/eventloop_fileident_clock_test.go` (read times the rules cannot
+  use), `internal/bpfsetup_fileident_test.go`,
   `internal/bpfsetup_kfunc_test.go`, and the integration tests
   `TestIouringReopenRowsFollowTheFile` (scenario `iouring-reopen`),
   `TestIouringReopenWithoutFileIdentityKeepsTheOpenedName` (the control,

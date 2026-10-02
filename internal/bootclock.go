@@ -18,10 +18,11 @@ import (
 //
 // The BPF programs stamp every record with bpf_ktime_get_boot_ns, the host's
 // CLOCK_BOOTTIME. The loop compares those stamps with boot-clock readings of
-// its own in four places: the comm recheck (provisionalSeedNeedsRecheck), the
+// its own in these places: the comm recheck (provisionalSeedNeedsRecheck), the
 // close row's procfs rule (fdTracker.cacheReadBefore), the restart fold's
-// drop watch (restartDropWatch) and its probe-change stamp (noteProbeChange).
-// All of them read the clock through bootClockNs.
+// drop watch (restartDropWatch) and its probe-change stamp (noteProbeChange),
+// and the file identity's rules on procfs answers (fdTracker.identReadAt,
+// task 603). All of them read the clock through bootClockNs.
 //
 // Inside a time namespace (unshare -T --boottime N) the two clocks differ:
 // clock_gettime(CLOCK_BOOTTIME) returns the host's value plus the namespace's
@@ -118,16 +119,27 @@ func (d bootClockDomain) report(warn func(...any)) {
 // readings order against record times also when ior runs inside a time
 // namespace (see the file comment). A failed read (not expected on Linux),
 // like a reading the offset turns into no time at all (hostBootNs), returns
-// the maximum value, which is the refusing side of all four comparisons:
+// the maximum value. Where it lands, comparison by comparison:
 //   - comm recheck: every seed counts as possibly predating a lost record and
 //     keeps its /proc read, until the next drop is stamped
-//     (provisionalSeedNeedsRecheck);
+//     (provisionalSeedNeedsRecheck) - the refusing side;
 //   - close row: a procfs answer stamped with it was read before no close, so
-//     the row stays unnamed rather than take a reuser's name;
+//     the row stays unnamed rather than take a reuser's name - the refusing
+//     side;
 //   - drop watch: a total first seen at it is older than no interruption, so
 //     folds are refused until the total next changes and gets a real stamp;
 //   - probe stamp: every row was interrupted before it, so folds are refused
-//     for the rest of the run (a later change's stamp is never smaller).
+//     for the rest of the run (a later change's stamp is never smaller);
+//   - the file identity's three uses of a procfs read time (task 603: an
+//     answer kept through a close, an answer not read again, the binding time
+//     of an answer promoted into the fd table): there a later time *keeps*
+//     state, so the maximum would have kept it for good - the answer through
+//     every close and never re-read, the entry through every close of its
+//     file and against every row of another. fdTracker.identReadAt therefore
+//     treats the value as no read time, which drops the answer with a close,
+//     reads procfs again, and binds the entry at its fcntl's exit
+//     (stampBinding). It does the same with every read time while the offset
+//     is unknown (the warning below), which may put them all in the future.
 //
 // With an offset that was read from a namespace ior really runs in (matching
 // ns links) the subtraction cannot produce such a value: the reading is the

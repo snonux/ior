@@ -95,11 +95,17 @@ type fdTracker struct {
 	// before an entry was bound says nothing against it.
 	bindNs uint64
 	// refusedFor notes, per procfs-cache key, the row identity for which the
-	// cached answer was read and refused because it describes another file
-	// (noteRefusal). It rations the re-reads for rows procfs persistently
-	// disagrees with (worthReadingAgain) and is allocated on first use: most
-	// runs never refuse an answer.
+	// cached answer was read and refused because it describes another file,
+	// or refusedSeveral once rows of two files were (noteRefusal). It
+	// rations the re-reads for rows procfs persistently disagrees with
+	// (worthReadingAgain) and is allocated on first use: most runs never
+	// refuse an answer.
 	refusedFor map[uint64]uint32
+	// readClockUnknown says the boottime offset of ior's time namespace could
+	// not be determined (bootClockDomain.warning), so procfs read times
+	// cannot be ordered against the records; the identity rules then leave
+	// them out (identReadAt). Set with identOn by trustFileIdents.
+	readClockUnknown bool
 	// readFdIdent reads a descriptor from procfs with its identity; nil means
 	// file.NewFdWithPidIdent. Tests substitute an answer procfs cannot be
 	// made to give on demand (one that changed under the read).
@@ -349,26 +355,44 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 		t.fileAges = make(map[uint64]uint64)
 	}
 	key := t.key(pid, fd)
+	// Looked up before the overwrite: the same object stored again binds
+	// nothing (stampStored).
+	prev, held := t.files[key]
 	t.age++
 	t.files[key] = f
 	t.fileAges[key] = t.age
 	t.indexFileKey(key)
-	// The fd table now answers for this number, so a procfs cache entry for it
-	// is shadowed and, since the traced syscall just rebound the descriptor,
-	// stale. Left in place it would resurface once the table entry goes (exec
-	// closing a cloexec fd, LRU eviction, close) and name the previous file
-	// (task kr2).
+	t.stampStored(key, f, held && prev == f)
+	t.pruneFiles()
+}
+
+// stampStored gives the entry f that set just stored under key its binding
+// time (stampBinding) and drops the procfs cache entry it shadows.
+//
+// The fd table now answers for this number, so a procfs cache entry for it
+// is shadowed and, since the traced syscall just rebound the descriptor,
+// stale. Left in place it would resurface once the table entry goes (exec
+// closing a cloexec fd, LRU eviction, close) and name the previous file (task
+// kr2). A cached answer promoted into the table (an fcntl on an untracked
+// descriptor) was seen to name its file when procfs was read, not at this
+// call's exit; identReadAt leaves out a read time that cannot be ordered
+// against the records.
+//
+// again says the key already held f: a flag change (storeFcntlFdFile, the
+// FIOCLEX/FIONCLEX handler) stores the entry once more and binds nothing, so
+// it is not stamped - an entry keeps its time, and a fork's copy, which has
+// none, stays unstamped (older than every row of the child).
+func (t *fdTracker) stampStored(key uint64, f file.File, again bool) {
 	cached, shadowed := t.procFdCache[key] // keep the common miss to one lookup
 	if !shadowed {
-		t.stampBinding(f, 0, false)
-	} else {
-		// A cached answer promoted into the table was seen to name its file
-		// when procfs was read, not at this call's exit.
-		readNs, stamped := t.procFdReadAt[key]
-		t.stampBinding(f, readNs, stamped && file.File(cached) == f)
-		t.deleteCacheKey(key)
+		if !again {
+			t.stampBinding(f, 0, false)
+		}
+		return
 	}
-	t.pruneFiles()
+	readNs, stamped := t.identReadAt(key)
+	t.stampBinding(f, readNs, stamped && file.File(cached) == f)
+	t.deleteCacheKey(key)
 }
 
 func (t *fdTracker) delete(fd int32, pid uint32) {
