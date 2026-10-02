@@ -19,7 +19,15 @@ const (
 	// the context where it is visible and every byte of invalid UTF-8. '?' is used
 	// rather than U+FFFD or a Control Pictures glyph such as U+241B, because
 	// those are East-Asian-ambiguous or font-dependent and could render two
-	// cells wide, breaking column alignment.
+	// cells wide, and a cell of foreign text can hold any number of
+	// placeholders, each one cell off.
+	//
+	// This does not make the TUI free of ambiguous-width runes: its own
+	// chrome has them (the box-drawing panel and modal borders, the "•"
+	// of the key hints, the cut marker Ellipsis, which the Stream tab's
+	// numeric cells use too), all counted as one cell. A terminal that
+	// draws ambiguous runes two cells wide is misaligned by the borders
+	// already; see Ellipsis in truncate.go for why that is accepted.
 	ControlPlaceholder = '?'
 	// WhitespacePlaceholder replaces TAB, LF, VT, FF and CR, so multi-line
 	// values (argv with embedded newlines, file names containing tabs)

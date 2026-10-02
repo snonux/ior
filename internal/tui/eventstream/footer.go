@@ -69,23 +69,35 @@ func (m *Model) appendStreamFooter(base string, start, spare int) string {
 // come first and the pure "Row x/N" scroll position (also implied by Sel)
 // comes last; the live footer is just the position.
 //
-// The hints are those of the selected row (task b23). A warning row is one
-// spanning line: it has no column to count, no cell to push a filter from
-// and no descriptor to trace, so "Col x/N", "Enter push-filter" and "T
-// fd-trace" promised what the keys do not do there; its footer names what
-// Enter does instead, show the whole message (handleEnterKey).
+// The hints are those the keys act on (task b23). "Esc/F undo" is shown
+// only while the shared filter stack has a layer to pop: with an empty
+// stack requestGlobalFilterUndo leaves both keys unhandled, and the hint
+// promised an undo that did nothing. A warning row is one spanning line: it
+// has no column to count, no cell to push a filter from and no descriptor
+// to trace, so "Col x/N", "Enter push-filter" and "T fd-trace" promised
+// what the keys do not do there; its footer names what Enter does instead,
+// show the whole message (handleEnterKey).
 func (m *Model) streamFooterSegments(start int) []string {
 	total := len(m.filtered)
 	row := fmt.Sprintf("Row %d/%d", rowNumber(start, total), total)
 	if !m.paused || m.selectedIdx < 0 {
 		return []string{row}
 	}
-	sel := fmt.Sprintf("Sel %d/%d", rowNumber(m.selectedIdx, total), total)
-	if ev := m.selectedEvent(); ev != nil && ev.IsWarning {
-		return []string{sel, "Esc/F undo", "Enter show warning", row}
+	segments := []string{fmt.Sprintf("Sel %d/%d", rowNumber(m.selectedIdx, total), total)}
+	warning := false
+	if ev := m.selectedEvent(); ev != nil {
+		warning = ev.IsWarning
 	}
-	sel += fmt.Sprintf(" Col %d/%d", m.selectedCol+1, streamColumnCount)
-	return []string{sel, "Esc/F undo", "Enter push-filter", "T fd-trace", row}
+	if !warning {
+		segments[0] += fmt.Sprintf(" Col %d/%d", m.selectedCol+1, streamColumnCount)
+	}
+	if len(m.filterStack) > 0 {
+		segments = append(segments, "Esc/F undo")
+	}
+	if warning {
+		return append(segments, "Enter show warning", row)
+	}
+	return append(segments, "Enter push-filter", "T fd-trace", row)
 }
 
 // fdTraceFooterLine renders the fd-trace view's footer fitted to width. The

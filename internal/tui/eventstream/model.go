@@ -282,6 +282,12 @@ func (m *Model) inputModalVisible() bool {
 	return m.searchModal.Visible() || m.exportModal.Visible()
 }
 
+// modalVisible reports whether any of the stream's modals is open: one of
+// the two input modals or the warning modal.
+func (m *Model) modalVisible() bool {
+	return m.inputModalVisible() || m.warningModal.Visible()
+}
+
 // handleModalKey hands msg to the open search or export modal and reports
 // that it was consumed: a modal takes every key.
 func (m *Model) handleModalKey(msg tea.KeyPressMsg) bool {
@@ -626,8 +632,15 @@ func (m *Model) HandleTeaKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return m.HandleKey(msg.String())
 }
 
+// handleViewportUpdate scrolls the live table for a row or page key and
+// reports whether it did. It stands back while the stream is paused (the
+// keys move the selection then) and while the FD trace or a modal owns the
+// keyboard. The warning modal is named with the other two although it opens
+// from the paused table only and takes every key, space included, so the
+// paused check already covers it today: its j/k and page keys must reach
+// its own window, and that should not hang on how the modal was opened.
 func (m *Model) handleViewportUpdate(msg tea.KeyPressMsg) bool {
-	if m.paused || m.fdTraceView.visible || m.exportModal.Visible() || m.searchModal.Visible() {
+	if m.paused || m.fdTraceView.visible || m.modalVisible() {
 		return false
 	}
 

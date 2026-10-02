@@ -6,8 +6,24 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Truncation markers shared by the TUI helpers below. Ellipsis is the single
-// cell "…"; ASCIIEllipsis is the three-cell "..." used by the table views.
+// Truncation markers shared by the TUI helpers below.
+//
+// ASCIIEllipsis is the three-cell "..." of the table views' text cells and
+// of cut paths. Ellipsis is the single cell "…" (U+2026) of tab labels, key
+// hints, modal, message and header lines, flamegraph and grid labels, and of
+// one kind of table cell: the Stream tab's numeric cells
+// (eventstream.fitNumberCell), which are too narrow to spend three cells on a
+// marker.
+//
+// U+2026 is East-Asian-ambiguous: a terminal configured to draw ambiguous
+// runes wide gives it two cells, while every helper here counts one. That is
+// accepted, inside a table cell as elsewhere, because the panel borders
+// around every table are box-drawing runes of the same class, so such a
+// terminal's rows are out of line before any marker is drawn, and at most
+// one marker is added per cell. A one-cell ASCII marker would not repair
+// that terminal, and in front of digits "<" or "~" reads as part of the
+// value ("<4430", "~4430"). Sanitize's placeholders are ASCII all the same
+// (sanitize.go): a cell can hold many of them.
 const (
 	Ellipsis      = "…"
 	ASCIIEllipsis = "..."

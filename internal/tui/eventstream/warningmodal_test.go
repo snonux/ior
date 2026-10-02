@@ -2,11 +2,14 @@ package eventstream
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
 	"ior/internal/tui/common"
+	"ior/internal/tui/messages"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -158,7 +161,8 @@ func TestWarningViewSanitisesAndWrapsByCells(t *testing.T) {
 	}
 }
 
-// scrollWindow reads the "lines a-b of n" part of a scrolled view's title.
+// scrollWindow reads the "lines a-b of n" part of a scrolled view's title,
+// which is the title's form from a text width of 24 to 26 cells up.
 func scrollWindow(t *testing.T, view string) (first, last, total int) {
 	t.Helper()
 	title := boxLines(view)[0]
@@ -226,7 +230,10 @@ func TestWarningViewScrolledWindowsCoverTheMessage(t *testing.T) {
 
 // TestWarningViewFitsEveryViewSize: the modal never outgrows its view, and
 // from the Stream tab's smallest body (six rows) up it keeps a message line
-// and the key that closes it, in a box from 24 columns up.
+// and the key that closes it, in a box from 24 columns up. Wherever the box
+// shows the message through a window, its title names the window and its
+// hint the scroll keys, in the form its width holds (13 columns, seven text
+// cells, is the narrowest box with room for "j/k Esc").
 func TestWarningViewFitsEveryViewSize(t *testing.T) {
 	m := pausedOnWarning(t, hostileWarning+bootClockWarning, 100, 24)
 	pressLocal(t, m, "enter")
@@ -234,13 +241,153 @@ func TestWarningViewFitsEveryViewSize(t *testing.T) {
 		for height := 1; height <= 30; height++ {
 			view := m.View(width, height)
 			assertViewFits(t, "warning", width, height, view)
-			if height < 6 || width < 24 {
+			if height < 6 || width < 13 {
 				continue
 			}
 			lines := boxLines(view)
-			if !strings.HasPrefix(lines[len(lines)-1], "Esc/Enter close") || len(lines) < 3 || !strings.Contains(ansi.Strip(view), "╭") {
+			title, hint := lines[0], lines[len(lines)-1]
+			if m.warningModal.frame(width, height).scrolls() && (!windowTitle.MatchString(title) || !strings.Contains(hint, "j/k")) {
+				t.Fatalf("%dx%d: title %q and hint %q do not say that the text scrolls:\n%s", width, height, title, hint, view)
+			}
+			if width < 24 {
+				continue
+			}
+			if !strings.Contains(hint, "Esc") || len(lines) < 3 || !strings.Contains(ansi.Strip(view), "╭") {
 				t.Fatalf("%dx%d: modal lost its box, message or hint:\n%s", width, height, view)
 			}
+		}
+	}
+}
+
+// windowTitle matches the window a scrolled view's title names, in any of
+// its forms: "Warning, lines 1-6 of 11", "Warning 1-6/11", "1-6/11".
+var windowTitle = regexp.MustCompile(`^(Warning, lines \d+-\d+ of \d+|(Warning )?\d+-\d+/\d+)$`)
+
+// TestNarrowWarningViewStillSaysItScrolls: under about 34 columns the long
+// title and the hint with "j/k scroll" do not fit, and both used to be
+// dropped whole, so a scrolled message looked complete. The short forms keep
+// the window and the keys; the last window ends the message.
+func TestNarrowWarningViewStillSaysItScrolls(t *testing.T) {
+	for _, tt := range []struct {
+		width, height     int
+		first, last, hint string
+	}{
+		{20, 6, "Warning 1-2/28", "27-28/28", "j/k • Esc"},
+		{30, 8, "Warning, lines 1-4 of 16", "Warning 13-16/16", "j/k scroll • Esc close"},
+		{34, 8, "Warning, lines 1-4 of 13", "Warning, lines 10-13 of 13", "Esc/Enter close • j/k scroll"},
+	} {
+		m := pausedOnWarning(t, bootClockWarning, tt.width, tt.height)
+		pressLocal(t, m, "enter")
+		view := m.View(tt.width, tt.height)
+		assertViewFits(t, "narrow warning", tt.width, tt.height, view)
+		lines := boxLines(view)
+		if lines[0] != tt.first || lines[len(lines)-1] != tt.hint || !strings.Contains(view, "╭") {
+			t.Fatalf("%dx%d: title %q hint %q, want %q and %q in a box:\n%s", tt.width, tt.height, lines[0], lines[len(lines)-1], tt.first, tt.hint, view)
+		}
+		pressLocal(t, m, "G")
+		lines = boxLines(m.View(tt.width, tt.height))
+		body := strings.Join(lines[1:len(lines)-1], " ")
+		if lines[0] != tt.last || !strings.HasSuffix(bootClockWarning, body) {
+			t.Fatalf("%dx%d: last window is %q with %q", tt.width, tt.height, lines[0], body)
+		}
+	}
+}
+
+// TestWarningHintFormsByWidth pins which form of each hint a text width
+// gets: the scroll keys stay down to seven cells and lead from the second
+// form on, and below the shortest form the way out is cut, not dropped.
+func TestWarningHintFormsByWidth(t *testing.T) {
+	for _, tt := range []struct {
+		width           int
+		scrolled, whole string
+	}{
+		{28, "Esc/Enter close • j/k scroll", "Esc/Enter close"},
+		{27, "j/k scroll • Esc close", "Esc/Enter close"},
+		{22, "j/k scroll • Esc close", "Esc/Enter close"},
+		{21, "j/k • Esc close", "Esc/Enter close"},
+		{15, "j/k • Esc close", "Esc/Enter close"},
+		{14, "j/k • Esc", "Esc close"},
+		{9, "j/k • Esc", "Esc close"},
+		{8, "j/k Esc", "Esc"},
+		{7, "j/k Esc", "Esc"},
+		{6, "Esc", "Esc"},
+		{3, "Esc", "Esc"},
+		{2, "E…", "E…"},
+		{1, "E", "E"},
+	} {
+		lines := []string{"a", "b"}
+		if got := warningHint(warningFrame{textWidth: tt.width, lines: lines, rows: 1}); got != tt.scrolled {
+			t.Fatalf("scrolled hint in %d cells = %q, want %q", tt.width, got, tt.scrolled)
+		}
+		if got := warningHint(warningFrame{textWidth: tt.width, lines: lines, rows: 2}); got != tt.whole {
+			t.Fatalf("hint of a whole message in %d cells = %q, want %q", tt.width, got, tt.whole)
+		}
+	}
+}
+
+// TestWarningViewSurvivesAnEnlargedView: the offset is clamped for the view
+// of the last key. Scrolled to the end of a small view and then drawn in a
+// larger one, where the message has fewer lines and more of them show, the
+// stored offset lies past the last window; View must clamp it, not slice out
+// of range (a panic, which nothing else in the suite reached).
+func TestWarningViewSurvivesAnEnlargedView(t *testing.T) {
+	m := pausedOnWarning(t, bootClockWarning, 50, 10)
+	pressLocal(t, m, "enter")
+	pressLocal(t, m, "G")
+	stored := m.warningModal.offset
+	for _, size := range []struct{ width, height int }{{60, 10}, {60, 12}, {120, 30}, {50, 10}} {
+		if f := m.warningModal.frame(size.width, size.height); size.width > 50 && stored <= f.maxOffset() {
+			t.Fatalf("%dx%d: offset %d is not past the last window (%d)", size.width, size.height, stored, f.maxOffset())
+		}
+		view := m.View(size.width, size.height)
+		assertViewFits(t, "enlarged warning", size.width, size.height, view)
+		lines := boxLines(view)
+		if got := lines[len(lines)-2]; !strings.HasSuffix(warningTail, got) && !strings.HasSuffix(got, warningTail) {
+			t.Fatalf("%dx%d: the view does not end on the message's last line:\n%s", size.width, size.height, view)
+		}
+	}
+	if lines := boxLines(m.View(120, 30)); lines[0] != "Warning" || strings.Join(lines[1:len(lines)-1], " ") != bootClockWarning {
+		t.Fatalf("the large view should show the whole message:\n%q", lines)
+	}
+}
+
+// TestWarningViewDropsLineFeedsAtTheMessageEnds: libbpf lines end in a line
+// feed. Kept, it is a blank line that the window and its "of n" count; the
+// title's total is the three lines of text. (boxLines drops blank lines, so
+// only the total shows the difference.)
+func TestWarningViewDropsLineFeedsAtTheMessageEnds(t *testing.T) {
+	m := pausedOnWarning(t, "\n\none\ntwo\n\nthree\n\n", 50, 6)
+	pressLocal(t, m, "enter")
+	first, last, total := scrollWindow(t, m.View(50, 6))
+	if first != 1 || last != 2 || total != 4 {
+		t.Fatalf("window is lines %d-%d of %d, want 1-2 of 4 (one, two, a blank, three)", first, last, total)
+	}
+	if got := boxLines(m.View(50, 6)); got[1] != "one" || got[2] != "two" {
+		t.Fatalf("first window = %q, want it to start at the first line of text", got)
+	}
+}
+
+// TestRowKeysReachAWarningViewOverALiveTable: the live table's viewport
+// leaves the row keys alone while the warning modal is open. The modal opens
+// from the paused table only and no key resumes the stream behind it, so the
+// test has to put it over a live table itself; it pins that the viewport's
+// guard names the modal, rather than relying on that.
+func TestRowKeysReachAWarningViewOverALiveTable(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 200)
+	m := NewModel(rb)
+	m.Refresh()
+	m.View(50, 10)
+	m.warningModal = m.warningModal.Open(NewWarningEvent(1, bootClockWarning))
+	scrolled := m.scrollOffset
+	for _, step := range []struct {
+		key   rune
+		first int
+	}{{'j', 2}, {'j', 3}, {'k', 2}} {
+		handled, _ := m.HandleTeaKey(tea.KeyPressMsg{Code: step.key, Text: string(step.key)})
+		first, _, _ := scrollWindow(t, m.View(50, 10))
+		if !handled || first != step.first || m.scrollOffset != scrolled {
+			t.Fatalf("%q: handled=%v, window starts at line %d (want %d), table row %d (want %d)", step.key, handled, first, step.first, m.scrollOffset, scrolled)
 		}
 	}
 }
@@ -279,6 +426,7 @@ func pausedFooter(t *testing.T, m *Model, width, height int) string {
 // hints it had.
 func TestPausedFooterOnAWarningRowSaysWhatEnterDoes(t *testing.T) {
 	m := pausedOnWarning(t, bootClockWarning, 120, 24)
+	m.SetFilterStack([]string{"pid=7"})
 	if got, want := pausedFooter(t, m, 120, 24), "Sel 2/2 | Esc/F undo | Enter show warning | Row 1/2"; got != want {
 		t.Fatalf("footer on a warning row = %q, want %q", got, want)
 	}
@@ -291,5 +439,36 @@ func TestPausedFooterOnAWarningRowSaysWhatEnterDoes(t *testing.T) {
 		if w := common.DisplayWidth(pausedFooter(t, m, width, 24)); w > width {
 			t.Fatalf("width %d: footer on a warning row is %d cells", width, w)
 		}
+	}
+}
+
+// TestPausedFooterNamesUndoOnlyWithALayerToPop: Esc and F pop the latest
+// layer of the shared filter stack. With an empty stack neither key is
+// handled (requestGlobalFilterUndo), so the footer does not offer them, on
+// either kind of row; the hint is there as soon as a layer is.
+func TestPausedFooterNamesUndoOnlyWithALayerToPop(t *testing.T) {
+	m := pausedOnWarning(t, bootClockWarning, 120, 24)
+	for _, tt := range []struct {
+		selected     int
+		empty, layer string
+	}{
+		{1, "Sel 2/2 | Enter show warning | Row 1/2", "Sel 2/2 | Esc/F undo | Enter show warning | Row 1/2"},
+		{0, "Sel 1/2 Col 1/10 | Enter push-filter | T fd-trace | Row 1/2", "Sel 1/2 Col 1/10 | Esc/F undo | Enter push-filter | T fd-trace | Row 1/2"},
+	} {
+		m.selectedIdx = tt.selected
+		m.SetFilterStack(nil)
+		for _, key := range []string{"esc", "F"} {
+			if handled, cmd := m.HandleKey(key); handled || cmd != nil {
+				t.Fatalf("row %d: %q was handled with an empty filter stack", tt.selected, key)
+			}
+		}
+		if got := pausedFooter(t, m, 120, 24); got != tt.empty {
+			t.Fatalf("row %d, empty stack: footer = %q, want %q", tt.selected, got, tt.empty)
+		}
+		m.SetFilterStack([]string{"pid=7"})
+		if got := pausedFooter(t, m, 120, 24); got != tt.layer {
+			t.Fatalf("row %d, one layer: footer = %q, want %q", tt.selected, got, tt.layer)
+		}
+		pressRequest[messages.GlobalFilterUndoRequestedMsg](t, m, "esc")
 	}
 }

@@ -1,6 +1,7 @@
 package eventstream
 
 import (
+	"strings"
 	"testing"
 
 	"ior/internal/tui/common"
@@ -149,9 +150,12 @@ func TestFDAndBytesCellsAreCutFromTheLeft(t *testing.T) {
 	assertCells(t, 120, events, streamColBytes, "…3456789", "64")
 }
 
-// TestFitNumberCell pins the cut itself, down to the widths where common's
-// marker rule leaves no room for the marker: the sign is kept before any
-// digit, and a number that fits is returned as it is.
+// TestFitNumberCell pins the cut itself: the sign is kept before any digit,
+// a number that fits is returned as it is, and a cut number always carries
+// the marker. Where one cell is left for the digits the cell is the marker
+// alone: the low digit by itself read as another whole value (Bytes
+// 1234567890 as "0", the errno -22 as "-2"). A negative number in one cell
+// is "…" as well, since "-" is what an absent value shows.
 func TestFitNumberCell(t *testing.T) {
 	for _, tt := range []struct {
 		number string
@@ -159,10 +163,11 @@ func TestFitNumberCell(t *testing.T) {
 		want   string
 	}{
 		{"1234567", 8, "1234567"}, {"1234567", 7, "1234567"}, {"1234567", 6, "…34567"},
-		{"1234567", 2, "…7"}, {"1234567", 1, "7"}, {"1234567", 0, ""}, {"1234567", -1, ""},
+		{"1234567", 2, "…7"}, {"1234567", 1, "…"}, {"1234567", 0, ""}, {"1234567", -1, ""},
 		{"-1234567", 8, "-1234567"}, {"-1234567", 7, "-…34567"}, {"-1234567", 3, "-…7"},
-		{"-1234567", 2, "-7"}, {"-1234567", 1, "-"}, {"-1234567", 0, ""},
-		{"-", 3, "-"}, {"-", 1, "-"}, {"0", 1, "0"}, {"-1", 2, "-1"},
+		{"-1234567", 2, "-…"}, {"-1234567", 1, "…"}, {"-1234567", 0, ""},
+		{"1234567890", 1, "…"}, {"12", 1, "…"}, {"-22", 2, "-…"}, {"-22", 1, "…"},
+		{"-", 3, "-"}, {"-", 1, "-"}, {"0", 1, "0"}, {"-1", 2, "-1"}, {"-1", 1, "…"},
 	} {
 		got := fitNumberCell(tt.number, tt.width)
 		if got != tt.want {
@@ -170,6 +175,44 @@ func TestFitNumberCell(t *testing.T) {
 		}
 		if w := common.DisplayWidth(got); w > max(tt.width, 0) {
 			t.Fatalf("fitNumberCell(%q, %d) = %q is %d cells wide", tt.number, tt.width, got, w)
+		}
+	}
+}
+
+// TestCutNumberNeverReadsAsAnotherNumber is the property behind those rows:
+// at every width a cut cell holds the marker, so no cell of digits alone is
+// anything but the whole number.
+func TestCutNumberNeverReadsAsAnotherNumber(t *testing.T) {
+	for _, number := range []string{"1234567890", "1234437", "-22", "-4095", "10", "-1"} {
+		for width := 1; width <= len(number)+1; width++ {
+			got := fitNumberCell(number, width)
+			if got == number {
+				continue
+			}
+			if !strings.Contains(got, common.Ellipsis) {
+				t.Fatalf("fitNumberCell(%q, %d) = %q: a cut cell without the marker", number, width, got)
+			}
+		}
+	}
+}
+
+// TestTIDCellInTheNarrowestColumns: under four cells a main thread's cut TID
+// is "=" (its value is the PID cell's), another thread's follows the number
+// rule down to the lone marker, never a bare low digit.
+func TestTIDCellInTheNarrowestColumns(t *testing.T) {
+	main, thread := idTestEvent(1, 1234437, 1234437), idTestEvent(2, 1234430, 1234437)
+	for _, tt := range []struct {
+		width        int
+		main, thread string
+	}{
+		{0, "", ""}, {1, "=", "…"}, {2, "=", "…7"}, {3, "=", "…37"},
+		{4, "=PID", "…437"}, {6, "=PID", "…34437"}, {7, "1234437", "1234437"},
+	} {
+		if got := tidCell(&main, tt.width); got != tt.main {
+			t.Fatalf("main thread's TID in %d cells = %q, want %q", tt.width, got, tt.main)
+		}
+		if got := tidCell(&thread, tt.width); got != tt.thread {
+			t.Fatalf("other thread's TID in %d cells = %q, want %q", tt.width, got, tt.thread)
 		}
 	}
 }

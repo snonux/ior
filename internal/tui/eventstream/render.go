@@ -412,25 +412,39 @@ func fitCell(s string, width int) string {
 // high digits being the ones the ids share. The low digits tell threads and
 // processes apart, and of a return value they are the errno; what the left
 // cut gives up is the magnitude, which the marker says is missing. The
-// marker is one cell, not the three of the cells' "...", because a numeric
-// column is 3 to 8 cells wide.
+// marker is one cell, not the three of the cells' "...", because the cells
+// it shares with the digits are few: a numeric column is 3 to 8 cells wide
+// from the compact layout up and shrinks to a single cell on a narrow
+// terminal (columnShrinkSteps).
 //
-// common's marker rule applies to the digits: with a single cell left for
-// them the low digit is shown without a marker. A one-cell column shows the
-// sign of a negative number rather than its last digit. Numbers are ASCII,
-// so they need no sanitising.
+// A cut number is never shown without the marker, which is where this
+// departs from common's marker rule (truncate.go: a hard cut where the
+// marker leaves no room). A prefix of a path is still that path's start,
+// but a lone low digit reads as another, complete value: Bytes 1234567890
+// as "0", TID 1234437 as "7", the errno -22 in two cells as "-2", which is
+// ENOENT. So where a single cell is left for the digits the cell is the
+// marker alone ("…", "-…"), and a negative number in a one-cell column is
+// "…" too, not "-": that is the placeholder of an absent value. Numbers
+// are ASCII, so they need no sanitising.
 func fitNumberCell(number string, width int) string {
 	if len(number) <= width {
 		return number
+	}
+	if width <= 0 {
+		return ""
 	}
 	sign, digits := "", number
 	if strings.HasPrefix(number, "-") {
 		sign, digits = "-", number[1:]
 	}
-	if width <= len(sign) {
-		return sign[:max(width, 0)]
+	room := width - len(sign)
+	if room < 1 {
+		return common.Ellipsis
 	}
-	return sign + common.TruncateLeft(digits, width-len(sign), common.Ellipsis)
+	if room == 1 {
+		return sign + common.Ellipsis
+	}
+	return sign + common.TruncateLeft(digits, room, common.Ellipsis)
 }
 
 // samePIDCell is what the TID cell of a main thread shows when the number
@@ -444,6 +458,9 @@ const samePIDCell = "=PID"
 // beside it, while "=PID" says the whole value. A TID that fits is always the
 // number, so the cell reads as before wherever there is room (from 92
 // columns for seven digits); Enter on it filters by the TID either way.
+// Another thread's cut TID follows fitNumberCell down to the lone marker,
+// so a one-cell TID column reads "=" on a main thread and "…" on any other
+// row whose TID has more than one digit.
 func tidCell(ev *StreamEvent, width int) string {
 	tid := strconv.FormatUint(uint64(ev.TID), 10)
 	if len(tid) > width && ev.TID == ev.PID {
