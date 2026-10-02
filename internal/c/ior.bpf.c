@@ -25,6 +25,10 @@
 // open_by_handle_at handlers.
 #include "handle.c"
 
+// File identity of a descriptor (the inode behind an fd number), used by the
+// generated single-descriptor enter handlers and the exits of the open kinds.
+#include "fileident.c"
+
 // Restart fold: the pending-restart state behind filter.c's enter/exit hooks
 // and its two probes (signal:signal_deliver, a second sys_enter_rt_sigreturn).
 #include "restart.c"

@@ -787,6 +787,7 @@ int handle_sys_exit_socket(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -907,6 +908,7 @@ int handle_sys_enter_bind(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -936,6 +938,7 @@ int handle_sys_exit_bind(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -964,6 +967,7 @@ int handle_sys_enter_listen(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -993,6 +997,7 @@ int handle_sys_exit_listen(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1145,6 +1150,7 @@ int handle_sys_enter_connect(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1174,6 +1180,7 @@ int handle_sys_exit_connect(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1202,6 +1209,7 @@ int handle_sys_enter_getsockname(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1231,6 +1239,7 @@ int handle_sys_exit_getsockname(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1259,6 +1268,7 @@ int handle_sys_enter_getpeername(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1288,6 +1298,7 @@ int handle_sys_exit_getpeername(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1316,6 +1327,7 @@ int handle_sys_enter_sendto(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1345,6 +1357,7 @@ int handle_sys_exit_sendto(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1408,6 +1421,7 @@ int handle_sys_exit_recvfrom(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1436,6 +1450,7 @@ int handle_sys_enter_setsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1465,6 +1480,7 @@ int handle_sys_exit_setsockopt(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1493,6 +1509,7 @@ int handle_sys_enter_getsockopt(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1522,6 +1539,7 @@ int handle_sys_exit_getsockopt(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1550,6 +1568,7 @@ int handle_sys_enter_shutdown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1579,6 +1598,7 @@ int handle_sys_exit_shutdown(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1607,6 +1627,7 @@ int handle_sys_enter_sendmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1636,6 +1657,7 @@ int handle_sys_exit_sendmsg(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1664,6 +1686,7 @@ int handle_sys_enter_sendmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1693,6 +1716,7 @@ int handle_sys_exit_sendmmsg(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1756,6 +1780,7 @@ int handle_sys_exit_recvmsg(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1784,6 +1809,7 @@ int handle_sys_enter_recvmmsg(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1813,6 +1839,7 @@ int handle_sys_exit_recvmmsg(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1869,6 +1896,7 @@ int handle_sys_exit_getrandom(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1928,6 +1956,7 @@ int handle_sys_exit_io_uring_register(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -1987,6 +2016,7 @@ int handle_sys_exit_io_uring_enter(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2048,6 +2078,7 @@ int handle_sys_exit_io_uring_setup(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2104,6 +2135,7 @@ int handle_sys_exit_ioprio_set(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2160,6 +2192,7 @@ int handle_sys_exit_ioprio_get(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2257,6 +2290,7 @@ int handle_sys_enter_landlock_add_rule(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2286,6 +2320,7 @@ int handle_sys_exit_landlock_add_rule(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2314,6 +2349,7 @@ int handle_sys_enter_landlock_restrict_self(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2343,6 +2379,7 @@ int handle_sys_exit_landlock_restrict_self(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2399,6 +2436,7 @@ int handle_sys_exit_lsm_set_self_attr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2455,6 +2493,7 @@ int handle_sys_exit_lsm_get_self_attr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2511,6 +2550,7 @@ int handle_sys_exit_lsm_list_modules(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2570,6 +2610,7 @@ int handle_sys_exit_add_key(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2629,6 +2670,7 @@ int handle_sys_exit_request_key(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2688,6 +2730,7 @@ int handle_sys_exit_keyctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2764,6 +2807,7 @@ int handle_sys_exit_mq_open(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2841,6 +2885,7 @@ int handle_sys_exit_mq_unlink(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2869,6 +2914,7 @@ int handle_sys_enter_mq_timedsend(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2898,6 +2944,7 @@ int handle_sys_exit_mq_timedsend(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2926,6 +2973,7 @@ int handle_sys_enter_mq_timedreceive(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2955,6 +3003,7 @@ int handle_sys_exit_mq_timedreceive(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -2983,6 +3032,7 @@ int handle_sys_enter_mq_notify(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3012,6 +3062,7 @@ int handle_sys_exit_mq_notify(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3040,6 +3091,7 @@ int handle_sys_enter_mq_getsetattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3069,6 +3121,7 @@ int handle_sys_exit_mq_getsetattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3125,6 +3178,7 @@ int handle_sys_exit_shmget(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3181,6 +3235,7 @@ int handle_sys_exit_shmctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3237,6 +3292,7 @@ int handle_sys_exit_shmat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3293,6 +3349,7 @@ int handle_sys_exit_shmdt(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3349,6 +3406,7 @@ int handle_sys_exit_semget(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3405,6 +3463,7 @@ int handle_sys_exit_semctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3461,6 +3520,7 @@ int handle_sys_exit_semtimedop(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3517,6 +3577,7 @@ int handle_sys_exit_semop(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3573,6 +3634,7 @@ int handle_sys_exit_msgget(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3629,6 +3691,7 @@ int handle_sys_exit_msgctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3685,6 +3748,7 @@ int handle_sys_exit_msgsnd(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3741,6 +3805,7 @@ int handle_sys_exit_msgrcv(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3818,6 +3883,7 @@ int handle_sys_exit_quotactl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3846,6 +3912,7 @@ int handle_sys_enter_quotactl_fd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3875,6 +3942,7 @@ int handle_sys_exit_quotactl_fd(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -3958,6 +4026,7 @@ int handle_sys_exit_name_to_handle_at(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4016,6 +4085,7 @@ int handle_sys_exit_open_by_handle_at(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4044,6 +4114,7 @@ int handle_sys_enter_flock(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4073,6 +4144,7 @@ int handle_sys_exit_flock(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4129,6 +4201,7 @@ int handle_sys_exit_io_setup(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4185,6 +4258,7 @@ int handle_sys_exit_io_destroy(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4241,6 +4315,7 @@ int handle_sys_exit_io_submit(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4297,6 +4372,7 @@ int handle_sys_exit_io_cancel(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4353,6 +4429,7 @@ int handle_sys_exit_io_getevents(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4409,6 +4486,7 @@ int handle_sys_exit_io_pgetevents(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4644,6 +4722,7 @@ int handle_sys_enter_timerfd_settime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4673,6 +4752,7 @@ int handle_sys_exit_timerfd_settime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4701,6 +4781,7 @@ int handle_sys_enter_timerfd_gettime(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -4730,6 +4811,7 @@ int handle_sys_exit_timerfd_gettime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5072,6 +5154,7 @@ int handle_sys_exit_epoll_ctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5138,6 +5221,7 @@ int handle_sys_exit_epoll_wait(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5204,6 +5288,7 @@ int handle_sys_exit_epoll_pwait(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5279,6 +5364,7 @@ int handle_sys_exit_epoll_pwait2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5423,6 +5509,7 @@ int handle_sys_exit_fanotify_mark(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5636,6 +5723,7 @@ int handle_sys_exit_inotify_add_watch(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5664,6 +5752,7 @@ int handle_sys_enter_inotify_rm_watch(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5693,6 +5782,7 @@ int handle_sys_exit_inotify_rm_watch(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5770,6 +5860,7 @@ int handle_sys_exit_file_getattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -5847,6 +5938,7 @@ int handle_sys_exit_file_setattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6009,6 +6101,7 @@ int handle_sys_exit_fspick(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6037,6 +6130,7 @@ int handle_sys_enter_fsconfig(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6066,6 +6160,7 @@ int handle_sys_exit_fsconfig(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6143,6 +6238,7 @@ int handle_sys_exit_statfs(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6171,6 +6267,7 @@ int handle_sys_enter_fstatfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6200,6 +6297,7 @@ int handle_sys_exit_fstatfs(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6256,6 +6354,7 @@ int handle_sys_exit_ustat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6319,6 +6418,7 @@ int handle_sys_exit_getcwd(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6405,6 +6505,7 @@ int handle_sys_exit_utimensat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6482,6 +6583,7 @@ int handle_sys_exit_futimesat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6559,6 +6661,7 @@ int handle_sys_exit_utimes(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6636,6 +6739,7 @@ int handle_sys_exit_utime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6692,6 +6796,7 @@ int handle_sys_exit_sync(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6720,6 +6825,7 @@ int handle_sys_enter_syncfs(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6749,6 +6855,7 @@ int handle_sys_exit_syncfs(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6777,6 +6884,7 @@ int handle_sys_enter_fsync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6806,6 +6914,7 @@ int handle_sys_exit_fsync(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6834,6 +6943,7 @@ int handle_sys_enter_fdatasync(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6863,6 +6973,7 @@ int handle_sys_exit_fdatasync(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6891,6 +7002,7 @@ int handle_sys_enter_sync_file_range(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6920,6 +7032,7 @@ int handle_sys_exit_sync_file_range(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6948,6 +7061,7 @@ int handle_sys_enter_vmsplice(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -6977,6 +7091,7 @@ int handle_sys_exit_vmsplice(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = TRANSFER_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7005,6 +7120,7 @@ int handle_sys_enter_splice(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[2];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7034,6 +7150,7 @@ int handle_sys_exit_splice(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = TRANSFER_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7062,6 +7179,7 @@ int handle_sys_enter_tee(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[1];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7091,6 +7209,7 @@ int handle_sys_exit_tee(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = TRANSFER_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7168,6 +7287,7 @@ int handle_sys_exit_setxattrat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7245,6 +7365,7 @@ int handle_sys_exit_setxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7322,6 +7443,7 @@ int handle_sys_exit_lsetxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7350,6 +7472,7 @@ int handle_sys_enter_fsetxattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7379,6 +7502,7 @@ int handle_sys_exit_fsetxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7463,6 +7587,7 @@ int handle_sys_exit_getxattrat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7542,6 +7667,7 @@ int handle_sys_exit_getxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7621,6 +7747,7 @@ int handle_sys_exit_lgetxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7684,6 +7811,7 @@ int handle_sys_exit_fgetxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7763,6 +7891,7 @@ int handle_sys_exit_listxattrat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7842,6 +7971,7 @@ int handle_sys_exit_listxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7921,6 +8051,7 @@ int handle_sys_exit_llistxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -7984,6 +8115,7 @@ int handle_sys_exit_flistxattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8061,6 +8193,7 @@ int handle_sys_exit_removexattrat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8138,6 +8271,7 @@ int handle_sys_exit_removexattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8215,6 +8349,7 @@ int handle_sys_exit_lremovexattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8243,6 +8378,7 @@ int handle_sys_enter_fremovexattr(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8272,6 +8408,7 @@ int handle_sys_exit_fremovexattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8349,6 +8486,7 @@ int handle_sys_exit_umount(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8425,6 +8563,7 @@ int handle_sys_exit_open_tree(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8502,6 +8641,7 @@ int handle_sys_exit_mount(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8659,6 +8799,7 @@ int handle_sys_exit_move_mount(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8736,6 +8877,7 @@ int handle_sys_exit_pivot_root(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8813,6 +8955,7 @@ int handle_sys_exit_mount_setattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8889,6 +9032,7 @@ int handle_sys_exit_open_tree_attr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -8945,6 +9089,7 @@ int handle_sys_exit_statmount(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9001,6 +9146,7 @@ int handle_sys_exit_listmount(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9057,6 +9203,7 @@ int handle_sys_exit_sysfs(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9117,6 +9264,7 @@ int handle_sys_exit_close_range(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9175,6 +9323,7 @@ int handle_sys_exit_dup3(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9203,6 +9352,7 @@ int handle_sys_enter_dup2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9232,6 +9382,7 @@ int handle_sys_exit_dup2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9260,6 +9411,7 @@ int handle_sys_enter_dup(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9289,6 +9441,7 @@ int handle_sys_exit_dup(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9357,6 +9510,7 @@ int handle_sys_exit_select(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9432,6 +9586,7 @@ int handle_sys_exit_pselect6(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9498,6 +9653,7 @@ int handle_sys_exit_poll(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9573,6 +9729,7 @@ int handle_sys_exit_ppoll(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9601,6 +9758,7 @@ int handle_sys_enter_getdents(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9630,6 +9788,7 @@ int handle_sys_exit_getdents(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9658,6 +9817,7 @@ int handle_sys_enter_getdents64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9687,6 +9847,7 @@ int handle_sys_exit_getdents64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9746,6 +9907,7 @@ int handle_sys_exit_ioctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9805,6 +9967,7 @@ int handle_sys_exit_fcntl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9882,6 +10045,7 @@ int handle_sys_exit_mknodat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -9959,6 +10123,7 @@ int handle_sys_exit_mknod(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10036,6 +10201,7 @@ int handle_sys_exit_mkdirat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10113,6 +10279,7 @@ int handle_sys_exit_mkdir(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10190,6 +10357,7 @@ int handle_sys_exit_rmdir(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10267,6 +10435,7 @@ int handle_sys_exit_unlinkat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10344,6 +10513,7 @@ int handle_sys_exit_unlink(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10432,6 +10602,7 @@ int handle_sys_exit_symlinkat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10520,6 +10691,7 @@ int handle_sys_exit_symlink(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10608,6 +10780,7 @@ int handle_sys_exit_linkat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10696,6 +10869,7 @@ int handle_sys_exit_link(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10784,6 +10958,7 @@ int handle_sys_exit_renameat2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10872,6 +11047,7 @@ int handle_sys_exit_renameat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -10960,6 +11136,7 @@ int handle_sys_exit_rename(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11194,6 +11371,7 @@ int handle_sys_exit_execve(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11264,6 +11442,7 @@ int handle_sys_exit_execveat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11341,6 +11520,7 @@ int handle_sys_exit_newstat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11418,6 +11598,7 @@ int handle_sys_exit_newlstat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11495,6 +11676,7 @@ int handle_sys_exit_newfstatat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11523,6 +11705,7 @@ int handle_sys_enter_newfstat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11552,6 +11735,7 @@ int handle_sys_exit_newfstat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11629,6 +11813,7 @@ int handle_sys_exit_readlinkat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11706,6 +11891,7 @@ int handle_sys_exit_readlink(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11783,6 +11969,7 @@ int handle_sys_exit_statx(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11811,6 +11998,7 @@ int handle_sys_enter_lseek(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11840,6 +12028,7 @@ int handle_sys_exit_lseek(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11868,6 +12057,7 @@ int handle_sys_enter_read(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11897,6 +12087,7 @@ int handle_sys_exit_read(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11925,6 +12116,7 @@ int handle_sys_enter_write(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11954,6 +12146,7 @@ int handle_sys_exit_write(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -11982,6 +12175,7 @@ int handle_sys_enter_pread64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12011,6 +12205,7 @@ int handle_sys_exit_pread64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12039,6 +12234,7 @@ int handle_sys_enter_pwrite64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12068,6 +12264,7 @@ int handle_sys_exit_pwrite64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12096,6 +12293,7 @@ int handle_sys_enter_readv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12125,6 +12323,7 @@ int handle_sys_exit_readv(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12153,6 +12352,7 @@ int handle_sys_enter_writev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12182,6 +12382,7 @@ int handle_sys_exit_writev(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12210,6 +12411,7 @@ int handle_sys_enter_preadv(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12239,6 +12441,7 @@ int handle_sys_exit_preadv(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12267,6 +12470,7 @@ int handle_sys_enter_preadv2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12296,6 +12500,7 @@ int handle_sys_exit_preadv2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12324,6 +12529,7 @@ int handle_sys_enter_pwritev(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12353,6 +12559,7 @@ int handle_sys_exit_pwritev(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12381,6 +12588,7 @@ int handle_sys_enter_pwritev2(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12410,6 +12618,7 @@ int handle_sys_exit_pwritev2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12438,6 +12647,7 @@ int handle_sys_enter_sendfile64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12467,6 +12677,7 @@ int handle_sys_exit_sendfile64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = TRANSFER_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12495,6 +12706,7 @@ int handle_sys_enter_copy_file_range(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[2];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12524,6 +12736,7 @@ int handle_sys_exit_copy_file_range(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = TRANSFER_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12601,6 +12814,7 @@ int handle_sys_exit_truncate(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12629,6 +12843,7 @@ int handle_sys_enter_ftruncate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12658,6 +12873,7 @@ int handle_sys_exit_ftruncate(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12686,6 +12902,7 @@ int handle_sys_enter_fallocate(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12715,6 +12932,7 @@ int handle_sys_exit_fallocate(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12792,6 +13010,7 @@ int handle_sys_exit_faccessat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12869,6 +13088,7 @@ int handle_sys_exit_faccessat2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -12946,6 +13166,7 @@ int handle_sys_exit_access(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13023,6 +13244,7 @@ int handle_sys_exit_chdir(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13051,6 +13273,7 @@ int handle_sys_enter_fchdir(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13080,6 +13303,7 @@ int handle_sys_exit_fchdir(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13157,6 +13381,7 @@ int handle_sys_exit_chroot(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13185,6 +13410,7 @@ int handle_sys_enter_fchmod(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13214,6 +13440,7 @@ int handle_sys_exit_fchmod(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13291,6 +13518,7 @@ int handle_sys_exit_fchmodat2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13368,6 +13596,7 @@ int handle_sys_exit_fchmodat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13445,6 +13674,7 @@ int handle_sys_exit_chmod(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13522,6 +13752,7 @@ int handle_sys_exit_fchownat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13599,6 +13830,7 @@ int handle_sys_exit_chown(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13676,6 +13908,7 @@ int handle_sys_exit_lchown(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13704,6 +13937,7 @@ int handle_sys_enter_fchown(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13733,6 +13967,7 @@ int handle_sys_exit_fchown(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13809,6 +14044,7 @@ int handle_sys_exit_open(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13885,6 +14121,7 @@ int handle_sys_exit_openat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -13967,6 +14204,7 @@ int handle_sys_exit_openat2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14044,6 +14282,7 @@ int handle_sys_exit_creat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = ior_file_ident_of_ret(ctx->ret);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14072,6 +14311,7 @@ int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14101,6 +14341,7 @@ int handle_sys_exit_close(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14157,6 +14398,7 @@ int handle_sys_exit_vhangup(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14436,6 +14678,7 @@ int handle_sys_exit_move_pages(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14492,6 +14735,7 @@ int handle_sys_exit_set_mempolicy_home_node(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14548,6 +14792,7 @@ int handle_sys_exit_mbind(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14604,6 +14849,7 @@ int handle_sys_exit_set_mempolicy(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14660,6 +14906,7 @@ int handle_sys_exit_migrate_pages(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14716,6 +14963,7 @@ int handle_sys_exit_get_mempolicy(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14793,6 +15041,7 @@ int handle_sys_exit_swapoff(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14870,6 +15119,7 @@ int handle_sys_exit_swapon(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14930,6 +15180,7 @@ int handle_sys_exit_madvise(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14958,6 +15209,7 @@ int handle_sys_enter_process_madvise(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -14987,6 +15239,7 @@ int handle_sys_exit_process_madvise(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15047,6 +15300,7 @@ int handle_sys_exit_mseal(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15103,6 +15357,7 @@ int handle_sys_exit_process_vm_readv(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15159,6 +15414,7 @@ int handle_sys_exit_process_vm_writev(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = WRITE_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15219,6 +15475,7 @@ int handle_sys_exit_msync(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15279,6 +15536,7 @@ int handle_sys_exit_mremap(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15339,6 +15597,7 @@ int handle_sys_exit_mprotect(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15399,6 +15658,7 @@ int handle_sys_exit_pkey_mprotect(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15455,6 +15715,7 @@ int handle_sys_exit_pkey_alloc(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15511,6 +15772,7 @@ int handle_sys_exit_pkey_free(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15571,6 +15833,7 @@ int handle_sys_exit_brk(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15631,6 +15894,7 @@ int handle_sys_exit_munmap(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15691,6 +15955,7 @@ int handle_sys_exit_remap_file_pages(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15751,6 +16016,7 @@ int handle_sys_exit_mlock(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15811,6 +16077,7 @@ int handle_sys_exit_mlock2(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15871,6 +16138,7 @@ int handle_sys_exit_munlock(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15927,6 +16195,7 @@ int handle_sys_exit_mlockall(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -15983,6 +16252,7 @@ int handle_sys_exit_munlockall(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16043,6 +16313,7 @@ int handle_sys_exit_mincore(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16071,6 +16342,7 @@ int handle_sys_enter_readahead(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16100,6 +16372,7 @@ int handle_sys_exit_readahead(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16128,6 +16401,7 @@ int handle_sys_enter_fadvise64(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16157,6 +16431,7 @@ int handle_sys_exit_fadvise64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16185,6 +16460,7 @@ int handle_sys_enter_process_mrelease(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16214,6 +16490,7 @@ int handle_sys_exit_process_mrelease(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16242,6 +16519,7 @@ int handle_sys_enter_cachestat(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16271,6 +16549,7 @@ int handle_sys_exit_cachestat(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16327,6 +16606,7 @@ int handle_sys_exit_rseq(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16402,6 +16682,7 @@ int handle_sys_exit_perf_event_open(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16459,6 +16740,7 @@ int handle_sys_exit_bpf(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16515,6 +16797,7 @@ int handle_sys_exit_seccomp(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16543,6 +16826,7 @@ int handle_sys_enter_kexec_file_load(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16572,6 +16856,7 @@ int handle_sys_exit_kexec_file_load(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16628,6 +16913,7 @@ int handle_sys_exit_kexec_load(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16705,6 +16991,7 @@ int handle_sys_exit_acct(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16761,6 +17048,7 @@ int handle_sys_exit_set_robust_list(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16817,6 +17105,7 @@ int handle_sys_exit_get_robust_list(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16873,6 +17162,7 @@ int handle_sys_exit_futex(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16929,6 +17219,7 @@ int handle_sys_exit_futex_waitv(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -16985,6 +17276,7 @@ int handle_sys_exit_futex_wake(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17041,6 +17333,7 @@ int handle_sys_exit_futex_wait(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17097,6 +17390,7 @@ int handle_sys_exit_futex_requeue(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17153,6 +17447,7 @@ int handle_sys_exit_getitimer(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17209,6 +17504,7 @@ int handle_sys_exit_alarm(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17265,6 +17561,7 @@ int handle_sys_exit_setitimer(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17321,6 +17618,7 @@ int handle_sys_exit_timer_create(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17377,6 +17675,7 @@ int handle_sys_exit_timer_gettime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17433,6 +17732,7 @@ int handle_sys_exit_timer_getoverrun(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17489,6 +17789,7 @@ int handle_sys_exit_timer_settime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17545,6 +17846,7 @@ int handle_sys_exit_timer_delete(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17601,6 +17903,7 @@ int handle_sys_exit_clock_settime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17657,6 +17960,7 @@ int handle_sys_exit_clock_gettime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17713,6 +18017,7 @@ int handle_sys_exit_clock_adjtime(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17769,6 +18074,7 @@ int handle_sys_exit_clock_getres(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17844,6 +18150,7 @@ int handle_sys_exit_clock_nanosleep(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17917,6 +18224,7 @@ int handle_sys_exit_nanosleep(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -17973,6 +18281,7 @@ int handle_sys_exit_time(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18029,6 +18338,7 @@ int handle_sys_exit_gettimeofday(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18085,6 +18395,7 @@ int handle_sys_exit_settimeofday(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18141,6 +18452,7 @@ int handle_sys_exit_adjtimex(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18201,6 +18513,7 @@ int handle_sys_exit_kcmp(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18257,6 +18570,7 @@ int handle_sys_exit_delete_module(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18313,6 +18627,7 @@ int handle_sys_exit_init_module(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18341,6 +18656,7 @@ int handle_sys_enter_finit_module(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18370,6 +18686,7 @@ int handle_sys_exit_finit_module(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18426,6 +18743,7 @@ int handle_sys_exit_syslog(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18482,6 +18800,7 @@ int handle_sys_exit_membarrier(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18538,6 +18857,7 @@ int handle_sys_exit_sched_setscheduler(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18594,6 +18914,7 @@ int handle_sys_exit_sched_setparam(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18650,6 +18971,7 @@ int handle_sys_exit_sched_setattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18706,6 +19028,7 @@ int handle_sys_exit_sched_getscheduler(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18762,6 +19085,7 @@ int handle_sys_exit_sched_getparam(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18818,6 +19142,7 @@ int handle_sys_exit_sched_getattr(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18874,6 +19199,7 @@ int handle_sys_exit_sched_setaffinity(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18930,6 +19256,7 @@ int handle_sys_exit_sched_getaffinity(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = READ_CLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -18986,6 +19313,7 @@ int handle_sys_exit_sched_yield(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19042,6 +19370,7 @@ int handle_sys_exit_sched_get_priority_max(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19098,6 +19427,7 @@ int handle_sys_exit_sched_get_priority_min(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19154,6 +19484,7 @@ int handle_sys_exit_sched_rr_get_interval(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19210,6 +19541,7 @@ int handle_sys_exit_getgroups(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19266,6 +19598,7 @@ int handle_sys_exit_setgroups(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19322,6 +19655,7 @@ int handle_sys_exit_reboot(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19378,6 +19712,7 @@ int handle_sys_exit_listns(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19406,6 +19741,7 @@ int handle_sys_enter_setns(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19435,6 +19771,7 @@ int handle_sys_exit_setns(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19532,6 +19869,7 @@ int handle_sys_enter_pidfd_getfd(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19561,6 +19899,7 @@ int handle_sys_exit_pidfd_getfd(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19617,6 +19956,7 @@ int handle_sys_exit_setpriority(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19673,6 +20013,7 @@ int handle_sys_exit_getpriority(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19729,6 +20070,7 @@ int handle_sys_exit_setregid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19785,6 +20127,7 @@ int handle_sys_exit_setgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19841,6 +20184,7 @@ int handle_sys_exit_setreuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19897,6 +20241,7 @@ int handle_sys_exit_setuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -19953,6 +20298,7 @@ int handle_sys_exit_setresuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20009,6 +20355,7 @@ int handle_sys_exit_getresuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20065,6 +20412,7 @@ int handle_sys_exit_setresgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20121,6 +20469,7 @@ int handle_sys_exit_getresgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20177,6 +20526,7 @@ int handle_sys_exit_setfsuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20233,6 +20583,7 @@ int handle_sys_exit_setfsgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20289,6 +20640,7 @@ int handle_sys_exit_getpid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20345,6 +20697,7 @@ int handle_sys_exit_gettid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20401,6 +20754,7 @@ int handle_sys_exit_getppid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20457,6 +20811,7 @@ int handle_sys_exit_getuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20513,6 +20868,7 @@ int handle_sys_exit_geteuid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20569,6 +20925,7 @@ int handle_sys_exit_getgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20625,6 +20982,7 @@ int handle_sys_exit_getegid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20681,6 +21039,7 @@ int handle_sys_exit_times(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20737,6 +21096,7 @@ int handle_sys_exit_setpgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20793,6 +21153,7 @@ int handle_sys_exit_getpgid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20849,6 +21210,7 @@ int handle_sys_exit_getpgrp(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20905,6 +21267,7 @@ int handle_sys_exit_getsid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -20961,6 +21324,7 @@ int handle_sys_exit_setsid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21017,6 +21381,7 @@ int handle_sys_exit_newuname(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21073,6 +21438,7 @@ int handle_sys_exit_sethostname(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21129,6 +21495,7 @@ int handle_sys_exit_setdomainname(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21185,6 +21552,7 @@ int handle_sys_exit_getrlimit(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21241,6 +21609,7 @@ int handle_sys_exit_prlimit64(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21297,6 +21666,7 @@ int handle_sys_exit_setrlimit(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21353,6 +21723,7 @@ int handle_sys_exit_getrusage(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21409,6 +21780,7 @@ int handle_sys_exit_umask(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21465,6 +21837,7 @@ int handle_sys_exit_prctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21521,6 +21894,7 @@ int handle_sys_exit_getcpu(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21577,6 +21951,7 @@ int handle_sys_exit_sysinfo(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21633,6 +22008,7 @@ int handle_sys_exit_restart_syscall(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21689,6 +22065,7 @@ int handle_sys_exit_rt_sigprocmask(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21745,6 +22122,7 @@ int handle_sys_exit_rt_sigpending(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21801,6 +22179,7 @@ int handle_sys_exit_rt_sigtimedwait(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21857,6 +22236,7 @@ int handle_sys_exit_kill(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21885,6 +22265,7 @@ int handle_sys_enter_pidfd_send_signal(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21914,6 +22295,7 @@ int handle_sys_exit_pidfd_send_signal(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -21970,6 +22352,7 @@ int handle_sys_exit_tgkill(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22026,6 +22409,7 @@ int handle_sys_exit_tkill(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22082,6 +22466,7 @@ int handle_sys_exit_rt_sigqueueinfo(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22138,6 +22523,7 @@ int handle_sys_exit_rt_tgsigqueueinfo(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22194,6 +22580,7 @@ int handle_sys_exit_sigaltstack(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22250,6 +22637,7 @@ int handle_sys_exit_rt_sigaction(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22306,6 +22694,7 @@ int handle_sys_exit_pause(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22362,6 +22751,7 @@ int handle_sys_exit_rt_sigsuspend(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22422,6 +22812,7 @@ int handle_sys_exit_ptrace(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22478,6 +22869,7 @@ int handle_sys_exit_capget(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22534,6 +22926,7 @@ int handle_sys_exit_capset(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22646,6 +23039,7 @@ int handle_sys_exit_waitid(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22702,6 +23096,7 @@ int handle_sys_exit_wait4(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22758,6 +23153,7 @@ int handle_sys_exit_personality(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22814,6 +23210,7 @@ int handle_sys_exit_set_tid_address(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22870,6 +23267,7 @@ int handle_sys_exit_fork(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22926,6 +23324,7 @@ int handle_sys_exit_vfork(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -22982,6 +23381,7 @@ int handle_sys_exit_clone(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23038,6 +23438,7 @@ int handle_sys_exit_clone3(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23094,6 +23495,7 @@ int handle_sys_exit_unshare(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23154,6 +23556,7 @@ int handle_sys_exit_map_shadow_stack(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23210,6 +23613,7 @@ int handle_sys_exit_uretprobe(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23266,6 +23670,7 @@ int handle_sys_exit_uprobe(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23322,6 +23727,7 @@ int handle_sys_exit_arch_prctl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23383,6 +23789,7 @@ int handle_sys_exit_mmap(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23439,6 +23846,7 @@ int handle_sys_exit_modify_ldt(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23495,6 +23903,7 @@ int handle_sys_exit_ioperm(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;
@@ -23551,6 +23960,7 @@ int handle_sys_exit_iopl(struct syscall_trace_exit *ctx) {
     ev->time = now;
     ev->ret = ctx->ret;
     ev->ret_type = UNCLASSIFIED;
+    ev->file_ident = 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

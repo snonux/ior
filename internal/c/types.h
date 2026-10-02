@@ -210,6 +210,14 @@ struct null_event {
 // fd_event is the hot single-descriptor record (read, write, close, ...): 32
 // bytes in the ring buffer. It has no schema field; its layout is the legacy
 // one, which userspace has always decoded.
+//
+// file_ident says which file fd named when the call entered: the low 32 bits
+// of its inode number, or 0 for "unknown" (ior_file_ident in fileident.c,
+// task 603). It occupies what was the tail padding of the 28-byte record, so
+// the size did not change and cannot tell an older object's record apart:
+// that one leaves stale ring-buffer bytes there. Userspace therefore reads
+// the word only in a run whose object has the IOR_FILE_IDENT global and had
+// it switched on (flags.h).
 struct fd_event {
     __u32 event_type;
     __u32 trace_id;
@@ -217,6 +225,7 @@ struct fd_event {
     __u32 pid;
     __u32 tid;
     __s32 fd;
+    __u32 file_ident;
 };
 
 // fd_size_event is fd_event plus the capacity of the caller's output buffer,
@@ -245,6 +254,13 @@ struct fd_size_event {
     __u32 schema_version;
 };
 
+// ret_event is the exit record of most syscalls. file_ident is, for the exits
+// of the open kinds, the identity of the file behind the descriptor the call
+// returned (ior_file_ident_of_ret in fileident.c; 0 = unknown, as in
+// fd_event), so that the fd table entry userspace registers knows which file
+// it stands for. Every other exit writes 0. Like fd_event's, the word took
+// the place of the tail padding of the 36-byte record and is only read in a
+// run that switched IOR_FILE_IDENT on.
 struct ret_event {
     __u32 event_type;
     __u32 trace_id;
@@ -253,6 +269,7 @@ struct ret_event {
     __u32 pid;
     __u32 tid;
     __u32 ret_type;
+    __u32 file_ident;
 };
 
 struct name_event {

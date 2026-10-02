@@ -275,6 +275,15 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	// Bytes 28..32 of the 32-byte record are the file identity word (task
+	// 603). An object built before it left stale padding there, which only
+	// the event loop can know (it reads the word only in a run that switched
+	// the capture on, eventloop_fileident.go); the 28-byte compact form has no
+	// such bytes.
+	f.FileIdent = 0
+	if len(raw) == fdEventSize {
+		f.FileIdent = binary.LittleEndian.Uint32(raw[28:32])
+	}
 	// The wide legacy layout's bytes 28..32 are alignment padding of an older
 	// BPF object, not flags; only fd_size_event (NewFdSizeEventFast) carries
 	// them.
@@ -348,6 +357,13 @@ func NewRetEventFast(raw []byte) *RetEvent {
 	r.Pid = binary.LittleEndian.Uint32(raw[24:28])
 	r.Tid = binary.LittleEndian.Uint32(raw[28:32])
 	r.RetType = binary.LittleEndian.Uint32(raw[32:36])
+	// The 40-byte record ends in the file identity word (task 603), which
+	// was tail padding before; see NewFdEventFast for who may trust it. The
+	// 36-byte form predates the word.
+	r.FileIdent = 0
+	if len(raw) == retEventSize {
+		r.FileIdent = binary.LittleEndian.Uint32(raw[36:40])
+	}
 	return r
 }
 

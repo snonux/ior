@@ -389,7 +389,7 @@ var extraEmitters = map[TracepointKind]extraEmitter{
 		return generateExtraIoUringFd(tp.Format.Name)
 	},
 	KindIoUringSetup: func(_ GeneratedTracepoint, _ bool) string { return generateExtraIoUringSetup() },
-	KindRet:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp.Format) },
+	KindRet:          func(tp GeneratedTracepoint, _ bool) string { return generateExtraRet(tp) },
 	// KindNull emits no extra fields — absence from the map means empty output.
 }
 
@@ -435,9 +435,20 @@ func generateSideMapTake(tp GeneratedTracepoint, isEnter bool) string {
 	return ""
 }
 
-// generateExtraRet emits the ret/ret_type capture for exit-side ret events.
-func generateExtraRet(f *Format) string {
-	return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n", ClassifyRet(f.Name))
+// generateExtraRet emits the ret/ret_type capture for exit-side ret events,
+// and the file identity word (task 603): the exits of the syscalls whose
+// return value is a new descriptor of the file the call opened
+// (returnsOpenedFile) say which file that is, so the fd table entry userspace
+// registers from the pair can be told from a later file on the same number.
+// Every other exit writes an explicit 0, because the ring buffer reservation
+// is not zeroed and the word used to be padding.
+func generateExtraRet(tp GeneratedTracepoint) string {
+	ident := "0"
+	if returnsOpenedFile(tp) {
+		ident = "ior_file_ident_of_ret(ctx->ret)"
+	}
+	return fmt.Sprintf("    ev->ret = ctx->ret;\n    ev->ret_type = %s;\n    ev->file_ident = %s;\n",
+		ClassifyRet(tp.Format.Name), ident)
 }
 
 // generateExtraDup3 emits fd and flags from fixed argument positions.
@@ -456,17 +467,25 @@ func generateExtraOpenByHandleAt() string {
 		"    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);\n"
 }
 
-// generateExtraFd returns the fd-capture line for fd-family events.
-func generateExtraFd(f *Format) string {
+// generateFdCapture returns the fd-capture line for fd-family events.
+func generateFdCapture(f *Format) string {
 	return fmt.Sprintf("    ev->fd = (__s32)ctx->args[%d];\n", fdArgumentIndex(f))
+}
+
+// generateExtraFd returns the body of an fd_event enter: the descriptor and
+// the identity of the file it names as the call enters (ior_file_ident in
+// internal/c/fileident.c, task 603). The identity is read from the record's
+// own fd field, so the two always describe the same argument.
+func generateExtraFd(f *Format) string {
+	return generateFdCapture(f) + "    ev->file_ident = ior_file_ident(ev->fd);\n"
 }
 
 // generateExtraFdSize returns the fd capture plus the flags and requested-size
 // metadata of the fd_size_event syscalls: the fd-based xattr reads and
-// recvfrom/recvmsg.
+// recvfrom/recvmsg. fd_size_event has no identity word.
 func generateExtraFdSize(f *Format) string {
 	var b strings.Builder
-	b.WriteString(generateExtraFd(f))
+	b.WriteString(generateFdCapture(f))
 	writeReceiveFlagsCapture(&b, f)
 	writeRequestedSizeCapture(&b, f)
 	b.WriteString("    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n")

@@ -709,6 +709,17 @@ func ClassifyRet(name string) RetClassification {
 	return Unclassified
 }
 
+// openedFileSyscalls lists the syscalls outside the open kinds whose
+// successful return value is a new descriptor of the file the call itself
+// opened, so that their exit handler captures that file's identity like an
+// open's does (returnsOpenedFile, internal/c/fileident.c, task 603). creat is
+// a pathname-kind call - it has no flags argument to make it an open_event -
+// but userspace registers its descriptor under the pathname all the same
+// (handlePathExit in internal/eventloop_exit.go).
+var openedFileSyscalls = map[string]struct{}{
+	"creat": {},
+}
+
 // outputPathSyscalls maps each syscall whose identifying path is an OUTPUT
 // buffer - one the kernel fills in and that only holds the path once the call
 // has returned - to that buffer's argument index. The enter side has nothing

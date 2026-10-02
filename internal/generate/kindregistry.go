@@ -26,6 +26,16 @@ type kindMeta struct {
 	// It implies recoversFilename and uses its own stash slot and fixup slot,
 	// because either read can fault independently of the other.
 	recoversSecondFilename bool
+	// returnsFile reports whether a successful call of this enter kind returns
+	// a new descriptor of the file the call itself opened. Its exit handler
+	// then captures that file's identity (ior_file_ident_of_ret in
+	// internal/c/fileident.c, task 603), which userspace stores with the fd
+	// table entry it registers under the pathname. The other descriptor
+	// creators are not listed: a dup's entry is a copy of its source's, and
+	// the sockets, pipes and anonymous descriptors have their own exit
+	// records without an identity word, so their entries take the identity
+	// of the first row that uses them.
+	returnsFile bool
 }
 
 // kindRegistry maps every known TracepointKind to its static metadata.
@@ -35,9 +45,9 @@ type kindMeta struct {
 var kindRegistry = map[TracepointKind]kindMeta{
 	KindFd:             {structName: "fd_event", enterAccepted: true},
 	KindFdSize:         {structName: "fd_size_event", enterAccepted: true},
-	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true},
-	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true},
-	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true},
+	KindOpen:           {structName: "open_event", enterAccepted: true, recoversFilename: true, returnsFile: true},
+	KindMqOpen:         {structName: "open_event", enterAccepted: true, recoversFilename: true, returnsFile: true},
+	KindOpenTree:       {structName: "open_event", enterAccepted: true, recoversFilename: true, returnsFile: true},
 	KindExec:           {structName: "exec_event", enterAccepted: true},
 	KindPathname:       {structName: "path_event", enterAccepted: true, recoversFilename: true},
 	KindFdPathname:     {structName: "fd_path_event", enterAccepted: true, recoversFilename: true},
@@ -46,7 +56,7 @@ var kindRegistry = map[TracepointKind]kindMeta{
 	KindFcntl:          {structName: "fcntl_event", enterAccepted: true},
 	KindNull:           {structName: "null_event", enterAccepted: true},
 	KindDup3:           {structName: "dup3_event", enterAccepted: true},
-	KindOpenByHandleAt: {structName: "open_by_handle_at_event", enterAccepted: true},
+	KindOpenByHandleAt: {structName: "open_by_handle_at_event", enterAccepted: true, returnsFile: true},
 	KindSocket:         {structName: "socket_event", enterAccepted: true},
 	KindSocketpair:     {structName: "socketpair_event", enterAccepted: true},
 	KindAccept:         {structName: "accept_event", enterAccepted: true},
@@ -90,6 +100,23 @@ func kindRecoversFilename(kind TracepointKind) bool {
 // (newname) through its own stash and fixup slot.
 func kindRecoversSecondFilename(kind TracepointKind) bool {
 	return lookupKind(kind).recoversSecondFilename
+}
+
+// kindReturnsFile reports whether the exit of a syscall of this enter kind
+// captures the identity of the file behind the descriptor it returned.
+func kindReturnsFile(kind TracepointKind) bool {
+	return lookupKind(kind).returnsFile
+}
+
+// returnsOpenedFile reports whether the exit tracepoint tp belongs to a
+// syscall whose return value is a new descriptor of the file it opened: one
+// of the open kinds (kindReturnsFile) or a syscall of openedFileSyscalls.
+func returnsOpenedFile(tp GeneratedTracepoint) bool {
+	if kindReturnsFile(tp.EnterKind) {
+		return true
+	}
+	_, listed := openedFileSyscalls[syscallName(tp.Format.Name)]
+	return listed
 }
 
 // lookupKind returns the metadata for kind. If kind is not registered (e.g.

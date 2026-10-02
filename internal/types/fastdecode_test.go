@@ -1854,9 +1854,12 @@ func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
 }
 
 func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
+	// The Go struct holds the fields of both wire layouts: the wide layout's
+	// 48 bytes plus the identity word only the lean record carries (task
+	// 603), rounded up to the struct's 8-byte alignment.
 	fdLayout := FdEvent{}
-	if got := unsafe.Sizeof(fdLayout); got != fdEventLegacyKernelSize {
-		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventLegacyKernelSize)
+	if got := unsafe.Sizeof(fdLayout); got != fdEventLegacyKernelSize+8 {
+		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventLegacyKernelSize+8)
 	}
 	if got := len(rawBytes(t, &fdLayout)); got != fdEventSize {
 		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventSize)

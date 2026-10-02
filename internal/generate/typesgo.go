@@ -534,6 +534,9 @@ var specialCodecs = map[string]func(b *strings.Builder, selfRef string){
 // requested-size layout decodable through the regular constructor. The fast
 // decoder owns the shared validation; duplicating it here would let the two
 // public constructors disagree on schema or padding.
+//
+// The lean record ends in the file identity word (task 603), the wide one
+// has the flags word at that offset and no identity.
 func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("var poolOfFdEvents = sync.Pool{\n\tNew: func() any { return &FdEvent{} },\n}\n\n")
 	b.WriteString("func NewFdEvent(raw []byte) *FdEvent { return NewFdEventFast(raw) }\n\n")
@@ -547,6 +550,7 @@ func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], %s.FileIdent)\n", selfRef)
 	b.WriteString("\tif size == 48 {\n")
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[28:32], %s.Flags)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)

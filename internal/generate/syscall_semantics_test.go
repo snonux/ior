@@ -641,8 +641,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "direct capture after submission",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "enter", "read",
-					"    ev->fd = (__s32)ctx->args[0];\n\n    bpf_ringbuf_submit(ev, 0);",
-					"    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
+					"    ev->fd = (__s32)ctx->args[0];\n"+fileIdentEnterLine+"\n    bpf_ringbuf_submit(ev, 0);",
+					fileIdentEnterLine+"\n    bpf_ringbuf_submit(ev, 0);\n\n    ev->fd = (__s32)ctx->args[0];")
 			},
 		},
 		{
@@ -1610,8 +1610,8 @@ func TestSyscallSemanticsOracleRejectsSemanticMutations(t *testing.T) {
 			name: "ret classification after submission",
 			mutate: func(t *testing.T, source string) string {
 				return replaceInHandler(t, source, "exit", "read",
-					"    ev->ret_type = READ_CLASSIFIED;\n\n    bpf_ringbuf_submit(ev, 0);",
-					"    bpf_ringbuf_submit(ev, 0);\n\n    ev->ret_type = READ_CLASSIFIED;")
+					"    ev->ret_type = READ_CLASSIFIED;\n"+fileIdentZeroLine+"\n    bpf_ringbuf_submit(ev, 0);",
+					fileIdentZeroLine+"\n    bpf_ringbuf_submit(ev, 0);\n\n    ev->ret_type = READ_CLASSIFIED;")
 			},
 		},
 		{
@@ -1941,6 +1941,9 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 			return nil, err
 		}
 		if err := validatePathTargetStatus(name, pair.enter); err != nil {
+			return nil, err
+		}
+		if err := validateFileIdentCapture(name, pair.enter, pair.exit); err != nil {
 			return nil, err
 		}
 		if kind == "eventfd" || kind == "pidfd" {

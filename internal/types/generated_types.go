@@ -1195,6 +1195,7 @@ type FdEvent struct {
 	Pid           uint32
 	Tid           uint32
 	Fd            int32
+	FileIdent     uint32
 	Flags         uint32
 	Size          uint64
 	SizeValid     uint32
@@ -1202,7 +1203,7 @@ type FdEvent struct {
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Flags, f.Size, f.SizeValid, f.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.Flags, f.Size, f.SizeValid, f.SchemaVersion)
 }
 
 func (f FdEvent) Equals(other any) bool {
@@ -1210,7 +1211,7 @@ func (f FdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (f *FdEvent) GetEventType() EventType {
@@ -1251,6 +1252,7 @@ func (f *FdEvent) Bytes() ([]byte, error) {
 	binary.LittleEndian.PutUint32(raw[16:20], f.Pid)
 	binary.LittleEndian.PutUint32(raw[20:24], f.Tid)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(f.Fd))
+	binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)
 	if size == 48 {
 		binary.LittleEndian.PutUint32(raw[28:32], f.Flags)
 		binary.LittleEndian.PutUint64(raw[32:40], f.Size)
@@ -1342,10 +1344,11 @@ type RetEvent struct {
 	Pid       uint32
 	Tid       uint32
 	RetType   uint32
+	FileIdent uint32
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v RetType:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid, r.RetType)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v RetType:%v FileIdent:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid, r.RetType, r.FileIdent)
 }
 
 func (r RetEvent) Equals(other any) bool {
@@ -1353,7 +1356,7 @@ func (r RetEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Ret == otherConcrete.Ret && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.RetType == otherConcrete.RetType
+	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Ret == otherConcrete.Ret && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.RetType == otherConcrete.RetType && r.FileIdent == otherConcrete.FileIdent
 }
 
 func (r *RetEvent) GetEventType() EventType {
