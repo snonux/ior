@@ -1054,7 +1054,7 @@ func TestProbeNameCharsRejectedNameIsEINVAL(t *testing.T) {
 	if !IsNameRejected(err) || !errors.Is(err, syscall.EINVAL) {
 		t.Errorf("err = %v, want it to wrap EINVAL and count as a rejected name", err)
 	}
-	if !strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), tempPrefix) {
+	if !strings.Contains(err.Error(), dir) || namesTempFile(err.Error(), dir) {
 		t.Errorf("err = %q, want the directory named and no internal temp name", err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -1108,6 +1108,15 @@ func TestRiskyNameChars(t *testing.T) {
 	}
 }
 
+// namesTempFile reports whether the error text msg names an internal temp
+// file (tempPrefix). dir, the directory the message is expected to name, is
+// taken out first: the path of a test's temp directory may contain the prefix
+// itself (a GOTMPDIR or checkout under ".../ior-...", task 323), and that is
+// not a temp file name.
+func namesTempFile(msg, dir string) bool {
+	return strings.Contains(strings.ReplaceAll(msg, dir, ""), tempPrefix)
+}
+
 // TestProbeErrorNamesDirectoryNotTempFile checks the message shape: the
 // absolute directory and the bare errno text, no internal ior-<hex>.tmp name.
 func TestProbeErrorNamesDirectoryNotTempFile(t *testing.T) {
@@ -1118,7 +1127,7 @@ func TestProbeErrorNamesDirectoryNotTempFile(t *testing.T) {
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, dir) || !strings.Contains(msg, "no such file or directory") ||
-		strings.Contains(msg, tempPrefix) || strings.Contains(msg, "open ") {
+		namesTempFile(msg, dir) || strings.Contains(msg, "open ") {
 		t.Errorf("Probe error = %q, want the directory and bare errno without the temp name", msg)
 	}
 	// A bare name reports the absolute working directory.
