@@ -25,11 +25,12 @@ import (
 // -512/-513/-514 (task 103) in eventloop_restart_reexec_test.go.
 
 // The fixture's process and threads lie above every possible pid
-// (absentPidBase, task zs2): the loop falls back to the real /proc/<pid>/...
-// for a comm or a descriptor it has not seen traced - the read fixtures of
-// the re-execution fold carry such a descriptor - so a plain 4100 that is
-// alive on the host would put that process's answers into the rows. Every
-// other tid these tests make up (the rows that fill the tracker to its
+// (absentPidBase, task zs2): the loop falls back to the real
+// /proc/<pid>/fd/<fd> for a descriptor it has not seen traced - the read
+// fixtures of the re-execution fold carry such a descriptor - so a plain 4100
+// that is alive on the host would put that process's answer into the rows
+// (the comm resolver of these fixtures is hermetic, newRestartFixtureFor).
+// Every other tid these tests make up (the rows that fill the tracker to its
 // bound, the hand-built trackers) is built the same way, also where no
 // procfs read is in reach, so that no restart fixture names a tid that a
 // host could hand out. restartPid is the leader's tid as well.
