@@ -89,7 +89,9 @@ func newLibbpfLink(link *bpf.BPFLink, err error) (probemanager.Link, error) {
 // one it first zeroes the BPFLink, so that Module.Close leaves the freed link
 // alone (see libbpfLink); a successful Destroy has cleared the pointer itself
 // and the struct is not touched. A second Destroy, and one on a nil or empty
-// wrapper, does nothing and returns nil.
+// wrapper, does nothing and returns nil - at once, also while a first call is
+// still inside libbpf: it does not wait for it. The callers promise one call
+// per link and teardown waits for them, so nothing relies on such a wait.
 func (l *libbpfLink) Destroy() error {
 	if l == nil {
 		return nil

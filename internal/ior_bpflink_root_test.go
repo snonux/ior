@@ -93,10 +93,12 @@ func TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy(t *testing.T) {
 	switch {
 	case strings.Contains(out, linkHelperSurvived):
 		t.Log("Module.Close destroyed the freed links again and the process lived through it this time")
-	case strings.Contains(out, "SIGSEGV") || strings.Contains(out, "SIGABRT"):
+	case err != nil:
+		// Any death counts: a use after free need not end in SIGSEGV. Both
+		// pointer lines were printed, so the helper got as far as the close.
 		t.Logf("Module.Close destroyed the freed links again and the process died of it (%v)", err)
 	default:
-		t.Fatalf("helper ended (%v) without closing the module and without a crash, output:\n%s", err, out)
+		t.Fatalf("helper ended without closing the module and without a crash, output:\n%s", out)
 	}
 }
 
