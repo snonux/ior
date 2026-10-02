@@ -2033,7 +2033,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `name_to_handle_at` passes a held restart row),
     `internal/eventloop_handle_fail_test.go`,
     `internal/eventloop_handle_reach_test.go` (the fallback's deny list: each
-    handle-less kind unnamed until its close, pidfd and namespace kept, and
+    handle-less kind unnamed, the socket's entry until its close, pidfd and namespace kept, and
     the kernel asked again whether the denied kinds really cannot be
     exported - only an answer that they can fails, a kernel that cannot be
     asked is logged), the decoder

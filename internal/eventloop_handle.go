@@ -56,9 +56,10 @@ import (
 //     removed from the open: a task that closed the descriptor and reused the
 //     number in the meantime would have the NEWER file filed under the
 //     handle, and every later open of it, by any process, named after the
-//     wrong file. No name is filed then; what the handle was already known
-//     as stays (handleTracker.store), and without that the open falls back
-//     like one of an unknown handle.
+//     wrong file. No name is filed then; the absolute name the handle
+//     already has stays, the taker's own scoped name ends
+//     (handleTracker.store), and without a name the open falls back like
+//     one of an unknown handle.
 //   - a table entry is no better than that /proc link when its name was
 //     made from one, and says so (FdFile.NameFromProcFS, the mark of a name
 //     ior cannot vouch for). The entries that carry it are the ones whose
@@ -127,8 +128,8 @@ import (
 //     the row and the fd table entry are then unnamed, as when procfs has
 //     no answer. A reuse by a file, a directory, a pidfd or a namespace
 //     still names the row after the newer one. The unnamed entry stays
-//     until its close is processed (procFdFile). A failed call
-//     with such a handle has an empty name. That is a handle taken before the
+//     until its close is processed (procFdFile). A failed call with such a
+//     handle has an empty name. That is a handle taken before the
 //     trace started; by a task outside a -pid/-tid scope; by a call the enter
 //     filter shed (-path, -comm); by a call BPF did not report - sampled out
 //     (the N-1 of 1-in-N), aggregate-only (rate 0), or with the enter or exit

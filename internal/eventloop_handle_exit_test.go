@@ -71,8 +71,9 @@ func notTheEndOfAProcess(t *testing.T, feed *handleFeed) map[string][]byte {
 		"a non-leader execve":   makeProcessExecEventFrom(t, feed.time, feed.pid, handleLeaderTid, feed.tid, "next"),
 		"a new thread":          makeForkRecord(t, feed.pid, feed.pid, sibling+1, cloneFlagThread),
 		"a forked child":        makeForkRecord(t, feed.pid, feed.pid+200, feed.pid+200, 0),
-		// Malformed: a new process whose pid is its live creator's. Treated
-		// as a recycled pid it would cost a running process its names.
+		// Malformed: a new process whose pid is its live creator's.
+		// Treated as a recycled pid it would cost a running process its
+		// names.
 		"its own child": makeForkRecord(t, feed.pid, feed.pid, sibling+2, 0),
 	}
 }
