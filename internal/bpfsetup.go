@@ -96,9 +96,21 @@ func fileIdentWanted(value string, warn func(args ...any)) bool {
 	return true
 }
 
-// fileIdentWantedByEnv is fileIdentWanted of this process's environment.
-func fileIdentWantedByEnv(warn func(args ...any)) bool {
-	return fileIdentWanted(os.Getenv(fileIdentEnv), warn)
+// fileIdentCaptureWanted decides whether this run switches the capture on:
+// the environment does not say no (envValue, fileIdentWanted) and the running
+// kernel can capture at all (kernelCan, kernelHasFileIdentKfunc). The
+// environment is read first, so its typo warning does not depend on the
+// kernel.
+//
+// The kernel half exists because "the object has the global" is not "the
+// kernel fills the word": without the bpf_rdonly_cast kfunc the walk compiles
+// to a constant 0 (internal/c/fileident.c), and user space would still
+// compare - which is harmless for the rows, 0 contradicts nothing, but makes
+// every procfs resolution pay a second readlink for an identity nobody can
+// match. Switching the global off as well also keeps the walk out of the
+// programs on exactly the kernels it was never loaded on.
+func fileIdentCaptureWanted(envValue string, kernelCan func() bool, warn func(args ...any)) bool {
+	return fileIdentWanted(envValue, warn) && kernelCan()
 }
 
 // setFileIdentGlobal writes the IOR_FILE_IDENT global through setGlobal (the

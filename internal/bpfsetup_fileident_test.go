@@ -227,7 +227,12 @@ func TestTraceSetupCarriesTheFileIdentCaptureToTheLoop(t *testing.T) {
 		t.Fatalf("loadBPFObject must report the capture state of a refused load:\n%s", object)
 	}
 	load := renderedBody(t, "ior_bpfsetup.go", "loadConfiguredBPFModule")
-	loaded := strings.Index(load, "loadWithIdentFallback(fileIdentWantedByEnv(log.warn), load, closeBPFModule, log.warn)")
+	// The capture is asked for only where the environment allows it and the
+	// kernel can capture; that decision is what the load is given.
+	if !strings.Contains(load, "wantIdent := fileIdentCaptureWanted(os.Getenv(fileIdentEnv), kernelHasFileIdentKfunc, log.warn)") {
+		t.Fatalf("loadConfiguredBPFModule must decide the capture from the environment and the kernel:\n%s", load)
+	}
+	loaded := strings.Index(load, "loadWithIdentFallback(wantIdent, load, closeBPFModule, log.warn)")
 	report := strings.Index(load, "log.fileIdent(identCaptured)")
 	if loaded < 0 || report < loaded || strings.Count(load, "log.fileIdent(") != 1 {
 		t.Fatalf("loadConfiguredBPFModule must report the capture once, after the load:\n%s", load)

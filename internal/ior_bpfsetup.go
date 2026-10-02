@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	appconfig "ior/internal/config"
@@ -98,7 +99,8 @@ type bpfSetupLog struct {
 	attached func(probeName string)
 	// fileIdent receives, once the object is loaded, whether it writes the
 	// file identity words of its records (setFileIdentGlobal): the object has
-	// the IOR_FILE_IDENT global and the run did not switch the capture off.
+	// the IOR_FILE_IDENT global, the run did not switch the capture off and
+	// the kernel has the kfunc the capture needs (fileIdentCaptureWanted).
 	// Trace setup hands that to the event loop (eventLoop.trustFileIdents,
 	// task 603). nil means nobody listens.
 	fileIdent func(captured bool)
@@ -200,7 +202,9 @@ func attachSessionProbes(ctx context.Context, attacher probemanager.Attacher, cf
 // its globals, loads it into the kernel and applies the sampling rates.
 // log.warn receives non-fatal setup degradations (see setTidFilterTgid) and
 // log.fileIdent, once everything succeeded, whether the object captures file
-// identities (setFileIdentGlobal). On failure it returns the failed stage
+// identities (setFileIdentGlobal). The capture is asked for when the
+// environment allows it and the kernel has the kfunc it needs
+// (fileIdentCaptureWanted). On failure it returns the failed stage
 // and, when the module was already opened, the module itself so the caller
 // can close it (nil otherwise).
 func loadConfiguredBPFModule(cfg flags.Config, log bpfSetupLog) (*bpf.Module, string, error) {
@@ -208,7 +212,8 @@ func loadConfiguredBPFModule(cfg flags.Config, log bpfSetupLog) (*bpf.Module, st
 	load := func(wantIdent bool) (*bpf.Module, bool, string, error) {
 		return loadBPFObject(cfg, wantIdent, log.warn)
 	}
-	bpfModule, identCaptured, stage, err := loadWithIdentFallback(fileIdentWantedByEnv(log.warn), load, closeBPFModule, log.warn)
+	wantIdent := fileIdentCaptureWanted(os.Getenv(fileIdentEnv), kernelHasFileIdentKfunc, log.warn)
+	bpfModule, identCaptured, stage, err := loadWithIdentFallback(wantIdent, load, closeBPFModule, log.warn)
 	if err != nil {
 		return bpfModule, stage, err
 	}
