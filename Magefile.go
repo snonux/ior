@@ -634,13 +634,15 @@ func World() error {
 	return nil
 }
 
-// IntegrationTest builds everything and runs integration tests in parallel.
+// IntegrationTest builds everything, runs the root link tests of ./internal
+// (runRootLinkTests) and then the integration tests in parallel.
 // Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU, minimum 1).
 func IntegrationTest() error {
 	return runIntegrationTests(true)
 }
 
-// IntegrationTestSerial builds everything and runs integration tests one at a time.
+// IntegrationTestSerial builds everything, runs the root link tests of
+// ./internal (runRootLinkTests) and then the integration tests one at a time.
 func IntegrationTestSerial() error {
 	return runIntegrationTests(false)
 }
@@ -649,13 +651,55 @@ func compileIntegrationTestBinary(env map[string]string) error {
 	return sh.RunWithV(env, "go", "test", "-c", "./integrationtests/...", "-o", integrationTestBinaryName)
 }
 
-// runIntegrationTestBinary execs the compiled integration test binary. The
-// binary is compiled to the repo root so its absolute path matches the scoped
-// sudoers rule (/home/paul/git/ior/integrationtests.test), while the child
-// process runs with Dir=integrationtests as before. Output is wired through
-// to mage so failures are visible instead of an opaque exit status
-// (audit M12).
+// rootLinkTests are the tests of internal/ior_bpflink_root_test.go: they load
+// the real BPF object, make libbpf's destroy of real links fail and close the
+// module (task 123). They skip for anybody but root, so `mage test` passes
+// them by, and runRootLinkTests is the one place that runs them. The names
+// are listed rather than matched by a pattern so that a renamed test fails a
+// gate (internal/buildgate) instead of silently no longer running.
+var rootLinkTests = []string{
+	"TestModuleCloseSurvivesAFailedDestroyOfIorsLinks",
+	"TestModuleCloseAfterACleanDestroyOfIorsLinks",
+	"TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy",
+}
+
+// runRootLinkTests builds the test binary of ./internal and runs rootLinkTests
+// with it as root, from the package directory as `go test` would (task 223).
+// They are what tells that a libbpfgo bump changed how a link whose Destroy
+// failed is treated, and before this step nothing ran them unless somebody
+// remembered to.
+//
+// The binary is written to the path of the integration test binary, which
+// runIntegrationTests builds over it afterwards: that path is the one a
+// scoped sudoers rule allows (see runRootTestBinary), and a second name would
+// need a second rule on every such host. Each of the tests re-executes the
+// binary as its helper process, which the same path covers.
+func runRootLinkTests(env map[string]string) error {
+	fmt.Println("Running the root link tests of ./internal (requires root)...")
+	if err := sh.RunWithV(env, "go", "test", "-c", "./internal/", "-o", integrationTestBinaryName); err != nil {
+		return err
+	}
+	return runRootTestBinary(env, "internal",
+		"-test.run", "^("+strings.Join(rootLinkTests, "|")+")$",
+		"-test.timeout=5m",
+		"-test.count=1",
+		"-test.v",
+	)
+}
+
+// runIntegrationTestBinary execs the compiled integration test binary as
+// root, with Dir=integrationtests.
 func runIntegrationTestBinary(env map[string]string, args ...string) error {
+	return runRootTestBinary(env, "integrationtests", args...)
+}
+
+// runRootTestBinary execs the test binary at integrationTestBinaryName as
+// root, in the directory dir. The binary is compiled to the repo root so its
+// absolute path matches the scoped sudoers rule
+// (/home/paul/git/ior/integrationtests.test), while the child process runs in
+// the directory of the package under test. Output is wired through to mage so
+// failures are visible instead of an opaque exit status (audit M12).
+func runRootTestBinary(env map[string]string, dir string, args ...string) error {
 	binaryPath, err := filepath.Abs(integrationTestBinaryName)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", integrationTestBinaryName, err)
@@ -667,7 +711,7 @@ func runIntegrationTestBinary(env map[string]string, args ...string) error {
 	slices.Sort(envList)
 
 	cmd := exec.Command(binaryPath, args...)
-	cmd.Dir = "integrationtests"
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), envList...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -675,7 +719,7 @@ func runIntegrationTestBinary(env map[string]string, args ...string) error {
 		return cmd.Run()
 	}
 	sudoCmd := exec.Command("sudo", append([]string{"-n", "-E", binaryPath}, args...)...)
-	sudoCmd.Dir = "integrationtests"
+	sudoCmd.Dir = dir
 	sudoCmd.Env = cmd.Env
 	sudoCmd.Stdout = os.Stdout
 	sudoCmd.Stderr = os.Stderr
@@ -691,6 +735,11 @@ func runIntegrationTests(parallel bool) error {
 	env := goEnv()
 	forwardEnv(env, "HOME", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN")
 
+	// First, and before the integration test binary is built over theirs:
+	// they take seconds, and a failure stops the run before the long part.
+	if err := runRootLinkTests(env); err != nil {
+		return fmt.Errorf("root link tests of ./internal: %w", err)
+	}
 	if err := compileIntegrationTestBinary(env); err != nil {
 		return err
 	}
