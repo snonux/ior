@@ -38,23 +38,14 @@ type openFileDesc struct {
 	status Flags
 }
 
-// fdWithDesc is the allocation unit of an FdFile that owns its description: the
-// FdFile and its openFileDesc in one object, so creating a descriptor (one per
-// traced open and one per emitted row, through Detach) costs one allocation, not
-// two. FdFile.desc points at the sibling field. A duplicate's desc pointer
-// into this object keeps it alive, which is harmless: the original FdFile it
-// also holds is small (a name and a few words).
-type fdWithDesc struct {
-	FdFile
-	own openFileDesc
-}
-
 // newFdFile allocates an FdFile that owns a new open file description with an
-// unknown status word; the caller sets the word.
+// unknown status word; the caller sets the word. The description is the
+// FdFile's own field (FdFile.own), so creating a descriptor (one per traced
+// open and one per emitted row, through Detach) costs one allocation, not two.
 func newFdFile(fd int32, name string) *FdFile {
-	w := &fdWithDesc{FdFile: FdFile{fd: fd, name: name}, own: openFileDesc{status: unknownFlag}}
-	w.desc = &w.own
-	return &w.FdFile
+	f := &FdFile{fd: fd, name: name, own: openFileDesc{status: unknownFlag}}
+	f.desc = &f.own
+	return f
 }
 
 // description returns the open file description f refers to. A zero FdFile
@@ -91,6 +82,9 @@ func (f *FdFile) Dup(fd int32) *FdFile {
 	dup := *f
 	dup.fd = fd
 	dup.desc = f.description()
+	// A new binding of the number: when it was made is the caller's to say
+	// (fdfile_ident.go, BoundAt).
+	dup.boundNs = 0
 	return &dup
 }
 
@@ -105,7 +99,8 @@ func (f *FdFile) Dup(fd int32) *FdFile {
 // came from is as true of it. No caller asks a snapshot for the mark today.
 // Use Dup, not Detach, to model a second descriptor.
 func (f *FdFile) Detach() *FdFile {
-	w := &fdWithDesc{FdFile: *f, own: openFileDesc{status: f.status()}}
-	w.desc = &w.own
-	return &w.FdFile
+	snapshot := *f
+	snapshot.own = openFileDesc{status: f.status()}
+	snapshot.desc = &snapshot.own
+	return &snapshot
 }

@@ -238,7 +238,7 @@ func TestApplyFdCloseStateFollowsLinuxCloseSemantics(t *testing.T) {
 				},
 			}
 
-			el.applyFdCloseState(ep, fd, pid)
+			el.applyFdCloseState(ep, fd, pid, 0)
 
 			if tc.wantEvicted {
 				verifyFdNotTracked(t, el, pid, fd)

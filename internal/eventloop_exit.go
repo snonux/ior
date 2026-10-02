@@ -81,6 +81,7 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		e.recyclePair(ep, "Dropped malformed enter event")
 		return false
 	}
+	e.fdState().noteExit(ep)
 	return handler(e, ep)
 }
 
@@ -563,8 +564,9 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	fd := fdEv.Fd
 	// The record says which file fd named at enter; the name must be that
 	// file's (eventloop_fileident.go).
-	ep.File = e.resolveIdentifiedOnExit(ep, fd, fdEv.Pid, e.fdState().rowIdent(fdEv))
-	e.applyFdCloseState(ep, fd, fdEv.Pid)
+	ident := e.fdState().rowIdent(fdEv)
+	ep.File = e.resolveIdentifiedOnExit(ep, fd, fdEv.Pid, ident)
+	e.applyFdCloseState(ep, fd, fdEv.Pid, ident)
 	ep.Comm = e.comm(fdEv.GetTid())
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {
 		return false
@@ -577,7 +579,13 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 // EINTR or EIO; only EBADF means that fd was not an open descriptor. Keeping
 // any other return leaves a stale fd->path entry that can mislabel a later use
 // of the same descriptor number. A malformed exit event leaves state unchanged.
-func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
+//
+// ident is the file the close row says it closed (0 = unknown). What a close
+// releases is that file, not whatever the number names by the time its row is
+// processed: another thread's open can return the number, and be processed,
+// before this close's exit record is (task 603). So what is known to describe
+// a later file stays (fdTracker.closeIdentified).
+func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32, ident uint32) {
 	if !ep.Is(types.SYS_ENTER_CLOSE) {
 		return
 	}
@@ -585,8 +593,7 @@ func (e *eventLoop) applyFdCloseState(ep *event.Pair, fd int32, pid uint32) {
 	if !ok || retEv.Ret == -int64(syscall.EBADF) {
 		return
 	}
-	e.fdState().delete(fd, pid)
-	e.fdState().deleteProcFdCache(fd, pid)
+	e.fdState().closeIdentified(fd, pid, ident, ep.EnterEv.GetTime())
 }
 
 // applyFdTransferOp handles dup/dup2 and pidfd_getfd fd-transfer operations.

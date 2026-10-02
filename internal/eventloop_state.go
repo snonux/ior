@@ -80,8 +80,9 @@ type fdTracker struct {
 	share fdTableShare
 	// identOn says the run's BPF object reports which file a descriptor
 	// named (eventLoop.trustFileIdents): rows and entries are then compared
-	// by that identity, and procfs answers record theirs
-	// (eventloop_fileident.go, task 603). Off, nothing reads an identity.
+	// by that identity, procfs answers record theirs and fd table entries
+	// when they were bound (eventloop_fileident.go, task 603). Off, nothing
+	// reads an identity and nothing is stamped.
 	identOn bool
 	// staleBindings counts the fd table entries dropped because a row showed
 	// the number naming another file; rejectedAnswers the procfs answers not
@@ -89,6 +90,20 @@ type fdTracker struct {
 	// end-of-run statistics when non-zero (eventLoop.fileIdentStatLine).
 	staleBindings   uint64
 	rejectedAnswers uint64
+	// bindNs is the exit time of the pair whose handler is running (noteExit),
+	// which set stamps a new entry with (stampBinding): a row that entered
+	// before an entry was bound says nothing against it.
+	bindNs uint64
+	// refusedFor notes, per procfs-cache key, the row identity for which the
+	// cached answer was read and refused because it describes another file
+	// (noteRefusal). It rations the re-reads for rows procfs persistently
+	// disagrees with (worthReadingAgain) and is allocated on first use: most
+	// runs never refuse an answer.
+	refusedFor map[uint64]uint32
+	// readFdIdent reads a descriptor from procfs with its identity; nil means
+	// file.NewFdWithPidIdent. Tests substitute an answer procfs cannot be
+	// made to give on demand (one that changed under the read).
+	readFdIdent func(fd int32, pid uint32) (*file.FdFile, bool)
 }
 
 // maxIdlePidKeys bounds how many emptied entries fdTracker.idlePidKeys holds.
@@ -343,7 +358,14 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 	// stale. Left in place it would resurface once the table entry goes (exec
 	// closing a cloexec fd, LRU eviction, close) and name the previous file
 	// (task kr2).
-	if _, shadowed := t.procFdCache[key]; shadowed { // keep the common miss to one lookup
+	cached, shadowed := t.procFdCache[key] // keep the common miss to one lookup
+	if !shadowed {
+		t.stampBinding(f, 0, false)
+	} else {
+		// A cached answer promoted into the table was seen to name its file
+		// when procfs was read, not at this call's exit.
+		readNs, stamped := t.procFdReadAt[key]
+		t.stampBinding(f, readNs, stamped && file.File(cached) == f)
 		t.deleteCacheKey(key)
 	}
 	t.pruneFiles()
@@ -834,7 +856,7 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	if cached, ok := t.cachedProcFdFile(fd, pid); ok {
 		return cached
 	}
-	discovered := t.readProcFd(fd, pid)
+	discovered, cacheable := t.readProcFd(fd, pid)
 	// Cache a successful resolution to avoid repeated /proc lookups for hot
 	// unknown FDs. A failed one (readlink error: empty name, unknown flags) is
 	// returned for this row but never cached: the number was not open at that
@@ -847,7 +869,10 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	// stream, syscalls answering EBADF, never gets here: exit handlers go
 	// through resolveOnExit, which skips procfs for it (see
 	// eventloop_procfs_ebadf.go).
-	if discovered.Name() != "" {
+	// An answer that changed while it was read (cacheable false, only in a
+	// run that compares identities) names this row, which has no identity to
+	// check it against, but describes no one file and is not kept.
+	if discovered.Name() != "" && cacheable {
 		// Stamped after the readlink returned: a close row may reuse this
 		// answer only if it was read before that close began (task jr2,
 		// eventloop_procfs_close.go). One clock_gettime(2) next to a readlink.
@@ -911,6 +936,7 @@ func (t *fdTracker) storeProcFdCache(fd int32, pid uint32, resolved *file.FdFile
 	} else {
 		delete(t.procFdReadAt, key) // a replaced entry must not keep the old stamp
 	}
+	t.forgetRefusal(key) // nor what the old answer was refused for
 	t.indexCacheKey(key)
 	t.pruneCache()
 }
@@ -996,6 +1022,7 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 	delete(t.procFdCache, key)
 	delete(t.procFdAges, key)
 	delete(t.procFdReadAt, key)
+	t.forgetRefusal(key)
 	t.unindexKey(key, true)
 }
 

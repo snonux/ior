@@ -82,6 +82,9 @@ type identRow struct {
 	ident       uint32
 	enterNs     uint64
 	ret         int64
+	// exitNs is when the call returned; 0 means openPairLatency after the
+	// enter. A call that blocked sets it.
+	exitNs uint64
 }
 
 func readRow(fd int32, ident uint32) identRow {
@@ -103,16 +106,28 @@ func feedIdentRow(t *testing.T, el *eventLoop, row identRow) *event.Pair {
 	if err != nil {
 		t.Fatalf("FdEvent.Bytes: %v", err)
 	}
-	_, exitRaw := makeExitRetEvent(t, row.enterNs+openPairLatency, pid, execCommTid, row.exit, row.ret)
+	exitNs := row.exitNs
+	if exitNs == 0 {
+		exitNs = row.enterNs + openPairLatency
+	}
+	_, exitRaw := makeExitRetEvent(t, exitNs, pid, execCommTid, row.exit, row.ret)
 	return mustEmit(t, feedRawPair(t, el, enterRaw, exitRaw), row.enter.Name())
 }
 
 // feedIdentOpen feeds an openat of pathname by this process that returned fd
-// and whose exit record identifies the opened file as ident.
+// and whose exit record identifies the opened file as ident. It is an early
+// call: every row built with bootClockNs entered long after it returned.
 func feedIdentOpen(t *testing.T, el *eventLoop, pathname string, fd int32, ident uint32) {
 	t.Helper()
+	feedIdentOpenAt(t, el, pathname, fd, ident, defaulTime)
+}
+
+// feedIdentOpenAt is feedIdentOpen for an openat that entered at enterNs and
+// returned openPairLatency later, which is when its number is bound.
+func feedIdentOpenAt(t *testing.T, el *eventLoop, pathname string, fd int32, ident uint32, enterNs uint64) {
+	t.Helper()
 	pid := uint32(os.Getpid())
-	enter := types.OpenEvent{EventType: types.ENTER_OPEN_EVENT, TraceId: types.SYS_ENTER_OPENAT, Time: defaulTime,
+	enter := types.OpenEvent{EventType: types.ENTER_OPEN_EVENT, TraceId: types.SYS_ENTER_OPENAT, Time: enterNs,
 		Pid: pid, Tid: execCommTid, Dirfd: defaultDirfd, Flags: syscall.O_RDWR, SchemaVersion: types.OPEN_EVENT_SCHEMA_VERSION}
 	copy(enter.Filename[:], pathname)
 	copy(enter.Comm[:], "ioworkload")
@@ -120,13 +135,21 @@ func feedIdentOpen(t *testing.T, el *eventLoop, pathname string, fd int32, ident
 	if err != nil {
 		t.Fatalf("OpenEvent.Bytes: %v", err)
 	}
-	exit := types.RetEvent{EventType: types.EXIT_RET_EVENT, TraceId: types.SYS_EXIT_OPENAT, Time: defaulTime + openPairLatency,
+	exitRaw := identExit(t, types.SYS_EXIT_OPENAT, enterNs+openPairLatency, pid, fd, ident)
+	mustEmit(t, feedRawPair(t, el, enterRaw, exitRaw), "openat")
+}
+
+// identExit builds the exit record of a call by execCommTid of pid that
+// returned the descriptor fd at exitNs and identifies the file as ident.
+func identExit(t *testing.T, trace types.TraceId, exitNs uint64, pid uint32, fd int32, ident uint32) []byte {
+	t.Helper()
+	exit := types.RetEvent{EventType: types.EXIT_RET_EVENT, TraceId: trace, Time: exitNs,
 		Ret: int64(fd), Pid: pid, Tid: execCommTid, FileIdent: ident}
-	exitRaw, err := exit.Bytes()
+	raw, err := exit.Bytes()
 	if err != nil {
 		t.Fatalf("RetEvent.Bytes: %v", err)
 	}
-	mustEmit(t, feedRawPair(t, el, enterRaw, exitRaw), "openat")
+	return raw
 }
 
 // requireUnnamedOf fails unless f is the unnamed file of a row whose
@@ -397,23 +420,27 @@ func cacheAnswer(el *eventLoop, n int32, name string, ident uint32, readNs uint6
 	el.fdState().setProcFdCacheRead(n, uint32(os.Getpid()), answer, readNs)
 }
 
-// Close rows never read procfs (task jr2) and used the cache by read time
-// alone. With identities the file decides: an answer for the closed file
-// names the row whenever it was read, an answer for another file never does,
-// and only an answer of unknown identity falls back to the read time.
-func TestCloseRowUsesACachedAnswerOnlyOfTheClosedFile(t *testing.T) {
+// Close rows never read procfs and use a cached answer only if it was read
+// before the close began (task jr2). The identity can only take an answer
+// away: one that describes another file is refused whenever it was read, and
+// an equal identity does not make a late answer usable - it may be of the
+// file that took the number since (every eventfd and epoll descriptor has the
+// same inode). A refused answer of another file is counted, and it survives
+// the close when it was read after the close began: it describes the reuser.
+func TestCloseRowUsesACachedAnswerOnlyIfReadBeforeAndNotOfAnotherFile(t *testing.T) {
 	const closedIdent = 4711
 	closeNs := bootClockNs()
 	tests := []struct {
-		name      string
-		ident     uint32
-		readNs    uint64
-		wantNamed bool
+		name                            string
+		ident                           uint32
+		readNs                          uint64
+		wantNamed, wantKept, wantRefuse bool
 	}{
-		{name: "same file, read after the close entered", ident: closedIdent, readNs: closeNs + 1000, wantNamed: true},
 		{name: "same file, read before the close entered", ident: closedIdent, readNs: closeNs - 1000, wantNamed: true},
-		{name: "another file, read before the close entered", ident: closedIdent + 1, readNs: closeNs - 1000},
-		{name: "another file, read after the close entered", ident: closedIdent + 1, readNs: closeNs + 1000},
+		{name: "same file, read after the close entered", ident: closedIdent, readNs: closeNs + 1000},
+		{name: "another file, read before the close entered", ident: closedIdent + 1, readNs: closeNs - 1000, wantRefuse: true},
+		{name: "another file, read after the close entered", ident: closedIdent + 1, readNs: closeNs + 1000,
+			wantKept: true, wantRefuse: true},
 		{name: "unknown file, read before the close entered", readNs: closeNs - 1000, wantNamed: true},
 		{name: "unknown file, read after the close entered", readNs: closeNs + 1000},
 	}
@@ -430,7 +457,12 @@ func TestCloseRowUsesACachedAnswerOnlyOfTheClosedFile(t *testing.T) {
 			if !tc.wantNamed {
 				requireUnnamedOf(t, ep.File, closedIdent)
 			}
-			verifyProcFdNotCached(t, el, uint32(os.Getpid()), n)
+			if _, kept := el.fdState().cachedProcFdFile(n, uint32(os.Getpid())); kept != tc.wantKept {
+				t.Fatalf("cached answer kept = %v after the close, want %v", kept, tc.wantKept)
+			}
+			if refused := el.fdState().rejectedAnswers == 1; refused != tc.wantRefuse || el.fdState().rejectedAnswers > 1 {
+				t.Fatalf("rejectedAnswers = %d, want refused=%v", el.fdState().rejectedAnswers, tc.wantRefuse)
+			}
 		})
 	}
 }

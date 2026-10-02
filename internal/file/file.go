@@ -74,9 +74,16 @@ type FdFile struct {
 	// ident says which file the descriptor stands for (fdfile_ident.go), 0
 	// when unknown. It sits in what was padding after fd, so the per-row
 	// files keep their size.
-	ident            uint32
-	name             string
-	desc             *openFileDesc
+	ident uint32
+	name  string
+	desc  *openFileDesc
+	// boundNs is when the fd table bound the number to this file, on the
+	// clock of the record timestamps (BoundAt in fdfile_ident.go), 0 when
+	// unknown. The word is paid for by own, below, which used to be a
+	// separate field of the allocation: an FdFile is still 48 bytes
+	// (TestFdFileKeepsItsSize), which matters because every emitted row
+	// allocates one (Detach).
+	boundNs          uint64
 	closeOnExecKnown bool
 	closeOnExec      bool
 	// fromProcFS marks a descriptor whose name ior cannot vouch for. It is
@@ -88,6 +95,12 @@ type FdFile struct {
 	// in (MarkNameFromProcFS; the field keeps the name of its first use).
 	// Dup and Detach copy it with the name.
 	fromProcFS bool
+	// own is the open file description of an FdFile that owns one: desc
+	// points at it (newFdFile, Detach), so a descriptor is one allocation. A
+	// duplicate's desc points into its source instead (Dup) and keeps that
+	// object alive, which is harmless: it is small. A duplicate's own is an
+	// unused copy. Its four bytes share a word with the three flags above.
+	own openFileDesc
 }
 
 // NewFd constructs an FdFile from explicit descriptor metadata.
@@ -112,16 +125,35 @@ func NewFdWithPid(fd int32, pid uint32) *FdFile {
 // readlink could see a different file if the descriptor was closed and reused
 // in between). Only the flags still come from /proc/<pid>/fdinfo/<fd>.
 func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
+	f, _, _ := newFdFromProc(fd, procDir(pid), name)
+	return f
+}
+
+// procDir is the procfs directory of the process pid.
+func procDir(pid uint32) string {
+	return "/proc/" + strconv.FormatUint(uint64(pid), 10)
+}
+
+// newFdFromProc builds the FdFile of a procfs answer for descriptor fd of the
+// process whose procfs directory is dir: the link text name, marked as read
+// from procfs, with the flags of <dir>/fdinfo/<fd>, or unknown flags when
+// that cannot be read or has no flags line. It returns the fdinfo content as
+// well, and whether it could be read: the file holds more than the flags
+// (NewFdWithPidIdent takes the inode number from it).
+func newFdFromProc(fd int32, dir, name string) (*FdFile, []byte, bool) {
 	f := newFdFile(fd, name)
-	flags, err := readFlagsFromFdInfo(fd, pid)
+	f.fromProcFS = true
+	data, err := os.ReadFile(fmt.Sprintf("%s/fdinfo/%d", dir, fd))
 	if err != nil {
+		f.SetFlags(-1)
+		return f, nil, false
+	}
+	if flags, err := parseFlagsFromFdInfo(data); err != nil {
 		f.SetFlags(-1)
 	} else {
 		f.SetFlags(int32(flags))
 	}
-	f.fromProcFS = true
-
-	return f
+	return f, data, true
 }
 
 // NewUnresolvedFd is the descriptor procfs could not answer for: no name and
@@ -133,14 +165,6 @@ func NewUnresolvedFd(fd int32) *FdFile {
 	f.SetFlags(-1)
 	f.fromProcFS = true
 	return f
-}
-
-func readFlagsFromFdInfo(fd int32, pid uint32) (Flags, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
-	if err != nil {
-		return unknownFlag, err
-	}
-	return parseFlagsFromFdInfo(data)
 }
 
 func parseFlagsFromFdInfo(data []byte) (Flags, error) {

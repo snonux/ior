@@ -47,7 +47,13 @@ import (
 //     host's boot clock read after the readlink, see bootClockNs) is earlier
 //     than the close's enter time. The cache is evicted by every close,
 //     close_range and EBADF of the number, so such an entry describes the
-//     descriptor this close releases.
+//     descriptor this close releases. (One exception since task 603: a close
+//     leaves an answer that is known to describe a later file - of another
+//     identity than the closed file's and read after the close began,
+//     fdTracker.closeIdentified. Such an entry is, by the same two facts,
+//     never used for that close's row, and by its read time for no earlier
+//     one. A row with an identity goes through resolveUntrackedClosing, which
+//     applies this read-time rule and refuses an answer of another file.)
 //     The stamp matters because the cache is filled at processing time, which
 //     lags the kernel: live, a write to the file just before its close was
 //     processed after the close and the pipe that reused the number, so the
