@@ -205,28 +205,86 @@ func attachSessionProbes(ctx context.Context, attacher probemanager.Attacher, cf
 // can close it (nil otherwise).
 func loadConfiguredBPFModule(cfg flags.Config, log bpfSetupLog) (*bpf.Module, string, error) {
 	log = log.withDefaults()
-	bpfModule, stage, err := loadBPFModule()
+	load := func(wantIdent bool) (*bpf.Module, bool, string, error) {
+		return loadBPFObject(cfg, wantIdent, log.warn)
+	}
+	bpfModule, identCaptured, stage, err := loadWithIdentFallback(fileIdentWantedByEnv(log.warn), load, closeBPFModule, log.warn)
 	if err != nil {
-		return nil, stage, err
-	}
-	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
-		return bpfModule, "resize maps", err
-	}
-	if err := setBPFGlobals(cfg, bpfModule, log.warn); err != nil {
-		return bpfModule, "set globals", err
-	}
-	identCaptured, err := setFileIdentGlobal(fileIdentWantedByEnv(log.warn), bpfModule.InitGlobalVariable)
-	if err != nil {
-		return bpfModule, "set globals", err
-	}
-	if err := bpfModule.BPFLoadObject(); err != nil {
-		return bpfModule, "load object", err
+		return bpfModule, stage, err
 	}
 	if err := applySyscallSamplingRates(cfg, bpfModule); err != nil {
 		return bpfModule, "configure sampling rates", err
 	}
 	log.fileIdent(identCaptured)
 	return bpfModule, "", nil
+}
+
+// loadObjectStage names the stage in which the kernel verifies and loads the
+// object's programs.
+const loadObjectStage = "load object"
+
+// loadBPFObject opens the BPF object, sizes its maps, sets its globals - the
+// file identity capture as wantIdent asks - and loads it into the kernel. It
+// returns whether the object captures file identities, and on failure the
+// failed stage and the module if it was opened.
+func loadBPFObject(cfg flags.Config, wantIdent bool, warn func(args ...any)) (*bpf.Module, bool, string, error) {
+	bpfModule, stage, err := loadBPFModule()
+	if err != nil {
+		return nil, false, stage, err
+	}
+	if err := resizeBPFMaps(cfg, bpfModule); err != nil {
+		return bpfModule, false, "resize maps", err
+	}
+	if err := setBPFGlobals(cfg, bpfModule, warn); err != nil {
+		return bpfModule, false, "set globals", err
+	}
+	identCaptured, err := setFileIdentGlobal(wantIdent, bpfModule.InitGlobalVariable)
+	if err != nil {
+		return bpfModule, false, "set globals", err
+	}
+	if err := bpfModule.BPFLoadObject(); err != nil {
+		return bpfModule, identCaptured, loadObjectStage, err
+	}
+	return bpfModule, identCaptured, "", nil
+}
+
+// closeBPFModule closes a module a failed load left open, if any.
+func closeBPFModule(bpfModule *bpf.Module) {
+	if bpfModule != nil {
+		bpfModule.Close()
+	}
+}
+
+// loadWithIdentFallback loads the object through load with the file identity
+// capture as want asks, and once more without it when the kernel refused to
+// load an object that had it switched on.
+//
+// The capture's kernel-side walk (internal/c/fileident.c) is the one part of
+// the programs that relies on verifier features newer than the rest: typed
+// pointer loads from bpf_get_current_task_btf and the bpf_rdonly_cast kfunc
+// in a tracepoint program. It is compiled into all single-descriptor
+// handlers, so a verifier that refuses it would leave ior unable to trace at
+// all, and it was only ever loaded on Linux 7.2. Without the capture ior
+// works as it did before it existed, so a failed load is retried once with
+// the global at 0, which makes the walk dead code. A failure that has
+// nothing to do with the capture fails the second time too and is reported
+// from there; the warning says that a retry happened, not why the load
+// failed. Other stages are not retried, and neither is a load that already
+// ran without the capture. discard releases the module of the failed attempt.
+func loadWithIdentFallback[M any](
+	want bool,
+	load func(wantIdent bool) (M, bool, string, error),
+	discard func(M),
+	warn func(args ...any),
+) (M, bool, string, error) {
+	module, captured, stage, err := load(want)
+	if err == nil || stage != loadObjectStage || !captured {
+		return module, captured, stage, err
+	}
+	warn(fmt.Sprintf("BPF object did not load with the file identity capture (%v): "+
+		"loading it once more without (set %s=0 to skip the first attempt)", err, fileIdentEnv))
+	discard(module)
+	return load(false)
 }
 
 // attachTraceProbes attaches the sched probes and then the syscall tracepoint

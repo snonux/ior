@@ -96,6 +96,92 @@ func TestSetFileIdentGlobalOnRealObjects(t *testing.T) {
 	}
 }
 
+// fakeObjectLoad is a load function for loadWithIdentFallback: it records the
+// attempts and fails those listed in fail with the given stage.
+type fakeObjectLoad struct {
+	attempts []bool
+	fail     map[bool]string // wantIdent -> failing stage
+	captures bool            // the object has the identity global
+	closed   []string
+}
+
+func (f *fakeObjectLoad) load(wantIdent bool) (string, bool, string, error) {
+	f.attempts = append(f.attempts, wantIdent)
+	module := fmt.Sprintf("module-%d", len(f.attempts))
+	captured := wantIdent && f.captures
+	if stage, fails := f.fail[wantIdent]; fails {
+		return module, captured, stage, fmt.Errorf("attempt %d failed", len(f.attempts))
+	}
+	return module, captured, "", nil
+}
+
+// TestLoadWithIdentFallback pins when a failed load is tried again without
+// the file identity capture: only when the kernel refused ("load object") an
+// object that had the capture switched on. The failed module is released,
+// the retry is announced once, and its outcome is what is returned.
+func TestLoadWithIdentFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		want         bool
+		load         fakeObjectLoad
+		wantAttempts []bool
+		wantModule   string
+		wantCaptured bool
+		wantErr      string
+	}{
+		{name: "loads with the capture", want: true, load: fakeObjectLoad{captures: true},
+			wantAttempts: []bool{true}, wantModule: "module-1", wantCaptured: true},
+		{name: "refused with the capture, loads without", want: true,
+			load:         fakeObjectLoad{captures: true, fail: map[bool]string{true: loadObjectStage}},
+			wantAttempts: []bool{true, false}, wantModule: "module-2"},
+		{name: "refused both times", want: true,
+			load:         fakeObjectLoad{captures: true, fail: map[bool]string{true: loadObjectStage, false: loadObjectStage}},
+			wantAttempts: []bool{true, false}, wantModule: "module-2", wantErr: "attempt 2 failed"},
+		{name: "capture switched off is not retried", want: false,
+			load:         fakeObjectLoad{captures: true, fail: map[bool]string{false: loadObjectStage}},
+			wantAttempts: []bool{false}, wantModule: "module-1", wantErr: "attempt 1 failed"},
+		{name: "object without the capture is not retried", want: true,
+			load:         fakeObjectLoad{fail: map[bool]string{true: loadObjectStage}},
+			wantAttempts: []bool{true}, wantModule: "module-1", wantErr: "attempt 1 failed"},
+		{name: "another stage is not retried", want: true,
+			load:         fakeObjectLoad{captures: true, fail: map[bool]string{true: "set globals"}},
+			wantAttempts: []bool{true}, wantModule: "module-1", wantCaptured: true, wantErr: "attempt 1 failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var warnings []string
+			warn := func(args ...any) { warnings = append(warnings, fmt.Sprint(args...)) }
+			discard := func(module string) { tc.load.closed = append(tc.load.closed, module) }
+			module, captured, _, err := loadWithIdentFallback(tc.want, tc.load.load, discard, warn)
+			if fmt.Sprint(tc.load.attempts) != fmt.Sprint(tc.wantAttempts) || module != tc.wantModule || captured != tc.wantCaptured {
+				t.Fatalf("attempts %v gave %q captured=%v, want %v, %q, %v",
+					tc.load.attempts, module, captured, tc.wantAttempts, tc.wantModule, tc.wantCaptured)
+			}
+			if (err == nil) != (tc.wantErr == "") || (err != nil && err.Error() != tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+			assertRetryAnnounced(t, len(tc.wantAttempts) == 2, warnings, tc.load.closed)
+		})
+	}
+}
+
+// assertRetryAnnounced checks the side effects of a retry: the first module
+// was released and one warning names the switch; without a retry, neither.
+func assertRetryAnnounced(t *testing.T, retried bool, warnings, closed []string) {
+	t.Helper()
+	if !retried {
+		if len(warnings) != 0 || len(closed) != 0 {
+			t.Fatalf("no retry, but warnings %q and released modules %q", warnings, closed)
+		}
+		return
+	}
+	if len(closed) != 1 || closed[0] != "module-1" {
+		t.Fatalf("released modules = %q, want the failed first one", closed)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], fileIdentEnv+"=0") || !strings.Contains(warnings[0], "attempt 1 failed") {
+		t.Fatalf("warnings = %q, want one naming the failure and %s=0", warnings, fileIdentEnv)
+	}
+}
+
 func TestTrustFileIdentsSwitchesTheComparisonOnAndOff(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	if el.fdState().identOn {
@@ -125,16 +211,26 @@ func renderedBody(t *testing.T, file, function string) string {
 
 // TestTraceSetupCarriesTheFileIdentCaptureToTheLoop pins the chain from the
 // global to the loop, structurally because the setup cannot run unprivileged:
-// the load stage reports what setFileIdentGlobal returned, and only after the
-// object loaded; setupTraceInfraBPF records it in the infra; runTraceSetup
-// passes exactly that field to trustFileIdents, once.
+// loadBPFObject sets the global before the load; the load stage reports what
+// the (possibly retried) load captured, once and after it;
+// setupTraceInfraBPF records it in the infra; runTraceSetup passes exactly
+// that field to trustFileIdents, once.
 func TestTraceSetupCarriesTheFileIdentCaptureToTheLoop(t *testing.T) {
+	object := renderedBody(t, "ior_bpfsetup.go", "loadBPFObject")
+	set := strings.Index(object, "identCaptured, err := setFileIdentGlobal(wantIdent, bpfModule.InitGlobalVariable)")
+	if loaded := strings.Index(object, "bpfModule.BPFLoadObject()"); set < 0 || loaded < set {
+		t.Fatalf("loadBPFObject must set the identity global before the load:\n%s", object)
+	}
+	// A refused load must say whether the capture was on, or
+	// loadWithIdentFallback never tries without it.
+	if !strings.Contains(object, "return bpfModule, identCaptured, loadObjectStage, err") {
+		t.Fatalf("loadBPFObject must report the capture state of a refused load:\n%s", object)
+	}
 	load := renderedBody(t, "ior_bpfsetup.go", "loadConfiguredBPFModule")
-	set := strings.Index(load, "identCaptured, err := setFileIdentGlobal(fileIdentWantedByEnv(log.warn), bpfModule.InitGlobalVariable)")
-	loaded := strings.Index(load, "bpfModule.BPFLoadObject()")
+	loaded := strings.Index(load, "loadWithIdentFallback(fileIdentWantedByEnv(log.warn), load, closeBPFModule, log.warn)")
 	report := strings.Index(load, "log.fileIdent(identCaptured)")
-	if set < 0 || loaded < set || report < loaded || strings.Count(load, "log.fileIdent(") != 1 {
-		t.Fatalf("loadConfiguredBPFModule must set the global before the load and report it once after:\n%s", load)
+	if loaded < 0 || report < loaded || strings.Count(load, "log.fileIdent(") != 1 {
+		t.Fatalf("loadConfiguredBPFModule must report the capture once, after the load:\n%s", load)
 	}
 
 	infra := renderedBody(t, "ior.go", "setupTraceInfraBPF")
