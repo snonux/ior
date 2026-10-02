@@ -1180,7 +1180,10 @@ func setupTraceInfraWithEventLoop(
 //     (hooks.probes, the same test attachSessionProbes calls headless): no
 //     headless run can change a probe, and listening is not free, it starts
 //     with a stamp that refuses the folds of every call interrupted before
-//     it; rename-record trust after the factory, which wires the drop counter
+//     it; a manager published to nobody is the other case, a trace set that
+//     is final, which the loop is told so that it does not hold a stopped
+//     sleep's row for a restart_syscall the run does not trace (task u13);
+//     rename-record trust after the factory, which wires the drop counter
 //     the trust also depends on (task xr2).
 //   - Signal the start last. Nothing fallible may follow: every step above
 //     still reaches the caller through err, and in TUI mode that is the only
@@ -1220,6 +1223,9 @@ func runTraceSetup(
 	}
 	if infra.mgr != nil && hooks.probes != nil {
 		el.watchProbeChanges(infra.mgr.SetChangeHook)
+	}
+	if infra.mgr != nil && hooks.probes == nil {
+		el.traceSetIsFinal(infra.mgr.IsActive)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)

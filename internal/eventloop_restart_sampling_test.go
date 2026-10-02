@@ -17,7 +17,12 @@ import (
 // interrupted syscall, must be what it was. Since task t13 the RESUME record
 // keeps a sampled-out restart_syscall from handing the row a later one by
 // itself (TestSampledOutRestartSyscallIsNotFoldedWithoutTheGuard in
-// eventloop_restart_handled_test.go); the guard tested here stays on top.
+// eventloop_restart_handled_test.go). The guard tested here stays for the two
+// things that record cannot do (task u13): emit the -516 row of a sampled-out
+// restart_syscall when it happens rather than with the thread's next record
+// (TestSampledRestartSyscallRowIsNotHeld), and tell a later call's
+// restart_syscall from the announced one on a clock that gives both the same
+// reading (TestSampledRestartSyscallNeverFoldsACoarseClockStranger).
 
 // samplingConfig is a flags.Config with the given sampling rates on top of
 // the built-in defaults of its output mode: a raw mode (-plain) promotes the
@@ -133,9 +138,47 @@ func TestSampledRestartSyscallNeverFoldsAStranger(t *testing.T) {
 	}
 }
 
+// TestSampledRestartSyscallNeverFoldsACoarseClockStranger is the stream the
+// RESUME record's time rule cannot judge, and so the one wrong fold the guard
+// alone prevents. On a clocksource too coarse to give two enters of a thread
+// different readings (jiffies), sleep A's sampled-out restart_syscall and the
+// sampled-in restart_syscall of a later silent call B, entered within the
+// same tick, carry one time: RESUME names B's enter as well as A's. The
+// records are those of a real continuation - at rate 1, where an announced
+// enter always arrives, they fold (TestRestartSyscallAtRateOneStillFolds
+// feeds the same stream) - so with restart_syscall sampled the row must not
+// have been held in the first place.
+func TestSampledRestartSyscallNeverFoldsACoarseClockStranger(t *testing.T) {
+	for _, cfg := range []samplingConfig{
+		{name: "restart_syscall=2", plain: true, syscalls: map[string]uint32{"restart_syscall": 2}},
+		{name: "Process=2", plain: true, families: map[types.SyscallFamily]uint32{types.FamilyProcess: 2}},
+	} {
+		for kind, newFixture := range samplingFixtures(cfg.flags()) {
+			t.Run(cfg.name+"/"+kind, func(t *testing.T) {
+				f := newFixture(t)
+				const tick, laterExit = restartBase + 4000, restartBase + 9000
+				rows := stoppedSleepThenRestart(f, restartBase, tick, tick, laterExit, -4)
+				want := []restartRow{
+					{name: "clock_nanosleep", tid: restartTid, ret: -516, enterTime: restartBase, duration: 500,
+						sleepNs: restartSleepNs},
+					{name: "restart_syscall", tid: restartTid, ret: -4, enterTime: tick,
+						duration: laterExit - tick, gap: tick - restartBase - 500},
+				}
+				if !slices.Equal(rows, want) {
+					t.Fatalf("rows = %+v, want the -516 row and the same-tick restart_syscall apart %+v", rows, want)
+				}
+				f.requireNothingHeld()
+			})
+		}
+	}
+}
+
 // TestSampledRestartSyscallRowIsNotHeld: in a run that samples
 // restart_syscall the -516 row is emitted by its own exit, not by the tid's
 // next record, and the tracker stays empty - there is no fold to wait for.
+// Held, the row of a sampled-out restart_syscall would get its RESUME record
+// and then wait for an enter that never comes: it would appear with the
+// thread's next record, seconds later or at its exit (task u13).
 func TestSampledRestartSyscallRowIsNotHeld(t *testing.T) {
 	cfg := samplingConfig{plain: true, syscalls: map[string]uint32{"restart_syscall": 2}}
 	for kind, newFixture := range samplingFixtures(cfg.flags()) {

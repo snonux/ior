@@ -171,20 +171,49 @@ import (
 // the effective one BPF applies (default < family < syscall, a family's 0
 // promoted to 1 in the raw output modes), in every output mode.
 //
-// Since task t13 the guard is no longer what keeps the stranger out. RESUME
+// Since task t13 the guard is no longer what keeps that stranger out. RESUME
 // is emitted before the sampling decision and names its enter by time, so a
 // sampled-out restart_syscall leaves a RESUME whose time no later enter
 // carries, and the later call's restart_syscall releases the row
 // (TestSampledOutRestartSyscallIsNotFoldedWithoutTheGuard) - exactly how the
-// re-execution fold has always dealt with a sampled-out re-execution. The
-// guard is kept on top of that: it costs the folds a sampled run could make
-// when both halves of a restart_syscall happen to be sampled in, which such a
-// run never made, and it leaves the one case the time rule cannot tell (a
-// clocksource too coarse to give two enters of a thread different readings,
-// see restart.c) to the re-execution fold alone. The interrupted syscall's
-// own rate needs no guard under either rule: a sampled-out interrupted call
-// holds no row and is not pending in BPF (ior_restart_on_exit takes emitted
-// exits only), so its restart_syscall is a row of its own.
+// re-execution fold has always dealt with a sampled-out re-execution.
+//
+// The guard stays all the same (task u13 asked whether it can go). Without
+// it a run at rate N would fold the stopped calls whose restart_syscall is
+// sampled in, one hop in N, and no other case of a sampled stream goes wrong
+// under the time rule: an interrupted call that is sampled out holds no row
+// and is not pending in BPF (ior_restart_on_exit takes emitted exits only),
+// a sampled-in restart_syscall has both its records (BPF decides once per
+// invocation), a sampled-out one that is stopped again leaves the task not
+// pending, so the next hop comes unannounced, and the rates are written once,
+// before any probe is attached. What the guard is needed for:
+//
+//   - The rows of a sampled run would be late. A row whose restart_syscall is
+//     sampled out is not released by anything at the time: RESUME arrives,
+//     the row waits for an enter that never comes (restartResumed), and it
+//     is emitted with the thread's next record - when the rest of the sleep
+//     is over, or at the thread's exit. That is N-1 rows in N, and at rate 0
+//     every one, for a fold that then never happens. Live, restart_syscall=2
+//     and a 5 s sleep stopped twice: the -516 row appeared 4 s after the
+//     first stop, at the process's exit, instead of 20 ms; a sampled-in first
+//     hop gave a row folded up to the second stop (-516 after 2 s) that
+//     appeared at the exit as well. With the guard every -516 row of such a
+//     run is emitted by its own exit (TestSampledRestartSyscallRowIsNotHeld).
+//     It is the delay described under "Output order" below for a
+//     restart_syscall that is not traced, which a run with a fixed trace set
+//     no longer has.
+//   - The time rule cannot tell on a clocksource too coarse to give two
+//     enters of a thread different readings (jiffies; see "A time rule that
+//     cannot tell" in restart.c). The later call's restart_syscall then
+//     carries the time of the RESUME record the sampled-out one left, and
+//     the stream is, record for record, that of a real continuation: at rate
+//     1, where an announced enter always arrives, the same records fold
+//     (TestSampledRestartSyscallNeverFoldsACoarseClockStranger). The
+//     re-execution fold has this residual; the guard keeps it out of this
+//     fold.
+//
+// The interrupted syscall's own rate needs no guard under either rule: its
+// restart_syscall is a row of its own whenever the call was sampled out.
 //
 // Runtime probe changes (task o03). BPF takes a task's first traced enter
 // after an interrupted exit for the continuation, and that holds only while
@@ -320,13 +349,14 @@ import (
 // The decision rules (heldRestart.phase records where a held row stands):
 //
 //   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent, in
-//     a run whose probes make RESUME a proof and that does not sample
-//     restart_syscall), or -512/-513/-514 when re-execution folding is on, is
-//     parked here instead of being completed (tracepointExited). Its exit
-//     handler, derived values and pair filter all wait for the outcome. At
-//     most maxHeldRestarts rows are held; beyond that the row is completed at
-//     once, unfolded. A row interrupted at or before the latest runtime probe
-//     change is not held either ("Runtime probe changes" above).
+//     a run whose probes make RESUME a proof, that does not sample
+//     restart_syscall and whose trace set is not fixed without it), or
+//     -512/-513/-514 when re-execution folding is on, is parked here instead
+//     of being completed (tracepointExited). Its exit handler, derived values
+//     and pair filter all wait for the outcome. At most maxHeldRestarts rows
+//     are held; beyond that the row is completed at once, unfolded. A row
+//     interrupted at or before the latest runtime probe change is not held
+//     either ("Runtime probe changes" above).
 //   - Handler: a HANDLER control record says a user handler runs for the
 //     interrupted call. If the call survives it by the rules above
 //     (restartSurvivesHandler, -513 and -512 with SA_RESTART; BPF applied the
@@ -434,23 +464,35 @@ import (
 // Those rows measure their gap from the interrupted exit, and the folded row
 // keeps the gap it had at its first enter (heldRestart.gapBase).
 //
-// One held row has no such bound: a -516 row that no handler ends, in a run
-// where restart_syscall emits nothing because it is outside the attached
-// trace set (-trace-syscalls without it, or its probes switched off in the
-// TUI). It can never fold, yet it is held like any other: holdable goes by
-// the probes and the sampling rate, and the loop is not told which syscalls
-// are attached. No record marks the resumption then, so the row waits for
+// One held row has no such bound: a -516 row that no handler ends, while
+// restart_syscall emits nothing because it is outside the attached trace set
+// (-trace-syscalls without it, or its probes switched off in the TUI). It can
+// never fold, and no record marks the resumption, so held it waits for
 // whatever the thread's next record is - the RESUME ahead of its next traced
 // enter (the BPF entry waits for that enter, restart.c), its exit record, or
 // the end of the run. For a thread that goes on sleeping that is as long as
 // the rest of the stopped call takes (2.5 s in a live run), and for one that
 // makes no further traced call it is the thread's exit. The row is right (ret
 // -516, the latency up to the stop); only the time it appears at and its
-// place in the output are off. Not holding -516 rows while restart_syscall is
-// not attached would end the delay, and is left open (task u13): the loop
-// would have to know the attached set, which the TUI's probes modal changes
-// while the loop runs, so a row held under one set can be released under
-// another.
+// place in the output are off.
+//
+// A run whose trace set is fixed does not hold such a row (task u13,
+// traceSetIsFinal, restartTracker.restartSyscallUntraced): every headless
+// run, where nobody is handed the probe manager, so what is attached when
+// setup ends is attached for the whole run. With no restart_syscall probe
+// among it the -516 row is completed by its own exit, like in a run that
+// samples restart_syscall. Nothing is given up: not holding a row can only
+// cost a fold, and there is none to make. BPF goes on as before - the task is
+// pending, RESUME precedes its next traced enter - and the record finds no
+// row and is recycled (handleSyscallRestartEvent).
+//
+// A TUI run still holds it, attached or not, and has the delay. There the
+// probes modal changes the set while the loop runs, and the loop reads the
+// stream behind the ring buffer: whether restart_syscall was attached when a
+// row was interrupted is not something "attached now" answers. The loop is
+// told of every change (probesChanged) but not of which syscall changed or
+// what the set is afterwards, and a row held under one set would have to be
+// released under another.
 type restartTracker struct {
 	held map[uint32]*heldRestart // keyed by tid
 	// restartBlock and reexec are set by trace setup (foldProvenRestarts)
@@ -466,8 +508,15 @@ type restartTracker struct {
 	// configuration (restartSyscallSampled): restart_syscall is not at rate 1,
 	// so a -516 row's own restart_syscall may be missing from the stream
 	// without any record lost, and such rows are not held ("Sampling" above:
-	// a guard on top of the RESUME record's time rule).
+	// held, most of them would only be late, and on a coarse clock the RESUME
+	// record's time rule would not keep a later call out).
 	restartSyscallSampled bool
+	// restartSyscallUntraced is set by trace setup (traceSetIsFinal) in a run
+	// that cannot change its probes, when restart_syscall has none attached:
+	// no restart_syscall exit will ever arrive, so a -516 row has nothing to
+	// wait for and is not held ("Output order" above). False in a TUI run
+	// whatever is attached, and in a loop nobody told.
+	restartSyscallUntraced bool
 	// drops knows since when the kernel's drop counter has stood at its
 	// current value, which is what proves that no record was lost while a row
 	// was held. Both folds ask it (restartProofLost); it stays at its zero
@@ -749,7 +798,8 @@ func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
 // exit of the kind the restart_syscall fold can patch, when BPF announces
 // restart_syscall continuations (restartBlock), or - when it proves
 // re-executions - any exit carrying -512/-513/-514. A run that samples
-// restart_syscall parks no -516 row either ("Sampling" in the file comment).
+// restart_syscall parks no -516 row either ("Sampling" in the file comment),
+// nor does one that will never record a restart_syscall (restartBlockHeld).
 // A row interrupted at or before the latest runtime probe change is not parked
 // at all: nothing may be folded into it any more ("Runtime probe changes" in
 // the file comment), so holding it would only delay it. The loop reaches such
@@ -767,9 +817,19 @@ func (r *restartTracker) holdable(ep *event.Pair) bool {
 	}
 	if event.IsRestartBlockRet(ret) {
 		_, isRet := ep.ExitEv.(*types.RetEvent)
-		return isRet && r.restartBlock && !r.restartSyscallSampled
+		return isRet && r.restartBlockHeld()
 	}
 	return r.reexec && event.IsReexecutedRestartRet(ret)
+}
+
+// restartBlockHeld reports whether this run parks -516 rows at all: BPF
+// announces restart_syscall continuations (restartBlock), and the run records
+// every restart_syscall - it does not sample the syscall ("Sampling" in the
+// file comment), and its probes are attached or may still be ("Output order"
+// there). The re-execution codes do not ask: their continuation is the
+// interrupted syscall itself, which the run evidently records.
+func (r *restartTracker) restartBlockHeld() bool {
+	return r.restartBlock && !r.restartSyscallSampled && !r.restartSyscallUntraced
 }
 
 // hold parks held.pair when it is holdable and reports whether it did. The
@@ -1379,6 +1439,26 @@ func (e *eventLoop) handleSyscallRestartEvent(ev *types.SyscallRestartEvent) {
 func (e *eventLoop) foldProvenRestarts(signalProbeAttached, exitProbeAttached bool) {
 	e.restarts.restartBlock = signalProbeAttached && exitProbeAttached
 	e.restarts.reexec = e.restarts.restartBlock && e.dropSrc != nil
+}
+
+// traceSetIsFinal tells the loop that the syscall probes attached now are the
+// ones the whole run has (trace setup, before the loop starts; isActive is
+// the probe manager's IsActive). Trace setup calls it only for a manager it
+// published to nobody (runTraceSetup): a headless run, in which no probe can
+// be attached or detached once setup is over. A TUI run, whose probes modal
+// does exactly that, is not told, and neither is a loop without a manager.
+//
+// What the loop takes from it is whether restart_syscall is traced (task
+// u13). If the manager calls it inactive, no restart_syscall exit can arrive
+// in this run, a -516 row can never fold, and holding it would only delay it
+// until the thread's next record ("Output order" in the file comment); so it
+// is not held. Inactive means that the manager holds no link of the pair:
+// the syscall was not selected, or its attach failed - which at worst leaves
+// the enter tracepoint attached, when the link could not be destroyed again,
+// and never the exit. While the manager calls it active, -516 rows are held
+// as before.
+func (e *eventLoop) traceSetIsFinal(isActive func(syscall string) bool) {
+	e.restarts.restartSyscallUntraced = !isActive(types.SYS_ENTER_RESTART_SYSCALL.Name())
 }
 
 // releaseAllHeldRestarts releases every row still held when the event loop

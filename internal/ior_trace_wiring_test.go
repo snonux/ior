@@ -244,6 +244,71 @@ func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	}
 }
 
+// TestTraceSetIsFinalWithARealProbeManager drives traceSetIsFinal through a
+// real probemanager.Manager (fake attacher), with the exact method value the
+// setup passes (task u13): the loop stops holding -516 rows exactly when the
+// manager has no restart_syscall probe attached. A manager-side change in how
+// IsActive names syscalls would otherwise call restart_syscall inactive in
+// every headless run and silently end the stopped-sleep fold there.
+func TestTraceSetIsFinalWithARealProbeManager(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		attach       func(tracepoint string) bool
+		wantUntraced bool
+	}{
+		{"restart_syscall attached", nil, false},
+		{"only the sleep attached", func(tp string) bool { return strings.HasSuffix(tp, "_clock_nanosleep") }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+			mgr, err := attachSyscallProbes(attacher, tc.attach,
+				syscallPairNames("clock_nanosleep", "restart_syscall"), failOnLog(t))
+			if err != nil {
+				t.Fatalf("attachSyscallProbes() error = %v", err)
+			}
+			defer func() { _ = mgr.Close() }()
+			f := newRestartFixture(t, globalfilter.Filter{})
+
+			f.el.traceSetIsFinal(mgr.IsActive)
+
+			if got := f.el.restarts.restartSyscallUntraced; got != tc.wantUntraced {
+				t.Fatalf("restartSyscallUntraced = %t, want %t", got, tc.wantUntraced)
+			}
+		})
+	}
+}
+
+// TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal pins the call that
+// connects the two, structurally like its siblings above (task u13). It must
+// hand the loop the real manager's IsActive, before the loop can run, and on
+// the setups that published their manager to nobody - on those only: a TUI's
+// probes modal attaches restart_syscall while the loop runs, and a loop told
+// at startup that it is not traced would never fold a stopped sleep again.
+func TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	final := callsNamed(decl, "traceSetIsFinal")
+	if len(final) != 1 {
+		t.Fatalf("shared trace setup calls traceSetIsFinal %d times, want exactly once", len(final))
+	}
+	call := final[0]
+	receiver, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector || !isIdentifier(receiver.X, "el") {
+		t.Fatal("traceSetIsFinal must be called on the event loop el")
+	}
+	assertCallArguments(t, call, []string{"infra.mgr.IsActive"})
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes == nil")
+	// That helper also accepts a call no condition guards, which here is the
+	// defect itself: a TUI's loop told that its trace set is final.
+	for _, statement := range decl.Body.List {
+		if expression, ok := statement.(*ast.ExprStmt); ok && expression.X == call {
+			t.Fatal("traceSetIsFinal must not run for a manager that was published to a TUI")
+		}
+	}
+	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
+		t.Fatalf("traceSetIsFinal at %s must precede the start signal", fset.Position(call.Pos()))
+	}
+}
+
 // TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap pins, structurally
 // again, the statement that gives the loop the kernel's restart_pending_map to
 // clear at a probe change (task o03). It needs a loaded BPF module to do
