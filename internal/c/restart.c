@@ -147,10 +147,13 @@
  * a syscall pair at runtime (internal/eventloop_restart.go, "Runtime probe
  * changes"): it writes 0 to every slot of restart_pending_map
  * (internal/restart_pending_map.go) - after a detach has destroyed its links,
- * before an attach attaches any - and from then on folds nothing into a row
- * whose interrupted exit is not younger than that moment. Either would do for
- * the case above; the clear keeps a stale RESUME from being emitted at all,
- * and the time rule covers what the clear cannot: it races with the programs
+ * before an attach attaches any, and again when that attach is over (the two
+ * tracepoints are attached one after the other, and a continuation that runs
+ * meanwhile is seen in part or not at all) - and from then on folds nothing
+ * into a row whose interrupted exit is not younger than that moment. Only a
+ * run with a TUI does any of this: nothing else changes probes. Either would
+ * do for the case above; the clear keeps a stale RESUME from being emitted at
+ * all, and the time rule covers what the clear cannot: it races with the programs
  * on other CPUs, and a signal delivery or rt_sigreturn that read a slot before
  * the clear and writes its changed word back afterwards
  * (ior_restart_on_handler, ior_restart_on_sigreturn) keeps that one entry
@@ -233,6 +236,17 @@
  *     had interrupted the call).
  *   - A kernel or driver bug lets -ERESTARTSYS escape with no signal pending:
  *     nothing restarts, the program sees errno 512 and carries on.
+ *   - The continuation's probes are attached at runtime while the call is
+ *     pending (task o03, "Runtime probe changes" above). Userspace clears the
+ *     map and refuses by time before the attach and after it, but it learns
+ *     that the attach is over only when the attach call has returned, and the
+ *     fresh pair records from the moment the kernel attached it. An entry
+ *     made during the attach whose continuation ran before the enter
+ *     tracepoint was attached still announces the task's next enter of that
+ *     syscall, and userspace folds it if that call's exit is recorded and
+ *     processed before the second clear and stamp exist: for -516, one thread
+ *     stopped and continued twice within a single attach of restart_syscall's
+ *     probes (internal/eventloop_restart.go, "What is left open").
  *
  * A time rule that cannot tell: RESUME is right. Here the kernel did
  * re-execute the call and the entry was cleared when it should be, but the
@@ -247,13 +261,18 @@
  * No longer among them: the syscall's probes (for -516: restart_syscall's)
  * detached in the TUI between the interrupted exit and the continuation and
  * attached again later, so that the entry outlived the continuation it stood
- * for (task o03, "Runtime probe changes" above; an exit handler still running
- * on another CPU when the detach returns can store an entry a few
+ * for (task o03; an exit handler still running on another CPU when the
+ * detach returns - possible if the kernel does not wait for a grace period
+ * there, which it may not while another perf event keeps the tracepoint
+ * registered, see perf_trace_event_unreg; not checked against the kernel's
+ * source, and nothing here depends on it - could store an entry a few
  * microseconds younger than the detach, which cannot announce that syscall
  * while its probes are off and is cleared, its row refused, before they are
- * attached again); a -516 call cut by a handled signal whose handler is
- * silent, followed by a silent stopped call (task t13, see the top of this
- * comment; the stream-only fold took that call's restart_syscall for the
+ * attached again); a call interrupted while such an attach was under way and
+ * continued before both tracepoints were attached, outside the corner above
+ * (the second clear and stamp); a -516 call cut by a handled signal whose
+ * handler is silent, followed by a silent stopped call (task t13, see the top
+ * of this comment; the stream-only fold took that call's restart_syscall for the
  * continuation); a recycled tid inheriting the entry of a task that died
  * pending (ior_restart_forget drops it in sched_process_exit, and userspace
  * folds only when that probe attached); the sampled-out and

@@ -252,10 +252,11 @@ followed by a second row for the continuation (if that was recorded at all), whe
   was interrupted and before its continuation was complete. While a syscall's probes are off
   ior cannot see a call being re-executed, and after they come back the thread's next call of
   that syscall would look like the continuation. So every probe change, of any syscall, ends
-  the wait for all calls interrupted before it: each is recorded as its restart-code row, and
-  its continuation, if ior sees it, as a row of its own. Toggling a whole family changes its
-  probes one after the other, so nothing is folded while that runs. Calls interrupted after
-  the change are folded as usual;
+  the wait for all calls interrupted before it - or while it was under way: a probe's enter
+  and exit side are attached one after the other - and each is recorded as its restart-code
+  row, and its continuation, if ior sees it, as a row of its own. Toggling a whole family
+  changes its probes one after the other, so nothing is folded while that runs. Calls
+  interrupted after the change are folded as usual;
 - another record of the same thread arrived between the continuation's enter and its exit.
   The fold only takes an exit that directly follows the enter; a thread's `comm` being written
   by another thread (`/proc/<pid>/task/<tid>/comm`), or the exec record of a successful

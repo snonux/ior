@@ -11,6 +11,7 @@ import (
 
 	"ior/internal/event"
 	"ior/internal/globalfilter"
+	"ior/internal/textsafe"
 )
 
 // Tests for the restart folds' guard against runtime probe changes (task o03,
@@ -234,6 +235,49 @@ func TestProbeChangeBeforeTheInterruptionDoesNotBlockTheFold(t *testing.T) {
 	requireFoldedSleep(t, f.foldSleep(restartBase), restartBase, "the probes changed before the interruption")
 }
 
+// TestProbeChangeInsideTheInterruptedCallDoesNotBlockTheFold: a row is judged
+// by when its call was interrupted, not by when the call began. A read that
+// was already blocked when some probe changed and is interrupted afterwards
+// has its whole continuation after the change, seen like any other: the row is
+// held, the woken loop leaves it alone, and the re-execution folds.
+func TestProbeChangeInsideTheInterruptedCallDoesNotBlockTheFold(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.feedNone(f.readEnter(restartBase, restartTid), "read enter")
+	f.changeProbes(restartBase + 200)
+	f.feedNone(f.readExit(restartBase+500, restartTid, restartSys), "read exit interrupted after the probe change")
+	if rows := f.noticeProbeChange(); len(rows) != 0 || len(f.el.restarts.held) != 1 {
+		t.Fatalf("woken loop emitted %+v and left %d rows held, want the row interrupted after the change still held",
+			rows, len(f.el.restarts.held))
+	}
+	f.clockAt(restartBase + 850)
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
+	f.clockAt(restartBase + 3050)
+	requireFolded(t, f.feed(f.readExit(restartBase+3000, restartTid, 1)), restartBase,
+		"the probes changed while the call was blocked, before it was interrupted")
+}
+
+// TestWokenLoopReleasesTheRowsInterruptedUpToTheStamp: the woken loop releases
+// what the time rule refuses, no more and no less. A row interrupted in the
+// very nanosecond of the stamp is refused (changedSince), so it is released -
+// left held, it could only wait for a fold that will not happen. A row
+// interrupted one nanosecond later is as sound as any and stays.
+func TestWokenLoopReleasesTheRowsInterruptedUpToTheStamp(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)        // interrupted at restartBase+500
+	f.interruptRead(restartBase+1, restartOtherTid, restartSys) // and one nanosecond later
+	f.changeProbes(restartBase + 500)
+
+	rows := f.noticeProbeChange()
+	if len(rows) != 1 {
+		t.Fatalf("woken loop released %+v, want only the row interrupted at the stamp", rows)
+	}
+	requireInterruptedRow(t, rows[0], restartSys)
+	if _, held := f.el.restarts.lookup(restartOtherTid); !held || len(f.el.restarts.held) != 1 {
+		t.Fatalf("%d rows held after the wake, want only the one interrupted after the stamp", len(f.el.restarts.held))
+	}
+}
+
 // TestWithoutAProbeChangeNothingIsRefused: the watch's zero value is "no
 // change", not "a change at time 0" - a record stamped 0 must not be refused
 // by it - and its stamp only moves forward, so of two changes reported from
@@ -274,13 +318,17 @@ func (c *scriptedPendingClearer) Clear() error {
 // restart_pending_map, and the stamp is a clock reading taken AFTER the clear -
 // an entry the clear removed must belong to a call the stamp refuses too. Here
 // the clear itself takes time: it starts at 100 and the clock stands at 500
-// when it is done.
+// when it is done. A first stamp already stands while the clear runs: after an
+// attach the fresh probes record from the moment they are attached, and the
+// loop must not fold those records for as long as a clear takes.
 func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.clockAt(100)
 	pending := &scriptedPendingClearer{}
+	var stampedBeforeClear uint64
 	pending.clock = func() uint64 {
 		defer f.clockAt(500)
+		stampedBeforeClear = f.el.restarts.probes.changedAt.Load()
 		return f.drops.now
 	}
 	f.el.restartPending = pending
@@ -288,6 +336,9 @@ func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	f.el.probesChanged()
 	if got := pending.clears.Load(); got != 1 || pending.clearedAt[0] != 100 {
 		t.Fatalf("clears = %d at %v, want one clear, begun at 100", got, pending.clearedAt)
+	}
+	if stampedBeforeClear != 100 {
+		t.Fatalf("change stamp = %d while the clear ran, want 100: a first stamp before the clear", stampedBeforeClear)
 	}
 	if got := f.el.restarts.probes.changedAt.Load(); got != 500 {
 		t.Fatalf("change stamp = %d, want 500, the reading taken after the clear", got)
@@ -318,17 +369,26 @@ func TestFailedClearStillRefusesTheFold(t *testing.T) {
 	requireInterruptedRow(t, f.feedOne(f.resumeRecord(restartBase+30_000, restartTid), "stale RESUME record"), restartSys)
 }
 
-// TestWatchProbeChangesHooksTheManagerAndStamps: trace setup hands the loop
-// the probe manager's SetChangeHook. The loop registers probesChanged there
-// and stamps once itself, for a change the TUI made before anybody listened:
+// TestWatchProbeChangesHooksTheManagerAndReportsOnce: trace setup hands the
+// loop the probe manager's SetChangeHook. The loop registers probesChanged
+// there and reports one change itself, for one the TUI made before anybody
+// listened: the kernel's pending restarts are cleared, the loop is woken, and
 // a call interrupted before that stamp is not held.
-func TestWatchProbeChangesHooksTheManagerAndStamps(t *testing.T) {
+func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
+	pending := &scriptedPendingClearer{}
+	f.el.restartPending = pending
 	f.clockAt(restartBase + 600)
 	var hook func()
 	f.el.watchProbeChanges(func(registered func()) { hook = registered })
 	if hook == nil {
 		t.Fatal("watchProbeChanges registered no hook")
+	}
+	if got := pending.clears.Load(); got != 1 {
+		t.Fatalf("clears = %d after installing the hook, want 1: a toggle made before it left entries behind", got)
+	}
+	if rows := f.noticeProbeChange(); len(rows) != 0 {
+		t.Fatalf("woken loop emitted %+v with nothing held", rows)
 	}
 	f.feedNone(f.readEnter(restartBase, restartTid), "read enter")
 	requireInterruptedRow(t, f.feedOne(f.readExit(restartBase+500, restartTid, restartSys), "interrupted read exit"), restartSys)
@@ -355,6 +415,13 @@ type probeChangeRun struct {
 
 func startProbeChangeRun(t *testing.T) *probeChangeRun {
 	t.Helper()
+	return startProbeChangeRunWith(t, nil)
+}
+
+// startProbeChangeRunWith is startProbeChangeRun with the loop's output
+// replaced by output, when that is not nil, before the loop starts.
+func startProbeChangeRunWith(t *testing.T, output func(el *eventLoop)) *probeChangeRun {
+	t.Helper()
 	r := &probeChangeRun{f: newRestartFixture(t, globalfilter.Filter{}), rawCh: make(chan []byte),
 		rows: make(chan restartRow, 1024)}
 	r.f.el.dropStampClock = r.now.Load
@@ -362,6 +429,9 @@ func startProbeChangeRun(t *testing.T) *probeChangeRun {
 		r.rows <- rowOf(ep)
 		ep.Recycle()
 	})
+	if output != nil {
+		output(r.f.el)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -379,13 +449,10 @@ func startProbeChangeRun(t *testing.T) *probeChangeRun {
 // TestRunningLoopReleasesAHeldRowWhenProbesChange: the loop is idle - a
 // stopped sleep is held and its thread produces nothing - when another
 // goroutine reports a probe change. The loop wakes without a record and emits
-// the row. The third record below is only a marker: the loop takes it after
-// it has finished the -516 exit, so the row is held by then.
+// the row.
 func TestRunningLoopReleasesAHeldRowWhenProbesChange(t *testing.T) {
 	r := startProbeChangeRun(t)
-	r.rawCh <- r.f.sleepEnter(restartBase, restartTid)
-	r.rawCh <- r.f.sleepExit(restartBase+500, restartTid, -516)
-	r.rawCh <- r.f.sleepEnter(restartBase+600, restartOtherTid)
+	r.holdStoppedSleep()
 	select {
 	case row := <-r.rows:
 		t.Fatalf("row %+v emitted before the probes changed, want the -516 row held", row)
@@ -401,6 +468,48 @@ func TestRunningLoopReleasesAHeldRowWhenProbesChange(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the idle loop did not release the held row after a probe change")
+	}
+}
+
+// holdStoppedSleep feeds the running loop a sleep of restartTid that is stopped
+// (-516) and held. The third record is only a marker: the loop takes it after
+// it has finished the -516 exit, so the row is held when this returns.
+func (r *probeChangeRun) holdStoppedSleep() {
+	r.rawCh <- r.f.sleepEnter(restartBase, restartTid)
+	r.rawCh <- r.f.sleepExit(restartBase+500, restartTid, -516)
+	r.rawCh <- r.f.sleepEnter(restartBase+600, restartOtherTid)
+}
+
+// TestRowReleasedByAProbeChangeIsFlushedInAPlainRun: in a -plain run a row
+// goes into the sink's buffer and leaves it when the flush timer fires, and
+// the timer is armed by whoever buffered a row. The woken loop buffers the
+// rows it releases without a record having arrived, so it has to arm the
+// timer itself: the held thread is stopped and nothing else may come for a
+// long time, and the row would sit in the buffer until then.
+func TestRowReleasedByAProbeChangeIsFlushedInAPlainRun(t *testing.T) {
+	old := plainFlushInterval
+	plainFlushInterval = 20 * time.Millisecond
+	t.Cleanup(func() { plainFlushInterval = old })
+
+	w := &recordingWriter{}
+	r := startProbeChangeRunWith(t, func(el *eventLoop) {
+		sink := newPlainSink(w, textsafe.EscapeNever)
+		el.printCb, el.flusher = sink.Print, sink
+	})
+	r.holdStoppedSleep()
+	r.now.Store(restartBase + 1000)
+	r.f.el.probesChanged()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, out := w.snapshot(); strings.Contains(out, ",clock_nanosleep,") {
+			return
+		}
+		if time.Now().After(deadline) {
+			_, out := w.snapshot()
+			t.Fatalf("output = %q after the probe change, want the released -516 row written by the flush timer", out)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

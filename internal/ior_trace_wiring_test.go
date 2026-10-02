@@ -7,10 +7,12 @@ import (
 	"go/ast"
 	"go/printer"
 	"go/token"
+	"slices"
 	"strings"
 	"testing"
 
 	"ior/internal/globalfilter"
+	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/types"
 )
@@ -127,8 +129,9 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 // hook through a real probemanager.Manager (fake attacher), with the exact
 // method value the setup passes (task o03): a probe detached and attached
 // again at runtime clears the kernel's pending restarts and moves the loop's
-// change stamp each time, and the startup attach, which ran before the loop
-// listened, is covered by the stamp taken when the hook was installed.
+// change stamp at each report - one for the detach, two for the attach - and
+// the startup attach, which ran before the loop listened, is covered by the
+// clear and the stamp taken when the hook was installed.
 func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
 	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
 	mgr, err := attachSyscallProbes(attacher, nil, syscallPairNames("read"), failOnLog(t))
@@ -142,26 +145,87 @@ func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
 
 	f.clockAt(100)
 	f.el.watchProbeChanges(mgr.SetChangeHook)
-	if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != 100 || clears != 0 {
-		t.Fatalf("after installing the hook: stamp=%d clears=%d, want the install stamp 100 and no clear", stamp, clears)
+	if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != 100 || clears != 1 {
+		t.Fatalf("after installing the hook: stamp=%d clears=%d, want the install stamp 100 and one clear", stamp, clears)
 	}
+	wantClears := []int64{2, 4} // the install, the detach, the attach twice
 	for i, change := range []func(string) error{mgr.Detach, mgr.Attach} {
 		at := uint64(200 + 100*i)
 		f.clockAt(at)
 		if err := change("read"); err != nil {
 			t.Fatalf("probe change %d: %v", i, err)
 		}
-		if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != at || clears != int64(i+1) {
-			t.Fatalf("after probe change %d: stamp=%d clears=%d, want %d and %d", i, stamp, clears, at, i+1)
+		if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != at || clears != wantClears[i] {
+			t.Fatalf("after probe change %d: stamp=%d clears=%d, want %d and %d", i, stamp, clears, at, wantClears[i])
 		}
 	}
+}
+
+// attachWindowProgram is a probe program whose attach first runs a callback:
+// what the traced host does while the manager is attaching a pair.
+type attachWindowProgram struct {
+	fakeProbeProgram
+	during func(tracepoint string)
+}
+
+func (p *attachWindowProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
+	if p.during != nil {
+		p.during(name)
+	}
+	return p.fakeProbeProgram.AttachTracepoint(category, name)
+}
+
+// TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall: the two
+// tracepoints of a pair are attached one after the other, after the attach was
+// reported. While restart_syscall's are being attached a traced sleep is
+// stopped - after that report, so its row is held and its task pending - and
+// resumed before the enter tracepoint is there: its restart_syscall is never
+// seen. The restart_syscall BPF announces later, from the entry that outlived
+// it, resumes another stopped call of the thread, one that left no record.
+// With the attach reported only beforehand it was folded into the held sleep;
+// the report after the attach is younger than that row, so RESUME releases it
+// and the restart_syscall is a row of its own.
+func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	prog := &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}
+	none := func(string) bool { return false }
+	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: prog}, none, syscallPairNames("restart_syscall"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	f.clockAt(restartBase - 1000)
+	f.el.watchProbeChanges(mgr.SetChangeHook)
+
+	prog.during = func(tracepoint string) {
+		if tracepoint != "sys_enter_restart_syscall" {
+			return
+		}
+		f.interrupt(restartBase, restartTid) // held: interrupted after the first report
+		f.clockAt(restartBase + 1000)        // and resumed unseen before this attach returns
+	}
+	f.clockAt(restartBase - 100)
+	if err := mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if stamp := f.el.restarts.probes.changedAt.Load(); stamp != restartBase+1000 {
+		t.Fatalf("change stamp = %d after the attach, want %d: a report once both tracepoints are attached", stamp, restartBase+1000)
+	}
+
+	rows := f.foldSleepFrom(restartBase)
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+	f.requireNothingHeld()
 }
 
 // TestSetupTraceInfraReportsProbeChangesToTheLoop pins the call that connects
 // the two, structurally like its sibling above: without it the TUI's probes
 // modal changes probes and the loop keeps folding into rows whose continuation
 // ran unseen (task o03). It must hand the loop the real manager's
-// SetChangeHook, on every setup that has a manager, before the loop can run.
+// SetChangeHook, on every setup that published its manager to a TUI, before
+// the loop can run. On those only: a headless run changes no probe, and
+// listening starts with a stamp that refuses the folds of the calls interrupted
+// before it - in a time namespace with a positive boottime offset, where the
+// stamp lies in the records' future, every fold for the length of the offset.
 func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	watch := callsNamed(decl, "watchProbeChanges")
@@ -174,9 +238,48 @@ func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 		t.Fatal("watchProbeChanges must be called on the event loop el")
 	}
 	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook"})
-	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil")
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes != nil")
 	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
 		t.Fatalf("watchProbeChanges at %s must precede the start signal", fset.Position(call.Pos()))
+	}
+}
+
+// TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap pins, structurally
+// again, the statement that gives the loop the kernel's restart_pending_map to
+// clear at a probe change (task o03). It needs a loaded BPF module to do
+// anything, so no test without root reaches it, and without it nothing fails
+// loudly: the loop's time rule still refuses the folds, and only the cases the
+// clear exists for - a stamp the records cannot be compared with - go wrong.
+func TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap(t *testing.T) {
+	decl, _ := parseInternalFunction(t, "ior.go", "newTraceEventLoop")
+	attach := callsNamed(decl, "attachRestartPendingMap")
+	if len(attach) != 1 {
+		t.Fatalf("newTraceEventLoop calls attachRestartPendingMap %d times, want exactly once", len(attach))
+	}
+	assertCallArguments(t, attach[0], []string{"el", "bpfModule"})
+	// A plain statement of the body: not behind a condition, in a closure
+	// nobody calls, or deferred past the return of the loop.
+	plain := slices.ContainsFunc(decl.Body.List, func(statement ast.Stmt) bool {
+		expression, ok := statement.(*ast.ExprStmt)
+		return ok && expression.X == attach[0]
+	})
+	if !plain {
+		t.Fatal("attachRestartPendingMap must be a plain statement of newTraceEventLoop's body")
+	}
+}
+
+// TestAttachRestartPendingMapWithoutAMapLeavesTheLoopWithout: an object
+// without restart_pending_map (here: no module at all) is not an error and
+// leaves a loop that guards the folds by time alone.
+func TestAttachRestartPendingMapWithoutAMapLeavesTheLoopWithout(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	attachRestartPendingMap(f.el, nil)
+	if f.el.restartPending != nil {
+		t.Fatalf("restartPending = %v without a module, want nil", f.el.restartPending)
+	}
+	f.changeProbes(restartBase)
+	if got := f.el.restarts.probes.changedAt.Load(); got != restartBase {
+		t.Fatalf("change stamp = %d without a map to clear, want %d", got, restartBase)
 	}
 }
 

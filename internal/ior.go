@@ -1176,8 +1176,12 @@ func setupTraceInfraWithEventLoop(
 //     for syscalls that really attached (raw modes; a no-op for the TUI, which
 //     has no tally); the probe manager's runtime changes reported to the
 //     loop, which then keeps the restart folds off the calls interrupted
-//     before one (task o03); rename-record trust after the factory, which
-//     wires the drop counter the trust also depends on (task xr2).
+//     before one (task o03) - only when the manager was published to a TUI
+//     (hooks.probes, the same test attachSessionProbes calls headless): no
+//     headless run can change a probe, and listening is not free, it starts
+//     with a stamp that refuses the folds of every call interrupted before
+//     it; rename-record trust after the factory, which wires the drop counter
+//     the trust also depends on (task xr2).
 //   - Signal the start last. Nothing fallible may follow: every step above
 //     still reaches the caller through err, and in TUI mode that is the only
 //     path an error has - once started is closed the starter has already
@@ -1213,6 +1217,8 @@ func runTraceSetup(
 	wireEventLoopLogging(el, logln, warnings)
 	if infra.mgr != nil {
 		el.restrictSamplingToActive(infra.mgr.IsActive)
+	}
+	if infra.mgr != nil && hooks.probes != nil {
 		el.watchProbeChanges(infra.mgr.SetChangeHook)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)

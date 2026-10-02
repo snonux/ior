@@ -198,18 +198,19 @@ import (
 // the probes of restart_syscall.
 //
 // So the probe manager reports every runtime change of a syscall pair
-// (probemanager.Manager.SetChangeHook, wired by watchProbeChanges), at a
-// moment when that syscall's enter tracepoint is not attached: after a
-// detach, before an attach, and before the opposite change of that syscall
-// can begin. On each report (probesChanged, on the goroutine that changed the
-// probe):
+// (probemanager.Manager.SetChangeHook, wired by watchProbeChanges): after a
+// detach has destroyed its links, before an attach attaches anything and again
+// when that attach is over, each time before the opposite change of that
+// syscall can begin. On each report (probesChanged, on the goroutine that
+// changed the probe):
 //
 //   - restart_pending_map is cleared (restartPendingMap.Clear), so no entry
 //     made before the change announces anything after it;
-//   - the boot clock is read and kept as the time of the latest change
-//     (restartProbeWatch), and from then on no row interrupted at or before
-//     that time is folded or held: holdable refuses it, and a row already held
-//     is released at the two steps that commit to a fold, RESUME and the
+//   - the boot clock is read, once before the clear and once after it, and
+//     the later reading kept as the time of the latest change
+//     (restartProbeWatch). From then on no row interrupted at or before that
+//     time is folded or held: holdable refuses it, and a row already held is
+//     released at the two steps that commit to a fold, RESUME and the
 //     continuation's exit (restartAcrossProbeChange), exactly where a possible
 //     lost record refuses it;
 //   - the loop is woken (processRawEvents) and releases the rows it holds from
@@ -231,7 +232,7 @@ import (
 // clear of the map is the second line: with it the stale RESUME is not emitted
 // in the first place, which also covers a record time and a userspace clock
 // reading that cannot be compared (a time namespace with a boottime offset,
-// the assumption bootClockNs makes everywhere).
+// see probesChanged).
 //
 // The rule is deliberately coarse. Any pair's change refuses every row
 // interrupted before it, of any syscall and any task: a family toggle is a
@@ -241,22 +242,71 @@ import (
 // every instant of the stream the loop has yet to read. The hand-attached
 // probes (signal_deliver, sched_process_exit, the restart fold's rt_sigreturn
 // program) are attached for the whole session and never report; the syscall
-// probe of rt_sigreturn does, like any pair. The first stamp is taken when the
-// hook is installed (watchProbeChanges): the TUI is handed the probe manager
-// before the loop exists, and a change it makes in between is reported to
-// nobody.
+// probe of rt_sigreturn does, like any pair.
 //
-// Why an attach reports as well, and before it attaches anything: the
-// detach's stamp can miss an entry. An exit handler that is still running on
-// another CPU when the link's destruction returns (the kernel need not wait
-// for a grace period there when another perf event keeps the tracepoint
-// registered) makes its task pending with an exit stamped microseconds AFTER
-// the detach's stamp and clear. Its re-execution goes unseen like any other.
-// While the probes are off that entry cannot announce a call of the same
-// syscall, and the attach's report clears it and stamps past its row before
-// the enter tracepoint is back. The same report covers a detach that failed
-// half-way and left the exit tracepoint attached, still making entries, with
-// the enter tracepoint gone.
+// Who listens. Only a run whose probe manager was published to a TUI
+// (runTraceSetup, traceSetupHooks.probes): the probes modal is the one place
+// probes change at runtime. A headless run installs no hook, takes no stamp
+// and refuses nothing on this account. Installing the hook counts as a change
+// itself (watchProbeChanges: clear, stamp and wake, like any report): the TUI
+// is handed the probe manager before the loop exists, and a change it makes in
+// between is reported to nobody.
+//
+// Why an attach reports as well, and twice.
+//
+// Before it attaches anything, because the detach's stamp can miss an entry.
+// An exit handler that is still running on another CPU when the link's
+// destruction returns makes its task pending with an exit stamped microseconds
+// AFTER the detach's stamp and clear. (Whether that can happen is a question
+// of whether the kernel waits for a grace period there; it may not while
+// another perf event keeps the tracepoint registered, see
+// perf_trace_event_unreg. That was not checked against the kernel's source,
+// and the design does not depend on it: the report is made either way.) Its
+// re-execution goes unseen like any other. While the probes are off that
+// entry cannot announce a call of the same syscall, and the attach's first
+// report clears it and stamps past its row before the enter tracepoint is
+// back.
+//
+// After the attach, because the first report cannot stand for the attach
+// itself: the two tracepoints are attached one after the other, enter first,
+// and the first stamp is older than both. Take an attach of restart_syscall's
+// probes. A traced poll is stopped and exits -516 after the first stamp - its
+// row is held, its task pending - and is resumed before the enter tracepoint
+// is attached: the restart_syscall goes unseen, nothing releases the row, and
+// the entry stands. The thread's next recorded enter can then be the
+// restart_syscall of a later stopped call whose own syscall is detached or
+// outside the trace set, and it was announced and folded into the held row.
+// (Seen at its enter and gone before the exit tracepoint is attached, the
+// restart_syscall leaves the row with its enter taken instead, waiting for an
+// exit that only a later call can deliver.) The second report's stamp is
+// younger than that row and its clear takes the entry. A failed attach is
+// reported twice all the same: it may have had the enter tracepoint attached
+// for a moment, which is an attach and a detach in one.
+//
+// A detach that failed half-way and left the exit tracepoint attached, with
+// the enter tracepoint gone, needs no report of its own while it lasts. A held
+// call whose continuation is that syscall - a call of the syscall itself, or
+// for restart_syscall a stopped call - is then continued unseen at its enter,
+// and its task stays pending. But the continuation's exit is recorded, arrives
+// as an exit of the tid that no RESUME announced, and releases the row (the
+// Release rule below). The entry stays until the task's next traced enter,
+// which cannot be one of that syscall, or until the probe is detached for
+// good, which reports and clears it (an attach of a probe that still has a
+// link is a no-op in the manager and reports nothing).
+//
+// What is left open. A report is made when the attach call has returned, not
+// at the instant the kernel attaches, so the fresh pair produces records
+// before the second stamp exists. A wrong fold through that gap needs the
+// whole of the scenario above inside one attach: the first restart_syscall
+// unseen before the enter tracepoint is attached, the later call's
+// restart_syscall entered after that, its exit recorded once the exit
+// tracepoint is attached, and the loop processing that exit before
+// probesChanged has stored its first stamp - which it takes before the clear
+// for that reason, so the race is against the return from the attach call and
+// one clock reading. That is one thread stopped and continued twice within a
+// single attach, and it is not closed: the loop would have to be told that a
+// change is in flight (a begin and an end rather than points in time) and
+// refuse every fold meanwhile.
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
@@ -417,7 +467,8 @@ type restartTracker struct {
 	// probes knows when a syscall's probes were last attached or detached at
 	// runtime, which is what refuses the rows interrupted before that
 	// ("Runtime probe changes" in the file comment). It stays at its zero
-	// value - no change, nothing refused - in a run nobody changes probes in.
+	// value - no change, nothing refused - in a run nobody changes probes in,
+	// which is every headless run: only a TUI run listens (watchProbeChanges).
 	probes restartProbeWatch
 }
 
@@ -434,9 +485,10 @@ type restartTracker struct {
 // the atomic and the channel; the tracker's other state belongs to the loop
 // alone and is not touched from there.
 type restartProbeWatch struct {
-	// changedAt is the boot-clock reading taken at the latest change: after
-	// the detach it reports had destroyed its links, or before the attach it
-	// reports attached any. 0 means no change was reported.
+	// changedAt is the boot-clock reading taken at the latest report: after a
+	// detach had destroyed its links, before an attach attached any, after
+	// that attach was over, or when the hook was installed. 0 means no change
+	// was reported.
 	changedAt atomic.Uint64
 	// wake tells the loop that changedAt moved, so it releases the rows held
 	// from before without waiting for a record (processRawEvents). One slot:
@@ -1341,32 +1393,60 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 
 // watchProbeChanges makes the loop listen to runtime probe changes (trace
 // setup, before the loop starts): listen is the probe manager's SetChangeHook.
-// The stamp taken right after is the first change as far as the loop knows.
-// The TUI is handed the probe manager before the loop exists, so a probe it
-// switched off and on in between was reported to nobody; calls interrupted
-// before this point are not folded, and they are the calls of the few
-// milliseconds between the probe attach and the end of setup.
+// Trace setup calls it only for a manager it published to a TUI
+// (runTraceSetup); a headless run changes no probe, so it must not pay for the
+// guard, least of all with folds refused over a clock it cannot compare (see
+// probesChanged).
+//
+// Installing the hook is reported as a change, the first one the loop knows
+// of. The TUI is handed the probe manager before the loop exists, so a probe
+// it switched off and on in between was reported to nobody: the entries such a
+// change left in restart_pending_map are cleared like at any report, and the
+// calls interrupted before this point are not folded - the calls of the few
+// milliseconds between the probe attach and the end of setup. The hook is set
+// first, so a change that races the install is reported by one or the other.
+// The wake token it leaves is taken by the loop when it starts and finds
+// nothing held.
 func (e *eventLoop) watchProbeChanges(listen func(hook func())) {
 	listen(e.probesChanged)
-	e.restarts.probes.note(e.readDropStampClock())
+	e.probesChanged()
 }
 
 // probesChanged is the probe manager's change hook
 // (probemanager.Manager.SetChangeHook): a syscall's probes are about to be
-// attached, or were just detached, at runtime. It runs on the goroutine that
-// changes the probe - never on the loop's - while that syscall's enter
-// tracepoint is not attached, and touches only what is safe from there: the
-// BPF map, the watch's atomics and channel, and the warning sink the drop
-// monitor's goroutine reports through as well.
+// attached, or were just attached or detached, at runtime. It runs on the
+// goroutine that changes the probe - never on the loop's - and touches only
+// what is safe from there: the BPF map, the watch's atomics and channel, and
+// the warning sink the drop monitor's goroutine reports through as well.
 //
-// The map is cleared before the clock is read, so every entry the clear
-// removed was made before the stamp, and the row it stood for is refused by
-// time as well: the two never disagree about a row. A clear that fails is
-// reported once and changes nothing else - the time rule does not depend on
-// it. Without a map to clear (restartPending nil: tests, and an object
-// override that has no restart probes and so announces nothing) only the
-// stamp is taken.
+// The clock is read twice. The reading that counts is the one after the clear:
+// every entry the clear removed was made before it, so the row that entry
+// stood for is refused by time as well, and the two never disagree about a
+// row. The reading before the clear only makes the stamp exist sooner. After
+// an attach the new pair has been producing records since the kernel attached
+// it, and until a stamp is stored the loop folds them into rows interrupted
+// during the attach ("What is left open" in the file comment); the clear takes
+// a third of a millisecond, two with the per-slot fallback, which that gap
+// need not include. The stamp only moves forward (restartProbeWatch.note), so
+// the first reading never undoes anything.
+//
+// A clear that fails is reported once and changes nothing else - the time rule
+// does not depend on it. Without a map to clear (restartPending nil: tests,
+// and an object override that has no restart probes and so announces nothing)
+// only the stamps are taken.
+//
+// The stamp is a user-space CLOCK_BOOTTIME reading compared with record times
+// from bpf_ktime_get_boot_ns, like every use of bootClockNs, and so assumes
+// that ior does not run in a time namespace with a boottime offset (the BPF
+// helper is not namespaced, the user-space clock is). With a positive offset
+// the stamp lies in the records' future and every fold is refused until the
+// records' clock has caught up with it - for the length of the offset after
+// each probe change, the install included. With a negative offset the stamp
+// lies in their past, the time rule refuses too little, and the clear of the
+// map is the only guard. Nothing detects or corrects the offset here, as
+// nowhere else in ior; only TUI runs take a stamp at all.
 func (e *eventLoop) probesChanged() {
+	e.restarts.probes.note(e.readDropStampClock())
 	if e.restartPending != nil {
 		if err := e.restartPending.Clear(); err != nil && e.restarts.probes.clearFailed.CompareAndSwap(false, true) {
 			e.notifyWarningOrLog(fmt.Sprintf(

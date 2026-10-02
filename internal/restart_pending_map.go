@@ -63,8 +63,18 @@ func newRestartPendingMap(module *bpf.Module) (*restartPendingMap, error) {
 // or an rt_sigreturn, restart.c) keeps one entry alive; that entry announces
 // nothing userspace folds, because the loop also refuses, by time, every row
 // interrupted before the probe change that asked for this clear
-// (restartTracker.probesChangedSince). The clear and that rule each cover the
-// other's gap; see "Runtime probe changes" in eventloop_restart.go.
+// (restartProbeWatch.changedSince, asked by restartTracker.holdable when a row
+// is to be held and by eventLoop.restartAcrossProbeChange when one is to be
+// folded). The clear and that rule each cover the other's gap; see "Runtime
+// probe changes" in eventloop_restart.go.
+//
+// The key and value slices are built anew on every call, 48 KiB that live for
+// one bpf(2) call. Clear runs on the goroutine that changes a probe, under
+// that probe's attach mutex only, so two probes changed at once (the TUI runs
+// every toggle as its own command) clear concurrently. Slices kept on the map
+// would be shared between those calls and handed to cgo by both; the kernel
+// only reads them, but nothing in the slot-map interface says so, and a probe
+// change is far too rare for the allocation to matter.
 func (m *restartPendingMap) Clear() error {
 	if m == nil || m.slots == nil {
 		return nil

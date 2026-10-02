@@ -81,23 +81,46 @@ func NewManager(attacher Attacher) *Manager {
 // hook stops the reports. Close reports nothing: it ends the session, and
 // whoever listened is being torn down with it.
 //
-// When it is called is the contract (task o03, internal/eventloop_restart.go):
-// while the syscall's enter tracepoint is NOT attached, and under the probe's
-// own attach mutex, so the opposite change of the same syscall cannot begin
-// before hook has returned.
+// When it is called is the contract (task o03, internal/eventloop_restart.go).
+// hook is called at every moment from which on the syscall is seen differently
+// than before, always under the probe's own attach mutex, so the opposite
+// change of the same syscall cannot begin before hook has returned:
 //
-//   - Attach calls it BEFORE it attaches anything, also when the attach then
-//     fails.
+//   - Attach calls it BEFORE it attaches anything, and a second time AFTER the
+//     attempt: with both tracepoints attached, or with the attach failed. A
+//     failed attach is reported twice as well because it may have had the
+//     enter tracepoint attached for a moment (the exit attach failed and the
+//     enter link was destroyed again, or could not be): for the kernel that
+//     is an attach followed by a detach, and a detach is reported when it is
+//     over.
 //   - Detach calls it AFTER both links were destroyed, and only when the
 //     probe had a link to destroy. A destroy that failed is reported like one
-//     that succeeded; the tracepoint it left attached keeps seeing its
-//     syscalls, so none of them runs unseen.
+//     that succeeded. It leaves the pair half attached, and with the enter
+//     link gone and the exit link left the syscall's calls do run unseen at
+//     their enter; the pair stays that way until the next Detach of the
+//     syscall, which reports again (an Attach of a probe that still has a
+//     link is a no-op). Why the listener's outcome is right meanwhile is its
+//     business ("Runtime probe changes" in internal/eventloop_restart.go: the
+//     exit tracepoint that is still attached ends the wait of the row).
 //
-// So whatever the listener notes in hook - the event loop stamps the boot
-// clock and clears the kernel's restart_pending_map - is noted after the old
-// attachment saw its last syscall and before the new one sees its first. A
-// syscall that ran unseen in between left nothing behind that is younger than
-// the note.
+// So what the listener notes in hook - the event loop clears the kernel's
+// restart_pending_map and stamps the boot clock - is noted after the old
+// attachment saw its last syscall (Detach), before the new one sees its first
+// (Attach, first report) and once more when the new one is complete (Attach,
+// second report). The first report of an attach cannot stand for the attach
+// itself: the two tracepoints are attached one after the other, enter first,
+// and a syscall that runs meanwhile - its enter before the enter tracepoint
+// is attached, or its exit before the exit tracepoint is - goes unseen in part
+// and can leave something behind that is younger than the first note. The
+// second note is younger than all of that.
+//
+// What no report can do is coincide with the kernel's attach. From the moment
+// the enter tracepoint is attached the new attachment produces records, and
+// the note that is younger than the half-seen syscalls is taken only when the
+// attach call for the exit tracepoint has returned and hook runs. A listener
+// that acts on those records before hook has noted anything acts without the
+// second note; how much that leaves open is the listener's to say (for the
+// event loop: "Runtime probe changes", the residual).
 //
 // hook runs on the goroutine that called Attach or Detach (in the TUI a
 // command goroutine, never the event loop) and without the manager lock, so it
@@ -230,6 +253,11 @@ func (m *Manager) Attach(syscall string) error {
 	// the listener notes must be older than anything the new attachment sees.
 	m.reportChange()
 	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
+	// And again once the attempt is over, whatever came of it: a syscall that
+	// ran while only one of the two tracepoints was attached was seen in part,
+	// and what the listener notes now is younger than that. Still under
+	// attachMu, and before the new state is committed, like Detach's report.
+	m.reportChange()
 	return m.commitAttach(syscall, enterLink, exitLink, attachErr)
 }
 

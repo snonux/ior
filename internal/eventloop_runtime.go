@@ -661,6 +661,14 @@ func (e *eventLoop) completeTracepointPair(ep *event.Pair, ch chan<- *event.Pair
 // first. A release that parks the continuation's enter again adds no pair
 // (reparkContinuation), and the exit that then pairs with it is that record's
 // one pair of its own.
+//
+// Two senders are not handlers of a record: the release of every row still
+// held when the loop stops (releaseAllHeldRestarts) and the release, in the
+// loop woken by a runtime probe change, of the rows interrupted before it
+// (releaseRestartsBehindProbeChange, task o03). Either may release thousands
+// of rows, and neither needs a slot per row: both run on the loop's goroutine
+// between two records, with the channel empty, send one row and drain it
+// before they complete the next. One slot would do for them.
 const pairChannelSlots = 3
 
 // extraPairPanic is the panic message of sendPair on a full channel.

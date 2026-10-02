@@ -11,8 +11,8 @@ import (
 
 // Tests for the change hook (SetChangeHook, task o03). The event loop hangs
 // the restart fold's guard on it, and the guard is sound only if the hook runs
-// while the changing syscall's enter tracepoint is not attached: before an
-// attach touches a tracepoint, after a detach destroyed its links, and before
+// at the right moments: before an attach touches a tracepoint and again when
+// the attach is over, after a detach destroyed its links, and each time before
 // the opposite change of the same syscall can begin. The tests below observe
 // the fake programs and links from inside the hook, which is the only place
 // that order can be seen.
@@ -54,20 +54,27 @@ func (h *hookedRead) observe() {
 	h.destroysSeen = append(h.destroysSeen, [2]int{h.enter.link.destroyCalls(), h.exit.link.destroyCalls()})
 }
 
-// TestChangeHookRunsBeforeAnAttachTouchesATracepoint: a runtime attach is
-// reported once, and at that moment neither tracepoint of the syscall has been
-// attached yet. Reported afterwards, the enter probe would already have seen a
-// syscall that the listener's note claims to be older than.
-func TestChangeHookRunsBeforeAnAttachTouchesATracepoint(t *testing.T) {
+// TestChangeHookRunsBeforeAndAfterAnAttach: a runtime attach is reported
+// twice. At the first report neither tracepoint of the syscall has been
+// attached yet: reported only afterwards, the enter probe would already have
+// seen a syscall that the listener's note claims to be older than. At the
+// second both are attached: the two are attached one after the other, and a
+// syscall that ran in between - seen at its enter and not at its exit, or not
+// at all - is younger than the first note. Without the second report the event
+// loop folded a later call into a row interrupted during the attach.
+func TestChangeHookRunsBeforeAndAfterAnAttach(t *testing.T) {
 	h := newHookedRead(t, false)
 	if err := h.mgr.Attach("read"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if h.calls != 1 {
-		t.Fatalf("hook ran %d times for one attach, want once", h.calls)
+	if h.calls != 2 {
+		t.Fatalf("hook ran %d times for one attach, want twice", h.calls)
 	}
 	if h.attachesSeen[0] != [2]int{0, 0} {
-		t.Fatalf("hook saw %v tracepoint attaches (enter, exit), want none yet", h.attachesSeen[0])
+		t.Fatalf("first report saw %v tracepoint attaches (enter, exit), want none yet", h.attachesSeen[0])
+	}
+	if h.attachesSeen[1] != [2]int{1, 1} {
+		t.Fatalf("second report saw %v tracepoint attaches (enter, exit), want both done", h.attachesSeen[1])
 	}
 	if !h.mgr.IsActive("read") {
 		t.Fatal("read is not active after Attach")
@@ -102,15 +109,18 @@ func TestChangeHookFollowsEveryToggle(t *testing.T) {
 			t.Fatalf("Toggle: %v", err)
 		}
 	}
-	if h.calls != 2 {
-		t.Fatalf("hook ran %d times for a detach and an attach, want 2", h.calls)
+	if h.calls != 3 {
+		t.Fatalf("hook ran %d times for a detach and an attach, want 3 (once and twice)", h.calls)
 	}
 	if h.destroysSeen[0] != [2]int{1, 1} {
 		t.Fatalf("the detach was reported with %v link destroys, want both done", h.destroysSeen[0])
 	}
 	// One attach each from AttachAll; the re-attach has not begun.
 	if h.attachesSeen[1] != [2]int{1, 1} {
-		t.Fatalf("the re-attach was reported with %v attaches, want only the startup ones", h.attachesSeen[1])
+		t.Fatalf("the re-attach was first reported with %v attaches, want only the startup ones", h.attachesSeen[1])
+	}
+	if h.attachesSeen[2] != [2]int{2, 2} {
+		t.Fatalf("the re-attach was last reported with %v attaches, want both tracepoints attached again", h.attachesSeen[2])
 	}
 }
 
@@ -145,15 +155,23 @@ func TestChangeHookIsSilentWhenNothingChanges(t *testing.T) {
 
 // TestChangeHookReportsFailedChanges: an attach that fails had its enter
 // tracepoint attached for a moment, and a detach that fails may have destroyed
-// one link of two. Both moved what the kernel sees, so both are reported.
+// one link of two. Both moved what the kernel sees, so both are reported - the
+// failed attach twice like any attach, the second time when the enter link it
+// had attached is destroyed again: that is a detach, and a detach is reported
+// when it is over.
 func TestChangeHookReportsFailedChanges(t *testing.T) {
 	h := newHookedRead(t, false)
 	h.exit.err = errors.New("no such tracepoint")
 	if err := h.mgr.Attach("read"); err == nil {
 		t.Fatal("Attach with a failing exit tracepoint returned nil")
 	}
-	if h.calls != 1 || h.attachesSeen[0] != [2]int{0, 0} {
-		t.Fatalf("failed attach: hook ran %d times, saw %v; want once, before any attach", h.calls, h.attachesSeen)
+	if h.calls != 2 || h.attachesSeen[0] != [2]int{0, 0} || h.attachesSeen[1] != [2]int{1, 1} {
+		t.Fatalf("failed attach: hook ran %d times, saw %v; want twice, before any attach and after both attempts",
+			h.calls, h.attachesSeen)
+	}
+	if h.destroysSeen[1] != [2]int{1, 0} {
+		t.Fatalf("failed attach: second report saw %v link destroys (enter, exit), want the enter link already destroyed",
+			h.destroysSeen[1])
 	}
 
 	h = newHookedRead(t, true)
@@ -238,15 +256,15 @@ func TestFamilyBatchReportsEachProbeItChanges(t *testing.T) {
 	if err != nil || result.Changed != 1 {
 		t.Fatalf("AttachFamily(FS) = %+v, %v; want write attached", result, err)
 	}
-	if calls != 1 {
-		t.Fatalf("hook ran %d times attaching one probe (read was attached), want 1", calls)
+	if calls != 2 {
+		t.Fatalf("hook ran %d times attaching one probe (read was attached), want 2: before and after", calls)
 	}
 
 	result, err = mgr.DetachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil || result.Changed != 2 {
 		t.Fatalf("DetachFamily(FS) = %+v, %v; want read and write detached", result, err)
 	}
-	if calls != 3 {
-		t.Fatalf("hook ran %d times in all, want 3 (one attach, two detaches)", calls)
+	if calls != 4 {
+		t.Fatalf("hook ran %d times in all, want 4 (one attach reported twice, two detaches)", calls)
 	}
 }
