@@ -248,6 +248,14 @@ followed by a second row for the continuation (if that was recorded at all), whe
   if it happened shortly before (ior reads the counter once a second, and again when it is
   about to fold). A fold refused for this reason costs no row: the
   restart-code row and the continuation's row are both recorded;
+- you attached or detached syscall probes in the TUI's probes modal (`o`/`O`) after the call
+  was interrupted and before its continuation was complete. While a syscall's probes are off
+  ior cannot see a call being re-executed, and after they come back the thread's next call of
+  that syscall would look like the continuation. So every probe change, of any syscall, ends
+  the wait for all calls interrupted before it: each is recorded as its restart-code row, and
+  its continuation, if ior sees it, as a row of its own. Toggling a whole family changes its
+  probes one after the other, so nothing is folded while that runs. Calls interrupted after
+  the change are folded as usual;
 - another record of the same thread arrived between the continuation's enter and its exit.
   The fold only takes an exit that directly follows the enter; a thread's `comm` being written
   by another thread (`/proc/<pid>/task/<tid>/comm`), or the exec record of a successful
@@ -278,8 +286,6 @@ syscall takes the mark and the row stays as it was):
 - a signal handler that rewrites the saved user context to resume other code (a preemptive
   user-level thread switch), or a nested handler that leaves through `siglongjmp` into an
   outer handler;
-- the syscall's probes (for a stopped sleep: those of `restart_syscall`) are switched off and
-  on again in the TUI while a thread sits between the interruption and the continuation;
 - a debugger or tracer rewrites the registers of the interrupted call while the thread is
   stopped for the signal or at that call's syscall-exit stop, so the kernel neither restarts
   the call nor runs a handler (a `gdb` inferior function call);
@@ -303,7 +309,8 @@ are not folded.
 Because ior waits for the thread's next records to decide whether an interrupted row is
 carried on, such a row appears in the stream only when ior sees the thread's next traced
 syscall, the signal handler being delivered, or the thread's exit (for a folded call, when
-the call completes), so rows of other threads may be listed before it. For a row that
+the call completes; in the TUI also when you change probes), so rows of other threads may be
+listed before it. For a row that
 stays as it is the wait is usually microseconds, except for a stopped sleep (-516) in a
 recording that does not trace `restart_syscall`: that row appears only with the thread's next
 traced syscall or its exit, seconds later for a long sleep (see "A stopped sleep is one row").

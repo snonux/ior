@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"ior/internal/globalfilter"
 	"ior/internal/statsengine"
 	"ior/internal/types"
 )
@@ -122,6 +123,63 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 	}
 }
 
+// TestWatchProbeChangesWithARealProbeManager drives the loop's probe-change
+// hook through a real probemanager.Manager (fake attacher), with the exact
+// method value the setup passes (task o03): a probe detached and attached
+// again at runtime clears the kernel's pending restarts and moves the loop's
+// change stamp each time, and the startup attach, which ran before the loop
+// listened, is covered by the stamp taken when the hook was installed.
+func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
+	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+	mgr, err := attachSyscallProbes(attacher, nil, syscallPairNames("read"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	f := newReexecFixture(t, globalfilter.Filter{})
+	pending := &scriptedPendingClearer{}
+	f.el.restartPending = pending
+
+	f.clockAt(100)
+	f.el.watchProbeChanges(mgr.SetChangeHook)
+	if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != 100 || clears != 0 {
+		t.Fatalf("after installing the hook: stamp=%d clears=%d, want the install stamp 100 and no clear", stamp, clears)
+	}
+	for i, change := range []func(string) error{mgr.Detach, mgr.Attach} {
+		at := uint64(200 + 100*i)
+		f.clockAt(at)
+		if err := change("read"); err != nil {
+			t.Fatalf("probe change %d: %v", i, err)
+		}
+		if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != at || clears != int64(i+1) {
+			t.Fatalf("after probe change %d: stamp=%d clears=%d, want %d and %d", i, stamp, clears, at, i+1)
+		}
+	}
+}
+
+// TestSetupTraceInfraReportsProbeChangesToTheLoop pins the call that connects
+// the two, structurally like its sibling above: without it the TUI's probes
+// modal changes probes and the loop keeps folding into rows whose continuation
+// ran unseen (task o03). It must hand the loop the real manager's
+// SetChangeHook, on every setup that has a manager, before the loop can run.
+func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	watch := callsNamed(decl, "watchProbeChanges")
+	if len(watch) != 1 {
+		t.Fatalf("shared trace setup calls watchProbeChanges %d times, want exactly once", len(watch))
+	}
+	call := watch[0]
+	receiver, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector || !isIdentifier(receiver.X, "el") {
+		t.Fatal("watchProbeChanges must be called on the event loop el")
+	}
+	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook"})
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil")
+	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
+		t.Fatalf("watchProbeChanges at %s must precede the start signal", fset.Position(call.Pos()))
+	}
+}
+
 // assertRunsUnconditionallyOnceManagerExists requires call to execute on every
 // pass of the setup that has a probe manager: it must be an expression
 // statement that is either a direct statement of the function body, or the
@@ -129,9 +187,14 @@ func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
 // Any other nesting - an unsent closure (`_ = func(){...}`), go/defer, a
 // different or inverted condition such as `if false` - does not match, because
 // the statement holding the call is then not an ExprStmt of those two shapes
-// (or the guard text differs and the test fails on it).
+// (or the guard text differs and the test fails on it). The failure names the
+// method call is a call of.
 func assertRunsUnconditionallyOnceManagerExists(t *testing.T, decl *ast.FuncDecl, call *ast.CallExpr, guard string) {
 	t.Helper()
+	name := "the call"
+	if method, isSelector := call.Fun.(*ast.SelectorExpr); isSelector {
+		name = method.Sel.Name
+	}
 	isCallStatement := func(statement ast.Stmt) bool {
 		expression, ok := statement.(*ast.ExprStmt)
 		return ok && expression.X == call
@@ -153,11 +216,11 @@ func assertRunsUnconditionallyOnceManagerExists(t *testing.T, decl *ast.FuncDecl
 				t.Fatalf("render guard condition: %v", err)
 			}
 			if condition.String() != guard {
-				t.Fatalf("restrictSamplingToActive is guarded by %q, want %q", condition.String(), guard)
+				t.Fatalf("%s is guarded by %q, want %q", name, condition.String(), guard)
 			}
 			return
 		}
 	}
-	t.Fatal("restrictSamplingToActive must be a plain statement of the setup body or of an `if " + guard +
+	t.Fatal(name + " must be a plain statement of the setup body or of an `if " + guard +
 		"` directly in it, not inside a closure, go/defer, or another construct")
 }

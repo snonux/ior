@@ -1174,8 +1174,10 @@ func setupTraceInfraWithEventLoop(
 //   - Load and attach (setupTraceInfraBPF), start the runtime, build the loop.
 //   - Wire the loop: logging right after it is stored; sampling reported only
 //     for syscalls that really attached (raw modes; a no-op for the TUI, which
-//     has no tally); rename-record trust after the factory, which wires the
-//     drop counter the trust also depends on (task xr2).
+//     has no tally); the probe manager's runtime changes reported to the
+//     loop, which then keeps the restart folds off the calls interrupted
+//     before one (task o03); rename-record trust after the factory, which
+//     wires the drop counter the trust also depends on (task xr2).
 //   - Signal the start last. Nothing fallible may follow: every step above
 //     still reaches the caller through err, and in TUI mode that is the only
 //     path an error has - once started is closed the starter has already
@@ -1211,6 +1213,7 @@ func runTraceSetup(
 	wireEventLoopLogging(el, logln, warnings)
 	if infra.mgr != nil {
 		el.restrictSamplingToActive(infra.mgr.IsActive)
+		el.watchProbeChanges(infra.mgr.SetChangeHook)
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
@@ -1419,7 +1422,27 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(.
 	// Deliberately non-fatal, see attachRingbufDropCounter.
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
 	attachRingbufUnreadReader(el, bpfModule, warnSetup)
+	attachRestartPendingMap(el, bpfModule)
 	return el, nil
+}
+
+// attachRestartPendingMap gives the event loop the kernel's
+// restart_pending_map to clear when a syscall's probes are attached or
+// detached at runtime (eventLoop.probesChanged, task o03). Only this factory
+// wires it: runtime probe changes come from the TUI's probes modal, and the
+// headless Parquet run has no way to make one.
+//
+// A missing map is not reported. The object is then an IOR_BPF_OBJECT override
+// from before the restart folds, which has no restart probes either: nothing
+// in it makes a task pending or announces a continuation, so there is nothing
+// to clear and nothing the loop holds. The loop's time rule works without the
+// map in any case.
+func attachRestartPendingMap(el *eventLoop, bpfModule *bpf.Module) {
+	pending, err := newRestartPendingMap(bpfModule)
+	if err != nil {
+		return
+	}
+	el.restartPending = pending
 }
 
 // openAggregateSource opens the kernel's syscall_aggregate_map of a loaded BPF

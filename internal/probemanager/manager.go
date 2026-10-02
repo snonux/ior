@@ -62,6 +62,9 @@ type Manager struct {
 	attacher Attacher
 	probes   map[string]*probeEntry
 	closed   bool
+	// changeHook is told of every runtime change of a probe pair (see
+	// SetChangeHook); nil until someone listens.
+	changeHook func()
 }
 
 // NewManager creates a new probe manager that resolves programs via attacher.
@@ -69,6 +72,54 @@ func NewManager(attacher Attacher) *Manager {
 	return &Manager{
 		attacher: attacher,
 		probes:   make(map[string]*probeEntry),
+	}
+}
+
+// SetChangeHook registers hook to be told whenever Attach or Detach changes
+// which tracepoints of a syscall are attached, from the moment it is set (the
+// startup attaches of AttachAll normally run before anybody listens). A nil
+// hook stops the reports. Close reports nothing: it ends the session, and
+// whoever listened is being torn down with it.
+//
+// When it is called is the contract (task o03, internal/eventloop_restart.go):
+// while the syscall's enter tracepoint is NOT attached, and under the probe's
+// own attach mutex, so the opposite change of the same syscall cannot begin
+// before hook has returned.
+//
+//   - Attach calls it BEFORE it attaches anything, also when the attach then
+//     fails.
+//   - Detach calls it AFTER both links were destroyed, and only when the
+//     probe had a link to destroy. A destroy that failed is reported like one
+//     that succeeded; the tracepoint it left attached keeps seeing its
+//     syscalls, so none of them runs unseen.
+//
+// So whatever the listener notes in hook - the event loop stamps the boot
+// clock and clears the kernel's restart_pending_map - is noted after the old
+// attachment saw its last syscall and before the new one sees its first. A
+// syscall that ran unseen in between left nothing behind that is younger than
+// the note.
+//
+// hook runs on the goroutine that called Attach or Detach (in the TUI a
+// command goroutine, never the event loop) and without the manager lock, so it
+// may call back into the manager's read methods; it must not call Attach,
+// Detach or Toggle of the same syscall, whose mutex is held.
+func (m *Manager) SetChangeHook(hook func()) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.changeHook = hook
+}
+
+// reportChange calls the change hook, if one is set. The caller holds the
+// attach mutex of the probe that changes, and not the manager lock.
+func (m *Manager) reportChange() {
+	m.mu.Lock()
+	hook := m.changeHook
+	m.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 }
 
@@ -175,6 +226,9 @@ func (m *Manager) Attach(syscall string) error {
 		return nil // entry was already active
 	}
 
+	// Reported before the first tracepoint is attached (SetChangeHook): what
+	// the listener notes must be older than anything the new attachment sees.
+	m.reportChange()
 	enterLink, exitLink, attachErr := attachPair(attacher, enterTP, exitTP)
 	return m.commitAttach(syscall, enterLink, exitLink, attachErr)
 }
@@ -270,6 +324,12 @@ func (m *Manager) Detach(syscall string) error {
 	m.mu.Unlock()
 
 	errs, enterErr, exitErr := destroyLinkPair(syscall, enterLink, exitLink)
+	if enterLink != nil || exitLink != nil {
+		// Reported once the links are gone and before attachMu is released
+		// (SetChangeHook): what the listener notes is younger than anything
+		// the old attachment saw, and a re-attach cannot start before it.
+		m.reportChange()
+	}
 	return m.commitDetach(entry, enterErr, exitErr, errs)
 }
 

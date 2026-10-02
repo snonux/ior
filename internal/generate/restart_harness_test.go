@@ -56,6 +56,11 @@ var restartFunctions = []string{
 // feeds which argument and that the acting task is the current tid, not its
 // tgid (the simulated tgid is 77, a tid no scenario uses).
 //
+// "clear" is not BPF's doing: it is userspace writing 0 to every slot, which
+// the event loop does when a syscall's probes are attached or detached at
+// runtime (restartPendingMap.Clear in internal/restart_pending_map.go, task
+// o03). Its tid argument is ignored.
+//
 // Time: every "enter" passes a fresh timestamp (sim_enter_now) as the hook's
 // now, the way a generated handler passes its single clock read, and the
 // simulated clock helper returns a different value (SIM_CLOCK). A RESUME
@@ -160,6 +165,8 @@ int main(void) {
             handle_restart_sigreturn(NULL);
         } else if (!strcmp(cmd, "forget")) {
             ior_restart_forget(tid);
+        } else if (!strcmp(cmd, "clear")) {
+            memset(restart_pending_map, 0, sizeof(restart_pending_map));
         } else if (!strcmp(cmd, "slot")) {
             print_slot(tid);
             continue;
@@ -338,6 +345,24 @@ var restartScenarios = []restartScenario{
 		{"drop 0", rsNone}, {"enter 9", rsNone},
 		{"exit 9 -512 1", rsEmit1}, {"drop 1", rsNone}, {"enter 9", "lost"},
 		{"drop 0", rsNone}, {"slot 9", rsFree}, {"enter 9", rsNone},
+	}},
+	// Task o03. An entry outlives the re-execution it stands for when the
+	// re-executed enter is not seen - the syscall's probes were detached in
+	// the TUI - and the task's next traced enter, whenever it comes, is then
+	// announced: the first three steps are that stale announcement, as BPF
+	// alone cannot avoid it. Userspace therefore clears the map at every
+	// runtime probe change. A cleared slot is free whatever state it was in
+	// (waiting, or behind a restarting handler), nothing is announced for it
+	// and its handler's rt_sigreturn finds nothing to count; a call
+	// interrupted after the clear is tracked and announced as ever.
+	{name: "userspace clears the map at a probe change", steps: []restartStep{
+		{"exit 9 -512 1", rsEmit1}, {"slot 9", "tid=9 code=512 decided=0 depth=0"}, {"enter 9", rsResume},
+		{"exit 9 -512 1", rsEmit1}, {"clear 0", rsNone}, {"slot 9", rsFree}, {"enter 9", rsNone},
+		{"exit 9 -513 1", rsEmit1}, {"deliver 9 " + rsHandler + " " + rsRestart, "handler sa_restart=1"},
+		{"slot 9", "tid=9 code=513 decided=1 depth=1"}, {"clear 0", rsNone}, {"slot 9", rsFree},
+		{"sigreturn 9", rsNone}, {"slot 9", rsFree}, {"enter 9", rsNone},
+		{"exit 9 -516 1", rsEmit1}, {"clear 0", rsNone}, {"enter 9", rsNone},
+		{"exit 9 -512 1", rsEmit1}, {"slot 9", "tid=9 code=512 decided=0 depth=0"}, {"enter 9", rsResume},
 	}},
 	restartDepthScenario(),
 }

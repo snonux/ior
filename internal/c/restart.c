@@ -113,8 +113,9 @@
  * happen to be sampled in; otherwise the interrupted row keeps its restart
  * code.
  *
- * Lost records. The state in restart_pending_map is not lossy; the records
- * are. A lost RESUME means no fold. A lost HANDLER makes the handler's first
+ * Lost records. The state in restart_pending_map is not lossy (userspace
+ * clears it at a runtime probe change, see below, and nothing else takes an
+ * entry away); the records are. A lost RESUME means no fold. A lost HANDLER makes the handler's first
  * syscall release the row (for -516: whatever record of the task comes next;
  * no RESUME follows, the task was forgotten when the handler was delivered).
  * A lost announced enter is caught by the time rule.
@@ -133,6 +134,30 @@
  * re-execution; the remaining assumption is the one all of ior's record-time
  * comparisons make, that ior does not run in a time namespace with a boottime
  * offset.
+ *
+ * Runtime probe changes (task o03). Step 4 takes the task's first traced
+ * enter for the continuation, which is true only while the continuation's own
+ * enter tracepoint is attached when the kernel runs it. The TUI's probes modal
+ * detaches and attaches syscall pairs while ior runs: a read that exits -512,
+ * has read's probes switched off and is re-executed unseen leaves its entry
+ * standing, and once the probes are on again the task's next read - a call
+ * the program made itself - was announced and folded into the interrupted
+ * row. The programs here cannot know that a tracepoint was off in between,
+ * so userspace deals with it, whenever the probe manager attaches or detaches
+ * a syscall pair at runtime (internal/eventloop_restart.go, "Runtime probe
+ * changes"): it writes 0 to every slot of restart_pending_map
+ * (internal/restart_pending_map.go) - after a detach has destroyed its links,
+ * before an attach attaches any - and from then on folds nothing into a row
+ * whose interrupted exit is not younger than that moment. Either would do for
+ * the case above; the clear keeps a stale RESUME from being emitted at all,
+ * and the time rule covers what the clear cannot: it races with the programs
+ * on other CPUs, and a signal delivery or rt_sigreturn that read a slot before
+ * the clear and writes its changed word back afterwards
+ * (ior_restart_on_handler, ior_restart_on_sigreturn) keeps that one entry
+ * alive. The clear also takes the entries of calls no probe change touched;
+ * their rows are the ones userspace has just refused to fold, so nothing more
+ * is lost by it. A slot stored after the clear belongs to a call interrupted
+ * after it and is as good as any.
  *
  * Cost. The enter hook pays an inlined array lookup, one load and one compare
  * per traced syscall; the exit hook pays one range check of ret. Everything
@@ -154,6 +179,11 @@
  *     is a row of its own.
  *   - A -516 call whose restart_syscall is not traced, or is detached, has
  *     nothing to fold with.
+ *   - A call that was interrupted before a syscall's probes - any syscall's -
+ *     were last attached or detached at runtime (see "Runtime probe changes"
+ *     above): its entry is cleared and userspace refuses the fold, also when
+ *     the change had nothing to do with it. A family toggle changes one pair
+ *     after the other, so for as long as it runs nothing is folded.
  *   - The re-executed call's enter or exit is sampled out or lost, or any
  *     record at all was dropped host-wide while the row was held (above).
  *   - The 32-bit sigreturn of compat tasks is not seen; syscall tracepoints
@@ -178,10 +208,6 @@
  *   - A call is interrupted inside handler A and restarted through a nested
  *     handler B that siglongjmps back into A; A's own rt_sigreturn then
  *     closes B's depth, and the interrupted code runs on.
- *   - The syscall's probes are detached at runtime (TUI probes view) between
- *     the interrupted exit and the re-execution, and attached again later:
- *     the entry outlives the re-execution it stood for. For -516 the probes
- *     in question are restart_syscall's.
  *   - A handler that the signal_deliver probe does not see cuts a -516 call
  *     and leaves by siglongjmp (an rt_sigreturn would forget the task, see
  *     ior_restart_on_sigreturn). Userspace therefore holds -516 rows only
@@ -218,7 +244,14 @@
  *     tick of the sampled-out re-execution, is sampled in and has its exit
  *     recorded is then folded in its place.
  *
- * No longer among them: a -516 call cut by a handled signal whose handler is
+ * No longer among them: the syscall's probes (for -516: restart_syscall's)
+ * detached in the TUI between the interrupted exit and the continuation and
+ * attached again later, so that the entry outlived the continuation it stood
+ * for (task o03, "Runtime probe changes" above; an exit handler still running
+ * on another CPU when the detach returns can store an entry a few
+ * microseconds younger than the detach, which cannot announce that syscall
+ * while its probes are off and is cleared, its row refused, before they are
+ * attached again); a -516 call cut by a handled signal whose handler is
  * silent, followed by a silent stopped call (task t13, see the top of this
  * comment; the stream-only fold took that call's restart_syscall for the
  * continuation); a recycled tid inheriting the entry of a task that died

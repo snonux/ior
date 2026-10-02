@@ -134,6 +134,12 @@ type eventLoop struct {
 	// dropSrc reads the kernel-side ring-buffer drop counter. nil disables
 	// drop monitoring (tests and any path without a BPF module).
 	dropSrc ringbufDropSource
+	// restartPending clears the kernel's restart_pending_map when a syscall's
+	// probes are attached or detached at runtime (probesChanged, task o03).
+	// Set by trace setup before the loop starts; nil without a BPF module
+	// (tests) or without that map, and then only the loop's own time rule
+	// guards the restart folds against a probe change.
+	restartPending restartPendingClearer
 	// dropMonitor is the running drop monitor, published and cleared by
 	// startRingbufDropMonitor like aggregateDrainer, so a TUI recording edge
 	// can read the drop counter now (flushRecordingCounters). nil while no
@@ -298,6 +304,9 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	// "Sampling" in eventloop_restart.go); the rates are fixed for the run,
 	// so the tracker is told once, here.
 	el.restarts.restartSyscallSampled = restartSyscallSampled(cfg.aggregateIngestTraceIDs)
+	// One slot: a runtime probe change wakes the loop once, however many
+	// probes changed before it looks (restartProbeWatch, task o03).
+	el.restarts.probes.wake = make(chan struct{}, 1)
 	el.SetFilter(cfg.filter)
 	el.initRawHandlers()
 	el.initRuntimeEventKinds()

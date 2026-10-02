@@ -3,8 +3,10 @@ package internal
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"ior/internal/event"
 	"ior/internal/types"
@@ -184,6 +186,78 @@ import (
 // holds no row and is not pending in BPF (ior_restart_on_exit takes emitted
 // exits only), so its restart_syscall is a row of its own.
 //
+// Runtime probe changes (task o03). BPF takes a task's first traced enter
+// after an interrupted exit for the continuation, and that holds only while
+// the continuation's own enter tracepoint is attached when the kernel runs it.
+// The TUI's probes modal detaches and attaches syscall pairs while the loop
+// runs. A read that exits -512, has its probes switched off, is re-executed
+// unseen and returns, leaves the task pending in BPF for as long as the probes
+// stay off; switched on again, the task's next read - a call the program made
+// itself, minutes later - is announced, enter and exit arrive in order, and it
+// was folded into the row still held here. The same went for a -516 row and
+// the probes of restart_syscall.
+//
+// So the probe manager reports every runtime change of a syscall pair
+// (probemanager.Manager.SetChangeHook, wired by watchProbeChanges), at a
+// moment when that syscall's enter tracepoint is not attached: after a
+// detach, before an attach, and before the opposite change of that syscall
+// can begin. On each report (probesChanged, on the goroutine that changed the
+// probe):
+//
+//   - restart_pending_map is cleared (restartPendingMap.Clear), so no entry
+//     made before the change announces anything after it;
+//   - the boot clock is read and kept as the time of the latest change
+//     (restartProbeWatch), and from then on no row interrupted at or before
+//     that time is folded or held: holdable refuses it, and a row already held
+//     is released at the two steps that commit to a fold, RESUME and the
+//     continuation's exit (restartAcrossProbeChange), exactly where a possible
+//     lost record refuses it;
+//   - the loop is woken (processRawEvents) and releases the rows it holds from
+//     before the change, each as the row it was, the continuation's enter of a
+//     row in restartContinuing parked again like on any release
+//     (releaseRestartsBehindProbeChange). That is only promptness: such a row
+//     can no longer fold, and without the wake it would wait for its tid's
+//     next record, which a stopped task may not produce for a long time.
+//
+// The time rule is the one that carries the proof, because it does not depend
+// on how far behind the ring buffer the loop is. A record of a stale entry -
+// the RESUME ahead of the program's own call - is reserved after the probes
+// were attached again, so after the detach's stamp was stored, and the loop
+// reads the stamp when it processes that record: the row it would have folded
+// was interrupted before the stamp, wherever the loop stood when the probes
+// changed. A snapshot of "the rows held when the change was noticed" would not
+// do: a loop still working through a backlog notices the change before it has
+// even read the interrupted exit, holds the row afterwards, and folds. The
+// clear of the map is the second line: with it the stale RESUME is not emitted
+// in the first place, which also covers a record time and a userspace clock
+// reading that cannot be compared (a time namespace with a boottime offset,
+// the assumption bootClockNs makes everywhere).
+//
+// The rule is deliberately coarse. Any pair's change refuses every row
+// interrupted before it, of any syscall and any task: a family toggle is a
+// rare, manual act, the refused folds cost no row (the interrupted row and the
+// continuation's row, as before the folds existed), and telling which rows a
+// change of which syscall can have touched means knowing the attached set at
+// every instant of the stream the loop has yet to read. The hand-attached
+// probes (signal_deliver, sched_process_exit, the restart fold's rt_sigreturn
+// program) are attached for the whole session and never report; the syscall
+// probe of rt_sigreturn does, like any pair. The first stamp is taken when the
+// hook is installed (watchProbeChanges): the TUI is handed the probe manager
+// before the loop exists, and a change it makes in between is reported to
+// nobody.
+//
+// Why an attach reports as well, and before it attaches anything: the
+// detach's stamp can miss an entry. An exit handler that is still running on
+// another CPU when the link's destruction returns (the kernel need not wait
+// for a grace period there when another perf event keeps the tracepoint
+// registered) makes its task pending with an exit stamped microseconds AFTER
+// the detach's stamp and clear. Its re-execution goes unseen like any other.
+// While the probes are off that entry cannot announce a call of the same
+// syscall, and the attach's report clears it and stamps past its row before
+// the enter tracepoint is back. The same report covers a detach that failed
+// half-way and left the exit tracepoint attached, still making entries, with
+// the enter tracepoint gone.
+//
 // The decision rules (heldRestart.phase records where a held row stands):
 //
 //   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent, in
@@ -192,7 +266,8 @@ import (
 //     parked here instead of being completed (tracepointExited). Its exit
 //     handler, derived values and pair filter all wait for the outcome. At
 //     most maxHeldRestarts rows are held; beyond that the row is completed at
-//     once, unfolded.
+//     once, unfolded. A row interrupted at or before the latest runtime probe
+//     change is not held either ("Runtime probe changes" above).
 //   - Handler: a HANDLER control record says a user handler runs for the
 //     interrupted call. If the call survives it by the rules above
 //     (restartSurvivesHandler, -513 and -512 with SA_RESTART; BPF applied the
@@ -229,14 +304,16 @@ import (
 //     the phase) first completes the held row unchanged, then is processed
 //     normally. So does a RESUME record or a
 //     continuation's exit that arrives after the kernel may have dropped
-//     records (see "Lost records" above), and an exit of the tid with a
+//     records (see "Lost records" above) or for a row interrupted before the
+//     syscall probes last changed, and an exit of the tid with a
 //     restart code while its handler runs, paired or not: BPF tracks the
 //     latest interrupted call of a task, so the row it could announce a
 //     re-execution for is no longer this one (stepHandlerRecord). A paired
 //     one is then held in the row's place (when there is room, holdRestart).
 //     At the end of the run every held row is completed too
-//     (releaseAllHeldRestarts). No held row is lost: it is either folded or
-//     emitted as it was.
+//     (releaseAllHeldRestarts), and at a runtime probe change every row
+//     interrupted before it (releaseRestartsBehindProbeChange). No held row
+//     is lost: it is either folded or emitted as it was.
 //   - One release is not triggered by a record of the held tid, because there
 //     is none: a non-leader thread that execs continues under the leader's
 //     tid, gets no exit record under its old one, and is never heard of under
@@ -337,6 +414,62 @@ type restartTracker struct {
 	// was held. Both folds ask it (restartProofLost); it stays at its zero
 	// value in a run without a drop counter, where nobody asks.
 	drops restartDropWatch
+	// probes knows when a syscall's probes were last attached or detached at
+	// runtime, which is what refuses the rows interrupted before that
+	// ("Runtime probe changes" in the file comment). It stays at its zero
+	// value - no change, nothing refused - in a run nobody changes probes in.
+	probes restartProbeWatch
+}
+
+// restartProbeWatch answers "were syscall probes attached or detached at
+// runtime at or after the boot-clock time `since`?" (task o03; see "Runtime
+// probe changes" in the file comment). since is the time of a row's
+// interrupted exit. A change at or after it means the row's continuation may
+// have run while its tracepoints were off, and BPF's pending entry for the
+// task - cleared at the change, should the clear have failed or lost a race -
+// may stand for a re-execution that is long over.
+//
+// It is written by the goroutine that changes a probe (eventLoop.probesChanged,
+// through the probe manager's change hook) and read by the event loop, hence
+// the atomic and the channel; the tracker's other state belongs to the loop
+// alone and is not touched from there.
+type restartProbeWatch struct {
+	// changedAt is the boot-clock reading taken at the latest change: after
+	// the detach it reports had destroyed its links, or before the attach it
+	// reports attached any. 0 means no change was reported.
+	changedAt atomic.Uint64
+	// wake tells the loop that changedAt moved, so it releases the rows held
+	// from before without waiting for a record (processRawEvents). One slot:
+	// the loop reads changedAt when it wakes, so a second change before then
+	// needs no second token. nil in a loop built without newEventLoop, which
+	// is then never woken and still refuses by time.
+	wake chan struct{}
+	// clearFailed remembers that a failed clear of restart_pending_map was
+	// reported, so a family toggle that fails a hundred times warns once.
+	clearFailed atomic.Bool
+}
+
+// note records a probe change stamped at (a boot-clock reading) and wakes the
+// loop. The stamp only moves forward: two probes changed at once report from
+// two goroutines, and the later reading must not be overwritten by the earlier
+// one, or the rows interrupted between the two would fold again.
+func (w *restartProbeWatch) note(at uint64) {
+	for {
+		seen := w.changedAt.Load()
+		if at <= seen || w.changedAt.CompareAndSwap(seen, at) {
+			break
+		}
+	}
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// changedSince reports whether a probe change was noted at or after since.
+func (w *restartProbeWatch) changedSince(since uint64) bool {
+	at := w.changedAt.Load()
+	return at != 0 && at >= since
 }
 
 // restartDropWatch answers "may the kernel have dropped a ring-buffer record
@@ -556,11 +689,19 @@ func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
 // restart_syscall continuations (restartBlock), or - when it proves
 // re-executions - any exit carrying -512/-513/-514. A run that samples
 // restart_syscall parks no -516 row either ("Sampling" in the file comment).
+// A row interrupted at or before the latest runtime probe change is not parked
+// at all: nothing may be folded into it any more ("Runtime probe changes" in
+// the file comment), so holding it would only delay it. The loop reaches such
+// a row when it lags behind the ring buffer, or when a fold ends in a restart
+// code again with a probe change behind it.
 // The bound is checked against the rows held now, so a caller that replaces a
 // tid's row releases that row first (holdRestart).
 func (r *restartTracker) holdable(ep *event.Pair) bool {
 	ret, ok := restartRetOf(ep)
 	if !ok || len(r.held) >= maxHeldRestarts {
+		return false
+	}
+	if r.probes.changedSince(ep.ExitEv.GetTime()) {
 		return false
 	}
 	if event.IsRestartBlockRet(ret) {
@@ -658,8 +799,19 @@ func (h *heldRestart) reexecutesExecOf(exit *types.RetEvent) bool {
 // takeAll removes every held row and returns them oldest exit first, so the
 // rows released at the end of a run keep their completion order.
 func (r *restartTracker) takeAll() []*heldRestart {
+	return r.takeInterruptedBy(math.MaxUint64)
+}
+
+// takeInterruptedBy removes the held rows whose interrupted exit is stamped at
+// or before at and returns them oldest exit first. For a row folded once and
+// interrupted again that exit is the continuation's (foldRestartExit), so the
+// row is judged by its latest interruption, as the drop watch judges it.
+func (r *restartTracker) takeInterruptedBy(at uint64) []*heldRestart {
 	rows := make([]*heldRestart, 0, len(r.held))
 	for tid, held := range r.held {
+		if held.pair.ExitEv.GetTime() > at {
+			continue
+		}
 		rows = append(rows, held)
 		delete(r.held, tid)
 	}
@@ -859,7 +1011,7 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 		return false
 	}
 	action := held.step(rawEvent.direction, ev)
-	if e.restartProofLost(held, action) {
+	if e.restartAcrossProbeChange(held, action) || e.restartProofLost(held, action) {
 		action = restartRelease
 	}
 	switch action {
@@ -957,8 +1109,22 @@ func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bo
 	return e.restarts.drops.lostSince(held.pair.ExitEv.GetTime(), e.dropSrc, e.readDropStampClock)
 }
 
+// restartAcrossProbeChange reports whether a step towards a fold must be
+// refused because syscall probes were attached or detached at runtime since
+// the interrupted exit ("Runtime probe changes" in the file comment): the
+// continuation may have run unseen, and what BPF announces now, or the exit
+// that arrives now, may belong to a later call of the task. It is asked at the
+// steps restartProofLost is asked at, for the same reasons, and costs one
+// atomic load there. The woken loop releases such a row on its own
+// (releaseRestartsBehindProbeChange); this is what holds when the record
+// reaches the loop first, and for a row the loop held only after the change.
+func (e *eventLoop) restartAcrossProbeChange(held *heldRestart, action restartAction) bool {
+	return commitsToFold(action) && e.restarts.probes.changedSince(held.pair.ExitEv.GetTime())
+}
+
 // commitsToFold reports whether action is a step at which a fold asks for
-// proof that no record was lost: the record that announces the continuation
+// proof that it still stands - no record lost (restartProofLost), no probe
+// changed (restartAcrossProbeChange): the record that announces the continuation
 // (RESUME) and the continuation's exit. The announced enter between them is
 // not such a step: RESUME, which names it by time, was asked just before it.
 func commitsToFold(action restartAction) bool {
@@ -1173,8 +1339,65 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 	}
 }
 
-// releaseTakenRestartSafe releases one held row at the end of the run, turning
-// a panic in its exit handler into a warning.
+// watchProbeChanges makes the loop listen to runtime probe changes (trace
+// setup, before the loop starts): listen is the probe manager's SetChangeHook.
+// The stamp taken right after is the first change as far as the loop knows.
+// The TUI is handed the probe manager before the loop exists, so a probe it
+// switched off and on in between was reported to nobody; calls interrupted
+// before this point are not folded, and they are the calls of the few
+// milliseconds between the probe attach and the end of setup.
+func (e *eventLoop) watchProbeChanges(listen func(hook func())) {
+	listen(e.probesChanged)
+	e.restarts.probes.note(e.readDropStampClock())
+}
+
+// probesChanged is the probe manager's change hook
+// (probemanager.Manager.SetChangeHook): a syscall's probes are about to be
+// attached, or were just detached, at runtime. It runs on the goroutine that
+// changes the probe - never on the loop's - while that syscall's enter
+// tracepoint is not attached, and touches only what is safe from there: the
+// BPF map, the watch's atomics and channel, and the warning sink the drop
+// monitor's goroutine reports through as well.
+//
+// The map is cleared before the clock is read, so every entry the clear
+// removed was made before the stamp, and the row it stood for is refused by
+// time as well: the two never disagree about a row. A clear that fails is
+// reported once and changes nothing else - the time rule does not depend on
+// it. Without a map to clear (restartPending nil: tests, and an object
+// override that has no restart probes and so announces nothing) only the
+// stamp is taken.
+func (e *eventLoop) probesChanged() {
+	if e.restartPending != nil {
+		if err := e.restartPending.Clear(); err != nil && e.restarts.probes.clearFailed.CompareAndSwap(false, true) {
+			e.notifyWarningOrLog(fmt.Sprintf(
+				"Could not clear the kernel's pending syscall restarts after a probe change (interrupted calls from before it stay unfolded all the same): %v", err))
+		}
+	}
+	e.restarts.probes.note(e.readDropStampClock())
+}
+
+// releaseRestartsBehindProbeChange releases, in the woken loop, every held row
+// that was interrupted at or before the latest runtime probe change: none of
+// them can fold any more (restartAcrossProbeChange), so they are emitted now,
+// unchanged and oldest exit first, instead of each waiting for its tid's next
+// record. A continuation enter taken for a fold is parked again as on any
+// release, and its exit then pairs with it as a row of its own. Rows
+// interrupted after the change stay held: their fold is as sound as any.
+// Like releaseAllHeldRestarts it runs outside processRawEventSafe, emits each
+// row before the next is completed and recovers a handler panic per row.
+func (e *eventLoop) releaseRestartsBehindProbeChange(pairs chan *event.Pair) {
+	if len(e.restarts.held) == 0 {
+		return
+	}
+	for _, held := range e.restarts.takeInterruptedBy(e.restarts.probes.changedAt.Load()) {
+		e.releaseTakenRestartSafe(held, pairs)
+		e.drainPairs(pairs)
+	}
+}
+
+// releaseTakenRestartSafe releases one held row outside the per-record path -
+// at the end of the run, or at a runtime probe change - turning a panic in its
+// exit handler into a warning.
 func (e *eventLoop) releaseTakenRestartSafe(held *heldRestart, pairs chan<- *event.Pair) {
 	defer func() {
 		if r := recover(); r != nil {

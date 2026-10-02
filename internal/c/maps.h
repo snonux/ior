@@ -146,6 +146,11 @@ struct {
 // slot: the later interrupted exit evicts the earlier one, whose call is then
 // simply not folded. One word per slot makes every update a single store, so
 // a slot never mixes one task's tid with another task's state.
+//
+// Userspace writes it too: it stores 0 in every slot whenever a syscall's
+// probes are attached or detached at runtime, because an entry cannot tell
+// that its continuation ran while the tracepoints were off (task o03,
+// "Runtime probe changes" in restart.c; internal/restart_pending_map.go).
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 4096);

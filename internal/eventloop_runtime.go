@@ -285,6 +285,12 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 		select {
 		case <-flush.C():
 			flush.fire()
+		case <-e.restarts.probes.wake:
+			// A syscall's probes were attached or detached at runtime: the
+			// rows held from before can no longer fold and are emitted now
+			// (task o03, "Runtime probe changes" in eventloop_restart.go).
+			e.releaseRestartsBehindProbeChange(pairs)
+			flush.armIfPending()
 		case raw, ok := <-rawCh:
 			if !ok {
 				e.releaseAllHeldRestarts(pairs)
