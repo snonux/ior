@@ -76,8 +76,9 @@ type Pair struct {
 	// at all. 0 for every other pair, including one that kept its restart code
 	// because the fold was refused, and for the continuation's own pair then.
 	// A count and a restart code can stand together: the pair was carried on
-	// N times and the hop after its last interruption was refused. It
-	// saturates at 255 (NoteRestart).
+	// N times, was interrupted again and was not provably continued after
+	// that (the program got EINTR, the next fold was refused, or the trace
+	// ended). It saturates at 255 (NoteRestart).
 	Restarts uint8
 	Bytes    uint64 // Number of bytes transferred (read/write/transfer syscalls only)
 	// AddressSpaceBytes is the virtual address space a memory syscall added,

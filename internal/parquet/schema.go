@@ -70,11 +70,12 @@ type Record struct {
 	// stopped with -516 and each re-execution after -512/-513/-514 counts one,
 	// saturating at 255. Such a row holds the call's final return, so this
 	// column is what tells it from an uninterrupted call. 0 for every other
-	// row; a row folded N times and then interrupted once more with that hop
-	// refused has both a count and a restart code in ret. It is the last
-	// column on purpose: columns are only appended, and a
-	// recording made before it simply has no such column (readers that select
-	// by name see it as missing, parquet-go fills in 0).
+	// row; a row folded N times, interrupted once more and not provably
+	// continued after that (EINTR, a refused fold, the end of the trace) has
+	// both a count and a restart code in ret. It is the last column on
+	// purpose: columns are only appended, and a recording made before it
+	// simply has no such column (readers that select by name see it as
+	// missing, parquet-go fills in 0).
 	Restarts uint8 `parquet:"restarts"`
 }
 

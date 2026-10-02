@@ -55,9 +55,10 @@ type Row struct {
 	// (event.Pair.Restarts): restart_syscall continuations of a stopped call
 	// and re-executions after a signal. 0 for a call that was not interrupted
 	// and for one whose restart was not folded (its RetVal is then the restart
-	// code). A row whose later hop was refused carries both a count and a
-	// restart code. Data outputs carry it (Parquet, the stream CSV export);
-	// the Stream tab does not show it.
+	// code). A row that was carried on, interrupted again and not provably
+	// continued after that carries both a count and a restart code. Data
+	// outputs carry it (Parquet, the stream CSV export); the Stream tab does
+	// not show it.
 	Restarts uint8
 	FD       int32
 	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
