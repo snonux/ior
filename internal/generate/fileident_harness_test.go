@@ -19,9 +19,14 @@ import (
 // Each property is also checked against a mutated helper, so the suite is
 // shown to catch the regression it is for.
 //
-// What a host build cannot show is that the BPF verifier accepts the walk;
-// the integration tests load the real object and compare its identities with
-// stat(2) (integrationtests/fileident_test.go).
+// What a host build cannot show is that the BPF verifier accepts the walk
+// and that the identities it reports are the right ones on a real kernel.
+// The integration tests load the real object and check the latter by what it
+// leads to, not by comparing numbers: rows on a descriptor that io_uring
+// rebound behind the trace follow the new file, and writes to a descriptor
+// that was closed and reused are never named after the reuser
+// (integrationtests/fileident_test.go). Neither happens with identities that
+// are absent or wrong, as the controls with the capture off show.
 
 // fileIdentHarnessTemplate wraps fileident.c (the %s verb). The kernel types
 // are cut down to the fields the walk reads. The simulated table has 8
@@ -173,6 +178,8 @@ var fileIdentGateCases = []fileIdentCase{
 	{name: "kernel without the kfunc", noKfunc: true, value: 0, want: fileIdentNoWalk},
 	{name: "kernel without struct kiocb", noKiocb: true, value: 0, want: fileIdentNoWalk},
 	{name: "ki_filp moved off offset 0", slotOffset: 8, value: 0, want: fileIdentNoWalk},
+	// A second offset, so that the gate is "at 0", not "anywhere but 8".
+	{name: "ki_filp moved to offset 16", slotOffset: 16, value: 0, want: fileIdentNoWalk},
 	{name: "returned descriptor", ret: true, value: 5, want: "ident=55" + fileIdentWalked},
 	{name: "failed call", ret: true, value: -9, want: fileIdentNoWalk},
 	{name: "return value that is no descriptor", ret: true, value: 1 << 32, want: fileIdentNoWalk},
@@ -215,6 +222,8 @@ var fileIdentMutations = []fileIdentMutation{
 	{"missing kiocb type ignored", " && bpf_core_type_id_kernel(struct kiocb) != 0", "", "kernel without struct kiocb"},
 	{"moved slot member ignored", " &&\n           bpf_core_field_offset(struct kiocb, ki_filp) == 0", "",
 		"ki_filp moved off offset 0"},
+	{"slot member refused at one offset only", "bpf_core_field_offset(struct kiocb, ki_filp) == 0",
+		"bpf_core_field_offset(struct kiocb, ki_filp) != 8", "ki_filp moved to offset 16"},
 	{"slot cast to another type", "slot = bpf_rdonly_cast(fds + fd, bpf_core_type_id_kernel(struct kiocb));",
 		"slot = bpf_rdonly_cast(fds + fd, 1);", "first descriptor"},
 	{"wide return value truncated to a descriptor", "    if (ret < 0 || ret > 0x7fffffff)", "    if (ret < 0)",

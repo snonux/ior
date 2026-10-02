@@ -143,24 +143,71 @@ func TestIouringReopenWithoutFileIdentityKeepsTheOpenedName(t *testing.T) {
 // kernel's identity and procfs's agree for a regular file.
 func TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe(t *testing.T) {
 	requireFileIdentCapture(t)
-	rows, _ := runParquetScenarioRows(t, "close-untracked", defaultDuration, nil, nil)
+	rows := closeUntrackedRows(t)
 
-	var writes, named int
-	for _, row := range rows {
-		if row.Syscall != "write" {
-			continue
-		}
-		writes++
-		if strings.Contains(row.File, "pipe") {
-			t.Errorf("write to fd %d is named after the pipe that reused the number: %q", row.FD, row.File)
-		}
-		if strings.Contains(row.File, "closeuntracked-") {
-			named++
-		}
+	writes, named, afterPipe := closeUntrackedWriteNames(t, rows)
+	if afterPipe != 0 {
+		t.Errorf("%d of %d writes are named after the pipe that reused their number", afterPipe, writes)
 	}
 	if writes < 64 || named < 1 {
 		t.Errorf("%d write rows, %d named after their file; want >= 64 rows and the first one named", writes, named)
 		logRowSummary(t, rows)
 	}
 	assertCloseUntrackedRows(t, rows)
+}
+
+// closeUntrackedRows runs the close-untracked scenario with iorEnv added to
+// ior's environment and returns its rows.
+func closeUntrackedRows(t *testing.T, iorEnv ...string) []iorparquet.Record {
+	t.Helper()
+	enableParallelIfRequested(t)
+	h := newTestHarness(t)
+	h.IorEnv = iorEnv
+	path, pid, err := h.RunParquetWithIorArgs("close-untracked", defaultDuration, nil)
+	if err != nil {
+		t.Fatalf("run parquet scenario close-untracked: %v", err)
+	}
+	rows := readParquetRecords(t, path)
+	assertParquetRowsOwnedBy(t, rows, uint32(pid), "ioworkload")
+	return rows
+}
+
+// closeUntrackedWriteNames counts the scenario's write rows: all of them,
+// those named after the file they wrote, and those named after a pipe (the
+// file that took the number afterwards; each is logged).
+func closeUntrackedWriteNames(t *testing.T, rows []iorparquet.Record) (writes, named, afterPipe int) {
+	t.Helper()
+	for _, row := range rows {
+		if row.Syscall != "write" {
+			continue
+		}
+		writes++
+		if strings.Contains(row.File, "pipe") {
+			afterPipe++
+			t.Logf("write to fd %d is named after the pipe that reused the number: %q", row.FD, row.File)
+		}
+		if strings.Contains(row.File, "closeuntracked-") {
+			named++
+		}
+	}
+	return writes, named, afterPipe
+}
+
+// TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe is
+// the control of the test above: with the capture switched off the same run
+// shows task yz2's defect, writes reported on the pipe that took the number
+// after them. It proves that the test above passes because the answers are
+// checked against the identity, not because the workload stopped racing the
+// event loop. The race is the workload's whole design (a write, at once the
+// close, at once a pipe, 63 times over) and ior reads procfs when it gets to
+// the row, so one wrongly named write among them is all the control asks for.
+func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *testing.T) {
+	rows := closeUntrackedRows(t, "IOR_FILE_IDENT=0")
+
+	writes, _, afterPipe := closeUntrackedWriteNames(t, rows)
+	if writes < 64 || afterPipe < 1 {
+		t.Errorf("%d write rows, %d named after the reusing pipe; want >= 64 rows and at least one such write with the capture off",
+			writes, afterPipe)
+		logRowSummary(t, rows)
+	}
 }
