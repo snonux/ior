@@ -246,6 +246,17 @@
  *     had interrupted the call).
  *   - A kernel or driver bug lets -ERESTARTSYS escape with no signal pending:
  *     nothing restarts, the program sees errno 512 and carries on.
+ *   - The continuation's probes are attached at runtime while the call is
+ *     pending, in a run whose clock readings are older than the record times
+ *     they are compared with: ior inside a time namespace whose boottime
+ *     offset it could not determine (it warns, and assumes none) and that is
+ *     in fact negative. The time rule of "Runtime probe changes" above then
+ *     misses a row interrupted during the attach. The entry of a call that
+ *     was interrupted and continued before the enter tracepoint was attached
+ *     announces the task's next enter of that syscall, and userspace folds
+ *     it if it reads those records only when the attach is over: while the
+ *     attach is in flight it folds nothing, whatever the clocks say
+ *     (internal/eventloop_restart.go, "What is left open").
  *
  * A time rule that cannot tell: RESUME is right. Here the kernel did
  * re-execute the call and the entry was cleared when it should be, but the
@@ -276,7 +287,8 @@
  * restart_syscall's probes: userspace learns that the attach is over only
  * when the attach call has returned, so from the first report to the second
  * it counts the attach as in flight and neither holds the row nor folds (task
- * x13); a -516 call cut by a handled signal whose
+ * x13; what a clock that cannot be compared leaves of this is the last entry
+ * of the list above); a -516 call cut by a handled signal whose
  * handler is silent, followed by a silent stopped call (task t13, see the top
  * of this comment; the stream-only fold took that call's restart_syscall for the
  * continuation); a recycled tid inheriting the entry of a task that died

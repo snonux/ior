@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"ior/internal/parkwait"
 	"ior/internal/types"
@@ -18,6 +19,43 @@ import (
 // opposite change of the same syscall can begin. The tests below observe the
 // fake programs and links from inside the hook, which is the only place that
 // order can be seen.
+
+// changeWait bounds every wait of these tests for something that must happen.
+// The manager's locks decide whether it does: with a wrong order a call never
+// returns, and the test then says which one instead of running into the test
+// binary's timeout ten minutes later. It is not a synchronisation guess - a
+// passing run takes what it waits for as soon as it is there.
+const changeWait = 10 * time.Second
+
+// awaitWithin receives from ch (a closed channel counts) and fails the test,
+// naming what did not happen, when nothing arrives within changeWait. Call it
+// on the test goroutine.
+func awaitWithin[T any](t *testing.T, ch <-chan T, notDone string) T {
+	t.Helper()
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(changeWait):
+		t.Fatalf("%s within %v", notDone, changeWait)
+		panic("unreachable")
+	}
+}
+
+// removeHookDuringAChange removes the manager's hook while a change of read
+// is under way and holds the probe's attach mutex. Removing a hook waits for
+// no change (SetChangeHook). One that waited as setting a hook does would
+// wait for that change, which in these tests waits for the caller: so the
+// removal runs on a goroutine of its own and must return while the change is
+// held.
+func (h *hookedRead) removeHookDuringAChange(t *testing.T) {
+	t.Helper()
+	removed := make(chan struct{})
+	go func() {
+		defer close(removed)
+		h.mgr.SetChangeHook(nil)
+	}()
+	awaitWithin(t, removed, "removing the hook did not return while a change was under way")
+}
 
 // hookedRead is a manager with one registered syscall, read, whose two
 // programs hand out one link each, and a hook that counts its calls and
@@ -230,11 +268,11 @@ func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 	})
 	detached := make(chan error, 1)
 	go func() { detached <- h.mgr.Detach("read") }()
-	<-inHook
+	awaitWithin(t, inHook, "Detach did not report to the hook")
 
 	const frame = "(*Manager).Attach"
 	baseline := parkwait.Count(frame, parkwait.MutexLock, parkwait.Semacquire)
-	h.mgr.SetChangeHook(nil) // the attach below reports nothing; it must still wait
+	h.removeHookDuringAChange(t) // the attach below reports nothing; it must still wait
 	attached := make(chan error, 1)
 	go func() { attached <- h.mgr.Attach("read") }()
 	parkwait.Await{Frame: frame, Reasons: []string{parkwait.MutexLock, parkwait.Semacquire}, Baseline: baseline,
@@ -244,10 +282,10 @@ func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 	}
 
 	close(leaveHook)
-	if err := <-detached; err != nil {
+	if err := awaitWithin(t, detached, "Detach did not return after its hook did"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
-	if err := <-attached; err != nil {
+	if err := awaitWithin(t, attached, "Attach did not return after the detach"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	if got := h.enter.attachCalls(); got != 2 {
@@ -306,9 +344,10 @@ func TestChangeEndsFollowsAnAttachThatPanics(t *testing.T) {
 // TestChangeEndsReachesTheHookThatWasToldOfTheBegin: the two reports of an
 // attach go to one listener. A hook removed while the attach runs still gets
 // the end - it counted the begin - and nobody else does.
+// The hook is removed from inside the attach (removeHookDuringAChange).
 func TestChangeEndsReachesTheHookThatWasToldOfTheBegin(t *testing.T) {
 	h := newHookedRead(t, false)
-	h.enter.onAttach = func() { h.mgr.SetChangeHook(nil) }
+	h.enter.onAttach = func() { h.removeHookDuringAChange(t) }
 	if err := h.mgr.Attach("read"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -323,23 +362,50 @@ func TestChangeEndsReachesTheHookThatWasToldOfTheBegin(t *testing.T) {
 	}
 }
 
-// attachUnderWay starts an Attach of read on a goroutine of the caller's and
-// returns once it is inside the enter tracepoint's attach, after its begin was
-// reported. finish lets the attach go on and returns what it returned.
-func (h *hookedRead) attachUnderWay(t *testing.T) (finish func() error) {
+// underWay starts change, an Attach or a Detach of read, on a goroutine of
+// the caller's and returns once the change is held inside the fake whose hook
+// gate points to (a program's onAttach, a link's onDestroy), which the change
+// must call once. finish lets it go on and returns what it returned.
+func underWay(t *testing.T, gate *func(), change func() error) (finish func() error) {
 	t.Helper()
-	inAttach, leaveAttach := make(chan struct{}), make(chan struct{})
-	h.enter.onAttach = func() {
-		close(inAttach)
-		<-leaveAttach
+	inside, leave := make(chan struct{}), make(chan struct{})
+	*gate = func() {
+		close(inside)
+		<-leave
 	}
-	attached := make(chan error, 1)
-	go func() { attached <- h.mgr.Attach("read") }()
-	<-inAttach
+	result := make(chan error, 1)
+	go func() { result <- change() }()
+	awaitWithin(t, inside, "the change did not reach the fake it was to be held in")
 	return func() error {
-		close(leaveAttach)
-		return <-attached
+		t.Helper()
+		close(leave)
+		return awaitWithin(t, result, "the change did not return after its fake let it go")
 	}
+}
+
+// setHookDuring sets a hook while a change of read is under way and requires
+// SetChangeHook to wait for it: parked on the probe's attach mutex until
+// finish has let the change end, and returned after that. It returns what the
+// new hook is told, then and later.
+func (h *hookedRead) setHookDuring(t *testing.T, finish func() error) *[]ChangePhase {
+	t.Helper()
+	const frame = "(*probeEntry).awaitChange"
+	baseline := parkwait.Count(frame, parkwait.MutexLock, parkwait.Semacquire)
+	told := new([]ChangePhase)
+	installed := make(chan struct{})
+	go func() {
+		defer close(installed)
+		h.mgr.SetChangeHook(func(phase ChangePhase) { *told = append(*told, phase) })
+	}()
+	parkwait.Await{Frame: frame, Reasons: []string{parkwait.MutexLock, parkwait.Semacquire}, Baseline: baseline,
+		Done: installed, DoneMsg: "SetChangeHook returned while a change was under way",
+		TimeoutMsg: "SetChangeHook did not wait for the change under way"}.Run(t)
+
+	if err := finish(); err != nil {
+		t.Fatalf("the change under way: %v", err)
+	}
+	awaitWithin(t, installed, "SetChangeHook did not return after the change under way was over")
+	return told
 }
 
 // TestSetChangeHookWaitsForAnAttachUnderWay: an attach that began before a
@@ -349,34 +415,43 @@ func (h *hookedRead) attachUnderWay(t *testing.T) (finish func() error) {
 // everything before, and every later change reports to it from its begin.
 func TestSetChangeHookWaitsForAnAttachUnderWay(t *testing.T) {
 	h := newHookedRead(t, false)
-	finish := h.attachUnderWay(t)
+	finish := underWay(t, &h.enter.onAttach, func() error { return h.mgr.Attach("read") })
+	later := h.setHookDuring(t, finish)
 
-	const frame = "(*probeEntry).awaitChange"
-	baseline := parkwait.Count(frame, parkwait.MutexLock, parkwait.Semacquire)
-	var later []ChangePhase
-	installed := make(chan struct{})
-	go func() {
-		defer close(installed)
-		h.mgr.SetChangeHook(func(phase ChangePhase) { later = append(later, phase) })
-	}()
-	parkwait.Await{Frame: frame, Reasons: []string{parkwait.MutexLock, parkwait.Semacquire}, Baseline: baseline,
-		TimeoutMsg: "SetChangeHook did not wait for the attach under way"}.Run(t)
-
-	if err := finish(); err != nil {
-		t.Fatalf("Attach: %v", err)
-	}
-	<-installed
 	if !slices.Equal(h.phases, []ChangePhase{ChangeBegins, ChangeEnds}) {
 		t.Fatalf("the earlier hook was told %v of the attach it saw begin, want its begin and its end", h.phases)
 	}
-	if len(later) != 0 {
-		t.Fatalf("the hook set during the attach was told %v, want nothing of an attach whose begin it missed", later)
+	if len(*later) != 0 {
+		t.Fatalf("the hook set during the attach was told %v, want nothing of an attach whose begin it missed", *later)
 	}
 	if err := h.mgr.Detach("read"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
-	if !slices.Equal(later, []ChangePhase{Changed}) || h.calls != 2 {
+	if !slices.Equal(*later, []ChangePhase{Changed}) || h.calls != 2 {
 		t.Fatalf("the detach was reported as %v to the new hook and the earlier one ran %d times, want Changed and 2",
-			later, h.calls)
+			*later, h.calls)
+	}
+}
+
+// TestSetChangeHookWaitsForADetachUnderWay: a detach reports once, when its
+// links are gone, to the hook that is set at that moment. One that is still
+// destroying its links when a hook is set therefore reports to the new hook -
+// but a detach that had just made its report to the earlier hook, or to
+// nobody, looks the same to the caller, who is about to take note of
+// everything before the install. So setting a hook waits for a detach under
+// way as it does for an attach, and returns when the detach is over.
+func TestSetChangeHookWaitsForADetachUnderWay(t *testing.T) {
+	h := newHookedRead(t, true)
+	finish := underWay(t, &h.enter.link.onDestroy, func() error { return h.mgr.Detach("read") })
+	later := h.setHookDuring(t, finish)
+
+	if !slices.Equal(*later, []ChangePhase{Changed}) {
+		t.Fatalf("the hook set during the detach was told %v, want the one report the detach made after that", *later)
+	}
+	if h.calls != 0 {
+		t.Fatalf("the earlier hook ran %d times, want 0: it was replaced before the detach reported", h.calls)
+	}
+	if h.mgr.IsActive("read") {
+		t.Fatal("read is still active after the detach SetChangeHook waited for")
 	}
 }

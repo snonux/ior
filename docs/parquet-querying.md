@@ -348,7 +348,11 @@ syscall takes the mark and the row stays as it was):
 
 Switching probes off and on in the TUI's probes modal is not among them: a call that was
 interrupted and not yet completed when probes change, or that is interrupted while a probe
-is being switched on, is not folded at all.
+is being switched on, is not folded at all. The one exception is a run that warned that it
+could not determine the boottime offset of its time namespace, if that offset is in fact
+negative: ior's clock readings are then older than the timestamps they are compared with,
+and switching the `restart_syscall` probes on while a thread is stopped and continued twice
+within that one switch can still mark the later call.
 
 One situation is different: the kernel did re-execute the call and the mark was right, but
 the enter it announced was sampled out, and the timestamp that should tell that enter from

@@ -262,9 +262,11 @@ import (
 // do: a loop still working through a backlog notices the change before it has
 // even read the interrupted exit, holds the row afterwards, and folds. The
 // clear of the map is the second line: with it the stale RESUME is not emitted
-// in the first place, which also covers a record time and a userspace clock
-// reading that cannot be compared (a time namespace whose boottime offset
-// could not be determined, see noteProbeChange).
+// in the first place. Where a record time and a userspace clock reading cannot
+// be compared - a time namespace whose boottime offset could not be
+// determined, see noteProbeChange - it is the line that is left for an entry
+// made before a report. It does not reach an entry made while an attach is in
+// flight ("What is left open" below).
 //
 // The rule is deliberately coarse. Any pair's change refuses every row
 // interrupted before it, of any syscall and any task: a family toggle is a
@@ -369,32 +371,51 @@ import (
 //
 //   - a record the new attachment produced exists only after k1, so after the
 //     count was raised, and the loop processes it either while the count is
-//     up - refused - or after it came down, when S2 is stored: the row that
-//     record would fold into was interrupted before the record was made, and
-//     if that was before the end of the attach it is not younger than S2;
-//   - the loop that finds the count at zero and then reads the stamp (in that
-//     order) is therefore either ahead of every begin whose end it does not
-//     see - what it processes was recorded before that attach touched
-//     anything - or behind an end whose stamp it sees;
+//     up - refused - or after it came down, when S2 is stored. The row that
+//     record would fold into was interrupted before the record was made. If
+//     that was before the end read the clock for S2, the row is not younger
+//     than S2, which refuses it. If it was later, the attach call had
+//     returned and both tracepoints were attached when the row was
+//     interrupted: its fold is as sound as any;
+//   - what carries that is the order of the two writes at the end: S2 is
+//     stored first and the count lowered second, so the loop never finds the
+//     count down and the stamp from before S2 still standing, however long
+//     the goroutine making the report is kept off its CPU between the two.
+//     A loop that finds the count at zero is then either ahead of every
+//     begin whose end it does not see - what it processes was recorded
+//     before that attach touched anything - or behind an end whose stamp it
+//     sees. The order in which the loop reads the two is not what carries
+//     it (restartProbeWatch.changedSince);
 //   - a loop that lags processes records from before the attach while the
 //     count is up and refuses those too. That only costs folds: two rows
 //     instead of one.
 //
-// A row is not held while the count is up because it could never fold - S2
-// will be younger than it - and held, it would wait for its thread's next
-// record. One held just before the count went up is older than S1 and is
+// A row is not held while the count is up because, held, it would wait for
+// its thread's next record and then, all but always, not fold: S2 is younger
+// than every row interrupted before the end read the clock for it. The
+// exception is a row interrupted between that reading and the count coming
+// down and read by the loop in that same instant. It is younger than S2 and
+// would have folded soundly; it is not held either, which costs that one
+// fold. A row held just before the count went up is older than S1 and is
 // released by that report's wake.
 //
 // A detach needs no count. Its tracepoints only go away: a stale entry needs
 // the continuation's enter unseen, and from then on no enter of that syscall
 // is recorded until the next attach, which begins after the detach's stamp.
 //
-// What is left open: nothing on this account, on a host whose record times
-// and stamps can be compared. In a time namespace with a negative boottime
-// offset the stamps lie in the records' past (noteProbeChange), so S2 does not
-// refuse a row interrupted during the attach once the count is down; the
-// clear of the map at the second report is then the only guard, as it is for
-// every other case of this section.
+// What is left open: nothing on this account, where record times and stamps
+// are on one clock. They are on any host, and in any time namespace whose
+// boottime offset bootClockNs could read (bootclock.go, task y13). Where it
+// could not, the offset is taken as 0, a setup warning says so, and the
+// stamps are off by the real offset (noteProbeChange). A positive one only
+// costs folds. With a negative one the stamps lie in the records' past, and
+// S2 does not refuse a row interrupted less than the offset before it. While
+// the attach is in flight the count still refuses that row, since no clock
+// enters it. A loop that lags, and reads the row's exit only after the end,
+// finds the count down and S2 older than the row: it holds the row and folds
+// the later call's restart_syscall into it. The wrong fold of this section is
+// then possible again. The clear of the map at the second report does not
+// prevent it: the stale RESUME was emitted after k1, before that clear.
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
@@ -602,10 +623,22 @@ type restartTracker struct {
 type restartProbeWatch struct {
 	// inFlight counts the attaches that have made their first report and not
 	// yet their second (begin, end). It is raised before the first report
-	// notes anything and lowered after the second has stored its last stamp,
-	// and read before changedAt (changedSince): a reader that finds it at
-	// zero is then either ahead of a begin or behind an end whose stamp it
-	// sees. A count, not a flag: a family toggle and single toggles attach
+	// notes anything and lowered after the second has stored its last
+	// stamp.
+	//
+	// The second of these orders is what the guard rests on: a reader that
+	// finds the count at zero is either ahead of a begin or behind an end
+	// whose stamp it sees. Were the count lowered before the stamp is
+	// stored, the loop could find it at zero with the older stamp still
+	// standing - when it holds a row and at both steps that commit to the
+	// fold, if the reporting goroutine is kept off its CPU in between.
+	//
+	// The first order only spares a row a moment in the tracker. Noted
+	// before it is counted, an attach would let the loop hold a row that is
+	// younger than the first stamp; nothing is attached yet at that point,
+	// and at RESUME the count, or later the end's stamp, refuses that row.
+	//
+	// A count, not a flag: a family toggle and single toggles attach
 	// several probes at once, each from its own goroutine.
 	inFlight atomic.Int64
 	// changedAt is the boot-clock reading taken at the latest report: after a
@@ -639,7 +672,8 @@ func (w *restartProbeWatch) begin() {
 
 // end counts the attach out again (probemanager.ChangeEnds). It comes last in
 // that report, after the stamp that is younger than the attach is stored, so
-// the loop never finds the count down and the old stamp still standing.
+// the loop never finds the count down and the old stamp still standing. That
+// order of the two writes is what the guard rests on (inFlight).
 func (w *restartProbeWatch) end() {
 	w.inFlight.Add(-1)
 }
@@ -663,9 +697,21 @@ func (w *restartProbeWatch) note(at uint64) {
 
 // changedSince reports whether a probe change was noted at or after since, or
 // an attach is in flight, in which case the answer is yes for every since: the
-// change is not over, and its stamp will be younger than anything the loop
-// can ask about now. The count is read before the stamp; see inFlight for why
-// the order matters.
+// change is not over, and its last stamp will be younger than what the loop
+// can ask about now (but for a row interrupted in the instant between the
+// end's last clock reading and the count coming down, which is refused here
+// for nothing: "While an attach is in flight" in the file comment).
+//
+// The count is read before the stamp. The guard does not rest on that order
+// but on the order of the end's two writes (inFlight). Every fold asks here
+// three times - when the row is to be held, at RESUME and at the
+// continuation's exit - and one end can slip between the two loads of one of
+// them only. Read the other way round, an end that stores its stamp and
+// lowers the count between the loads would be answered with the older stamp
+// and a count of zero: "no change" for a row interrupted during the attach.
+// At worst that row is held, and the next question about it finds the end's
+// stamp - if the loop, woken by the token that stamp's note left, has not
+// released the row before. Reading the count first spares that moment.
 func (w *restartProbeWatch) changedSince(since uint64) bool {
 	if w.inFlight.Load() > 0 {
 		return true
@@ -756,7 +802,12 @@ func (w *restartProbeWatch) takeClearWarning() string {
 //
 // The comparison of a record time with a user-space clock reading holds
 // inside a time namespace as well: the stamps come from bootClockNs, which
-// takes the namespace's boottime offset out of them (bootclock.go).
+// takes the namespace's boottime offset out of them (bootclock.go). With an
+// offset it could not read (taken as 0, warned about once) the stamps are off
+// by it. A positive one also refuses the folds of the calls interrupted up to
+// that long after the first observation of a drop. A negative one lets a drop
+// first observed less than that long after an interruption pass for one seen
+// before it, and that fold is not refused.
 type restartDropWatch struct {
 	mu          sync.Mutex
 	total       uint64 // the kernel's cumulative drop count at the latest observation
@@ -1610,8 +1661,8 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 // setup, before the loop starts): listen is the probe manager's SetChangeHook.
 // Trace setup calls it only for a manager it published to a TUI
 // (runTraceSetup); a headless run changes no probe, so it must not pay for the
-// guard, least of all with folds refused over a clock it cannot compare (see
-// noteProbeChange).
+// guard, least of all with folds refused over a boottime offset it could not
+// read (see noteProbeChange).
 //
 // Installing the hook is reported as a change, the first one the loop knows
 // of. The TUI is handed the probe manager before the loop exists, so a probe
@@ -1623,7 +1674,9 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 // SetChangeHook returns once every change that began without the hook is
 // over, which makes the stamp taken here younger than those, and a change
 // that begins later reports to the hook in full. The wake token it leaves is
-// taken by the loop when it starts and finds nothing held.
+// taken by the loop when it starts: it finds nothing held, and raises the
+// warning of a clear that failed here, which nobody could be told of yet
+// (probeChangeNoticed).
 func (e *eventLoop) watchProbeChanges(listen func(hook func(probemanager.ChangePhase))) {
 	// The order is the point: see above.
 	listen(e.probesChanged)
@@ -1680,14 +1733,26 @@ func (e *eventLoop) probesChanged(phase probemanager.ChangePhase) {
 // from bpf_ktime_get_boot_ns. Inside a time namespace with a boottime offset
 // the two clocks differ by that offset (the BPF helper is not namespaced, the
 // user-space clock is), so bootClockNs takes the offset out of its reading
-// (bootclock.go, task y13). Uncorrected, a positive offset put the stamp in
-// the records' future and every fold was refused until the records' clock had
-// caught up with it - for the length of the offset after each probe change,
-// the install included - and a negative one put it in their past, where the
-// time rule refuses too little and the clear of the map is the only guard.
-// That is still what happens when the offset cannot be determined (it is then
-// taken as 0 and warned about once, warnUnknownBootClock). Only TUI runs take a
-// stamp at all.
+// (bootclock.go, task y13) and the stamp is on the host's boot clock, like the
+// record times. What is left is an offset bootClockNs could not determine. It
+// is taken as 0, a setup warning says so once per trace session
+// (warnUnknownBootClock), and the stamps are off by the real offset:
+//
+//   - positive, the stamps lie in the records' future, and every fold is
+//     refused until the records' clock has caught up with the stamp - for
+//     the length of the offset after each probe change, the install
+//     included. That only costs folds;
+//   - negative, the stamps lie in the records' past, and the time rule does
+//     not refuse a row interrupted less than the offset before a change.
+//     What then stands against a stale entry is the clear of the map and,
+//     during an attach, the count of the attaches in flight, which no clock
+//     enters. Neither reaches the entry of a call interrupted and resumed
+//     while an attach was in flight once the loop reads that call's records
+//     after the attach's end: the wrong fold the count was added for is
+//     possible again, for a loop that lags past the end ("What is left open"
+//     in the file comment).
+//
+// Only TUI runs take a stamp at all.
 func (e *eventLoop) noteProbeChange() {
 	watch := &e.restarts.probes
 	watch.note(e.readDropStampClock())

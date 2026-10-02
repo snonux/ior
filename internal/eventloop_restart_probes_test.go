@@ -552,14 +552,39 @@ func TestRunningLoopReportsAFailedClearOfPendingRestarts(t *testing.T) {
 	})
 	r.now.Store(restartBase)
 	r.f.el.probesChanged(probemanager.Changed)
+	requireFailedClearWarning(t, warnings, "after a probe change")
+}
+
+// requireFailedClearWarning waits for the running loop to raise the warning
+// of a failed clear ("bad file descriptor") on warnings; when names the moment
+// it is expected at.
+func requireFailedClearWarning(t *testing.T, warnings <-chan string, when string) {
+	t.Helper()
 	select {
 	case message := <-warnings:
 		if !strings.Contains(message, "bad file descriptor") {
 			t.Fatalf("warning = %q, want the failed clear", message)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("the running loop did not report the failed clear after a probe change")
+		t.Fatalf("the running loop did not report the failed clear %s", when)
 	}
+}
+
+// TestLoopReportsAClearThatFailedAtTheInstallWhenItStarts: installing the hook
+// counts as a change (watchProbeChanges), and trace setup makes it before the
+// loop runs and before the mode has wired the loop's warning sink. A clear
+// that fails there has nobody to tell yet. Its warning waits on the watch with
+// the wake token of the install, and the loop raises it when it starts - with
+// no probe changed since and no record arriving - through the sink wired
+// after the install.
+func TestLoopReportsAClearThatFailedAtTheInstallWhenItStarts(t *testing.T) {
+	warnings := make(chan string, 8)
+	startProbeChangeRunWith(t, func(el *eventLoop) {
+		el.restartPending = &scriptedPendingClearer{err: errors.New("bad file descriptor")}
+		el.watchProbeChanges(func(func(probemanager.ChangePhase)) {})
+		el.SetWarningCallback(func(message string) { warnings <- message })
+	})
+	requireFailedClearWarning(t, warnings, "of the install when it started")
 }
 
 // holdStoppedSleep feeds the running loop a sleep of restartTid that is stopped
@@ -799,13 +824,20 @@ func TestEveryProbeAttachInFlightIsCounted(t *testing.T) {
 	requireFolded(t, f.foldRead(later), later, "both attaches were over before the interruption")
 }
 
-// TestProbeAttachIsCountedBeforeItsFirstStampAndUntilItsLast pins the order
-// inside the two reports, which is what the guard's proof rests on: the count
+// TestProbeAttachIsCountedBeforeItsFirstReadingAndUntilItsLast pins the order
+// inside the two reports as far as a single goroutine can see it: the count
 // goes up before the first report reads the clock or clears the map, and it
-// comes down only after the second report has taken its last reading. A loop
-// that finds the count at zero is then ahead of the begin or sees the end's
-// stamp. A detach counts nothing.
-func TestProbeAttachIsCountedBeforeItsFirstStampAndUntilItsLast(t *testing.T) {
+// is still up when the second report takes its last reading. A detach counts
+// nothing.
+//
+// Not pinned here: that the count comes down only after that last reading is
+// STORED as the stamp, which is the order the guard rests on
+// (restartProbeWatch.inFlight). The clock and the clear are the only places a
+// test runs inside a report, and both come before the store; a count lowered
+// between the reading and the store looks the same from there. That order is
+// watched from a second goroutine instead
+// (TestEndOfAProbeAttachStoresItsStampBeforeItLowersTheCount).
+func TestProbeAttachIsCountedBeforeItsFirstReadingAndUntilItsLast(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	watch := &f.el.restarts.probes
 	var counted []int64
@@ -836,5 +868,76 @@ func TestProbeAttachIsCountedBeforeItsFirstStampAndUntilItsLast(t *testing.T) {
 	f.el.probesChanged(probemanager.Changed)
 	if len(counted) != 3 || counted[0] != 0 || counted[2] != 0 || watch.inFlight.Load() != 0 {
 		t.Fatalf("attaches in flight during and after a detach's report = %v, want none", counted)
+	}
+}
+
+// endOrderWatch is the two goroutines of the test below. The reporter makes
+// the reports of one attach after the other on a clock that ticks at every
+// use; inside names an instant of the latest report, taken while its clear
+// ran: after that report's first reading and before its last. The reader asks
+// the watch about that instant as the loop does about a row interrupted then.
+type endOrderWatch struct {
+	watch  *restartProbeWatch
+	tick   atomic.Uint64
+	inside atomic.Uint64
+	done   atomic.Bool
+}
+
+// report makes the two reports of n attaches, one attach after the other,
+// through el's hook.
+func (o *endOrderWatch) report(el *eventLoop, n int) {
+	defer o.done.Store(true)
+	for range n {
+		el.probesChanged(probemanager.ChangeBegins)
+		el.probesChanged(probemanager.ChangeEnds)
+	}
+}
+
+// read returns how often the watch answered "no change" for an instant
+// inside an attach's report, until the reporter is done.
+func (o *endOrderWatch) read() (wrong int) {
+	for !o.done.Load() {
+		if at := o.inside.Load(); at != 0 && !o.watch.changedSince(at) {
+			wrong++
+		}
+	}
+	return wrong
+}
+
+// TestEndOfAProbeAttachStoresItsStampBeforeItLowersTheCount: the order of the
+// two writes at the end of an attach is what the guard rests on. An instant
+// inside a report of an attach - here the time of its clear - must be
+// answered "changed" from then on: while the attach is in flight by the count,
+// afterwards by the end's last stamp, which is younger. An end that lowered
+// the count before that stamp is stored leaves a moment with the count at
+// zero and the stamp from before the clear still standing, and a loop that
+// asks then holds and folds a row interrupted during the attach.
+//
+// No test code runs between the two writes, so the moment can only be met,
+// not arranged: a reader asks in a tight loop while the attaches are
+// reported. With the count lowered between the last reading and its store, it
+// answered wrong tens of thousands of times in each of eleven such runs on a
+// machine with several CPUs, five of them under -race. With GOMAXPROCS=1 the
+// reader does not get to run between the two writes and the mutation passed:
+// there the test proves nothing. It cannot fail for the correct order on any
+// machine.
+func TestEndOfAProbeAttachStoresItsStampBeforeItLowersTheCount(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	o := &endOrderWatch{watch: &f.el.restarts.probes}
+	f.el.dropStampClock = func() uint64 { return o.tick.Add(1) }
+	f.el.restartPending = &scriptedPendingClearer{clock: func() uint64 {
+		o.inside.Store(o.tick.Add(1))
+		return 0
+	}}
+
+	wrong := make(chan int, 1)
+	go func() { wrong <- o.read() }()
+	o.report(f.el, 200_000)
+	if n := <-wrong; n != 0 {
+		t.Fatalf("%d times the watch answered \"no change\" for an instant inside an attach's report: "+
+			"the count was down before the end's stamp was stored", n)
+	}
+	if got := o.watch.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after every end was reported, want 0", got)
 	}
 }

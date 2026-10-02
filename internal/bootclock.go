@@ -20,7 +20,7 @@ import (
 // CLOCK_BOOTTIME. The loop compares those stamps with boot-clock readings of
 // its own in four places: the comm recheck (provisionalSeedNeedsRecheck), the
 // close row's procfs rule (fdTracker.cacheReadBefore), the restart fold's
-// drop watch (restartDropWatch) and its probe-change stamp (probesChanged).
+// drop watch (restartDropWatch) and its probe-change stamp (noteProbeChange).
 // All of them read the clock through bootClockNs.
 //
 // Inside a time namespace (unshare -T --boottime N) the two clocks differ:
