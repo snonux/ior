@@ -1246,7 +1246,14 @@ func TestReexecFoldTakesAnyExitKindAndItsNameFixup(t *testing.T) {
 // execEnter is an execve enter of tid in the fixture's process.
 func (f *restartFixture) execEnter(at uint64, tid uint32) []byte {
 	f.t.Helper()
-	enter := &types.ExecEvent{EventType: types.ENTER_EXEC_EVENT, TraceId: types.SYS_ENTER_EXECVE, Time: at,
+	return f.execEnterOf(types.SYS_ENTER_EXECVE, at, tid)
+}
+
+// execEnterOf is execEnter for either exec syscall: id is SYS_ENTER_EXECVE or
+// SYS_ENTER_EXECVEAT, which share the enter record's kind.
+func (f *restartFixture) execEnterOf(id types.TraceId, at uint64, tid uint32) []byte {
+	f.t.Helper()
+	enter := &types.ExecEvent{EventType: types.ENTER_EXEC_EVENT, TraceId: id, Time: at,
 		Pid: restartPid, Tid: tid, Dirfd: -1, SchemaVersion: types.EXEC_EVENT_SCHEMA_VERSION}
 	copy(enter.Filename[:], "/usr/bin/newprog")
 	copy(enter.Comm[:], "sleeper")
@@ -1255,7 +1262,14 @@ func (f *restartFixture) execEnter(at uint64, tid uint32) []byte {
 
 func (f *restartFixture) execExit(at uint64, tid uint32, ret int64) []byte {
 	f.t.Helper()
-	_, raw := makeExitRetEvent(f.t, at, restartPid, tid, types.SYS_EXIT_EXECVE, ret)
+	return f.execExitOf(types.SYS_EXIT_EXECVE, at, tid, ret)
+}
+
+// execExitOf is execExit for either exec syscall (SYS_EXIT_EXECVE or
+// SYS_EXIT_EXECVEAT).
+func (f *restartFixture) execExitOf(id types.TraceId, at uint64, tid uint32, ret int64) []byte {
+	f.t.Helper()
+	_, raw := makeExitRetEvent(f.t, at, restartPid, tid, id, ret)
 	return raw
 }
 
@@ -1277,13 +1291,32 @@ func (f *restartFixture) execRecord(at uint64, tid, oldTid uint32, exitUntraced 
 // enter has been taken for the fold: the row is held and the enter kept.
 func (f *restartFixture) interruptExecve(tid uint32) {
 	f.t.Helper()
-	f.feedNone(f.execEnter(restartBase, tid), "execve enter")
-	f.feedNone(f.execExit(restartBase+500, tid, restartNoIntr), "interrupted execve exit")
-	f.feedNone(f.resumeRecord(restartBase+800, tid), "RESUME record")
-	f.feedNone(f.execEnter(restartBase+800, tid), "re-executed execve enter")
-	if held, ok := f.el.restarts.lookup(tid); !ok || held.continuation == nil {
-		f.t.Fatal("the re-executed execve enter was not taken for the fold")
+	f.interruptExec(types.SYS_ENTER_EXECVE, tid)
+}
+
+// interruptExec is interruptExecve for either exec syscall, named by its enter
+// trace ID (SYS_ENTER_EXECVE or SYS_ENTER_EXECVEAT).
+func (f *restartFixture) interruptExec(enterID types.TraceId, tid uint32) {
+	f.t.Helper()
+	exitID, ok := execExitTraceID(enterID)
+	if !ok {
+		f.t.Fatalf("%s is not an exec enter", enterID.Name())
 	}
+	f.feedNone(f.execEnterOf(enterID, restartBase, tid), "exec enter")
+	f.feedNone(f.execExitOf(exitID, restartBase+500, tid, restartNoIntr), "interrupted exec exit")
+	f.feedNone(f.resumeRecord(restartBase+800, tid), "RESUME record")
+	f.feedNone(f.execEnterOf(enterID, restartBase+800, tid), "re-executed exec enter")
+	f.requireExecveStillContinuing(tid)
+}
+
+// holdReexecutedRead drives a read of restartTid that exits -512 up to the
+// point where its re-executed enter has been taken for the fold, as
+// interruptExecve does for an execve.
+func (f *restartFixture) holdReexecutedRead() {
+	f.t.Helper()
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
 }
 
 // requireNoEnterPending fails when an enter is still parked under any of tids.
@@ -1447,6 +1480,57 @@ func TestReexecutedNonLeaderExecWithALostExecRecordIsRecovered(t *testing.T) {
 	}
 }
 
+// TestReexecutedNonLeaderExecveatWithALostExecRecordIsRecovered: the recovery
+// above is not execve's alone. execveat shares the enter record's kind and the
+// exec path, so a re-executed execveat whose exec record was lost comes out as
+// its two rows as well - which needs the held row to be matched against the
+// exit's own syscall, not against execve (reexecutesExecOf).
+func TestReexecutedNonLeaderExecveatWithALostExecRecordIsRecovered(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptExec(types.SYS_ENTER_EXECVEAT, restartTid)
+	rows := f.feed(f.execExitOf(types.SYS_EXIT_EXECVEAT, restartBase+3000, restartPid, 0))
+	interrupted, reexecuted := interruptedExecveRow, reexecutedExecveRow
+	interrupted.name, reexecuted.name = "execveat", "execveat"
+	if len(rows) != 2 || rows[0] != interrupted || rows[1] != reexecuted {
+		t.Fatalf("rows = %+v, want %+v, then %+v", rows, interrupted, reexecuted)
+	}
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+	if f.el.numSyscalls != 2 || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want 2 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
+	}
+	f.requireOldTidRetired()
+}
+
+// TestTwiceInterruptedExecveWithALostExecRecordIsRecovered: the execve exits
+// -513, is re-executed, exits -513 again and is re-executed once more before it
+// succeeds - and the exec record is lost. The first re-execution is an ordinary
+// fold (its exit arrives under the caller's own tid): one row from the first
+// enter to the second -513, held again. Only the last re-execution is completed
+// under the leader tid, and the recovery gives it a row of its own after that
+// folded one.
+func TestTwiceInterruptedExecveWithALostExecRecordIsRecovered(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptExecve(restartTid)
+	f.feedNone(f.execExit(restartBase+1200, restartTid, restartNoIntr), "the re-execution's interrupted exit")
+	f.feedNone(f.resumeRecord(restartBase+1500, restartTid), "second RESUME record")
+	f.feedNone(f.execEnter(restartBase+1500, restartTid), "second re-executed execve enter")
+	f.requireExecveStillContinuing(restartTid)
+
+	rows := f.feed(f.execExit(restartBase+3000, restartPid, 0))
+	folded := restartRow{name: "execve", tid: restartTid, ret: restartNoIntr, enterTime: restartBase, duration: 1200}
+	succeeded := restartRow{name: "execve", tid: restartTid, ret: 0, enterTime: restartBase + 1500, duration: 1500, gap: 300}
+	if len(rows) != 2 || rows[0] != folded || rows[1] != succeeded {
+		t.Fatalf("rows = %+v, want the folded -513 row %+v, then %+v", rows, folded, succeeded)
+	}
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+	if f.el.numSyscalls != 2 || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want 2 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
+	}
+	f.requireOldTidRetired()
+}
+
 // requireOldTidRetired fails when the non-leader exec left anything behind
 // under the caller's pre-exec tid: a comm, a gap baseline, or a hint in the
 // index of parked exec callers.
@@ -1473,54 +1557,79 @@ func (f *restartFixture) requireExecveStillContinuing(tid uint32) {
 	}
 }
 
-// TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve: the negatives of the
-// recovery above. An unpaired successful execve exit under a leader tid adopts
-// a held row only when that row is a re-executed exec of the same syscall in
-// the same process. In every other stream the exit stays the unpaired exit it
-// was - no row, not counted - and the held row stays where it is.
-func TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve(t *testing.T) {
-	execveatExit := func(f *restartFixture) []byte {
-		_, raw := makeExitRetEvent(f.t, restartBase+3000, restartPid, restartPid, types.SYS_EXIT_EXECVEAT, 0)
-		return raw
-	}
+// lostExecNegative is one stream of
+// TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve: hold leaves a row
+// held under restartTid, exit is an unpaired exec exit that must not adopt it,
+// and phase is the phase the row must still stand in afterwards.
+type lostExecNegative struct {
+	name  string
+	hold  func(f *restartFixture)
+	exit  func(f *restartFixture) []byte
+	phase restartPhase
+}
+
+// lostExecNegatives lists the streams in which the lost-record recovery must
+// keep its hands off the held row: each differs from the recovered stream
+// (interruptExecve, then a successful execve exit under the leader tid) in one
+// thing - the exit's process, its syscall or its outcome, or what the row is
+// and how far its re-execution got.
+func lostExecNegatives() []lostExecNegative {
+	const exitAt = restartBase + 3000
+	reexecuted := func(f *restartFixture) { f.interruptExecve(restartTid) }
+	leaderExit := func(f *restartFixture) []byte { return f.execExit(exitAt, restartPid, 0) }
 	otherProcessExit := func(f *restartFixture) []byte {
-		_, raw := makeExitRetEvent(f.t, restartBase+3000, restartOtherTid, restartOtherTid, types.SYS_EXIT_EXECVE, 0)
+		_, raw := makeExitRetEvent(f.t, exitAt, restartOtherTid, restartOtherTid, types.SYS_EXIT_EXECVE, 0)
 		return raw
 	}
-	leaderExit := func(f *restartFixture) []byte { return f.execExit(restartBase+3000, restartPid, 0) }
-	for _, tc := range []struct {
-		name  string
-		hold  func(f *restartFixture)
-		exit  func(f *restartFixture) []byte
-		phase restartPhase
-	}{
-		{"the held row is another process's", func(f *restartFixture) { f.interruptExecve(restartTid) },
-			otherProcessExit, restartContinuing},
-		{"the exit is another exec syscall's", func(f *restartFixture) { f.interruptExecve(restartTid) },
-			execveatExit, restartContinuing},
-		{"the kept enter is not an exec enter", func(f *restartFixture) {
-			f.interruptRead(restartBase, restartTid, restartSys)
-			f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
-			f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
-		}, leaderExit, restartContinuing},
-		{"the execve was not re-executed yet", func(f *restartFixture) {
-			f.feedNone(f.execEnter(restartBase, restartTid), "execve enter")
-			f.feedNone(f.execExit(restartBase+500, restartTid, restartNoIntr), "interrupted execve exit")
-		}, leaderExit, restartWaiting},
-		{"the re-executed enter never arrived", func(f *restartFixture) {
-			f.feedNone(f.execEnter(restartBase, restartTid), "execve enter")
-			f.feedNone(f.execExit(restartBase+500, restartTid, restartNoIntr), "interrupted execve exit")
-			f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
-		}, leaderExit, restartResumed},
-	} {
+	execveatExit := func(f *restartFixture) []byte {
+		return f.execExitOf(types.SYS_EXIT_EXECVEAT, exitAt, restartPid, 0)
+	}
+	// A failed execve returns under the tid it entered under: this one is the
+	// leader's own, whose enter this run did not see. Nobody exec'd.
+	failedExit := func(f *restartFixture) []byte { return f.execExit(exitAt, restartPid, -int64(syscall.ENOENT)) }
+	return []lostExecNegative{
+		{"the exit is another process's", reexecuted, otherProcessExit, restartContinuing},
+		{"the exit is another exec syscall's", reexecuted, execveatExit, restartContinuing},
+		{"the exit is a failed execve's", reexecuted, failedExit, restartContinuing},
+		{"the kept enter is not an exec enter", (*restartFixture).holdReexecutedRead, leaderExit, restartContinuing},
+		{"the execve was not re-executed yet", func(f *restartFixture) { f.interruptedExecve(false) },
+			leaderExit, restartWaiting},
+		{"the re-executed enter never arrived", func(f *restartFixture) { f.interruptedExecve(true) },
+			leaderExit, restartResumed},
+	}
+}
+
+// interruptedExecve feeds an execve of restartTid that exits -513 and, when
+// resumed, the RESUME record that announces its re-execution - but not the
+// re-executed enter: the row is held without a kept enter.
+func (f *restartFixture) interruptedExecve(resumed bool) {
+	f.t.Helper()
+	f.feedNone(f.execEnter(restartBase, restartTid), "execve enter")
+	f.feedNone(f.execExit(restartBase+500, restartTid, restartNoIntr), "interrupted execve exit")
+	if resumed {
+		f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	}
+}
+
+// TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve: the negatives of the
+// recovery above. An unpaired exec exit under a leader tid adopts a held row
+// only when the exit is a successful one and that row is a re-executed exec of
+// the same syscall in the same process. In every other stream
+// (lostExecNegatives) the exit stays the unpaired exit it was - no row, not
+// counted - and the held row stays where it is.
+func TestLostExecRecordRecoveryTakesOnlyTheReexecutedExecve(t *testing.T) {
+	for _, tc := range lostExecNegatives() {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReexecFixture(t, globalfilter.Filter{})
 			tc.hold(f)
-			f.feedNone(tc.exit(f), "an unpaired successful exec exit")
+			f.feedNone(tc.exit(f), "an unpaired exec exit")
 			held, ok := f.el.restarts.lookup(restartTid)
 			if !ok || held.phase != tc.phase || len(f.el.restarts.held) != 1 {
 				t.Fatalf("held = %+v (held=%t, %d rows), want the row untouched in phase %d",
 					held, ok, len(f.el.restarts.held), tc.phase)
+			}
+			if (held.continuation != nil) != (tc.phase == restartContinuing) {
+				t.Fatalf("kept enter = %+v in phase %d, want it kept exactly while continuing", held.continuation, tc.phase)
 			}
 			if f.el.numSyscalls != 1 || f.el.numTracepointMismatches != 0 {
 				t.Fatalf("numSyscalls=%d mismatches=%d, want 1 (the interrupted call) and 0",
@@ -1633,21 +1742,14 @@ func TestOutOfScopeNewtaskDoesNotParkTheDeadTasksEnter(t *testing.T) {
 	}
 }
 
-// TestDeadTasksEnterDoesNotCrowdOutLiveEnters: the record that says a task is
-// gone - its exit record, or a task_newtask record reusing its tid - releases
-// the row the task held and recycles the continuation's enter without parking
-// it. Its control handler would evict a parked one within the same record, but
-// not before the parking could trim the pending-enter table: with the table at
-// its limit, the oldest enters of live threads were recycled to make room for
-// an enter that was thrown away a moment later, and their exits found nothing.
-// Both folds: a re-executed read and a stopped sleep's restart_syscall.
-func TestDeadTasksEnterDoesNotCrowdOutLiveEnters(t *testing.T) {
-	const firstLive, secondLive = restartOtherTid, restartPid
-	continuations := map[string]func(f *restartFixture) restartRow{
+// takenContinuations drives restartTid, per fold, up to the point where the
+// continuation's enter has been taken - a re-executed read and a stopped
+// sleep's restart_syscall - and returns the interrupted row a release must
+// then emit unchanged.
+func takenContinuations() map[string]func(f *restartFixture) restartRow {
+	return map[string]func(f *restartFixture) restartRow{
 		"re-executed read": func(f *restartFixture) restartRow {
-			f.interruptRead(restartBase, restartTid, restartSys)
-			f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
-			f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter")
+			f.holdReexecutedRead()
 			return restartRow{name: "read", tid: restartTid, ret: restartSys, enterTime: restartBase, duration: 500}
 		},
 		"restart_syscall": func(f *restartFixture) restartRow {
@@ -1658,14 +1760,32 @@ func TestDeadTasksEnterDoesNotCrowdOutLiveEnters(t *testing.T) {
 				duration: 500, sleepNs: restartSleepNs}
 		},
 	}
-	gone := map[string]func(f *restartFixture) []byte{
+}
+
+// taskGoneRecords builds the two records that say restartTid's task no longer
+// exists (reportsTaskGone): its exit record, and a task_newtask record that
+// hands the tid to a new thread the trace follows.
+func taskGoneRecords() map[string]func(f *restartFixture) []byte {
+	return map[string]func(f *restartFixture) []byte{
 		"exit record": func(f *restartFixture) []byte {
 			return makeThreadExitEvent(f.t, restartBase+2000, restartPid, restartTid)
 		},
 		"task_newtask record": func(f *restartFixture) []byte { return f.newtaskRecord(restartBase+2000, restartTid, false) },
 	}
-	for contName, hold := range continuations {
-		for goneName, record := range gone {
+}
+
+// TestDeadTasksEnterDoesNotCrowdOutLiveEnters: the record that says a task is
+// gone - its exit record, or a task_newtask record reusing its tid - releases
+// the row the task held and recycles the continuation's enter without parking
+// it. Its control handler would evict a parked one within the same record, but
+// not before the parking could trim the pending-enter table: with the table at
+// its limit, the oldest enters of live threads were recycled to make room for
+// an enter that was thrown away a moment later, and their exits found nothing.
+// Both folds (takenContinuations) and both records (taskGoneRecords).
+func TestDeadTasksEnterDoesNotCrowdOutLiveEnters(t *testing.T) {
+	const firstLive, secondLive = restartOtherTid, restartPid
+	for contName, hold := range takenContinuations() {
+		for goneName, record := range taskGoneRecords() {
 			t.Run(contName+", "+goneName, func(t *testing.T) {
 				f := newReexecFixture(t, globalfilter.Filter{})
 				f.el.pairs.maxSize = 2
@@ -1735,6 +1855,37 @@ func TestExecRecordMayCompleteThreeRows(t *testing.T) {
 	f.requireNoEnterPending(restartTid, restartPid)
 	if f.el.numSyscalls != 3 {
 		t.Fatalf("numSyscalls = %d, want 3", f.el.numSyscalls)
+	}
+}
+
+// TestLostExecRecordExitMayCompleteThreeRows is the same bound reached without
+// the exec record: when it is lost, the successful execve's exit under the
+// leader tid is the record that names both tids. It releases the row the dead
+// leader still holds (routeHeldRestart: the leader's exit record was lost too,
+// and the row waits, so any syscall record of the tid releases it), then the
+// caller's interrupted execve (adoptLostExecCaller), and completes the execve
+// itself. Three rows from one record, in that order, into a channel of
+// pairChannelSlots - the fixture's, where a fourth would panic.
+func TestLostExecRecordExitMayCompleteThreeRows(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.el.setCachedComm(restartPid, "leader")
+	f.interruptRead(restartBase-100, restartPid, restartSys)
+	f.interruptExecve(restartTid)
+	if cap(f.out) != pairChannelSlots {
+		t.Fatalf("the fixture's pair channel has %d slots, want pairChannelSlots (%d)", cap(f.out), pairChannelSlots)
+	}
+	rows := f.feed(f.execExit(restartBase+3000, restartPid, 0))
+	if len(rows) != 3 {
+		t.Fatalf("rows = %+v, want the leader's read, the interrupted execve and the successful execve", rows)
+	}
+	leaderRead := restartRow{name: "read", tid: restartPid, ret: restartSys, enterTime: restartBase - 100, duration: 500}
+	if rows[0] != leaderRead || rows[1] != interruptedExecveRow || rows[2] != reexecutedExecveRow {
+		t.Fatalf("rows = %+v, want %+v, %+v, %+v", rows, leaderRead, interruptedExecveRow, reexecutedExecveRow)
+	}
+	f.requireNothingHeld()
+	f.requireNoEnterPending(restartTid, restartPid)
+	if f.el.numSyscalls != 3 || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want 3 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
 	}
 }
 

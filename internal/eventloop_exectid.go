@@ -150,17 +150,30 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // The result is the two rows the delivered record produces as well, the -513
 // row and the successful execve from its re-executed enter, not one folded
 // row: a record of this very exec is known to be lost, which is what refuses a
-// fold (restartProofLost). If this run's raw enter filter sheds the enter when
-// it is parked again, the exit stays the unpaired exit it would have been
-// without any fold.
+// fold (restartProofLost). The enter always survives being parked again: exec
+// enters are registered without a raw enter filter (eventloop_kinds.go), so
+// nothing on that path can shed it.
 //
 // A parked caller is preferred over a held row when both exist: only one
 // thread can have won the exec, and the other's exit record is missing either
 // way. The held-row lookup has the residual of the parked one: adopting the
 // wrong thread needs the exec record AND a killed sibling's exit record to be
-// lost, or an exit whose own enter this run never parked (a leader's execve
-// shed by the raw enter filter) while a killed sibling's row is still held for
-// want of its exit record.
+// lost, or a leader's own successful execve exit that finds no parked enter
+// (its enter record lost to backpressure, the enter trimmed or displaced from
+// the pending table, or the execve already in flight when the probes
+// attached) while a killed sibling's row is still held for want of its exit
+// record.
+//
+// One stream never gets here at all. Records are routed by their own tid
+// first (routeHeldRestart), so when the dead leader still holds a row with a
+// kept continuation enter - its exit record lost as well as the exec record -
+// the execve's exit under the leader tid is taken for that row's business:
+// the leader's enter is parked again and the exit pairs with it. That is a
+// trace-ID mismatch (no row for the exec), or, when the leader's kept enter
+// is an execve too, a successful execve row under the dead leader's enter;
+// either way the exit has an enter, this fallback is not asked, and the real
+// caller's -513 row stays held until the loop stops or its tid is reused.
+// Accepted: it takes two lost records and a leader interrupted mid-fold.
 func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
 	ret, ok := exitEv.(*types.RetEvent)
 	if !ok || ret.Ret != 0 || ret.Tid != ret.Pid {

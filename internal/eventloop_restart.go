@@ -613,10 +613,9 @@ func (r *restartTracker) take(tid uint32) (*heldRestart, bool) {
 // tracker's index of parked exec callers knows nothing of it. The row is found
 // here instead: one of exit's process, held under a tid other than the
 // leader's, whose kept enter is an exec enter of the syscall that exit belongs
-// to. No other thread of the process can be the caller: a
-// successful exec leaves the process with one task, and the rows of the
-// threads de_thread killed were released by their exit records before the
-// execve returned.
+// to. No other thread of the process can be the caller: a successful exec
+// leaves the process with one task, and the rows of the threads de_thread
+// killed were released by their exit records before the execve returned.
 //
 // Should more than one row qualify all the same (a killed sibling's exit record
 // was lost as well as the exec record), the one whose execve was entered last
@@ -896,6 +895,13 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 // continuation whose enter the fold had taken was still inside the kernel when
 // its task died. It never returns, so the enter is recycled rather than parked
 // again (routeHeldRestart).
+//
+// A task_newtask record also finds a row under its tid when the previous owner
+// was a non-leader thread that exec'd with the exec record lost (such a thread
+// gets no exit record under its old tid): recycling the enter is still right,
+// unless the execve's exit is behind the newtask record in the ring (the tid
+// numbers wrapped around within one exec), in which case that exit finds no
+// row to adopt from (adoptLostExecCaller) and the exec's row is lost.
 //
 // Parking it bought nothing and cost something (task r13). After an exit
 // record, or a task_newtask record of a task the trace follows, the control
