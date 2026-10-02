@@ -55,11 +55,27 @@ type aggregateDrainPeriodSetter interface {
 	SetAggregateDrainPeriod(time.Duration)
 }
 
-// ringbufDropSource reports the cumulative number of events the kernel dropped
-// because the event ring buffer was full. Implemented by ringbufDropCounter
-// over the BPF ringbuf_drop_map; stubbed in tests.
+// ringbufDropSource reports the cumulative number of records lost in the
+// kernel. Implemented by ringbufDropCounter over the BPF ringbuf_drop_map
+// (records the full event ring buffer refused) and by recordLossSource, which
+// adds the program runs the kernel skipped (skippedRunCounter); stubbed in
+// tests.
 type ringbufDropSource interface {
 	Total() (uint64, error)
+}
+
+// recordLossReader is the drop source that can tell the two kinds of loss
+// apart (recordLossSource). The drop monitor asks it instead of Total, so
+// that its warning and the end-of-run statistics name each by what it is.
+type recordLossReader interface {
+	Loss() (recordLoss, error)
+}
+
+// datedDropSource is the drop source that can answer for a time in the past
+// from what it read before (recordLossSource.TotalAsOf). The drop watch asks
+// it with the time of the record it decides about (restartDropWatch).
+type datedDropSource interface {
+	TotalAsOf(asOf uint64) (uint64, error)
 }
 
 type eventLoopConfig struct {
@@ -196,9 +212,15 @@ type eventLoop struct {
 	// previous one (applyBrkGrowth). Zero value usable; evicted per process on
 	// exec and on group-dead exit; event-loop goroutine only.
 	brkState brkTracker
-	// numRingbufDrops is the cumulative kernel-side ring-buffer drop count.
+	// numRingbufDrops is the cumulative count of records lost in the kernel:
+	// what the drop source's latest reading returned, ring-buffer drops and,
+	// where they are counted, skipped program runs (recordLossSource).
 	// Written by the drop-monitor goroutine and read by stats(), hence atomic.
 	numRingbufDrops atomic.Uint64
+	// numSkippedRuns is the share of numRingbufDrops that is skipped program
+	// runs; 0 with a drop source that does not count them (skippedRunStatLine
+	// says "not counted" then). Written and read like numRingbufDrops.
+	numSkippedRuns atomic.Uint64
 	// ringbufDropReadFailed records whether the most recent reading of the
 	// kernel drop counter failed. numRingbufDrops is then stale (or still 0,
 	// if the very first read failed) and says nothing about the real loss, so
@@ -419,7 +441,7 @@ func (e *eventLoop) stats() string {
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
-		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine()+e.fileIdentStatLine(),
+		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.skippedRunStatLine()+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine()+e.fileIdentStatLine(),
 		e.samplingStatLines(),
 	)
 }
@@ -510,6 +532,9 @@ func (e *eventLoop) mismatchPercent() float64 {
 // and a read that failed (ringbufDropReadFailed). In either case the run total
 // is unknown, and printing the last reading - 0, for a run that never got one -
 // would state "no loss" as fact about a loss nobody measured.
+//
+// The figure is the ring buffer's share of the loss total (lossFigures); the
+// program runs the kernel skipped have the line after it (skippedRunStatLine).
 func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
 	// Flag first, then the total: handleRingbufDropResult publishes them in
 	// the opposite order, so seeing a cleared flag here guarantees the total
@@ -522,7 +547,7 @@ func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
 		return "\tring buffer drops: unknown (drop counter unavailable)\n"
 	}
 	readFailed := e.ringbufDropReadFailed.Load()
-	drops := e.numRingbufDrops.Load()
+	drops, _ := e.lossFigures()
 	if readFailed {
 		if drops == 0 {
 			return "\tring buffer drops: unknown (drop counter unreadable)\n"
@@ -537,4 +562,38 @@ func (e *eventLoop) ringbufDropStatLine(rate func(uint64) float64) string {
 		dropPct = (float64(drops) / float64(total)) * 100
 	}
 	return fmt.Sprintf("\tring buffer drops: %d (%.2f/s, %.2f%% of events)\n", drops, rate(drops), dropPct)
+}
+
+// lossFigures splits the published loss total (numRingbufDrops) into the
+// records the ring buffer refused and the program runs the kernel skipped.
+// The monitor stores the two one after the other (publishDropTotal), so a
+// reader in between may pair an older total with a newer share; the clamp
+// keeps the difference from wrapping around then.
+func (e *eventLoop) lossFigures() (ringDrops, skippedRuns uint64) {
+	total := e.numRingbufDrops.Load()
+	skippedRuns = min(e.numSkippedRuns.Load(), total)
+	return total - skippedRuns, skippedRuns
+}
+
+// skippedRunStatLine renders the end-of-run line for the records lost
+// because the kernel skipped the program that would have written them
+// (skippedRunCounter, task 723). Like the ring-buffer line next to it, it
+// states a figure only when one was read: a run whose drop source does not
+// count skipped runs (a kernel before 6.7, one without the field, no drop
+// counter at all) says "not counted", and one whose latest reading failed
+// says "unknown", as the ring-buffer line does.
+func (e *eventLoop) skippedRunStatLine() string {
+	const label = "\tprobe runs skipped by the kernel: "
+	if _, counted := e.dropSrc.(recordLossReader); !counted {
+		return label + "not counted\n"
+	}
+	readFailed := e.ringbufDropReadFailed.Load()
+	_, skipped := e.lossFigures()
+	switch {
+	case readFailed && skipped == 0:
+		return label + "unknown (counter unreadable)\n"
+	case readFailed:
+		return fmt.Sprintf("%sunknown (counter unreadable; %d counted before the failure)\n", label, skipped)
+	}
+	return fmt.Sprintf("%s%d\n", label, skipped)
 }

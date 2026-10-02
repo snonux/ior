@@ -27,11 +27,17 @@ const (
 	// targetStopLineSuffix ends the status line ior prints when a target-exit
 	// trigger stops a headless run (eventLoop.targetExited).
 	targetStopLineSuffix = "exited, stopping the trace"
+	// skippedRunsUncounted is ior's setup warning when a kernel that counts
+	// skipped program runs could not be read (withSkippedRuns).
+	skippedRunsUncounted = "skipped by the kernel will not be counted"
 )
 
 var (
 	threadExitTraceArgs = []string{"-trace-syscalls", "pipe2,write,close"}
 	groupDeadExitsLine  = regexp.MustCompile(`group-dead exits: (\d+)`)
+	// skippedRunsLine captures the figure of the statistics line for the
+	// program runs the kernel skipped (eventLoop.skippedRunStatLine).
+	skippedRunsLine = regexp.MustCompile(`probe runs skipped by the kernel: ([^\n]+)`)
 )
 
 // TestThreadExitKeepsFdName pins the sched_process_exit group_dead gate end to
@@ -167,6 +173,26 @@ func assertExitProbeEffective(t *testing.T, out *OutputCapture) {
 	}
 	if !strings.Contains(logged, zeroDropsLine) {
 		t.Fatalf("ior output lacks %q: ring-buffer records were lost or the statistics are missing", zeroDropsLine)
+	}
+	assertNoSkippedProbeRuns(t, logged)
+}
+
+// assertNoSkippedProbeRuns is the other half of "no record was lost": the
+// kernel skipped none of ior's programs (task 723). A kernel that does not
+// count skipped runs (before 6.7) prints "not counted", which is accepted;
+// one that should count them must have been read, so the setup warning about
+// an unreadable count fails the test as well.
+func assertNoSkippedProbeRuns(t *testing.T, logged string) {
+	t.Helper()
+	m := skippedRunsLine.FindStringSubmatch(logged)
+	if m == nil {
+		t.Fatalf("ior output lacks a %q statistics line", "probe runs skipped by the kernel")
+	}
+	if m[1] != "0" && m[1] != "not counted" {
+		t.Fatalf("probe runs skipped by the kernel: %s, want 0: records were lost without a ring-buffer drop", m[1])
+	}
+	if strings.Contains(logged, skippedRunsUncounted) {
+		t.Fatalf("ior could not read the skipped probe runs on a kernel that counts them:\n%s", logged)
 	}
 }
 

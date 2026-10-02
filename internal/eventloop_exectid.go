@@ -125,7 +125,10 @@ func (e *eventLoop) noteExecRecord(ev *types.ProcessExecEvent) {
 // count as complete only when ring-buffer drops are counted too (dropSrc):
 // then an exec that left no record is a counted drop or did not happen, which
 // is what lets a successful exec exit without an enter be told from a call a
-// seccomp filter answered (lostExecRecord). The probe is attached before any
+// seccomp filter answered (lostExecRecord). "Counted drop" includes the run
+// of the exec program the kernel skipped where the kernel counts it; where
+// it does not, that exec has no record and no count (lostExecRecord names
+// the cost). The probe is attached before any
 // syscall probe (attachTraceProbes), so no exec whose enter the trace saw can
 // have passed the tracepoint unseen. False in a loop nobody told and whenever
 // either is missing; adoptLostExecCaller then adopts unchecked, as it did
@@ -143,8 +146,9 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 // and before the exit. While exec records are trusted (trustExecRecords) it
 // is therefore missing only if a record was dropped since the enter, and the
 // drop watch is asked as a fold asks it (restartDropWatch.lostSince), but
-// from the candidate's enter on, not from an interrupted exit. That is one
-// read of the drop counter per exit, paid only by a successful exec exit
+// from the candidate's enter on, not from an interrupted exit, and up to the
+// exit that asks (exited), which every record in question precedes. That is
+// one read of the drop counter per exit, paid only by a successful exec exit
 // without an enter that found a candidate: lostExecCaller asks about one
 // candidate and never about a second. "No drop since" is a proof: the thread
 // has not exec'd, the exit is not its execve's, nothing is adopted and
@@ -162,9 +166,14 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 //     (warnUnknownBootClock) and puts the watch's stamps in the records'
 //     past, so that a drop first observed after the enter passes for one
 //     seen before it (restartDropWatch);
-//   - the kernel skipped the tracepoint program without a ring-buffer drop.
-//     Whether that happens to this probe is not verified; a follow-up task
-//     (723) looks into it.
+//   - the kernel skipped the tracepoint program, which loses the record
+//     without a ring-buffer drop, on a kernel that does not count the skip
+//     for this kind of program (before Linux 6.7). It happens to this probe:
+//     sched_process_exec is a classic tracepoint, skipped while a task
+//     preempted in the middle of a bpf(2) map operation has left
+//     bpf_prog_active raised on the CPU (skippedRunCounter, task 723). Where
+//     the kernel counts it the drop source does too, and the skip is a drop
+//     like any other here.
 //
 // Each of the three makes the gate refuse, never adopt wrongly: the exit
 // finds "no drop since" and stays unpaired, and the exec has no row - a
@@ -182,11 +191,11 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 // adopted, since otherwise such a run lost the row of every non-leader exec,
 // but the pair proves nothing: a wrong adoption then costs the one wrong
 // execve row it always cost, and not the rows of live threads.
-func (e *eventLoop) lostExecRecord(entered uint64) (adopt, proven bool) {
+func (e *eventLoop) lostExecRecord(entered, exited uint64) (adopt, proven bool) {
 	if !e.execRecordsTrusted {
 		return true, false
 	}
-	lost := e.restarts.drops.lostSince(entered, e.dropSrc, e.readDropStampClock)
+	lost := e.restarts.drops.lostSince(entered, exited, e.dropSrc, e.readDropStampClock)
 	return lost, lost
 }
 
@@ -372,7 +381,7 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pai
 func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok bool) {
 	if tid, ok = e.pairs.parkedExecCaller(exit.Pid); ok {
 		parked, _ := e.pairs.pending(tid)
-		if ok, proven = e.lostExecRecord(parked.EnterEv.GetTime()); !ok {
+		if ok, proven = e.lostExecRecord(parked.EnterEv.GetTime(), exit.GetTime()); !ok {
 			e.pairs.indexExecCaller(parked.EnterEv)
 			return 0, false, false
 		}
@@ -382,7 +391,7 @@ func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok
 		return 0, false, false
 	}
 	held, _ := e.restarts.lookup(tid)
-	ok, proven = e.lostExecRecord(held.continuation.GetTime())
+	ok, proven = e.lostExecRecord(held.continuation.GetTime(), exit.GetTime())
 	return tid, proven, ok
 }
 

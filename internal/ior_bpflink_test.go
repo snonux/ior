@@ -374,10 +374,13 @@ func returnsOnlyAWrappedAttach(decl *ast.FuncDecl) bool {
 //     *bpf.BPFProg, in libbpfTracepointModule.GetProgram alone. The scan goes
 //     by name, so the two calls of probemanager.Attacher's GetProgram are
 //     listed too.
+//
 //   - BPFProg and BPFLink are the types. ior_bpflink.go wraps and destroys
 //     the links and makes the attach calls; beyond it only the field of
 //     libbpfTracepointProgram names the program type.
+//
 //   - prog is that field: only the two methods read it, to pass it on.
+//
 //   - AttachTracepoint and AttachRawTracepoint are libbpfgo's two attach
 //     calls ior makes, in ior_bpflink.go. The scan goes by name here too, so
 //     the calls of probemanager.Program's methods of the same names are
@@ -385,15 +388,18 @@ func returnsOnlyAWrappedAttach(decl *ast.FuncDecl) bool {
 //     probes' in ior_bpfsetup.go. libbpfTracepointProgram's own two methods
 //     are not: they declare the names and select neither.
 //
+//   - NextProgram is the iterator's way to every program of the module.
+//     libbpfProgramFDs alone walks it, and hands out file descriptors only
+//     (task 723: the programs' skipped runs are read through them).
+//
 // Every other Attach... method of libbpfgo is pinned as well, to no place at
 // all (libbpfgoAttachMethods, libbpfSeamPlaces).
 //
 // Anything else is a way around the wrapper (libbpfLink: a bare link whose
 // Destroy failed is destroyed again by Module.Close) or around the attach
 // mutex (libbpfAttachMu). What the scan cannot see: a program reached without
-// any of these names, such as through libbpfgo's Module.Iterator, and a bare
-// program passed on as a plain variable, which is why the one function that
-// has such a variable is pinned whole
+// any of these names, and a bare program passed on as a plain variable,
+// which is why the one function that has such a variable is pinned whole
 // (TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram).
 var libbpfSeamNames = map[string]map[string][]string{
 	"GetProgram": {
@@ -406,6 +412,9 @@ var libbpfSeamNames = map[string]map[string][]string{
 	},
 	"BPFLink": {
 		"internal/ior_bpflink.go": {"*"},
+	},
+	"NextProgram": {
+		"internal/ior_bpflink.go": {"libbpfProgramFDs"},
 	},
 	"prog": {
 		"internal/ior_bpfsetup.go": {

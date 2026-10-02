@@ -1559,13 +1559,51 @@ var openAggregateSource = func(module *bpf.Module) (syscallAggregateSource, erro
 // the setup-warning collector, which replays the message as an event-loop
 // warning: a warning row in the TUI (instead of stderr text written over the
 // screen on every trace start) and stderr in the headless modes.
+//
+// The source the loop gets also counts the program runs the kernel skipped,
+// where it can (withSkippedRuns).
 func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, warnSetup func(...any)) {
 	dropCounter, err := newRingbufDropCounter(bpfModule)
 	if err != nil {
 		warnSetup("Ring-buffer drop counter unavailable (kernel-side drops will not be reported):", err)
 		return
 	}
-	el.dropSrc = dropCounter
+	el.dropSrc = withSkippedRuns(dropCounter, bpfModule, el.readDropStampClock, warnSetup)
+}
+
+// The three things withSkippedRuns asks the system: the running kernel's
+// release, the descriptors of the loaded programs and one program's skipped
+// runs. They are variables so that a test can answer without a kernel.
+var (
+	skippedRunKernelRelease = runningKernelRelease
+	skippedRunProgramFDs    = libbpfProgramFDs
+	skippedRunProgramMisses = progRecursionMisses
+)
+
+// withSkippedRuns returns the drop source of a run: ring, the ring-buffer
+// drop counter, together with the count of the program runs the kernel
+// skipped (recordLossSource), where the kernel counts them. A skipped run
+// loses a record the ring buffer's counter never hears of, so on such a
+// kernel every "nothing was dropped" the loop relies on reads both (task
+// 723; skippedRunCounter has the kernel facts).
+//
+// A kernel before 6.7 does not count the skips of classic tracepoint
+// programs, and its zeroes would be read as "none": the ring counter is
+// returned alone, without a warning - nothing is wrong with the run, and the
+// end-of-run statistics say "not counted" (skippedRunStatLine).
+// A kernel that should count them and cannot be read is warned about, since
+// that is a degradation of this run, and gets the ring counter alone too.
+// clock is the loop's drop-stamp clock, which dates the sweeps.
+func withSkippedRuns(ring ringbufDropSource, bpfModule *bpf.Module, clock func() uint64, warnSetup func(...any)) ringbufDropSource {
+	if !kernelCountsSkippedRuns(skippedRunKernelRelease()) {
+		return ring
+	}
+	skipped, err := newSkippedRunCounter(skippedRunProgramFDs(bpfModule), skippedRunProgramMisses, clock)
+	if err != nil {
+		warnSetup("Probe runs skipped by the kernel will not be counted (events lost that way go unreported):", err)
+		return ring
+	}
+	return &recordLossSource{ring: ring, skipped: skipped}
 }
 
 // ringBufferStopper abstracts the ring-buffer polling control for teardown.

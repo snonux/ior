@@ -143,7 +143,7 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 		e.notifyWarningOrLog(result.warning)
 		return
 	}
-	e.publishDropTotal(result.total)
+	e.publishDropTotal(result.total, result.skipped)
 	// The restart fold's drop watch (restartDropWatch) is told of the reading,
 	// with a clock reading taken after the counter was read (the result is in
 	// hand). The reading that matters is the one that CHANGED the total: it
@@ -188,7 +188,12 @@ func (e *eventLoop) recordDropReadFailure() {
 // very statement this whole change exists to prevent. The two goroutines do
 // overlap: startTraceShutdownWatcher calls stats() on ctx.Done() while the
 // monitor is still winding down on the same signal.
-func (e *eventLoop) publishDropTotal(total uint64) {
+//
+// skipped is the share of total that is skipped program runs
+// (ringbufDropResult.skipped). It is only ever shown next to the total
+// (lossFigures), never taken for evidence on its own.
+func (e *eventLoop) publishDropTotal(total, skipped uint64) {
+	e.numSkippedRuns.Store(skipped)
 	e.numRingbufDrops.Store(total)
 	e.ringbufDropReadFailed.Store(false)
 }

@@ -1068,6 +1068,29 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   ordering bug, not a data race - and nor can a test: what is pinned instead is
   the intermediate state
   (`TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal`).
+- **A skipped probe run is a lost record too** (task 723;
+  `internal/skipped_run_counter.go`, `internal/bpf_prog_misses.go`): the kernel
+  does not run a tracepoint program while `bpf_prog_active` is raised on the
+  CPU (classic tracepoints, `trace_call_bpf`; raised by every `bpf(2)` map
+  lookup/update/delete with preemption enabled, so a task preempted mid-way
+  blocks the CPU's programs) or while the same program is in flight there (raw
+  tracepoints, and on 7.2 - not yet on 6.19 - the syscall tracepoints, which
+  run preemptibly through `trace_call_bpf_faultable`). Such a run reserves nothing, so
+  `ringbuf_drop_map` stays put; the kernel counts it in the program's
+  `recursion_misses` (`bpf_prog_info`; classic tracepoints only since 6.7).
+  `withSkippedRuns` therefore wraps the ring counter in a `recordLossSource`
+  whose `Total()` is ring drops plus the misses of every loaded program, so
+  every reader of the drop source (monitor warning, `numRingbufDrops`, the
+  restart folds' `restartDropWatch`, the exec adoption, the rename trust)
+  treats a skip as a drop. Rules: reading costs one `BPF_OBJ_GET_INFO_BY_FD`
+  per program (~740, about 0.35 ms), so the loop never asks for "now" but for
+  the time of the record it decides about (`lostSince`'s `upTo`,
+  `TotalAsOf`), which a sweep begun after that time answers; the programs are
+  reached only through `libbpfProgramFDs` (pinned in `libbpfSeamNames`); a
+  kernel before 6.7 gets the ring counter alone and the statistics line says
+  `not counted`, never `0`. Reproduce with a `SCHED_FIFO` task that wakes up
+  and makes a syscall on a CPU where another task loops over the same
+  syscall: rows go missing with `ring buffer drops: 0`.
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
   asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by

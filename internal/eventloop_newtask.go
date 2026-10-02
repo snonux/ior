@@ -150,6 +150,11 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 // thread execs, renames again, or makes an open/exec syscall whose payload
 // comm contradicts the cache):
 //
+//   - A rename record lost because the kernel skipped the task_rename
+//     program (a raw tracepoint: skipped only while the same program is in
+//     flight on that CPU) on a kernel whose drop source does not count
+//     skipped runs. Where it does (recordLossSource, task 723), the skip is
+//     a drop like any other and is swept.
 //   - Two microsecond-wide windows inside copy_process: a third thread writing
 //     /proc/<tid>/comm of the child between attach_pid and trace_task_newtask
 //     emits its rename record before the newtask record, whose seed then

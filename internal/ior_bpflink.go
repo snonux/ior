@@ -79,6 +79,27 @@ func attachLibbpfRawTracepoint(prog *bpf.BPFProg, name string) (probemanager.Lin
 	return newLibbpfLink(attachBPFRawTracepoint(prog, name))
 }
 
+// libbpfProgramFDs returns the file descriptor of every program of module
+// that the kernel loaded, attached or not. It is the one place that walks
+// the module's programs (libbpfgo's iterator, which the scans of
+// ior_bpflink_test.go pin to this function): the descriptors are all that
+// leaves it, and all a descriptor is used for is reading the program's
+// skipped runs (skippedRunCounter). They belong to the module and are valid
+// until it is closed. A nil module has none.
+func libbpfProgramFDs(module *bpf.Module) []int {
+	if module == nil {
+		return nil
+	}
+	var fds []int
+	iter := module.Iterator()
+	for prog := iter.NextProgram(); prog != nil; prog = iter.NextProgram() {
+		if fd := prog.FileDescriptor(); fd >= 0 {
+			fds = append(fds, fd)
+		}
+	}
+	return fds
+}
+
 // libbpfLink is the probemanager.Link ior hands out for every link it attaches
 // through libbpfgo (libbpfTracepointProgram). It keeps libbpfgo's Module.Close
 // from destroying a link a second time after its Destroy reported an error

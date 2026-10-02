@@ -291,6 +291,17 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   the trace); with an actual offset such closes may then be unnamed or named after the file
   that reused the number, and interrupted calls may stay two rows or, with a negative offset,
   be folded with a later call (after lost records, or after a probe change in the TUI).
+- **The kernel can skip a probe without running it.** A BPF tracepoint program is not run
+  while another task was preempted on that CPU in the middle of the same program (the
+  syscall probes on Linux 7.2) or of a BPF map operation of any program on the host (the
+  syscall probes up to at least Linux 6.19; the process and signal probes on both). The
+  events of those calls are missing although the ring buffer never filled. From Linux 6.7 on the kernel counts
+  these runs and ior reports them: a `Kernel skipped N probe runs` warning while it
+  happens, and `probe runs skipped by the kernel: N` in the end-of-run statistics, next to
+  `ring buffer drops`. On an older kernel the line reads `not counted`, and such a loss
+  leaves no trace. It needs a preemption inside the kernel, so it is rare on a desktop
+  and common where real-time tasks or `preempt=full` preempt a traced, syscall-heavy
+  CPU.
 
 ## Bytes Classification
 
