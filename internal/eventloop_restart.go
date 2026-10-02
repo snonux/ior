@@ -490,7 +490,13 @@ import (
 //     exec probe attached, drops counted - the exit adopts only when a
 //     record may have been dropped since that thread's exec enter
 //     (lostExecRecord). An exit without an enter and without that evidence
-//     is a call a seccomp filter answered, and touches nothing.
+//     is a call a seccomp filter answered: it adopts no other thread's
+//     enter, releases no other thread's row and proves nothing. It is a
+//     record of the leader tid all the same and is routed as one before it
+//     gets that far (routeHeldRestart), so it may still release a row the
+//     leader itself holds, as any record that is no step of that row's fold
+//     does; the row's kept enter is then recycled, unless it is an enter of
+//     the exit's own exec (continuationCutShortBy).
 //   - Nor is the release of the rows an exec leaves behind under the tids of
 //     the threads it ended (task v13). de_thread kills every other thread of
 //     the process, and each releases its row with its own exit record; with
@@ -793,21 +799,35 @@ func (w *restartProbeWatch) takeClearWarning() string {
 }
 
 // restartDropWatch answers "may the kernel have dropped a ring-buffer record
-// at or after the boot-clock time `since`?" for both folds. since is the time
-// of the interrupted exit's record; records reserved after it are the ones
-// the fold reasons about. A row folded once and interrupted again carries the
-// continuation's exit (foldRestartExit), so each hop of a call stopped several
-// times asks from its own interruption.
+// at or after the boot-clock time `since`?" for three askers: the two folds,
+// and the adoption of the enter of an exec whose record was lost
+// (eventLoop.lostExecRecord, task v13).
+//
+// A fold asks with the time of the interrupted exit's record; records
+// reserved after it are the ones the fold reasons about. A row folded once
+// and interrupted again carries the continuation's exit (foldRestartExit), so
+// each hop of a call stopped several times asks from its own interruption.
+// The adoption asks with the time of a candidate caller's exec ENTER - for a
+// re-executed execve the kept, second enter, not the row's -513 exit: the
+// exec record it looks for was reserved after that enter. It also reads the
+// answer the other way round. "Maybe lost" refuses a fold and is what lets
+// the adoption adopt; "no loss" lets a fold go on and refuses the adoption.
+// The rest of this comment speaks of folds. For the adoption, read "the
+// candidate's enter" for "the interrupted exit" and "adopted" for "refused".
 //
 // What it knows. An observation is one read of the kernel's cumulative drop
 // counter together with a boot-clock reading taken AFTER that read. The watch
 // keeps the total of the latest observation and the stamp of the earliest
 // observation that returned that same total (firstSeenAt). Observations come
-// from two places: the periodic drop monitor (handleRingbufDropResult, on its
-// own goroutine, hence the mutex), which keeps the watch current while no call
-// is interrupted, and the fold itself, which reads the counter at RESUME and
+// from three places: the periodic drop monitor (handleRingbufDropResult, on
+// its own goroutine, hence the mutex), which keeps the watch current while no
+// call is interrupted; the fold itself, which reads the counter at RESUME and
 // at the folding exit (lostSince), because the monitor's next poll may be a
-// second away.
+// second away; and the adoption, which reads it once, through lostSince as
+// well, at a successful exec exit without an enter that found a candidate
+// caller. An observation counts the same whoever made it: a drop the
+// adoption was first to see is stamped then, and refuses the folds of the
+// calls interrupted before that.
 //
 // The invariant: the counter returned `total` in a read that finished at or
 // before firstSeenAt. The counter only grows, so if a read made now returns
@@ -856,7 +876,11 @@ func (w *restartProbeWatch) takeClearWarning() string {
 // by it. A positive one also refuses the folds of the calls interrupted up to
 // that long after the first observation of a drop. A negative one lets a drop
 // first observed less than that long after an interruption pass for one seen
-// before it, and that fold is not refused.
+// before it, and that fold is not refused. For the adoption it is the
+// positive one that errs towards the wrong row - a drop seen up to that long
+// before a candidate's enter counts as evidence - and the negative one that
+// hides a drop first observed less than that long after the enter, which
+// costs the exec its row (eventLoop.lostExecRecord).
 type restartDropWatch struct {
 	mu          sync.Mutex
 	total       uint64 // the kernel's cumulative drop count at the latest observation

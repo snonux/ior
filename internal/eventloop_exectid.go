@@ -142,13 +142,40 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 // The exec record of a real exec by that thread was reserved after the enter
 // and before the exit. While exec records are trusted (trustExecRecords) it
 // is therefore missing only if a record was dropped since the enter, and the
-// drop watch is asked exactly as a fold asks it (restartDropWatch.lostSince,
-// one read of the drop counter, paid only by a successful exec exit without
-// an enter that found a candidate). "No drop since" is a proof: the thread
+// drop watch is asked as a fold asks it (restartDropWatch.lostSince), but
+// from the candidate's enter on, not from an interrupted exit. That is one
+// read of the drop counter per exit, paid only by a successful exec exit
+// without an enter that found a candidate: lostExecCaller asks about one
+// candidate and never about a second. "No drop since" is a proof: the thread
 // has not exec'd, the exit is not its execve's, nothing is adopted and
 // nothing is proven. "Maybe dropped" is weaker - a drop first observed after
 // the enter, a first read of a moved counter, a counter that cannot be read -
 // but it is the only evidence there is, and it adopts and proves.
+//
+// What the gate cannot see. The drop counter counts the records the ring
+// buffer refused, and an exec record can go missing in other ways:
+//
+//   - it reached userspace and was discarded there, before it moved the
+//     caller's enter: a record that does not decode, or a panic in
+//     handleProcessExecEvent ahead of the re-key (rekeyExecCaller);
+//   - the boottime offset of ior's time namespace is unknown
+//     (warnUnknownBootClock) and puts the watch's stamps in the records'
+//     past, so that a drop first observed after the enter passes for one
+//     seen before it (restartDropWatch);
+//   - the kernel skipped the tracepoint program without a ring-buffer drop.
+//     Whether that happens to this probe is not verified; a follow-up task
+//     looks into it.
+//
+// Each of the three makes the gate refuse, never adopt wrongly: the exit
+// finds "no drop since" and stays unpaired, and the exec has no row - a
+// missing execve row, what a lost exec record cost before there was an
+// adoption (task r13 for a re-executed execve) - while the caller's enter
+// stays parked, or kept with its held row.
+//
+// An unknown offset that puts the stamps in the records' future errs the
+// other way and loses no exec: a drop seen up to that long before the enter
+// cannot be placed before it, which widens the residual adoptLostExecCaller
+// names by that much.
 //
 // Without that trust (no counter, the exec probe not attached, records that
 // name no caller) a missing exec record says nothing either way. The enter is
@@ -241,7 +268,19 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 //
 // A parked caller is preferred over a held row when both exist: only one
 // thread can have won the exec, and the other's exit record is missing either
-// way. The held-row lookup has the residual of the parked one: adopting the
+// way. Preferred means asked alone (lostExecCaller): when the parked caller
+// is refused, the held row is not asked in its place. The refusal says that
+// nothing was dropped since the parked caller's enter, and that proves more
+// than "this thread did not exec": an exec by any thread of the process
+// since then would have killed the parked caller, and its exit record - not
+// dropped - would have evicted its enter. So no thread exec'd, and the exit
+// is a filter's answer. Falling through adopted the held thread's enter
+// whenever that enter predated a drop the watch had first seen before the
+// parked caller's: a wrong execve row, its -513 row, and - the pair
+// counting as a proof - the held rows of the process's live threads
+// released.
+//
+// The held-row lookup has the residual of the parked one: adopting the
 // wrong thread needs the exec record AND a killed sibling's exit record to be
 // lost, or a leader's own successful execve exit that finds no parked enter
 // (its enter record lost to backpressure, the enter trimmed from the pending
@@ -312,19 +351,29 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pai
 }
 
 // lostExecCaller finds the thread whose exec enter the exit adopts
-// (adoptLostExecCaller): the most recently parked non-leader exec caller of
-// the process, else the thread whose re-executed exec is kept with a held
-// row - each only when its exec record may be lost (lostExecRecord), which
-// also says whether the pair will prove the exec. A parked caller that is
-// refused keeps its hint in the index: its execve is still in flight, and
-// the exit that completes it may need the hint.
+// (adoptLostExecCaller). One candidate is asked about, in this order:
+//
+//   - the most recently parked non-leader exec caller of the process, if
+//     there is one. It is adopted when its exec record may be lost
+//     (lostExecRecord, which also says whether the pair will prove the
+//     exec). When it is refused there is no caller at all, and a thread
+//     whose re-executed exec is kept with a held row is not asked: the
+//     parked caller is alive, so no thread of the process has exec'd since
+//     its enter (adoptLostExecCaller). The refused caller keeps its hint in
+//     the index, which the lookup took out: its execve is still in flight,
+//     and the exit that completes it may need the hint.
+//   - only when no caller is parked: the thread whose re-executed exec is
+//     kept with a held row, judged the same way by that kept enter's time.
+//     The exec record is reserved after the enter the exec ran from, which
+//     is the re-executed one, not after the row's -513 exit.
 func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok bool) {
 	if tid, ok = e.pairs.parkedExecCaller(exit.Pid); ok {
 		parked, _ := e.pairs.pending(tid)
-		if ok, proven = e.lostExecRecord(parked.EnterEv.GetTime()); ok {
-			return tid, proven, true
+		if ok, proven = e.lostExecRecord(parked.EnterEv.GetTime()); !ok {
+			e.pairs.indexExecCaller(parked.EnterEv)
+			return 0, false, false
 		}
-		e.pairs.indexExecCaller(parked.EnterEv)
+		return tid, proven, true
 	}
 	if tid, ok = e.restarts.reexecutingExecCaller(exit); !ok {
 		return 0, false, false

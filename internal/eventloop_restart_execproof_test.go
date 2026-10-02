@@ -92,6 +92,84 @@ func TestFilterAnsweredLeaderExecveCostsNoLiveThreadItsRow(t *testing.T) {
 	}
 }
 
+// TestRefusedParkedExecCallerEndsTheSearch: the filter answers the leader's
+// execve while two non-leader threads are inside real execves. One has its
+// enter parked, with nothing dropped since. The other's was interrupted and
+// re-executed, its second enter kept with the held row - an enter older than
+// a drop the monitor saw before the parked caller entered. The parked
+// caller is asked first and refused, and that is the answer for the process:
+// the thread is alive, so nobody has exec'd since its enter. The exit used
+// to go on to the held thread, whose enter the drop does cover, adopt it and
+// take the pair for a proof: the thread's -513 row and a wrong successful
+// execve came out, and the row of a third, live thread was released. Now
+// nothing is adopted and nothing released; all three stay where they were.
+func TestRefusedParkedExecCallerEndsTheSearch(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.holdOtherThreadsRead()
+	f.interruptExecve(restartTid)
+	f.loseRecords(1)
+	f.monitorPoll(restartBase + 1000)
+	const parkedAt = restartBase + 1500
+	f.feedNone(f.execEnter(parkedAt, restartThirdTid), "the parked caller's execve enter")
+	counted := f.el.numSyscalls
+	f.clockAt(restartBase + 2950)
+	f.feedNone(f.execExit(restartBase+2900, restartPid, 0), "the filter-answered execve exit")
+	if f.el.numSyscalls != counted || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want %d and 0: the exit pairs with nothing",
+			f.el.numSyscalls, f.el.numTracepointMismatches, counted)
+	}
+	f.requireHeldUnder(restartOtherTid, restartTid)
+	f.requireExecveStillContinuing(restartTid)
+	if held, _ := f.el.restarts.lookup(restartOtherTid); held.continuation == nil {
+		t.Fatal("the live thread's kept read enter is gone")
+	}
+	parked, ok := f.el.pairs.pending(restartThirdTid)
+	if !ok || parked.EnterEv.GetTime() != parkedAt || f.el.pairs.execCallerHints != 1 {
+		t.Fatalf("the parked caller: %+v (parked=%t, %d hints), want its enter parked and its hint kept",
+			parked, ok, f.el.pairs.execCallerHints)
+	}
+}
+
+// TestHeldExecCallerIsJudgedByItsReexecutedEnter pins the time a held
+// candidate is asked about: that of its kept, re-executed enter
+// (restartBase+800), not of the row's -513 exit (restartBase+500). The exec
+// record is reserved after the enter the exec ran from, so a drop first seen
+// between the two is one seen before the candidate's enter and no evidence;
+// judged by the exit's time it adopted. A drop first seen at the enter's own
+// time is evidence, as at every "at or after" of the watch.
+//
+// The clock is scripted for this: a live loop that saw a drop between the
+// two refuses the fold at RESUME and holds no such row. Stamps that lie in
+// the records' past (an unknown boottime offset) get a run there.
+func TestHeldExecCallerIsJudgedByItsReexecutedEnter(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		seenAt uint64
+		rows   int
+	}{
+		{"a drop seen between the -513 exit and the enter", restartBase + 650, 0},
+		{"a drop seen at the enter's time", restartBase + 800, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			f.interruptExecve(restartTid)
+			f.loseRecords(1)
+			f.monitorPoll(tc.seenAt)
+			f.clockAt(restartBase + 2950)
+			rows := f.feed(f.execExit(restartBase+2900, restartPid, 0))
+			if len(rows) != tc.rows {
+				t.Fatalf("rows = %+v, want %d", rows, tc.rows)
+			}
+			if tc.rows == 0 {
+				f.requireHeldUnder(restartTid)
+				f.requireExecveStillContinuing(restartTid)
+				return
+			}
+			f.requireNothingHeld()
+		})
+	}
+}
+
 // requireLiveThreadsReadFolds feeds the exit of the read holdOtherThreadsRead
 // left re-executing and fails unless it folds into the held row: one row,
 // from the first enter to this exit, counted once with its first exit.

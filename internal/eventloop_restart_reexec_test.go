@@ -852,14 +852,14 @@ func TestInterruptedCallInTheHandlerTakesTheRowsPlaceAtTheBound(t *testing.T) {
 	f := newReexecFixture(t, globalfilter.Filter{})
 	f.interruptRead(restartBase, restartTid, restartSys)
 	f.feedNone(f.handlerRecord(restartBase+510, restartTid, true), "HANDLER record")
-	// Fill the tracker to the bound with rows of other threads, which are as
-	// made up as the fixture's own (absentPidBase + n, n below restartPid's).
-	for tid := uint32(absentPidBase + 1); len(f.el.restarts.held) < maxHeldRestarts; tid++ {
-		f.el.restarts.held[tid] = &heldRestart{pair: &event.Pair{
-			EnterEv: &types.FdEvent{TraceId: types.SYS_ENTER_READ, Tid: tid},
-			ExitEv:  &types.RetEvent{TraceId: types.SYS_EXIT_READ, Tid: tid, Ret: restartSys},
-		}}
+	// Fill the tracker to the bound with rows of other processes, held the
+	// way the loop holds one (restartTracker.hold), so the per-process count
+	// knows them like the fixture's own.
+	f.holdStrangersRows(maxHeldRestarts - 1)
+	if n := len(f.el.restarts.held); n != maxHeldRestarts {
+		t.Fatalf("%d rows held, want the bound of %d", n, maxHeldRestarts)
 	}
+	requireHeldCounted(t, &f.el.restarts)
 
 	f.feedNone(f.readEnter(restartBase+600, restartTid), "the handler's read enter")
 	outer := f.feedOne(f.readExit(restartBase+700, restartTid, restartSys), "the handler's read, interrupted")
@@ -875,6 +875,10 @@ func TestInterruptedCallInTheHandlerTakesTheRowsPlaceAtTheBound(t *testing.T) {
 	if inner.enterTime != restartBase+600 || inner.ret != 7 || inner.duration != 1400 {
 		t.Fatalf("row = %+v, want the handler's own read folded: enter +600, ret 7, duration 1400", inner)
 	}
+	if n := len(f.el.restarts.held); n != maxHeldRestarts-1 {
+		t.Fatalf("%d rows held after the fold, want the %d of the other processes", n, maxHeldRestarts-1)
+	}
+	requireHeldCounted(t, &f.el.restarts)
 }
 
 // TestReexecutionCutShortReleasesTheRow: the re-executed enter arrived but

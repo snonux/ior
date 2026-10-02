@@ -1196,6 +1196,15 @@ func setupTraceInfraWithEventLoop(
 //     sleep's row for a restart_syscall the run does not trace (task u13);
 //     rename-record trust after the factory, which wires the drop counter
 //     the trust also depends on (task xr2).
+//   - Tell the loop which of the hand-attached probes attached, for the two
+//     decisions that rest on them and on that drop counter, so both come
+//     after the factory as well: the restart folds are on only when the
+//     signal_deliver and sched_process_exit probes attached, the
+//     re-execution fold only with the counter besides
+//     (foldProvenRestarts, tasks 103 and t13), and exec records count as
+//     complete only when the sched_process_exec probe did (trustExecRecords,
+//     task v13), which is what lets a successful exec exit without an enter
+//     adopt another thread's enter only on a counted drop.
 //   - Signal the start last. Nothing fallible may follow: every step above
 //     still reaches the caller through err, and in TUI mode that is the only
 //     path an error has - once started is closed the starter has already
