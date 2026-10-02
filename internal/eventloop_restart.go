@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"sync"
 
 	"ior/internal/event"
 	"ior/internal/types"
@@ -61,14 +62,16 @@ import (
 // buffer refused - the time check is needed either way, so it is the whole
 // mechanism.
 //
-// Lost records. A fold also requires that the kernel drop counter did not
-// move since the interrupted exit (restartDropWatch): with records missing,
-// the stream between hold and fold is no longer the one the rules below
-// reason about (the re-executed exit and the next call's enter lost together
-// would let that call's exit complete the fold; a lost exit of a call
-// interrupted inside the handler leaves BPF tracking the inner call while the
-// outer row is still held here). The check is host-wide, so under ring-buffer
-// backpressure nothing is folded - the direction every doubt is resolved in.
+// Lost records. A fold also requires proof that the kernel dropped no record
+// since the interrupted exit (restartDropWatch): with records missing, the
+// stream between hold and fold is no longer the one the rules below reason
+// about (the re-executed exit and the next call's enter lost together would
+// let that call's exit complete the fold; a lost exit of a call interrupted
+// inside the handler leaves BPF tracking the inner call while the outer row is
+// still held here). The check is host-wide, so under ring-buffer backpressure
+// nothing is folded - the direction every doubt is resolved in. A refused
+// fold costs no row: the call shows as it did before task 103, the
+// interrupted row and the continuation's row.
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
@@ -85,32 +88,46 @@ import (
 //     row is released at once. At most maxHandlerRecords records may pass (a
 //     handler that leaves through siglongjmp never returns, and a lost RESUME
 //     must not park the row for good).
-//   - Resume: the continuation's enter arrives and is consumed (no row, no
-//     raw enter filter: the decision must not depend on what this run would
-//     show). For -516 it is the tid's restart_syscall enter, right after the
-//     hold. For re-execution it is an enter of the same syscall, and only as
-//     the tid's very next record after a RESUME control record and stamped
-//     with that record's time.
+//   - Resume: the continuation's enter arrives and is taken out of the
+//     stream (no row, no raw enter filter: the decision must not depend on
+//     what this run would show). For -516 it is the tid's restart_syscall
+//     enter, right after the hold. For re-execution it is an enter of the
+//     same syscall, and only as the tid's very next record after a RESUME
+//     control record and stamped with that record's time. The enter is kept
+//     with the row (heldRestart.continuation), not recycled: the fold can
+//     still be refused, and then the continuation needs it to become a row.
 //   - Fold: the tid's next record is the continuation's exit. For -516 its
 //     return value and time replace the held exit's (the exit keeps the
 //     original syscall's trace ID); for re-execution the exit record itself
 //     replaces the held one (it is the same syscall's exit, of whatever
-//     kind). A fold that ends in a restart code again is held again. A name
-//     fixup the re-executed enter triggers is consumed with it.
+//     kind). The kept enter is recycled now. A fold that ends in a restart
+//     code again is held again. A name fixup the re-executed enter triggers
+//     is applied to the kept enter and consumed.
 //   - Release: any record of the held tid that is not the next step above
 //     (any enter, another exit, a control record such as the task's exit, a
 //     fresh task with the recycled tid, a restart record that does not fit
 //     the phase) first completes the held row unchanged, then is processed
 //     normally. So does a RESUME record or a continuation's exit that arrives
-//     after the kernel dropped records (see "Lost records" above). A call
-//     interrupted inside a signal handler releases the row the handler was
-//     running for and is held in its place (when there is room, holdRestart).
-//     At the end of the run every held row is completed too
-//     (releaseAllHeldRestarts). No held row is lost: it is either folded or
-//     emitted as it was. A continuation whose enter was consumed and whose
-//     fold is then refused (its exit lost, or records dropped meanwhile) is
-//     not a row: its exit, if it arrives, has no enter left and is dropped
-//     like every unpaired exit.
+//     after the kernel may have dropped records (see "Lost records" above),
+//     and an exit of the tid with a restart code while its handler runs,
+//     paired or not: BPF tracks the latest interrupted call of a task, so the
+//     row it could announce a re-execution for is no longer this one
+//     (stepHandlerRecord). A paired one is then held in the row's place
+//     (when there is room, holdRestart). At the end of the run every held row
+//     is completed too (releaseAllHeldRestarts). No held row is lost: it is
+//     either folded or emitted as it was.
+//   - A release never costs the continuation its row either. When the
+//     continuation's enter was already taken (restartContinuing), the release
+//     parks it again as the tid's pending enter, through the path every enter
+//     takes (syscallEntered: comm seeding, the raw enter filter, the exec
+//     snapshot), after the held row is completed and before the releasing
+//     record is processed. A refused or interrupted fold is therefore exactly
+//     the two rows ior showed before it folded anything: the releasing record
+//     finds the stream as if the fold had never been attempted, and the
+//     continuation's exit - the releasing record itself when the fold was
+//     refused over lost records, or a later one - pairs with its own enter,
+//     runs its exit handler (fd tracking for an accept or an open) and is
+//     counted.
 //
 // How the folded row looks: the original enter (name, arguments, requested
 // sleep, enter time, gap to the previous row) with the final return value
@@ -149,34 +166,89 @@ type restartTracker struct {
 	// -512/-513/-514 rows are worth holding. False in every other case, which
 	// leaves those rows exactly as they were before task 103.
 	reexec bool
-	// drops notices records the kernel lost while a row was held.
+	// drops knows since when the kernel's drop counter has stood at its
+	// current value, which is what proves that no record was lost while a row
+	// was held.
 	drops restartDropWatch
 }
 
-// restartDropWatch answers "did the kernel drop a ring-buffer record since
-// the boot-clock time `since`?" for the re-execution fold, from the event-loop
-// goroutine and at the moment of the question.
+// restartDropWatch answers "may the kernel have dropped a ring-buffer record
+// at or after the boot-clock time `since`?" for the re-execution fold. since is
+// the time of the interrupted exit's record; records reserved after it are
+// the ones the fold reasons about.
 //
-// The periodic drop monitor cannot answer it: its poll may not have run yet
-// when the loop reaches the records that follow a loss. And a counter
-// snapshot taken when the row was held cannot either, because the loop
-// consumes a backlog - by the time it processes the interrupted exit, records
-// reserved after it may already have been dropped and counted. So the watch
-// remembers the last total it read and the boot-clock time at which it first
-// saw that total. A record dropped after `since` is in the total read now;
-// either this read is the first to include it (the stamp becomes now, which
-// is after `since`), or an earlier read was, and that read happened after the
-// drop and therefore after `since` as well. Drops from before `since` that
-// are first seen later also refuse the fold, which is the safe side.
+// What it knows. An observation is one read of the kernel's cumulative drop
+// counter together with a boot-clock reading taken AFTER that read. The watch
+// keeps the total of the latest observation and the stamp of the earliest
+// observation that returned that same total (firstSeenAt). Observations come
+// from two places: the periodic drop monitor (handleRingbufDropResult, on its
+// own goroutine, hence the mutex), which keeps the watch current while no call
+// is interrupted, and the fold itself, which reads the counter at RESUME and
+// at the folding exit (lostSince), because the monitor's next poll may be a
+// second away.
+//
+// The invariant: the counter returned `total` in a read that finished at or
+// before firstSeenAt. The counter only grows, so if a read made now returns
+// `total` as well, nothing was dropped between that earlier read and now.
+//
+// The rule. lostSince reads the counter now and answers "no loss" only when
+// the read returns the watched total and firstSeenAt < since: the counter
+// stood at this value in a read that finished before the interrupted exit was
+// stamped and still stands there, so no record reserved after that exit was
+// dropped. In every other case it answers "maybe lost" and the fold is
+// refused, which includes the cases where nothing was lost after `since` but
+// nothing proves it:
+//
+//   - the total moved and this read is the first to see it. The drop may be
+//     an hour old or a microsecond old; a counter value says how many, not
+//     when. The stamp becomes now, which is after `since`.
+//   - the total moved before `since`, but the first observation that saw it
+//     came after `since` (a monitor poll, or an earlier fold check, while the
+//     row was already held). No observation between the drop and the
+//     interruption covers it, so the proof is impossible and the choice is
+//     the conservative one. This window is at most one monitor period wide.
+//   - the counter cannot be read, or there is none.
+//
+// So a drop refuses the folds of the calls that were interrupted before the
+// first observation that saw it, and no others: an old drop the monitor has
+// seen does not keep a later interrupted call from folding.
+//
+// The zero value is an observation too: the counter is zero when the BPF
+// object is loaded, before any record exists, so "0, first seen at time 0"
+// is true; were the counter not zero (an object that outlived an earlier
+// loop), the first read differs and is stamped like any other change.
+//
+// A snapshot of the counter taken when the row is held would not do instead:
+// the loop consumes a backlog, so by the time it processes the interrupted
+// exit, records reserved after it may already have been dropped and counted,
+// and the snapshot would include them. Two observers may also report out of
+// order (the monitor's read overtaken by the loop's): a total that differs
+// from the watched one is always taken as a change and stamped with its own
+// reading, which keeps the invariant and at worst refuses one fold more.
 //
 // The comparison of a record time with a user-space clock reading assumes no
 // time-namespace boottime offset, like every other use of bootClockNs.
 type restartDropWatch struct {
-	total     uint64 // the kernel's cumulative drop count at the last read
-	changedAt uint64 // boot-clock time of the read that first saw total
+	mu          sync.Mutex
+	total       uint64 // the kernel's cumulative drop count at the latest observation
+	firstSeenAt uint64 // stamp of the earliest observation that returned total
 }
 
-// lostSince reports whether a record may have been dropped at or after since.
+// observe records one reading of the drop counter, stamped with a boot-clock
+// time read after the counter was, and returns the stamp of the earliest
+// observation that returned the same total.
+func (w *restartDropWatch) observe(total, seenAt uint64) uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if total != w.total {
+		w.total = total
+		w.firstSeenAt = seenAt
+	}
+	return w.firstSeenAt
+}
+
+// lostSince reports whether a record may have been dropped at or after since
+// (see the rule above). It reads the counter itself, and the clock after it.
 // An unreadable or missing counter counts as a loss: without it nothing
 // vouches for the stream.
 func (w *restartDropWatch) lostSince(since uint64, src ringbufDropSource, clock func() uint64) bool {
@@ -187,11 +259,7 @@ func (w *restartDropWatch) lostSince(since uint64, src ringbufDropSource, clock 
 	if err != nil {
 		return true
 	}
-	if total != w.total {
-		w.total = total
-		w.changedAt = clock()
-	}
-	return w.changedAt >= since
+	return w.observe(total, clock()) >= since
 }
 
 // restartPhase is where a held row stands on its way to a fold.
@@ -227,6 +295,14 @@ type heldRestart struct {
 	// the same clock read, so only an enter carrying exactly this time is the
 	// announced one (isReexecutedEnter).
 	resumeTime uint64
+	// continuation is the continuation's enter while the row stands in
+	// restartContinuing: taken out of the stream for the fold, but kept, so a
+	// release can park it again (reparkContinuation) and the continuation
+	// still becomes a row. continuationKind is the registered kind it arrived
+	// as, which carries its raw enter filter. An accepted fold recycles it
+	// (dropContinuation). nil in every other phase.
+	continuation     event.Event
+	continuationKind rawRuntimeEvent
 }
 
 // maxHeldRestarts bounds the rows held at once. A held row normally lives
@@ -248,10 +324,14 @@ type restartAction uint8
 
 const (
 	// restartRelease: the record ends the wait; the row is completed
-	// unchanged and the record is processed normally.
+	// unchanged, a continuation enter taken earlier is parked again, and the
+	// record is processed normally.
 	restartRelease restartAction = iota
 	// restartConsume: the record was a step of the fold and is dropped.
 	restartConsume
+	// restartKeepEnter: the record is the continuation's enter. It leaves the
+	// stream but is kept with the row until the fold is accepted or refused.
+	restartKeepEnter
 	// restartResume: the record is BPF's RESUME; it is dropped like a consumed
 	// step, unless records were lost since the interrupted exit
 	// (restartProofLost), in which case it releases the row.
@@ -263,7 +343,8 @@ const (
 	restartEnterHandler
 	// restartFold: the record is the continuation's exit. A re-execution is
 	// folded only when no record was lost since the interrupted exit
-	// (restartProofLost); otherwise the row is released.
+	// (restartProofLost); otherwise the row is released and the exit pairs
+	// with the continuation's own enter.
 	restartFold
 )
 
@@ -375,14 +456,14 @@ func (h *heldRestart) step(direction rawEventDirection, ev runtimeDecodedEvent) 
 	case restartWaiting:
 		if h.isRestartSyscallEnter(direction, ev) {
 			h.phase = restartContinuing
-			return restartConsume
+			return restartKeepEnter
 		}
 	case restartInHandler:
 		return h.stepHandlerRecord(direction, ev)
 	case restartResumed:
 		if h.isReexecutedEnter(direction, ev) {
 			h.phase = restartContinuing
-			return restartConsume
+			return restartKeepEnter
 		}
 	case restartContinuing:
 		return h.stepContinuation(direction, ev)
@@ -418,11 +499,24 @@ func (h *heldRestart) stepRestartRecord(rec *types.SyscallRestartEvent) restartA
 // its enters and exits and the name fixups between them. Any other record of
 // the tid (its exit, a new task with its tid, an exec) ends the wait, and so
 // does a handler that outlasts maxHandlerRecords.
+//
+// An exit that carries a restart code ends it too, whether or not it will
+// pair. It is a call of the handler interrupted in turn, and every emitted
+// exit in the restart-code range makes BPF replace or clear the task's one
+// entry (ior_restart_on_exit): from here on a RESUME record announces the
+// re-execution of that inner call, not of this row's. Waiting for the exit to
+// pair (holdRestart) is not enough, because its enter may never have been
+// parked - an open the raw enter filter shed (-path, -comm), or an enter lost
+// to backpressure - and the outer row would then take the inner call's
+// re-execution for its own when both are the same syscall.
 func (h *heldRestart) stepHandlerRecord(direction rawEventDirection, ev runtimeDecodedEvent) restartAction {
 	if direction == rawControlEvent {
 		if _, isFixup := ev.(*types.OpenNameFixupEvent); !isFixup {
 			return restartRelease
 		}
+	}
+	if carrier, ok := ev.(event.RetCarrier); ok && direction == rawExitEvent && event.IsRestartRet(carrier.GetRet()) {
+		return restartRelease
 	}
 	h.passed++
 	if h.passed > maxHandlerRecords {
@@ -432,10 +526,13 @@ func (h *heldRestart) stepHandlerRecord(direction rawEventDirection, ev runtimeD
 }
 
 // stepContinuation expects the exit of the continuation whose enter was
-// consumed. A name fixup in between belongs to that consumed enter (a
-// re-executed open whose path read faulted again) and goes with it.
+// taken. A name fixup in between belongs to that enter (a re-executed open
+// whose path read faulted again): it is spliced into the kept enter, as
+// handleOpenNameFixupEvent would splice it into a parked one, so the enter is
+// complete should a release park it again, and then goes with it.
 func (h *heldRestart) stepContinuation(direction rawEventDirection, ev runtimeDecodedEvent) restartAction {
-	if _, isFixup := ev.(*types.OpenNameFixupEvent); isFixup && h.reexecuted() {
+	if fixup, isFixup := ev.(*types.OpenNameFixupEvent); isFixup && h.reexecuted() {
+		applyRecoveredFilename(h.continuation, fixup)
 		return restartConsume
 	}
 	exitEv, ok := ev.(event.Event)
@@ -480,7 +577,8 @@ func (h *heldRestart) isRestartSyscallEnter(direction rawEventDirection, ev runt
 // identify it: the tid's next call of that syscall would pass too, and a
 // stranger's result would be folded into the row. A later enter has a later
 // time (a clock too coarse to tell two enters of one thread apart is the one
-// exception, see "Known limits" in restart.c).
+// exception, see "A time rule that cannot tell" under "Known wrong folds" in
+// restart.c).
 func (h *heldRestart) isReexecutedEnter(direction rawEventDirection, ev runtimeDecodedEvent) bool {
 	enterEv, ok := ev.(event.Event)
 	return ok && direction == rawEnterEvent && enterEv.GetTraceId() == h.pair.EnterEv.GetTraceId() &&
@@ -494,12 +592,14 @@ type tidRecord interface {
 }
 
 // routeHeldRestart applies the decision rules above to one decoded record
-// before it is processed, and reports whether the fold consumed the record
-// (a step of a held row's continuation), in which case the caller must not
-// process it further. A record that releases the held row is not consumed:
-// the row is completed (and sent on ch) first, then the record goes its usual
-// way. Records of tids without a held row cost one length check.
-func (e *eventLoop) routeHeldRestart(direction rawEventDirection, ev runtimeDecodedEvent, ch chan<- *event.Pair) bool {
+// before it is processed, and reports whether the fold took the record (a
+// step of a held row's continuation), in which case the caller must not
+// process it further. A record that releases the held row is not taken: the
+// row is completed (and sent on ch) and a continuation enter taken earlier is
+// parked again first, then the record goes its usual way. Records of tids
+// without a held row cost one length check. rawEvent is the registered kind
+// ev was decoded as.
+func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecodedEvent, ch chan<- *event.Pair) bool {
 	if len(e.restarts.held) == 0 {
 		return false
 	}
@@ -512,11 +612,14 @@ func (e *eventLoop) routeHeldRestart(direction rawEventDirection, ev runtimeDeco
 	if !ok {
 		return false
 	}
-	action := held.step(direction, ev)
+	action := held.step(rawEvent.direction, ev)
 	if e.restartProofLost(held, action) {
 		action = restartRelease
 	}
 	switch action {
+	case restartKeepEnter:
+		held.continuation, held.continuationKind = ev.(event.Event), rawEvent
+		return true
 	case restartConsume, restartResume:
 		ev.Recycle()
 		return true
@@ -536,11 +639,13 @@ func (e *eventLoop) routeHeldRestart(direction rawEventDirection, ev runtimeDeco
 // restartProofLost reports whether a step towards a re-execution fold must be
 // refused because the kernel dropped records since the interrupted exit (see
 // "Lost records" in the file comment and restartDropWatch). It is asked at
-// the two steps that commit: RESUME, where a refusal costs nothing - the row
-// is released and the re-execution becomes a row of its own - and the
-// continuation's exit, where it keeps a result that may belong to another
-// call out of the row. Each question is one read of the drop counter, paid
-// only by interrupted calls. The restart_syscall fold is not asked: it does
+// the two steps that commit: RESUME, where a refusal releases the row before
+// the re-executed enter is taken, and the continuation's exit, where it keeps
+// a result that may belong to another call out of the row. Either way the
+// call ends up as two rows, the interrupted one and the re-execution: at the
+// exit, the release parks the enter taken for the fold again and the exit
+// pairs with it. Each question is one read of the drop counter, paid only by
+// interrupted calls. The restart_syscall fold is not asked: it does
 // not depend on a control record, and its tid's very next records are the
 // whole proof.
 func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bool {
@@ -579,7 +684,10 @@ func (e *eventLoop) detourGapBaseline(held *heldRestart) {
 // for the inner call's re-execution must not find the outer row still waiting
 // - a handler reading again from the descriptor its interrupted call was
 // reading would be folded into the outer row. Releasing first also frees the
-// slot ep needs when the tracker is at its bound.
+// slot ep needs when the tracker is at its bound. (Since stepHandlerRecord
+// releases on the interrupted exit itself, the row is normally gone by the
+// time the pair gets here; the release below is what holds when a row
+// reaches this point by any other route.)
 func (e *eventLoop) holdRestart(ep *event.Pair, ch chan<- *event.Pair) bool {
 	if !interrupted(ep) {
 		return false
@@ -593,6 +701,9 @@ func (e *eventLoop) holdRestart(ep *event.Pair, ch chan<- *event.Pair) bool {
 // continuation was itself interrupted (a restart code once more).
 func (e *eventLoop) foldRestartExit(exitEv event.Event, ch chan<- *event.Pair) {
 	held, _ := e.restarts.take(exitEv.GetTid())
+	// The fold is accepted: the continuation is part of this row now and its
+	// enter is not needed any more.
+	held.dropContinuation()
 	if held.reexecuted() {
 		// The same syscall's exit record, of whatever kind: it replaces the
 		// interrupted one.
@@ -632,12 +743,59 @@ func (e *eventLoop) completeHeldRestart(held *heldRestart, ch chan<- *event.Pair
 	}
 }
 
-// releaseHeldRestart completes the row tid holds unchanged, if any: the record
-// that triggered it shows that the call is not carried on.
+// releaseHeldRestart releases the row tid holds, if any: the record that
+// triggered it shows that the call is not carried on, or not provably.
 func (e *eventLoop) releaseHeldRestart(tid uint32, ch chan<- *event.Pair) {
 	if held, ok := e.restarts.take(tid); ok {
-		e.completeHeldRestart(held, ch)
+		e.releaseTakenRestart(held, ch)
 	}
+}
+
+// releaseTakenRestart undoes a fold that will not happen, for a row already
+// taken out of the tracker: the row is completed unchanged, then the
+// continuation's enter, if the fold had taken it, becomes the tid's pending
+// enter again. In that order, which is the order of the stream (the
+// interrupted exit precedes the continuation's enter), so the row's exit
+// handler and gap are settled before the next call of the tid is parked. The
+// repark is deferred so that a panic in the row's exit handler, which the
+// callers recover, does not cost the continuation its enter as well.
+func (e *eventLoop) releaseTakenRestart(held *heldRestart, ch chan<- *event.Pair) {
+	defer e.reparkContinuation(held, ch)
+	e.completeHeldRestart(held, ch)
+}
+
+// reparkContinuation hands the continuation's enter back to the path every
+// enter takes (syscallEntered), as if the fold had never taken it: its comm
+// seeds the cache, the kind's raw enter filter decides whether this run wants
+// it at all, and an exec enter gets its target snapshot. The exit that
+// follows then pairs with it like any other.
+//
+// It sends nothing on ch, which the two-slot bound of processRawEvents relies
+// on: syscallEntered completes a row only for a syscall that never returns,
+// and the enter kept here is one whose syscall has an exit - the interrupted
+// call's own syscall, or restart_syscall. The tid has no other pending enter
+// to displace: its last one was consumed by the interrupted exit, and in
+// restartContinuing every further record of the tid comes through here first.
+func (e *eventLoop) reparkContinuation(held *heldRestart, ch chan<- *event.Pair) {
+	enterEv := held.continuation
+	if enterEv == nil {
+		return
+	}
+	held.continuation = nil
+	e.syscallEntered(held.continuationKind, enterEv, ch)
+}
+
+// dropContinuation recycles the continuation's enter once the fold that took
+// it is accepted. The field is cleared first, so the enter can never be both
+// recycled here and parked again by a later release of the same row (a fold
+// that ended in a restart code keeps the heldRestart).
+func (h *heldRestart) dropContinuation() {
+	enterEv := h.continuation
+	if enterEv == nil {
+		return
+	}
+	h.continuation = nil
+	enterEv.Recycle()
 }
 
 // handleSyscallRestartEvent is the control handler of the restart-fold
@@ -667,29 +825,32 @@ func (e *eventLoop) foldReexecutedRestarts(signalProbeAttached, exitProbeAttache
 	e.restarts.reexec = signalProbeAttached && exitProbeAttached && e.dropSrc != nil
 }
 
-// releaseAllHeldRestarts completes every row still held when the event loop
+// releaseAllHeldRestarts releases every row still held when the event loop
 // stops, so a call interrupted near the end of the trace (or in a task that is
-// still stopped) is emitted as it was rather than lost. Each row is emitted
-// before the next is completed: pairs has room for one record's pairs only.
-// It runs outside processRawEventSafe, so each completion recovers a handler
-// panic the same way: one bad row must not cost the others.
+// still stopped) is emitted as it was rather than lost. A continuation enter
+// taken for a fold that the stop cut short is parked again like on any other
+// release; its call was still running when the trace ended and is, like every
+// call in flight at the stop, not a row. Each row is emitted before the next
+// is completed: pairs has room for one record's pairs only. It runs outside
+// processRawEventSafe, so each release recovers a handler panic the same way:
+// one bad row must not cost the others.
 func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 	if len(e.restarts.held) == 0 {
 		return
 	}
 	for _, held := range e.restarts.takeAll() {
-		e.completeHeldRestartSafe(held, pairs)
+		e.releaseTakenRestartSafe(held, pairs)
 		e.drainPairs(pairs)
 	}
 }
 
-// completeHeldRestartSafe completes one held row released at the end of the
-// run, turning a panic in its exit handler into a warning.
-func (e *eventLoop) completeHeldRestartSafe(held *heldRestart, pairs chan<- *event.Pair) {
+// releaseTakenRestartSafe releases one held row at the end of the run, turning
+// a panic in its exit handler into a warning.
+func (e *eventLoop) releaseTakenRestartSafe(held *heldRestart, pairs chan<- *event.Pair) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.notifyWarning(fmt.Sprintf("Recovered panic releasing a held restart row: %v", r))
 		}
 	}()
-	e.completeHeldRestart(held, pairs)
+	e.releaseTakenRestart(held, pairs)
 }

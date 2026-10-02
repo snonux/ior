@@ -144,10 +144,16 @@ func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 		return
 	}
 	e.publishDropTotal(result.total)
+	// The restart fold learns of every reading, changed or not, with a clock
+	// reading taken after the counter was read (the result is in hand): that
+	// is how it knows since when the total has stood at its current value
+	// (restartDropWatch), and what lets a call interrupted long after a drop
+	// fold again. One clock read serves both users of the stamp.
 	if result.delta == 0 {
+		e.restarts.drops.observe(result.total, e.readDropStampClock())
 		return
 	}
-	e.requestCommSweepAfterDrop()
+	e.restarts.drops.observe(result.total, e.requestCommSweepAfterDrop())
 	e.notifyWarningOrLog(formatRingbufDropWarning(result))
 }
 
@@ -193,9 +199,13 @@ func (e *eventLoop) publishDropTotal(total uint64) {
 // previous stamp: that seed would escape both the sweep and the time check
 // in provisionalSeedNeedsRecheck. Pinned by
 // TestDropStampIsStoredBeforeTheSweepIsRequested.
-func (e *eventLoop) requestCommSweepAfterDrop() {
-	e.lastDropSeenBootNs.Store(e.readDropStampClock())
+//
+// It returns the stamp, for the restart fold's drop watch.
+func (e *eventLoop) requestCommSweepAfterDrop() uint64 {
+	seenAt := e.readDropStampClock()
+	e.lastDropSeenBootNs.Store(seenAt)
 	e.commRefreshPending.Store(true)
+	return seenAt
 }
 
 // readDropStampClock reads the boot clock through the test seam
@@ -260,9 +270,11 @@ func (e *eventLoop) processRawEvents(ctx context.Context, rawCh <-chan []byte) {
 	// interrupted row its tid held back (routeHeldRestart releases or folds
 	// the one row of that tid, and holdRestart releases it before a new one
 	// takes its place; tasks fs2, 103), so two slots always suffice and the
-	// released row is drained first. sendPair never blocks: a third pair for one record
-	// panics instead of deadlocking this goroutine, which is the channel's
-	// only reader.
+	// released row is drained first. A release that parks the continuation's
+	// enter again adds no pair (reparkContinuation), and the exit that then
+	// pairs with it is the record's one pair of its own. sendPair never
+	// blocks: a third pair for one record panics instead of deadlocking this
+	// goroutine, which is the channel's only reader.
 	pairs := make(chan *event.Pair, 2)
 
 	// Buffered output (-plain) is flushed by the timer: a row waits at most
@@ -429,7 +441,7 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 		if !ok {
 			return
 		}
-		if e.routeHeldRestart(rawEvent.direction, ev, ch) {
+		if e.routeHeldRestart(rawEvent, ev, ch) {
 			return
 		}
 		if rawEvent.direction == rawControlEvent {

@@ -165,17 +165,23 @@ The fold errs on the side of two rows. A kernel-restarted call keeps its restart
 followed by a second row for the continuation (if that was recorded at all), when:
 
 - the proof is missing: the `signal_deliver` or the `sched_process_exit` probe could not be
-  attached (ior warns at startup; no -512/-513/-514 call is folded in that run), a control
-  record was lost to ring-buffer backpressure, or two threads whose ids collide in the
-  kernel-side table were interrupted at the same time;
+  attached (ior warns at startup), or the kernel's drop counter is not available to ior (no
+  -512/-513/-514 call is folded in such a run), a control record was lost to ring-buffer
+  backpressure, or two threads whose ids collide in the kernel-side table were interrupted at
+  the same time;
 - the continuation's enter or exit was not recorded: sampled out, lost, or the trace ended or
   the thread exited first. With 1-in-N sampling of the syscall this is the common case: both
   halves are sampled independently, so a re-executed call is folded only when both happen to be
   recorded; otherwise you see the restart-code row alone, the continuation alone, or neither;
-- the kernel dropped any record at all, host-wide, between the interruption and the
-  continuation's exit (see the drop counter). ior cannot know whose records were lost, so it
-  folds nothing across a loss; a continuation whose enter had already been taken for the fold
-  is then missing from the recording, like the lost records themselves;
+- ior cannot rule out that the kernel dropped a record, any record of any process, between
+  the interruption and the continuation's exit (see the drop counter). It cannot know whose
+  records were lost, so it folds nothing across a possible loss. The drop counter says how
+  many records were lost, not when, so ior goes by when it first read the current count: a
+  loss it had already seen before the call was interrupted does not matter, however recent,
+  while a loss it first sees after the interruption counts as possibly later than it, even
+  if it happened shortly before (ior reads the counter once a second, and again when it is
+  about to fold). A fold refused for this reason costs no row: the
+  restart-code row and the continuation's row are both recorded;
 - a signal handler made more than about a hundred traced syscalls before returning, never
   returned (it left through `siglongjmp`), or was itself interrupted in a blocking call (that
   inner call is folded instead);
@@ -183,25 +189,33 @@ followed by a second row for the continuation (if that was recorded at all), whe
   (ior judges that handler as if it had decided);
 - the process is a 32-bit one (its syscalls are not traced at all).
 
-A few exotic situations can make ior fold a call that was not re-executed. In all of them the
-kernel-side mark is set although no re-execution follows, and the wrong fold happens only if
-the first syscall of that thread that ior traces afterwards is the same syscall as the
-interrupted one (any other traced syscall clears the mark and the row stays as it was):
+A few exotic situations can make ior fold the wrong call into the row. In most of them the
+kernel-side mark is left standing although no re-execution follows it (or ior never sees the
+one that does), and the wrong fold happens only if the first syscall of that thread that ior
+traces afterwards is the same syscall as the interrupted one (any other traced syscall takes
+the mark and the row stays as it was):
 
 - a signal handler that rewrites the saved user context to resume other code (a preemptive
   user-level thread switch), or a nested handler that leaves through `siglongjmp` into an
   outer handler;
 - the syscall's probes are switched off and on again in the TUI while a thread sits between
   the interruption and the re-execution;
-- a debugger or tracer rewrites the thread's registers while it is stopped for the signal or
-  at the syscall's exit, so the kernel neither restarts the call nor runs a handler (a `gdb`
-  inferior function call, `strace -e inject`);
-- a seccomp user-notification supervisor, or syscall user dispatch, answers the re-executed
-  call before the kernel's syscall-enter tracepoint, so ior never sees the re-execution;
-- a kernel or driver bug returns the restart code to the program with no signal pending;
+- a debugger or tracer rewrites the registers of the interrupted call while the thread is
+  stopped for the signal or at that call's syscall-exit stop, so the kernel neither restarts
+  the call nor runs a handler (a `gdb` inferior function call);
+- the re-executed call is taken away before the kernel's syscall-enter tracepoint, so ior
+  never sees the re-execution: a tracer that cancels it or changes its syscall number at the
+  syscall-entry stop (`strace --inject` with `error=` or `retval=`), a seccomp
+  user-notification supervisor, or syscall user dispatch;
+- a kernel or driver bug returns the restart code to the program with no signal pending.
+
+One situation is different: the kernel did re-execute the call and the mark was right, but
+the enter it announced was sampled out, and the timestamp that should tell that enter from
+the thread's next call of the same syscall cannot:
+
 - on a machine whose clocksource is too coarse to give two syscalls of a thread different
   timestamps (`jiffies`), a sampled-out re-execution followed within the same tick by another
-  call of the same syscall.
+  call of the same syscall, which is then folded in its place.
 
 Kernel-side aggregate counts (sampled-out or aggregate-only syscalls) are per invocation and
 are not folded.

@@ -88,13 +88,17 @@
  * re-executed exit and the next call's enter lost together (that call's exit
  * then looks like the continuation's), or the lost exit of a call interrupted
  * inside the handler (the entry here moves on to the inner call while
- * userspace still holds the outer row). For those userspace refuses a fold
- * whenever the ring-buffer drop counter moved since the interrupted exit
- * (restartDropWatch, read at RESUME and again at the folding exit), and keeps
- * the fold off altogether when it cannot read that counter. With that, a lost
- * record fails towards "not folded"; the remaining assumption is the one all
- * of ior's record-time comparisons make, that ior does not run in a time
- * namespace with a boottime offset.
+ * userspace still holds the outer row). For those userspace folds only when
+ * it can prove that the ring-buffer drop counter has not moved since the
+ * interrupted exit (restartDropWatch: the periodic drop monitor tells it
+ * since when the counter has stood at its value, and it reads the counter
+ * again at RESUME and at the folding exit), and keeps the fold off altogether
+ * when it cannot read that counter. With that, a lost record fails towards
+ * "not folded", and a fold refused after the re-executed enter was already
+ * taken for it still leaves two rows, the interrupted one and the
+ * re-execution; the remaining assumption is the one all of ior's record-time
+ * comparisons make, that ior does not run in a time namespace with a boottime
+ * offset.
  *
  * Cost. The enter hook pays an inlined array lookup, one load and one compare
  * per traced syscall; the exit hook pays one range check of ret. Everything
@@ -117,7 +121,9 @@
  *   - The 32-bit sigreturn of compat tasks is not seen; syscall tracepoints
  *     do not fire for compat syscalls either, so such tasks are never pending.
  *
- * Known wrong folds. All of them need the same two things at once. First, the
+ * Known wrong folds. There are two kinds.
+ *
+ * Stale entries: RESUME is wrong. These need two things at once. First, the
  * entry stands at depth 0 although the kernel is not about to re-execute the
  * call: it outlived the re-execution, or there never was one. Second, the
  * first syscall enter of the task that ior traces after that is an enter of
@@ -135,27 +141,46 @@
  *   - The syscall's probes are detached at runtime (TUI probes view) between
  *     the interrupted exit and the re-execution, and attached again later:
  *     the entry outlives the re-execution it stood for.
- *   - A ptrace tracer rewrites the registers so that the kernel neither
- *     restarts the call nor runs a handler: at the signal-delivery stop (a
- *     gdb inferior call sets orig_ax to -1 and suppresses the signal, and the
- *     called function's first traced syscall is announced), or at the
- *     syscall-exit stop, which comes after the sys_exit tracepoint this file
- *     judges by (strace -e inject replacing the return value).
- *   - Something answers the re-executed call before trace_sys_enter fires, so
- *     the re-execution has no enter here and the entry stays: a seccomp
- *     user-notification supervisor that let the first attempt through and
- *     answers the second itself (or a filter installed in between), or
- *     syscall user dispatch switched on in between (its SIGSYS handler is
- *     then also judged as if it had interrupted the call).
+ *   - A ptrace tracer rewrites the registers of the interrupted call so that
+ *     the kernel neither restarts it nor runs a handler: at the
+ *     signal-delivery stop (a gdb inferior call sets orig_ax to -1 and
+ *     suppresses the signal, and the called function's first traced syscall
+ *     is announced), or at the interrupted call's syscall-exit stop, which
+ *     comes after the sys_exit tracepoint this file judges by (a tracer that
+ *     replaces the restart code in the return register there).
+ *   - Something takes the re-executed call away before its sys_enter
+ *     tracepoint fires, so the re-execution has no enter here and the entry
+ *     stays: a ptrace tracer that, at the re-execution's syscall-entry stop,
+ *     cancels the call or turns it into a syscall ior does not trace (the
+ *     stop comes before the tracepoint, and the per-syscall tracepoint goes
+ *     by the number the tracer left: strace's --inject error= and retval=
+ *     replace it with -1; a number changed to another traced syscall takes
+ *     the RESUME and releases the row instead); a seccomp user-notification
+ *     supervisor that let the first attempt through and answers the second
+ *     itself (or a filter installed in between); or syscall user dispatch
+ *     switched on in between (its SIGSYS handler is then also judged as if it
+ *     had interrupted the call).
  *   - A kernel or driver bug lets -ERESTARTSYS escape with no signal pending:
  *     nothing restarts, the program sees errno 512 and carries on.
+ *
+ * A time rule that cannot tell: RESUME is right. Here the kernel did
+ * re-execute the call and the entry was cleared when it should be, but the
+ * enter RESUME announced was sampled out, and the time rule that keeps the
+ * task's next call of that syscall out of the row has nothing to go by:
  *   - A clocksource too coarse to give two enters of one task different
- *     readings (jiffies) weakens the time rule to "same syscall, same tick";
- *     only then can a sampled-out re-execution still be mistaken.
+ *     readings (jiffies) weakens the rule to "same syscall, same tick". A
+ *     later call of the interrupted syscall that the task enters within the
+ *     tick of the sampled-out re-execution, is sampled in and has its exit
+ *     recorded is then folded in its place.
+ *
  * No longer among them: a recycled tid inheriting the entry of a task that
  * died pending (ior_restart_forget drops it in sched_process_exit, and
- * userspace folds only when that probe attached), and the sampled-out and
- * lost-record cases described above.
+ * userspace folds only when that probe attached); the sampled-out and
+ * lost-record cases described above; and a call interrupted inside a
+ * restarting handler whose interrupted exit pairs with nothing in userspace
+ * (its enter was filtered out or lost) - the exit replaces the entry here,
+ * and in userspace that exit record itself now releases the row the handler
+ * was running for (stepHandlerRecord).
  *
  * Old kernels: the probes use only an ARRAY map, scalar context loads through
  * a CO-RE flavor (the pattern handle_task_newtask uses, see exec.c) and the
