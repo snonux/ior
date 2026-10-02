@@ -129,7 +129,11 @@ single row for it:
 
 A -516 row that is not followed by `restart_syscall` on the same thread stays as it is: a
 handler ran and the program got `EINTR`, or the trace ended (or the thread exited) while the
-call was stopped. A `restart_syscall` row whose interrupted call was not traced (the trace
+call was stopped. Known gap: ior tells "a handler ran" by the handler's records (its syscalls
+or `rt_sigreturn`). In a run that does not record them (for example
+`-trace-syscalls clock_nanosleep,restart_syscall`), a sleep cut by a handled signal can absorb
+the `restart_syscall` of a later stopped call that was not recorded either; trace
+`rt_sigreturn` as well to avoid it. A `restart_syscall` row whose interrupted call was not traced (the trace
 started while the process was stopped, or the original syscall is not traced) also stays.
 And when some other record of the thread arrives between the `restart_syscall` enter and its
 exit (another thread wrote this thread's `comm` through `/proc/<pid>/task/<tid>/comm`), ior no

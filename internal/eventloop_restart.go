@@ -36,6 +36,14 @@ import (
 // And sampling of restart_syscall itself, which no counter reports: a run
 // that samples it does not hold -516 rows at all ("Sampling" below).
 //
+// Open hole (task t13): "the handler's work or its rt_sigreturn" has to be
+// RECORDED to release the row. When a handled signal cut the call (the program
+// got EINTR) and the handler's records are silent - rt_sigreturn outside the
+// trace set, sampled out or detached, a handler leaving by siglongjmp - a
+// later, equally silent call of the thread that gets stopped has its
+// restart_syscall folded into this row, with no record lost and nothing
+// sampled. The fix is the BPF proof of task 103 extended to -516.
+//
 // (2) Re-execution, for -ERESTARTSYS, -ERESTARTNOINTR and -ERESTARTNOHAND
 // (-512/-513/-514; task 103). The kernel rewinds the instruction pointer and
 // the task issues the very same syscall again - but a sys_enter of the same
