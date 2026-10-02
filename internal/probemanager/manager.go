@@ -144,7 +144,31 @@ type Manager struct {
 	closed   bool
 	// changeHook is told of every runtime change of a probe pair (see
 	// SetChangeHook); nil until someone listens.
-	changeHook func(ChangePhase)
+	changeHook func(Change)
+}
+
+// Change is one report to the change hook (SetChangeHook): which probe pair
+// changes, where that change stands, and what it left attached.
+type Change struct {
+	// Syscall is the pair that changes, by the name it is registered under
+	// (the key of Attach, Detach and IsActive).
+	Syscall string
+	// Phase says where the change stands.
+	Phase ChangePhase
+	// Attached says whether the change left the syscall's tracepoints
+	// attached. It is true in one report only: the ChangeEnds of an attach
+	// that returned its links. It is false at ChangeBegins (nothing is
+	// attached yet, and from the next instant something may be), at the
+	// ChangeEnds of an attach that failed - it took back what it had
+	// attached - or whose attacher panicked (what that one attached before
+	// is known to nobody, attachReported), and at Changed, the report of a
+	// detach.
+	//
+	// The report carries it because the manager cannot be asked: a change is
+	// committed only after its last report, so IsActive, called from the
+	// hook, still gives the state from before the change - active throughout
+	// a detach, inactive throughout an attach, whatever came of it.
+	Attached bool
 }
 
 // ChangePhase says where a runtime change of a probe pair stands when the
@@ -178,8 +202,9 @@ func NewManager(attacher Attacher) *Manager {
 // whoever listened is being torn down with it.
 //
 // When it is called is the contract (tasks o03 and x13,
-// internal/eventloop_restart.go). hook is called with the phase of the
-// change, always under the probe's own attach mutex, so the opposite change of
+// internal/eventloop_restart.go). hook is called with the syscall that
+// changes, the phase of the change and what it left attached (Change; task
+// 023), always under the probe's own attach mutex, so the opposite change of
 // the same syscall cannot begin before hook has returned:
 //
 //   - Attach calls it with ChangeBegins BEFORE it attaches anything, and with
@@ -234,8 +259,11 @@ func NewManager(attacher Attacher) *Manager {
 // command goroutine, never the event loop) and without the manager lock, so it
 // may call back into the manager's read methods; it must not call Attach,
 // Detach or Toggle of the same syscall, whose mutex is held, nor set another
-// hook, which would wait for that mutex.
-func (m *Manager) SetChangeHook(hook func(ChangePhase)) {
+// hook, which would wait for that mutex. What those read methods say of the
+// syscall that is changing is its state before the change, at every report:
+// the change is committed after the last one. Change.Attached is how a
+// listener learns the outcome.
+func (m *Manager) SetChangeHook(hook func(Change)) {
 	if m == nil {
 		return
 	}
@@ -263,12 +291,12 @@ func (m *Manager) SetChangeHook(hook func(ChangePhase)) {
 // probe that changes, and not the manager lock, and makes every report of
 // that change through what it got here (SetChangeHook: ChangeBegins and
 // ChangeEnds reach the same listener).
-func (m *Manager) changeReporter() func(ChangePhase) {
+func (m *Manager) changeReporter() func(Change) {
 	m.mu.Lock()
 	hook := m.changeHook
 	m.mu.Unlock()
 	if hook == nil {
-		return func(ChangePhase) {}
+		return func(Change) {}
 	}
 	return hook
 }
@@ -391,7 +419,10 @@ func (m *Manager) Attach(syscall string) error {
 // failure, or a panic of the attacher: a syscall that ran while only one of
 // the two tracepoints was attached was seen in part, what the listener notes
 // now is younger than that, and a listener that counts the attaches under way
-// must not be left counting this one.
+// must not be left counting this one. It says what the attempt left attached
+// (Change.Attached): the pair when attachPair returned its links, and nothing
+// when it failed or never returned - which is what commitAttach then stores
+// as the probe's state, unless the manager was closed meanwhile.
 //
 // Both the end report and the commit are deferred, and deferred calls run
 // last in, first out: the end is reported, then the outcome committed. The
@@ -406,8 +437,8 @@ func (m *Manager) Attach(syscall string) error {
 // An attacher that panics committed nothing before and commits nothing now
 // (attempted): there is no result to store, and an enter link it had attached
 // before the panic is not known to anybody. The real attacher does not panic.
-func (m *Manager) attachReported(syscall string, report func(ChangePhase), attacher Attacher, enterTP, exitTP string) (err error) {
-	report(ChangeBegins)
+func (m *Manager) attachReported(syscall string, report func(Change), attacher Attacher, enterTP, exitTP string) (err error) {
+	report(Change{Syscall: syscall, Phase: ChangeBegins})
 	var (
 		enterLink, exitLink Link
 		attachErr           error
@@ -418,7 +449,12 @@ func (m *Manager) attachReported(syscall string, report func(ChangePhase), attac
 			err = m.commitAttach(syscall, enterLink, exitLink, attachErr)
 		}
 	}()
-	defer report(ChangeEnds)
+	defer func() {
+		// Read here, not when the call is deferred: the links exist only
+		// once attachPair has returned.
+		attached := enterLink != nil || exitLink != nil
+		report(Change{Syscall: syscall, Phase: ChangeEnds, Attached: attached})
+	}()
 	enterLink, exitLink, attachErr = attachPair(attacher, enterTP, exitTP)
 	attempted = true
 	return nil
@@ -545,7 +581,7 @@ func (m *Manager) Detach(syscall string) error {
 		// Reported once the links are gone and before attachMu is released
 		// (SetChangeHook): what the listener notes is younger than anything
 		// the old attachment saw, and a re-attach cannot start before it.
-		m.changeReporter()(Changed)
+		m.changeReporter()(Change{Syscall: syscall, Phase: Changed})
 	}
 	return m.commitDetach(entry, destroyed, detachError(syscall, enterErr, exitErr))
 }

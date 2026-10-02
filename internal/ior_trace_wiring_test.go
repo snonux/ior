@@ -148,7 +148,7 @@ func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
 	prog.during = func(string) { inFlight = append(inFlight, f.el.restarts.probes.inFlight.Load()) }
 
 	f.clockAt(100)
-	f.el.watchProbeChanges(mgr.SetChangeHook)
+	f.el.watchProbeChanges(mgr.SetChangeHook, mgr.IsActive)
 	if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != 100 || clears != 1 {
 		t.Fatalf("after installing the hook: stamp=%d clears=%d, want the install stamp 100 and one clear", stamp, clears)
 	}
@@ -194,7 +194,7 @@ type attachWindowRun struct {
 
 // newAttachWindowRun builds that run. listen is what the loop registers its
 // hook through: the manager's SetChangeHook, or a wrapper of it.
-func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(func(probemanager.ChangePhase))) *attachWindowRun {
+func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(func(probemanager.Change))) *attachWindowRun {
 	t.Helper()
 	r := &attachWindowRun{f: newReexecFixture(t, globalfilter.Filter{}),
 		prog: &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}}
@@ -206,7 +206,7 @@ func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(fu
 	t.Cleanup(func() { _ = mgr.Close() })
 	r.mgr = mgr
 	r.f.clockAt(restartBase - 1000)
-	r.f.el.watchProbeChanges(listen(mgr))
+	r.f.el.watchProbeChanges(listen(mgr), mgr.IsActive)
 	return r
 }
 
@@ -224,7 +224,7 @@ func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(fu
 // (TestRowInterruptedDuringAProbeAttachIsNotHeldByALaggingLoop). Either way
 // the restart_syscall is a row of its own.
 func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing.T) {
-	r := newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.ChangePhase)) {
+	r := newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.Change)) {
 		return mgr.SetChangeHook
 	})
 	f := r.f
@@ -269,13 +269,13 @@ func TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns(t *tes
 	beforeTheEndIsNoted := func() {
 		rows = append(rows, r.f.feed(r.f.restartExit(restartBase+3000, restartTid, 0))...)
 	}
-	r = newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.ChangePhase)) {
-		return func(hook func(probemanager.ChangePhase)) {
-			mgr.SetChangeHook(func(phase probemanager.ChangePhase) {
-				if phase == probemanager.ChangeEnds {
+	r = newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.Change)) {
+		return func(hook func(probemanager.Change)) {
+			mgr.SetChangeHook(func(change probemanager.Change) {
+				if change.Phase == probemanager.ChangeEnds {
 					beforeTheEndIsNoted()
 				}
-				hook(phase)
+				hook(change)
 			})
 		}
 	})
@@ -323,7 +323,7 @@ func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	if !isSelector || !isIdentifier(receiver.X, "el") {
 		t.Fatal("watchProbeChanges must be called on the event loop el")
 	}
-	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook"})
+	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook", "infra.mgr.IsActive"})
 	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes != nil")
 	// A headless loop that listens takes the install's stamp and refuses the
 	// folds of the calls interrupted before it, for nothing.
@@ -331,6 +331,86 @@ func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
 		t.Fatalf("watchProbeChanges at %s must precede the start signal", fset.Position(call.Pos()))
 	}
+}
+
+// tuiProbeRun is a loop that listens to a real probe manager (fake attacher)
+// as a TUI run's does, through the two method values the setup passes. The
+// manager has clock_nanosleep attached and restart_syscall registered and not
+// attached: a TUI session started without it.
+type tuiProbeRun struct {
+	f        *restartFixture
+	mgr      *probemanager.Manager
+	attacher *fakeProbeAttacher
+}
+
+func newTUIProbeRun(t *testing.T) *tuiProbeRun {
+	t.Helper()
+	r := &tuiProbeRun{f: newReexecFixture(t, globalfilter.Filter{}),
+		attacher: &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}}
+	onlyTheSleep := func(tp string) bool { return strings.HasSuffix(tp, "_clock_nanosleep") }
+	mgr, err := attachSyscallProbes(r.attacher, onlyTheSleep,
+		syscallPairNames("clock_nanosleep", "restart_syscall"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	r.mgr = mgr
+	r.f.clockAt(restartBase - 1000)
+	r.f.el.watchProbeChanges(mgr.SetChangeHook, mgr.IsActive)
+	return r
+}
+
+// TestStoppedSleepFollowsTheRestartSyscallProbeOfARealManager drives the
+// loop's knowledge of restart_syscall's probes through a real
+// probemanager.Manager (task 023): what IsActive says at the install, and
+// what the reports of Attach and Detach carry. A manager-side change in how
+// a report names its syscall, or in what it says the change left attached,
+// would otherwise leave every TUI session holding -516 rows again, or never
+// folding one.
+func TestStoppedSleepFollowsTheRestartSyscallProbeOfARealManager(t *testing.T) {
+	r := newTUIProbeRun(t)
+	f := r.f
+	f.requireStoppedSleepNotHeld(restartBase)
+
+	f.clockAt(restartBase + 10_000)
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	attached := restartBase + 20_000
+	requireFoldedSleep(t, f.foldSleep(attached), attached, "restart_syscall was attached at runtime")
+
+	f.clockAt(restartBase + 30_000)
+	if err := r.mgr.Detach("restart_syscall"); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	f.requireStoppedSleepNotHeld(restartBase + 40_000)
+
+	// The sleep's own probes change: restart_syscall's state must not.
+	f.clockAt(restartBase + 50_000)
+	for _, change := range []func(string) error{r.mgr.Detach, r.mgr.Attach} {
+		if err := change("clock_nanosleep"); err != nil {
+			t.Fatalf("probe change of clock_nanosleep: %v", err)
+		}
+	}
+	f.requireStoppedSleepNotHeld(restartBase + 60_000)
+}
+
+// TestFailedAttachOfRestartSyscallLeavesStoppedSleepsUnheld: an attach of
+// restart_syscall that fails through the real manager is reported as having
+// left nothing attached, and the loop goes on emitting -516 rows at their
+// exit. Without the outcome in the report it would hold them from the
+// attach's first report on, with nothing attached to end the wait.
+func TestFailedAttachOfRestartSyscallLeavesStoppedSleepsUnheld(t *testing.T) {
+	r := newTUIProbeRun(t)
+	r.attacher.err = errors.New("no such program")
+	r.f.clockAt(restartBase - 500)
+	if err := r.mgr.Attach("restart_syscall"); err == nil {
+		t.Fatal("Attach with a failing attacher returned nil")
+	}
+	if r.mgr.IsActive("restart_syscall") {
+		t.Fatal("restart_syscall is active after its attach failed")
+	}
+	r.f.requireStoppedSleepNotHeld(restartBase)
 }
 
 // TestTraceSetIsFinalWithARealProbeManager drives traceSetIsFinal through a

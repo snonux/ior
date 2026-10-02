@@ -40,8 +40,8 @@ func (h *hookedRead) recordedError(t *testing.T) string {
 // the next Attach attached a second pair, and every record came twice.
 func TestAttachWhoseEndReportPanicsKeepsItsLinks(t *testing.T) {
 	h := newHookedRead(t, false)
-	h.mgr.SetChangeHook(func(phase ChangePhase) {
-		if phase == ChangeEnds {
+	h.mgr.SetChangeHook(func(change Change) {
+		if change.Phase == ChangeEnds {
 			panic("listener failed")
 		}
 	})
@@ -71,7 +71,7 @@ func TestAttachWhoseEndReportPanicsKeepsItsLinks(t *testing.T) {
 func TestAttachIsCommittedAfterItsEndReport(t *testing.T) {
 	h := newHookedRead(t, false)
 	var activeAt []bool
-	h.mgr.SetChangeHook(func(ChangePhase) { activeAt = append(activeAt, h.mgr.IsActive("read")) })
+	h.mgr.SetChangeHook(func(Change) { activeAt = append(activeAt, h.mgr.IsActive("read")) })
 	if err := h.mgr.Attach("read"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}

@@ -31,7 +31,7 @@ import (
 func (f *restartFixture) changeProbes(at uint64) {
 	f.t.Helper()
 	f.clockAt(at)
-	f.el.probesChanged(probemanager.Changed)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 }
 
 // beginAttach is the first report of a runtime attach, made at boot-clock
@@ -39,14 +39,14 @@ func (f *restartFixture) changeProbes(at uint64) {
 func (f *restartFixture) beginAttach(at uint64) {
 	f.t.Helper()
 	f.clockAt(at)
-	f.el.probesChanged(probemanager.ChangeBegins)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.ChangeBegins})
 }
 
 // endAttach is the second report of that attach, made at boot-clock time at.
 func (f *restartFixture) endAttach(at uint64) {
 	f.t.Helper()
 	f.clockAt(at)
-	f.el.probesChanged(probemanager.ChangeEnds)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.ChangeEnds})
 }
 
 // noticeProbeChange is the loop's select case for a probe change: it takes the
@@ -175,7 +175,7 @@ func TestRestartSyscallAfterAProbeChangeIsNotFoldedIntoTheHeldSleep(t *testing.T
 		f.el.dropStampClock = func() uint64 { return now }
 		f.interrupt(restartBase, restartTid)
 		now = restartBase + 10_000
-		f.el.probesChanged(probemanager.Changed)
+		f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 
 		now = restartBase + 30_050
 		sleep := f.feedOne(f.resumeRecord(restartBase+30_000, restartTid), "stale RESUME record")
@@ -351,7 +351,7 @@ func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	}
 	f.el.restartPending = pending
 
-	f.el.probesChanged(probemanager.Changed)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	if got := pending.clears.Load(); got != 1 || pending.clearedAt[0] != 100 {
 		t.Fatalf("clears = %d at %v, want one clear, begun at 100", got, pending.clearedAt)
 	}
@@ -361,7 +361,7 @@ func TestProbeChangeClearsTheKernelsPendingRestarts(t *testing.T) {
 	if got := f.el.restarts.probes.changedAt.Load(); got != 500 {
 		t.Fatalf("change stamp = %d, want 500, the reading taken after the clear", got)
 	}
-	f.el.probesChanged(probemanager.Changed)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	if got := pending.clears.Load(); got != 2 {
 		t.Fatalf("clears = %d after a second change, want 2", got)
 	}
@@ -413,7 +413,7 @@ func TestFailedClearOfPendingRestartsIsReportedByTheLoop(t *testing.T) {
 	changed := make(chan struct{})
 	go func() {
 		defer close(changed)
-		f.el.probesChanged(probemanager.Changed)
+		f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	}()
 	// Nothing orders this write with the hook: the channel is read afterwards.
 	var warnings []string
@@ -439,15 +439,15 @@ func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	pending := &scriptedPendingClearer{}
 	f.el.restartPending = pending
 	f.clockAt(restartBase + 600)
-	var hook func(probemanager.ChangePhase)
-	f.el.watchProbeChanges(func(registered func(probemanager.ChangePhase)) {
+	var hook func(probemanager.Change)
+	f.el.watchProbeChanges(func(registered func(probemanager.Change)) {
 		hook = registered
 		// The hook must exist before the install is reported: a change that
 		// races the install is then reported by one or the other.
 		if pending.clears.Load() != 0 || f.el.restarts.probes.changedAt.Load() != 0 {
 			t.Error("the install was reported before the hook was registered")
 		}
-	})
+	}, onlyRestartSyscall)
 	if hook == nil {
 		t.Fatal("watchProbeChanges registered no hook")
 	}
@@ -461,7 +461,7 @@ func TestWatchProbeChangesHooksTheManagerAndReportsOnce(t *testing.T) {
 	requireInterruptedRow(t, f.feedOne(f.readExit(restartBase+500, restartTid, restartSys), "interrupted read exit"), restartSys)
 
 	f.clockAt(restartBase + 5000)
-	hook(probemanager.Changed)
+	hook(probemanager.Change{Phase: probemanager.Changed})
 	if got := f.el.restarts.probes.changedAt.Load(); got != restartBase+5000 {
 		t.Fatalf("change stamp = %d after the registered hook ran, want %d", got, restartBase+5000)
 	}
@@ -530,7 +530,7 @@ func TestRunningLoopReleasesAHeldRowWhenProbesChange(t *testing.T) {
 	}
 
 	r.now.Store(restartBase + 1000)
-	r.f.el.probesChanged(probemanager.Changed)
+	r.f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	select {
 	case row := <-r.rows:
 		if row.name != "clock_nanosleep" || row.tid != restartTid || row.ret != -516 {
@@ -551,7 +551,7 @@ func TestRunningLoopReportsAFailedClearOfPendingRestarts(t *testing.T) {
 		el.SetWarningCallback(func(message string) { warnings <- message })
 	})
 	r.now.Store(restartBase)
-	r.f.el.probesChanged(probemanager.Changed)
+	r.f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	requireFailedClearWarning(t, warnings, "after a probe change")
 }
 
@@ -581,15 +581,16 @@ func TestLoopReportsAClearThatFailedAtTheInstallWhenItStarts(t *testing.T) {
 	warnings := make(chan string, 8)
 	startProbeChangeRunWith(t, func(el *eventLoop) {
 		el.restartPending = &scriptedPendingClearer{err: errors.New("bad file descriptor")}
-		el.watchProbeChanges(func(func(probemanager.ChangePhase)) {})
+		el.watchProbeChanges(func(func(probemanager.Change)) {}, onlyRestartSyscall)
 		el.SetWarningCallback(func(message string) { warnings <- message })
 	})
 	requireFailedClearWarning(t, warnings, "of the install when it started")
 }
 
 // holdStoppedSleep feeds the running loop a sleep of restartTid that is stopped
-// (-516) and held. The third record is only a marker: the loop takes it after
-// it has finished the -516 exit, so the row is held when this returns.
+// (-516) and held - in a run that holds such rows. The third record is only a
+// marker: the loop takes it after it has finished the -516 exit, so the row is
+// held, or emitted, when this returns.
 func (r *probeChangeRun) holdStoppedSleep() {
 	r.rawCh <- r.f.sleepEnter(restartBase, restartTid)
 	r.rawCh <- r.f.sleepExit(restartBase+500, restartTid, -516)
@@ -614,7 +615,7 @@ func TestRowReleasedByAProbeChangeIsFlushedInAPlainRun(t *testing.T) {
 	})
 	r.holdStoppedSleep()
 	r.now.Store(restartBase + 1000)
-	r.f.el.probesChanged(probemanager.Changed)
+	r.f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -629,14 +630,26 @@ func TestRowReleasedByAProbeChangeIsFlushedInAPlainRun(t *testing.T) {
 	}
 }
 
-// changeProbesUntil reports probe changes from two goroutines, each at a new
-// clock reading - a detach, then an attach's begin and its end, over and over
-// - until the returned function is called; that function waits for both to
-// finish, each with its last attach ended.
-func (r *probeChangeRun) changeProbesUntil() func() {
+// detachAndAttach is the reports of one syscall's probes being switched off
+// and on again: a detach, then an attach's begin and its end.
+func detachAndAttach(syscall string) []probemanager.Change {
+	return []probemanager.Change{
+		{Syscall: syscall, Phase: probemanager.Changed},
+		{Syscall: syscall, Phase: probemanager.ChangeBegins},
+		{Syscall: syscall, Phase: probemanager.ChangeEnds, Attached: true},
+	}
+}
+
+// changeProbesUntil reports probe changes from one goroutine per cycle, each
+// report at a new clock reading and each goroutine its cycle over and over,
+// until the returned function is called; that function waits for all of them
+// to finish, each at the end of its cycle. A cycle must end every attach it
+// begins, and no two may report about the same syscall at once: the probe
+// manager makes the reports of one syscall one after the other.
+func (r *probeChangeRun) changeProbesUntil(cycles ...[]probemanager.Change) func() {
 	var changers sync.WaitGroup
 	stopChanging := make(chan struct{})
-	for range 2 {
+	for _, cycle := range cycles {
 		changers.Add(1)
 		go func() {
 			defer changers.Done()
@@ -645,11 +658,9 @@ func (r *probeChangeRun) changeProbesUntil() func() {
 				case <-stopChanging:
 					return
 				default:
-					for _, phase := range []probemanager.ChangePhase{
-						probemanager.Changed, probemanager.ChangeBegins, probemanager.ChangeEnds,
-					} {
+					for _, change := range cycle {
 						r.now.Add(1)
-						r.f.el.probesChanged(phase)
+						r.f.el.probesChanged(change)
 					}
 				}
 			}
@@ -658,6 +669,20 @@ func (r *probeChangeRun) changeProbesUntil() func() {
 	return func() {
 		close(stopChanging)
 		changers.Wait()
+	}
+}
+
+// feedStoppedSleeps feeds the running loop n sleeps of restartTid, each
+// stopped, announced and resumed by a restart_syscall that returns 0, on a
+// clock that moves on by 10 us per sleep.
+func (r *probeChangeRun) feedStoppedSleeps(n int) {
+	for range n {
+		base := r.now.Add(10_000)
+		r.rawCh <- r.f.sleepEnter(base, restartTid)
+		r.rawCh <- r.f.sleepExit(base+500, restartTid, -516)
+		r.rawCh <- r.f.resumeRecord(base+800, restartTid)
+		r.rawCh <- r.f.restartEnter(base+800, restartTid)
+		r.rawCh <- r.f.restartExit(base+3000, restartTid, 0)
 	}
 }
 
@@ -673,15 +698,8 @@ func TestProbeChangesRaceWithTheRunningLoop(t *testing.T) {
 	pending := &scriptedPendingClearer{}
 	r.f.el.restartPending = pending
 
-	stopChanging := r.changeProbesUntil()
-	for range sleeps {
-		base := r.now.Add(10_000)
-		r.rawCh <- r.f.sleepEnter(base, restartTid)
-		r.rawCh <- r.f.sleepExit(base+500, restartTid, -516)
-		r.rawCh <- r.f.resumeRecord(base+800, restartTid)
-		r.rawCh <- r.f.restartEnter(base+800, restartTid)
-		r.rawCh <- r.f.restartExit(base+3000, restartTid, 0)
-	}
+	stopChanging := r.changeProbesUntil(detachAndAttach(""), detachAndAttach(""))
+	r.feedStoppedSleeps(sleeps)
 	stopChanging()
 	r.stop()
 
@@ -697,6 +715,98 @@ func TestProbeChangesRaceWithTheRunningLoop(t *testing.T) {
 	if got := r.f.el.restarts.probes.inFlight.Load(); got != 0 {
 		t.Fatalf("%d attaches in flight after every begin was followed by its end, want 0", got)
 	}
+}
+
+// restartSyscallOffAndOn is the reports of restart_syscall's probes being
+// switched off, on, off again and then failing to come on: every way its
+// state moves (task 023).
+func restartSyscallOffAndOn() []probemanager.Change {
+	failed := []probemanager.Change{
+		{Syscall: "restart_syscall", Phase: probemanager.Changed},
+		{Syscall: "restart_syscall", Phase: probemanager.ChangeBegins},
+		{Syscall: "restart_syscall", Phase: probemanager.ChangeEnds},
+	}
+	return append(detachAndAttach("restart_syscall"), failed...)
+}
+
+// sleepRowTally counts the rows the stopped sleeps of feedStoppedSleeps can
+// end as: the folded sleep, the sleep left at its -516 exit, and the
+// restart_syscall as a row of its own. Any other row is wrong.
+type sleepRowTally struct {
+	folded, interrupted, restarts int
+	wrong                         []restartRow
+}
+
+func tallySleepRows(rows <-chan restartRow) sleepRowTally {
+	var tally sleepRowTally
+	for range len(rows) {
+		switch row := <-rows; {
+		case row.name == "clock_nanosleep" && row.ret == 0 && row.duration == 3000:
+			tally.folded++
+		case row.name == "clock_nanosleep" && row.ret == -516 && row.duration == 500:
+			tally.interrupted++
+		case row.name == "restart_syscall" && row.ret == 0 && row.duration == 2200:
+			tally.restarts++
+		default:
+			tally.wrong = append(tally.wrong, row)
+		}
+	}
+	return tally
+}
+
+// TestRestartSyscallProbeChangesRaceWithTheRunningLoop: the state of
+// restart_syscall's probes is written by the goroutine that changes them
+// while the loop decides, row by row, whether to hold a stopped sleep (task
+// 023). Run with -race. Whatever the interleaving, every sleep is one folded
+// row or its -516 row followed by its restart_syscall's row - none lost, none
+// made of the pieces of two - and nothing is left held.
+func TestRestartSyscallProbeChangesRaceWithTheRunningLoop(t *testing.T) {
+	const sleeps = 300
+	r := startProbeChangeRunWith(t, func(el *eventLoop) {
+		el.watchProbeChanges(func(func(probemanager.Change)) {}, allButRestartSyscall)
+	})
+
+	stopChanging := r.changeProbesUntil(restartSyscallOffAndOn(), detachAndAttach("clock_nanosleep"))
+	r.feedStoppedSleeps(sleeps)
+	stopChanging()
+	r.stop()
+
+	tally := tallySleepRows(r.rows)
+	if len(tally.wrong) != 0 {
+		t.Fatalf("rows that are no piece of a stopped sleep: %+v", tally.wrong)
+	}
+	if tally.folded+tally.interrupted != sleeps || tally.restarts != tally.interrupted {
+		t.Fatalf("%d folded sleeps, %d -516 sleeps and %d restart_syscall rows for %d stopped sleeps, "+
+			"want every sleep once and one restart_syscall row per sleep that was not folded",
+			tally.folded, tally.interrupted, tally.restarts, sleeps)
+	}
+	r.f.requireNothingHeld()
+	if got := r.f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after every begin was followed by its end, want 0", got)
+	}
+}
+
+// TestRunningLoopEmitsAStoppedSleepAtOnceWithRestartSyscallDetached: a TUI
+// run that does not trace restart_syscall (task 023). The stopped thread
+// produces nothing more and no probe changes, so nothing would release a held
+// row; the loop emits it with the -516 exit itself. With restart_syscall
+// attached the same records leave the row held
+// (TestRunningLoopReleasesAHeldRowWhenProbesChange).
+func TestRunningLoopEmitsAStoppedSleepAtOnceWithRestartSyscallDetached(t *testing.T) {
+	r := startProbeChangeRunWith(t, func(el *eventLoop) {
+		el.watchProbeChanges(func(func(probemanager.Change)) {}, allButRestartSyscall)
+	})
+	r.holdStoppedSleep()
+	select {
+	case row := <-r.rows:
+		if row.name != "clock_nanosleep" || row.tid != restartTid || row.ret != -516 || row.duration != 500 {
+			t.Fatalf("row = %+v, want the -516 sleep as it was at its exit", row)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the -516 row was held although restart_syscall's probes are detached")
+	}
+	r.stop()
+	r.f.requireNothingHeld()
 }
 
 // The tests below are about an attach in flight (task x13). The probe manager
@@ -855,7 +965,7 @@ func TestProbeAttachIsCountedBeforeItsFirstReadingAndUntilItsLast(t *testing.T) 
 
 	for _, phase := range []probemanager.ChangePhase{probemanager.ChangeBegins, probemanager.ChangeEnds} {
 		counted = nil
-		f.el.probesChanged(phase)
+		f.el.probesChanged(probemanager.Change{Phase: phase})
 		// Two clock readings around one clear, all with the attach counted.
 		if len(counted) != 3 || counted[0] != 1 || counted[1] != 1 || counted[2] != 1 {
 			t.Fatalf("attaches in flight at the stamps and the clear of report %d = %v, want 1 at each", phase, counted)
@@ -865,7 +975,7 @@ func TestProbeAttachIsCountedBeforeItsFirstReadingAndUntilItsLast(t *testing.T) 
 		t.Fatalf("after the end: %d attaches in flight, stamp %d; want 0 and the last reading %d", got, stamp, now)
 	}
 	counted = nil
-	f.el.probesChanged(probemanager.Changed)
+	f.el.probesChanged(probemanager.Change{Phase: probemanager.Changed})
 	if len(counted) != 3 || counted[0] != 0 || counted[2] != 0 || watch.inFlight.Load() != 0 {
 		t.Fatalf("attaches in flight during and after a detach's report = %v, want none", counted)
 	}
@@ -888,8 +998,8 @@ type endOrderWatch struct {
 func (o *endOrderWatch) report(el *eventLoop, n int) {
 	defer o.done.Store(true)
 	for range n {
-		el.probesChanged(probemanager.ChangeBegins)
-		el.probesChanged(probemanager.ChangeEnds)
+		el.probesChanged(probemanager.Change{Phase: probemanager.ChangeBegins})
+		el.probesChanged(probemanager.Change{Phase: probemanager.ChangeEnds})
 	}
 }
 

@@ -319,7 +319,7 @@ func TestCloseDestroysAnAttachedPairOnceDespiteErrors(t *testing.T) {
 // of its commit, and Close must still find no link to destroy again.
 func TestDetachWhoseHookPanicsLeavesNoLinkToDestroyAgain(t *testing.T) {
 	h := newHookedRead(t, true)
-	h.mgr.SetChangeHook(func(ChangePhase) { panic("listener failed") })
+	h.mgr.SetChangeHook(func(Change) { panic("listener failed") })
 	func() {
 		defer func() {
 			if recover() == nil {

@@ -1187,7 +1187,10 @@ func setupTraceInfraWithEventLoop(
 //     for syscalls that really attached (raw modes; a no-op for the TUI, which
 //     has no tally); the probe manager's runtime changes reported to the
 //     loop, which then keeps the restart folds off the calls interrupted
-//     before one (task o03) - only when the manager was published to a TUI
+//     before one (task o03) and holds no stopped sleep's row while
+//     restart_syscall's probes are off (task 023; the loop asks IsActive
+//     once, for the state it starts from) - only when the manager was
+//     published to a TUI
 //     (hooks.probes, the same test attachSessionProbes calls headless): no
 //     headless run can change a probe, and listening is not free, it starts
 //     with a stamp that refuses the folds of every call interrupted before
@@ -1247,7 +1250,7 @@ func runTraceSetup(
 		el.restrictSamplingToActive(infra.mgr.IsActive)
 	}
 	if infra.mgr != nil && hooks.probes != nil {
-		el.watchProbeChanges(infra.mgr.SetChangeHook)
+		el.watchProbeChanges(infra.mgr.SetChangeHook, infra.mgr.IsActive)
 	}
 	if infra.mgr != nil && hooks.probes == nil {
 		el.traceSetIsFinal(infra.mgr.IsActive)

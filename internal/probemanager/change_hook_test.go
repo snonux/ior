@@ -65,6 +65,7 @@ type hookedRead struct {
 	enter, exit  *fakeProgram
 	calls        int
 	phases       []ChangePhase
+	changes      []Change // the reports in full: syscall, phase, outcome
 	attachesSeen [][2]int // enter and exit AttachTracepoint calls so far
 	destroysSeen [][2]int // enter and exit link Destroy calls so far
 }
@@ -89,9 +90,10 @@ func newHookedRead(t *testing.T, attached bool) *hookedRead {
 	return h
 }
 
-func (h *hookedRead) observe(phase ChangePhase) {
+func (h *hookedRead) observe(change Change) {
 	h.calls++
-	h.phases = append(h.phases, phase)
+	h.changes = append(h.changes, change)
+	h.phases = append(h.phases, change.Phase)
 	h.attachesSeen = append(h.attachesSeen, [2]int{h.enter.attachCalls(), h.exit.attachCalls()})
 	h.destroysSeen = append(h.destroysSeen, [2]int{h.enter.link.destroyCalls(), h.exit.link.destroyCalls()})
 }
@@ -233,13 +235,64 @@ func TestChangeHookReportsFailedChanges(t *testing.T) {
 	}
 }
 
+// reportedChange is one way a probe pair changes at runtime, with the reports
+// the hook must get of it in full: change makes the change on a manager whose
+// read probe is attached at the start or not (startAttached).
+type reportedChange struct {
+	startAttached bool
+	change        func(t *testing.T, h *hookedRead)
+	want          []Change
+}
+
+func reportedChanges() map[string]reportedChange {
+	begins := Change{Syscall: "read", Phase: ChangeBegins}
+	return map[string]reportedChange{
+		"an attach": {change: func(_ *testing.T, h *hookedRead) { _ = h.mgr.Attach("read") },
+			want: []Change{begins, {Syscall: "read", Phase: ChangeEnds, Attached: true}}},
+		"an attach whose exit tracepoint fails": {change: func(_ *testing.T, h *hookedRead) {
+			h.exit.err = errors.New("no such tracepoint")
+			_ = h.mgr.Attach("read")
+		}, want: []Change{begins, {Syscall: "read", Phase: ChangeEnds}}},
+		"an attach whose attacher panics": {change: func(t *testing.T, h *hookedRead) {
+			h.enter.onAttach = func() { panic("attach failed hard") }
+			expectPanic(t, "Attach did not pass the attacher's panic on", func() { _ = h.mgr.Attach("read") })
+		}, want: []Change{begins, {Syscall: "read", Phase: ChangeEnds}}},
+		"a detach": {startAttached: true, change: func(_ *testing.T, h *hookedRead) { _ = h.mgr.Detach("read") },
+			want: []Change{{Syscall: "read", Phase: Changed}}},
+	}
+}
+
+// TestChangeReportNamesTheSyscallAndWhatItLeftAttached: a report says which
+// pair changes and whether the change left it attached (task 023). The event
+// loop keeps the state of restart_syscall's probes from that, and cannot ask
+// the manager instead: a change is committed after its last report, so
+// IsActive still gives the state from before it
+// (TestAttachIsCommittedAfterItsEndReport,
+// TestChangeHookCanBeRemovedAndMayReadTheManager). "Attached" is true at the
+// end of an attach that has its links and nowhere else - not at its begin,
+// when nothing is attached yet, and not when the attach failed or panicked.
+func TestChangeReportNamesTheSyscallAndWhatItLeftAttached(t *testing.T) {
+	for name, tc := range reportedChanges() {
+		t.Run(name, func(t *testing.T) {
+			h := newHookedRead(t, tc.startAttached)
+			tc.change(t, h)
+			if !slices.Equal(h.changes, tc.want) {
+				t.Fatalf("reports = %+v, want %+v", h.changes, tc.want)
+			}
+			if got := h.mgr.IsActive("read"); got != tc.want[len(tc.want)-1].Attached {
+				t.Fatalf("IsActive = %t after the change, want what its last report said: %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestChangeHookCanBeRemovedAndMayReadTheManager: a nil hook stops the
 // reports, and a hook runs without the manager lock, so it can ask the manager
 // what is attached (the detach's own state is committed only afterwards).
 func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 	h := newHookedRead(t, true)
 	var activeInHook bool
-	h.mgr.SetChangeHook(func(ChangePhase) { activeInHook = h.mgr.IsActive("read") })
+	h.mgr.SetChangeHook(func(Change) { activeInHook = h.mgr.IsActive("read") })
 	if err := h.mgr.Detach("read"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -252,7 +305,7 @@ func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 		t.Fatalf("Attach without a hook: %v", err)
 	}
 	var none *Manager
-	none.SetChangeHook(func(ChangePhase) {}) // a nil manager has nothing to report
+	none.SetChangeHook(func(Change) {}) // a nil manager has nothing to report
 }
 
 // TestChangeHookHoldsBackTheOppositeChange: the detach's report must be over
@@ -262,7 +315,7 @@ func TestChangeHookCanBeRemovedAndMayReadTheManager(t *testing.T) {
 func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 	h := newHookedRead(t, true)
 	inHook, leaveHook := make(chan struct{}), make(chan struct{})
-	h.mgr.SetChangeHook(func(ChangePhase) {
+	h.mgr.SetChangeHook(func(Change) {
 		close(inHook)
 		<-leaveHook
 	})
@@ -299,7 +352,7 @@ func TestChangeHookHoldsBackTheOppositeChange(t *testing.T) {
 func TestFamilyBatchReportsEachProbeItChanges(t *testing.T) {
 	mgr := newFamilyTestManager(t) // read attached; write, socket, connect, nanosleep not
 	var phases []ChangePhase
-	mgr.SetChangeHook(func(phase ChangePhase) { phases = append(phases, phase) })
+	mgr.SetChangeHook(func(change Change) { phases = append(phases, change.Phase) })
 
 	result, err := mgr.AttachFamily(context.Background(), types.FamilyFS, nil)
 	if err != nil || result.Changed != 1 {
@@ -395,7 +448,7 @@ func (h *hookedRead) setHookDuring(t *testing.T, finish func() error) *[]ChangeP
 	installed := make(chan struct{})
 	go func() {
 		defer close(installed)
-		h.mgr.SetChangeHook(func(phase ChangePhase) { *told = append(*told, phase) })
+		h.mgr.SetChangeHook(func(change Change) { *told = append(*told, change.Phase) })
 	}()
 	parkwait.Await{Frame: frame, Reasons: []string{parkwait.MutexLock, parkwait.Semacquire}, Baseline: baseline,
 		Done: installed, DoneMsg: "SetChangeHook returned while a change was under way",

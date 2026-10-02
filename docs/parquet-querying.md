@@ -144,14 +144,13 @@ that.
 
 A -516 row therefore stays as it is when a handler ran and the program got `EINTR`, when the
 trace ended (or the thread exited) while the call was stopped, and when `restart_syscall` is not
-traced. In that last case a headless run (`-parquet`, `-plain`, `-flamegraph`) writes the -516
-row when the call is interrupted: its syscalls are fixed for the whole run, so ior knows that
-nothing will continue the row. In the TUI, where syscalls can be switched on and off while
-tracing, the row is also late: nothing ior records marks the moment the call is resumed, so the
--516 row appears only with the thread's next traced syscall or its exit, which can be seconds
-after the stop (typically the rest of the sleep). The row itself is correct; only its place in
-the output and the time it shows up are affected. Trace `restart_syscall` along with the
-sleeping syscalls to get one row per sleep, and in the TUI to avoid the delay. A
+traced. In that last case ior writes the -516 row when the call is interrupted, because it
+knows that nothing will continue the row: in a headless run (`-parquet`, `-plain`,
+`-flamegraph`) the syscalls are fixed for the whole run, and in the TUI, where syscalls can be
+switched on and off while tracing, ior follows the `restart_syscall` probe - a call stopped
+while that probe is off is written at once, and a row that was waiting when you switch the
+probe off is written at that moment. Trace `restart_syscall` along with the sleeping syscalls
+to get one row per sleep. A
 `restart_syscall` row whose interrupted call was not traced (the trace started while the process
 was stopped, or the original syscall is not traced) also stays. And when some other record of
 the thread arrives between the `restart_syscall` enter and its exit (another thread wrote this
@@ -370,11 +369,10 @@ carried on, such a row appears in the stream only when ior sees the thread's nex
 syscall, the signal handler being delivered, or the thread's exit (for a folded call, when
 the call completes; in the TUI also when you change probes), so rows of other threads may be
 listed before it. For a row that
-stays as it is the wait is usually microseconds, except for a stopped sleep (-516) in a TUI
-session that does not trace `restart_syscall`: that row appears only with the thread's next
-traced syscall or its exit, seconds later for a long sleep (see "A stopped sleep is one row").
-A headless run that does not trace `restart_syscall` does not wait for such a row at all,
-and neither does any run, TUI or headless, that samples `restart_syscall`.
+stays as it is the wait is usually microseconds. A run that does not trace `restart_syscall` -
+a headless run, or a TUI session for as long as that probe is switched off - does not wait for
+a stopped sleep (-516) at all, and neither does any run that samples `restart_syscall` (see
+"A stopped sleep is one row").
 
 ### Syscalls that never return
 

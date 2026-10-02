@@ -201,8 +201,8 @@ import (
 //     appeared at the exit as well. With the guard every -516 row of such a
 //     run is emitted by its own exit (TestSampledRestartSyscallRowIsNotHeld).
 //     It is the delay described under "Output order" below for a
-//     restart_syscall that is not traced, which a run with a fixed trace set
-//     no longer has.
+//     restart_syscall that is not traced, which no run has any more (tasks
+//     u13 and 023).
 //   - The time rule cannot tell on a clocksource too coarse to give two
 //     enters of a thread different readings (jiffies; see "A time rule that
 //     cannot tell" in restart.c). The later call's restart_syscall then
@@ -421,7 +421,8 @@ import (
 //
 //   - Hold (waiting): a pair whose exit carries -516 (a *types.RetEvent, in
 //     a run whose probes make RESUME a proof, that does not sample
-//     restart_syscall and whose trace set is not fixed without it), or
+//     restart_syscall, whose trace set is not fixed without it and whose
+//     restart_syscall probes are not switched off at the moment), or
 //     -512/-513/-514 when re-execution folding is on, is parked here instead
 //     of being completed (tracepointExited). Its exit handler, derived values
 //     and pair filter all wait for the outcome. At most maxHeldRestarts rows
@@ -574,36 +575,89 @@ import (
 // Those rows measure their gap from the interrupted exit, and the folded row
 // keeps the gap it had at its first enter (heldRestart.gapBase).
 //
-// One held row has no such bound, in a TUI run: a -516 row that no handler
-// ends, while restart_syscall emits nothing because it is outside the attached
-// trace set (the TUI started without it, or its probes switched off there). It
-// can never fold, and no record marks the resumption, so held it waits for
+// One held row would have no such bound: a -516 row that no handler ends,
+// while restart_syscall emits nothing because its probes are not attached
+// (the run started without it, or the TUI's probes modal switched them off).
+// It can never fold, and no record marks the resumption, so held it waits for
 // whatever the thread's next record is - the RESUME ahead of its next traced
 // enter (the BPF entry waits for that enter, restart.c), its exit record, or
 // the end of the run. For a thread that goes on sleeping that is as long as
 // the rest of the stopped call takes (2.5 s in a live headless run before task
-// u13, when such a run held the row too), and for one that makes no further
+// u13, when such a run held the row), and for one that makes no further
 // traced call it is the thread's exit. The row is right (ret -516, the latency
-// up to the stop); only the time it appears at and its place in the output are
-// off.
+// up to the stop); only the time it appears at and its place in the output
+// would be off.
 //
-// A run whose trace set is fixed does not hold such a row (task u13,
+// So such a row is not held, in either kind of run. Nothing is given up: not
+// holding a row never makes a wrong row, it can only cost a fold - the
+// interrupted row and the continuation's row where one row was possible - and
+// here there is none to make. BPF goes on as before - the task is pending,
+// RESUME precedes its next traced enter - and the record finds no row and is
+// recycled (handleSyscallRestartEvent).
+//
+// A run whose trace set is fixed knows from the start (task u13,
 // traceSetIsFinal, restartTracker.restartSyscallUntraced): every headless
 // run, where nobody is handed the probe manager, so what is attached when
 // setup ends is attached for the whole run. With no restart_syscall probe
 // among it the -516 row is completed by its own exit, like in a run that
-// samples restart_syscall. Nothing is given up: not holding a row can only
-// cost a fold, and there is none to make. BPF goes on as before - the task is
-// pending, RESUME precedes its next traced enter - and the record finds no
-// row and is recycled (handleSyscallRestartEvent).
+// samples restart_syscall.
 //
-// A TUI run still holds it, attached or not, and has the delay. There the
-// probes modal changes the set while the loop runs, and the loop reads the
-// stream behind the ring buffer: whether restart_syscall was attached when a
-// row was interrupted is not something "attached now" answers. The loop is
-// told of every change (probesChanged) but not of which syscall changed or
-// what the set is afterwards, and a row held under one set would have to be
-// released under another.
+// A TUI run follows the probes (task 023). There the probes modal changes the
+// set while the loop runs, and the loop reads the stream behind the ring
+// buffer: whether restart_syscall was attached when a row was interrupted is
+// not something "attached now" answers by itself. The answer is put together
+// from two things the goroutine that changes a probe leaves on the watch: the
+// change stamps of "Runtime probe changes" above, and the state of
+// restart_syscall's own probes (restartProbeWatch.restartSyscall). Each
+// report names its syscall and says what it left attached
+// (probemanager.Change), and the loop takes the manager's word for
+// restart_syscall when it begins to listen (watchProbeChanges: a TUI can
+// start without it). The watch calls restart_syscall detached from the
+// report of its detach, or of an attach of it that failed, until the first
+// report of its next attach, and a -516 row the loop reads meanwhile is not
+// held (restartBlockHeld). In every other state the rows are held, folded and
+// refused by the rules above, unchanged.
+//
+// The order of the writes carries it, as for the count of the attaches in
+// flight. "Detached" is stored between the two stamps of its report
+// (noteProbeChange), and "may be attached" before an attach does anything
+// else (probesChanged):
+//
+//   - A row not held for it could not have folded. Say the loop reads
+//     "detached" for a row interrupted at T. The report that stored it took
+//     its first stamp before, with nothing of restart_syscall attached any
+//     more, and no attach of restart_syscall had begun when the loop read the
+//     state. If T is not younger than that stamp, the time rule refuses the
+//     row at every step anyway. If it is, restart_syscall was detached when
+//     the call was interrupted and until the loop read its row: the
+//     restart_syscall that resumes it can be recorded only after an attach
+//     that begins later than T, and that attach's first stamp refuses the
+//     row. Were the state stored ahead of the first stamp, a loop that lags
+//     could read "detached" for a call interrupted and resumed while the
+//     probes were on and lose a fold it would have completed before the
+//     stamp arrived.
+//   - No row stays held behind a detach. A row the loop held because it read
+//     another state was read, and so interrupted, before "detached" was
+//     stored. The report's second stamp is taken after that, so it is
+//     younger than the row, and the wake it leaves releases the row
+//     (releaseRestartsBehindProbeChange). Were the state stored after the
+//     second stamp, a row interrupted and read between the two writes would
+//     be held with nothing to release it: the delay this is about.
+//   - The loop asks for the stamps before the state (holdable). Neither
+//     point depends on that order: each compares the row with a stamp that
+//     is stored by the time it matters.
+//   - The install asks the manager and stores the answer only where no
+//     report has spoken yet (seedRestartSyscall). SetChangeHook has waited
+//     for the changes that began without the hook, so the answer is theirs;
+//     a change that begins later reports, and what it reports stands.
+//
+// Where the state is wrong, it errs to "may be attached", which is the delay
+// as it was: a manager closed under an attach destroys the links its end
+// report called attached (the session is ending). The one error the other
+// way is an attacher that panics: its end report says nothing is attached,
+// and what it had attached before is known to nobody (the real attacher does
+// not panic). A -516 row is then not held although its restart_syscall may
+// be recorded, which is two right rows.
 type restartTracker struct {
 	held map[uint32]*heldRestart // keyed by tid
 	// heldOf counts the held rows of each process (pid of the row's exit),
@@ -632,7 +686,9 @@ type restartTracker struct {
 	// that cannot change its probes, when restart_syscall has none attached:
 	// no restart_syscall exit will ever arrive, so a -516 row has nothing to
 	// wait for and is not held ("Output order" above). False in a TUI run
-	// whatever is attached, and in a loop nobody told.
+	// whatever is attached - there the probes can change, and the watch below
+	// says whether restart_syscall's are off (probes) - and in a loop nobody
+	// told.
 	restartSyscallUntraced bool
 	// drops knows since when the kernel's drop counter has stood at its
 	// current value, which is what proves that no record was lost while a row
@@ -642,8 +698,10 @@ type restartTracker struct {
 	// probes knows when a syscall's probes were last attached or detached at
 	// runtime, which is what refuses the rows interrupted before that, and
 	// whether an attach is in flight, which refuses every row ("Runtime probe
-	// changes" in the file comment). It stays at its zero
-	// value - no change, nothing refused - in a run nobody changes probes in,
+	// changes" in the file comment). It also knows whether restart_syscall's
+	// own probes are detached, which keeps -516 rows from being held ("Output
+	// order" there). It stays at its zero value - no change, nothing refused,
+	// nothing known of restart_syscall - in a run nobody changes probes in,
 	// which is every headless run: only a TUI run listens (watchProbeChanges).
 	probes restartProbeWatch
 	// execed is the process whose exec the record being processed proved
@@ -669,6 +727,9 @@ type execedProcess struct {
 // should the clear have failed or lost a race - may stand for a re-execution
 // that is long over. An attach under way means the same of every row: its
 // tracepoints are being attached at moments no stamp marks.
+//
+// It also answers whether restart_syscall's own probes are detached (task
+// 023, restartSyscallOff), which is asked of a -516 row only.
 //
 // It is written by the goroutine that changes a probe (eventLoop.probesChanged,
 // through the probe manager's change hook) and read by the event loop, hence
@@ -716,6 +777,69 @@ type restartProbeWatch struct {
 	// warning sink is written by the mode's output wiring, which trace setup
 	// runs after the hook is installed and without a lock (task x13).
 	clearWarning atomic.Pointer[string]
+	// restartSyscall is what the loop knows of restart_syscall's own probes
+	// (restartSyscallProbes; task 023, "Output order" in the file comment):
+	// whether they are provably detached, in which case no -516 row is held.
+	// It is written like the rest of the watch, by the install and by the
+	// reports of restart_syscall's changes, in an order that the comments of
+	// probesChanged and noteProbeChange give the reasons for.
+	restartSyscall atomic.Uint32
+}
+
+// restartSyscallProbes is what a restartProbeWatch knows of the probes of
+// restart_syscall, the one syscall whose attached state decides whether a row
+// is worth holding: without them no restart_syscall exit is recorded, and a
+// -516 row has nothing to wait for.
+type restartSyscallProbes = uint32
+
+const (
+	// restartSyscallUnknown: nobody told the watch - a headless run, which
+	// does not listen to probe changes and has traceSetIsFinal instead, or a
+	// loop built without a probe manager. -516 rows are held.
+	restartSyscallUnknown restartSyscallProbes = iota
+	// restartSyscallMayBeAttached: the probes are attached, or an attach of
+	// them has begun, whatever came of it since. -516 rows are held, by the
+	// rules that hold them in any run.
+	restartSyscallMayBeAttached
+	// restartSyscallDetached: neither tracepoint is attached, and no attach
+	// of them has begun since that was established - by the report of a
+	// detach or of a failed attach, or by the probe manager's word when the
+	// loop began to listen. -516 rows are not held.
+	restartSyscallDetached
+)
+
+// markRestartSyscallMayAttach notes that an attach of restart_syscall's probes
+// begins (probemanager.ChangeBegins). From here on the watch does not call
+// them detached until a report says so again.
+func (w *restartProbeWatch) markRestartSyscallMayAttach() {
+	w.restartSyscall.Store(restartSyscallMayBeAttached)
+}
+
+// markRestartSyscallDetached notes that restart_syscall's probes are
+// detached: its detach has destroyed both links, or its attach failed and
+// left nothing attached. The caller has stored a stamp younger than that
+// before, and takes another afterwards (noteProbeChange).
+func (w *restartProbeWatch) markRestartSyscallDetached() {
+	w.restartSyscall.Store(restartSyscallDetached)
+}
+
+// seedRestartSyscall takes the probe manager's word for restart_syscall's
+// probes when the loop begins to listen (watchProbeChanges), unless a report
+// has said something since the hook was set: a change that races the install
+// knows better than a question asked beside it, in whichever order the two
+// are stored.
+func (w *restartProbeWatch) seedRestartSyscall(attached bool) {
+	state := restartSyscallDetached
+	if attached {
+		state = restartSyscallMayBeAttached
+	}
+	w.restartSyscall.CompareAndSwap(restartSyscallUnknown, state)
+}
+
+// restartSyscallOff reports whether restart_syscall's probes are provably
+// detached at this moment (restartSyscallDetached).
+func (w *restartProbeWatch) restartSyscallOff() bool {
+	return w.restartSyscall.Load() == restartSyscallDetached
 }
 
 // begin counts one more attach in flight (probemanager.ChangeBegins). It
@@ -1043,7 +1167,8 @@ func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
 // restart_syscall continuations (restartBlock), or - when it proves
 // re-executions - any exit carrying -512/-513/-514. A run that samples
 // restart_syscall parks no -516 row either ("Sampling" in the file comment),
-// nor does one that will never record a restart_syscall (restartBlockHeld).
+// nor does one that will never record a restart_syscall, or cannot while its
+// probes are switched off (restartBlockHeld).
 // A row interrupted at or before the latest runtime probe change is not parked
 // at all, and none is while a probe attach is in flight: nothing may be
 // folded into it any more ("Runtime probe changes" in the file comment), so
@@ -1067,14 +1192,19 @@ func (r *restartTracker) holdable(ep *event.Pair) bool {
 	return r.reexec && event.IsReexecutedRestartRet(ret)
 }
 
-// restartBlockHeld reports whether this run parks -516 rows at all: BPF
+// restartBlockHeld reports whether this run parks a -516 row now: BPF
 // announces restart_syscall continuations (restartBlock), and the run records
 // every restart_syscall - it does not sample the syscall ("Sampling" in the
-// file comment), and its probes are attached or may still be ("Output order"
-// there). The re-execution codes do not ask: their continuation is the
-// interrupted syscall itself, which the run evidently records.
+// file comment), and its probes are attached or may be ("Output order"
+// there). The probes are known to be off in a headless run that started
+// without them (restartSyscallUntraced, for good), and in a TUI run for as
+// long as the probe manager's reports say so (restartProbeWatch, an atomic
+// the goroutine that changes a probe writes; task 023). The re-execution
+// codes do not ask: their continuation is the interrupted syscall itself,
+// which the run evidently records.
 func (r *restartTracker) restartBlockHeld() bool {
-	return r.restartBlock && !r.restartSyscallSampled && !r.restartSyscallUntraced
+	return r.restartBlock && !r.restartSyscallSampled && !r.restartSyscallUntraced &&
+		!r.probes.restartSyscallOff()
 }
 
 // hold parks held.pair when it is holdable and reports whether it did. The
@@ -1901,7 +2031,9 @@ func (e *eventLoop) foldProvenRestarts(signalProbeAttached, exitProbeAttached bo
 // the probe manager's IsActive). Trace setup calls it only for a manager it
 // published to nobody (runTraceSetup): a headless run, in which no probe can
 // be attached or detached once setup is over. A TUI run, whose probes modal
-// does exactly that, is not told, and neither is a loop without a manager.
+// does exactly that, is not told - it follows restart_syscall's probes
+// instead (watchProbeChanges, task 023) - and neither is a loop without a
+// manager.
 //
 // What the loop takes from it is whether restart_syscall is traced (task
 // u13). If the manager calls it inactive, no restart_syscall exit can arrive
@@ -1937,7 +2069,8 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 }
 
 // watchProbeChanges makes the loop listen to runtime probe changes (trace
-// setup, before the loop starts): listen is the probe manager's SetChangeHook.
+// setup, before the loop starts): listen is the probe manager's SetChangeHook
+// and isActive its IsActive.
 // Trace setup calls it only for a manager it published to a TUI
 // (runTraceSetup); a headless run changes no probe, so it must not pay for the
 // guard, least of all with folds refused over a boottime offset it could not
@@ -1956,11 +2089,27 @@ func (e *eventLoop) releaseAllHeldRestarts(pairs chan *event.Pair) {
 // taken by the loop when it starts: it finds nothing held, and raises the
 // warning of a clear that failed here, which nobody could be told of yet
 // (probeChangeNoticed).
-func (e *eventLoop) watchProbeChanges(listen func(hook func(probemanager.ChangePhase))) {
+//
+// Between the two the loop asks whether restart_syscall's probes are attached
+// (task 023): a TUI can start without them, and no report says so. The hook
+// is set by then and every earlier change is over and committed, so the
+// answer is the state those changes left; a change that begins after the hook
+// was set reports to it, and its report stands whichever of the two is stored
+// first (seedRestartSyscall). The stamps taken next are younger than the
+// answer, and the loop is not running yet: every row it will read with
+// "detached" still standing is either refused by the install's stamp or was
+// interrupted after the question was asked ("Output order" in the file
+// comment).
+func (e *eventLoop) watchProbeChanges(listen func(hook func(probemanager.Change)), isActive func(syscall string) bool) {
 	// The order is the point: see above.
 	listen(e.probesChanged)
-	e.noteProbeChange()
+	e.restarts.probes.seedRestartSyscall(isActive(restartSyscallProbe))
+	e.noteProbeChange(false)
 }
+
+// restartSyscallProbe is the name restart_syscall's probe pair has in the
+// probe manager: what IsActive is asked with and what a Change of it carries.
+var restartSyscallProbe = types.SYS_ENTER_RESTART_SYSCALL.Name()
 
 // probesChanged is the probe manager's change hook
 // (probemanager.Manager.SetChangeHook): a syscall's probes are about to be
@@ -1979,19 +2128,35 @@ func (e *eventLoop) watchProbeChanges(listen func(hook func(probemanager.ChangeP
 // failed or panicked. Were the first to panic here after the count went up,
 // the count would stay up and the run would fold nothing more, which is the
 // direction every doubt is resolved in.
-func (e *eventLoop) probesChanged(phase probemanager.ChangePhase) {
-	if phase == probemanager.ChangeBegins {
-		e.restarts.probes.begin()
+//
+// A report about restart_syscall also moves what the watch knows of that
+// syscall's probes (task 023; "Output order" in the file comment), which
+// decides whether -516 rows are held. The first report of its attach says
+// "may be attached" before anything else, so a loop that still reads
+// "detached" reads it before the attach has touched a tracepoint. The report
+// of its detach, and the second report of an attach that left nothing
+// attached, say "detached" between their two stamps (noteProbeChange). The
+// second report of an attach that succeeded changes nothing: "may be
+// attached" stands. Reports about other syscalls leave the state alone.
+func (e *eventLoop) probesChanged(change probemanager.Change) {
+	watch := &e.restarts.probes
+	ofRestartSyscall := change.Syscall == restartSyscallProbe
+	if change.Phase == probemanager.ChangeBegins {
+		if ofRestartSyscall {
+			watch.markRestartSyscallMayAttach()
+		}
+		watch.begin()
 	}
-	e.noteProbeChange()
-	if phase == probemanager.ChangeEnds {
-		e.restarts.probes.end()
+	e.noteProbeChange(ofRestartSyscall && change.Phase != probemanager.ChangeBegins && !change.Attached)
+	if change.Phase == probemanager.ChangeEnds {
+		watch.end()
 	}
 }
 
 // noteProbeChange is what every report of a probe change does, and the
 // install of the hook (watchProbeChanges): stamp and wake, clear, stamp and
-// wake again.
+// wake again. restartSyscallOff says that the change reported left
+// restart_syscall's probes detached; it is noted between the two stamps.
 //
 // The clock is read twice. The reading that counts is the one after the clear:
 // every entry the clear removed was made before it, so the row that entry
@@ -2031,10 +2196,20 @@ func (e *eventLoop) probesChanged(phase probemanager.ChangePhase) {
 //     possible again, for a loop that lags past the end ("What is left open"
 //     in the file comment).
 //
+// "Detached" is stored after the first stamp and before the second reading
+// (task 023). Both orders matter, for the -516 rows the state keeps from
+// being held ("Output order" in the file comment): a loop that reads
+// "detached" finds a stamp taken when the probes were already off, and a row
+// the loop held because it read the earlier state is older than the second
+// stamp, whose wake releases it.
+//
 // Only TUI runs take a stamp at all.
-func (e *eventLoop) noteProbeChange() {
+func (e *eventLoop) noteProbeChange(restartSyscallOff bool) {
 	watch := &e.restarts.probes
 	watch.note(e.readDropStampClock())
+	if restartSyscallOff {
+		watch.markRestartSyscallDetached()
+	}
 	if e.restartPending != nil {
 		if err := e.restartPending.Clear(); err != nil {
 			watch.clearFailedWith(err)
