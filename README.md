@@ -247,8 +247,9 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   reads the new file). Descriptors the program opens and closes with
   ordinary syscalls are tracked correctly; the `io_uring_setup`, `io_uring_enter` and
   `io_uring_register` calls themselves are traced as usual.
-- **Rows are checked against the file behind the descriptor only on Linux 6.2 and newer,
-  and only for some syscalls.** On such a kernel the records of the single-descriptor
+- **Rows are checked against the file behind the descriptor only on kernels with the
+  `bpf_rdonly_cast` kfunc (mainline 6.2 and newer), and only for some syscalls.** On such a
+  kernel the records of the single-descriptor
   syscalls (`read`, `write`, `pread64`, `close`, `fsync`, `fstat`, ...) say which file the
   descriptor named when the call entered (the low 32 bits of its inode number), and the
   `open` family says which file it returned. A row is named only after that file: a
@@ -257,12 +258,22 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   was closed and reused before ior got to the row - is not used. Such a row has no name;
   the plain output shows `E:ino:<n>` (the identity) instead of `E:name`, also for the close
   of a descriptor ior never saw opened and for rows of a process that exited first. ior
-  cannot name a file that is no longer open when it looks. Not checked, so still named by
-  descriptor number alone: every row on an older kernel (RHEL 8 and 9 included), rows of
-  syscalls whose record has no identity (`recvfrom`, `ioctl`, `fcntl`, `mmap`, `epoll_ctl`,
-  `dup3`, ...), files with the same inode number on different filesystems, and the
-  descriptors that share the kernel's anonymous inode (eventfd, epoll, io_uring, timerfd).
-  `IOR_FILE_IDENT=0` in ior's environment switches the check off.
+  cannot name a file that is no longer open when it looks. A row whose call began before
+  the descriptor number was bound to its current file (a `read` that blocked while another
+  thread closed the number and an `open` returned it again) is left unnamed as well, and the
+  close of a descriptor ior never saw opened is named only from a `/proc` answer read before
+  that close began. Not checked, so still named by descriptor number alone: every row on a
+  kernel without the kfunc (mainline before 6.2 and RHEL 8; RHEL 9 backports much of BPF and
+  may have it, which is unverified - ior asks the kernel's BTF and switches the check off
+  where it is missing), rows of syscalls whose record has no identity (`recvfrom`, `ioctl`,
+  `fcntl`, `mmap`, `epoll_ctl`, `dup3`, ...), and files the identity cannot tell apart: the
+  descriptors that share the kernel's anonymous inode (eventfd, epoll, io_uring, timerfd), a
+  file that got the inode number of one unlinked just before (ext4 and xfs reuse a freed
+  number at once), files with the same inode number on different filesystems or in
+  different subvolumes or snapshots of one btrfs filesystem, and inode numbers that differ
+  only above bit 31. The check was loaded and run on Linux 7.2 only; if another kernel's
+  verifier refuses it, ior warns and loads once more without it. `IOR_FILE_IDENT=0` in
+  ior's environment switches the check off.
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either.

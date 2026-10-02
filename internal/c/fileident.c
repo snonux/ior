@@ -25,9 +25,17 @@
 //   - 32 bits fit the tail of fd_event and ret_event that was padding, so
 //     the hot records keep their size. 0 means "unknown" (also for the rare
 //     inode whose low word is 0); userspace then behaves as it did before.
-// Not told apart: two files with the same inode number on different
-// filesystems, and the files that share one anonymous inode (eventfd, epoll,
-// io_uring, ... - but not pipes and sockets, which have their own).
+// Not told apart, so userspace may only ever use the identity to refuse a
+// name, never to accept one that some other rule would refuse:
+//   - the files that share one anonymous inode (eventfd, epoll, io_uring,
+//     timerfd, ... - but not pipes and sockets, which have their own);
+//   - a file that was given the inode number of one unlinked and freed
+//     before it (ext4 and xfs reuse a freed number at once);
+//   - two files with the same inode number on different filesystems (every
+//     tmpfs counts from the same start), or in different subvolumes or
+//     snapshots of one btrfs filesystem (a snapshot keeps the numbers; i_ino
+//     is unique per subvolume only);
+//   - two inode numbers that differ only above bit 31.
 //
 // Cost. The walk is current->files->fdt->fd[fd]->f_inode->i_ino. Done with
 // bpf_probe_read_kernel it is seven helper calls of about 90 instructions
@@ -37,18 +45,31 @@
 // since Linux 6.2: bpf_get_current_task_btf() returns a BTF-typed task whose
 // pointer fields load directly (an exception-table fixup instead of a helper
 // call), and the bpf_rdonly_cast kfunc - the verifier replaces it by a
-// register move - types the two pointers a field load cannot: the fd slot,
-// which sits behind a `struct file **`, and the file read from it. That
-// version has no helper call but the first and costs +78 instructions (+6%).
+// register move - types the one pointer a field load cannot: the fd slot,
+// which sits behind a `struct file **`. There is one cast; the file pointer
+// loaded from the cast slot is typed by that load, and so is everything
+// after it. That version has no helper call but the first and costs +78
+// instructions (+6%).
 //
-// Only that version is compiled in. On a kernel without the kfunc (before
-// 6.2: RHEL 8 and 9) the ksym is unresolved, libbpf turns the test below into
-// a constant and the call into a poisoned instruction in a branch the
-// verifier never follows, and every identity is 0. The probe-read walk was
-// not kept as a fallback: at its cost it would have to be opt-in, and nothing
-// here could test it on such a kernel. Verified by loading on Linux 7.2 only;
-// with the kfunc declared under a name the kernel lacks the same object loads
-// and reports 0.
+// Only that version is compiled in. On a kernel without the kfunc (mainline
+// before 6.2 and RHEL 8; RHEL 9 rebases its BPF subsystem and may have it,
+// which is unverified) the ksym is unresolved, libbpf turns the test below
+// into a constant and the call into a poisoned instruction in a branch the
+// verifier never follows, and every identity is 0. Userspace does not even
+// ask such a kernel: it looks the kfunc up in the kernel's BTF and leaves
+// IOR_FILE_IDENT at 0 where it is missing (internal/bpfsetup_kfunc.go), so
+// that branch is the second line of defence. The probe-read walk was not
+// kept as a fallback: at its cost it would have to be opt-in, and nothing
+// here could test it on such a kernel.
+//
+// Verified by loading on Linux 7.2 only; with the kfunc declared under a name
+// the kernel lacks the same object loads and reports 0. A kernel that has the
+// kfunc but is not 7.2 therefore runs the walk through a verifier it was
+// never loaded on (typed loads from bpf_get_current_task_btf and the kfunc
+// in a tracepoint program are both younger than the rest of these programs);
+// the safety net for that is userspace's second load without the capture
+// when the first is refused (loadWithIdentFallback in
+// internal/ior_bpfsetup.go).
 //
 // The fd slot is typed by borrowing struct kiocb, whose first member is a
 // struct file pointer: the kfunc needs the BTF id of a kernel struct, and the

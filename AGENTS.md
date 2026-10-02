@@ -2452,9 +2452,17 @@ kernel program reports the file, and user space compares.
   `i_ino` that `/proc/<pid>/fdinfo/<fd>` prints as `ino:` (since 5.14), so a
   procfs answer can be checked without touching the file's filesystem. No
   device: fdinfo has none, and `stat`'s `st_dev` is not `sb->s_dev` on btrfs
-  and overlayfs. The `struct file` pointer is reused by the very next open. Not told apart: equal inode numbers on
-  different filesystems, and the anon-inode descriptors (eventfd, epoll,
-  io_uring, timerfd share one inode; pipes and sockets do not).
+  and overlayfs. The `struct file` pointer is reused by the very next open.
+- **What the identity cannot tell apart** - so it may only ever *refuse* a
+  name, never admit one another rule would refuse (the close-row rule below
+  got that wrong once): the anon-inode descriptors (eventfd, epoll, io_uring,
+  timerfd share one inode - `ino: 1058` for an eventfd and an epoll fd alike
+  on the development host; pipes and sockets have their own); a file that got
+  the inode number of one unlinked just before (ext4 and xfs reuse a freed
+  number at once); equal inode numbers on different filesystems (every tmpfs
+  counts from the same start) and in different subvolumes or snapshots of one
+  btrfs filesystem (`i_ino` is unique per subvolume only); inode numbers that
+  differ only above bit 31.
 - **Capture**: every `fd_event` enter (`generateExtraFd`) and the `ret_event`
   exits of the open kinds and `creat` (`returnsOpenedFile`:
   `kindMeta.returnsFile` plus `openedFileSyscalls`); every other `ret_event`
@@ -2466,9 +2474,10 @@ kernel program reports the file, and user space compares.
   ->f_inode->i_ino` through seven `bpf_probe_read_kernel` calls cost +645
   instructions per event (each ~90), half of what a traced syscall costs. The
   committed walk uses `bpf_get_current_task_btf()` and direct BTF loads, and
-  the `bpf_rdonly_cast` kfunc for the two pointers a field load cannot type
-  (the fd slot behind `struct file **`, borrowed as a `struct kiocb`, whose
-  first member is a `struct file *`; and the file): +83 instructions per fd
+  the `bpf_rdonly_cast` kfunc - one cast - for the one pointer a field load
+  cannot type: the fd slot behind `struct file **`, borrowed as a `struct
+  kiocb`, whose first member is a `struct file *` (the file loaded from the
+  cast slot is typed by that load): +83 instructions per fd
   syscall (dd `bs=1`: 3.980G -> 4.15G `instructions:k` for 2M syscalls, +6.6%
   of ior's share; open+close+stat loop +77 per walk). Measure with a ring
   buffer large enough for the whole run (`-mapSize 268435456`, 1M dd
@@ -2476,21 +2485,39 @@ kernel program reports the file, and user space compares.
   included, and a run with drops under-reports. Wall time and `cycles:k` do
   not resolve the difference on a shared box. A BPF-side "tracked fd" map or
   LRU gate was rejected: one hash helper call costs more than the walk.
-- **Kernels**: the kfunc exists since 6.2. Before that (el8, el9) the weak
-  ksym is unresolved, `ior_file_ident_supported()` is a constant 0, libbpf
-  poisons the call in a branch the verifier never follows, and every identity
-  is 0 - user space then behaves exactly as before. No probe-read fallback
-  (it would have to be opt-in at that cost, and could not be tested here).
+- **Kernels**: the capture needs the `bpf_rdonly_cast` kfunc: mainline 6.2.
+  Kernels without it are mainline before 6.2 and el8; el9 rebases its BPF
+  subsystem and may have it (unverified). Without it the weak ksym is
+  unresolved, `ior_file_ident_supported()` is a constant 0, libbpf poisons
+  the call in a branch the verifier never follows, and every identity is 0 -
+  user space then behaves exactly as before. No probe-read fallback (it would
+  have to be opt-in at that cost, and could not be tested here).
   **Loaded and run on Linux 7.2 only**; the same object with the kfunc
-  declared under a name the kernel lacks loads and reports 0.
+  declared under a name the kernel lacks loads and reports 0. Any other
+  kernel that has the kfunc therefore runs the walk through a verifier it was
+  never loaded on; the fallback load below is the safety net for that.
 - **Capability, not size**: an older `IOR_BPF_OBJECT` leaves stale padding
   where the word is, and the record size is the same. The object therefore
   has a rodata global `IOR_FILE_IDENT` (0 in the object); `setFileIdentGlobal`
   sets it to 1 before the load, a missing symbol means "not captured", and
   the answer goes `bpfSetupLog.fileIdent` -> `traceInfra.fileIdentCaptured`
-  -> `eventLoop.trustFileIdents` (`fdTracker.identOn`). Off, nothing reads
-  the word. `IOR_FILE_IDENT=0` in ior's environment switches the capture off
-  (the walk is then pruned as dead code).
+  -> `applyProbeCapabilities` -> `eventLoop.trustFileIdents`
+  (`fdTracker.identOn`). Off, nothing reads the word. `IOR_FILE_IDENT=0` in
+  ior's environment switches the capture off (the walk is then pruned as
+  dead code).
+- **The global is set only where the kernel can capture**
+  (`fileIdentCaptureWanted`, `internal/bpfsetup_kfunc.go`): "the object has
+  the global" is not "the kernel fills the word". Without the kfunc user
+  space would compare identities that are all 0 - harmless for the rows, but
+  every procfs resolution would pay a second readlink for nothing - so setup
+  looks `bpf_rdonly_cast` up in the string section of
+  `/sys/kernel/btf/vmlinux` (the table libbpf resolves the ksym against; a
+  7 MB read, once per process) and leaves the global at 0 where it is
+  missing. Unreadable or unparsable BTF counts as "has it": nothing known
+  must not switch the check off. Rejected: `/proc/kallsyms` (220 ms of system
+  time per start here), and guessing from the records ("the first N
+  identities were 0" is what a close-everything loop after fork looks like on
+  a kernel that captures fine).
 - **A refused load is retried without the capture** (`loadWithIdentFallback`,
   `internal/ior_bpfsetup.go`): the walk is compiled into every
   single-descriptor handler and relies on newer verifier features than the
@@ -2503,21 +2530,61 @@ kernel program reports the file, and user space compares.
   scalar (the verifier's "invalid mem access" on the first load, a normal
   trace after the retry).
 - **Rules** (`internal/eventloop_fileident.go`, `resolveIdentifiedOnExit`,
-  called by `handleFdExit` only). For a row with identity r != 0: an fd-table
-  entry without identity takes r; an entry of another file is a stale binding,
-  dropped, and the row is resolved as untracked. A procfs-cache entry of
-  another file read *after* the row's call entered means the number was
-  reused: the row stays unnamed and the entry stays; read *before*, it is
-  dropped and procfs is read again. A fresh procfs answer of another file is
-  cached but not given to the row. Close rows use a cache entry of the same
-  file whenever it was read, never one of another file, and the jr2 read-time
-  rule only for an entry of unknown identity. EBADF with a known identity is
-  the call's own error (the descriptor was open), so the row is named.
-  Identity 0 on either side contradicts nothing.
+  called by `handleFdExit` only). For a row with identity r != 0:
+  - *fd-table entry* (`trackedFile`): of the file r, it names the row. One
+    that disagrees (another file, or no identity yet) is judged by age: an
+    entry remembers when it was bound (`FdFile.BoundAt`, below). Bound
+    *after* the row's call entered, the row may be of the file the number
+    named before - a read that blocked on X while another thread closed the
+    number and an open returned it for Y is processed after that open - so
+    the entry stays untouched and only the row goes unnamed, uncounted.
+    Bound *before*: an entry without identity takes r; an entry of another
+    file is a stale binding, dropped, and the row is resolved as untracked.
+    Without the times the late row of X evicted the correct entry of Y, and
+    an identity-less entry (a pipe) took X's identity and dropped itself on
+    its own first row.
+  - *procfs-cache entry of another file*: read *after* the row's call
+    entered, the number was reused; the row stays unnamed and the entry
+    stays. Read *before*, it is dropped and procfs is read again - but for
+    rows of one file at most once per `identRereadIntervalNs` (100 ms of
+    record time, `worthReadingAgain`, `fdTracker.refusedFor`): a thread on a
+    private table (unshare(CLONE_FILES)) disagrees with `/proc/<tgid>/fd`
+    for good, and each of its rows cost two readlinks and an fdinfo read.
+  - *fresh procfs answer of another file*: cached but not given to the row.
+  - *close rows* use a cache entry only if it was read before the close
+    began (task jr2's rule, unchanged) and never one of another file. An
+    equal identity does **not** replace the read time: an untracked eventfd
+    is closed, an epoll fd takes the number, a lagging row caches
+    `anon_inode:[eventpoll]` with the same identity.
+  - *a close forgets* the number's entries (`closeIdentified`), except what
+    describes a later file: an fd-table entry bound after the close entered
+    (another thread's open returned the number and was processed first), a
+    cached answer of another file read after it.
+  - EBADF with a known identity is the call's own error (the descriptor was
+    open), so the row is named. Identity 0 on either side contradicts
+    nothing.
+- **Binding time** (`FdFile.BoundAt`, `fdTracker.stampBinding`): the exit
+  time of the pair whose handler created the entry (`noteExit` keeps it in
+  `fdTracker.bindNs`; every `set` call is in an exit handler), because the
+  call's exit record is the first moment a row of the new file can follow.
+  A dup is bound at the dup's exit (`Dup` resets the time, `set` stamps); a
+  fork's copy has none, i.e. is older than every row of the child, which
+  cannot have entered before the fork; a procfs answer promoted into the
+  table (fcntl on an untracked descriptor) takes its read time; an entry
+  stored again after a flag change keeps its time; `rekeyTable` moves the
+  objects. Nothing is stamped in a run without identities. The word is in
+  `FdFile` because a side map would cost a write per open and a delete per
+  close; it did not grow the per-row allocation, since the open file
+  description moved from a sibling field of the allocation into the struct
+  (`FdFile.own`, 48 bytes, `TestFdFileKeepsItsSize`).
 - **Procfs answers** carry their identity when `identOn`
   (`file.NewFdWithPidIdent`): the `ino:` line of the fdinfo read that
-  supplies the flags anyway, kept only when a second `readlink` still gives
-  the same name, because the reads are not atomic. Not `stat` on the
+  supplies the flags anyway. The link is read a second time because the
+  reads are not atomic; if it then reads differently, or fdinfo was gone, the
+  number was rebound under the read and the answer mixes two files. Such an
+  answer is read once more (`fdTracker.readProcFd`) and, if torn again, not
+  cached - as "unknown identity" it would contradict nothing and name every
+  later row - and not given to a row that has an identity. Not `stat` on the
   descriptor link: that goes to the file's filesystem (it can block on a dead
   NFS server, is refused on another user's FUSE mount, and reports the
   filesystem's getattr rather than `i_ino`). `FdFile.ident` sits in the
@@ -2532,17 +2599,27 @@ kernel program reports the file, and user space compares.
   file; the close of an untracked descriptor and the rows of an exited
   process stay unnamed, now as `E:ino:<n>`). That needs the name from BPF (a
   dentry walk) and a way to limit it to rows user space cannot name. An entry
-  that takes its identity from the first row was not checked against it.
+  that takes its identity from the first row was not checked against it. A
+  call that entered between another thread's fd install and that call's exit
+  record on the very number being installed (a dup2 target written to
+  concurrently) is left unnamed although it may be of the new file.
 - **Tests**: `fileident_harness_test.go` (the committed C helper against a
-  simulated task, 21 cases, 12 mutations), `syscall_semantics_fileident_test.go`
+  simulated task, 22 cases, 13 mutations), `syscall_semantics_fileident_test.go`
   (which handlers capture, with an independent list of the open syscalls; it
   caught `creat`, a pathname-kind call), `internal/types/fileident_test.go`,
   `internal/eventloop_fileident_test.go` (real descriptors and procfs),
-  `internal/bpfsetup_fileident_test.go`, and the integration tests
+  `internal/eventloop_fileident_age_test.go` (both orders of row and
+  binding, per way an entry is made), `internal/eventloop_fileident_procfs_test.go`
+  (re-read rationing and torn answers through a scripted reader,
+  `fdTracker.readFdIdent`), `internal/bpfsetup_fileident_test.go`,
+  `internal/bpfsetup_kfunc_test.go`, and the integration tests
   `TestIouringReopenRowsFollowTheFile` (scenario `iouring-reopen`),
   `TestIouringReopenWithoutFileIdentityKeepsTheOpenedName` (the control,
-  `IOR_FILE_IDENT=0`) and
-  `TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe`.
+  `IOR_FILE_IDENT=0`), `TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe`
+  and its control
+  `TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe`.
+  The integration tests show what the identities lead to; none compares an
+  identity with `stat(2)`.
 
 ## Code Style
 
