@@ -78,7 +78,8 @@ func (f *FdFile) status() Flags {
 // Dup models a descriptor created by dup, dup2, dup3, fcntl(F_DUPFD*) or fork:
 // a new FdFile on descriptor number fd that refers to the same open file
 // description as f. The status word is shared, so a later F_SETFL/F_GETFL
-// through either descriptor is seen through both; the name is copied. FD_CLOEXEC
+// through either descriptor is seen through both; the name is copied, and with
+// it the mark that says the name is an O_TMPFILE open's directory. FD_CLOEXEC
 // is copied as a starting value only and is the caller's to set on the new
 // descriptor (dup/dup2/F_DUPFD clear it, dup3(O_CLOEXEC) and F_DUPFD_CLOEXEC
 // set it, a fork keeps it): the two descriptors never share it.

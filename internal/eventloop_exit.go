@@ -118,7 +118,7 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 		openEventAllowsEmptyPath(openEv, !event.IsErrnoRet(retEvent.Ret)))
 	ep.Comm = comm
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		fdFile := file.NewFd(fd, filename.Name(), openEventFlags(openEv))
+		fdFile := openedFdFile(fd, filename.Name(), openEventFlags(openEv))
 		e.fdState().set(fd, openEv.Pid, fdFile)
 		ep.File = fdFile
 	} else {
@@ -139,6 +139,26 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 	// checked. A concrete dirfd-relative path deferred that dimension until
 	// this checkpoint, where ep.File carries the resolved value.
 	return e.finishPair(ep)
+}
+
+// openedFdFile builds the fd table entry of a successful open under the
+// pathname it was called with. For an O_TMPFILE open that pathname is the
+// directory the unnamed file was created in, not a name of the file, and the
+// entry is marked so: a name_to_handle_at(fd, "", AT_EMPTY_PATH) on it stashes
+// a path that leads to another inode (takenFromTrackedTmpfile). The mark is
+// set here, where the name is given, because the flags alone do not tell the
+// two origins apart later - a descriptor promoted from procfs carries
+// O_TMPFILE in its fdinfo flags too, under its link text.
+//
+// Unknown flags (-1: an openat2 whose open_how BPF could not read) match
+// nothing, so such an O_TMPFILE open stays unmarked; nothing in the event says
+// what it was. An ordinary open pays one flag test and no memory for this.
+func openedFdFile(fd int32, name string, flags int32) *file.FdFile {
+	fdFile := file.NewFd(fd, name, flags)
+	if fdFile.Flags().Is(unix.O_TMPFILE) {
+		fdFile.MarkNamedAfterTmpfileDir()
+	}
+	return fdFile
 }
 
 func openEventFlags(openEv *types.OpenEvent) int32 {

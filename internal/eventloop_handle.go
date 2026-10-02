@@ -452,8 +452,19 @@ func (e *eventLoop) stashHandleName(pathEv *types.PathEvent, name string) {
 //     is comparable by form and still contradicts its own open, so it stays
 //     in the slot until the thread's next name_to_handle_at: a path renamed
 //     since the handle was taken (or since ior saw the source descriptor
-//     opened), a path of another mount namespace, and the unlinked "<path>"
-//     shadowed by a live file literally named "<path> (deleted)".
+//     opened), a path of another mount namespace, the unlinked "<path>"
+//     shadowed by a live file literally named "<path> (deleted)", and the
+//     directory of an O_TMPFILE descriptor whose open flags ior never learned
+//     (an openat2 whose open_how BPF could not read is tracked with unknown
+//     flags, so openedFdFile cannot mark it for takenFromTrackedTmpfile).
+//   - The same goes for an absolute path that means something else to the
+//     task than to ior, which stats it in its own context: "/proc/self/...",
+//     "/proc/thread-self/...", "/dev/fd/N", and any path of a chrooted task.
+//     Such a stash is usually a kept mismatch too, but it can also match
+//     for the wrong reason: name_to_handle_at("/proc/self/ns/net",
+//     AT_SYMLINK_FOLLOW) is compared with ior's OWN network namespace, which
+//     matches when ior shares the task's and is a kept mismatch when it does
+//     not, and "/dev/fd/N" is whatever ior has open under that number.
 //
 // Only the handle bytes, which the events do not carry, would close these
 // (task k03).
@@ -496,24 +507,44 @@ func namespaceLinkText(name string) bool {
 }
 
 // takenFromTrackedTmpfile reports whether the handle of pathEv was taken with
-// AT_EMPTY_PATH from a descriptor ior tracks as an O_TMPFILE open.
+// AT_EMPTY_PATH from a descriptor ior saw being opened with O_TMPFILE.
 // handleOpenExit names such a descriptor by the pathname of its open, which is
 // the directory the unnamed file was created in. As a stash that is an
 // absolute path naming another inode than the file the handle opens (whose
 // link is "<dir>/#<inode> (deleted)"), so it is opaque although its form is
-// comparable.
+// comparable. It stays so after the file is given a name with linkat: the
+// table entry keeps the directory, which is still not the file.
 //
-// The fd table is asked, not procfs: it is in event order, and it is the only
-// source of the misleading name - an O_TMPFILE descriptor ior does not track
-// is stashed as its link text, which matches. An empty captured pathname is
-// what says the name came from the descriptor itself (a non-empty one under
-// an O_TMPFILE dirfd fails with ENOTDIR and is never stashed).
+// The fd table is asked, not procfs, because it is in event order, and it is
+// asked where the NAME came from (the mark openedFdFile sets, which a dup and
+// a fork carry along with the name), not what the flags are. The flags do not
+// say it: a descriptor ior did not see opened can be in the table as well -
+// an fcntl F_GETFL/F_SETFL/F_GETFD/F_SETFD or an ioctl FIOCLEX/FIONCLEX
+// promotes the procfs-resolved file (storeFcntlFdFile, applyIoctlFdState) -
+// and that entry has O_TMPFILE in its fdinfo flags while its name is the link
+// text (observed on Linux 7.2.5, tmpfs: flags 022300002, and the link still
+// reads "<dir>/#<inode> (deleted)" after a linkat gave the file a name). That
+// is a name of the file, so such a stash is comparable and must survive
+// another handle's open, as the link-text stash of an O_TMPFILE descriptor
+// that is in no table does.
+//
+// An empty captured pathname is what says the name came from the descriptor
+// itself (a non-empty one under an O_TMPFILE dirfd fails with ENOTDIR and is
+// never stashed).
+//
+// Not found: an O_TMPFILE open whose flags ior never learned (see
+// openedFdFile) is unmarked, so its directory stash is taken for comparable
+// (the residual list on comparableHandleName).
 func (e *eventLoop) takenFromTrackedTmpfile(pathEv *types.PathEvent) bool {
 	if types.StringValue(pathEv.Pathname[:]) != "" {
 		return false
 	}
 	source, tracked := e.fdState().get(pathEv.Dirfd, pathEv.Pid)
-	return tracked && source.Flags().Is(unix.O_TMPFILE)
+	if !tracked {
+		return false
+	}
+	fdFile, isFd := source.(*file.FdFile)
+	return isFd && fdFile.NamedAfterTmpfileDir()
 }
 
 // confirmedHandleFd returns the procfs-named file for a descriptor whose probe

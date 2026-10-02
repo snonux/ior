@@ -1770,7 +1770,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     really named by a number still matches); and, the one case the form
     cannot show, the directory a tracked `O_TMPFILE` descriptor is named
     after (`takenFromTrackedTmpfile` asks the fd table, which is in event
-    order). An opaque stash never outlives the thread's next
+    order, for the mark `openedFdFile` puts on an entry whose open carried
+    `O_TMPFILE` - `FdFile.NamedAfterTmpfileDir`, copied with the name by a
+    dup or fork and kept across a `linkat`, which renames no entry. The
+    origin of the name decides, not the flags: an `O_TMPFILE` descriptor ior
+    did not see opened but promoted into the table from procfs by an `fcntl`
+    or `FIOCLEX` has the flag in its fdinfo word and is named by its link
+    `<dir>/#N (deleted)`, a comparable name of the file). An opaque stash
+    never outlives the thread's next
     `open_by_handle_at`: a confirmed descriptor names the row from procfs, as
     before, and the stash is now consumed with it; an unconfirmed one leaves
     the row to the stash, as before. A relative name under a dirfd tracked by
@@ -1787,8 +1794,14 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     that does not lead to its file from where ior stands - a path renamed
     since the handle was taken, a path of another mount namespace, the
     unlinked `<path>` shadowed by a live file literally named
-    `<path> (deleted)`. Only handle bytes in the events close those (task
-    k03). Pinned by `internal/eventloop_handle_deleted_test.go`,
+    `<path> (deleted)`, the directory of an `O_TMPFILE` descriptor whose open
+    flags ior never learned (an `openat2` whose `open_how` BPF could not read
+    is tracked with flags -1 and stays unmarked), and an absolute path that
+    means something else to the task than to ior, which stats it in its own
+    context (`/proc/self/...`, `/proc/thread-self/...`, `/dev/fd/N`, any path
+    of a chrooted task; such a stash can also match for the wrong reason -
+    `/proc/self/ns/net` is compared with ior's own namespace). Only handle
+    bytes in the events close those (task k03). Pinned by `internal/eventloop_handle_deleted_test.go`,
     `internal/eventloop_handle_traced_test.go` and
     `internal/eventloop_handle_opaque_test.go`. The `/proc/<pid>/fd/<fd>`
     probe that check rests on is taken when the loop handles the exit, not
