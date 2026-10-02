@@ -1890,13 +1890,19 @@ func replaceExactlyOnce(t *testing.T, source, old, replacement string) string {
 	return strings.Replace(source, old, replacement, 1)
 }
 
+// handlerPair holds the bodies of one syscall's committed enter and exit
+// handlers (exit is empty for a syscall without an exit handler).
+type handlerPair struct {
+	enter string
+	exit  string
+}
+
+// parseGeneratedSyscallSemantics reads the semantics of every syscall from
+// the committed handler source: the kind comments and the handler pairs, each
+// pair checked (validateHandlerPair) and then described (pairSemantics).
 func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics, error) {
 	source = stripCBlockComments(source)
 	source = stripDisabledCPreprocessorBlocks(source)
-	type handlerPair struct {
-		enter string
-		exit  string
-	}
 	kinds := map[string]string{}
 	for _, match := range kindCommentRE.FindAllStringSubmatch(source, -1) {
 		if _, exists := kinds[match[1]]; exists {
@@ -1904,7 +1910,38 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 		}
 		kinds[match[1]] = match[2]
 	}
+	pairs, err := parseHandlerPairs(source)
+	if err != nil {
+		return nil, err
+	}
 
+	result := make(map[string]syscallSemantics, len(pairs))
+	for name, pair := range pairs {
+		if pair.enter == "" {
+			return nil, fmt.Errorf("sys_exit_%s has no enter handler", name)
+		}
+		kind, ok := kinds[name]
+		if !ok {
+			return nil, fmt.Errorf("sys_enter_%s has no kind comment", name)
+		}
+		if err := validateHandlerPair(name, kind, pair.enter, pair.exit); err != nil {
+			return nil, err
+		}
+		semantics, err := pairSemantics(name, kind, pair)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = semantics
+	}
+	if len(kinds) != len(result) {
+		return nil, fmt.Errorf("kind comments=%d enter handlers=%d", len(kinds), len(result))
+	}
+	return result, nil
+}
+
+// parseHandlerPairs collects the enter and exit handler bodies by syscall
+// name, refusing a second handler for the same phase of a syscall.
+func parseHandlerPairs(source string) (map[string]handlerPair, error) {
 	pairs := map[string]handlerPair{}
 	for _, match := range handlerRE.FindAllStringSubmatch(source, -1) {
 		pair := pairs[match[2]]
@@ -1921,51 +1958,40 @@ func parseGeneratedSyscallSemantics(source string) (map[string]syscallSemantics,
 		}
 		pairs[match[2]] = pair
 	}
+	return pairs, nil
+}
 
-	result := make(map[string]syscallSemantics, len(pairs))
-	for name, pair := range pairs {
-		if pair.enter == "" {
-			return nil, fmt.Errorf("sys_exit_%s has no enter handler", name)
-		}
-		kind, ok := kinds[name]
-		if !ok {
-			return nil, fmt.Errorf("sys_enter_%s has no kind comment", name)
-		}
-		if err := validateHandlerPair(name, kind, pair.enter, pair.exit); err != nil {
-			return nil, err
-		}
-		ret := "NORETURN"
-		if pair.exit != "" {
-			parsedRet, err := parseExitRetSemantics(name, pair.exit)
-			if err != nil {
-				return nil, err
-			}
-			ret = parsedRet
-		}
-		traceID, ok := iortypes.EnterTraceIDByName(name)
-		if !ok {
-			return nil, fmt.Errorf("sys_enter_%s is missing from generated runtime trace IDs", name)
-		}
-		runtimeFamily := string(traceID.Family())
-		classifiedFamily := string(ClassifySyscallFamily("sys_enter_" + name))
-		if runtimeFamily != classifiedFamily {
-			return nil, fmt.Errorf("sys_enter_%s runtime family=%q differs from classifier=%q", name, runtimeFamily, classifiedFamily)
-		}
-		args, err := parseEnterArgSources(name, pair.enter, pair.exit)
+// pairSemantics describes a validated handler pair: the return semantics
+// (NORETURN without an exit handler), the runtime family, which must match
+// the classifier's, and the argument sources.
+func pairSemantics(name, kind string, pair handlerPair) (syscallSemantics, error) {
+	ret := "NORETURN"
+	if pair.exit != "" {
+		parsedRet, err := parseExitRetSemantics(name, pair.exit)
 		if err != nil {
-			return nil, err
+			return syscallSemantics{}, err
 		}
-		result[name] = syscallSemantics{
-			kind:   kind,
-			args:   args,
-			ret:    ret,
-			family: runtimeFamily,
-		}
+		ret = parsedRet
 	}
-	if len(kinds) != len(result) {
-		return nil, fmt.Errorf("kind comments=%d enter handlers=%d", len(kinds), len(result))
+	traceID, ok := iortypes.EnterTraceIDByName(name)
+	if !ok {
+		return syscallSemantics{}, fmt.Errorf("sys_enter_%s is missing from generated runtime trace IDs", name)
 	}
-	return result, nil
+	runtimeFamily := string(traceID.Family())
+	classifiedFamily := string(ClassifySyscallFamily("sys_enter_" + name))
+	if runtimeFamily != classifiedFamily {
+		return syscallSemantics{}, fmt.Errorf("sys_enter_%s runtime family=%q differs from classifier=%q", name, runtimeFamily, classifiedFamily)
+	}
+	args, err := parseEnterArgSources(name, pair.enter, pair.exit)
+	if err != nil {
+		return syscallSemantics{}, err
+	}
+	return syscallSemantics{
+		kind:   kind,
+		args:   args,
+		ret:    ret,
+		family: runtimeFamily,
+	}, nil
 }
 
 // validateHandlerPair runs the per-syscall checks of the committed enter and

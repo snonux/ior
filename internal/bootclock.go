@@ -21,8 +21,10 @@ import (
 // its own in these places: the comm recheck (provisionalSeedNeedsRecheck), the
 // close row's procfs rule (fdTracker.cacheReadBefore), the restart fold's
 // drop watch (restartDropWatch) and its probe-change stamp (noteProbeChange),
-// and the file identity's rules on procfs answers (fdTracker.identReadAt,
-// task 603). All of them read the clock through bootClockNs.
+// the exec adoption's gate, which reads the same drop watch
+// (eventLoop.lostExecRecord), and the file identity's rules on procfs answers
+// (fdTracker.identReadAt, task 603). All of them read the clock through
+// bootClockNs.
 //
 // Inside a time namespace (unshare -T --boottime N) the two clocks differ:
 // clock_gettime(CLOCK_BOOTTIME) returns the host's value plus the namespace's
@@ -130,6 +132,11 @@ func (d bootClockDomain) report(warn func(...any)) {
 //     folds are refused until the total next changes and gets a real stamp;
 //   - probe stamp: every row was interrupted before it, so folds are refused
 //     for the rest of the run (a later change's stamp is never smaller);
+//   - exec gate: a drop total first seen at it counts as dropped after
+//     every enter, so the caller's enter is adopted and the pair proven
+//     (eventLoop.lostExecRecord) - the adopting side, until the total next
+//     changes; the gate's comment covers that case for an unknown offset that
+//     puts the stamps in the records' future;
 //   - the file identity's three uses of a procfs read time (task 603: an
 //     answer kept through a close, an answer not read again, the binding time
 //     of an answer promoted into the fd table): there a later time *keeps*

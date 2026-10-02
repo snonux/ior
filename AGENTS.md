@@ -2577,7 +2577,8 @@ kernel program reports the file, and user space compares.
   table (fcntl on an untracked descriptor) takes its read time; an entry
   stored again after a flag change keeps its time, and a fork's copy stays
   unstamped (`set` looks the key up first and stamps only an object the key
-  did not already hold, `stampStored`); `rekeyTable` moves the objects. Nothing is stamped in a run without identities. The word is in
+  did not already hold, `stampStored`); `rekeyTable` moves the objects.
+  Nothing is stamped in a run without identities. The word is in
   `FdFile` because a side map would cost a write per open and a delete per
   close; it did not grow the per-row allocation, since the open file
   description moved from a sibling field of the allocation into the struct

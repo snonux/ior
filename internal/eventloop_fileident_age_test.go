@@ -190,6 +190,34 @@ func TestDuplicateIsBoundWhenTheDupReturns(t *testing.T) {
 	requireNothingCounted(t, el)
 }
 
+// A flag change stores a fork's copy again and binds nothing, also if a
+// procfs answer were cached for the key (a state set does not reach, built
+// here by hand): the copy keeps no binding time, not the answer's read time,
+// and the answer goes, as with every store.
+func TestReStoredForkedCopyIgnoresACachedAnswer(t *testing.T) {
+	const parent, child = absentPidBase + 7310, absentPidBase + 7311
+	tr := identLoop(t).fdState()
+	tr.bindNs = 5000
+	opened := file.NewFd(5, "/data/inherited.txt", syscall.O_RDWR)
+	tr.set(5, parent, opened)
+	tr.inherit(parent, child)
+	copied, ok := tr.get(5, child)
+	if !ok {
+		t.Fatal("child has no copy of the parent's entry")
+	}
+	answer := copied.(*file.FdFile)
+	tr.setProcFdCacheRead(5, child, answer, 9000)
+
+	tr.bindNs = 20000
+	tr.set(5, child, answer)
+	if got := answer.BoundAt(); got != 0 {
+		t.Fatalf("re-stored fork's copy bound at %d, want no binding time", got)
+	}
+	if _, cached := tr.procFdCache[tr.key(child, 5)]; cached {
+		t.Fatal("the store left the cached answer in place")
+	}
+}
+
 // A fork's copy carries no binding time: no row of the child can have
 // entered before the fork, so every row is younger than the copy, whenever
 // the parent bound the number. A row of another file drops the child's entry

@@ -197,6 +197,33 @@ func TestTrustFileIdentsSwitchesTheComparisonOnAndOff(t *testing.T) {
 	}
 }
 
+// TestTrustFileIdentsNotesAnUnknownReadClock pins that trustFileIdents takes
+// readClockUnknown from ownBootClockDomain's warning: set in a capturing run
+// whose clock offset is unknown, clear without the capture or the warning.
+func TestTrustFileIdentsNotesAnUnknownReadClock(t *testing.T) {
+	saved := ownBootClockDomain
+	t.Cleanup(func() { ownBootClockDomain = saved })
+	el := mustNewEventLoop(t, eventLoopConfig{})
+
+	ownBootClockDomain = func() bootClockDomain {
+		return bootClockDomain{warning: "x"}
+	}
+	el.trustFileIdents(true)
+	if !el.fdState().readClockUnknown {
+		t.Fatal("an unknown clock offset left readClockUnknown clear")
+	}
+	el.trustFileIdents(false)
+	if el.fdState().readClockUnknown {
+		t.Fatal("a run without the capture kept readClockUnknown set")
+	}
+
+	ownBootClockDomain = func() bootClockDomain { return bootClockDomain{} }
+	el.trustFileIdents(true)
+	if el.fdState().readClockUnknown {
+		t.Fatal("a known clock offset set readClockUnknown")
+	}
+}
+
 // renderedBody returns the source of the named function of file, as gofmt
 // prints it.
 func renderedBody(t *testing.T, file, function string) string {

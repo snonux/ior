@@ -381,7 +381,11 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 // again says the key already held f: a flag change (storeFcntlFdFile, the
 // FIOCLEX/FIONCLEX handler) stores the entry once more and binds nothing, so
 // it is not stamped - an entry keeps its time, and a fork's copy, which has
-// none, stays unstamped (older than every row of the child).
+// none, stays unstamped (older than every row of the child). That holds with
+// a cached answer for the key too, which only drops the answer: a state set
+// does not reach today (set drops the key's answer, and no answer is cached
+// while the table holds the key), but a cached answer's read time would not
+// be this entry's binding time either.
 func (t *fdTracker) stampStored(key uint64, f file.File, again bool) {
 	cached, shadowed := t.procFdCache[key] // keep the common miss to one lookup
 	if !shadowed {
@@ -390,8 +394,10 @@ func (t *fdTracker) stampStored(key uint64, f file.File, again bool) {
 		}
 		return
 	}
-	readNs, stamped := t.identReadAt(key)
-	t.stampBinding(f, readNs, stamped && file.File(cached) == f)
+	if !again {
+		readNs, stamped := t.identReadAt(key)
+		t.stampBinding(f, readNs, stamped && file.File(cached) == f)
+	}
 	t.deleteCacheKey(key)
 }
 
