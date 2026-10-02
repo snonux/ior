@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1285,6 +1286,63 @@ func TestRegexSearchForwardBackwardAndRepeat(t *testing.T) {
 	}
 	if m.searchDirection != SearchBackward {
 		t.Fatalf("expected search direction backward")
+	}
+}
+
+// TestSearchMatchesAWarningRowByItsVisibleTextOnly: a warning row is drawn
+// as "warning: <message>" and nothing else, so a search must not stop on it
+// for the placeholders behind it (comm "ior", pid 0, ret -1, 0 bytes, its
+// sequence number, the error flag), and must find what the line shows, with
+// control characters as the placeholders they are drawn as.
+func TestSearchMatchesAWarningRowByItsVisibleTextOnly(t *testing.T) {
+	warning := NewWarningEvent(2, "Trace stopped:\tboom\x1b[31m")
+	if got, want := warningLine(warning), "warning: Trace stopped: boom?[31m"; got != want {
+		t.Fatalf("warningLine = %q, want %q", got, want)
+	}
+	for _, tt := range []struct {
+		pattern string
+		want    bool
+	}{
+		{`^-1$`, false}, {`^ior$`, false}, {`^0$`, false}, {`^2$`, false},
+		{`^error$`, false}, {`^warning$`, false}, {`\t`, false}, {`\x1b`, false},
+		{`^warning: Trace`, true}, {`stopped: boom\?\[31m$`, true}, {`boom`, true},
+	} {
+		if got := streamEventMatchesRegex(warning, regexp.MustCompile(tt.pattern)); got != tt.want {
+			t.Errorf("/%s on a warning row: matched = %v, want %v", tt.pattern, got, tt.want)
+		}
+	}
+}
+
+// TestPausedSearchSkipsAWarningRowsHiddenValues drives the paused search in
+// both directions over a syscall row (no zero, no "ior", no -1 in it) and a
+// warning row: the hidden placeholders leave the selection where it was with
+// "No match", the visible text moves it to the warning row.
+func TestPausedSearchSkipsAWarningRowsHiddenValues(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq: 1, TimeNs: 5, GapNs: 9, DurationNs: 9, Comm: "alpha", PID: 10, TID: 100,
+		Syscall: "read", FD: 3, RetVal: 7, Bytes: 7, FileName: "/tmp/a",
+	})
+	rb.Push(NewWarningEvent(2, "Trace stopped: boom"))
+	for _, direction := range []SearchDirection{SearchForward, SearchBackward} {
+		m := NewModel(rb)
+		m.height = 20
+		m.Refresh()
+		_ = pressLocal(t, &m, "space")
+		for _, hidden := range []string{`^-1$`, `^ior$`, `^0$`, `^error$`} {
+			m.moveSelectionTo(0)
+			m.submitSearch(hidden, direction)
+			if m.selectedIdx != 0 || !strings.HasPrefix(m.statusMessage, "No match") {
+				t.Fatalf("/%s (direction %d) selected row %d, status %q", hidden, direction, m.selectedIdx, m.statusMessage)
+			}
+		}
+		for _, visible := range []string{`^warning: Trace`, `boom`} {
+			m.moveSelectionTo(0)
+			m.submitSearch(visible, direction)
+			if m.selectedIdx != 1 {
+				t.Fatalf("/%s (direction %d) selected row %d, want the warning row", visible, direction, m.selectedIdx)
+			}
+		}
 	}
 }
 

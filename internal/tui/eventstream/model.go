@@ -1309,9 +1309,18 @@ func (m *Model) findMatch(start int, direction SearchDirection) int {
 	return -1
 }
 
+// streamEventMatchesRegex reports whether the paused search's pattern matches
+// a row: any of its text cells, any of its numbers in decimal, or the word
+// "error" on a failed call. A warning row is matched by the one line it shows
+// (warningLine) and by nothing else: its other values are placeholders that
+// are not drawn (comm "ior", pid 0, ret -1, 0 bytes, the error flag), and
+// /^0$ or /^ior$ used to stop on a row showing neither.
 func streamEventMatchesRegex(ev StreamEvent, re *regexp.Regexp) bool {
 	if re == nil {
 		return false
+	}
+	if ev.IsWarning {
+		return re.MatchString(warningLine(ev))
 	}
 	if re.MatchString(ev.Syscall) || re.MatchString(ev.Comm) || re.MatchString(ev.FileName) {
 		return true

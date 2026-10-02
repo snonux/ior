@@ -38,7 +38,16 @@ var columnShrinkSteps = []struct{ col, floor int }{
 	{streamColFD, 1}, {streamColFile, 1},
 }
 
-// syscallCommonWidth is the Syscall column's first growth target: it holds
+// syscallUsualWidth is the Syscall column's first growth target: about four
+// in five of the generated syscall names fit in it (openat, pread64, ftruncate,
+// newfstatat, epoll_pwait2, ...). Going straight to syscallCommonWidth
+// instead left a 100-column terminal with a File column of 20 cells, paths
+// cut in the middle, beside a Syscall column whose cells mostly ended in
+// eight or more blanks; the remaining cells go to the File column first. A
+// test pins that it keeps covering the generated table.
+const syscallUsualWidth = 12
+
+// syscallCommonWidth is the Syscall column's second growth target: it holds
 // all but a handful of the generated syscall names (clock_nanosleep,
 // name_to_handle_at, process_vm_writev, ...; the exceptions are a few sched_*
 // and landlock_* names and set_mempolicy_home_node), so a mid-sized terminal
@@ -46,6 +55,10 @@ var columnShrinkSteps = []struct{ col, floor int }{
 // longest one from the File column. A test pins that it keeps covering the
 // generated table.
 const syscallCommonWidth = 17
+
+// commFullWidth is the longest comm the kernel hands out (TASK_COMM_LEN is
+// 16 bytes including the terminating NUL), the bound of the Comm column.
+const commFullWidth = 15
 
 // syscallFullWidth is the widest name a traced row can carry in its Syscall
 // cell, the bound of that column: no terminal width makes it wider.
@@ -68,23 +81,31 @@ func longestSyscallNameWidth() int {
 // has beyond the compact layout, and up to which width; the File column takes
 // whatever the last step leaves. It is the counterpart of columnShrinkSteps
 // and, like it, depends on the width only, so the table is stable while rows
-// scroll. The order is by what a cut cell costs: a readable File cell first,
-// whole PIDs and TIDs (7 digits with the default pid_max), then whole syscall
-// names - the Syscall column used to stay at 9 or 11 cells at any width, so
-// a 200-column terminal showed "cloc...leep" beside a hundred-cell File
-// column (task 923) - then, alternating with more room for paths, the less
-// often cut Comm, FD, Ret and Bytes cells, the few names longer than
-// syscallCommonWidth, and the roomier Comm/PID/TID of very wide terminals.
+// scroll. Every step only widens its column, and a wider row gets no further
+// in the list than a narrower one plus what it has to spare, so no column is
+// ever narrower on a wider terminal.
+//
+// The order is by what a cut cell costs: a readable File cell first, whole
+// PIDs and TIDs (7 digits with the default pid_max), then syscall names - the
+// Syscall column used to stay at 9 or 11 cells at any width, so a 200-column
+// terminal showed "cloc...leep" beside a hundred-cell File column (task 923).
+// Names and paths take turns: the usual names (syscallUsualWidth), a File
+// column of 28 cells, and only then the long names (syscallCommonWidth, whole
+// from a terminal of about 109 columns). After that, alternating with more
+// room for paths, come the less often cut Comm, FD, Ret and Bytes cells, the
+// few names longer than syscallCommonWidth, and on very wide terminals whole
+// comms and roomier PID/TID columns.
 var columnGrowSteps = []struct{ col, ceil int }{
 	{streamColFile, 20},
 	{streamColPID, 7}, {streamColTID, 7},
-	{streamColSyscall, syscallCommonWidth},
+	{streamColSyscall, syscallUsualWidth},
 	{streamColFile, 28},
+	{streamColSyscall, syscallCommonWidth},
 	{streamColComm, 10}, {streamColFD, 4}, {streamColRet, 5}, {streamColBytes, 8},
 	{streamColFile, 40},
 	{streamColSyscall, syscallFullWidth},
 	{streamColFile, 60},
-	{streamColComm, 12}, {streamColPID, 8}, {streamColTID, 8},
+	{streamColComm, commFullWidth}, {streamColPID, 8}, {streamColTID, 8},
 }
 
 // RenderStreamTable renders the stream tab's main panel: status line, filter
@@ -242,8 +263,8 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 // that column and, like a path, in the middle, which removed exactly the
 // cause a warning names early on: "(t...may be unnamed" at 220 columns (task
 // 923). A row is one terminal line (model.visibleRows), so the message
-// cannot wrap; what the end cut drops is the trailing advice. The message is
-// foreign text (libbpf output, error strings) and is sanitised like a cell.
+// cannot wrap; what the end cut drops is the trailing advice. The text is
+// warningLine's, which the paused search matches too.
 //
 // The line is exactly as wide as the columns with their separators, so it
 // fills the panel like every other row. Selected, it takes the row
@@ -254,12 +275,23 @@ func renderWarningRow(ev StreamEvent, columns []common.TableColumn, selected boo
 	for _, col := range columns {
 		width += col.Width
 	}
-	line := common.FitRight(common.Sanitize(ev.Syscall+": "+ev.FileName), width, common.ASCIIEllipsis)
+	line := common.FitRight(warningLine(ev), width, common.ASCIIEllipsis)
 	theme := common.Current()
 	if selected {
 		return theme.TableSelectedRowStyle.Render(line)
 	}
 	return theme.ErrorStyle.Render(line)
+}
+
+// warningLine is the text a warning row shows before it is cut to the row:
+// its label ("warning", the row's Syscall text), a colon and the message.
+// The message is foreign text (libbpf output, error strings) and is sanitised
+// like a cell: control characters become placeholders, a newline or tab a
+// space. renderWarningRow draws this string and streamEventMatchesRegex
+// searches it, so a search hit on a warning row is always text on screen
+// (or text the end cut dropped), never one of the row's hidden placeholders.
+func warningLine(ev StreamEvent) string {
+	return common.Sanitize(ev.Syscall + ": " + ev.FileName)
 }
 
 // computeColumnLayout sizes the columns for a row of width cells. It starts

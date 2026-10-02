@@ -8,6 +8,7 @@ import (
 	"ior/internal/tui/common"
 	"ior/internal/types"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -161,19 +162,40 @@ func TestStreamTableFitsEveryGeneratedSyscallNameAt200(t *testing.T) {
 	}
 }
 
-// TestSyscallCommonWidthCoversNearlyAllNames keeps the first growth step
-// honest: syscallCommonWidth is a literal, so a regenerated table that makes
-// many names longer than it must fail here rather than quietly truncate them
-// on mid-sized terminals.
-func TestSyscallCommonWidthCoversNearlyAllNames(t *testing.T) {
-	names := generatedSyscallNames()
+// namesWiderThan counts the names that a column of width cells would cut.
+func namesWiderThan(names []string, width int) int {
 	over := 0
 	for _, name := range names {
-		if len(name) > syscallCommonWidth {
+		if len(name) > width {
 			over++
 		}
 	}
-	if over*100 > len(names)*3 {
+	return over
+}
+
+// TestSyscallUsualWidthCoversMostNames keeps the first growth step honest:
+// syscallUsualWidth is a literal chosen because about four in five generated
+// names fit in it, which is what justifies giving the File column its next
+// cells before the Syscall column grows on. A regenerated table in which
+// more than a quarter of the names are longer must fail here rather than
+// quietly cut them on terminals of about 100 columns.
+func TestSyscallUsualWidthCoversMostNames(t *testing.T) {
+	names := generatedSyscallNames()
+	if over := namesWiderThan(names, syscallUsualWidth); over*4 > len(names) {
+		t.Fatalf("%d of %d generated names are wider than syscallUsualWidth (%d): raise it", over, len(names), syscallUsualWidth)
+	}
+	if syscallUsualWidth >= syscallCommonWidth || syscallCommonWidth >= syscallFullWidth {
+		t.Fatalf("growth targets out of order: usual %d, common %d, full %d", syscallUsualWidth, syscallCommonWidth, syscallFullWidth)
+	}
+}
+
+// TestSyscallCommonWidthCoversNearlyAllNames does the same for the second
+// growth step: syscallCommonWidth is a literal, so a regenerated table that
+// makes more than 3% of the names longer than it must fail here rather than
+// quietly truncate them on mid-sized terminals.
+func TestSyscallCommonWidthCoversNearlyAllNames(t *testing.T) {
+	names := generatedSyscallNames()
+	if over := namesWiderThan(names, syscallCommonWidth); over*100 > len(names)*3 {
 		t.Fatalf("%d of %d generated names are wider than syscallCommonWidth (%d): raise it", over, len(names), syscallCommonWidth)
 	}
 	for _, name := range longSyscallNames {
@@ -221,23 +243,65 @@ func TestStreamHeaderDoesNotDependOnRows(t *testing.T) {
 	}
 }
 
-// TestSyscallColumnGrowsMonotonically: widening the terminal never narrows
-// the Syscall column (a name readable at one width stays readable at every
-// larger one), and the column never grows past the longest generated name.
-func TestSyscallColumnGrowsMonotonically(t *testing.T) {
-	prev := 0
-	for width := 1; width <= 300; width++ {
+// TestColumnLayoutNeverNarrowsAsWidthGrows is the layout's contract over
+// text widths 1 to 400, across the shrink path, the compact layout and every
+// growth step: from the all-ones minimum up the row is exactly as wide as
+// the text area, no column is empty, and widening the terminal never narrows
+// any column (a cell readable at one width stays readable at every larger
+// one). The Syscall and Comm columns stop at the longest value they can hold.
+func TestColumnLayoutNeverNarrowsAsWidthGrows(t *testing.T) {
+	const minRow = streamColumnCount*2 - 1
+	prev := computeColumnLayout(1)
+	for width := 1; width <= 400; width++ {
 		cols := computeColumnLayout(width)
-		if cols.syscall < prev {
-			t.Fatalf("width %d: Syscall column shrank from %d to %d", width, prev, cols.syscall)
+		if got := rowWidth(&cols); width >= minRow && got != width {
+			t.Fatalf("width %d: row is %d cells wide: %+v", width, got, cols)
 		}
-		if cols.syscall > syscallFullWidth {
-			t.Fatalf("width %d: Syscall column %d is wider than the longest name (%d)", width, cols.syscall, syscallFullWidth)
+		before := columnFields(&prev)
+		for i, f := range columnFields(&cols) {
+			if *f < 1 || *f < *before[i] {
+				t.Fatalf("width %d: column %q is %d cells, was %d one cell narrower", width, streamColumnTitles[i], *f, *before[i])
+			}
 		}
-		prev = cols.syscall
+		if cols.syscall > syscallFullWidth || cols.comm > commFullWidth {
+			t.Fatalf("width %d: Syscall %d or Comm %d is wider than its longest value (%d, %d)", width, cols.syscall, cols.comm, syscallFullWidth, commFullWidth)
+		}
+		prev = cols
 	}
-	if prev != syscallFullWidth {
-		t.Fatalf("Syscall column is %d at 300 columns, want %d", prev, syscallFullWidth)
+	if prev.syscall != syscallFullWidth || prev.comm != commFullWidth {
+		t.Fatalf("at 400 cells Syscall is %d and Comm %d, want %d and %d", prev.syscall, prev.comm, syscallFullWidth, commFullWidth)
+	}
+}
+
+// TestColumnGrowOrder pins the order of columnGrowSteps with the exact layout
+// at one text width inside each stage (a terminal is four columns wider than
+// its text area). The early stages matter most: File reaches 20 cells before
+// PID and TID get their seventh, those before the Syscall column grows, and
+// the Syscall column stops at syscallUsualWidth until File has 28 cells, so
+// a 100-column terminal shows File 24 / Syscall 12 and not File 20 beside a
+// mostly blank Syscall 17.
+func TestColumnGrowOrder(t *testing.T) {
+	full := syscallFullWidth
+	for _, tt := range []struct {
+		width int
+		want  columnLayout
+	}{
+		{78, columnLayout{gap: 7, latency: 8, comm: 8, pid: 6, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7, file: 12}},
+		{82, columnLayout{gap: 7, latency: 8, comm: 8, pid: 6, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7, file: 16}},
+		{87, columnLayout{gap: 7, latency: 8, comm: 8, pid: 7, tid: 6, syscall: 8, fd: 3, ret: 4, bytes: 7, file: 20}},
+		{90, columnLayout{gap: 7, latency: 8, comm: 8, pid: 7, tid: 7, syscall: 10, fd: 3, ret: 4, bytes: 7, file: 20}},
+		{96, columnLayout{gap: 7, latency: 8, comm: 8, pid: 7, tid: 7, syscall: 12, fd: 3, ret: 4, bytes: 7, file: 24}},
+		{104, columnLayout{gap: 7, latency: 8, comm: 8, pid: 7, tid: 7, syscall: 16, fd: 3, ret: 4, bytes: 7, file: 28}},
+		{108, columnLayout{gap: 7, latency: 8, comm: 10, pid: 7, tid: 7, syscall: 17, fd: 4, ret: 4, bytes: 7, file: 28}},
+		{112, columnLayout{gap: 7, latency: 8, comm: 10, pid: 7, tid: 7, syscall: 17, fd: 4, ret: 5, bytes: 8, file: 30}},
+		{124, columnLayout{gap: 7, latency: 8, comm: 10, pid: 7, tid: 7, syscall: 19, fd: 4, ret: 5, bytes: 8, file: 40}},
+		{128 + full, columnLayout{gap: 7, latency: 8, comm: 13, pid: 7, tid: 7, syscall: full, fd: 4, ret: 5, bytes: 8, file: 60}},
+		{132 + full, columnLayout{gap: 7, latency: 8, comm: 15, pid: 8, tid: 8, syscall: full, fd: 4, ret: 5, bytes: 8, file: 60}},
+		{200, columnLayout{gap: 7, latency: 8, comm: 15, pid: 8, tid: 8, syscall: full, fd: 4, ret: 5, bytes: 8, file: 128 - full}},
+	} {
+		if got := computeColumnLayout(tt.width); got != tt.want {
+			t.Fatalf("text width %d:\n got %+v\nwant %+v", tt.width, got, tt.want)
+		}
 	}
 }
 
@@ -324,6 +388,84 @@ func TestSelectedWarningRowKeepsItsWidth(t *testing.T) {
 	}
 }
 
+// TestWarningRowStyles compares the raw output, SGR sequences included: an
+// unselected warning is the padded line in ErrorStyle (what marks it as a
+// warning between ordinary rows), a selected one the same line in the row
+// selection style and not in ErrorStyle, whatever column is selected.
+func TestWarningRowStyles(t *testing.T) {
+	const width = 116
+	theme := common.Current()
+	columns := streamColumns(width)
+	ev := NewWarningEvent(1, "Trace stopped: boom")
+	line := common.PadRight("warning: Trace stopped: boom", width)
+	plain := renderEventRow(ev, columns, false, -1)
+	selected := renderEventRow(ev, columns, true, streamColSyscall)
+	if want := theme.ErrorStyle.Render(line); plain != want {
+		t.Fatalf("unselected warning row:\n got %q\nwant %q", plain, want)
+	}
+	if want := theme.TableSelectedRowStyle.Render(line); selected != want {
+		t.Fatalf("selected warning row:\n got %q\nwant %q", selected, want)
+	}
+	if plain == line || selected == plain {
+		t.Fatalf("the theme's styles emit no SGR here, so the comparison above proves nothing: %q", plain)
+	}
+}
+
+// styledText returns the text out carries inside style's SGR sequences, byte
+// for byte. ansi.Strip is no use to a sanitising test: it would remove an
+// escape sequence the row let through together with the style's own.
+func styledText(t *testing.T, style lipgloss.Style, out string) string {
+	t.Helper()
+	pre, post, _ := strings.Cut(style.Render("x"), "x")
+	text, hasPre := strings.CutPrefix(out, pre)
+	text, hasPost := strings.CutSuffix(text, post)
+	if pre == "" || !hasPre || !hasPost {
+		t.Fatalf("row is not one run in the expected style (%q...%q): %q", pre, post, out)
+	}
+	return text
+}
+
+// assertCleanRowText fails when text holds a control byte (ESC, tab, line
+// feed, DEL, ...) or is not exactly width display cells wide.
+func assertCleanRowText(t *testing.T, text string, width int) {
+	t.Helper()
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c < 0x20 || c == 0x7f {
+			t.Fatalf("control byte %#x at offset %d of %q", c, i, text)
+		}
+	}
+	if got := common.DisplayWidth(text); got != width {
+		t.Fatalf("row text is %d cells, want %d: %q", got, width, text)
+	}
+}
+
+// TestWarningRowSanitizesItsMessage: a warning's message is foreign text
+// (libbpf output, error strings quoting a path). An escape sequence in it
+// must not reach the terminal, a tab or line feed must not break the row,
+// and a wide rune counts two cells, also when the cut falls beside one.
+func TestWarningRowSanitizesItsMessage(t *testing.T) {
+	const width = 62
+	errorStyle := common.Current().ErrorStyle
+	columns := streamColumns(width)
+
+	short := NewWarningEvent(1, "libbpf:\x1b[2Jmap\t'\u754c'\nfailed\x7f")
+	got := styledText(t, errorStyle, renderEventRow(short, columns, false, -1))
+	want := "warning: libbpf:?[2Jmap '\u754c' failed?"
+	if strings.TrimRight(got, " ") != want {
+		t.Fatalf("warning row text = %q, want %q padded", got, want)
+	}
+	assertCleanRowText(t, got, width)
+
+	// "warning: ?" is 10 cells, so the 52 left hold 24 wide runes, the
+	// marker and one padding cell: the cut cannot split a rune to fill it.
+	long := NewWarningEvent(2, "\x1b"+strings.Repeat("\u754c", 40))
+	got = styledText(t, errorStyle, renderEventRow(long, columns, false, -1))
+	if want := "warning: ?" + strings.Repeat("\u754c", 24) + common.ASCIIEllipsis + " "; got != want {
+		t.Fatalf("cut warning row text = %q, want %q", got, want)
+	}
+	assertCleanRowText(t, got, width)
+}
+
 // TestPausedEnterOnWarningRowIsNotHandled: a warning row is one spanning
 // line without cells, and every value behind it is a placeholder, so Enter
 // pushes no filter from any column, where it used to push pid=0 or ret=-1.
@@ -337,9 +479,9 @@ func TestPausedEnterOnWarningRowIsNotHandled(t *testing.T) {
 }
 
 // TestStreamViewLayoutAcrossWidths renders the model's own view, the path
-// the dashboard draws, at the three widths the task names, and pins the
-// Syscall column of each: whole names at 200 and 120, cut ones at 80, never
-// a line wider than the terminal, and the warning on a single line.
+// the dashboard draws, at 200, 120 and 80 columns, and pins the Syscall
+// column of each: whole names at 200 and 120, cut ones at 80, never a line
+// wider than the terminal, and the warning on a single line.
 func TestStreamViewLayoutAcrossWidths(t *testing.T) {
 	for _, tt := range []struct {
 		width   int
