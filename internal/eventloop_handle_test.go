@@ -40,9 +40,15 @@ func (h testHandle) key() handleKey {
 	return handleKey{handleType: h.handleType, size: uint32(len(h.bytes)), bytes: h.fHandle()}
 }
 
+// handleCallDuration is how long every name_to_handle_at of these fixtures
+// takes: the helpers stamp the exit, and the handle record ahead of it, this
+// much after the enter.
+const handleCallDuration = 100
+
 // makeFileHandleEvent builds the control record a successful
 // name_to_handle_at emits for handle h. time must be the time of the exit
-// record that follows it.
+// record that follows it; the record names its enter as the one
+// handleCallDuration earlier.
 func makeFileHandleEvent(t *testing.T, time uint64, pid, tid uint32, h testHandle) (types.FileHandleEvent, []byte) {
 	t.Helper()
 	ev := types.FileHandleEvent{
@@ -55,6 +61,7 @@ func makeFileHandleEvent(t *testing.T, time uint64, pid, tid uint32, h testHandl
 		HandleBytes:  uint32(len(h.bytes)),
 		HandleType:   h.handleType,
 		FHandle:      h.fHandle(),
+		EnterTime:    time - handleCallDuration,
 	}
 	return ev, eventBytes(t, &ev)
 }

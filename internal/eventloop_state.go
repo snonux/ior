@@ -2,6 +2,7 @@ package internal
 
 import (
 	"cmp"
+	"path/filepath"
 	"slices"
 
 	"ior/internal/event"
@@ -132,6 +133,28 @@ type takenHandle struct {
 	time uint64
 }
 
+// handleName is what a handle is filed as: the name, and whom it may be given
+// to. An absolute pathname is given to every opener of the handle. Any other
+// name - a relative pathname, which is relative to the taker's working
+// directory, or what ior calls a descriptor that has no path ("memfd:x",
+// "pidfd:0") - means something only in the process that took the handle, so
+// it is scoped: only opens by the thread group pid are named by it.
+type handleName struct {
+	name   string
+	pid    uint32
+	scoped bool
+}
+
+// newHandleName builds the entry for a handle the process pid took of name.
+func newHandleName(name string, pid uint32) handleName {
+	return handleName{name: name, pid: pid, scoped: !filepath.IsAbs(name)}
+}
+
+// namesOpensBy reports whether an open by the process pid is given the name.
+func (n handleName) namesOpensBy(pid uint32) bool {
+	return !n.scoped || n.pid == pid
+}
+
 // handleTracker remembers which pathname a file handle was taken of, so that
 // an open_by_handle_at can be named after the file its handle belongs to.
 //
@@ -140,7 +163,8 @@ type takenHandle struct {
 // be opened any number of times, so an entry is never consumed by an open. It
 // is replaced when name_to_handle_at returns the same handle again (the latest
 // name wins) and evicted least-recently-used first above the cap; a lookup
-// counts as use.
+// that names an open counts as use. Whom an entry names is the entry's own
+// business (handleName).
 //
 // taken is the short-lived per-thread half: see takenHandle. An entry normally
 // lives from the control record to the exit record a few records later, and
@@ -148,7 +172,7 @@ type takenHandle struct {
 // stays until the thread's next name_to_handle_at exit, which discards it
 // because the times differ.
 type handleTracker struct {
-	names        map[handleKey]string
+	names        map[handleKey]handleName
 	nameAges     map[handleKey]uint64
 	taken        map[uint32]takenHandle
 	maxCacheSize int
@@ -225,7 +249,7 @@ func newHandleTracker() *handleTracker {
 // can complete a hand-built tracker without spelling out its map fields.
 func (t *handleTracker) ensureInit() {
 	if t.names == nil {
-		t.names = make(map[handleKey]string)
+		t.names = make(map[handleKey]handleName)
 	}
 	if t.nameAges == nil {
 		t.nameAges = make(map[handleKey]uint64)
@@ -932,12 +956,13 @@ func (t *fdTracker) deleteCacheKey(key uint64) {
 
 // store files name under the handle key, replacing what the handle was known
 // as: name_to_handle_at returned it again, and the pathname of the latest call
-// is the freshest name ior has for that file. An empty name (resolvePathEvent
-// produced none) is no name to give a row, but it still supersedes the old
-// entry, which is dropped rather than left to be mistaken for the current
-// one: a missing name leaves the row to procfs, a stale one would be wrong.
-func (t *handleTracker) store(key handleKey, name string) {
-	if name == "" {
+// is the freshest name ior has for that file. An empty name (the caller has
+// none it can vouch for, see takenHandleName) is no name to give a row, but
+// it still supersedes the old entry, which is dropped rather than left to be
+// mistaken for the current one: a missing name leaves the row to procfs, a
+// stale one would be wrong.
+func (t *handleTracker) store(key handleKey, name handleName) {
+	if name.name == "" {
 		delete(t.names, key)
 		delete(t.nameAges, key)
 		return
@@ -949,20 +974,24 @@ func (t *handleTracker) store(key handleKey, name string) {
 	t.prune()
 }
 
-// lookup returns the name the handle key was taken of. A hit refreshes the
-// entry's LRU age: a handle that is still being opened is worth keeping, and
-// the entry stays where it is, because the next open of the same handle - by
-// this thread or any other - is the same file. A failed open is no reason to
-// drop it either: the handle itself is not what failed in the common cases
-// (a bad mount fd, a missing capability), and a retry should be named.
-func (t *handleTracker) lookup(key handleKey) (string, bool) {
-	name, ok := t.names[key]
-	if !ok {
+// lookup returns the name an open of the handle key by the process pid is
+// given. A hit refreshes the entry's LRU age: a handle that is still being
+// opened is worth keeping, and the entry stays where it is, because the next
+// open of the same handle - by this thread or any other - is the same file. A
+// failed open is no reason to drop it either: the handle itself is not what
+// failed in the common cases (a bad mount fd, a missing capability), and a
+// retry should be named.
+//
+// A scoped name asked for by another process is a miss, and leaves the entry
+// alone: it is still right for the process that took the handle.
+func (t *handleTracker) lookup(key handleKey, pid uint32) (string, bool) {
+	entry, ok := t.names[key]
+	if !ok || !entry.namesOpensBy(pid) {
 		return "", false
 	}
 	t.age++
 	t.nameAges[key] = t.age
-	return name, true
+	return entry.name, true
 }
 
 // park records the handle a name_to_handle_at of tid returned, as its control
@@ -987,10 +1016,20 @@ func (t *handleTracker) park(tid uint32, key handleKey, time uint64) {
 // any case: the exit of a name_to_handle_at ends the only call it could
 // belong to.
 //
-// The time check is what makes the pairing exact rather than positional. The
-// control record and the exit record of one call carry the same clock read,
-// and a later call of the tid has a later one, so a handle whose own exit
-// record was lost can never be filed under the pathname of the next call.
+// The time check is what makes the pairing by identity rather than by
+// position. The control record and the exit record of one call carry the same
+// clock read, and the exit of a later call of the tid is stamped with a later
+// read, so a handle whose own exit record was lost is not filed under the
+// pathname of the next call.
+//
+// "Later" is as fine as the clock: the two reads are a syscall return, a
+// syscall entry and the whole next call apart, and a clocksource too coarse
+// to move in that time (the jiffies fallback of a host without a usable TSC
+// or HPET) could stamp both exits alike. The first call's handle would then
+// be filed under the second call's pathname - but only if, within that one
+// tick, the first call's exit record was lost and so was the second call's
+// own handle record, which would otherwise have replaced the parked one
+// (park). Accepted; not worth a sequence number in the record.
 func (t *handleTracker) claim(tid uint32, time uint64) (handleKey, bool) {
 	parked, ok := t.taken[tid]
 	if !ok {

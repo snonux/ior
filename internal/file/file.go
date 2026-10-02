@@ -75,7 +75,11 @@ type FdFile struct {
 	desc             *openFileDesc
 	closeOnExecKnown bool
 	closeOnExec      bool
-	flagsFromProcFS  bool
+	// fromProcFS marks a descriptor whose name is what /proc/<pid>/fd/<fd>
+	// showed when ior looked (NewFdWithPid, NewFdWithProcName), or that
+	// procfs could not answer for: a later look at the number, not the name
+	// a traced call gave the file. Dup and Detach copy it with the name.
+	fromProcFS bool
 }
 
 // NewFd constructs an FdFile from explicit descriptor metadata.
@@ -107,7 +111,7 @@ func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
 	} else {
 		f.SetFlags(int32(flags))
 	}
-	f.flagsFromProcFS = true
+	f.fromProcFS = true
 
 	return f
 }
@@ -117,7 +121,7 @@ func NewFdWithProcName(fd int32, pid uint32, name string) *FdFile {
 func unresolvedFd(fd int32) *FdFile {
 	f := newFdFile(fd, "")
 	f.SetFlags(-1)
-	f.flagsFromProcFS = true
+	f.fromProcFS = true
 	return f
 }
 
@@ -146,6 +150,16 @@ func parseFlagsFromFdInfo(data []byte) (Flags, error) {
 		return unknownFlag, err
 	}
 	return unknownFlag, fmt.Errorf("flags field not found in fdinfo")
+}
+
+// NameFromProcFS reports whether the name was read from /proc/<pid>/fd rather
+// than learned from a traced call. Such a name describes whatever the number
+// was when the event loop got to look, which is a newer file once the task
+// closed and reused the number; it is good enough for the row it was read
+// for, but must not be passed on as the identity of the file (the handle
+// names of internal/eventloop_handle.go refuse it).
+func (f *FdFile) NameFromProcFS() bool {
+	return f.fromProcFS
 }
 
 // Name returns the file's path, or the empty string when it was never

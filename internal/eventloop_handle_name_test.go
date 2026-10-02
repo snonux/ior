@@ -91,6 +91,7 @@ func TestHandleRecordIsAcceptedOnlyForItsOwnCall(t *testing.T) {
 		"another tid":          func(ev *types.FileHandleEvent) { ev.Tid++ },
 		"another syscall's ID": func(ev *types.FileHandleEvent) { ev.TraceId = types.SYS_ENTER_ACCESS },
 		"another call's time":  func(ev *types.FileHandleEvent) { ev.Time-- },
+		"another call's enter": func(ev *types.FileHandleEvent) { ev.EnterTime-- },
 		"an unreadable handle": func(ev *types.FileHandleEvent) { ev.HandleStatus = types.FILE_HANDLE_READ_FAILED },
 		"an empty handle":      func(ev *types.FileHandleEvent) { ev.HandleBytes = 0 },
 	}
@@ -145,27 +146,32 @@ func TestLostExitDoesNotMisfileTheNextCall(t *testing.T) {
 // that returned handle h: the handle of the file behind a descriptor.
 func (f *handleFeed) nameToHandleOfFd(fd int32, h testHandle) {
 	f.t.Helper()
-	ev, _ := makeEnterPathEvent(f.t, f.time, f.pid, f.tid, "", types.SYS_ENTER_NAME_TO_HANDLE_AT)
-	ev.Dirfd = fd
-	ev.Flags = unix.AT_EMPTY_PATH
-	ev.PathnameStatus = types.PATH_READ_OK
-	ev.TargetStatus = types.PATH_TARGET_REQUIRED
-	_, record := makeFileHandleEvent(f.t, f.time+100, f.pid, f.tid, h)
-	_, exit := makeExitRetEvent(f.t, f.time+100, f.pid, f.tid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
+	f.nameToHandleUnder(fd, "", unix.AT_EMPTY_PATH, h)
+}
+
+// nameToHandleUnder feeds a successful name_to_handle_at(dirfd, pathname,
+// flags) that returned handle h.
+func (f *handleFeed) nameToHandleUnder(dirfd int32, pathname string, flags uint32, h testHandle) {
+	f.t.Helper()
+	ev, _ := makeEnterPathEvent(f.t, f.time, f.pid, f.tid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
+	ev.Dirfd = dirfd
+	ev.Flags = flags
+	_, record := makeFileHandleEvent(f.t, f.time+handleCallDuration, f.pid, f.tid, h)
+	_, exit := makeExitRetEvent(f.t, f.time+handleCallDuration, f.pid, f.tid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
 	f.consume(eventBytes(f.t, &ev), record, exit)
 	f.time += 1000
 }
 
 // TestHandleTakenThroughADescriptorCarriesItsTrackedName replaces the opaque
 // stash rules of tasks l03 and m03. A handle taken with AT_EMPTY_PATH is
-// filed under whatever ior calls the descriptor - a traced memfd or pidfd
-// name, the directory an O_TMPFILE file is tracked under, a relative path as
-// the task spelled it. None of these names can be compared with a /proc link,
-// which is why such a stash used to be spent on the thread's NEXT open,
-// whichever handle that opened. Keyed by the handle, each names its own open
-// and no other, in any order.
+// filed under whatever ior calls the descriptor, verbatim - a traced memfd or
+// pidfd name, the directory an O_TMPFILE file is tracked under, a relative
+// path as the task spelled it. None of these names can be compared with a
+// /proc link, which is why such a stash used to be spent on the thread's NEXT
+// open, whichever handle that opened. Keyed by the handle, each names its own
+// open and no other, in any order.
 func TestHandleTakenThroughADescriptorCarriesItsTrackedName(t *testing.T) {
-	names := []string{"memfd:scratch", "pidfd:0", "/data/tmpfile-dir", "relative/file.txt", "fsopen:ext4"}
+	names := []string{"memfd:scratch", "memfd:odd//name", "pidfd:0", "/data/tmpfile-dir", "relative/file.txt", "fsopen:ext4"}
 	for _, tracked := range names {
 		t.Run(tracked, func(t *testing.T) {
 			feed := newHandleFeed(t, globalfilter.Filter{})
@@ -193,6 +199,8 @@ func TestRelativePathHandleNamesItsOwnOpenOnly(t *testing.T) {
 // TestAmendingControlRecordsPassAHeldRestart: a handle record, like a name
 // fixup, belongs to a call made inside a signal handler and must not end the
 // wait of the interrupted row held for that tid; other control records do.
+// TestHandlersNameToHandleAtPassesTheHeldRow drives the records through the
+// held row itself.
 func TestAmendingControlRecordsPassAHeldRestart(t *testing.T) {
 	if !amendsPendingEnter(&types.FileHandleEvent{}) || !amendsPendingEnter(&types.OpenNameFixupEvent{}) {
 		t.Fatal("a handle record and a name fixup amend the pending enter")

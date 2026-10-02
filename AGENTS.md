@@ -1755,29 +1755,60 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       size. The pointer travels in the *second* pending slot
       (`pending_filename2`): the syscall has one path, so the slot is free,
       and reusing it keeps `struct syscall_enter_state` at its size and the
-      exit at one map lookup (`ior_on_syscall_exit_take_filenames`). The
-      control record carries the exit handler's single clock read, i.e.
-      exactly the `time` of the exit record that follows.
+      exit at one map lookup (`ior_on_syscall_exit_take_handle`, which hands
+      back the pathname pointer, the handle pointer and the state's
+      `start_ns` from that lookup). The control record (176 bytes) names both
+      ends of its call by their clock reads: `time` is the exit handler's
+      single read, i.e. exactly the `time` of the exit record that follows,
+      and `enter_time` is that `start_ns`, i.e. exactly the `time` of the
+      call's enter record.
 
     Userspace keeps `handleTracker.names`: handle key (`handleKey`: type,
-    length, bytes) -> the pathname `name_to_handle_at` was called with,
-    resolved like any path event (`resolvePathEvent`: joined with a dirfd ior
-    knows by name; for `AT_EMPTY_PATH` whatever ior calls the descriptor, a
-    traced name such as `memfd:x` or the directory of an `O_TMPFILE` open
-    included). `handleFileHandleEvent` parks the handle per tid
-    (`handleTracker.taken`) while the call's enter is still pending;
-    `recordNameToHandleAt` claims it at the exit record - only if the two
-    carry the same time, so a handle whose exit record was lost is never
-    filed under the next call's pathname - and files the name.
+    length, bytes) -> `handleName`. `handleFileHandleEvent` parks the handle
+    per tid (`handleTracker.taken`) while the call's enter is still pending;
+    `recordNameToHandleAt` claims it at the exit record and files the name.
     `handleOpenByHandleAtExit` looks the name up by the key of its enter
     record: a hit names the row and the fd table entry (flags: the call's)
     without asking procfs, and names a failed call too. Decisions:
+    - *The control record is tied to both ends of its call, by time.* It is
+      accepted only while the enter pending for the tid is a
+      `name_to_handle_at` with the record's `enter_time`
+      (`ownsPendingEnter`), and claimed only by an exit with the record's
+      `time` (`handleTracker.claim`). Position alone is not enough in either
+      direction: a handle whose exit record was lost would be filed under
+      the next call's pathname, and - the case `enter_time` exists for - a
+      pending enter can be an *earlier* call's (its exit lost) while the
+      enter of the record's own call never arrived (lost, or shed by
+      `-path`), which filed the earlier pathname under this handle for
+      good. Both checks are as fine as the clock; see the residuals.
+    - *A name must come from a traced call, never from a look at procfs*
+      (`takenHandleName`). An absolute pathname is filed as given; a
+      pathname below a dirfd, or an empty one with `AT_EMPTY_PATH`, is
+      resolved through the fd table only (`fdTracker.get`, not `resolve`),
+      and a table entry that was itself named from procfs
+      (`FdFile.NameFromProcFS`: an `open_by_handle_at` of an unknown handle,
+      `io_uring_setup`, a procfs-resolved descriptor an `fcntl` promoted) is
+      refused. Otherwise the only name is the `/proc/<pid>/fd` link as it is
+      when the loop handles the exit: a task that closed the descriptor and
+      reused the number would have the *newer* file filed under the handle,
+      and every later open of it, in any process, named after the wrong
+      file - the lagging look this design removed from the open, moved to
+      the take. No name is filed then (and an older one is dropped); the
+      open falls back as for an unknown handle. `registerDup` applies the
+      same caution to a duplicated descriptor.
+    - *A name that is not an absolute pathname stays in the process that
+      took the handle* (`handleName.scoped`). A relative pathname is
+      relative to the taker's working directory, which ior does not track,
+      and a descriptor name without a path (`memfd:x`, `pidfd:0`) names one
+      of the taker's descriptors; either names the opens of every thread of
+      that process (`pid`) and none of another, which falls back.
     - *The map is global and an entry is never consumed.* A handle is valid
       system-wide, is passed between threads and processes and can be opened
       any number of times; a failed open says nothing against the name. The
-      latest `name_to_handle_at` of a handle wins (an empty name drops the
-      entry), a lookup refreshes the entry, and above
-      `defaultMaxHandleEntries` the least recently used are evicted.
+      latest `name_to_handle_at` of a handle wins (one without a name ior can
+      vouch for drops the entry), a lookup that names an open refreshes the
+      entry, and above `defaultMaxHandleEntries` the least recently used are
+      evicted.
     - *No handle, no guess.* An enter record that identifies no handle
       (`handleKeyOf`: status other than OK, zero bytes, a count beyond the
       field) and a handle ior has no name for are named from
@@ -1788,9 +1819,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       needs `/proc/<pid>/fdinfo` (the lagging look this design removes) or
       walking the file table in BPF, and a mount ID is not the filesystem
       anyway (a handle is valid on every bind mount of it). Equal type and
-      bytes on two filesystems therefore share an entry - an accepted
-      residual; the common encodings carry the inode number plus a 32-bit
-      random generation.
+      bytes on two filesystems therefore share an entry.
 
     This replaced the per-tid stash and its procfs arbitration (tasks j03,
     l03, m03: `classifyHandlePath`, `compareHandleLinkText`,
@@ -1807,15 +1836,62 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     after the decoy, 5/5 older-handle failures named after the newer file,
     10/10 cross-thread rows unnamed.
 
-    Still wrong, by design: the name is the one the handle was *taken* by
-    (a file renamed or unlinked since keeps it, as an fd table entry does); a
-    handle ior did not see taken - before the trace started, outside a
-    `-pid`/`-tid` scope, by a `name_to_handle_at` the raw enter filter shed
-    under `-path`/`-comm`, with a lost control record, or evicted - falls
-    back to procfs with its lag. Not run on a 4.18/5.14 kernel: the
-    variable-length `bpf_probe_read_user` is bounded by an explicit
-    `> IOR_MAX_HANDLE_SZ` check, loads on 7.2, and is untested on the old
-    verifiers.
+    Still wrong, and accepted:
+    - *Stale names.* The name is the one the handle was *taken* by: a file
+      renamed or unlinked since keeps it, as an fd table entry does. A
+      scoped relative name survives a `chdir` of its process, and a pid
+      recycled while the entry lives inherits the scoped names of its
+      predecessor.
+    - *Mount namespaces and chroots.* An absolute pathname is a path in the
+      taker's root and mount namespace, and ior tracks neither (no path row
+      does): an opener in another one - a container opening a handle the
+      host took, or the reverse - gets the taker's view of the path.
+    - *Cross-filesystem collisions are ordinary for some encodings*, not
+      remote. A handle only has to be unique within its filesystem. Seen on
+      Linux 7.2: ext4 (type 1) is inode number + `i_generation`, random for
+      ordinary files, but the root directory is inode 2 / generation 0 on
+      *every* ext4 filesystem; tmpfs (type 1) carries a random generation;
+      btrfs (type 77) is object ID + root ID + the creating transaction's
+      generation, a small counter, so two btrfs filesystems of similar
+      history produce equal triples; cgroup/kernfs (type 254) is the node
+      ID, and the root is node 1 on cgroup2 and on every cgroup v1
+      hierarchy; FUSE is whatever node ID and generation the server
+      assigns, so servers counting from 1 with generation 0 would collide
+      between mounts (not verified). The cost is a row named after the file
+      that took such a handle last; a program working on one filesystem,
+      the usual case, never sees it.
+    - *Handles ior did not see being taken* fall back to procfs with its
+      lag (a failed call is then unnamed): taken before the trace started;
+      outside a `-pid`/`-tid` scope; by a `name_to_handle_at` the raw enter
+      filter shed under `-path`/`-comm`; by one BPF did not report - sampled
+      out (the N-1 of 1-in-N), aggregate-only (rate 0), or with its enter or
+      exit probe not attached (detached at runtime, a failed attach); with a
+      lost control record; through a descriptor only procfs could name; or
+      evicted by the LRU cap.
+    - *The fd table is trusted as it is.* An entry whose own name was built
+      from a procfs-resolved directory (an `openat` relative to a dirfd ior
+      did not see being opened) carries that lagging answer unmarked, and a
+      handle taken through it inherits it.
+    - *A coarse clock.* The two time checks compare clock reads of one tid
+      that are at least a syscall entry or exit apart. A clocksource too
+      coarse to move in that time (the jiffies fallback) makes two calls
+      look alike; a misfiled name then additionally needs the lost records
+      described above within one tick.
+    - *An `IOR_BPF_OBJECT` built before k03 is named from procfs only.* It
+      emits no handle record and a handle-less open record
+      (`FILE_HANDLE_NONE`), so nothing is ever filed. This is **not** the
+      "older object degrades to the old behaviour" rule the other record
+      changes in this file follow: before k03 such a row was named from the
+      thread's last `name_to_handle_at`, and that per-tid stash was deleted
+      together with the procfs arbitration it needed rather than kept as a
+      fallback. With an older object, failed calls are unnamed and a
+      descriptor already closed or reused when the loop looks is unnamed or
+      named after the newer file.
+    - *Old verifiers.* Not run on a 4.18/5.14 kernel. The variable-length
+      `bpf_probe_read_user` gets its size as [1, 128] in the register the
+      bound checks were made on, at `-mcpu` v1, v2 and v3 (`llvm-objdump`
+      evidence in `internal/c/handle.c`); it loads on 7.2 and is untested on
+      the old verifiers.
 
     Pinned by `internal/eventloop_handle_test.go` (naming by handle, a number
     reused by another file / directory / pipe, cross-thread and
@@ -1824,9 +1900,15 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     unusable statuses, legacy record, LRU, claim-by-time),
     `internal/eventloop_handle_name_test.go` (failed and size-probe calls,
     refused control records, a lost exit, `AT_EMPTY_PATH` names),
+    `internal/eventloop_handle_source_test.go` (no name from an untracked or
+    procfs-named descriptor, absolute names below a tracked dirfd, scoped
+    names, a record whose own enter never arrived, a malformed exit),
+    `internal/eventloop_restart_handle_test.go` (a handler's
+    `name_to_handle_at` passes a held restart row),
     `internal/eventloop_handle_fail_test.go`, the decoder tests in
-    `internal/types/fastdecode_test.go`, the generator and oracle tests
-    (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,
+    `internal/types/fastdecode_test.go`, the generator, harness and oracle
+    tests (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,
+    `TestFileHandleCapture`,
     `TestSyscallSemanticsOracleRejectsHandleCaptureMutations`) and the
     integration tests `TestOpenByHandleAtIsNamedByItsHandleNotItsNumber`
     (scenario `open-by-handle-at-reuse`),
@@ -2075,7 +2157,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     the user pointer in `syscall_enter_state.pending_filename`;
   - exit: `ior_on_syscall_exit_take_filename(tid, SYS_ENTER_X, ctx->ret, now,
     &pending_filename)` (`_take_filenames` with both out pointers for the
-    two-path kinds): the exit hook itself copies the stashed pointer(s) out of
+    two-path kinds; `_take_handle` for `name_to_handle_at`, whose second
+    slot is its output handle pointer and which also gets the enter time):
+    the exit hook itself copies the stashed pointer(s) out of
     the enter-state entry it looks up anyway, **before** it deletes that entry —
     guarded on `enter_trace_id` so a stale entry cannot graft a foreign path
     (the outputs stay 0 for a missing or foreign entry) — then

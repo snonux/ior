@@ -2802,7 +2802,7 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 
 		// The name stays filed under the handle (a handle can be opened
 		// again), and nothing stays parked for the thread.
-		if name, ok := el.handleState().names[defaultTestHandle.key()]; !ok || name != pathname {
+		if name, ok := el.handleState().lookup(defaultTestHandle.key(), defaultPid+1); !ok || name != pathname {
 			t.Errorf("Expected the handle to stay named %q, got %q (known=%v)", pathname, name, ok)
 		}
 		if _, ok := el.handleState().taken[defaultTid]; ok {

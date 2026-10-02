@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"path/filepath"
+
 	"ior/internal/event"
 	"ior/internal/file"
 	"ior/internal/types"
@@ -19,9 +21,9 @@ import (
 //     handleOpenByHandleAtExit looks the name up by it.
 //
 // The handle is the key (handleKey), so the lookup is exact: it does not
-// matter which thread or process took the handle, how many handles a thread
-// holds or in which order it opens them, whether the call fails, or what the
-// returned descriptor number points at by the time the event loop gets there.
+// matter which thread took the handle, how many handles a thread holds or in
+// which order it opens them, whether the call fails, or what the returned
+// descriptor number points at by the time the event loop gets there.
 //
 // It replaces a guess (tasks j03, l03, m03). The records used to carry no
 // handle, so the pathname was parked per thread - the thread's last
@@ -36,39 +38,77 @@ import (
 // is named from procfs without a second opinion, like any descriptor ior did
 // not see being created.
 //
-// What the name is. It is the pathname of the name_to_handle_at, resolved as
-// every path event is (resolvePathEvent): joined with a dirfd ior knows by
-// name, or, for AT_EMPTY_PATH, whatever ior calls that descriptor - its traced
-// name ("memfd:x", "pidfd:0", the directory of an O_TMPFILE open, a relative
-// path as the task spelled it) or its /proc link. The opened descriptor is the
-// same file, so it gets the same name as the descriptor the handle was taken
-// through; nothing has to be comparable with anything any more.
+// What the name is (takenHandleName). A name is filed for every later open of
+// the handle, so it has to be one ior got from a traced call, not from a look
+// at procfs:
+//
+//   - an absolute pathname is filed as the caller gave it;
+//   - a pathname relative to a dirfd is joined with what the fd table calls
+//     that descriptor, and an empty pathname with AT_EMPTY_PATH is that name
+//     itself - a traced name ("memfd:x", "pidfd:0", the directory of an
+//     O_TMPFILE open, a relative path as the task spelled it);
+//   - a descriptor ior did not see being opened has only a /proc link, read
+//     when the loop handles the exit. That is the lagging look this design
+//     removed from the open: a task that closed the descriptor and reused the
+//     number in the meantime would have the NEWER file filed under the
+//     handle, and every later open of it, by any process, named after the
+//     wrong file. No name is filed then, and the open falls back like one of
+//     an unknown handle.
+//
+// Whom the name is given to (handleName). An absolute pathname names every
+// open of the handle. A name that is not one - relative to the taker's
+// working directory, which ior does not track, or a descriptor name without a
+// path - means nothing in another process, so it names only the opens of the
+// process that took the handle; any other opener falls back.
 //
 // What is still wrong, and accepted:
 //
 //   - The name is the one the handle was taken by. A file renamed or unlinked
 //     since keeps its old pathname on the row, as an fd table entry keeps the
-//     name its descriptor was opened by.
+//     name its descriptor was opened by. A relative name likewise survives a
+//     chdir of its process, and a pid recycled while the entry lives inherits
+//     the scoped names of the process that had it before.
+//   - An absolute pathname is a path in the taker's root and mount namespace.
+//     ior tracks neither (no path row does), so an opener in another mount
+//     namespace or chroot - a container opening a handle the host took, or
+//     the reverse - gets a row named with the taker's view of the path.
 //   - The mount is not part of the key, so two filesystems that encode
 //     different files as the same type and bytes share an entry and the later
-//     name_to_handle_at wins (see handleKeyOf for why the mount cannot be had,
-//     and how far apart the encodings keep real handles).
-//   - A handle ior did not see being taken - taken before the trace started,
-//     by a task outside a -pid/-tid scope, by a call the enter filter shed
-//     (-path, -comm), or whose control record was lost to ring-buffer
-//     backpressure - and one that could not be read (handleKeyOf) are named
-//     from procfs, with the lag every procfs-resolved descriptor has: a number
-//     the task closed and reused before the loop reads it shows the newer
-//     file. A failed call with such a handle has an empty name.
+//     name_to_handle_at wins. That is not far-fetched for every encoding (see
+//     handleKeyOf for why the mount cannot be had and which handles collide).
+//   - A handle ior did not see being taken is named from procfs, with the lag
+//     every procfs-resolved descriptor has: a number the task closed and
+//     reused before the loop reads it shows the newer file. A failed call
+//     with such a handle has an empty name. That is a handle taken before the
+//     trace started; by a task outside a -pid/-tid scope; by a call the enter
+//     filter shed (-path, -comm); by a call BPF did not report - sampled out
+//     (the N-1 of 1-in-N), aggregate-only (rate 0), or with the enter or exit
+//     probe of name_to_handle_at not attached (detached at runtime, a failed
+//     attach); one whose control record was lost to ring-buffer backpressure;
+//     one that could not be read (handleKeyOf); and one taken through a
+//     descriptor only procfs could name (above).
+//   - The fd table is trusted as it is. An entry whose own name was built
+//     from a procfs-resolved directory (an openat relative to a dirfd ior did
+//     not see being opened) carries that lagging answer unmarked, and a
+//     handle taken through it inherits it.
 //   - An entry evicted by the LRU cap is such an unknown handle again.
+//   - An IOR_BPF_OBJECT built before task k03 emits no handle record and a
+//     handle-less open record, so every open_by_handle_at is named from
+//     procfs. That is NOT the pre-k03 behaviour, which named the row from the
+//     thread's last name_to_handle_at: the per-tid stash was deleted with the
+//     arbitration it needed, not kept as a fallback. Such an object loses the
+//     names of failed calls and of descriptors already closed when the loop
+//     looks; it is the one place where an older object does not degrade to
+//     what it did before.
 
 // handleKeyOf builds the key of the handle in a record's handle fields. ok is
 // false when the record identifies no handle: a status other than
-// FILE_HANDLE_OK (an object that predates the capture, a NULL or unreadable
-// pointer, an oversized handle_bytes), a zero handle_bytes, which no file has
-// and the kernel rejects, and a byte count beyond the field, which the BPF
-// side never submits as OK and is refused here so that a foreign producer
-// cannot make the slice below run past the array.
+// FILE_HANDLE_OK (an object that predates the capture - see the last residual
+// above -, a NULL or unreadable pointer, an oversized handle_bytes), a zero
+// handle_bytes, which no file has and the kernel rejects, and a byte count
+// beyond the field, which the BPF side never submits as OK and is refused
+// here so that a foreign producer cannot make the slice below run past the
+// array.
 //
 // Only the first handleBytes bytes are copied; the rest of the key stays
 // zero. BPF zero-fills the field as well, but equality of two keys must not
@@ -80,11 +120,30 @@ import (
 // this design exists to get rid of - or walking the task's file table in BPF.
 // A mount ID would also be the wrong identity: a handle is valid on every
 // mount of its filesystem, so a handle taken through one bind mount and
-// opened through another would stop matching. The residual is a collision of
-// type and bytes across filesystems. The common encodings make that remote -
-// ext4, xfs, tmpfs and their kin put the inode number and a 32-bit random
-// generation in the bytes, btrfs adds its root - and what it costs is a row
-// named after the file that took such a handle last.
+// opened through another would stop matching.
+//
+// The residual is a collision of type and bytes across filesystems, and for
+// some encodings it is ordinary rather than remote. A handle only has to be
+// unique within its filesystem, and what the common ones put in it (handles
+// taken on Linux 7.2, x86_64):
+//
+//   - ext4, type 1: inode number and i_generation, 8 bytes. The generation of
+//     an ordinary file is random, but the root directory is inode 2 with
+//     generation 0 on every ext4 filesystem - the same handle.
+//   - tmpfs, type 1: a random generation and the inode number, 12 bytes.
+//   - btrfs, type 77: object ID, root (subvolume) ID and the generation, 20
+//     bytes. The generation is the transaction that created the inode, a
+//     small counter, not a random number: two btrfs filesystems of similar
+//     history hand out equal triples (their top directories first of all).
+//   - cgroup (kernfs), type 254: the 64-bit node ID, 8 bytes. The root is
+//     node 1 on cgroup2 and on every cgroup v1 hierarchy.
+//   - FUSE: node ID and generation as the server assigns them; servers that
+//     count node IDs from 1 with generation 0 would collide between mounts
+//     (not verified).
+//
+// What a collision costs is a row named after the file that took such a
+// handle last. A program that takes handles on two filesystems that collide
+// gets that; one that works on a single filesystem, the usual case, does not.
 func handleKeyOf(status, handleBytes uint32, handleType int32, fHandle *[types.IOR_MAX_HANDLE_SZ]byte) (key handleKey, ok bool) {
 	if status != types.FILE_HANDLE_OK || handleBytes == 0 || handleBytes > types.IOR_MAX_HANDLE_SZ {
 		return handleKey{}, false
@@ -100,12 +159,11 @@ func handleKeyOf(status, handleBytes uint32, handleType int32, fHandle *[types.I
 //
 // The kernel reserves this control record before the exit record of the same
 // call and the ring buffer preserves that order, so the call's enter event is
-// still pending here. The record is only accepted for such a pending
-// name_to_handle_at enter: without one the pair was shed at enter (the raw
-// path filter, -comm) or its enter was lost, and no exit handler will ever
-// name the handle. Records of other tids interleave between this one and the
-// exit, which is why the handle is parked per tid rather than kept in one
-// slot.
+// still pending here - if it arrived. The record is accepted only for the
+// pending enter of ITS call (ownsPendingEnter): the pathname that will be
+// filed under the handle is that enter's. Records of other tids interleave
+// between this one and the exit, which is why the handle is parked per tid
+// rather than kept in one slot.
 //
 // Like every control record it never becomes a row, and it owns the event it
 // is handed, so it must recycle it.
@@ -116,14 +174,35 @@ func (e *eventLoop) handleFileHandleEvent(ev *types.FileHandleEvent) {
 		return
 	}
 	pair, ok := e.pairs.pending(ev.Tid)
-	if !ok {
-		return
-	}
-	pathEv, ok := pair.EnterEv.(*types.PathEvent)
-	if !ok || pathEv.GetTraceId() != ev.GetTraceId() || !isNameToHandleAt(pathEv) {
+	if !ok || !ownsPendingEnter(ev, pair.EnterEv) {
 		return
 	}
 	e.handleState().park(ev.Tid, key, ev.Time)
+}
+
+// ownsPendingEnter reports whether enterEv, the enter pending for the tid of
+// the handle record ev, is the enter of the call that returned the handle.
+//
+// Being a name_to_handle_at enter is not enough. The pending enter can be an
+// earlier call's: its exit record was lost, so it stayed pending, and the
+// enter of the call this record belongs to never got here - lost too, or
+// shed by the raw path filter (-path). The record and the exit behind it
+// would then file the EARLIER call's pathname under this call's handle, and
+// the entry would misname every open of that handle until it is replaced. So
+// the record carries the time of its own enter (BPF takes it from the enter
+// state, where the enter handler put the clock read it also stamped the enter
+// record with), and only an enter with exactly that time is its own. Two
+// enters of one tid are a whole syscall apart; a clock too coarse to tell
+// them apart leaves this check blind, which is accepted (see claim).
+//
+// Without a pending enter at all the pair was shed at enter or its enter was
+// lost, and no exit handler will ever name the handle.
+func ownsPendingEnter(ev *types.FileHandleEvent, enterEv event.Event) bool {
+	pathEv, ok := enterEv.(*types.PathEvent)
+	if !ok || pathEv.GetTraceId() != ev.GetTraceId() || !isNameToHandleAt(pathEv) {
+		return false
+	}
+	return pathEv.GetTime() == ev.EnterTime
 }
 
 // isNameToHandleAt reports whether pathEv is the enter of a name_to_handle_at.
@@ -131,18 +210,17 @@ func isNameToHandleAt(pathEv *types.PathEvent) bool {
 	return pathEv.GetTraceId().Name() == sysEnterNameToHandleAtName
 }
 
-// recordNameToHandleAt files the resolved pathname of a successful
-// name_to_handle_at under the handle the call returned, so that an
-// open_by_handle_at of that handle can name the file it opens. The pair itself
-// is always recycled (never emitted); it always returns false so the caller
-// drops it.
+// recordNameToHandleAt files the name of a successful name_to_handle_at under
+// the handle the call returned, so that an open_by_handle_at of that handle
+// can name the file it opens. The pair itself is always recycled (never
+// emitted); it always returns false so the caller drops it.
 //
-// The parked handle is claimed before anything else and on every path, a
-// failed call included: this exit ends the only call it can belong to. No
-// handle means no name is filed - the call failed (also the EOVERFLOW a caller
-// provokes to learn the handle size, which returns no handle), the control
-// record was lost or never emitted (an older BPF object, an unreadable
-// buffer), or it belonged to another call (claim).
+// The parked handle is given up before anything else and on every path, a
+// failed call and a malformed exit record included: this exit ends the only
+// call it can belong to. No handle means no name is filed - the call failed
+// (also the EOVERFLOW a caller provokes to learn the handle size, which
+// returns no handle), the control record was lost or never emitted (an older
+// BPF object, an unreadable buffer), or it belonged to another call (claim).
 func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent) bool {
 	defer ep.Recycle()
 	handles := e.handleState()
@@ -155,21 +233,62 @@ func (e *eventLoop) recordNameToHandleAt(ep *event.Pair, pathEv *types.PathEvent
 	if !taken || event.IsErrnoRet(retEv.Ret) {
 		return false
 	}
-	pathname := e.resolvePathEvent(pathEv, pathEventAllowsEmptyPath(pathEv, true))
-	handles.store(key, pathname.Name())
+	handles.store(key, newHandleName(e.takenHandleName(pathEv), pathEv.Pid))
 	return false
 }
 
-// openedHandleName returns the pathname the handle of an open_by_handle_at was
+// takenHandleName returns the name to file the handle of a successful
+// name_to_handle_at under, or "" when ior has none it can vouch for (store
+// then files nothing and drops what the handle was known as). See "What the
+// name is" at the top of this file.
+//
+// It resolves the pathname as resolvePathEvent does for the row of any other
+// path syscall, with one difference: the dirfd is looked up in the fd table
+// only (fdTracker.get), never read from procfs (fdTracker.resolve), and a
+// table entry that was itself named from procfs is refused. A row may show
+// what procfs says now; a name that will label other calls may not.
+func (e *eventLoop) takenHandleName(pathEv *types.PathEvent) string {
+	if !pathEventTargetRequired(pathEv) || pathEv.PathnameStatus != types.PATH_READ_OK {
+		return ""
+	}
+	pathname := trimCutPathname(types.StringValue(pathEv.Pathname[:]))
+	if pathname == "" && !pathEventAllowsEmptyPath(pathEv, true) {
+		return ""
+	}
+	if !dirfdPathNeedsResolution(pathEv.Dirfd, pathname) {
+		return pathname
+	}
+	dir, tracked := e.fdState().get(pathEv.Dirfd, pathEv.Pid)
+	if !tracked || namedFromProcfs(dir) || dir.Name() == "" {
+		return ""
+	}
+	if pathname == "" {
+		return dir.Name()
+	}
+	return filepath.Join(dir.Name(), pathname)
+}
+
+// namedFromProcfs reports whether f is a descriptor whose name is a
+// /proc/<pid>/fd link ior read, rather than the name a traced call gave it.
+// Such entries do get into the fd table: an open_by_handle_at of an unknown
+// handle (procFdFile), an io_uring_setup, a procfs-resolved descriptor an
+// fcntl promoted (storeFcntlFdFile).
+func namedFromProcfs(f file.File) bool {
+	fdFile, ok := f.(*file.FdFile)
+	return ok && fdFile.NameFromProcFS()
+}
+
+// openedHandleName returns the name the handle of an open_by_handle_at was
 // taken of. named is false when the enter record identifies no handle
-// (handleKeyOf) or ior has no name for it.
+// (handleKeyOf), ior has no name for it, or the name it has is one that only
+// holds in another process (handleName).
 func (e *eventLoop) openedHandleName(openByHandleEv *types.OpenByHandleAtEvent) (name string, named bool) {
 	key, ok := handleKeyOf(openByHandleEv.HandleStatus, openByHandleEv.HandleBytes,
 		openByHandleEv.HandleType, &openByHandleEv.FHandle)
 	if !ok {
 		return "", false
 	}
-	return e.handleState().lookup(key)
+	return e.handleState().lookup(key, openByHandleEv.Pid)
 }
 
 // openedHandleFile returns the file the descriptor a successful

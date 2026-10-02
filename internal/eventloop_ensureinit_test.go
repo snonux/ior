@@ -63,16 +63,16 @@ func TestHandleTrackerZeroValueIsUsable(t *testing.T) {
 	var tracker handleTracker
 	key := testHandleA.key()
 
-	if _, ok := tracker.lookup(key); ok {
+	if _, ok := tracker.lookup(key, 1); ok {
 		t.Fatal("looking a handle up in a zero-value tracker must not report a hit")
 	}
 	if _, ok := tracker.claim(1, 100); ok {
 		t.Fatal("claiming from a zero-value tracker must not report a hit")
 	}
-	tracker.dropTaken(1)   // deleting from nil maps must be a no-op, not a panic
-	tracker.store(key, "") // so must superseding a name that was never stored
-	tracker.store(key, "/tmp/handle.txt")
-	if name, ok := tracker.lookup(key); !ok || name != "/tmp/handle.txt" {
+	tracker.dropTaken(1)             // deleting from nil maps must be a no-op, not a panic
+	tracker.store(key, handleName{}) // so must superseding a name that was never stored
+	tracker.store(key, newHandleName("/tmp/handle.txt", 1))
+	if name, ok := tracker.lookup(key, 2); !ok || name != "/tmp/handle.txt" {
 		t.Fatalf("lookup after store = (%q, %v), want the stored pathname", name, ok)
 	}
 

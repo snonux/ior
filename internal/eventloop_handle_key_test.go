@@ -132,20 +132,20 @@ func TestHandleTrackerEvictsLeastRecentlyUsed(t *testing.T) {
 	tracker.maxCacheSize = 2
 	keyA, keyB, keyC := testHandleA.key(), testHandleB.key(), defaultTestHandle.key()
 
-	tracker.store(keyA, "/a")
-	tracker.store(keyB, "/b")
-	if _, ok := tracker.lookup(keyA); !ok {
+	tracker.store(keyA, newHandleName("/a", 1))
+	tracker.store(keyB, newHandleName("/b", 1))
+	if _, ok := tracker.lookup(keyA, 2); !ok {
 		t.Fatal("stored handle is not known")
 	}
-	tracker.store(keyC, "/c")
+	tracker.store(keyC, newHandleName("/c", 1))
 
 	if _, ok := tracker.names[keyB]; ok {
 		t.Fatal("the least recently used handle survived the cap")
 	}
-	if name, ok := tracker.lookup(keyA); !ok || name != "/a" {
+	if name, ok := tracker.lookup(keyA, 2); !ok || name != "/a" {
 		t.Fatalf("a handle used after the evicted one was dropped: (%q, %v)", name, ok)
 	}
-	if name, ok := tracker.lookup(keyC); !ok || name != "/c" {
+	if name, ok := tracker.lookup(keyC, 2); !ok || name != "/c" {
 		t.Fatalf("the newest handle was dropped: (%q, %v)", name, ok)
 	}
 	if got := len(tracker.nameAges); got != len(tracker.names) {
@@ -157,14 +157,14 @@ func TestHandleTrackerEvictsLeastRecentlyUsed(t *testing.T) {
 // has no name for must not keep its old name.
 func TestHandleTrackerEmptyNameSupersedes(t *testing.T) {
 	tracker := newHandleTracker()
-	tracker.store(testHandleA.key(), "/a")
-	tracker.store(testHandleB.key(), "/b")
-	tracker.store(testHandleA.key(), "")
+	tracker.store(testHandleA.key(), newHandleName("/a", 1))
+	tracker.store(testHandleB.key(), newHandleName("/b", 1))
+	tracker.store(testHandleA.key(), newHandleName("", 1))
 
-	if name, ok := tracker.lookup(testHandleA.key()); ok {
+	if name, ok := tracker.lookup(testHandleA.key(), 2); ok {
 		t.Fatalf("handle kept the superseded name %q", name)
 	}
-	if name, ok := tracker.lookup(testHandleB.key()); !ok || name != "/b" {
+	if name, ok := tracker.lookup(testHandleB.key(), 2); !ok || name != "/b" {
 		t.Fatalf("another handle lost its name: (%q, %v)", name, ok)
 	}
 	if len(tracker.nameAges) != 1 {
