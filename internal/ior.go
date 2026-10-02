@@ -1572,20 +1572,24 @@ func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, warnSetup fu
 }
 
 // The three things withSkippedRuns asks the system: the running kernel's
-// release, the descriptors of the loaded programs and one program's skipped
-// runs. They are variables so that a test can answer without a kernel.
+// release, the descriptors of the module's attached programs and one
+// program's skipped runs. They are variables so that a test can answer
+// without a kernel.
 var (
 	skippedRunKernelRelease = runningKernelRelease
-	skippedRunProgramFDs    = libbpfProgramFDs
-	skippedRunProgramMisses = progRecursionMisses
+	skippedRunProgramFDs    = libbpfAttachedProgramFDs
+	skippedRunProgramMisses = func() func(int) (uint64, bool, error) {
+		return newProgMissesReader().misses
+	}
 )
 
 // withSkippedRuns returns the drop source of a run: ring, the ring-buffer
 // drop counter, together with the count of the program runs the kernel
 // skipped (recordLossSource), where the kernel counts them. A skipped run
-// loses a record the ring buffer's counter never hears of, so on such a
-// kernel every "nothing was dropped" the loop relies on reads both (task
-// 723; skippedRunCounter has the kernel facts).
+// may lose a record the ring buffer's counter never hears of, so on such a
+// kernel the loop's "nothing was lost" asks both, each for what it is
+// evidence of (task 723; skippedRunCounter has the kernel facts,
+// restartDropWatch what is made of them).
 //
 // A kernel before 6.7 does not count the skips of classic tracepoint
 // programs, and its zeroes would be read as "none": the ring counter is
@@ -1593,12 +1597,17 @@ var (
 // end-of-run statistics say "not counted" (skippedRunStatLine).
 // A kernel that should count them and cannot be read is warned about, since
 // that is a degradation of this run, and gets the ring counter alone too.
-// clock is the loop's drop-stamp clock, which dates the sweeps.
+// clock is the loop's drop-stamp clock, which dates the sweeps. The counter
+// follows the module's attached programs from here on (it is built after the
+// probes were attached, which its first sweep reads), and like the ring
+// counter's map their descriptors must not be read once the module is
+// closed: the monitor and the loop that ask stop before the teardown.
 func withSkippedRuns(ring ringbufDropSource, bpfModule *bpf.Module, clock func() uint64, warnSetup func(...any)) ringbufDropSource {
 	if !kernelCountsSkippedRuns(skippedRunKernelRelease()) {
 		return ring
 	}
-	skipped, err := newSkippedRunCounter(skippedRunProgramFDs(bpfModule), skippedRunProgramMisses, clock)
+	attached := func() []int { return skippedRunProgramFDs(bpfModule) }
+	skipped, err := newSkippedRunCounter(attached, skippedRunProgramMisses(), clock)
 	if err != nil {
 		warnSetup("Probe runs skipped by the kernel will not be counted (events lost that way go unreported):", err)
 		return ring

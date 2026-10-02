@@ -122,49 +122,102 @@ func (e *eventLoop) startRingbufDropMonitor(ctx context.Context) func() {
 	}
 }
 
-// handleRingbufDropResult records the running drop total and raises a warning
-// for every interval that lost events, and for every failed counter read, so
-// backpressure shows up live (and in the end-of-run statistics).
+// handleRingbufDropResult records the running totals of the two kernel-side
+// loss counters and raises a warning for every interval in which one of them
+// grew, and for every failed read of one, so loss shows up live (and in the
+// end-of-run statistics).
 //
-// Both warnings go through notifyWarningOrLog, which falls back to stderr in
+// The warnings go through notifyWarningOrLog, which falls back to stderr in
 // modes without a warning sink (-plain, -flamegraph, headless -parquet): those
 // would otherwise learn about the loss, or about a counter that cannot be
 // read, only from the end-of-run statistics, which can be hours away. Losing
 // events silently is exactly the finding this counter closes; stdout stays
 // machine-readable.
+//
+// What a skipped run does here (task 723). It is evidence that a record MAY
+// be missing, counted for every task on the host (skippedRunCounter), and
+// each consumer takes it by what a false alarm costs there:
+//
+//   - a TUI recording's sampling totals become a lower bound, as after a
+//     drop. A run of a traced task that was skipped is in neither the rows
+//     nor the kernel's aggregate, and nothing tells it from a run of another
+//     task: "at least N" is true either way, "exactly N" is not known;
+//   - the comm cache is swept (requestCommSweepAfterDrop). The skipped run
+//     may have been a rename or exec record's; a sweep that was not needed
+//     costs /proc reads, at most once per monitor period;
+//   - the drop watch is told, under the skipped runs' own stamp, where a
+//     fold is refused on it and an exec adoption is allowed but proves
+//     nothing (restartDropWatch).
 func (e *eventLoop) handleRingbufDropResult(result ringbufDropResult) {
 	// A loss (or a counter that could not be read) during a TUI recording
 	// makes its sampling totals a lower bound.
-	if result.warning != "" || result.delta > 0 {
+	if result.lost() {
 		e.markRecordingLowerBound()
 	}
+	// One clock reading, taken now that both counters were read, stamps what
+	// this result tells the drop watch and the comm recheck. The reading
+	// that matters to the watch is the one that CHANGED a total: it stamps
+	// the new total here, within one monitor period of the loss, and a call
+	// interrupted after that stamp folds again. Without it the new total
+	// would first be seen by a fold's own read, which comes after that
+	// call's interruption, and the fold would be refused. A reading that
+	// returns the total the watch already has changes nothing there (observe
+	// keeps the first stamp). One reading with delta 0 does move the watch:
+	// a stale one, taken before the loop's own read saw a newer total and
+	// delivered after it. The watch takes any differing total for a change
+	// and stamps it now, and the next read of the real total stamps once
+	// more, so the invariant holds and the price is the folds of the calls
+	// interrupted before that next read (usually one).
+	seenAt := e.stampDropReading(result.grew())
+	e.recordRingDrops(result, seenAt)
+	e.recordSkippedRuns(result, seenAt)
+	if warning := formatRingbufDropWarning(result); warning != "" {
+		e.notifyWarningOrLog(warning)
+	}
+}
+
+// stampDropReading reads the boot clock for a reading of the loss counters
+// that is in hand. When the reading found a loss it also asks for the comm
+// sweep, whose own stamp is that same clock reading
+// (requestCommSweepAfterDrop).
+func (e *eventLoop) stampDropReading(lost bool) uint64 {
+	if lost {
+		return e.requestCommSweepAfterDrop()
+	}
+	return e.readDropStampClock()
+}
+
+// recordRingDrops takes the ring-buffer half of a monitor result: the total
+// is published and the drop watch told, or the failed read is recorded and
+// warned about.
+func (e *eventLoop) recordRingDrops(result ringbufDropResult, seenAt uint64) {
 	if result.warning != "" {
 		e.recordDropReadFailure()
 		e.notifyWarningOrLog(result.warning)
 		return
 	}
-	e.publishDropTotal(result.total, result.skipped)
-	// The restart fold's drop watch (restartDropWatch) is told of the reading,
-	// with a clock reading taken after the counter was read (the result is in
-	// hand). The reading that matters is the one that CHANGED the total: it
-	// stamps the new total here, within one monitor period of the drop, and a
-	// call interrupted after that stamp folds again. Without it the new total
-	// would first be seen by a fold's own read, which comes after that call's
-	// interruption, and the fold would be refused. A reading that returns the
-	// total the watch already has changes nothing there (observe keeps the
-	// first stamp). One reading with delta 0 does move the watch: a stale one,
-	// taken before the loop's own read saw a newer total and delivered after
-	// it. The watch takes any differing total for a change and stamps it now,
-	// and the next read of the real total stamps once more, so the invariant
-	// holds and the price is the folds of the calls interrupted before that next
-	// read (usually one). One clock read serves
-	// both users of the stamp.
-	if result.delta == 0 {
-		e.restarts.drops.observe(result.total, e.readDropStampClock())
+	e.publishDropTotal(result.total)
+	e.restarts.drops.observe(result.total, seenAt)
+}
+
+// recordSkippedRuns takes the other half, the program runs the kernel
+// skipped, the same way and apart from the first: a failed read of these
+// makes their own statistics line "unknown" and stops the trust in rename
+// records (provisionalSeedNeedsRecheck), and leaves the ring-buffer total
+// and its line alone. A source that counts none reports nothing here.
+func (e *eventLoop) recordSkippedRuns(result ringbufDropResult, seenAt uint64) {
+	if result.skippedWarning != "" {
+		e.skippedRunReadFailed.Store(true)
+		e.notifyWarningOrLog(result.skippedWarning)
 		return
 	}
-	e.restarts.drops.observe(result.total, e.requestCommSweepAfterDrop())
-	e.notifyWarningOrLog(formatRingbufDropWarning(result))
+	if !result.skippedCounted {
+		return
+	}
+	// The figure before the flag, as publishDropTotal stores its two.
+	e.numSkippedRuns.Store(result.skipped)
+	e.skippedRunReadFailed.Store(false)
+	e.restarts.drops.observeSkipped(result.skipped, seenAt)
 }
 
 // recordDropReadFailure notes that the counter could not be read, so the run
@@ -188,12 +241,7 @@ func (e *eventLoop) recordDropReadFailure() {
 // very statement this whole change exists to prevent. The two goroutines do
 // overlap: startTraceShutdownWatcher calls stats() on ctx.Done() while the
 // monitor is still winding down on the same signal.
-//
-// skipped is the share of total that is skipped program runs
-// (ringbufDropResult.skipped). It is only ever shown next to the total
-// (lossFigures), never taken for evidence on its own.
-func (e *eventLoop) publishDropTotal(total, skipped uint64) {
-	e.numSkippedRuns.Store(skipped)
+func (e *eventLoop) publishDropTotal(total uint64) {
 	e.numRingbufDrops.Store(total)
 	e.ringbufDropReadFailed.Store(false)
 }

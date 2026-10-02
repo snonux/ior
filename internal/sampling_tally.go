@@ -215,6 +215,13 @@ func (e *eventLoop) samplingPlan() sampling.Summary {
 // drainBacklogAtStop). Neither the drop counter nor the discard count can say
 // which syscalls lost rows, so any loss, or a drop counter that could not be
 // read, marks all of them.
+//
+// A program run the kernel skipped marks them as well (task 723). The
+// kernel's aggregate is counted by the same program as the row, so a skipped
+// run of a traced task is in neither count. The skip counter covers every
+// task on the host (skippedRunCounter), so under a -pid/-tid filter the
+// totals may in fact be exact; nothing tells the two cases apart, and "at
+// least" is the claim that holds in both.
 func (e *eventLoop) samplingResult() sampling.Summary {
 	t := e.samplingTally
 	if t == nil {
@@ -231,10 +238,18 @@ func (e *eventLoop) samplingResult() sampling.Summary {
 	summary := t.summary("")
 	// numDiscardedAtStop is written by the event-loop goroutine only and is
 	// final here: the caller runs after run returned.
-	if e.numRingbufDrops.Load() > 0 || e.ringbufDropReadFailed.Load() || e.numDiscardedAtStop > 0 {
+	if e.kernelLossPossible() || e.numDiscardedAtStop > 0 {
 		return summary.AtLeast()
 	}
 	return summary
+}
+
+// kernelLossPossible reports whether the run may have lost a record in the
+// kernel: a counted ring-buffer drop, a skipped program run, or a counter of
+// either that could not be read last time.
+func (e *eventLoop) kernelLossPossible() bool {
+	return e.numRingbufDrops.Load() > 0 || e.ringbufDropReadFailed.Load() ||
+		e.numSkippedRuns.Load() > 0 || e.skippedRunReadFailed.Load()
 }
 
 // announceSampling tells the user at startup that the output of this run is a

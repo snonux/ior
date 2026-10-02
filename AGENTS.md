@@ -557,8 +557,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     reason, rates still reported. Lost rows make them inexact, not
     unavailable: a dropped event is an emitted row that is in neither `traced`
     nor the kernel aggregate, so `samplingResult` marks the `Summary` with
-    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0`, the drop
-    counter could not be read, or `numDiscardedAtStop > 0` (records discarded
+    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0`, the kernel
+    skipped probe runs (`numSkippedRuns > 0`, task 723: such a run of a
+    traced task is in neither count, and the counter cannot say whose it
+    was), either counter could not be read (`kernelLossPossible`), or
+    `numDiscardedAtStop > 0` (records discarded
     by the stop-time drain are emitted rows that never reached decoding, so
     they are in neither `traced` nor the kernel aggregate either; pinned by the
     "records were discarded at stop" case of
@@ -1068,29 +1071,65 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   ordering bug, not a data race - and nor can a test: what is pinned instead is
   the intermediate state
   (`TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal`).
-- **A skipped probe run is a lost record too** (task 723;
+- **A skipped probe run may be a lost record** (task 723;
   `internal/skipped_run_counter.go`, `internal/bpf_prog_misses.go`): the kernel
   does not run a tracepoint program while `bpf_prog_active` is raised on the
   CPU (classic tracepoints, `trace_call_bpf`; raised by every `bpf(2)` map
   lookup/update/delete with preemption enabled, so a task preempted mid-way
   blocks the CPU's programs) or while the same program is in flight there (raw
   tracepoints, and on 7.2 - not yet on 6.19 - the syscall tracepoints, which
-  run preemptibly through `trace_call_bpf_faultable`). Such a run reserves nothing, so
-  `ringbuf_drop_map` stays put; the kernel counts it in the program's
-  `recursion_misses` (`bpf_prog_info`; classic tracepoints only since 6.7).
-  `withSkippedRuns` therefore wraps the ring counter in a `recordLossSource`
-  whose `Total()` is ring drops plus the misses of every loaded program, so
-  every reader of the drop source (monitor warning, `numRingbufDrops`, the
-  restart folds' `restartDropWatch`, the exec adoption, the rename trust)
-  treats a skip as a drop. Rules: reading costs one `BPF_OBJ_GET_INFO_BY_FD`
-  per program (~740, about 0.35 ms), so the loop never asks for "now" but for
-  the time of the record it decides about (`lostSince`'s `upTo`,
-  `TotalAsOf`), which a sweep begun after that time answers; the programs are
-  reached only through `libbpfProgramFDs` (pinned in `libbpfSeamNames`); a
-  kernel before 6.7 gets the ring counter alone and the statistics line says
-  `not counted`, never `0`. Reproduce with a `SCHED_FIFO` task that wakes up
-  and makes a syscall on a CPU where another task loops over the same
-  syscall: rows go missing with `ring buffer drops: 0`.
+  run preemptibly through `trace_call_bpf_faultable`). Such a run reserves
+  nothing, so `ringbuf_drop_map` stays put; the kernel counts it in the
+  program's `recursion_misses` (`bpf_prog_info`; classic tracepoints only
+  since 6.7). Rules:
+  - **It is weaker evidence than a drop and never added to one.**
+    `ringbuf_drop_map` is bumped after BPF's `filter()` passed: a record ior
+    wanted. `recursion_misses` is bumped before any program code ran, for
+    every task on the host, so under `-pid`/`-tid`/`-comm` it also counts
+    tasks outside the filter (`-pid <looper>` plus an unrelated `SCHED_FIFO`
+    task on that CPU: tens of thousands of skips, no row missing).
+    `recordLossSource.Total()` is the ring drops alone; the skipped runs come
+    through `skippedRunSource`, and `numRingbufDrops`/`numSkippedRuns` and
+    their two failure flags are published apart (a failed sweep must not turn
+    the ring line into `unknown`, nor the reverse).
+  - **Per consumer** (`handleRingbufDropResult`, `restartDropWatch`): a skip
+    refuses a restart fold like a drop (`lostSince`; one row stays two); it
+    lets the exec exit ADOPT but the pair proves no exec
+    (`evidenceSince` -> `maybeSkippedRecord`, `lostExecRecord`: a proof
+    releases live threads' held rows and needs `countedRecordLoss`); it
+    requests the comm sweep (only `/proc` reads, once per monitor period);
+    it marks sampling totals `lower_bound` ("at least" holds either way,
+    "exact" is not known). The warning and the statistics line say `events
+    may be missing; the count includes tasks outside the trace filter`
+    (`skippedRunsMeaning`), never that events ARE missing.
+  - **Only attached programs are swept**: `libbpfLinkOf(prog)` lists the
+    program of every link ior hands out in `attachedProgramSet` until that
+    link's `Destroy` returned (`libbpfAttachedProgramFDs`, own tiny mutex,
+    never the probe manager's), and a sweep also reads once more what was
+    attached at the previous sweep and is gone. `NextProgram` is pinned to no
+    place; the attach functions are pinned to
+    `return libbpfLinkOf(prog)(attachBPF...(prog, ...))`.
+  - **Cost**: one `BPF_OBJ_GET_INFO_BY_FD` per attached program, in which the
+    kernel sums per-CPU counters over every possible CPU, so it scales with
+    the host's CPU count (8 CPUs, 7.2.5: 0.24-0.38 ms for the 242 programs
+    of a default run, 8-20 us for the 8 of a one-syscall run). So the loop
+    never asks for "now" but for the time of the record it decides about
+    (`lostSince`'s `upTo`, `TotalAsOf`), which a sweep begun after that time
+    answers; a caught-up loop still sweeps per fold. A sweep stamped by an unreadable
+    clock (`math.MaxUint64`) is never reused: for this one comparison the
+    maximum is the accepting side (`bootclock.go`).
+  - `bpf_prog_info` is input too: `progMissesReader` clears its reused
+    buffer before each call, or the kernel answers `EFAULT` for the lengths
+    the previous call left in it. A closed fd is `EBADFD`, not `EBADF`.
+  - A kernel before 6.7 gets the ring counter alone and the statistics line
+    says `not counted`, never `0`.
+  - Integration tests: a host with real-time tasks skips runs for real.
+    `assertNoSkippedProbeRuns` only logs a non-zero count, and tests that
+    require exact folds run through `runFoldScenarioRows`, which retries a
+    run that saw loss once and then skips with the counts.
+  Reproduce with a `SCHED_FIFO` task that wakes up and makes a syscall on a
+  CPU where another task loops over the same syscall: rows of the looper go
+  missing with `ring buffer drops: 0` when the looper is traced.
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
   asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by

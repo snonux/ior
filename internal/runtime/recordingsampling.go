@@ -47,8 +47,8 @@ type RecordingSamplingPublisher interface {
 type RecordingSamplingCounter interface {
 	// CountKernelOnly adds n kernel-counted invocations of syscall (no row).
 	CountKernelOnly(syscall string, n uint64)
-	// MarkSamplingLowerBound records lost events (ring-buffer drops, rows a
-	// retired session may still deliver).
+	// MarkSamplingLowerBound records lost events (ring-buffer drops, probe
+	// runs the kernel skipped, rows a retired session may still deliver).
 	MarkSamplingLowerBound()
 	// MarkSamplingUnavailable records why the kernel counts are incomplete.
 	MarkSamplingUnavailable(reason string)

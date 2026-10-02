@@ -3,17 +3,24 @@ package internal
 import (
 	"encoding/binary"
 	"errors"
+	"math"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	bpf "github.com/aquasecurity/libbpfgo"
+	"golang.org/x/sys/unix"
 )
 
 // Tests for the count of the program runs the kernel skipped (task 723):
-// reading one program's recursion_misses, summing them over the loaded
-// programs, and the sum's way into the drop monitor's results, its warning
-// and the end-of-run statistics. What the restart folds and the exec
-// adoption make of it is tested in eventloop_restart_skipped_test.go.
+// reading one program's recursion_misses, adding them up over the attached
+// programs, and the count's way - beside the ring-buffer drops, never added
+// to them - into the drop monitor's results, its warning and the end-of-run
+// statistics. What the restart folds and the exec adoption make of it is
+// tested in eventloop_restart_skipped_test.go, the list of attached programs
+// in ior_bpflink_test.go, and the read of a really loaded program in
+// ior_bpflink_root_test.go.
 
 // progInfoWithMisses is a bpf_prog_info buffer as the kernel fills it, with
 // recursion_misses set and a neighbour on each side that must not be taken
@@ -55,12 +62,21 @@ func TestDecodeProgRecursionMissesRejectsAShortInfo(t *testing.T) {
 }
 
 // The system call itself, as far as it goes without a loaded program: a
-// descriptor that is not a BPF object is an error, never a zero count.
-func TestProgRecursionMissesFailsOnADescriptorThatIsNoProgram(t *testing.T) {
-	for _, fd := range []int{-1, 0} {
-		if misses, reported, err := progRecursionMisses(fd); err == nil {
-			t.Errorf("fd %d: got %d reported=%v without an error", fd, misses, reported)
-		}
+// descriptor that is not a BPF program is an error, never a zero count. A
+// closed one is EBADFD - not EBADF - from the kernel's
+// bpf_obj_get_info_by_fd.
+func TestProgMissesReaderFailsOnADescriptorThatIsNoProgram(t *testing.T) {
+	reader := newProgMissesReader()
+	if misses, reported, err := reader.misses(-1); !errors.Is(err, unix.EBADFD) {
+		t.Errorf("fd -1: got %d reported=%v err=%v, want EBADFD", misses, reported, err)
+	}
+	file, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer func() { _ = file.Close() }()
+	if misses, reported, err := reader.misses(int(file.Fd())); err == nil {
+		t.Errorf("an open file: got %d reported=%v without an error", misses, reported)
 	}
 }
 
@@ -94,36 +110,77 @@ func (c *steppingClock) read() uint64 {
 	return c.now
 }
 
-func TestSkippedRunCounterSumsEveryProgram(t *testing.T) {
+func TestSkippedRunCounterSumsTheAttachedPrograms(t *testing.T) {
 	programs := newScriptedPrograms(3, 4, 5)
+	// A loaded program without a link: never read, and its count - which
+	// cannot move - never added.
+	programs.misses[6] = 1000
 	clock := &steppingClock{}
-	counter, err := newSkippedRunCounter(programs.fds(), programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
 	if programs.reads != 3 {
-		t.Fatalf("the first sweep made %d reads, want one per program", programs.reads)
+		t.Fatalf("the first sweep made %d reads, want one per attached program", programs.reads)
 	}
 	programs.skip(3, 2)
 	programs.skip(5, 40)
-	if total, err := counter.Total(); err != nil || total != 42 {
-		t.Fatalf("Total = %d, %v, want 42", total, err)
+	if total, err := counter.Total(); err != nil || total != 42 || programs.reads != 6 {
+		t.Fatalf("Total = %d, %v after %d reads, want 42 after 6", total, err, programs.reads)
 	}
 }
 
+// TestSkippedRunCounterReadsADetachedProgramOnceMore: the runs skipped
+// between the last sweep and a probe's detach are still in the program's
+// count, so the sweep after the detach reads it one last time. After that it
+// costs nothing, its count stays in the sum - which never falls - and when
+// the probe is attached again only what was skipped since is added.
+func TestSkippedRunCounterReadsADetachedProgramOnceMore(t *testing.T) {
+	programs := newScriptedPrograms(3, 4)
+	counter, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read)
+	if err != nil {
+		t.Fatalf("newSkippedRunCounter: %v", err)
+	}
+	programs.skip(4, 5)
+	programs.detach(4)
+	swept := programs.reads
+	if total, err := counter.Total(); err != nil || total != 5 || programs.reads != swept+2 {
+		t.Fatalf("first sweep after the detach: Total = %d, %v after %d reads, want 5 after 2",
+			total, err, programs.reads-swept)
+	}
+	swept = programs.reads
+	if total, err := counter.Total(); err != nil || total != 5 || programs.reads != swept+1 {
+		t.Fatalf("second sweep after the detach: Total = %d, %v after %d reads, want the 5 kept after 1",
+			total, err, programs.reads-swept)
+	}
+	programs.attached = append(programs.attached, 4)
+	programs.skip(4, 2)
+	if total, err := counter.Total(); err != nil || total != 7 {
+		t.Fatalf("after the probe was attached again: Total = %d, %v, want 7 (5 and the 2 skipped since)", total, err)
+	}
+}
+
+// A kernel that does not report the field, or a read that fails, builds no
+// counter: its zero would be read as "none skipped". Nothing attached is not
+// that: nothing can be skipped, and 0 is the count.
 func TestSkippedRunCounterNeedsAKernelThatReports(t *testing.T) {
-	if _, err := newSkippedRunCounter(nil, newScriptedPrograms().read, (&steppingClock{}).read); err == nil {
-		t.Error("a counter over no programs was built: its zero would be read as \"none skipped\"")
+	none := newScriptedPrograms()
+	counter, err := newSkippedRunCounter(none.fds, none.read, (&steppingClock{}).read)
+	if err != nil {
+		t.Fatalf("a counter over no attached program: %v", err)
+	}
+	if total, err := counter.Total(); err != nil || total != 0 || none.reads != 0 {
+		t.Errorf("Total = %d, %v after %d reads, want 0 and no read", total, err, none.reads)
 	}
 	programs := newScriptedPrograms(3)
 	programs.unreported = true
-	if _, err := newSkippedRunCounter(programs.fds(), programs.read, (&steppingClock{}).read); !errors.Is(err, errSkippedRunsNotReported) {
+	if _, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read); !errors.Is(err, errSkippedRunsNotReported) {
 		t.Errorf("err = %v, want errSkippedRunsNotReported", err)
 	}
 	boom := errors.New("boom")
 	programs = newScriptedPrograms(3)
 	programs.err = boom
-	if _, err := newSkippedRunCounter(programs.fds(), programs.read, (&steppingClock{}).read); !errors.Is(err, boom) {
+	if _, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the read's error", err)
 	}
 }
@@ -136,7 +193,7 @@ func TestSkippedRunCounterNeedsAKernelThatReports(t *testing.T) {
 func TestSkippedRunCounterAnswersThePastFromItsLastSweep(t *testing.T) {
 	programs := newScriptedPrograms(3, 4)
 	clock := &steppingClock{now: 99}
-	counter, err := newSkippedRunCounter(programs.fds(), programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -166,7 +223,7 @@ func TestSkippedRunCounterStampsASweepBeforeItsReads(t *testing.T) {
 		readAt = clock.read()
 		return programs.read(fd)
 	}
-	counter, err := newSkippedRunCounter(programs.fds(), read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -176,12 +233,43 @@ func TestSkippedRunCounterStampsASweepBeforeItsReads(t *testing.T) {
 	}
 }
 
+// TestSkippedRunCounterNeverReusesASweepWithoutATime: a boot clock that
+// cannot be read returns the maximum value (bootClockNs), which is later
+// than every record. A sweep stamped with it would be "begun after" every
+// question from then on, and answer them all with a count that never moves
+// again. Such a sweep answers its own question and no other.
+func TestSkippedRunCounterNeverReusesASweepWithoutATime(t *testing.T) {
+	programs := newScriptedPrograms(3)
+	now := uint64(math.MaxUint64)
+	counter, err := newSkippedRunCounter(programs.fds, programs.read, func() uint64 { return now })
+	if err != nil {
+		t.Fatalf("newSkippedRunCounter: %v", err)
+	}
+	for _, skippedSoFar := range []uint64{1, 2} {
+		programs.skip(3, 1)
+		swept := programs.reads
+		if total, err := counter.TotalAsOf(5000); err != nil || total != skippedSoFar || programs.reads != swept+1 {
+			t.Fatalf("TotalAsOf with an unreadable clock = %d, %v after %d reads, want a new sweep's %d",
+				total, err, programs.reads-swept, skippedSoFar)
+		}
+	}
+	// Once the clock reads again, a sweep is dated and reused as usual.
+	now = 9000
+	if _, err := counter.Total(); err != nil {
+		t.Fatalf("Total: %v", err)
+	}
+	swept := programs.reads
+	if _, err := counter.TotalAsOf(5000); err != nil || programs.reads != swept {
+		t.Fatalf("a dated sweep was not reused (err %v, %d reads)", err, programs.reads-swept)
+	}
+}
+
 // A sweep that failed leaves no sum to answer from: the next question reads
 // again, also one about the past.
 func TestSkippedRunCounterForgetsItsSweepWhenOneFails(t *testing.T) {
 	programs := newScriptedPrograms(3)
 	clock := &steppingClock{now: 99}
-	counter, err := newSkippedRunCounter(programs.fds(), programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -203,36 +291,37 @@ func TestSkippedRunCounterForgetsItsSweepWhenOneFails(t *testing.T) {
 // over a scripted ring counter and scripted programs.
 func lossSourceOver(t *testing.T, ring ringbufDropSource, programs *scriptedPrograms, clock func() uint64) *recordLossSource {
 	t.Helper()
-	skipped, err := newSkippedRunCounter(programs.fds(), programs.read, clock)
+	skipped, err := newSkippedRunCounter(programs.fds, programs.read, clock)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
 	return &recordLossSource{ring: ring, skipped: skipped}
 }
 
-func TestRecordLossSourceAddsSkippedRunsToRingDrops(t *testing.T) {
+// The two counters are not added up: a ring-buffer drop is a record ior
+// wanted, a skipped run one that may be missing.
+func TestRecordLossSourceKeepsSkippedRunsApartFromRingDrops(t *testing.T) {
 	ring := uint64(3)
 	programs := newScriptedPrograms(3, 4)
 	source := lossSourceOver(t, ringbufDropSourceFunc(func() (uint64, error) { return ring, nil }),
 		programs, (&steppingClock{now: 99}).read)
 	programs.skip(4, 10)
-	if total, err := source.Total(); err != nil || total != 13 {
-		t.Fatalf("Total = %d, %v, want 13", total, err)
+	if total, err := source.Total(); err != nil || total != 3 {
+		t.Fatalf("Total = %d, %v, want the 3 ring-buffer drops alone", total, err)
 	}
-	if loss, err := source.Loss(); err != nil || loss != (recordLoss{ring: 3, skipped: 10}) {
-		t.Fatalf("Loss = %+v, %v, want ring 3 and skipped 10", loss, err)
+	if skipped, err := source.SkippedRuns(); err != nil || skipped != 10 {
+		t.Fatalf("SkippedRuns = %d, %v, want 10", skipped, err)
 	}
-	// The past is asked of the skipped runs only: the ring counter is read
-	// anew, the programs are not.
-	ring = 4
+	// The past is answered from the sweep SkippedRuns just made.
 	programs.skip(3, 100)
 	swept := programs.reads
-	if total, err := source.TotalAsOf(0); err != nil || total != 14 || programs.reads != swept {
-		t.Fatalf("TotalAsOf(0) = %d, %v after %d program reads, want 14 and none", total, err, programs.reads-swept)
+	if skipped, err := source.SkippedRunsAsOf(0); err != nil || skipped != 10 || programs.reads != swept {
+		t.Fatalf("SkippedRunsAsOf(0) = %d, %v after %d program reads, want 10 and none", skipped, err, programs.reads-swept)
 	}
 }
 
-func TestRecordLossSourceFailsWhenEitherCounterDoes(t *testing.T) {
+// One counter that cannot be read says nothing about the other.
+func TestRecordLossSourceFailsEachCounterApart(t *testing.T) {
 	boom := errors.New("boom")
 	var ringErr error
 	programs := newScriptedPrograms(3)
@@ -242,54 +331,99 @@ func TestRecordLossSourceFailsWhenEitherCounterDoes(t *testing.T) {
 	if _, err := source.Total(); !errors.Is(err, boom) {
 		t.Errorf("Total with an unreadable ring counter: err = %v", err)
 	}
-	ringErr, programs.err = nil, boom
-	if total, err := source.Total(); !errors.Is(err, boom) || total != 0 {
-		t.Errorf("Total with unreadable programs = %d, %v, want 0 and the error", total, err)
+	if skipped, err := source.SkippedRuns(); err != nil || skipped != 0 {
+		t.Errorf("SkippedRuns with an unreadable ring counter = %d, %v, want 0 and no error", skipped, err)
 	}
-	if _, err := source.TotalAsOf(^uint64(0)); !errors.Is(err, boom) {
-		t.Errorf("TotalAsOf with unreadable programs: err = %v", err)
+	ringErr, programs.err = nil, boom
+	if total, err := source.Total(); err != nil || total != 1 {
+		t.Errorf("Total with unreadable programs = %d, %v, want 1 and no error", total, err)
+	}
+	if _, err := source.SkippedRuns(); !errors.Is(err, boom) {
+		t.Errorf("SkippedRuns with unreadable programs: err = %v", err)
+	}
+	if _, err := source.SkippedRunsAsOf(^uint64(0)); !errors.Is(err, boom) {
+		t.Errorf("SkippedRunsAsOf with unreadable programs: err = %v", err)
 	}
 }
 
-func TestDropMonitorSplitsItsDeltaIntoDropsAndSkippedRuns(t *testing.T) {
+func TestDropMonitorReportsSkippedRunsBesideTheDrops(t *testing.T) {
 	ring := uint64(0)
 	programs := newScriptedPrograms(3)
 	monitor := newRingbufDropMonitor(lossSourceOver(t,
 		ringbufDropSourceFunc(func() (uint64, error) { return ring, nil }), programs, (&steppingClock{}).read))
-	if got := monitor.Tick(); got != (ringbufDropResult{}) {
-		t.Fatalf("first tick = %+v, want all zero", got)
+	if got, want := monitor.Tick(), (ringbufDropResult{skippedCounted: true}); got != want {
+		t.Fatalf("first tick = %+v, want %+v", got, want)
 	}
 	ring = 4
 	programs.skip(3, 6)
-	if got, want := monitor.Tick(), (ringbufDropResult{total: 10, delta: 10, skipped: 6, skippedDelta: 6}); got != want {
+	want := ringbufDropResult{total: 4, delta: 4, skippedCounted: true, skipped: 6, skippedDelta: 6}
+	if got := monitor.Tick(); got != want {
 		t.Fatalf("tick = %+v, want %+v", got, want)
 	}
 	programs.skip(3, 1)
-	if got, want := monitor.Tick(), (ringbufDropResult{total: 11, delta: 1, skipped: 7, skippedDelta: 1}); got != want {
-		t.Fatalf("tick = %+v, want %+v", got, want)
+	want = ringbufDropResult{total: 4, skippedCounted: true, skipped: 7, skippedDelta: 1}
+	if got := monitor.Tick(); got != want || !got.lost() {
+		t.Fatalf("tick = %+v (lost %v), want %+v and a loss", got, got.lost(), want)
 	}
-	// A plain source has no skipped share.
+	if got := monitor.Tick(); got.lost() {
+		t.Fatalf("a tick that found nothing new reports a loss: %+v", got)
+	}
+	// A plain source has no skipped runs to report.
 	plain := newRingbufDropMonitor(&ringbufDropSourceStub{totals: []uint64{5}})
 	if got, want := plain.Tick(), (ringbufDropResult{total: 5, delta: 5}); got != want {
 		t.Fatalf("plain tick = %+v, want %+v", got, want)
 	}
 }
 
+// TestDropMonitorReadsEachCounterApart: a failed read of one counter is that
+// counter's warning. The other was read, and its figures stand - a failed
+// sweep of the programs must not make the ring-buffer drops unknown, nor the
+// reverse.
+func TestDropMonitorReadsEachCounterApart(t *testing.T) {
+	var ringErr error
+	programs := newScriptedPrograms(3)
+	monitor := newRingbufDropMonitor(lossSourceOver(t,
+		ringbufDropSourceFunc(func() (uint64, error) { return 2, ringErr }), programs, (&steppingClock{}).read))
+	programs.err = errors.New("boom")
+	got := monitor.Tick()
+	if got.warning != "" || got.total != 2 || got.delta != 2 || got.skippedCounted ||
+		!strings.Contains(got.skippedWarning, "skipped probe run counter read failed: ") {
+		t.Fatalf("tick with unreadable programs = %+v, want the ring-buffer figures and a skipped-run warning", got)
+	}
+	programs.err, ringErr = nil, errors.New("boom")
+	programs.skip(3, 5)
+	got = monitor.Tick()
+	if !strings.Contains(got.warning, "ring buffer drop counter read failed: ") || got.skippedWarning != "" ||
+		!got.skippedCounted || got.skipped != 5 || got.skippedDelta != 5 {
+		t.Fatalf("tick with an unreadable ring counter = %+v, want its warning and the skipped-run figures", got)
+	}
+}
+
+// TestDropWarningNamesEachKindOfLoss: the two parts say different things. A
+// drop is events lost; a skipped run is counted for every task on the host,
+// so its part says that events MAY be missing and that the count is not the
+// traced tasks' alone - never that "their events are missing", which a run
+// with a -pid filter and a busy real-time task elsewhere proved false.
 func TestDropWarningNamesEachKindOfLoss(t *testing.T) {
-	const ringText, skipText = "Ring buffer full: ", "Kernel skipped "
-	ringOnly := formatRingbufDropWarning(ringbufDropResult{total: 9, delta: 4, skipped: 2})
+	const skipText = "Kernel skipped 3 probe runs (5 total this run): events may be missing; " +
+		"the count includes tasks outside the trace filter - a task was preempted inside a BPF program or map operation"
+	ringOnly := formatRingbufDropWarning(ringbufDropResult{total: 7, delta: 4, skippedCounted: true, skipped: 2})
 	if want := "Ring buffer full: 4 events dropped kernel-side (7 total this run) - consider a larger -mapSize"; ringOnly != want {
 		t.Errorf("ring only = %q, want %q", ringOnly, want)
 	}
-	skippedOnly := formatRingbufDropWarning(ringbufDropResult{total: 9, delta: 3, skipped: 5, skippedDelta: 3})
-	if strings.Contains(skippedOnly, ringText) || strings.Contains(skippedOnly, "mapSize") ||
-		!strings.HasPrefix(skippedOnly, "Kernel skipped 3 probe runs (5 total this run)") {
-		t.Errorf("skipped only = %q", skippedOnly)
+	skippedOnly := formatRingbufDropWarning(ringbufDropResult{total: 4, skippedCounted: true, skipped: 5, skippedDelta: 3})
+	if skippedOnly != skipText {
+		t.Errorf("skipped only = %q, want %q", skippedOnly, skipText)
 	}
-	both := formatRingbufDropWarning(ringbufDropResult{total: 9, delta: 5, skipped: 5, skippedDelta: 3})
-	if !strings.HasPrefix(both, "Ring buffer full: 2 events dropped kernel-side (4 total this run)") ||
-		!strings.Contains(both, "; "+skipText+"3 probe runs (5 total this run)") {
-		t.Errorf("both = %q", both)
+	both := formatRingbufDropWarning(ringbufDropResult{total: 4, delta: 2, skippedCounted: true, skipped: 5, skippedDelta: 3})
+	if want := "Ring buffer full: 2 events dropped kernel-side (4 total this run) - consider a larger -mapSize; " + skipText; both != want {
+		t.Errorf("both = %q, want %q", both, want)
+	}
+	if none := formatRingbufDropWarning(ringbufDropResult{total: 4, skippedCounted: true, skipped: 5}); none != "" {
+		t.Errorf("nothing new = %q, want no warning", none)
+	}
+	if strings.Contains(skipText, "their events are missing") {
+		t.Error("the warning claims the traced tasks' events are missing")
 	}
 }
 
@@ -304,10 +438,17 @@ func TestStatsReportSkippedRunsApartFromRingDrops(t *testing.T) {
 	programs := newScriptedPrograms(3)
 	el := &eventLoop{}
 	el.dropSrc = lossSourceOver(t, &ringbufDropSourceStub{totals: []uint64{4}}, programs, el.readDropStampClock)
+	monitor := newRingbufDropMonitor(el.dropSrc)
+	el.handleRingbufDropResult(monitor.Tick())
+	if stats := statsOf(el); !strings.Contains(stats, "\tprobe runs skipped by the kernel: 0\n") {
+		t.Errorf("no skipped run must read as a bare 0:\n%s", stats)
+	}
 	programs.skip(3, 6)
-	el.handleRingbufDropResult(newRingbufDropMonitor(el.dropSrc).Tick())
+	el.handleRingbufDropResult(monitor.Tick())
 	stats := statsOf(el)
-	for _, want := range []string{"\tring buffer drops: 4 (", "\tprobe runs skipped by the kernel: 6\n"} {
+	skippedLine := "\tprobe runs skipped by the kernel: 6 " +
+		"(events may be missing; the count includes tasks outside the trace filter)\n"
+	for _, want := range []string{"\tring buffer drops: 4 (", skippedLine} {
 		if !strings.Contains(stats, want) {
 			t.Errorf("stats lack %q:\n%s", want, stats)
 		}
@@ -318,7 +459,7 @@ func TestStatsReportSkippedRunsApartFromRingDrops(t *testing.T) {
 }
 
 // A figure nobody read is not printed as 0: a source that does not count
-// skipped runs says so, and a failed reading makes both lines unknown.
+// skipped runs says so, and a failed reading makes the line unknown.
 func TestStatsNeverReportUncountedSkippedRunsAsZero(t *testing.T) {
 	plain := &eventLoop{dropSrc: &ringbufDropSourceStub{}}
 	plain.handleRingbufDropResult(newRingbufDropMonitor(plain.dropSrc).Tick())
@@ -349,6 +490,69 @@ func TestStatsNeverReportUncountedSkippedRunsAsZero(t *testing.T) {
 	}
 }
 
+// warningsOf wires a warning sink to el and returns what it collects.
+func warningsOf(el *eventLoop) *[]string {
+	var warnings []string
+	el.warningCb = func(text string) { warnings = append(warnings, text) }
+	return &warnings
+}
+
+// TestAFailedSkippedRunSweepLeavesTheRingBufferFiguresAlone: the programs
+// could not be read while the ring-buffer counter could. The ring-buffer
+// line states its figure, the warning names the counter that failed and no
+// other, and the comm trust that leans on both counters is off until the
+// sweep works again. The reverse failure leaves the skipped-run line alone.
+func TestAFailedSkippedRunSweepLeavesTheRingBufferFiguresAlone(t *testing.T) {
+	programs := newScriptedPrograms(3)
+	el := &eventLoop{renameRecordsTrusted: true}
+	warnings := warningsOf(el)
+	var ringErr error
+	el.dropSrc = lossSourceOver(t, ringbufDropSourceFunc(func() (uint64, error) { return 0, ringErr }),
+		programs, el.readDropStampClock)
+	monitor := newRingbufDropMonitor(el.dropSrc)
+	programs.err = errors.New("boom")
+	el.handleRingbufDropResult(monitor.Tick())
+	stats := statsOf(el)
+	if !strings.Contains(stats, "\tring buffer drops: 0 (") || el.ringbufDropReadFailed.Load() {
+		t.Errorf("a failed sweep of the programs made the ring-buffer drops unknown:\n%s", stats)
+	}
+	if len(*warnings) != 1 || !strings.HasPrefix((*warnings)[0], "skipped probe run counter read failed: ") {
+		t.Errorf("warnings = %q, want the skipped-run counter's alone", *warnings)
+	}
+	if !el.provisionalSeedNeedsRecheck(^uint64(0)) {
+		t.Error("rename records are trusted although a skipped rename could not show up")
+	}
+	programs.err, ringErr = nil, errors.New("boom")
+	el.handleRingbufDropResult(monitor.Tick())
+	stats = statsOf(el)
+	if !strings.Contains(stats, "\tring buffer drops: unknown (drop counter unreadable)\n") ||
+		!strings.Contains(stats, "\tprobe runs skipped by the kernel: 0\n") {
+		t.Errorf("a failed read of the ring counter must leave the skipped-run line alone:\n%s", stats)
+	}
+}
+
+// TestSkippedRunsRequestTheCommSweep: a skipped run may have been a rename or
+// exec record's, so a poll that finds new ones asks for the comm sweep and
+// stamps it, as a poll that finds drops does; a seed recorded up to that
+// stamp keeps its /proc read. A sweep that was not needed costs /proc reads
+// only, which is why the weaker evidence is enough here.
+func TestSkippedRunsRequestTheCommSweep(t *testing.T) {
+	el := &eventLoop{renameRecordsTrusted: true, dropStampClock: func() uint64 { return 700 }}
+	warningsOf(el)
+	el.handleRingbufDropResult(ringbufDropResult{skippedCounted: true})
+	if el.commRefreshPending.Load() || el.provisionalSeedNeedsRecheck(1) {
+		t.Fatal("a poll without a skipped run asked for the comm sweep")
+	}
+	el.handleRingbufDropResult(ringbufDropResult{skippedCounted: true, skipped: 2, skippedDelta: 2})
+	if !el.commRefreshPending.Load() || el.lastDropSeenBootNs.Load() != 700 {
+		t.Fatalf("after 2 skipped runs: sweep pending = %v, stamp = %d, want a sweep stamped 700",
+			el.commRefreshPending.Load(), el.lastDropSeenBootNs.Load())
+	}
+	if !el.provisionalSeedNeedsRecheck(700) || el.provisionalSeedNeedsRecheck(701) {
+		t.Fatal("a seed recorded up to the stamp must keep its /proc read, and a later one must not")
+	}
+}
+
 // skippedRunSetup replaces the three questions withSkippedRuns asks the
 // system for one test.
 func skippedRunSetup(t *testing.T, release string, programs *scriptedPrograms) {
@@ -359,7 +563,7 @@ func skippedRunSetup(t *testing.T, release string, programs *scriptedPrograms) {
 	})
 	skippedRunKernelRelease = func() string { return release }
 	skippedRunProgramFDs = func(*bpf.Module) []int { return programs.fds() }
-	skippedRunProgramMisses = programs.read
+	skippedRunProgramMisses = func() func(int) (uint64, bool, error) { return programs.read }
 }
 
 func TestWithSkippedRunsCountsThemWhereTheKernelDoes(t *testing.T) {
@@ -369,8 +573,17 @@ func TestWithSkippedRunsCountsThemWhereTheKernelDoes(t *testing.T) {
 	warned := 0
 	source := withSkippedRuns(ring, nil, (&steppingClock{}).read, func(...any) { warned++ })
 	programs.skip(3, 5)
-	if total, err := source.Total(); err != nil || total != 7 || warned != 0 {
-		t.Fatalf("Total = %d, %v with %d warnings, want 7 (2 drops and 5 skipped runs) and none", total, err, warned)
+	skipped, err := source.(skippedRunSource).SkippedRuns()
+	if total, ringErr := source.Total(); ringErr != nil || err != nil || total != 2 || skipped != 5 || warned != 0 {
+		t.Fatalf("Total = %d (%v), SkippedRuns = %d (%v) with %d warnings, want 2 drops, 5 skipped runs and none",
+			total, ringErr, skipped, err, warned)
+	}
+	// The counter follows what is attached: a probe switched on later is
+	// read by the next sweep.
+	programs.attached = append(programs.attached, 9)
+	programs.skip(9, 1)
+	if skipped, err := source.(skippedRunSource).SkippedRuns(); err != nil || skipped != 6 {
+		t.Fatalf("SkippedRuns after a probe was attached = %d, %v, want 6", skipped, err)
 	}
 }
 
@@ -397,7 +610,6 @@ func TestWithSkippedRunsWarnsWhenTheCountCannotBeRead(t *testing.T) {
 	for name, breakIt := range map[string]func(*scriptedPrograms){
 		"read fails":         func(p *scriptedPrograms) { p.err = errors.New("boom") },
 		"field not reported": func(p *scriptedPrograms) { p.unreported = true },
-		"no programs":        func(p *scriptedPrograms) { p.misses = map[int]uint64{} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			programs := newScriptedPrograms(3)
@@ -415,8 +627,16 @@ func TestWithSkippedRunsWarnsWhenTheCountCannotBeRead(t *testing.T) {
 	}
 }
 
-func TestLibbpfProgramFDsOfNoModule(t *testing.T) {
-	if fds := libbpfProgramFDs(nil); fds != nil {
-		t.Fatalf("libbpfProgramFDs(nil) = %v, want none", fds)
+// The seams withSkippedRuns asks are the real ones unless a test replaced
+// them: the attached programs of the module, and a reader of its own.
+func TestWithSkippedRunsAsksTheSeamForTheAttachedPrograms(t *testing.T) {
+	if got, want := reflect.ValueOf(skippedRunProgramFDs).Pointer(), reflect.ValueOf(libbpfAttachedProgramFDs).Pointer(); got != want {
+		t.Fatal("skippedRunProgramFDs is not libbpfAttachedProgramFDs")
+	}
+	if fds := libbpfAttachedProgramFDs(nil); fds != nil {
+		t.Fatalf("libbpfAttachedProgramFDs(nil) = %v, want none", fds)
+	}
+	if _, _, err := skippedRunProgramMisses()(-1); !errors.Is(err, unix.EBADFD) {
+		t.Fatalf("skippedRunProgramMisses does not read through bpf(2): err = %v", err)
 	}
 }

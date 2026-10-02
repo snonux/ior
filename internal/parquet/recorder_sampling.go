@@ -17,8 +17,9 @@ func (r *Recorder) CountKernelOnly(syscall string, n uint64) {
 }
 
 // MarkSamplingLowerBound records that events were lost while the active
-// recording ran (ring-buffer drops), so its sampling totals are only a lower
-// bound. A no-op without an active recording or tally.
+// recording ran, or may have been (ring-buffer drops, probe runs the kernel
+// skipped), so its sampling totals are only a lower bound. A no-op without
+// an active recording or tally.
 func (r *Recorder) MarkSamplingLowerBound() {
 	r.activeTally().MarkLowerBound()
 }

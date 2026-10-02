@@ -77,7 +77,8 @@ func TestAll() []string {
 
 // RootLinkTests are the tests of internal/ior_bpflink_root_test.go: they load
 // the real BPF object, make libbpf's destroy of real links fail and close the
-// module (task 123). They skip for anybody but root, so `mage test` passes
+// module (task 123), and read the skipped runs of really attached programs
+// (task 723). They skip for anybody but root, so `mage test` passes
 // them by, and the root link step of `mage integrationTest` is the one place
 // that runs them. The names are listed rather than matched by a pattern so
 // that a renamed test fails a gate (internal/buildgate) instead of silently
@@ -87,6 +88,7 @@ func RootLinkTests() []string {
 		"TestModuleCloseSurvivesAFailedDestroyOfIorsLinks",
 		"TestModuleCloseAfterACleanDestroyOfIorsLinks",
 		"TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy",
+		"TestSkippedRunsAreReadFromReallyAttachedPrograms",
 	}
 }
 

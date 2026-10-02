@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"ior/internal/flags"
 	"ior/internal/probemanager"
@@ -38,6 +39,10 @@ import (
 // believes it owns is only safe where nothing else opens files in between -
 // libbpf closes the number again, whoever has it by then - which holds for a
 // child that does nothing else, not for a test binary.
+//
+// The last test here is of another kind and runs in the test binary itself:
+// it reads the skipped runs (recursion_misses, task 723) of really attached
+// programs through the same seam, which no test without a kernel can.
 
 const (
 	linkHelperEnv      = "IOR_TEST_LIBBPF_LINK_HELPER"
@@ -337,4 +342,106 @@ func bpfLinkPointer(link *bpf.BPFLink) string {
 		return "cleared"
 	}
 	return "kept"
+}
+
+// TestSkippedRunsAreReadFromReallyAttachedPrograms loads the real BPF object,
+// attaches a classic and a raw tracepoint program through ior's seam and
+// reads their recursion_misses (task 723): the seam lists exactly the two as
+// attached, the kernel answers for each with a count it reports (on a kernel
+// from 6.7 on; an older one may end its bpf_prog_info before the field), a
+// second read through the same reader works as the first did, and the
+// counter built over the seam sweeps them. Destroying the links empties the
+// list. It logs what one read costs, the figure behind the cost notes in
+// skipped_run_counter.go.
+func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: loads the BPF object and attaches probes")
+	}
+	module, stage, err := loadConfiguredBPFModule(flags.NewFlags(), bpfSetupLog{warn: func(...any) {}})
+	if err != nil {
+		t.Fatalf("load the BPF object: %s: %v", stage, err)
+	}
+	defer module.Close()
+	classic, _ := attachThroughIor(t, module, "classic", processExecProgName)
+	raw, _ := attachThroughIor(t, module, "raw", taskRenameProgName)
+	attached := func() []int { return libbpfAttachedProgramFDs(module) }
+	fds := attached()
+	if len(fds) != 2 || fds[0] == fds[1] {
+		t.Fatalf("attached programs = %v, want the two just attached", fds)
+	}
+	reader := newProgMissesReader()
+	requireMissesReported(t, reader, fds)
+	requireMissesReported(t, reader, fds)
+	counter, err := newSkippedRunCounter(attached, reader.misses, bootClockNs)
+	if err != nil {
+		t.Fatalf("a counter over the attached programs: %v", err)
+	}
+	if total, err := counter.Total(); err != nil {
+		t.Fatalf("sweep: %d, %v", total, err)
+	}
+	logMissesReadCost(t, reader, fds[0])
+	for name, link := range map[string]probemanager.Link{"classic": classic, "raw": raw} {
+		if err := link.Destroy(); err != nil {
+			t.Fatalf("destroy the %s link: %v", name, err)
+		}
+	}
+	if left := attached(); left != nil {
+		t.Fatalf("programs still listed as attached after their links were destroyed: %v", left)
+	}
+}
+
+// requireMissesReported reads the skipped runs of every program of fds and
+// fails on an error, and on a count the kernel did not report although its
+// release says it counts them. Called twice with one reader it also pins
+// that the reader's buffer is fit for a second call (progMissesReader.misses
+// clears what the first one left in it).
+func requireMissesReported(t *testing.T, reader *progMissesReader, fds []int) {
+	t.Helper()
+	mustReport := kernelCountsSkippedRuns(runningKernelRelease())
+	for _, fd := range fds {
+		misses, reported, err := reader.misses(fd)
+		if err != nil {
+			t.Fatalf("read the skipped runs of program fd %d: %v", fd, err)
+		}
+		if mustReport && !reported {
+			t.Fatalf("kernel %s did not report recursion_misses for program fd %d", runningKernelRelease(), fd)
+		}
+		t.Logf("program fd %d: recursion_misses=%d reported=%v", fd, misses, reported)
+	}
+}
+
+// logMissesReadCost logs the time of one read of a program's skipped runs,
+// averaged over many: what a sweep costs per attached program on this host.
+func logMissesReadCost(t *testing.T, reader *progMissesReader, fd int) {
+	t.Helper()
+	const reads = 20000
+	start := time.Now()
+	for range reads {
+		if _, _, err := reader.misses(fd); err != nil {
+			t.Fatalf("read the skipped runs of program fd %d: %v", fd, err)
+		}
+	}
+	perRead := time.Since(start) / reads
+	t.Logf("one read: %v on %d possible CPUs; a sweep of 242 attached programs (a default run): %v, of 8: %v",
+		perRead, possibleCPUs(t), 242*perRead, 8*perRead)
+}
+
+// possibleCPUs returns the number of CPUs the kernel calls possible, which
+// is what one read loops over (bpf_prog_get_stats); 0 when it cannot be told.
+func possibleCPUs(t *testing.T) int {
+	t.Helper()
+	raw, err := os.ReadFile("/sys/devices/system/cpu/possible")
+	if err != nil {
+		return 0
+	}
+	// "0-7", or "0" on a single CPU: the last number is the highest index.
+	last := strings.TrimSpace(string(raw))
+	if i := strings.LastIndexAny(last, "-,"); i >= 0 {
+		last = last[i+1:]
+	}
+	n, err := strconv.Atoi(last)
+	if err != nil {
+		return 0
+	}
+	return n + 1
 }

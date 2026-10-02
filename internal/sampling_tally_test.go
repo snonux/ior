@@ -309,6 +309,10 @@ func TestSamplingTotalsAreALowerBoundUnderRingbufDrops(t *testing.T) {
 		// Rows that reached rawCh but were discarded at stop are lost to the
 		// counts just like dropped ones (task tq2).
 		{"records were discarded at stop", func(el *eventLoop) { el.numDiscardedAtStop = 7 }},
+		// A probe run the kernel skipped may have been a traced task's, and
+		// is then in neither count (task 723): "at least" holds either way.
+		{"the kernel skipped probe runs", func(el *eventLoop) { el.numSkippedRuns.Store(3) }},
+		{"the skipped runs could not be read", func(el *eventLoop) { el.skippedRunReadFailed.Store(true) }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -253,6 +253,15 @@ func TestRingbufLossMakesTheRecordingALowerBound(t *testing.T) {
 	if counter.lowerBound != 2 {
 		t.Fatalf("lower-bound marks = %d, want 2 (a loss and an unreadable counter)", counter.lowerBound)
 	}
+	// Probe runs the kernel skipped may be the traced tasks' (task 723): they
+	// mark the recording too, and so does a count of them nobody could read;
+	// a poll that finds the same count again does not.
+	el.handleRingbufDropResult(ringbufDropResult{total: 3, skippedCounted: true, skipped: 5, skippedDelta: 5})
+	el.handleRingbufDropResult(ringbufDropResult{total: 3, skippedWarning: "cannot read the skipped runs"})
+	el.handleRingbufDropResult(ringbufDropResult{total: 3, skippedCounted: true, skipped: 5})
+	if counter.lowerBound != 4 {
+		t.Fatalf("lower-bound marks = %d, want 4 (two more: skipped runs, and their unreadable counter)", counter.lowerBound)
+	}
 }
 
 // The raw modes have no recording counter: forwarding is a no-op there and the

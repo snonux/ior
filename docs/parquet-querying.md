@@ -170,9 +170,10 @@ The same two rows are what you get under record loss. When the kernel drops reco
 (ring-buffer backpressure, see the drop counter), the announced `restart_syscall` that
 arrives next may resume a later stopped call of the thread, with everything in between lost.
 So ior folds a stopped sleep only when it can rule out that any record, of any process, was
-dropped between the interruption and the `restart_syscall` (it checks when the
-`restart_syscall` is announced and again when it returns, by the rule described under "When a
-restart is not folded"). Otherwise the -516 row stays and `restart_syscall` is a row of its
+dropped - or, on Linux 6.7 and later, that the kernel skipped a run of one of ior's probes,
+for any task on the host - between the interruption and the `restart_syscall` (it checks
+when the `restart_syscall` is announced and again when it returns, by the rule described
+under "When a restart is not folded"). Otherwise the -516 row stays and `restart_syscall` is a row of its
 own with the return value it had; no row is lost and both are counted. A sleep stopped
 several times is checked stop by stop, so it may be folded up to one of its stops: a row with
 `ret` -516 whose `latency_ns` runs to that stop, followed by a `restart_syscall` row.
@@ -286,7 +287,11 @@ followed by a second row for the continuation (if that was recorded at all), whe
   happens to be recorded: see "A stopped sleep is one row". Re-executed calls
   (-512/-513/-514) are not affected by that rate;
 - ior cannot rule out that the kernel dropped a record, any record of any process, between
-  the interruption and the continuation's exit (see the drop counter). This applies to both
+  the interruption and the continuation's exit (see the drop counter), or the kernel skipped
+  a run of one of ior's probes in that time (the statistics' `probe runs skipped by the
+  kernel`, counted from Linux 6.7 on and for every task on the host, traced or not: a busy
+  real-time task elsewhere on the CPU can refuse folds of a trace that lost nothing). This
+  applies to both
   folds, the stopped sleep (-516, continued by `restart_syscall`) and the re-executed call;
   only a stopped sleep in a run without a drop counter is folded unchecked. ior cannot know
   whose records were lost, so it folds nothing across a possible loss. The drop counter says how
@@ -492,9 +497,12 @@ traced everything:
   is counted as traced but has no row, so compare `total`, not the row count, with the
   population (headless `-parquet` never sheds rows, it waits for the writer; for TUI
   recordings see below). When events were lost (the run statistics say
-  `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither `traced` nor `counted_only`: every
-  element then carries `"lower_bound":true` and its numbers are a lower bound (the true
-  total is at least that). The value is the word `unavailable` when the totals cannot be
+  `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither
+  `traced` nor `counted_only`: every element then carries `"lower_bound":true` and its
+  numbers are a lower bound (the true total is at least that). The same mark is set when
+  events may have been lost because the kernel skipped probe runs (`probe runs skipped by
+  the kernel: N` above zero): that counter covers every task on the host, so with a `-pid`,
+  `-tid` or `-comm` filter the numbers may in fact be exact, and ior cannot tell. The value is the word `unavailable` when the totals cannot be
   trusted at all (a filter the kernel counters cannot apply, or a failed read of them).
 
 Row counts of sampled syscalls in such a file are therefore not the population; use
@@ -529,9 +537,11 @@ mean for a TUI recording:
   attributed to it. The dashboard's auto-reset (`I`, 30s by default) and the `r` key do not
   affect it. Rows still in flight between the kernel and the recorder at the start or stop
   are attributed by when they reach the recorder, like any row of the file.
-- The elements carry `"lower_bound":true` when events were lost while recording: ring-buffer
-  drops (including those of the last moments before the stop), rows shed by the recorder's
-  full queue (the status line then shows `rec: ... (dropped N)`), or a filter change that
+- The elements carry `"lower_bound":true` when events were lost while recording, or may have
+  been: ring-buffer drops (including those of the last moments before the stop), probe runs
+  the kernel skipped (counted for every task on the host, traced or not), rows shed by the
+  recorder's full queue (the status line then shows `rec: ... (dropped N)`), or a filter
+  change that
   restarts the trace while its event loop is still running: the old trace's rows that had
   not reached the recorder yet are discarded with it, as the raw modes' `records discarded
   at stop` are.

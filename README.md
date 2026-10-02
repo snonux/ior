@@ -153,6 +153,9 @@ under a filter the kernel counters cannot apply (`-comm`, `-path`, ...). If the 
 buffer dropped events (`ring buffer drops: N` in the statistics) or records still buffered at
 stop could not be decoded (`records discarded at stop: N`), the lost rows are in neither
 count, so the totals are labelled `at least` (Parquet: `"lower_bound":true`) instead of exact.
+They are labelled the same way when the kernel skipped probe runs (`probe runs skipped by the
+kernel: N`, see Known limitations): a skipped run of a traced task is in neither count, and
+since that counter covers every task on the host ior cannot tell whether one was.
 A family rate (`-syscall-sampling-families FS=10`) is reported once as `FS=10`, with lines and
 totals only for the syscalls that were invoked; syscalls whose probes are not attached are not
 reported.
@@ -290,18 +293,24 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   (on stderr in the headless modes, as a warning row in the TUI, again after each restart of
   the trace); with an actual offset such closes may then be unnamed or named after the file
   that reused the number, and interrupted calls may stay two rows or, with a negative offset,
-  be folded with a later call (after lost records, or after a probe change in the TUI).
+  be folded with a later call (after lost records, or after a probe change in the TUI). With
+  a positive offset ior also learns of a skipped probe run (next item) up to one poll of its
+  loss counters late, and may fold an interrupted call across it in that time.
 - **The kernel can skip a probe without running it.** A BPF tracepoint program is not run
   while another task was preempted on that CPU in the middle of the same program (the
   syscall probes on Linux 7.2) or of a BPF map operation of any program on the host (the
   syscall probes up to at least Linux 6.19; the process and signal probes on both). The
-  events of those calls are missing although the ring buffer never filled. From Linux 6.7 on the kernel counts
-  these runs and ior reports them: a `Kernel skipped N probe runs` warning while it
-  happens, and `probe runs skipped by the kernel: N` in the end-of-run statistics, next to
-  `ring buffer drops`. On an older kernel the line reads `not counted`, and such a loss
-  leaves no trace. It needs a preemption inside the kernel, so it is rare on a desktop
-  and common where real-time tasks or `preempt=full` preempt a traced, syscall-heavy
-  CPU.
+  events of those calls are missing although the ring buffer never filled. From Linux 6.7 on
+  the kernel counts these runs and ior reports them: a `Kernel skipped N probe runs` warning
+  while it happens, and `probe runs skipped by the kernel: N` in the end-of-run statistics,
+  next to `ring buffer drops`. The count is taken before ior's filter and covers every task
+  on the host, so it says that events *may* be missing, not how many: with `-pid`, `-tid` or
+  `-comm` it includes the calls of tasks outside the filter, and can be large while the
+  trace is complete. ior acts on it on the safe side: an interrupted call is not folded with
+  its restart across a skipped run (two rows instead of one), and sampling totals are
+  labelled `at least`. On an older kernel the line reads `not counted`, and such a loss
+  leaves no trace. It needs a preemption inside the kernel, so it is rare on a desktop and
+  common where real-time tasks or `preempt=full` preempt a syscall-heavy CPU.
 
 ## Bytes Classification
 

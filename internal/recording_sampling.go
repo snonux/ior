@@ -124,9 +124,10 @@ func (e *eventLoop) forwardAggregatesToRecording(result aggregateDrainResult) {
 	}
 }
 
-// markRecordingLowerBound tells the active recording that events were lost
-// (or that the drop counter could not be read): its totals become a lower
-// bound, as the raw modes' do (samplingResult).
+// markRecordingLowerBound tells the active recording that events were lost,
+// or may have been (a skipped program run, a loss counter that could not be
+// read): its totals become a lower bound, as the raw modes' do
+// (samplingResult).
 func (e *eventLoop) markRecordingLowerBound() {
 	if e.recordingCounter != nil {
 		e.recordingCounter.MarkSamplingLowerBound()

@@ -64,11 +64,11 @@ var libbpfAttachMu sync.Mutex
 
 // attachLibbpfTracepoint attaches prog to the classic tracepoint
 // category/name, one attach at a time (libbpfAttachMu), and hands out the
-// link wrapped (libbpfLink).
+// link wrapped and its program listed as attached (libbpfLinkOf).
 func attachLibbpfTracepoint(prog *bpf.BPFProg, category, name string) (probemanager.Link, error) {
 	libbpfAttachMu.Lock()
 	defer libbpfAttachMu.Unlock()
-	return newLibbpfLink(attachBPFTracepoint(prog, category, name))
+	return libbpfLinkOf(prog)(attachBPFTracepoint(prog, category, name))
 }
 
 // attachLibbpfRawTracepoint is attachLibbpfTracepoint for the raw tracepoint
@@ -76,28 +76,111 @@ func attachLibbpfTracepoint(prog *bpf.BPFProg, category, name string) (probemana
 func attachLibbpfRawTracepoint(prog *bpf.BPFProg, name string) (probemanager.Link, error) {
 	libbpfAttachMu.Lock()
 	defer libbpfAttachMu.Unlock()
-	return newLibbpfLink(attachBPFRawTracepoint(prog, name))
+	return libbpfLinkOf(prog)(attachBPFRawTracepoint(prog, name))
 }
 
-// libbpfProgramFDs returns the file descriptor of every program of module
-// that the kernel loaded, attached or not. It is the one place that walks
-// the module's programs (libbpfgo's iterator, which the scans of
-// ior_bpflink_test.go pin to this function): the descriptors are all that
-// leaves it, and all a descriptor is used for is reading the program's
-// skipped runs (skippedRunCounter). They belong to the module and are valid
-// until it is closed. A nil module has none.
-func libbpfProgramFDs(module *bpf.Module) []int {
-	if module == nil {
+// attachedProgram names one loaded program for the list of attached ones:
+// the module it belongs to and its file descriptor, which is all that ever
+// leaves the seam of a program (libbpfAttachedProgramFDs). The zero value
+// names no program and is never listed.
+type attachedProgram struct {
+	module *bpf.Module
+	fd     int
+}
+
+// attachedProgramOf names prog. A nil program (the tests' seam without a
+// kernel) and one the kernel did not load have no name.
+func attachedProgramOf(prog *bpf.BPFProg) attachedProgram {
+	if prog == nil {
+		return attachedProgram{}
+	}
+	fd := prog.FileDescriptor()
+	if fd < 0 {
+		return attachedProgram{}
+	}
+	return attachedProgram{module: prog.GetModule(), fd: fd}
+}
+
+// attachedProgramSet lists, per module, the programs that have a live link:
+// the ones the kernel can run, and so the only ones it can skip (task 723,
+// skippedRunCounter). A program enters with the link ior hands out for it
+// (libbpfLinkOf) and leaves when that link's Destroy returned
+// (libbpfLink.Destroy), so the list follows the probe manager's attaches and
+// detaches at runtime and the hand-attached probes alike, without asking the
+// manager: its lock is held across attaches that take milliseconds, and the
+// event loop reads this list while it decides about a fold.
+//
+// The mutex guards two map operations and is never held across a system
+// call. A module's entry goes with its last link, so a closed module leaves
+// nothing behind: teardown destroys every link before it closes the module.
+type attachedProgramSet struct {
+	mu sync.Mutex
+	// links counts the live links of each program, by module and fd. ior
+	// attaches every program once; the count only keeps a second link of
+	// the same program from being unlisted by the first one's Destroy.
+	links map[*bpf.Module]map[int]int
+}
+
+// libbpfAttached is the list for the process. One list serves every module:
+// each asks for its own programs.
+var libbpfAttached attachedProgramSet
+
+func (s *attachedProgramSet) add(prog attachedProgram) {
+	if prog.module == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.links == nil {
+		s.links = map[*bpf.Module]map[int]int{}
+	}
+	if s.links[prog.module] == nil {
+		s.links[prog.module] = map[int]int{}
+	}
+	s.links[prog.module][prog.fd]++
+}
+
+func (s *attachedProgramSet) remove(prog attachedProgram) {
+	if prog.module == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ofModule := s.links[prog.module]
+	if ofModule[prog.fd] > 1 {
+		ofModule[prog.fd]--
+		return
+	}
+	delete(ofModule, prog.fd)
+	if len(ofModule) == 0 {
+		delete(s.links, prog.module)
+	}
+}
+
+// fds returns the descriptors of module's attached programs, in a slice of
+// the caller's own.
+func (s *attachedProgramSet) fds(module *bpf.Module) []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ofModule := s.links[module]
+	if len(ofModule) == 0 {
 		return nil
 	}
-	var fds []int
-	iter := module.Iterator()
-	for prog := iter.NextProgram(); prog != nil; prog = iter.NextProgram() {
-		if fd := prog.FileDescriptor(); fd >= 0 {
-			fds = append(fds, fd)
-		}
+	fds := make([]int, 0, len(ofModule))
+	for fd := range ofModule {
+		fds = append(fds, fd)
 	}
 	return fds
+}
+
+// libbpfAttachedProgramFDs returns the file descriptor of every program of
+// module that has a live link at this moment: the syscall probes the probe
+// manager has attached and the hand-attached ones. The descriptors are all
+// that leaves the seam of a program, and all one is used for is reading the
+// program's skipped runs (skippedRunCounter). They belong to the module and
+// are valid until it is closed.
+func libbpfAttachedProgramFDs(module *bpf.Module) []int {
+	return libbpfAttached.fds(module)
 }
 
 // libbpfLink is the probemanager.Link ior hands out for every link it attaches
@@ -149,22 +232,39 @@ type libbpfLink struct {
 	// that Destroy reaches libbpfgo at most once per link however it is
 	// called; its callers promise one call already (probemanager.Link).
 	link atomic.Pointer[bpf.BPFLink]
+	// program is the attached program the link keeps listed
+	// (attachedProgramSet); the zero value for a link no program was named
+	// for (newLibbpfLink).
+	program attachedProgram
 }
 
-// newLibbpfLink wraps the result of a libbpfgo attach. A failed attach hands
-// out no link, as an untyped nil: libbpfgo returns a nil *bpf.BPFLink then,
-// which must become neither a non-nil probemanager.Link nor a wrapper around
-// nothing.
+// newLibbpfLink wraps the result of a libbpfgo attach for which no program
+// is listed as attached (libbpfLinkOf of no program).
 func newLibbpfLink(link *bpf.BPFLink, err error) (probemanager.Link, error) {
-	if err != nil {
-		return nil, err
+	return libbpfLinkOf(nil)(link, err)
+}
+
+// libbpfLinkOf returns the function that wraps the result of a libbpfgo
+// attach of prog; it takes the attach call's two results as they come, so
+// that no bare link is ever held in a variable (the attach functions are
+// pinned to `return libbpfLinkOf(prog)(attachBPF...(...))`). A failed attach
+// hands out no link, as an untyped nil: libbpfgo returns a nil *bpf.BPFLink
+// then, which must become neither a non-nil probemanager.Link nor a wrapper
+// around nothing. A link that is handed out lists prog as attached until its
+// Destroy (attachedProgramSet).
+func libbpfLinkOf(prog *bpf.BPFProg) func(*bpf.BPFLink, error) (probemanager.Link, error) {
+	return func(link *bpf.BPFLink, err error) (probemanager.Link, error) {
+		if err != nil {
+			return nil, err
+		}
+		if link == nil {
+			return nil, errNoLibbpfLink
+		}
+		wrapped := &libbpfLink{program: attachedProgramOf(prog)}
+		wrapped.link.Store(link)
+		libbpfAttached.add(wrapped.program)
+		return wrapped, nil
 	}
-	if link == nil {
-		return nil, errNoLibbpfLink
-	}
-	wrapped := &libbpfLink{}
-	wrapped.link.Store(link)
-	return wrapped, nil
 }
 
 // Destroy destroys the link once and passes libbpfgo's error on. When there is
@@ -174,6 +274,11 @@ func newLibbpfLink(link *bpf.BPFLink, err error) (probemanager.Link, error) {
 // wrapper, does nothing and returns nil - at once, also while a first call is
 // still inside libbpf: it does not wait for it. The callers promise one call
 // per link and teardown waits for them, so nothing relies on such a wait.
+//
+// The program leaves the list of attached ones after libbpfgo returned,
+// whatever it returned (the link is gone either way): until then the kernel
+// may still run the program, or skip it, and a sweep of the skipped runs
+// must still read it.
 func (l *libbpfLink) Destroy() error {
 	if l == nil {
 		return nil
@@ -183,6 +288,7 @@ func (l *libbpfLink) Destroy() error {
 		return nil
 	}
 	err := destroyBPFLink(link)
+	libbpfAttached.remove(l.program)
 	if err != nil {
 		*link = bpf.BPFLink{}
 	}

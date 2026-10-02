@@ -84,9 +84,10 @@ func (t *Tally) CountUntraced(syscall string, n uint64) {
 	}
 }
 
-// MarkLowerBound records that events were lost during the window (ring-buffer
-// drops, rows shed by a full recorder queue, ...): the counts are then a lower
-// bound (Summary.LowerBound).
+// MarkLowerBound records that events were lost during the window, or may
+// have been (ring-buffer drops, probe runs the kernel skipped, rows shed by a
+// full recorder queue, ...): the counts are then a lower bound
+// (Summary.LowerBound).
 func (t *Tally) MarkLowerBound() {
 	if t == nil {
 		return

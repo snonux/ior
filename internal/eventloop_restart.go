@@ -135,11 +135,14 @@ import (
 // continuation's row.
 //
 // A record is also lost when the kernel skips the program that would have
-// written it, which no ring-buffer counter sees (task 723). The drop source
-// counts those runs as drops on a kernel that counts them itself (Linux 6.7
-// and later; recordLossSource), and the proof covers them there. On an older
-// kernel a skipped run is invisible and the proof is of ring-buffer drops
-// alone (restartDropWatch says what that leaves open).
+// written it, which no ring-buffer counter sees (task 723). On a kernel that
+// counts those runs (Linux 6.7 and later; recordLossSource) the proof asks
+// about them as well: a fold is refused when a run of any of ior's attached
+// programs was skipped since the interruption. That count is taken before
+// ior's filter and covers every task on the host, so it refuses folds that
+// lost nothing (one row then stays two, as after a drop), which is the safe
+// side. On an older kernel a skipped run is invisible and the proof is of
+// ring-buffer drops alone (restartDropWatch says what that leaves open).
 //
 // The two folds differ in what they do WITHOUT a drop counter (the counter
 // map could not be opened, or an object override without it; ior warns at
@@ -1023,76 +1026,163 @@ func (w *restartProbeWatch) takeClearWarning() string {
 // hides a drop first observed less than that long after the enter, which
 // costs the exec its row (eventLoop.lostExecRecord).
 //
-// What the counter counts (task 723). "Dropped" above is every way a record
-// is lost in the kernel that the drop source counts. The ring buffer's own
-// counter (ringbuf_drop_map) is bumped by a program that ran and could not
-// reserve; a program the kernel did not run at all - skipped while
-// bpf_prog_active was raised on its CPU, or while the same program was in
-// flight there (skippedRunCounter has the facts) - loses its record without
-// touching it. A drop source that counts those runs too (recordLossSource:
-// Linux 6.7 and later) returns the sum, and the rule holds for both without
-// a word changed. One that does not leaves a skipped run invisible: "no
-// loss" is then "no ring-buffer drop", so a fold may go on although a record
-// between its two halves was skipped, and an adoption may be refused
-// although the exec record was. That residual needs a task preempted inside
-// the kernel at the wrong instruction and is not closed on such a kernel.
+// Two kinds of evidence (task 723). Everything above is said of the ring
+// buffer's own counter (ringbuf_drop_map), which a program bumps when it ran,
+// its filter passed and it could not reserve: a record ior wanted and lost.
+// A program the kernel did not run at all - skipped while bpf_prog_active
+// was raised on its CPU, or while the same program was in flight there
+// (skippedRunCounter has the facts) - loses its record without touching that
+// counter. A drop source that counts those runs (skippedRunSource: Linux 6.7
+// and later) is asked for them too, and the watch keeps a second total and
+// stamp for them, under the same invariant and the same rule. They are kept
+// apart because they are not the same evidence: the kernel counts a skipped
+// run before any program code ran, so for every task on the host, traced or
+// not. A grown count says that a record MAY be missing. evidenceSince
+// therefore answers with the kind (lossEvidence), and each asker takes it by
+// what its mistake costs:
+//
+//   - a fold is refused on either kind (lostSince). A refusal that lost
+//     nothing leaves one call as two rows; a fold across a skipped record
+//     could join two calls.
+//   - the exec adoption adopts on either kind and takes the pair for proof
+//     of an exec on a counted drop only (eventLoop.lostExecRecord).
+//
+// A source that counts no skipped runs leaves them invisible: "no loss" is
+// then "no ring-buffer drop", so a fold may go on although a record between
+// its two halves was skipped, and an adoption may be refused although the
+// exec record was. That residual needs a task preempted inside the kernel at
+// the wrong instruction and is not closed on such a kernel.
 //
 // The read and the record that asks. The skipped runs are read with one
-// system call per program, which a fold cannot pay per question on a busy
-// loop. lostSince therefore passes the time of the record it decides about
-// (upTo) to a source that can answer for the past (datedDropSource): the
-// records a fold reasons about were stamped before that record, and a miss
-// is counted when it happens, so a reading that began after upTo holds every
-// one of them, however long ago it was made. The ring buffer's counter is
-// read anew each time, as before: a refused reservation is counted after the
-// record's stamp was taken, by a handler another CPU may have delayed. The
-// invariant is untouched: such a total was still returned by reads that
-// finished before the stamp the watch gives it.
+// system call per attached program, which a fold cannot pay per question on
+// a busy loop. evidenceSince therefore passes the time of the record it
+// decides about (upTo) to the source (SkippedRunsAsOf): the records a fold
+// reasons about were stamped before that record, and a miss is counted when
+// it happens, so a reading that began after upTo holds every one of them,
+// however long ago it was made. The ring buffer's counter is read anew each
+// time, as before: a refused reservation is counted after the record's stamp
+// was taken, by a handler another CPU may have delayed. The invariant is
+// untouched: such a total was still returned by reads that finished before
+// the stamp the watch gives it. With an unknown positive boottime offset the
+// source may answer from a sweep begun before upTo
+// (skippedRunCounter.TotalAsOf); a skipped run between that sweep and the
+// record is then seen one monitor period late at most, by the next sweep.
 type restartDropWatch struct {
-	mu          sync.Mutex
-	total       uint64 // the kernel's cumulative drop count at the latest observation
-	firstSeenAt uint64 // stamp of the earliest observation that returned total
+	mu sync.Mutex
+	// drops is the ring-buffer drop counter's latest total with the stamp of
+	// the earliest observation that returned it; skipped is the same for
+	// the program runs the kernel skipped, and stays at its zero value with
+	// a source that counts none.
+	drops, skipped stampedTotal
 }
 
-// observe records one reading of the drop counter, stamped with a boot-clock
-// time read after the counter was, and returns the stamp of the earliest
-// observation that returned the same total.
+// stampedTotal is what the watch knows of one cumulative counter: the total
+// of the latest observation and the stamp of the earliest observation that
+// returned that same total.
+type stampedTotal struct {
+	total       uint64
+	firstSeenAt uint64
+}
+
+// observe records one reading of total, stamped with a boot-clock time read
+// after the counter was, and returns the stamp of the earliest observation
+// that returned the same total.
+func (s *stampedTotal) observe(total, seenAt uint64) uint64 {
+	if total != s.total {
+		s.total = total
+		s.firstSeenAt = seenAt
+	}
+	return s.firstSeenAt
+}
+
+// lossEvidence is the watch's answer to "may a record have been lost since?":
+// what kind of evidence there is, the stronger kind when there are both.
+type lossEvidence uint8
+
+const (
+	// noLossEvidence: both counters stood still since before the time asked
+	// about. No record was dropped; none was skipped either, where the
+	// kernel counts that.
+	noLossEvidence lossEvidence = iota
+	// maybeSkippedRecord: the kernel skipped a run of one of ior's programs,
+	// for some task on the host, or the count of those runs could not be
+	// read. A record of the trace may be missing.
+	maybeSkippedRecord
+	// countedRecordLoss: the ring buffer refused a record ior wanted, or
+	// its counter is missing or unreadable and nothing vouches for the
+	// stream.
+	countedRecordLoss
+)
+
+// observe records one reading of the ring-buffer drop counter, stamped with
+// a boot-clock time read after the counter was, and returns the stamp of the
+// earliest observation that returned the same total.
 func (w *restartDropWatch) observe(total, seenAt uint64) uint64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if total != w.total {
-		w.total = total
-		w.firstSeenAt = seenAt
-	}
-	return w.firstSeenAt
+	return w.drops.observe(total, seenAt)
 }
 
-// lostSince reports whether a record may have been dropped at or after since
-// (see the rule above). It reads the counter itself, and the clock after it.
-// upTo is the time of the record that asks, the latest of the records the
-// answer is about; only a source that can answer for the past looks at it
-// (readDropTotal). An unreadable or missing counter counts as a loss:
-// without it nothing vouches for the stream. (The restart_syscall fold of a
-// run that has no counter at all does not ask, restartProofLost.)
+// observeSkipped is observe for a reading of the skipped program runs.
+func (w *restartDropWatch) observeSkipped(total, seenAt uint64) uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.skipped.observe(total, seenAt)
+}
+
+// lostSince reports whether a record may have been lost at or after since,
+// on either kind of evidence (evidenceSince). It is the question of a fold,
+// which is refused on both.
 func (w *restartDropWatch) lostSince(since, upTo uint64, src ringbufDropSource, clock func() uint64) bool {
-	if src == nil {
-		return true
-	}
-	total, err := readDropTotal(src, upTo)
-	if err != nil {
-		return true
-	}
-	return w.observe(total, clock()) >= since
+	return w.evidenceSince(since, upTo, src, clock) != noLossEvidence
 }
 
-// readDropTotal reads the drop source for a question about the records up to
-// the boot-clock time upTo: a source that can answer for the past is asked
-// for that time (datedDropSource), any other for its total now.
-func readDropTotal(src ringbufDropSource, upTo uint64) (uint64, error) {
-	if dated, ok := src.(datedDropSource); ok {
-		return dated.TotalAsOf(upTo)
+// evidenceSince says what evidence there is that a record was lost at or
+// after since (see the rule above). It reads the counters itself, and the
+// clock after them. upTo is the time of the record that asks, the latest of
+// the records the answer is about; only the skipped runs are asked as of it.
+// An unreadable or missing ring-buffer counter counts as a counted loss, as
+// it always did: without it nothing vouches for the stream. (The
+// restart_syscall fold of a run that has no counter at all does not ask,
+// restartProofLost.) Skipped runs that cannot be read count as a possible
+// skip: the stream is vouched for as far as the ring buffer goes.
+func (w *restartDropWatch) evidenceSince(since, upTo uint64, src ringbufDropSource, clock func() uint64) lossEvidence {
+	if src == nil {
+		return countedRecordLoss
 	}
-	return src.Total()
+	drops, err := src.Total()
+	if err != nil {
+		return countedRecordLoss
+	}
+	skipped, skippedKnown := readSkippedRuns(src, upTo)
+	seenAt := clock()
+	// Both readings are told to the watch whatever the answer: each total
+	// gets its stamp from the first observation that returned it.
+	dropsSeenAt := w.observe(drops, seenAt)
+	skippedSeenAt := uint64(math.MaxUint64)
+	if skippedKnown {
+		skippedSeenAt = w.observeSkipped(skipped, seenAt)
+	}
+	switch {
+	case dropsSeenAt >= since:
+		return countedRecordLoss
+	case skippedSeenAt >= since:
+		return maybeSkippedRecord
+	}
+	return noLossEvidence
+}
+
+// readSkippedRuns reads the skipped program runs for a question about the
+// records up to the boot-clock time upTo. A source that counts none answers
+// 0, which is what the watch holds for it from the start; known is false
+// only when a source that counts them could not be read.
+func readSkippedRuns(src ringbufDropSource, upTo uint64) (skipped uint64, known bool) {
+	counted, ok := src.(skippedRunSource)
+	if !ok {
+		return 0, true
+	}
+	skipped, err := counted.SkippedRunsAsOf(upTo)
+	return skipped, err == nil
 }
 
 // restartPhase is where a held row stands on its way to a fold.
@@ -1840,8 +1930,10 @@ func reportsTaskGone(ev runtimeDecodedEvent) bool {
 // rows, the interrupted one and the continuation: at the exit, the release
 // parks the enter taken for the fold again and the exit pairs with it. Each
 // question is one read of the drop counter, paid only by interrupted calls,
-// and names the record that asks (ev, restartProofUpTo), which spares a lagging
-// loop the sweep over the programs' skipped runs (restartDropWatch).
+// and names the record that asks (ev, restartProofUpTo), which spares a
+// lagging loop the sweep over the attached programs' skipped runs
+// (restartDropWatch). Skipped runs refuse the fold like drops, although they
+// only say that a record may be missing: the refusal is the safe side.
 //
 // Without a drop counter the restart_syscall fold is not asked and folds on
 // RESUME alone; the stranger it can then fold is the residual described under

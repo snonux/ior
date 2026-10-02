@@ -13,15 +13,37 @@ import (
 // increase since the previous observation, and warning is set instead of the
 // counters when the counter could not be read.
 //
-// skipped and skippedDelta are the share of total and of delta that is
-// program runs the kernel skipped, not records the ring buffer refused. Both
-// are 0 with a source that does not tell the two apart (recordLossReader).
+// The skipped fields are the same observation of the other counter, the
+// program runs the kernel skipped (skippedRunSource): skippedCounted says
+// that the source has such a counter and that it was read, skipped and
+// skippedDelta are its total and increase, and skippedWarning is set instead
+// when it could not be read. The two counters are read apart and reported
+// apart: a result may carry a ring-buffer total next to a skippedWarning, or
+// the reverse. All of them are zero with a source that counts no skipped
+// runs.
 type ringbufDropResult struct {
-	total        uint64
-	delta        uint64
-	skipped      uint64
-	skippedDelta uint64
-	warning      string
+	total   uint64
+	delta   uint64
+	warning string
+
+	skippedCounted bool
+	skipped        uint64
+	skippedDelta   uint64
+	skippedWarning string
+}
+
+// lost reports whether the observation gives a reason to think records are
+// missing since the previous one: a counter that grew, or one that could not
+// be read. A skipped run counts although it only says that a record MAY be
+// missing (skippedRunCounter): what is marked or refreshed on the strength
+// of it errs towards saying less or reading more.
+func (r ringbufDropResult) lost() bool {
+	return r.grew() || r.warning != "" || r.skippedWarning != ""
+}
+
+// grew reports whether either counter moved since the previous observation.
+func (r ringbufDropResult) grew() bool {
+	return r.delta > 0 || r.skippedDelta > 0
 }
 
 // ringbufDropMonitor polls the kernel-side ring-buffer drop counter and turns
@@ -29,9 +51,9 @@ type ringbufDropResult struct {
 // reserve ring-buffer space, which is how userspace backpressure manifests:
 // the libbpfgo ring-buffer callback blocks on a full Go channel, event_map
 // fills up, and bpf_ringbuf_reserve() starts returning NULL. With a source
-// that counts them (recordLossSource) the delta also holds the program runs
-// the kernel skipped, which lose a record without any backpressure; the
-// result says how many of each (skippedDelta).
+// that counts them (skippedRunSource) it polls the program runs the kernel
+// skipped as well, which may lose a record without any backpressure, and
+// reports them beside the drops (ringbufDropResult).
 //
 // Besides the poll loop, Flush reads the counter on demand: the TUI flushes it
 // together with the aggregate drain at the edges of a Parquet recording, so
@@ -45,7 +67,7 @@ type ringbufDropMonitor struct {
 	mu     sync.Mutex
 	source ringbufDropSource
 	last   uint64
-	// lastSkipped is the skipped share of last (ringbufDropResult.skipped).
+	// lastSkipped is last for the skipped program runs.
 	lastSkipped uint64
 	// handle is the sink Start wired; nil before Start and once retired.
 	handle func(ringbufDropResult)
@@ -60,38 +82,45 @@ func newRingbufDropMonitor(source ringbufDropSource) *ringbufDropMonitor {
 	return &ringbufDropMonitor{source: source}
 }
 
-// Tick reads the counter once and reports the delta since the previous Tick.
-// Once Start ran it is called only under mu (pollCycle, Flush); tests call it
-// directly on a monitor that was never started.
+// Tick reads the counters once and reports the deltas since the previous
+// Tick. Once Start ran it is called only under mu (pollCycle, Flush); tests
+// call it directly on a monitor that was never started.
 func (m *ringbufDropMonitor) Tick() ringbufDropResult {
 	if m == nil || m.source == nil {
 		return ringbufDropResult{}
 	}
-	loss, err := readRecordLoss(m.source)
+	var result ringbufDropResult
+	total, err := m.source.Total()
 	if err != nil {
-		return ringbufDropResult{warning: fmt.Sprintf("ring buffer drop counter read failed: %v", err)}
+		result.warning = fmt.Sprintf("ring buffer drop counter read failed: %v", err)
+	} else {
+		// The per-CPU counters are monotonic, but guard against a reset (or
+		// a short read) so a wrapped-looking value never produces a bogus
+		// delta.
+		result.total, result.delta = total, growth(m.last, total)
+		m.last = total
 	}
-	// The per-CPU counters are monotonic, but guard against a reset (or a
-	// short read) so a wrapped-looking value never produces a bogus delta.
-	total := loss.total()
-	result := ringbufDropResult{
-		total:        total,
-		delta:        growth(m.last, total),
-		skipped:      loss.skipped,
-		skippedDelta: growth(m.lastSkipped, loss.skipped),
-	}
-	m.last, m.lastSkipped = total, loss.skipped
+	m.tickSkippedRuns(&result)
 	return result
 }
 
-// readRecordLoss reads source once: both kinds of loss from a source that
-// tells them apart, and the plain total as ring-buffer drops from any other.
-func readRecordLoss(source ringbufDropSource) (recordLoss, error) {
-	if reader, ok := source.(recordLossReader); ok {
-		return reader.Loss()
+// tickSkippedRuns adds the reading of the skipped program runs to result,
+// for a source that counts them. It is a read of its own: whether the ring
+// counter could be read decides nothing here, and a failure here leaves the
+// ring-buffer fields as they are.
+func (m *ringbufDropMonitor) tickSkippedRuns(result *ringbufDropResult) {
+	source, ok := m.source.(skippedRunSource)
+	if !ok {
+		return
 	}
-	total, err := source.Total()
-	return recordLoss{ring: total}, err
+	skipped, err := source.SkippedRuns()
+	if err != nil {
+		result.skippedWarning = fmt.Sprintf("skipped probe run counter read failed: %v", err)
+		return
+	}
+	result.skippedCounted = true
+	result.skipped, result.skippedDelta = skipped, growth(m.lastSkipped, skipped)
+	m.lastSkipped = skipped
 }
 
 // growth returns how far a cumulative counter moved up from last to now, and
@@ -149,24 +178,32 @@ func (m *ringbufDropMonitor) flushLocked() {
 	}
 }
 
-// formatRingbufDropWarning renders the user-facing message for a burst of
-// lost records. It names the cause and both the burst and run totals so a
-// single stream/TUI warning row is self-contained: a full ring buffer for
-// the records it refused, the kernel for the program runs it skipped (which
-// a larger -mapSize does nothing about), and both when a poll saw both.
+// formatRingbufDropWarning renders the user-facing message for what a poll
+// found lost, "" when neither counter grew. It names the cause and both the
+// burst and run totals so a single stream/TUI warning row is self-contained:
+// a full ring buffer for the records it refused, the kernel for the program
+// runs it skipped (which a larger -mapSize does nothing about), and both
+// when a poll saw both.
+//
+// The two parts claim different things. A ring-buffer drop is a record ior
+// wanted and lost. A skipped run is counted before ior's filter and for
+// every task on the host, so the text says that events MAY be missing and
+// that the count is not the traced tasks' alone (skippedRunsMeaning) - with
+// a -pid filter and a busy real-time task elsewhere on the CPU, all of it
+// can be other tasks' runs.
 func formatRingbufDropWarning(result ringbufDropResult) string {
 	var parts []string
-	if ringDelta := result.delta - min(result.skippedDelta, result.delta); ringDelta > 0 {
+	if result.delta > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"Ring buffer full: %d events dropped kernel-side (%d total this run) - consider a larger -mapSize",
-			ringDelta, result.total-min(result.skipped, result.total),
+			result.delta, result.total,
 		))
 	}
 	if result.skippedDelta > 0 {
 		parts = append(parts, fmt.Sprintf(
-			"Kernel skipped %d probe runs (%d total this run): their events are missing - "+
+			"Kernel skipped %d probe runs (%d total this run): %s - "+
 				"a task was preempted inside a BPF program or map operation",
-			result.skippedDelta, result.skipped,
+			result.skippedDelta, result.skipped, skippedRunsMeaning,
 		))
 	}
 	return strings.Join(parts, "; ")

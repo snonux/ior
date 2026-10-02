@@ -67,7 +67,9 @@ type Summary struct {
 	// kernel dropped events (the ring buffer was full) or because records
 	// still buffered at stop were discarded undecoded. Such a row is one the
 	// kernel did not count in the aggregate either and that never reached the
-	// output. The true totals are at least the ones stored. Meaningful only when
+	// output. It is also true when the kernel skipped probe runs, which may
+	// have been a traced task's and are in neither count then. The true
+	// totals are at least the ones stored. Meaningful only when
 	// Unavailable is empty.
 	LowerBound bool
 	// Unavailable is empty when Traced and Counted are the run's exact

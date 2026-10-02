@@ -51,7 +51,7 @@ A host whose administrator tightened the rule beyond the example does need an ed
   is escaped in a sudoers argument list):
 
   ```
-  %developers ALL=(root) NOPASSWD:SETENV: /home/paul/git/ior/integrationtests.test -test.run ^(TestModuleCloseSurvivesAFailedDestroyOfIorsLinks|TestModuleCloseAfterACleanDestroyOfIorsLinks|TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy)$ -test.timeout\=5m -test.count\=1 -test.v
+  %developers ALL=(root) NOPASSWD:SETENV: /home/paul/git/ior/integrationtests.test -test.run ^(TestModuleCloseSurvivesAFailedDestroyOfIorsLinks|TestModuleCloseAfterACleanDestroyOfIorsLinks|TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy|TestSkippedRunsAreReadFromReallyAttachedPrograms)$ -test.timeout\=5m -test.count\=1 -test.v
   ```
 
   `visudo -c` accepts that line (sudo 1.9.17); it was not installed and matched against a

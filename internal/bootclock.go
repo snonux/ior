@@ -22,9 +22,10 @@ import (
 // close row's procfs rule (fdTracker.cacheReadBefore), the restart fold's
 // drop watch (restartDropWatch) and its probe-change stamp (noteProbeChange),
 // the exec adoption's gate, which reads the same drop watch
-// (eventLoop.lostExecRecord), and the file identity's rules on procfs answers
-// (fdTracker.identReadAt, task 603). All of them read the clock through
-// bootClockNs.
+// (eventLoop.lostExecRecord), the file identity's rules on procfs answers
+// (fdTracker.identReadAt, task 603) and the date of a sweep of the skipped
+// program runs (skippedRunCounter.TotalAsOf, task 723). All of them read the
+// clock through bootClockNs.
 //
 // Inside a time namespace (unshare -T --boottime N) the two clocks differ:
 // clock_gettime(CLOCK_BOOTTIME) returns the host's value plus the namespace's
@@ -37,7 +38,10 @@ import (
 // a negative one put it in their past (a close row took the name of the file
 // that reused its number; a comm recheck that was needed was skipped; a
 // restart fold that lost records or a probe change should have refused was
-// made - restartDropWatch, noteProbeChange).
+// made - restartDropWatch, noteProbeChange). The sweep's date is read the
+// other way round, as "the sweep began after this record": there a positive
+// offset is the one that errs towards trusting, and a sweep begun up to the
+// offset before a record answers for it (skippedRunCounter.TotalAsOf).
 //
 // So bootClockNs subtracts the offset, read once from /proc/self/
 // timens_offsets. Reading it once is sound: the kernel refuses to change the
@@ -145,7 +149,11 @@ func (d bootClockDomain) report(warn func(...any)) {
 //     close and never re-read. fdTracker.identReadAt therefore treats the
 //     value as no read time, which drops the answer with a close and reads
 //     procfs again. It does the same with every read time while the offset
-//     is unknown (the warning below), which may put them all in the future.
+//     is unknown (the warning below), which may put them all in the future;
+//   - skipped-run sweep (task 723): the accepting side - a sweep dated with
+//     it would have begun after every record and answer for all of them. The
+//     caller must not let it: skippedRunCounter never reuses a sweep with
+//     that date (TestSkippedRunCounterNeverReusesASweepWithoutATime).
 //
 // With an offset that was read from a namespace ior really runs in (matching
 // ns links) the subtraction cannot produce such a value: the reading is the

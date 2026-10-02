@@ -127,7 +127,9 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 //
 // Three cases keep the read even then:
 //
-//   - The drop counter's latest read failed (ringbufDropReadFailed). A lost
+//   - The latest read of the drop counter failed (ringbufDropReadFailed), or
+//     of the skipped program runs where they are counted
+//     (skippedRunReadFailed). A lost
 //     rename could not show up as a drop while the counter stays unreadable, so
 //     nothing would sweep the seed. A one-off failure costs only the reads of
 //     the seeds consumed meanwhile: the counter is cumulative, so the next
@@ -153,8 +155,10 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 //   - A rename record lost because the kernel skipped the task_rename
 //     program (a raw tracepoint: skipped only while the same program is in
 //     flight on that CPU) on a kernel whose drop source does not count
-//     skipped runs. Where it does (recordLossSource, task 723), the skip is
-//     a drop like any other and is swept.
+//     skipped runs. Where it does (recordLossSource, task 723), a skipped
+//     run of any attached program for any task is taken for a possibly lost
+//     rename and swept like a drop (handleRingbufDropResult): the sweep
+//     that was not needed costs /proc reads only.
 //   - Two microsecond-wide windows inside copy_process: a third thread writing
 //     /proc/<tid>/comm of the child between attach_pid and trace_task_newtask
 //     emits its rename record before the newtask record, whose seed then
@@ -163,7 +167,7 @@ func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 //     a name the child never had. Before task xr2 the corrective read healed
 //     both.
 func (e *eventLoop) provisionalSeedNeedsRecheck(seedTime uint64) bool {
-	if !e.renameRecordsTrusted || e.ringbufDropReadFailed.Load() {
+	if !e.renameRecordsTrusted || e.ringbufDropReadFailed.Load() || e.skippedRunReadFailed.Load() {
 		return true
 	}
 	// Record time vs a user-space boot-clock reading. bootClockNs takes a

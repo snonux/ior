@@ -125,10 +125,10 @@ func (e *eventLoop) noteExecRecord(ev *types.ProcessExecEvent) {
 // count as complete only when ring-buffer drops are counted too (dropSrc):
 // then an exec that left no record is a counted drop or did not happen, which
 // is what lets a successful exec exit without an enter be told from a call a
-// seccomp filter answered (lostExecRecord). "Counted drop" includes the run
-// of the exec program the kernel skipped where the kernel counts it; where
-// it does not, that exec has no record and no count (lostExecRecord names
-// the cost). The probe is attached before any
+// seccomp filter answered (lostExecRecord). A run of the exec program the
+// kernel skipped is no counted drop, though it loses the record as well;
+// lostExecRecord says what the gate makes of it where the kernel counts such
+// runs, and what it costs where it does not. The probe is attached before any
 // syscall probe (attachTraceProbes), so no exec whose enter the trace saw can
 // have passed the tracepoint unseen. False in a loop nobody told and whenever
 // either is missing; adoptLostExecCaller then adopts unchecked, as it did
@@ -144,20 +144,35 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 //
 // The exec record of a real exec by that thread was reserved after the enter
 // and before the exit. While exec records are trusted (trustExecRecords) it
-// is therefore missing only if a record was dropped since the enter, and the
-// drop watch is asked as a fold asks it (restartDropWatch.lostSince), but
+// is therefore missing only if a record was lost since the enter, and the
+// drop watch is asked as a fold asks it (restartDropWatch.evidenceSince), but
 // from the candidate's enter on, not from an interrupted exit, and up to the
 // exit that asks (exited), which every record in question precedes. That is
 // one read of the drop counter per exit, paid only by a successful exec exit
 // without an enter that found a candidate: lostExecCaller asks about one
-// candidate and never about a second. "No drop since" is a proof: the thread
-// has not exec'd, the exit is not its execve's, nothing is adopted and
-// nothing is proven. "Maybe dropped" is weaker - a drop first observed after
-// the enter, a first read of a moved counter, a counter that cannot be read -
-// but it is the only evidence there is, and it adopts and proves.
+// candidate and never about a second. The answer has three values:
 //
-// What the gate cannot see. The drop counter counts the records the ring
-// buffer refused, and an exec record can go missing in other ways:
+//   - no evidence of a loss is a proof: the thread has not exec'd, the exit
+//     is not its execve's, nothing is adopted and nothing is proven.
+//   - a counted loss (a ring-buffer drop first observed after the enter, a
+//     first read of a moved drop counter, a drop counter that cannot be
+//     read) is weaker than that, but it is a record ior wanted and did not
+//     get, and the only evidence there is: it adopts and proves.
+//   - a skipped program run (task 723) adopts and proves NOTHING. The kernel
+//     counts a skipped run for every task on the host, whatever ior's
+//     filter, so on a host where a real-time task keeps preempting BPF
+//     programs the count moves all the time without one record of the trace
+//     missing. Adopting on it is right: the alternative is an exec without
+//     a row whenever its record really was skipped. Taking the pair for
+//     proof of an exec is not: the proof releases the held rows of the
+//     process's other threads (restartTracker.noteExec), and an unrelated
+//     task's skip would do that to live threads. A wrong adoption on a
+//     skipped run costs the one wrong execve row an unchecked adoption
+//     always cost.
+//
+// What the gate cannot see. The two counters count the records the ring
+// buffer refused and the program runs the kernel skipped, and an exec record
+// can go missing in other ways:
 //
 //   - it reached userspace and was discarded there, before it moved the
 //     caller's enter: a record that does not decode, or a panic in
@@ -166,17 +181,14 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 //     (warnUnknownBootClock) and puts the watch's stamps in the records'
 //     past, so that a drop first observed after the enter passes for one
 //     seen before it (restartDropWatch);
-//   - the kernel skipped the tracepoint program, which loses the record
-//     without a ring-buffer drop, on a kernel that does not count the skip
-//     for this kind of program (before Linux 6.7). It happens to this probe:
-//     sched_process_exec is a classic tracepoint, skipped while a task
-//     preempted in the middle of a bpf(2) map operation has left
-//     bpf_prog_active raised on the CPU (skippedRunCounter, task 723). Where
-//     the kernel counts it the drop source does too, and the skip is a drop
-//     like any other here.
+//   - the kernel skipped the tracepoint program on a kernel that does not
+//     count the skip for this kind of program (before Linux 6.7). It happens
+//     to this probe: sched_process_exec is a classic tracepoint, skipped
+//     while a task preempted in the middle of a bpf(2) map operation has
+//     left bpf_prog_active raised on the CPU (skippedRunCounter).
 //
 // Each of the three makes the gate refuse, never adopt wrongly: the exit
-// finds "no drop since" and stays unpaired, and the exec has no row - a
+// finds no evidence and stays unpaired, and the exec has no row - a
 // missing execve row, what a lost exec record cost before there was an
 // adoption (task r13 for a re-executed execve) - while the caller's enter
 // stays parked, or kept with its held row.
@@ -195,8 +207,8 @@ func (e *eventLoop) lostExecRecord(entered, exited uint64) (adopt, proven bool) 
 	if !e.execRecordsTrusted {
 		return true, false
 	}
-	lost := e.restarts.drops.lostSince(entered, exited, e.dropSrc, e.readDropStampClock)
-	return lost, lost
+	evidence := e.restarts.drops.evidenceSince(entered, exited, e.dropSrc, e.readDropStampClock)
+	return evidence != noLossEvidence, evidence == countedRecordLoss
 }
 
 // applyExecTidChange moves a non-leader exec's per-tid state from the caller's
