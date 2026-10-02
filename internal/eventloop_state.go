@@ -113,9 +113,17 @@ type pidFdKeys struct {
 // no way to recognise the descriptor a handle of that name opens (see
 // comparableHandleName), so a descriptor that contradicts the name proves
 // nothing about which handle was opened.
+//
+// tmpfileDir keeps the reason for the one opaque name whose reason has to be
+// passed on: the name is the directory a tracked O_TMPFILE descriptor is named
+// after (takenFromTrackedTmpfile). A descriptor such a stash names is then
+// named after that directory too and must carry the mark that says so
+// (openedHandleFile). No other reason is kept: a relative path and a traced
+// name are opaque by their form, wherever they are copied.
 type handleStash struct {
-	name   string
-	opaque bool
+	name       string
+	opaque     bool
+	tmpfileDir bool
 }
 
 // pendingHandleTracker holds unresolved name_to_handle_at pathnames keyed by
@@ -921,7 +929,14 @@ func (t *pendingHandleTracker) setOpaque(tid uint32, pathname string) {
 	t.store(tid, handleStash{name: pathname, opaque: true})
 }
 
-// store is the one insertion path behind set and setOpaque.
+// setTmpfileDir is setOpaque for the directory a tracked O_TMPFILE descriptor
+// is named after, the opaque name whose origin the stash remembers (see
+// handleStash).
+func (t *pendingHandleTracker) setTmpfileDir(tid uint32, pathname string) {
+	t.store(tid, handleStash{name: pathname, opaque: true, tmpfileDir: true})
+}
+
+// store is the one insertion path behind set, setOpaque and setTmpfileDir.
 func (t *pendingHandleTracker) store(tid uint32, stash handleStash) {
 	if stash.name == "" {
 		t.delete(tid)
@@ -935,9 +950,9 @@ func (t *pendingHandleTracker) store(tid uint32, stash handleStash) {
 }
 
 // peek returns the stashed pathname without removing it or refreshing its LRU
-// age. Together with isOpaque it is the only read path: the claimer must
-// verify the entry against the opened descriptor first and only then delete it
-// (see openedHandleFile).
+// age. Together with isOpaque and namesTmpfileDir it is the only read path:
+// the claimer must verify the entry against the opened descriptor first and
+// only then delete it (see openedHandleFile).
 func (t *pendingHandleTracker) peek(tid uint32) (string, bool) {
 	stash, ok := t.paths[tid]
 	return stash.name, ok
@@ -947,6 +962,12 @@ func (t *pendingHandleTracker) peek(tid uint32) (string, bool) {
 // descriptor; false without a stash.
 func (t *pendingHandleTracker) isOpaque(tid uint32) bool {
 	return t.paths[tid].opaque
+}
+
+// namesTmpfileDir reports whether the thread's stash is the directory a
+// tracked O_TMPFILE descriptor is named after; false without a stash.
+func (t *pendingHandleTracker) namesTmpfileDir(tid uint32) bool {
+	return t.paths[tid].tmpfileDir
 }
 
 func (t *pendingHandleTracker) delete(tid uint32) {

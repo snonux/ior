@@ -270,6 +270,12 @@ func TestOpenByHandleAtOpaqueStashIsSpentOnTheNextOpen(t *testing.T) {
 // tmpfileOpenFlags are the flags the tests' O_TMPFILE opens are traced with.
 const tmpfileOpenFlags = unix.O_TMPFILE | unix.O_RDWR
 
+// closedHandleFd is a descriptor number the test process has nothing open
+// under: an open_by_handle_at that "returned" it stands for one whose
+// descriptor the task closed before the loop handled the exit, so procfs
+// cannot answer and the stash names the row and the fd table entry.
+const closedHandleFd = 1 << 20
+
 // TestOpenByHandleAtTrackedTmpfileStashIsSpentOnTheNextOpen: handleOpenExit
 // names an O_TMPFILE descriptor after the directory it was created in, so the
 // AT_EMPTY_PATH stash of a tracked one is that directory - an absolute path
@@ -323,10 +329,74 @@ func TestOpenByHandleAtLinkedTrackedTmpfileStashIsStillSpent(t *testing.T) {
 	assertStashSpentOnItsOwnOpen(t, feed, openHandleFd(t, linked), syscall.O_RDONLY, linked)
 }
 
+// TestOpenByHandleAtStashNamedTmpfileRowKeepsTheMark: the descriptor a handle
+// of a tracked O_TMPFILE file opens is named by the stash when procfs cannot
+// answer for it (the task closed it before the loop got to the exit), and the
+// stash is the directory. That entry is as little a name of the file as the
+// source's, so a handle taken through IT - in event order, before its close -
+// is opaque as well. Unmarked, that second stash passed for the directory's
+// comparable path and stayed in the slot after its own open.
+func TestOpenByHandleAtStashNamedTmpfileRowKeepsTheMark(t *testing.T) {
+	dir := tempDir(t)
+	source, opened, link := tmpfileFds(t, dir)
+
+	feed := newHandleFeed(t)
+	feed.open(source, dir, tmpfileOpenFlags)
+	stashFromEmptyPath(t, feed, source, dir)
+	if got := feed.openByHandle(closedHandleFd).File.Name(); got != dir {
+		t.Fatalf("row named %q, want the stashed %q (procfs has no such descriptor)", got, dir)
+	}
+	stashFromEmptyPath(t, feed, closedHandleFd, dir)
+	assertStashSpentOnItsOwnOpen(t, feed, opened, syscall.O_RDWR, link)
+}
+
+// TestOpenByHandleAtOtherOpaqueStashDoesNotMarkTheRow is the negative side:
+// the mark says that a name is an O_TMPFILE open's directory, not that the
+// stash was opaque. A relative path and an fsmount descriptor's traced name
+// are opaque by their form wherever they are copied, and a row they name is
+// not named after a tmpfile directory.
+func TestOpenByHandleAtOtherOpaqueStashDoesNotMarkTheRow(t *testing.T) {
+	stashes := map[string]func(t *testing.T, feed *handleFeed) string{
+		"relative path": func(_ *testing.T, feed *handleFeed) string {
+			feed.nameToHandle("rel.txt")
+			return "rel.txt"
+		},
+		"fsmount descriptor": func(t *testing.T, feed *handleFeed) string {
+			source := openReusingDirFd(t, tempDir(t))
+			name := feed.traceSource(source, types.SYS_ENTER_FSOPEN, "tmpfs")
+			feed.nameToHandleEmptyPath(source)
+			return name
+		},
+	}
+	for name, stash := range stashes {
+		t.Run(name, func(t *testing.T) {
+			feed := newHandleFeed(t)
+			want := stash(t, feed)
+			if !feed.el.pendingHandleState().isOpaque(feed.pid) {
+				t.Fatalf("stash %q is not opaque", want)
+			}
+			if got := feed.openByHandle(closedHandleFd).File.Name(); got != want {
+				t.Fatalf("row named %q, want the stashed %q", got, want)
+			}
+			tracked, _ := feed.el.fdState().get(closedHandleFd, feed.pid)
+			entry, isFd := tracked.(*file.FdFile)
+			if !isFd || entry.Name() != want {
+				t.Fatalf("fd table entry = %v, want one named %q", tracked, want)
+			}
+			if entry.NamedAfterTmpfileDir() {
+				t.Errorf("entry named %q is marked as named after an O_TMPFILE directory", want)
+			}
+		})
+	}
+}
+
 // TestOpenedFdFileMarksOnlyAnOTmpfileOpen: the mark that makes a stash opaque
-// is given by the open's flags, and only by both O_TMPFILE bits. O_DIRECTORY
-// alone is a directory open, whose name IS the descriptor's path, and unknown
-// flags (-1, every bit set) say nothing.
+// is given by the open's flags, and only by both O_TMPFILE bits without
+// O_PATH. O_DIRECTORY alone is a directory open, whose name IS the
+// descriptor's path; so is O_PATH with the O_TMPFILE bits, which open and
+// openat turn into a path descriptor on the directory (the kernel drops every
+// flag O_PATH does not allow); and unknown flags (-1, every bit set) say
+// nothing.
 func TestOpenedFdFileMarksOnlyAnOTmpfileOpen(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -336,6 +406,8 @@ func TestOpenedFdFileMarksOnlyAnOTmpfileOpen(t *testing.T) {
 		{"O_TMPFILE", tmpfileOpenFlags, true},
 		{"O_TMPFILE with O_CLOEXEC", tmpfileOpenFlags | syscall.O_CLOEXEC, true},
 		{"a directory", dirOpenFlags, false},
+		{"O_PATH with the O_TMPFILE bits", unix.O_PATH | tmpfileOpenFlags, false},
+		{"O_PATH on a directory", unix.O_PATH | syscall.O_DIRECTORY, false},
 		{"a plain file", syscall.O_RDWR | syscall.O_CREAT, false},
 		{"unknown flags", -1, false},
 	}
@@ -392,6 +464,14 @@ var comparableStashCases = []comparableStashCase{
 		feed.nameToHandleEmptyPath(dirfd)
 		return dir
 	}},
+	{"AT_EMPTY_PATH on a directory opened with O_PATH and the O_TMPFILE bits", func(t *testing.T, feed *handleFeed, dir, _ string) string {
+		// open/openat keep only the O_PATH flags of such a request, so the
+		// descriptor is the directory and its name is its own path.
+		dirfd := openReusingDirFd(t, dir)
+		feed.open(dirfd, dir, unix.O_PATH|tmpfileOpenFlags)
+		feed.nameToHandleEmptyPath(dirfd)
+		return dir
+	}},
 	{"AT_EMPTY_PATH on an untracked O_TMPFILE descriptor", func(t *testing.T, feed *handleFeed, dir, _ string) string {
 		source, _, link := tmpfileFds(t, dir)
 		feed.nameToHandleEmptyPath(source)
@@ -423,9 +503,10 @@ var comparableStashCases = []comparableStashCase{
 // handle's open and must be kept for its own. The cases are the neighbours of
 // the opaque ones: a relative name under a dirfd tracked by an absolute path
 // (joined to an absolute stash), a tracked directory that is no O_TMPFILE
-// descriptor, an O_TMPFILE descriptor ior did not see opened (stashed as its
-// link text, whether it is in no table or was promoted into the fd table from
-// procfs) and a namespace descriptor (a link text that is not a path).
+// descriptor (opened as a directory, or with O_PATH and the O_TMPFILE bits),
+// an O_TMPFILE descriptor ior did not see opened (stashed as its link text,
+// whether it is in no table or was promoted into the fd table from procfs)
+// and a namespace descriptor (a link text that is not a path).
 func TestOpenByHandleAtComparableStashSurvivesAnotherHandlesOpen(t *testing.T) {
 	dir := tempDir(t)
 	target := writeHandleFile(t, dir, "target")
@@ -519,10 +600,11 @@ func TestComparableHandleName(t *testing.T) {
 	}
 }
 
-// TestPendingHandleTrackerOpacityFollowsTheStash: opacity belongs to the
-// entry, so a later comparable stash of the thread clears it, an empty name
-// drops the entry whichever setter was used, and a thread without a stash is
-// not opaque.
+// TestPendingHandleTrackerOpacityFollowsTheStash: opacity and its tmpfile
+// origin belong to the entry, so a later stash of the thread replaces both (a
+// tmpfile directory stash is opaque; an opaque stash of another kind is not a
+// tmpfile directory), an empty name drops the entry whichever setter was
+// used, and a thread without a stash is neither.
 func TestPendingHandleTrackerOpacityFollowsTheStash(t *testing.T) {
 	var tracker pendingHandleTracker
 	if tracker.isOpaque(1) {
@@ -536,7 +618,15 @@ func TestPendingHandleTrackerOpacityFollowsTheStash(t *testing.T) {
 	if tracker.isOpaque(1) {
 		t.Error("a comparable stash inherited the opacity of the one it replaced")
 	}
+	tracker.setTmpfileDir(1, "/dir")
+	if got, ok := tracker.peek(1); !ok || got != "/dir" || !tracker.isOpaque(1) || !tracker.namesTmpfileDir(1) {
+		t.Fatalf("after setTmpfileDir: peek = %q, %v, opaque = %v, tmpfile dir = %v",
+			got, ok, tracker.isOpaque(1), tracker.namesTmpfileDir(1))
+	}
 	tracker.setOpaque(1, "rel.txt")
+	if !tracker.isOpaque(1) || tracker.namesTmpfileDir(1) {
+		t.Error("an opaque stash inherited the tmpfile origin of the one it replaced")
+	}
 	tracker.setOpaque(1, "")
 	if _, ok := tracker.peek(1); ok || tracker.isOpaque(1) {
 		t.Error("an empty opaque name must drop the entry")

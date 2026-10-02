@@ -1776,12 +1776,22 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     origin of the name decides, not the flags: an `O_TMPFILE` descriptor ior
     did not see opened but promoted into the table from procfs by an `fcntl`
     or `FIOCLEX` has the flag in its fdinfo word and is named by its link
-    `<dir>/#N (deleted)`, a comparable name of the file). An opaque stash
-    never outlives the thread's next
-    `open_by_handle_at`: a confirmed descriptor names the row from procfs, as
-    before, and the stash is now consumed with it; an unconfirmed one leaves
-    the row to the stash, as before. A relative name under a dirfd tracked by
-    an absolute name is not opaque - `resolveDirfdPath` stashes it joined.
+    `<dir>/#N (deleted)`, a comparable name of the file. `O_PATH` with the
+    `O_TMPFILE` bits is not marked either: `open`/`openat` keep only the
+    `O_PATH` flags, so it is a path descriptor on the directory itself, whose
+    name is its own path, while BPF reports the flags as passed; `openat2`
+    rejects the combination. The stash remembers this one origin -
+    `handleStash.tmpfileDir` - because `openedHandleFile` has to pass it on:
+    a descriptor it names by such a stash, procfs having no answer, is named
+    after the directory too and gets the mark, or a handle taken through that
+    descriptor before its close would count as the directory's comparable
+    path and outlive its own open. A relative or traced opaque stash sets no
+    mark; its form keeps it opaque wherever it is copied). An opaque stash
+    never outlives the thread's next `open_by_handle_at`: a confirmed
+    descriptor names the row from procfs, as before, and the stash is now
+    consumed with it; an unconfirmed one leaves the row to the stash, as
+    before. A relative name under a dirfd tracked by an absolute name is not
+    opaque - `resolveDirfdPath` stashes it joined.
     Rejected alternatives: resolving against `/proc/<pid>/cwd` when the open
     is handled (a second lagging procfs read, of a directory the task may
     have left, plus a stat below it on the event loop) and accepting a link
@@ -1801,9 +1811,11 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     context (`/proc/self/...`, `/proc/thread-self/...`, `/dev/fd/N`, any path
     of a chrooted task; such a stash can also match for the wrong reason -
     `/proc/self/ns/net` is compared with ior's own namespace). Only handle
-    bytes in the events close those (task k03). Pinned by `internal/eventloop_handle_deleted_test.go`,
-    `internal/eventloop_handle_traced_test.go` and
-    `internal/eventloop_handle_opaque_test.go`. The `/proc/<pid>/fd/<fd>`
+    bytes in the events close those (task k03). Pinned by
+    `internal/eventloop_handle_deleted_test.go`,
+    `internal/eventloop_handle_traced_test.go`,
+    `internal/eventloop_handle_opaque_test.go` and, for the mark's copies,
+    `internal/file/file_test.go`. The `/proc/<pid>/fd/<fd>`
     probe that check rests on is taken when the loop handles the exit, not
     when the syscall returned, so a task that closed the descriptor and
     opened something else under the same number makes procfs describe the

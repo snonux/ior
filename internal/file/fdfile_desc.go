@@ -96,7 +96,9 @@ func (f *FdFile) Dup(fd int32) *FdFile {
 // it. A pair that is emitted (printed, aggregated, kept for the TUI) must
 // report the descriptor as it was when its syscall returned, which is why the
 // event loop detaches the file of every pair it freezes (and of a pending exec
-// target). Use Dup, not Detach, to model a second descriptor.
+// target). Everything else is copied as it is, the tmpfile-directory mark of
+// the name included, though no caller asks a snapshot for it. Use Dup, not
+// Detach, to model a second descriptor.
 func (f *FdFile) Detach() *FdFile {
 	w := &fdWithDesc{FdFile: *f, own: openFileDesc{status: f.status()}}
 	w.desc = &w.own

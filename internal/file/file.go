@@ -214,14 +214,21 @@ func (f *FdFile) CloseOnExec() (set, known bool) {
 
 // MarkNamedAfterTmpfileDir records that the name is the pathname of an
 // O_TMPFILE open ior saw, which is the directory the unnamed file was created
-// in and not a name of the file itself. Only the open's exit handler sets it:
-// a descriptor named from procfs carries its link text ("<dir>/#<inode>
-// (deleted)"), which is a name of the file, whatever its flags say.
+// in and not a name of the file itself. The event loop sets it where it gives
+// that name: in the open's exit handler, and on a descriptor an
+// open_by_handle_at returned that it names by the stash taken from such an
+// entry. No constructor sets it: a descriptor named from procfs carries its
+// link text ("<dir>/#<inode> (deleted)"), which is a name of the file, whatever
+// its flags say.
 //
-// The mark belongs to the name, so it travels wherever the name is copied:
-// Dup (dup*, F_DUPFD*, fork) and Detach keep it, and nothing clears it,
-// because nothing renames an FdFile - a descriptor that is resolved again gets
-// a new, unmarked one.
+// The mark belongs to the name, so it travels wherever the name is copied. Dup
+// (dup*, F_DUPFD*, fork) keeps it, and the event loop relies on that: a handle
+// taken through a duplicate is as opaque as one taken through the original.
+// Detach keeps it too, only because a snapshot is a copy of the whole FdFile:
+// no caller reads the mark of a snapshot (it is asked of fd table entries, a
+// snapshot is an emitted row's file). Nothing clears it, because nothing
+// renames an FdFile - a descriptor that is resolved again gets a new, unmarked
+// one.
 func (f *FdFile) MarkNamedAfterTmpfileDir() {
 	f.namedAfterTmpfileDir = true
 }

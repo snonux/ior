@@ -150,12 +150,21 @@ func (e *eventLoop) handleOpenExit(ep *event.Pair, openEv *types.OpenEvent) bool
 // two origins apart later - a descriptor promoted from procfs carries
 // O_TMPFILE in its fdinfo flags too, under its link text.
 //
+// O_PATH with the O_TMPFILE bits is no O_TMPFILE open and is not marked. For
+// open and openat the kernel keeps only the flags O_PATH allows, so the call
+// succeeds as an O_PATH|O_DIRECTORY descriptor on the directory itself
+// (observed on Linux 7.2.5: the link is the directory, fdinfo flags
+// 012200000), while BPF reports the flags as the caller passed them. The
+// pathname is then a real name of the descriptor, and a handle taken of it is
+// comparable like that of any directory. openat2 strips nothing and rejects
+// the combination with EINVAL, so no successful open is excluded wrongly.
+//
 // Unknown flags (-1: an openat2 whose open_how BPF could not read) match
 // nothing, so such an O_TMPFILE open stays unmarked; nothing in the event says
 // what it was. An ordinary open pays one flag test and no memory for this.
 func openedFdFile(fd int32, name string, flags int32) *file.FdFile {
 	fdFile := file.NewFd(fd, name, flags)
-	if fdFile.Flags().Is(unix.O_TMPFILE) {
+	if opened := fdFile.Flags(); opened.Is(unix.O_TMPFILE) && !opened.Is(unix.O_PATH) {
 		fdFile.MarkNamedAfterTmpfileDir()
 	}
 	return fdFile
@@ -646,18 +655,9 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	}
 
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		// The stash is only the thread's LAST name_to_handle_at path, so it
-		// is checked against what procfs shows under the returned number.
-		// procfs names the row when there is no stash (or an empty one), and
-		// when it contradicts the stash AND the descriptor it shows can still
-		// be the call's own (confirmedHandleFd: still open, of a kind a
-		// handle can open, with the call's fixed flags - plausible, not
-		// proven). A contradiction from a descriptor that vanished, is a
-		// socket, pipe or other anonymous inode, or has other flags (a reused
-		// number, certainly or most likely) leaves the row to the stash (see
-		// openedHandleFile). A stash ior cannot compare with any descriptor
-		// (a relative path, say) is spent on this call whichever names the
-		// row.
+		// The stash is only the thread's LAST name_to_handle_at path, so
+		// openedHandleFile checks it against what procfs shows under the
+		// returned number and decides which of the two names the row.
 		fdFile := e.openedHandleFile(tid, openByHandleEv.Pid, fd, openByHandleEv.Flags)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
@@ -678,12 +678,11 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 	// /proc/<pid>/fd readlink, or for a failed call the stashed pathname or
 	// an empty one), so filter and displayed value can never disagree, and
 	// unlike the rename kinds there is no raw match to contradict. Applying
-	// -path to a
-	// procfs-resolved name is also not new: every fd-based kind already does
-	// that (handleFdExit -> fdTracker.resolve -> file.NewFdWithPid, then
-	// finishPair). A failed row carries no descriptor (FD() is -1, as for a
-	// failed open's pathname), so -path matches it only through the stash and
-	// -fd never matches it.
+	// -path to a procfs-resolved name is also not new: every fd-based kind
+	// already does that (handleFdExit -> fdTracker.resolve ->
+	// file.NewFdWithPid, then finishPair). A failed row carries no descriptor
+	// (FD() is -1, as for a failed open's pathname), so -path matches it only
+	// through the stash and -fd never matches it.
 	return e.finishPairForTid(ep, tid)
 }
 

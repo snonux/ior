@@ -356,6 +356,16 @@ func compareHandleLinkText(probe handleFdProbe, pathname string) handleVerdict {
 //     rows that followed. It is a guess, and confirmedHandleFd names the case
 //     in which it is wrong.
 //
+// A stash-named row inherits what the stash is. If that is the directory a
+// tracked O_TMPFILE descriptor is named after (takenFromTrackedTmpfile), the
+// new entry is named after that directory too - it is the same unnamed file,
+// under a name that is not the file's - and is marked like the source. Without
+// the mark a handle taken of the NEW descriptor (and stashed, in event order,
+// before the close that made procfs fail here) passed for the directory's own
+// comparable path and outlived its open: the m03 symptom one handle further
+// on. Only this origin is passed on; a relative path or a traced name is
+// opaque by its form, in whichever entry it ends up, and sets no mark.
+//
 // Flags differ by branch on purpose. A stash-named row has no procfs view it
 // trusts, so it carries the flags the event captured at enter (what the
 // caller asked for). A procfs-named row takes the kernel's own view from
@@ -379,20 +389,31 @@ func (e *eventLoop) openedHandleFile(tid, pid uint32, fd int32, eventFlags int32
 			return procFile
 		}
 	}
+	fdFile := file.NewFd(fd, pathname, eventFlags)
+	if handles.namesTmpfileDir(tid) {
+		fdFile.MarkNamedAfterTmpfileDir()
+	}
 	handles.delete(tid)
-	return file.NewFd(fd, pathname, eventFlags)
+	return fdFile
 }
 
 // stashHandleName records name as the stash of the thread that made the
 // successful name_to_handle_at pathEv, marking it opaque when ior will not be
 // able to recognise the descriptor a handle of that name opens.
+//
+// The tmpfile origin is asked first and wins over the form of the name: it is
+// the one reason for opacity the stash has to remember (handleStash), and a
+// tmpfile directory can be a relative path as well (open(".", O_TMPFILE)).
 func (e *eventLoop) stashHandleName(pathEv *types.PathEvent, name string) {
 	handles := e.pendingHandleState()
-	if comparableHandleName(name) && !e.takenFromTrackedTmpfile(pathEv) {
-		handles.set(pathEv.GetTid(), name)
-		return
+	switch tid := pathEv.GetTid(); {
+	case e.takenFromTrackedTmpfile(pathEv):
+		handles.setTmpfileDir(tid, name)
+	case comparableHandleName(name):
+		handles.set(tid, name)
+	default:
+		handles.setOpaque(tid, name)
 	}
-	handles.setOpaque(pathEv.GetTid(), name)
 }
 
 // comparableHandleName reports whether classifyHandlePath can recognise, by
@@ -517,7 +538,8 @@ func namespaceLinkText(name string) bool {
 //
 // The fd table is asked, not procfs, because it is in event order, and it is
 // asked where the NAME came from (the mark openedFdFile sets, which a dup and
-// a fork carry along with the name), not what the flags are. The flags do not
+// a fork carry along with the name, and which openedHandleFile passes on to a
+// descriptor it names by such a stash), not what the flags are. The flags do not
 // say it: a descriptor ior did not see opened can be in the table as well -
 // an fcntl F_GETFL/F_SETFL/F_GETFD/F_SETFD or an ioctl FIOCLEX/FIONCLEX
 // promotes the procfs-resolved file (storeFcntlFdFile, applyIoctlFdState) -
@@ -531,6 +553,10 @@ func namespaceLinkText(name string) bool {
 // An empty captured pathname is what says the name came from the descriptor
 // itself (a non-empty one under an O_TMPFILE dirfd fails with ENOTDIR and is
 // never stashed).
+//
+// Not a tmpfile at all: open/openat with O_PATH and the O_TMPFILE bits yields
+// a path descriptor on the directory, whose name is its own path; openedFdFile
+// leaves it unmarked and its stash comparable.
 //
 // Not found: an O_TMPFILE open whose flags ior never learned (see
 // openedFdFile) is unmarked, so its directory stash is taken for comparable
