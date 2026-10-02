@@ -159,10 +159,11 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // way. The held-row lookup has the residual of the parked one: adopting the
 // wrong thread needs the exec record AND a killed sibling's exit record to be
 // lost, or a leader's own successful execve exit that finds no parked enter
-// (its enter record lost to backpressure, the enter trimmed or displaced from
-// the pending table, or the execve already in flight when the probes
-// attached) while a killed sibling's row is still held for want of its exit
-// record.
+// (its enter record lost to backpressure, the enter trimmed from the pending
+// table, or the execve already in flight when the probes attached) while a
+// killed sibling's row is still held for want of its exit record. A displaced
+// enter is not such a case: the enter that displaced it pairs with the exit
+// (a trace-ID mismatch), and this function is not asked.
 //
 // One stream never gets here at all. Records are routed by their own tid
 // first (routeHeldRestart), so when the dead leader still holds a row with a

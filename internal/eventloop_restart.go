@@ -1101,10 +1101,13 @@ func (e *eventLoop) reparkContinuation(held *heldRestart, ch chan<- *event.Pair)
 	e.syscallEntered(held.continuationKind, enterEv, ch)
 }
 
-// dropContinuation recycles the continuation's enter once the fold that took
-// it is accepted. The field is cleared first, so the enter can never be both
-// recycled here and parked again by a later release of the same row (a fold
-// that ended in a restart code keeps the heldRestart).
+// dropContinuation recycles the continuation's enter: once the fold that took
+// it is accepted, or when the record that releases the row says the task died
+// inside the continuation (routeHeldRestart, reportsTaskGone). The field is
+// cleared first, so the enter can never be both recycled here and parked again
+// by a release of the same row - the later one of a fold that ended in a
+// restart code and keeps the heldRestart, or the one that follows at once for
+// a gone task, whose reparkContinuation then finds nothing to park.
 func (h *heldRestart) dropContinuation() {
 	enterEv := h.continuation
 	if enterEv == nil {
