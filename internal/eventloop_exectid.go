@@ -164,7 +164,7 @@ func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
 //     seen before it (restartDropWatch);
 //   - the kernel skipped the tracepoint program without a ring-buffer drop.
 //     Whether that happens to this probe is not verified; a follow-up task
-//     looks into it.
+//     (723) looks into it.
 //
 // Each of the three makes the gate refuse, never adopt wrongly: the exit
 // finds "no drop since" and stays unpaired, and the exec has no row - a
@@ -271,10 +271,12 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // way. Preferred means asked alone (lostExecCaller): when the parked caller
 // is refused, the held row is not asked in its place. The refusal says that
 // nothing was dropped since the parked caller's enter, and that proves more
-// than "this thread did not exec": an exec by any thread of the process
-// since then would have killed the parked caller, and its exit record - not
-// dropped - would have evicted its enter. So no thread exec'd, and the exit
-// is a filter's answer. Falling through adopted the held thread's enter
+// than "this thread did not exec": the parked caller was alive at its
+// enter, so an exec by any thread of the process that this exit could
+// complete passed de_thread, and reserved its exec record, after that
+// enter. Not dropped, that record would have moved the exec'ing thread's
+// enter under the leader tid, and the exit would have found it. So no
+// thread exec'd, and the exit is a filter's answer. Falling through adopted the held thread's enter
 // whenever that enter predated a drop the watch had first seen before the
 // parked caller's: a wrong execve row, its -513 row, and - the pair
 // counting as a proof - the held rows of the process's live threads
@@ -358,8 +360,9 @@ func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pai
 //     (lostExecRecord, which also says whether the pair will prove the
 //     exec). When it is refused there is no caller at all, and a thread
 //     whose re-executed exec is kept with a held row is not asked: the
-//     parked caller is alive, so no thread of the process has exec'd since
-//     its enter (adoptLostExecCaller). The refused caller keeps its hint in
+//     parked caller entered alive, so the exec record of any exec since
+//     was reserved after its enter and was not dropped
+//     (adoptLostExecCaller). The refused caller keeps its hint in
 //     the index, which the lookup took out: its execve is still in flight,
 //     and the exit that completes it may need the hint.
 //   - only when no caller is parked: the thread whose re-executed exec is
