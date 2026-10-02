@@ -42,7 +42,9 @@ type FamilyState struct {
 }
 
 // Err joins the per-syscall errors into one error ("<syscall>: <err>" each),
-// or returns nil when every probe of the batch changed state.
+// or returns nil when every probe of the batch changed without an error. A
+// detach whose Destroy reported an error is listed here although the probe
+// is detached (a Destroy is final, see Link).
 func (r BatchResult) Err() error {
 	errs := make([]error, 0, len(r.Errors))
 	for _, e := range r.Errors {

@@ -89,10 +89,12 @@ type probeEntry struct {
 	exitLink  Link
 	attachMu  sync.Mutex
 
-	// active says that the probe is attached: it holds a link. The one
-	// moment the two differ is inside a Detach, which has taken the links
-	// and commits "inactive" only after it destroyed them and reported the
-	// change (commitDetach).
+	// active says that the probe is attached: it holds a link. The two
+	// differ inside a Detach, which has taken the links and commits
+	// "inactive" only after it destroyed them and reported the change
+	// (commitDetach) - and after a Detach whose change hook panicked before
+	// that commit: the entry stays active with no links until the next
+	// Detach, which finds nothing to destroy and commits.
 	active  bool
 	lastErr error
 }
