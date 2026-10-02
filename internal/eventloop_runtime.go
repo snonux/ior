@@ -574,7 +574,11 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 // enterOfExit takes the pending enter exitEv completes: the one parked under
 // its tid or, for a non-leader execve whose exec record was lost, the one
 // parked under the caller's (adoptLostExecCaller, which may send that
-// caller's interrupted row on ch first).
+// caller's interrupted row on ch first). proven reports whether the pairing
+// may stand as a proof of an exec, should exitEv be a successful exec exit
+// (tracepointExited): always for an enter of the exit's own tid, and for an
+// adopted one only when the adoption had evidence of the lost exec record
+// (lostExecRecord).
 //
 // An exit with no enter is dropped by the caller without a row and without a
 // count (it is neither a mismatch nor a syscall ior saw start). Besides a
@@ -585,15 +589,15 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 // arguments from (task qr2; such calls are invisible in the trace, but they
 // no longer consume a parked enter and inflate the mismatch count now that
 // noreturn enters are not parked, task pr2).
-func (e *eventLoop) enterOfExit(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
-	if ep, ok := e.pairs.consume(exitEv.GetTid()); ok {
-		return ep, true
+func (e *eventLoop) enterOfExit(exitEv event.Event, ch chan<- *event.Pair) (ep *event.Pair, proven, ok bool) {
+	if ep, ok = e.pairs.consume(exitEv.GetTid()); ok {
+		return ep, true, true
 	}
 	return e.adoptLostExecCaller(exitEv, ch)
 }
 
 func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
-	ep, ok := e.enterOfExit(exitEv, ch)
+	ep, provenPairing, ok := e.enterOfExit(exitEv, ch)
 	if !ok {
 		exitEv.Recycle()
 		return
@@ -614,9 +618,14 @@ func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) 
 		return
 	}
 	// A successful exec that found its enter proves the process's other
-	// threads gone; the rows they still hold are released behind this record
-	// (task v13). One length check unless a row is held.
-	e.restarts.noteExecExit(exitEv)
+	// threads gone; the rows they still hold are released behind this
+	// record (task v13). Only here, behind the check above: an exec exit
+	// that took another syscall's enter proves nothing. Nor does an enter
+	// adopted from another thread without evidence that the exec record
+	// was lost (lostExecRecord). One length check unless a row is held.
+	if provenPairing {
+		e.restarts.noteExecExit(exitEv)
+	}
 	// A call interrupted with a restart code may still be carried on by the
 	// kernel (a proven restart_syscall for -516, a proven re-execution for
 	// -512/-513/-514): it is held, not completed, until its tid's next

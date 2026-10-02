@@ -228,8 +228,16 @@ type eventLoop struct {
 	// corrective /proc read (provisionalSeedNeedsRecheck). False in tests and
 	// whenever either is missing, which keeps the read.
 	renameRecordsTrusted bool
-	startTime            time.Time
-	done                 chan struct{}
+	// execRecordsTrusted is set by trace setup (trustExecRecords) before
+	// the loop starts: the sched_process_exec probe attached and drops are
+	// counted, so an exec that left no exec record is a counted drop. It is
+	// what a successful exec exit without an enter is judged by
+	// (lostExecRecord). False in a loop nobody told and whenever either is
+	// missing, and cleared by an exec record that names no caller
+	// (noteExecRecord); the exit then adopts a caller's enter unchecked.
+	execRecordsTrusted bool
+	startTime          time.Time
+	done               chan struct{}
 }
 
 // Filter returns a snapshot of the currently active global filter. Each call

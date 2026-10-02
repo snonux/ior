@@ -1065,6 +1065,12 @@ type traceInfra struct {
 	// pending (eventLoop.foldProvenRestarts).
 	exitProbeAttached bool
 
+	// execProbeAttached records that the sched_process_exec probe attached
+	// during setup (execAttachRecorder); runTraceSetup hands it to the
+	// event loop (eventLoop.trustExecRecords), which judges a successful
+	// exec exit without an enter by whether an exec record can be missing.
+	execProbeAttached bool
+
 	cleanups []func()
 }
 
@@ -1239,6 +1245,7 @@ func runTraceSetup(
 	}
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
+	el.trustExecRecords(infra.execProbeAttached)
 	signalTraceStarted(started)
 	return infra, nil
 }
@@ -1279,6 +1286,7 @@ func setupTraceInfraBPF(
 	infra.renameProbeAttached = handAttach.rename.attached
 	infra.signalProbeAttached = handAttach.signal.attached
 	infra.exitProbeAttached = handAttach.exit.attached
+	infra.execProbeAttached = handAttach.exec.attached
 	// The BPF side is released as one unit in closeTraceInfra's canonical
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
@@ -1296,6 +1304,7 @@ type handProbeAttachRecorder struct {
 	rename renameAttachRecorder
 	signal signalAttachRecorder
 	exit   exitAttachRecorder
+	exec   execAttachRecorder
 }
 
 // note records one probe that attached (called by attachHandProbe).
@@ -1303,6 +1312,7 @@ func (r *handProbeAttachRecorder) note(probeName string) {
 	r.rename.note(probeName)
 	r.signal.note(probeName)
 	r.exit.note(probeName)
+	r.exec.note(probeName)
 }
 
 // renameAttachRecorder remembers whether the task_rename probe was among the
@@ -1357,6 +1367,26 @@ type exitAttachRecorder struct {
 // note records one probe that attached.
 func (r *exitAttachRecorder) note(probeName string) {
 	if probeName == processExitProbeName {
+		r.attached = true
+	}
+}
+
+// execAttachRecorder remembers whether the sched_process_exec probe was among
+// the probes that attached. Only then does every exec of a traced task leave
+// an exec record or a counted drop, which is what lets the event loop refuse
+// to pair a successful exec exit that has no enter with another thread's
+// exec enter when nothing was dropped (eventLoop.trustExecRecords, task
+// v13). A sink that turned it on for any other probe would refuse every such
+// exit in a run without exec records, where that pairing is the only way a
+// non-leader thread's exec gets its row. Pinned by
+// TestExecAttachRecorderNotesOnlyTheExecProbe.
+type execAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *execAttachRecorder) note(probeName string) {
+	if probeName == processExecProbeName {
 		r.attached = true
 	}
 }

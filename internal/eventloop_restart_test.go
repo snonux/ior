@@ -254,6 +254,7 @@ func (f *restartFixture) requireNothingHeld() {
 	if n := len(f.el.restarts.held); n != 0 {
 		f.t.Fatalf("%d rows still held, want none", n)
 	}
+	requireHeldCounted(f.t, &f.el.restarts)
 }
 
 // TestRestartSyscallFoldsIntoTheInterruptedCall is the positive case: a

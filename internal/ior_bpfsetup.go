@@ -91,8 +91,10 @@ type bpfSetupLog struct {
 	// /proc read (eventLoop.trustRenameRecords, task xr2), and whether the
 	// signal_deliver and sched_process_exit probes attached, which decides
 	// whether kernel-restarted syscalls are folded
-	// (eventLoop.foldProvenRestarts, tasks 103 and t13). nil means nobody
-	// listens.
+	// (eventLoop.foldProvenRestarts, tasks 103 and t13), and whether the
+	// sched_process_exec probe attached, which decides whether a missing
+	// exec record means a counted drop (eventLoop.trustExecRecords, task
+	// v13). nil means nobody listens.
 	attached func(probeName string)
 }
 
@@ -416,6 +418,10 @@ func attachSyscallProbes(attacher probemanager.Attacher, shouldAttach func(strin
 // post-exec task comm.
 const processExecProgName = "handle_sched_process_exec"
 
+// processExecProbeName is the probe name attachProcessExecProbe reports, in
+// warnings and through bpfSetupLog.attached.
+const processExecProbeName = "sched_process_exec"
+
 // processExitProgName is the BPF program in internal/c/exec.c that reports an
 // exiting task's tgid, so the fdTracker can evict its per-(pid, fd) entries.
 const processExitProgName = "handle_sched_process_exit"
@@ -435,7 +441,7 @@ const taskNewtaskProgName = "handle_task_newtask"
 // outside the probemanager's enter/exit pair model and is attached directly
 // here, for the whole run, independently of -trace-* selection.
 func attachProcessExecProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachHandTracepoint(attacher, processExecProgName, "sched", "sched_process_exec", log)
+	return attachHandTracepoint(attacher, processExecProgName, "sched", processExecProbeName, log)
 }
 
 // attachProcessExitProbe attaches sched:sched_process_exit, whose control

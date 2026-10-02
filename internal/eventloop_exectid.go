@@ -101,13 +101,66 @@ func (e *eventLoop) releaseExecCallerRestart(ev *types.ProcessExecEvent, ch chan
 // (releaseExecCallerRestart). A record without the field - an object that
 // predates it, a synthetic replay - may be a non-leader's, whose row and kept
 // execve enter are still to be found by the execve's exit
-// (adoptLostExecCaller) and must not be taken for a dead thread's; that exit
-// then proves the exec itself. A record whose tid is not the pid does not
-// come from the kernel and proves nothing.
+// (adoptLostExecCaller) and must not be taken for a dead thread's. A record
+// whose tid is not the pid does not come from the kernel and proves nothing.
+//
+// A record without the field also ends the trust in exec records
+// (trustExecRecords) for the rest of the run: whatever wrote it names no
+// caller, so no exec record of this run moves a non-leader's enter, every
+// such exec depends on the adoption, and a missing record with no counted
+// drop is then the rule, not a sign that no exec happened. The exit adopts
+// unchecked from then on and proves nothing (lostExecRecord).
 func (e *eventLoop) noteExecRecord(ev *types.ProcessExecEvent) {
-	if ev.OldTid != 0 && ev.Tid == ev.Pid {
+	if ev.OldTid == 0 {
+		e.execRecordsTrusted = false
+		return
+	}
+	if ev.Tid == ev.Pid {
 		e.restarts.noteExec(ev.Pid)
 	}
+}
+
+// trustExecRecords tells the loop whether the sched_process_exec probe
+// attached for this run (trace setup, before the loop starts). Exec records
+// count as complete only when ring-buffer drops are counted too (dropSrc):
+// then an exec that left no record is a counted drop or did not happen, which
+// is what lets a successful exec exit without an enter be told from a call a
+// seccomp filter answered (lostExecRecord). The probe is attached before any
+// syscall probe (attachTraceProbes), so no exec whose enter the trace saw can
+// have passed the tracepoint unseen. False in a loop nobody told and whenever
+// either is missing; adoptLostExecCaller then adopts unchecked, as it did
+// before task v13.
+func (e *eventLoop) trustExecRecords(execProbeAttached bool) {
+	e.execRecordsTrusted = execProbeAttached && e.dropSrc != nil
+}
+
+// lostExecRecord answers the two questions adoptLostExecCaller has about a
+// candidate caller whose exec enter is stamped entered: may the exit under
+// the leader tid adopt that enter (adopt), and does the adopted pair prove
+// an exec of the process (proven, restartTracker.noteExec)?
+//
+// The exec record of a real exec by that thread was reserved after the enter
+// and before the exit. While exec records are trusted (trustExecRecords) it
+// is therefore missing only if a record was dropped since the enter, and the
+// drop watch is asked exactly as a fold asks it (restartDropWatch.lostSince,
+// one read of the drop counter, paid only by a successful exec exit without
+// an enter that found a candidate). "No drop since" is a proof: the thread
+// has not exec'd, the exit is not its execve's, nothing is adopted and
+// nothing is proven. "Maybe dropped" is weaker - a drop first observed after
+// the enter, a first read of a moved counter, a counter that cannot be read -
+// but it is the only evidence there is, and it adopts and proves.
+//
+// Without that trust (no counter, the exec probe not attached, records that
+// name no caller) a missing exec record says nothing either way. The enter is
+// adopted, since otherwise such a run lost the row of every non-leader exec,
+// but the pair proves nothing: a wrong adoption then costs the one wrong
+// execve row it always cost, and not the rows of live threads.
+func (e *eventLoop) lostExecRecord(entered uint64) (adopt, proven bool) {
+	if !e.execRecordsTrusted {
+		return true, false
+	}
+	lost := e.restarts.drops.lostSince(entered, e.dropSrc, e.readDropStampClock)
+	return lost, lost
 }
 
 // applyExecTidChange moves a non-leader exec's per-tid state from the caller's
@@ -224,26 +277,61 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 // behind the exit either way (releaseRestartsBehindExec): whoever won, that
 // thread is gone.
 //
-// The exit is taken at its word here: what makes it one of an exec is the
-// enter it adopts (completedExec). An execve of the leader that a seccomp
-// filter answered with 0 while a non-leader thread is inside a real execve
-// would adopt that thread's enter; that needs a filter faking a success, and
-// was so before task v13.
-func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (*event.Pair, bool) {
+// The exit alone says nothing: an execve of the leader that a seccomp filter
+// answered with 0 leaves exactly this record (completedExec) while the
+// process and its threads live on, and one of them may be a non-leader thread
+// inside a real execve - a candidate. Adopting its enter gave a wrong execve
+// row (the filter's "success" under that thread's tid and filename, and the
+// thread's real execve then without its enter), which was so before task
+// v13; since v13 the adopted pair also counts as a proof of the exec
+// (noteExec), which released the held rows of every live thread of the
+// process, recycled their kept enters and retired their tids, so that their
+// calls came back without a row and uncounted. The adoption therefore asks
+// for what it presupposes, a lost exec record (lostExecRecord): where exec
+// records are trusted it adopts, and proves, only when a record may have
+// been dropped since the candidate's enter, and the exit is otherwise
+// dropped unpaired like any filter-answered call, the candidate left where
+// it was. Where they are not trusted it adopts as before and proves nothing.
+// What stays: the filter's answer, a thread inside a real execve and a drop
+// the watch cannot place before that thread's enter, all at once.
+//
+// proven reports whether the pair may stand as a proof of the exec.
+func (e *eventLoop) adoptLostExecCaller(exitEv event.Event, ch chan<- *event.Pair) (ep *event.Pair, proven, ok bool) {
 	ret, ok := completedExec(exitEv)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
-	callerTid, ok := e.pairs.parkedExecCaller(ret.Pid)
+	callerTid, proven, ok := e.lostExecCaller(ret)
 	if !ok {
-		callerTid, ok = e.restarts.reexecutingExecCaller(ret)
-	}
-	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	e.releaseHeldRestart(callerTid, ch)
 	e.applyExecTidChange(callerTid, ret.Tid)
-	return e.pairs.consume(ret.Tid)
+	ep, ok = e.pairs.consume(ret.Tid)
+	return ep, proven, ok
+}
+
+// lostExecCaller finds the thread whose exec enter the exit adopts
+// (adoptLostExecCaller): the most recently parked non-leader exec caller of
+// the process, else the thread whose re-executed exec is kept with a held
+// row - each only when its exec record may be lost (lostExecRecord), which
+// also says whether the pair will prove the exec. A parked caller that is
+// refused keeps its hint in the index: its execve is still in flight, and
+// the exit that completes it may need the hint.
+func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok bool) {
+	if tid, ok = e.pairs.parkedExecCaller(exit.Pid); ok {
+		parked, _ := e.pairs.pending(tid)
+		if ok, proven = e.lostExecRecord(parked.EnterEv.GetTime()); ok {
+			return tid, proven, true
+		}
+		e.pairs.indexExecCaller(parked.EnterEv)
+	}
+	if tid, ok = e.restarts.reexecutingExecCaller(exit); !ok {
+		return 0, false, false
+	}
+	held, _ := e.restarts.lookup(tid)
+	ok, proven = e.lostExecRecord(held.continuation.GetTime())
+	return tid, proven, ok
 }
 
 // completeUntracedExec finishes a traced thread's successful execve whose

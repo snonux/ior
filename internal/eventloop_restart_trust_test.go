@@ -87,6 +87,62 @@ func TestExitProbeAnnouncesItsRecorderName(t *testing.T) {
 	}
 }
 
+// TestExecAttachRecorderNotesOnlyTheExecProbe pins the attach sink of task
+// v13: only the sched_process_exec probe's announcement sets it, and the
+// probe announces the name the recorder listens for. Set by any other probe,
+// a run without exec records would refuse to pair every non-leader exec's
+// exit with its enter for want of a counted drop (eventLoop.lostExecRecord).
+func TestExecAttachRecorderNotesOnlyTheExecProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		announced []string
+		want      bool
+	}{
+		{"nothing attached", nil, false},
+		{"other hand probes", []string{processExitProbeName, taskRenameProbeName, signalDeliverProbeName, restartSigreturnProbeName}, false},
+		{"a near miss", []string{processExecProbeName + "x"}, false},
+		{"the exec probe", []string{processExecProbeName}, true},
+		{"exec then others", []string{processExecProbeName, processExitProbeName}, true},
+	} {
+		var hand handProbeAttachRecorder
+		for _, name := range tc.announced {
+			hand.note(name)
+		}
+		if hand.exec.attached != tc.want {
+			t.Fatalf("%s: attached = %v after %q, want %v", tc.name, hand.exec.attached, tc.announced, tc.want)
+		}
+	}
+	var announced []string
+	release := attachProcessExecProbe(&fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}, bpfSetupLog{attached: func(name string) {
+		announced = append(announced, name)
+	}})
+	defer release()
+	if len(announced) != 1 || announced[0] != processExecProbeName {
+		t.Fatalf("attachProcessExecProbe announced %q, want [%q]", announced, processExecProbeName)
+	}
+}
+
+// TestTraceSetupCarriesTheExecAttachToTheLoop pins the rest of that chain
+// structurally, like the test below does for the fold's probes: the
+// recorder's result is copied into the infra and runTraceSetup passes
+// exactly that field to trustExecRecords, once.
+func TestTraceSetupCarriesTheExecAttachToTheLoop(t *testing.T) {
+	bpfDecl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
+	var body bytes.Buffer
+	if err := printer.Fprint(&body, token.NewFileSet(), bpfDecl.Body); err != nil {
+		t.Fatalf("render setupTraceInfraBPF: %v", err)
+	}
+	if want := "infra.execProbeAttached = handAttach.exec.attached"; !bytes.Contains(body.Bytes(), []byte(want)) {
+		t.Fatalf("setupTraceInfraBPF must contain %q", want)
+	}
+	setupDecl, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	calls := callsNamed(setupDecl, "trustExecRecords")
+	if len(calls) != 1 {
+		t.Fatalf("runTraceSetup calls trustExecRecords %d times, want once", len(calls))
+	}
+	assertCallArguments(t, calls[0], []string{"infra.execProbeAttached"})
+}
+
 // TestTraceSetupCarriesTheSignalAttachToTheLoop pins the rest of the chain,
 // structurally because the setup cannot run unprivileged: setupTraceInfraBPF
 // hands the hand-probe recorder's note to BPF setup, that note reaches the

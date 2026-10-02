@@ -485,15 +485,23 @@ import (
 //     whose restarting handler exec'd instead of returning. When the exec
 //     record is lost, the successful execve's exit under the leader tid is
 //     what is left, and it releases the same row (adoptLostExecCaller, which
-//     finds a re-executed execve by reexecutingExecCaller; task r13).
+//     finds a re-executed execve by reexecutingExecCaller; task r13). Lost
+//     is meant literally (task v13): where exec records are trusted - the
+//     exec probe attached, drops counted - the exit adopts only when a
+//     record may have been dropped since that thread's exec enter
+//     (lostExecRecord). An exit without an enter and without that evidence
+//     is a call a seccomp filter answered, and touches nothing.
 //   - Nor is the release of the rows an exec leaves behind under the tids of
 //     the threads it ended (task v13). de_thread kills every other thread of
 //     the process, and each releases its row with its own exit record; with
 //     that record lost, no record names the tid again. The record that proves
 //     the exec releases them: the exec record that names its caller, or the
-//     execve's successful exit once it has found its enter (noteExec). An
-//     exit without an enter proves nothing - a seccomp filter can make execve
-//     return 0 without running it (completedExec) - and leaves them held.
+//     execve's successful exit once it has found its enter (noteExec) - an
+//     exec enter under its own tid, or one adopted from the thread that made
+//     the call on the evidence above; an enter adopted where exec records
+//     are not trusted proves nothing. An exit without an enter proves
+//     nothing either - a seccomp filter can make execve return 0 without
+//     running it (completedExec) - and leaves them held.
 //     The loop releases them behind that record, one at a time
 //     (releaseRestartsBehindExec): a process may lose more threads in one
 //     exec than a record's handler may complete pairs. The enter of a
@@ -592,6 +600,12 @@ import (
 // released under another.
 type restartTracker struct {
 	held map[uint32]*heldRestart // keyed by tid
+	// heldOf counts the held rows of each process (pid of the row's exit),
+	// so that a proven exec of a process that holds none - nearly every
+	// exec while any row is held - costs one lookup instead of a scan of
+	// every held row (takeProcess). It mirrors held: hold counts a row in,
+	// take and takeWhere count it out, and a pid without rows has no entry.
+	heldOf map[uint32]int
 	// restartBlock and reexec are set by trace setup (foldProvenRestarts)
 	// before the loop starts. restartBlock: the signal_deliver and
 	// sched_process_exit probes attached, so a RESUME record of BPF means
@@ -627,9 +641,9 @@ type restartTracker struct {
 	// which is every headless run: only a TUI run listens (watchProbeChanges).
 	probes restartProbeWatch
 	// execed is the process whose exec the record being processed proved
-	// (noteExec), left for the loop's step behind that record, which releases
-	// the rows the exec left behind (releaseRestartsBehindExec). Unset
-	// between records.
+	// (noteExec), left for the loop's step behind that record, which
+	// releases the rows the exec left behind (releaseRestartsBehindExec).
+	// Unset between records.
 	execed execedProcess
 }
 
@@ -917,11 +931,12 @@ type heldRestart struct {
 	// release can park it again (reparkContinuation) and the continuation
 	// still becomes a row. continuationKind is the registered kind it arrived
 	// as, which carries its raw enter filter. An accepted fold recycles it
-	// (dropContinuation), and so does a release that knows the continuation's
-	// call will not return: by a record that says so (continuationCutShortBy),
-	// by the exec record of the thread's own exec for a call that is not that
-	// execve (releaseExecCallerRestart), or behind an exec that ended the
-	// thread (releaseRestartsBehindExec). nil in every other phase.
+	// (dropContinuation), and so does a release that knows the
+	// continuation's call will not return: by a record that says so
+	// (continuationCutShortBy), by the exec record of the thread's own exec
+	// for a call that is not that execve (releaseExecCallerRestart), or
+	// behind an exec that ended the thread (releaseRestartsBehindExec). nil
+	// in every other phase.
 	continuation     event.Event
 	continuationKind rawRuntimeEvent
 }
@@ -1048,11 +1063,30 @@ func (r *restartTracker) hold(held *heldRestart) bool {
 	}
 	if r.held == nil {
 		r.held = make(map[uint32]*heldRestart)
+		r.heldOf = make(map[uint32]int)
 	}
 	held.phase = restartWaiting
 	held.passed = 0
-	r.held[held.pair.ExitEv.GetTid()] = held
+	tid := held.pair.ExitEv.GetTid()
+	if prev, ok := r.held[tid]; ok {
+		// Not reached from the loop, which releases a tid's row before
+		// it holds the next (holdRestart); the count stays right all
+		// the same.
+		r.uncount(prev)
+	}
+	r.held[tid] = held
+	r.heldOf[held.pair.ExitEv.GetPid()]++
 	return true
+}
+
+// uncount takes a row that is leaving held out of its process's count.
+func (r *restartTracker) uncount(held *heldRestart) {
+	pid := held.pair.ExitEv.GetPid()
+	if r.heldOf[pid] <= 1 {
+		delete(r.heldOf, pid)
+		return
+	}
+	r.heldOf[pid]--
 }
 
 // lookup returns the row tid holds, if any.
@@ -1068,6 +1102,7 @@ func (r *restartTracker) take(tid uint32) (*heldRestart, bool) {
 		return nil, false
 	}
 	delete(r.held, tid)
+	r.uncount(held)
 	return held, true
 }
 
@@ -1140,19 +1175,32 @@ func (r *restartTracker) takeInterruptedBy(at uint64) []*heldRestart {
 // takeProcess removes the rows held under any thread of process pid and
 // returns them oldest exit first: the rows an exec of that process leaves
 // behind (releaseRestartsBehindExec).
+//
+// A process that holds no row is answered from the per-process count
+// (heldOf), without looking at the rows of the others. That is the usual
+// case, and it comes twice per exec: an ordinary exec is proven by its exec
+// record and again by its exit, and a host-wide trace sees execs of processes
+// that hold nothing all the time while some thread elsewhere sits in an
+// interrupted call. Scanning for each cost up to 61 us and 32 KB with
+// maxHeldRestarts rows held.
 func (r *restartTracker) takeProcess(pid uint32) []*heldRestart {
+	if r.heldOf[pid] == 0 {
+		return nil
+	}
 	return r.takeWhere(func(held *heldRestart) bool { return held.pair.ExitEv.GetPid() == pid })
 }
 
 // takeWhere removes the held rows that match and returns them oldest exit
 // first; rows interrupted at the same instant come in the order of their tids,
-// so the order never depends on the map's.
+// so the order never depends on the map's. The result grows with the matches
+// only: when nothing matches, nothing is allocated.
 func (r *restartTracker) takeWhere(match func(*heldRestart) bool) []*heldRestart {
-	rows := make([]*heldRestart, 0, len(r.held))
+	var rows []*heldRestart
 	for tid, held := range r.held {
 		if match(held) {
 			rows = append(rows, held)
 			delete(r.held, tid)
+			r.uncount(held)
 		}
 	}
 	slices.SortFunc(rows, func(a, b *heldRestart) int {
@@ -1200,15 +1248,23 @@ func completedExec(ev any) (*types.RetEvent, bool) {
 //   - the exec record, when it names the thread that exec'd (noteExecRecord);
 //   - the successful exit of an exec paired with its enter, whether that
 //     enter was parked under the leader tid or adopted from the non-leader
-//     thread that made the call (tracepointExited, noteExecExit);
+//     thread that made the call - adopted on evidence that the exec record
+//     was lost, not otherwise (tracepointExited, noteExecExit,
+//     eventLoop.lostExecRecord);
 //   - that exit folded into the leader's own interrupted exec, whose
 //     re-executed enter was kept with the row (foldRestartExit).
 //
 // The pairing is what makes an exit a proof (completedExec). It can be wrong
 // only together with another fault: an exec enter left parked under the
-// leader tid by a lost exit record, or a non-leader thread inside a real
-// execve when the leader's is answered by a filter (adoptLostExecCaller pairs
-// that exit with the wrong enter in the first place).
+// leader tid by a lost exit record; or a non-leader thread inside a real
+// execve when the leader's is answered by a filter, and a record dropped
+// since that thread's enter. The second used to need no drop: the adoption
+// took any such exit (as it had before task v13, at the price of one wrong
+// execve row), and as a proof it cost every live thread of the process its
+// held row, its kept enter and with it the row of the call it was
+// re-executing. An adoption without evidence of a lost exec record no longer
+// happens where exec records are trusted, and proves nothing where they are
+// not (adoptLostExecCaller).
 //
 // What the proof says: the kernel's de_thread killed every other thread of
 // the process and waited for each to be gone before the exec went on. The
@@ -1227,9 +1283,11 @@ func (r *restartTracker) noteExec(pid uint32) {
 
 // noteExecExit is noteExec for an exit that found its enter: exitEv proves an
 // exec when it is the successful exit of one (completedExec). The caller has
-// paired it with an enter of its own syscall, or folds it into the row of
-// that syscall. It is called for every paired exit, so it asks the record
-// only while a row is held: without one there is nothing to release.
+// paired it with an enter of its own syscall - past the trace-ID check, an
+// exec exit that took a read's enter is a mismatch and no proof - or folds
+// it into the row of that syscall. It is called for every paired exit, so it
+// asks the record only while a row is held: without one there is nothing to
+// release.
 func (r *restartTracker) noteExecExit(exitEv event.Event) {
 	if len(r.held) == 0 {
 		return
@@ -1462,7 +1520,8 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 		return false
 	}
 	if held.continuationCutShortBy(ev) {
-		// Nothing will pair with that enter any more: it must not be parked.
+		// Nothing will pair with that enter any more: it must not be
+		// parked.
 		held.dropContinuation()
 	}
 	e.releaseHeldRestart(tid, ch)
@@ -2023,9 +2082,13 @@ func (e *eventLoop) releaseRestartsBehindProbeChange(pairs chan *event.Pair) {
 // handler panic per row. The rows therefore follow the record's own rows -
 // the execve's among them - although their calls ended earlier ("Output
 // order" in the file comment), and they are judged by the process's state
-// behind the exec: after a delivered exec record the row of a call on a
-// close-on-exec descriptor has lost its path, as it has when it is released
-// at the end of the run.
+// behind the exec. After a delivered exec record the row of a call on a
+// close-on-exec descriptor loses or mislabels its path: dropOnExec has taken
+// the descriptor out of the fd table, so the lookup falls back to
+// /proc/<pid>/fd/N, which is the new program's table by then - the number is
+// closed there (no path) or already names a file the new program opened
+// (seen live: a dead thread's pipe read labelled /etc/ld.so.cache). A row
+// released at the end of the run has the same fallback.
 //
 // Not released here: the rows of a process whose exec nothing proved - the
 // exec record lost (or its probe not attached) and the execve's exit without

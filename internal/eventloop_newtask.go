@@ -83,19 +83,19 @@ const (
 func (e *eventLoop) handleTaskNewtaskEvent(ev *types.TaskNewtaskEvent) {
 	defer ev.Recycle()
 	if ev.ChildOutOfScope() {
-		// Not a task of this trace: only its effect on the creator's table
-		// matters (see inheritFdTable). Nothing of the child's - comm,
-		// per-tid state - is cached: the filter never lets any of its
-		// records through, so there is nothing to seed. Its tid is retired
-		// all the same (task v13). The number is a brand-new task's, so
-		// whatever is kept under it is a dead previous owner's whose exit
-		// record was lost, and no record of the new owner will ever come to
-		// displace it: a parked exec enter of a non-leader thread stayed
-		// parked, and a parkedExecCaller hint of its process for
-		// adoptLostExecCaller to pair with a later, unrelated execve exit,
-		// until LRU trimming. (A row that owner still held has been released
-		// by now, its continuation's enter recycled: routeHeldRestart,
-		// reportsTaskGone.)
+		// Not a task of this trace: only its effect on the creator's
+		// table matters (see inheritFdTable). Nothing of the child's -
+		// comm, per-tid state - is cached: the filter never lets any of
+		// its records through, so there is nothing to seed. Its tid is
+		// retired all the same (task v13). The number is a brand-new
+		// task's, so whatever is kept under it is a dead previous
+		// owner's whose exit record was lost, and no record of the new
+		// owner will ever come to displace it: a parked exec enter of a
+		// non-leader thread stayed parked, and a parkedExecCaller hint
+		// of its process for adoptLostExecCaller to pair with a later,
+		// unrelated execve exit, until LRU trimming. (A row that owner
+		// still held has been released by now, its continuation's enter
+		// recycled: routeHeldRestart, reportsTaskGone.)
 		e.retireRecycledTid(ev.Tid)
 		if ev.CreatorPid != 0 {
 			e.fdState().markBlind(ev.CreatorPid)
