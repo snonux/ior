@@ -29,7 +29,9 @@ import (
 // runs (a handled signal turns -516 into EINTR and the next record of the tid
 // is the handler's work or its rt_sigreturn, never restart_syscall). So a -516
 // row whose tid's very next record is a restart_syscall enter is provably the
-// same call, and the syscall stream alone proves it.
+// same call, and the syscall stream alone proves it - as long as the stream
+// is complete. Whether it is, the drop counter says ("Lost records" below);
+// a run without one folds on the stream alone.
 //
 // (2) Re-execution, for -ERESTARTSYS, -ERESTARTNOINTR and -ERESTARTNOHAND
 // (-512/-513/-514; task 103). The kernel rewinds the instruction pointer and
@@ -68,10 +70,30 @@ import (
 // about (the re-executed exit and the next call's enter lost together would
 // let that call's exit complete the fold; a lost exit of a call interrupted
 // inside the handler leaves BPF tracking the inner call while the outer row is
-// still held here). The check is host-wide, so under ring-buffer backpressure
-// nothing is folded - the direction every doubt is resolved in. A refused
-// fold costs no row: the call shows as it did before task 103, the
-// interrupted row and the continuation's row.
+// still held here). The restart_syscall fold has the same hole (task p03):
+// "the tid's very next record" is the next record that ARRIVED. When a
+// stopped sleep's restart_syscall exit is lost together with the thread's
+// records up to a later stopped call's restart_syscall (that call's enter,
+// its -516 exit, and its restart_syscall enter - or, with the first
+// restart_syscall lost whole, everything up to that enter), a -516 row is
+// followed by a restart_syscall that resumes another call, and its return
+// value and end time would be written into the row. The check is host-wide,
+// so under ring-buffer backpressure nothing is folded - the direction every
+// doubt is resolved in. A refused fold costs no row: the call shows as it did
+// before it was folded at all, the interrupted row and the continuation's row.
+//
+// The two folds differ in what they do WITHOUT a drop counter (an older BPF
+// object without the counter map, a map that could not be opened; ior warns
+// at startup). The re-execution fold is then off altogether
+// (foldReexecutedRestarts): it is the newer one and never ran unchecked. The
+// restart_syscall fold predates the counter and keeps folding, unchecked
+// (restartProofLost): refusing would turn every stopped sleep of such a run
+// back into two rows, in order to avoid a wrong row that needs a burst of at
+// least four consecutive lost records of one stopped-and-stopped-again
+// thread that ends exactly inside a later restart_syscall - in a run that
+// cannot report any of its losses in the first place. That is the residual,
+// pinned by TestRestartSyscallFoldWithoutADropCounterIsUnchecked. A counter
+// that exists but cannot be read is not that case: it refuses both folds.
 //
 // The decision rules (heldRestart.phase records where a held row stands):
 //
@@ -91,24 +113,32 @@ import (
 //   - Resume: the continuation's enter arrives and is taken out of the
 //     stream (no row, no raw enter filter: the decision must not depend on
 //     what this run would show). For -516 it is the tid's restart_syscall
-//     enter, right after the hold. For re-execution it is an enter of the
-//     same syscall, and only as the tid's very next record after a RESUME
-//     control record and stamped with that record's time. The enter is kept
-//     with the row (heldRestart.continuation), not recycled: the fold can
-//     still be refused, and then the continuation needs it to become a row.
-//   - Fold: the tid's next record is the continuation's exit. For -516 its
-//     return value and time replace the held exit's (the exit keeps the
-//     original syscall's trace ID); for re-execution the exit record itself
-//     replaces the held one (it is the same syscall's exit, of whatever
-//     kind). The kept enter is recycled now. A fold that ends in a restart
-//     code again is held again. A name fixup the re-executed enter triggers
-//     is applied to the kept enter and consumed.
+//     enter, right after the hold, and - with a drop counter - only when no
+//     record may have been lost since the interrupted exit; otherwise it
+//     releases the row and is an ordinary enter. For re-execution it is an
+//     enter of the same syscall, and only as the tid's very next record after
+//     a RESUME control record and stamped with that record's time (RESUME
+//     itself is where the re-execution fold asks about lost records). The
+//     enter is kept with the row (heldRestart.continuation), not recycled:
+//     the fold can still be refused, and then the continuation needs it to
+//     become a row.
+//   - Fold: the tid's next record is the continuation's exit, and no record
+//     may have been lost since the interrupted exit (asked again: the enter
+//     and the exit can be a long sleep apart). For -516 its return value
+//     and time replace the held exit's (the exit keeps the original syscall's
+//     trace ID); for re-execution the exit record itself replaces the held
+//     one (it is the same syscall's exit, of whatever kind). The kept enter
+//     is recycled now. A fold that ends in a restart code again is held
+//     again, and its next hop asks about lost records from that exit on. A
+//     name fixup the re-executed enter triggers is applied to the kept enter
+//     and consumed.
 //   - Release: any record of the held tid that is not the next step above
 //     (any enter, another exit, a control record such as the task's exit, a
 //     fresh task with the recycled tid, a restart record that does not fit
 //     the phase) first completes the held row unchanged, then is processed
-//     normally. So does a RESUME record or a continuation's exit that arrives
-//     after the kernel may have dropped records (see "Lost records" above),
+//     normally. So does a RESUME record, a restart_syscall enter or a
+//     continuation's exit that arrives after the kernel may have dropped
+//     records (see "Lost records" above),
 //     and an exit of the tid with a restart code while its handler runs,
 //     paired or not: BPF tracks the latest interrupted call of a task, so the
 //     row it could announce a re-execution for is no longer this one
@@ -175,14 +205,17 @@ type restartTracker struct {
 	reexec bool
 	// drops knows since when the kernel's drop counter has stood at its
 	// current value, which is what proves that no record was lost while a row
-	// was held.
+	// was held. Both folds ask it (restartProofLost); it stays at its zero
+	// value in a run without a drop counter, where nobody asks.
 	drops restartDropWatch
 }
 
 // restartDropWatch answers "may the kernel have dropped a ring-buffer record
-// at or after the boot-clock time `since`?" for the re-execution fold. since is
-// the time of the interrupted exit's record; records reserved after it are
-// the ones the fold reasons about.
+// at or after the boot-clock time `since`?" for both folds. since is the time
+// of the interrupted exit's record; records reserved after it are the ones
+// the fold reasons about. A row folded once and interrupted again carries the
+// continuation's exit (foldRestartExit), so each hop of a call stopped several
+// times asks from its own interruption.
 //
 // What it knows. An observation is one read of the kernel's cumulative drop
 // counter together with a boot-clock reading taken AFTER that read. The watch
@@ -190,9 +223,9 @@ type restartTracker struct {
 // observation that returned that same total (firstSeenAt). Observations come
 // from two places: the periodic drop monitor (handleRingbufDropResult, on its
 // own goroutine, hence the mutex), which keeps the watch current while no call
-// is interrupted, and the fold itself, which reads the counter at RESUME and
-// at the folding exit (lostSince), because the monitor's next poll may be a
-// second away.
+// is interrupted, and the fold itself, which reads the counter at RESUME (for
+// -516: at the restart_syscall enter) and at the folding exit (lostSince),
+// because the monitor's next poll may be a second away.
 //
 // The invariant: the counter returned `total` in a read that finished at or
 // before firstSeenAt. The counter only grows, so if a read made now returns
@@ -258,7 +291,8 @@ func (w *restartDropWatch) observe(total, seenAt uint64) uint64 {
 // lostSince reports whether a record may have been dropped at or after since
 // (see the rule above). It reads the counter itself, and the clock after it.
 // An unreadable or missing counter counts as a loss: without it nothing
-// vouches for the stream.
+// vouches for the stream. (The restart_syscall fold of a run that has no
+// counter at all does not ask, restartProofLost.)
 func (w *restartDropWatch) lostSince(since uint64, src ringbufDropSource, clock func() uint64) bool {
 	if src == nil {
 		return true
@@ -339,6 +373,9 @@ const (
 	restartConsume
 	// restartKeepEnter: the record is the continuation's enter. It leaves the
 	// stream but is kept with the row until the fold is accepted or refused.
+	// A restart_syscall enter is not taken when records may have been lost
+	// since the interrupted exit (restartProofLost): it releases the row and
+	// is parked as the ordinary enter it then is.
 	restartKeepEnter
 	// restartResume: the record is BPF's RESUME; it is dropped like a consumed
 	// step, unless records were lost since the interrupted exit
@@ -349,8 +386,8 @@ const (
 	// restartEnterHandler: a restarting handler begins; the record goes on to
 	// its (recycling) control handler and the row stays held.
 	restartEnterHandler
-	// restartFold: the record is the continuation's exit. A re-execution is
-	// folded only when no record was lost since the interrupted exit
+	// restartFold: the record is the continuation's exit. It is folded only
+	// when no record may have been lost since the interrupted exit
 	// (restartProofLost); otherwise the row is released and the exit pairs
 	// with the continuation's own enter.
 	restartFold
@@ -648,26 +685,46 @@ func (e *eventLoop) routeHeldRestart(rawEvent rawRuntimeEvent, ev runtimeDecoded
 	return false
 }
 
-// restartProofLost reports whether a step towards a re-execution fold must be
-// refused because the kernel dropped records since the interrupted exit (see
-// "Lost records" in the file comment and restartDropWatch). It is asked at
-// the two steps that commit: RESUME, where a refusal releases the row before
-// the re-executed enter is taken, and the continuation's exit, where it keeps
-// a result that may belong to another call out of the row. Either way the
-// call ends up as two rows, the interrupted one and the re-execution: at the
-// exit, the release parks the enter taken for the fold again and the exit
-// pairs with it. Each question is one read of the drop counter, paid only by
-// interrupted calls. The restart_syscall fold is not asked: it does
-// not depend on a control record, and its tid's very next records are the
-// whole proof.
+// restartProofLost reports whether a step towards a fold must be refused
+// because the kernel may have dropped records since the interrupted exit (see
+// "Lost records" in the file comment and restartDropWatch). It is asked at the
+// two steps of each fold that commit (heldRestart.commitsToFold): where the
+// continuation is recognised - RESUME, or the restart_syscall enter - a
+// refusal releases the row before an enter is taken for it, and at the
+// continuation's exit it keeps a result that may belong to another call out
+// of the row. Either way the call ends up as two rows, the interrupted one and
+// the continuation: at the exit, the release parks the enter taken for the
+// fold again and the exit pairs with it. Each question is one read of the drop
+// counter, paid only by interrupted calls.
+//
+// Without a drop counter the restart_syscall fold is not asked and folds on
+// the stream alone, as it did before the counter existed; the stranger it can
+// then fold is the residual described under "Lost records". A re-execution
+// row is never held without a counter (foldReexecutedRestarts), and would be
+// refused here if it were.
 func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction) bool {
-	if action != restartResume && action != restartFold {
+	if !held.commitsToFold(action) {
 		return false
 	}
-	if !held.reexecuted() {
+	if e.dropSrc == nil && !held.reexecuted() {
 		return false
 	}
 	return e.restarts.drops.lostSince(held.pair.ExitEv.GetTime(), e.dropSrc, e.readDropStampClock)
+}
+
+// commitsToFold reports whether action is a step at which the row's fold asks
+// for proof that no record was lost: the continuation's exit for both folds,
+// and the record that announces the continuation - RESUME for a re-execution,
+// the restart_syscall enter for a -516 row. The re-executed enter is not such
+// a step: RESUME, which names it by time, was asked just before it.
+func (h *heldRestart) commitsToFold(action restartAction) bool {
+	switch action {
+	case restartResume, restartFold:
+		return true
+	case restartKeepEnter:
+		return !h.reexecuted()
+	}
+	return false
 }
 
 // detourGapBaseline prepares the tid's gap baseline for the rows of a signal

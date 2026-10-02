@@ -27,8 +27,8 @@ const (
 	restartReadFd = int32(3)
 )
 
-// reexecDrops scripts the kernel drop counter and the boot clock of a
-// re-execution fixture: total is what the counter reads, err makes the read
+// reexecDrops scripts the kernel drop counter and the boot clock of a fixture
+// that has one (newDropCountedFixture, newReexecFixture): total is what the counter reads, err makes the read
 // fail, now is what the boot clock reads (clockAt), and monitor is the
 // periodic drop monitor on that counter, polled by hand (monitorPoll).
 type reexecDrops struct {
@@ -47,11 +47,7 @@ type reexecDrops struct {
 // record already fed, or it proves nothing about the order of things.
 func newReexecFixture(t *testing.T, filter globalfilter.Filter) *restartFixture {
 	t.Helper()
-	f := newRestartFixture(t, filter)
-	f.drops = &reexecDrops{}
-	f.el.dropSrc = ringbufDropSourceFunc(func() (uint64, error) { return f.drops.total, f.drops.err })
-	f.drops.monitor = newRingbufDropMonitor(f.el.dropSrc)
-	f.el.dropStampClock = func() uint64 { return f.drops.now }
+	f := newDropCountedFixture(t, filter)
 	f.el.foldReexecutedRestarts(true, true)
 	return f
 }

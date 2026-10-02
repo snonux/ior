@@ -136,6 +136,23 @@ exit (another thread wrote this thread's `comm` through `/proc/<pid>/task/<tid>/
 longer treats what follows as the continuation: the -516 row stays as it is and is followed
 directly by a `restart_syscall` row with the final return value.
 
+The same two rows are what you get under record loss. "Followed by `restart_syscall`" means
+followed in what ior received, and when the kernel drops records (ring-buffer backpressure,
+see the drop counter) the `restart_syscall` that arrives next may resume a later stopped call
+of the thread, with everything in between lost. So ior folds a stopped sleep only when it can
+rule out that any record, of any process, was dropped between the interruption and the
+`restart_syscall` (it checks when `restart_syscall` begins and again when it returns, by the
+rule described under "When a restart is not folded"). Otherwise the -516 row stays and
+`restart_syscall` is a row of its own with the return value it had; no row is lost and both
+are counted. A sleep stopped several times is checked stop by stop, so it may be folded up to
+one of its stops: a row with `ret` -516 whose `latency_ns` runs to that stop, followed by a
+`restart_syscall` row.
+
+One exception: when the kernel's drop counter is not available at all (ior warns at startup
+and the end-of-run statistics say "ring buffer drops: unknown (drop counter unavailable)"),
+stopped sleeps are still folded, without this check. In such a run a burst of lost records can, rarely, leave one row that starts with one
+stopped sleep and ends with the result of a later one of the same thread.
+
 #### A re-executed call is one row
 
 A blocked `read`, `accept`, `wait4`, `futex` wait, ... that a signal interrupts exits with
@@ -170,16 +187,18 @@ followed by a second row for the continuation (if that was recorded at all), whe
 
 - the proof is missing: the `signal_deliver` or the `sched_process_exit` probe could not be
   attached (ior warns at startup), or the kernel's drop counter is not available to ior (no
-  -512/-513/-514 call is folded in such a run), a control record was lost to ring-buffer
-  backpressure, or two threads whose ids collide in the kernel-side table were interrupted at
-  the same time;
+  -512/-513/-514 call is folded in such a run; a stopped sleep, -516, still is), a control
+  record was lost to ring-buffer backpressure, or two threads whose ids collide in the
+  kernel-side table were interrupted at the same time;
 - the continuation's enter or exit was not recorded: sampled out, lost, or the trace ended or
   the thread exited first. With 1-in-N sampling of the syscall this is the common case: both
   halves are sampled independently, so a re-executed call is folded only when both happen to be
   recorded; otherwise you see the restart-code row alone, the continuation alone, or neither;
 - ior cannot rule out that the kernel dropped a record, any record of any process, between
-  the interruption and the continuation's exit (see the drop counter). It cannot know whose
-  records were lost, so it folds nothing across a possible loss. The drop counter says how
+  the interruption and the continuation's exit (see the drop counter). This applies to both
+  folds, the stopped sleep (-516, continued by `restart_syscall`) and the re-executed call;
+  only a stopped sleep in a run without a drop counter is folded unchecked. ior cannot know
+  whose records were lost, so it folds nothing across a possible loss. The drop counter says how
   many records were lost, not when, so ior goes by when it first read the current count: a
   loss it had already seen before the call was interrupted does not matter, however recent,
   while a loss it first sees after the interruption counts as possibly later than it, even

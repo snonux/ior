@@ -12,8 +12,11 @@ import (
 
 // Tests for folding restart_syscall into the -516 row it resumes (task fs2,
 // eventloop_restart.go). The fixture leaves BPF's re-execution proof off, as
-// a run without the signal_deliver probe has it; the re-execution fold of
-// -512/-513/-514 (task 103) is tested in eventloop_restart_reexec_test.go.
+// a run without the signal_deliver probe has it, and has no drop counter, as a
+// run on an older BPF object: the fold then goes by the syscall stream alone.
+// The fold's drop check (task p03) is tested in
+// eventloop_restart_drops_test.go, and the re-execution fold of -512/-513/-514
+// (task 103) in eventloop_restart_reexec_test.go.
 
 const (
 	restartPid      = uint32(4100)
@@ -56,8 +59,9 @@ type restartFixture struct {
 	t   *testing.T
 	el  *eventLoop
 	out chan *event.Pair
-	// drops is the scripted drop counter of a re-execution fixture
-	// (newReexecFixture); nil for the plain restart_syscall fixture.
+	// drops is the scripted drop counter of a fixture that has one
+	// (newDropCountedFixture, newReexecFixture); nil for the plain
+	// restart_syscall fixture.
 	drops *reexecDrops
 }
 
