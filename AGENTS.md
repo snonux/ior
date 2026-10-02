@@ -1176,8 +1176,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   did before any name was known (the `task_rename` record normally makes even
   those rows right). The record also retires the per-tid state of a dead
   previous owner whose exit record was lost (`retireRecycledTid`: cached comm
-  and in-flight lookup, parked enter, `-gap` baseline, pending
-  name_to_handle_at path), the same set the exit record clears. The child's
+  and in-flight lookup, parked enter, `-gap` baseline, parked
+  name_to_handle_at handle), the same set the exit record clears. The child's
   tgid is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid)
   rather than read from the task struct, and the record is scoped like
   `filter()` but applied to the *child* (`ior_task_in_scope`): a thread of a
@@ -1570,10 +1570,10 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `TestProcessExitEvictsOnlyTheExitedTasksComm`
   (`internal/eventloop_processexit_comm_test.go`).
 
-  **The same record evicts the tid's pair state and its pending handle**, for
+  **The same record evicts the tid's pair state and its parked handle**, for
   the same reason and with the same precision: `pairTracker.enters` and
   `pairTracker.prevTimes` (`pairTracker.evictTid`), and
-  `pendingHandleTracker.paths`, are all tid-keyed too. Of the pair tracker's
+  `handleTracker.taken`, are all tid-keyed too. Of the pair tracker's
   two, the parked enter is the sharper: a task killed *inside* a syscall never
   gets its `sys_exit`, so its enter stays parked, and the next task handed that
   tid number has its own
@@ -1608,17 +1608,19 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   `TestProcessExitEvictsOnlyTheExitedTasksPairState`
   (`internal/eventloop_processexit_pair_test.go`).
 
-  `pendingHandleTracker` is the one with the longest reach.
-  `name_to_handle_at` parks a pathname under the tid until the matching
-  `open_by_handle_at` consumes it, and the two need not be the same task -
-  passing the handle to another process is what the API is for - so an
-  unconsumed pathname outliving its task is ordinary rather than exceptional.
-  Left behind it does more damage than a parked enter: `handleOpenByHandleAtExit`
-  labels the row with the dead task's path *and* registers that path in the fd
-  table for the new process, so every later read, write and close on the
-  descriptor reports it too. Both syscalls are FS-family, so a default run
-  reaches it. Pinned by
-  `TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle`.
+  `handleTracker.taken` is the mildest of them. It parks the handle a
+  `name_to_handle_at` returned (from its `FILE_HANDLE_EVENT` control record)
+  until the call's exit record claims it a few records later, so an entry
+  outlives its task only when that exit record was lost. It cannot mislabel
+  the recycled tid - a claim needs the exit record's exact time - so dropping
+  it is hygiene. What the exit record must **not** drop are the handle
+  *names* (`handleTracker.names`): they are keyed by the handle itself, and
+  taking a handle for another thread or process to open is what the API is
+  for, so a name outlives the task that took the handle. (While the pathname
+  was parked per tid, until task k03, it had to be dropped here, or the
+  recycled tid's next `open_by_handle_at` was labelled, row and fd table
+  entry, with the dead task's path.) Pinned by
+  `TestTaskExitDropsTheParkedHandleAndKeepsTheHandleNames`.
 
   A failed attach is non-fatal and simply degrades to the old procfs-only
   labelling. Correspondingly, the `sys_enter_execve` comm is the *calling*
@@ -1718,174 +1720,119 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     `open_by_handle_at` that is the *only* filtering it gets, because its raw
     enter filter is `nil` (see `rawRuntimeEvents`). A *failed*
     `open_by_handle_at` (EPERM, EBADF, ESTALE, ...) reaches that checkpoint
-    too, as a descriptor-less pathname row like a failed open: named after
-    the thread's stashed `name_to_handle_at` path (consumed; there is no fd to
-    verify it against, so with several pending handles it may be another
-    handle's path) or empty without one (`failedHandleFile`,
-    `internal/eventloop_handle.go`). It used to be recycled in
+    too, as a descriptor-less pathname row like a failed open
+    (`failedHandleFile`). It used to be recycled in
     `handleOpenByHandleAtExit`, so failed calls produced no row, no error and
-    no "syscalls after filter" count (task eq2). Pinned by
-    `internal/eventloop_handle_fail_test.go` and the integration test
-    `TestOpenByHandleAtFailuresAreErrorRows` (scenario
-    `open-by-handle-at-fail`). A *successful* call is named by
-    `openedHandleFile`: the stash is one slot per tid (the thread's last
-    `name_to_handle_at`), so it is checked against the returned descriptor
-    through `/proc/<pid>/fd/<fd>` (inode, then link text) and a contradicted
-    stash is left alone while procfs names the row (unless it is opaque, see
-    below). The link-text rule
-    (`compareHandleLinkText`) accepts three things. The link minus one
-    trailing ` (deleted)`: a file unlinked after its handle was taken (clean
-    stash, row shows the clean path). The link as it stands: a stash that was
-    itself read from a `/proc` link, which is what `name_to_handle_at(fd, "",
-    AT_EMPTY_PATH)` stashes for a descriptor that is *not* in ior's fd table
-    (`fdTracker.resolve` falls back to procfs) - a pidfd, a namespace, a file
-    already unlinked at that point, an untracked memfd (`/memfd:x (deleted)`;
-    the row keeps the suffix, as every procfs-named unlinked file does). And
-    the link form of a traced name (`tracedHandleLink`): the same call on a
-    memfd or pidfd ior saw being created is answered from the fd table, so
-    the stash is `memfd:x` or `pidfd:0`, which is translated to
-    `/memfd:x (deleted)` or `anon_inode:[pidfd]` for the comparison while the
-    row keeps the traced name, like every other row on that descriptor. It
-    is translated from the name rather than read from the source's `/proc`
-    link when the stash is taken: the fd table is in event order, procfs is
-    not, and the source number is often reused by then. Without the last two
-    such a stash contradicted its own descriptor: the row was named from
-    procfs, but the stash stayed in the slot and named the thread's next
-    `open_by_handle_at` whenever procfs could not answer for it (task l03).
-    The stash is never stripped: `<path> (deleted)` against a live `<path>`
-    is a new file at the old path, and a name literally ending in
-    ` (deleted)` must still match its `... (deleted) (deleted)` link. Equal
-    text is not the same file: any pidfd matches a pidfd stash, and two
-    unlinked files that lived at one path, or two memfds of one name, read
-    the same link, so the stash of one is spent on the open of the other
-    (the row's name is still that descriptor's); a relative path stash
-    literally spelled `memfd:x` or `pidfd:0` is translated too and matches
-    such a memfd or any pidfd. A matching traced row carries the source's
-    traced name, for a pidfd including the source's flags suffix. Some
-    stashes can match no descriptor at all, their own included, and used to
-    stay in the slot after their own open, naming a later unrelated
-    `open_by_handle_at` of the thread (task m03). They are *opaque*
-    (`comparableHandleName`, decided when the stash is taken, from the name's
-    form and without a `/proc` read): a relative path
-    (`name_to_handle_at(AT_FDCWD, "rel.txt")`, a relative name under a dirfd
-    whose tracked name is relative or unknown, `AT_EMPTY_PATH` on a file ior
-    saw opened by a relative path - ior does not know a task's cwd); a traced
-    name no link can be derived from (an fsmount descriptor, tracked as
-    `fsopen:<fs>` while its link is the mount root); `memfd:<number>` (a
-    traced memfd whose name BPF could not read carries its flags; a memfd
-    really named by a number still matches); and, the one case the form
-    cannot show, the directory a tracked `O_TMPFILE` descriptor is named
-    after (`takenFromTrackedTmpfile` asks the fd table, which is in event
-    order, for the mark `openedFdFile` puts on an entry whose open carried
-    `O_TMPFILE` - `FdFile.NamedAfterTmpfileDir`, copied with the name by a
-    dup or fork and kept across a `linkat`, which renames no entry. The
-    origin of the name decides, not the flags: an `O_TMPFILE` descriptor ior
-    did not see opened but promoted into the table from procfs by an `fcntl`
-    or `FIOCLEX` has the flag in its fdinfo word and is named by its link
-    `<dir>/#N (deleted)`, a comparable name of the file. `O_PATH` with the
-    `O_TMPFILE` bits is not marked either: `open`/`openat` keep only the
-    `O_PATH` flags, so it is a path descriptor on the directory itself, whose
-    name is its own path, while BPF reports the flags as passed; `openat2`
-    rejects the combination. The stash remembers this one origin -
-    `handleStash.tmpfileDir` - because `openedHandleFile` has to pass it on:
-    a descriptor it names by such a stash without procfs agreeing
-    (unverifiable, or a contradiction it does not believe) is named after
-    the directory too and gets the mark, or a handle taken through that
-    descriptor before its close would count as the directory's comparable
-    path and outlive its own open. A descriptor procfs shows to BE that
-    directory (another handle's open) keeps the name unmarked - also when
-    the number was merely reused by an open of that directory, an accepted
-    residual - and a procfs-named row is never marked. A relative or traced
-    opaque stash sets no mark; its form keeps it opaque wherever it is
-    copied). An opaque stash
-    never outlives the thread's next `open_by_handle_at`: a confirmed
-    descriptor names the row from procfs, as before, and the stash is now
-    consumed with it; an unconfirmed one leaves the row to the stash, as
-    before. A relative name under a dirfd tracked by an absolute name is not
-    opaque - `resolveDirfdPath` stashes it joined.
-    Rejected alternatives: resolving against `/proc/<pid>/cwd` when the open
-    is handled (a second lagging procfs read, of a directory the task may
-    have left, plus a stat below it on the event loop) and accepting a link
-    that ends in the relative name (matches that name in any directory). The
-    price: an opaque stash is spent on *another* handle's confirmed open too,
-    so with handles A and B (B opaque) taken and A opened first, B's own open
-    is named from procfs only. Still mismatching, stash left behind until the
-    thread's next `name_to_handle_at`: a relative path spelled like a
-    comparable name (`memfd:x`, `pidfd:0`, `net:[1]`), and an absolute stash
-    that does not lead to its file from where ior stands - a path renamed
-    since the handle was taken, a path of another mount namespace, the
-    unlinked `<path>` shadowed by a live file literally named
-    `<path> (deleted)`, the directory of an `O_TMPFILE` descriptor whose open
-    flags ior never learned (an `openat2` whose `open_how` BPF could not read
-    is tracked with flags -1 and stays unmarked), and an absolute path that
-    means something else to the task than to ior, which stats it in its own
-    context (`/proc/self/...`, `/proc/thread-self/...`, `/dev/fd/N`, any path
-    of a chrooted task; such a stash can also match for the wrong reason -
-    `/proc/self/ns/net` is compared with ior's own namespace). Only handle
-    bytes in the events close those (task k03). Pinned by
-    `internal/eventloop_handle_deleted_test.go`,
-    `internal/eventloop_handle_traced_test.go`,
-    `internal/eventloop_handle_opaque_test.go` and, for the mark's copies,
-    `internal/file/file_test.go`. The `/proc/<pid>/fd/<fd>`
-    probe that check rests on is taken when the loop handles the exit, not
-    when the syscall returned, so a task that closed the descriptor and
-    opened something else under the same number makes procfs describe the
-    newer file (task j03: `TestOpenByHandleAt` failed 10 of 40 runs because
-    `os.RemoveAll`'s directory open reused the number, and the row and its
-    `close` were named after the directory).
-    A contradicting descriptor is therefore believed only when
-    `confirmedHandleFd` finds it still there (link read, fdinfo readable) with
-    the fixed open flags the call asked for (`sameFixedFlags`: `O_ACCMODE`,
-    `O_DIRECTORY`, `O_NOFOLLOW`, `O_PATH` - a chosen subset of the flags
-    neither `F_SETFL` nor `F_SETFD` can change; `O_SYNC`/`O_DSYNC` are as
-    immutable and deliberately left out); otherwise the number is most likely
-    changing hands and the stash names the row and is consumed, as in the
-    unverifiable case. The access mode counts only for a descriptor whose link
-    is an absolute path (`fixedFlagsMask`): pidfs forces it (a pidfd handle
-    opened `O_RDONLY` shows `O_RDWR` in fdinfo), so for a non-path target
-    that a handle can open (`anon_inode:[pidfd]`, nsfs links such as
-    `net:[N]`) only `O_DIRECTORY`/`O_NOFOLLOW`/`O_PATH` are compared -
-    otherwise a pidfd row took an unrelated stash. A non-path target that no
-    handle can open is never believed (`reachableByHandle`, a deny list:
-    `socket:[`, `pipe:[`, and `anon_inode:` other than `anon_inode:[pidfd]`):
-    sockfs, pipefs and the generic anon-inode fs have no export operations
-    (kernel knowledge; on 7.2.5 `name_to_handle_at(fd, "", AT_EMPTY_PATH)`
-    answers `EOPNOTSUPP` for socket, pipe, eventfd, epoll, timerfd, signalfd
-    and inotify descriptors and succeeds for a pidfd and every
-    `/proc/self/ns/*`), so such a link under the returned number proves the
-    number was reused - without it an `O_RDONLY` call whose number went to an
-    `O_RDWR` socket/eventfd/epoll descriptor was named after that descriptor,
-    because the kind mask does not look at the access mode. What the kind
-    mask still costs: a number reused by a pidfd or a namespace descriptor is
-    believed unless the request carried a kind flag. "Most likely" is meant
-    literally, and there is a losing case: the vanished descriptor can be the
-    call's *own*, closed between the probe's reads. If the stash then belongs
-    to another handle (stale, or a daemon that calls `name_to_handle_at` only
-    for mount IDs and opens handles obtained elsewhere), the row carries the
-    wrong stash where it used to get the correct procfs name (readlink ok,
-    fdinfo gone) or no name (stat ok, readlink failed), and the stash is
-    spent. Accepted because the common pattern - take a handle and open it on
-    the same thread - is strictly better off. Both halves are needed:
-    with the flag comparison alone the test still failed 22 of 100 runs,
-    because the directory descriptor lives for microseconds: closed again
-    between the probe's readlink and the fdinfo read, it left a name but no
-    flags to compare. The
-    evidence is one-sided: a number reused with the *same* fixed flags and
-    still open - by a path, or under the kind mask by a pidfd or namespace
-    descriptor - is taken for the opened handle and names the row; only handle
-    bytes in the BPF events could close that (task k03). The integration
-    test is exposed to exactly that residual and passes thanks to the
-    workload's fd numbering (see the comment in `openByHandleAt`,
-    `cmd/ioworkload/scenario_open.go`). Pinned by
-    `TestOpenByHandleAtIgnoresAReusedDescriptorNumber`,
-    `TestConfirmedHandleFdRejectsAVanishedDescriptor`,
-    `TestOpenByHandleAtDirectoryHandleStillNamedFromProcfs`,
-    `TestOpenByHandleAtPidfdHandleIsNamedFromProcfs`,
-    `TestOpenByHandleAtIgnoresANumberReusedByAHandleLessDescriptor`,
-    `TestOpenByHandleAtPidfdStashMatchesAPidfd`, `TestReachableByHandle`,
-    `TestOpenByHandleAtOtherAccessModeOnAPathIsAReusedNumber`,
-    `TestFixedFlagsMask` and `TestSameFixedFlags`
-    (`internal/eventloop_handle_test.go`).
+    no "syscalls after filter" count (task eq2).
+
+    **An `open_by_handle_at` is named by its handle** (task k03;
+    `internal/c/handle.c`, `internal/eventloop_handle.go`). The call passes no
+    pathname, only an opaque `struct file_handle`, so both ends carry the
+    handle itself - `handle_type`, `handle_bytes` and up to `MAX_HANDLE_SZ`
+    (128) bytes of `f_handle`:
+    - `sys_enter_open_by_handle_at` reads it from `args[1]` into its enter
+      record (`ior_read_file_handle`; `struct open_by_handle_at_event` grew
+      from 32 to 168 bytes - the syscall is rare, and no other record
+      changed). `handle_status` says what the fields hold:
+      `FILE_HANDLE_OK`, `_NULL`, `_READ_FAILED` (nofault read of a page that
+      is not resident), `_TOO_LARGE` (`handle_bytes` > 128; nothing read), or
+      `FILE_HANDLE_NONE` for the legacy 32/28-byte record of an older
+      `IOR_BPF_OBJECT`, which the decoder recognises by its length (the status
+      word sits in what was unwritten tail padding). The header is read
+      first and then exactly `handle_bytes` bytes: a fixed 128-byte read would
+      fail as a whole on a shorter buffer at the end of its mapping.
+      `f_handle` is zero-filled first, so the record holds the handle and
+      zeros (binary data has no terminator to stop at, unlike the string
+      fields).
+    - `name_to_handle_at` returns the handle through an output buffer, so
+      there is nothing to read at enter: `outputHandleSyscalls`
+      (`internal/generate/classify.go`) makes the enter handler park `args[2]`
+      on the enter state (`ior_stash_pending_handle`) and the exit handler,
+      **only for `ret == 0`**, publish the handle as a `FILE_HANDLE_EVENT`
+      (65) control record ahead of its own exit record
+      (`ior_emit_file_handle`). A failed call emits nothing - that includes
+      the `EOVERFLOW` a caller provokes with `handle_bytes = 0` to learn the
+      size. The pointer travels in the *second* pending slot
+      (`pending_filename2`): the syscall has one path, so the slot is free,
+      and reusing it keeps `struct syscall_enter_state` at its size and the
+      exit at one map lookup (`ior_on_syscall_exit_take_filenames`). The
+      control record carries the exit handler's single clock read, i.e.
+      exactly the `time` of the exit record that follows.
+
+    Userspace keeps `handleTracker.names`: handle key (`handleKey`: type,
+    length, bytes) -> the pathname `name_to_handle_at` was called with,
+    resolved like any path event (`resolvePathEvent`: joined with a dirfd ior
+    knows by name; for `AT_EMPTY_PATH` whatever ior calls the descriptor, a
+    traced name such as `memfd:x` or the directory of an `O_TMPFILE` open
+    included). `handleFileHandleEvent` parks the handle per tid
+    (`handleTracker.taken`) while the call's enter is still pending;
+    `recordNameToHandleAt` claims it at the exit record - only if the two
+    carry the same time, so a handle whose exit record was lost is never
+    filed under the next call's pathname - and files the name.
+    `handleOpenByHandleAtExit` looks the name up by the key of its enter
+    record: a hit names the row and the fd table entry (flags: the call's)
+    without asking procfs, and names a failed call too. Decisions:
+    - *The map is global and an entry is never consumed.* A handle is valid
+      system-wide, is passed between threads and processes and can be opened
+      any number of times; a failed open says nothing against the name. The
+      latest `name_to_handle_at` of a handle wins (an empty name drops the
+      entry), a lookup refreshes the entry, and above
+      `defaultMaxHandleEntries` the least recently used are evicted.
+    - *No handle, no guess.* An enter record that identifies no handle
+      (`handleKeyOf`: status other than OK, zero bytes, a count beyond the
+      field) and a handle ior has no name for are named from
+      `/proc/<pid>/fd/<fd>` (`procFdFile`), as an `open_by_handle_at` without
+      a stash always was; a failed call is then unnamed.
+    - *The mount is not part of the key.* `name_to_handle_at` returns a mount
+      ID but `open_by_handle_at` takes a mount *fd*; mapping one to the other
+      needs `/proc/<pid>/fdinfo` (the lagging look this design removes) or
+      walking the file table in BPF, and a mount ID is not the filesystem
+      anyway (a handle is valid on every bind mount of it). Equal type and
+      bytes on two filesystems therefore share an entry - an accepted
+      residual; the common encodings carry the inode number plus a 32-bit
+      random generation.
+
+    This replaced the per-tid stash and its procfs arbitration (tasks j03,
+    l03, m03: `classifyHandlePath`, `compareHandleLinkText`,
+    `tracedHandleLink`, `confirmedHandleFd`, `reachableByHandle`,
+    `fixedFlagsMask`/`sameFixedFlags`, the opaque-stash rules and
+    `FdFile.NamedAfterTmpfileDir`, all deleted). That design could only ask
+    what the returned *number* is when the loop handles the exit, which is a
+    later file once the task closed and reused it: a reuse with the same fixed
+    flags named the row and the fd table entry after the newer file
+    (`TestOpenByHandleAt` passed thanks to the workload's fd numbering), a
+    failed call was named after the thread's *last* handle, and a handle
+    opened by another thread was never matched. Checked against the
+    pre-change binary with the scenarios below: 5/5 reused numbers named
+    after the decoy, 5/5 older-handle failures named after the newer file,
+    10/10 cross-thread rows unnamed.
+
+    Still wrong, by design: the name is the one the handle was *taken* by
+    (a file renamed or unlinked since keeps it, as an fd table entry does); a
+    handle ior did not see taken - before the trace started, outside a
+    `-pid`/`-tid` scope, by a `name_to_handle_at` the raw enter filter shed
+    under `-path`/`-comm`, with a lost control record, or evicted - falls
+    back to procfs with its lag. Not run on a 4.18/5.14 kernel: the
+    variable-length `bpf_probe_read_user` is bounded by an explicit
+    `> IOR_MAX_HANDLE_SZ` check, loads on 7.2, and is untested on the old
+    verifiers.
+
+    Pinned by `internal/eventloop_handle_test.go` (naming by handle, a number
+    reused by another file / directory / pipe, cross-thread and
+    cross-process, not consumed, latest wins),
+    `internal/eventloop_handle_key_test.go` (type/byte/length sensitivity,
+    unusable statuses, legacy record, LRU, claim-by-time),
+    `internal/eventloop_handle_name_test.go` (failed and size-probe calls,
+    refused control records, a lost exit, `AT_EMPTY_PATH` names),
+    `internal/eventloop_handle_fail_test.go`, the decoder tests in
+    `internal/types/fastdecode_test.go`, the generator and oracle tests
+    (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,
+    `TestSyscallSemanticsOracleRejectsHandleCaptureMutations`) and the
+    integration tests `TestOpenByHandleAtIsNamedByItsHandleNotItsNumber`
+    (scenario `open-by-handle-at-reuse`),
+    `TestOpenByHandleAtMatchesAHandleTakenOnAnotherThread`
+    (`open-by-handle-at-threads`) and
+    `TestOpenByHandleAtFailuresAreErrorRows` (`open-by-handle-at-fail`).
   - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
     (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
     checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and
@@ -1946,7 +1893,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   100ms window of boot-clock time is dropped, a FIFO queue expires entries from
   the front, so a recycled pid dying later still counts). The cleanup is split by key: every record drops the exited task's
   tid-keyed state — cached comm, pair state (parked enter plus gap baseline)
-  and unconsumed `name_to_handle_at` pathname (see "Comm resolution across
+  and parked `name_to_handle_at` handle (see "Comm resolution across
   `execve`") — while the tgid's entries in both fd maps are dropped only on
   the group-dead record. Evicting them on a mere thread exit pushed the
   surviving threads' descriptors through the `/proc/<pid>/fd` fallback,

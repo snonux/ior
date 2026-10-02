@@ -280,20 +280,15 @@ const _AT_FDCWD int = -100
 
 // openByHandleAt creates a file, resolves its handle via name_to_handle_at,
 // then opens it via open_by_handle_at. Requires root (CAP_DAC_READ_SEARCH).
-// LockOSThread prevents goroutine migration between the two syscalls so that
-// ior sees the same TID for both and can correlate the path.
 //
-// The descriptor numbers this function frees are load-bearing for
-// TestOpenByHandleAt (tasks j03, k03). ior names the row by probing
-// /proc/<pid>/fd/<fd2> some time after the call, and by then the deferred
-// cleanup (os.RemoveAll) has reopened both numbers closed here: the parent
-// directory, opened with plain O_RDONLY|O_CLOEXEC - the very fixed flags of the
-// handle open - lands on mountFD's number (the lower one), and the temp
-// directory, opened with O_DIRECTORY|O_NOFOLLOW, on fd2's. ior tells only the
-// second apart from the handle by its flags. If a change here (the order of
-// the closes, an extra descriptor) swaps the two, the parent directory names
-// the row and the test turns flaky again until the stash is keyed by handle
-// bytes (k03).
+// ior names the open_by_handle_at row after the pathname of the
+// name_to_handle_at that returned the same handle bytes (task k03), so nothing
+// here is load-bearing for TestOpenByHandleAt any more: not the thread the two
+// calls run on, and not the descriptor numbers this function frees, which the
+// deferred cleanup (os.RemoveAll) reopens before ior gets to the exit record.
+// The thread is locked only to keep the scenario's syscalls on one tid in the
+// trace. The scenarios in scenario_handle.go pin the cases that used to depend
+// on those accidents.
 func openByHandleAt() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -326,12 +321,13 @@ func openByHandleAt() error {
 	return syscall.Close(fd2)
 }
 
-// openByHandleAtFailures makes open_by_handle_at fail in two ways, five times
-// each so a single dropped event cannot fail the test: EBADF (a valid handle
-// with mount_fd -1, which the kernel rejects before its permission check) and
-// ESTALE (the handle of a file unlinked before it is opened). Each failing
-// call follows its own name_to_handle_at on the same thread, so ior can name
-// the failed row after that pathname. Requires root (CAP_DAC_READ_SEARCH) for
+// openByHandleAtFailures makes open_by_handle_at fail in three ways, five
+// times each so a single dropped event cannot fail the test: EBADF (a valid
+// handle with mount_fd -1, which the kernel rejects before its permission
+// check), ESTALE (the handle of a file unlinked before it is opened), and
+// EBADF again for a handle that is not the thread's latest
+// (openByHandleAtEbadfOlderHandle). ior names each failed row after the
+// pathname its handle was taken of. Requires root (CAP_DAC_READ_SEARCH) for
 // the name_to_handle_at/open_by_handle_at pair to get as far as ESTALE.
 func openByHandleAtFailures() error {
 	runtime.LockOSThread()
@@ -348,6 +344,9 @@ func openByHandleAtFailures() error {
 			return err
 		}
 		if err := openByHandleAtEstale(dir, i); err != nil {
+			return err
+		}
+		if err := openByHandleAtEbadfOlderHandle(dir); err != nil {
 			return err
 		}
 	}
