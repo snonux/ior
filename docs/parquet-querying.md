@@ -150,8 +150,20 @@ one of its stops: a row with `ret` -516 whose `latency_ns` runs to that stop, fo
 
 One exception: when the kernel's drop counter is not available at all (ior warns at startup
 and the end-of-run statistics say "ring buffer drops: unknown (drop counter unavailable)"),
-stopped sleeps are still folded, without this check. In such a run a burst of lost records can, rarely, leave one row that starts with one
-stopped sleep and ends with the result of a later one of the same thread.
+stopped sleeps are still folded, without this check. In such a run a burst of lost records
+can, rarely, leave one row that starts with one stopped sleep and ends with the result of a
+later one of the same thread.
+
+Sampling is not record loss, and this check does not cover it. By default every
+`restart_syscall` is recorded and the above holds. If you sample `restart_syscall` itself
+(`-syscall-sampling-syscalls restart_syscall=N`, or a rate for its family,
+`-syscall-sampling-families Process=N`, with N above 1), a thread that is stopped in one call
+and later in another can produce the same wrong row with nothing lost and the drop counter at
+zero: the first call's `restart_syscall` is sampled out, the later call leaves no record at
+all (its syscall is sampled out, aggregate-only or not traced), and the later call's
+`restart_syscall` is sampled in and taken for the first call's. Sampling the interrupted
+syscall alone (`clock_nanosleep=N`) does not do this. Leave `restart_syscall` at rate 1 when
+stopped calls matter in a sampled recording.
 
 #### A re-executed call is one row
 

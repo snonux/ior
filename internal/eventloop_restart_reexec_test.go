@@ -28,9 +28,10 @@ const (
 )
 
 // reexecDrops scripts the kernel drop counter and the boot clock of a fixture
-// that has one (newDropCountedFixture, newReexecFixture): total is what the counter reads, err makes the read
-// fail, now is what the boot clock reads (clockAt), and monitor is the
-// periodic drop monitor on that counter, polled by hand (monitorPoll).
+// that has one (newDropCountedFixture, newReexecFixture): total is what the
+// counter reads, err makes the read fail, now is what the boot clock reads
+// (clockAt), and monitor is the periodic drop monitor on that counter, polled
+// by hand (monitorPoll).
 type reexecDrops struct {
 	total   uint64
 	err     error
@@ -504,6 +505,35 @@ func TestRefusedFoldKeepsTheContinuationsRow(t *testing.T) {
 	}
 	if _, pending := f.el.pairs.pending(restartTid); pending {
 		t.Fatal("the continuation's enter is still parked after its exit")
+	}
+}
+
+// TestReexecutedEnterIsNotAskedAboutLostRecords pins where the re-execution
+// fold asks about lost records: at RESUME and at the continuation's exit, not
+// at the re-executed enter in between (heldRestart.commitsToFold). RESUME
+// names that enter by time and was asked just before it, so the enter is
+// taken even when a loss has become visible since - unlike a restart_syscall
+// enter, which is itself the announcing step and releases the row. The loss
+// refuses the fold where the next question is asked, at the exit: the row is
+// released there, not one record earlier, and the kept enter pairs with it.
+func TestReexecutedEnterIsNotAskedAboutLostRecords(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	f.interruptRead(restartBase, restartTid, restartSys)
+	f.clockAt(restartBase + 850)
+	f.feedNone(f.resumeRecord(restartBase+800, restartTid), "RESUME record")
+	f.loseRecords(1)
+	f.clockAt(restartBase + 860)
+	f.feedNone(f.readEnter(restartBase+800, restartTid), "re-executed read enter after a loss")
+	held, ok := f.el.restarts.lookup(restartTid)
+	if !ok || held.phase != restartContinuing || held.continuation == nil {
+		t.Fatal("the re-executed enter was not kept with the held row")
+	}
+	f.clockAt(restartBase + 3050)
+	rows := f.feed(f.readExit(restartBase+3000, restartTid, 1))
+	requireTwoRows(t, rows, restartBase, restartBase+3000, 1)
+	f.requireNothingHeld()
+	if f.el.numSyscalls != 2 || f.el.numTracepointMismatches != 0 {
+		t.Fatalf("numSyscalls=%d mismatches=%d, want 2 and 0", f.el.numSyscalls, f.el.numTracepointMismatches)
 	}
 }
 
