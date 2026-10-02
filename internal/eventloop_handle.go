@@ -65,10 +65,10 @@ import (
 //     ior cannot vouch for). The entries that carry it are the ones whose
 //     name is the look itself or was built from it:
 //       - the look a call stored: an open_by_handle_at of an unknown handle
-//         (procFdFile, the unnamed answer included), an io_uring_setup, a
-//         procfs-resolved descriptor an fcntl or an ioctl FIOCLEX/FIONCLEX
-//         promoted (the cache entry fdTracker.resolve made is stored as it
-//         is);
+//         (procFdFile, the unnamed answer included) and an io_uring_setup.
+//         (An fcntl or an ioctl FIOCLEX/FIONCLEX on a procfs-resolved
+//         descriptor promoted the answer until task a23; it now stays in
+//         the procfs cache, storeFcntlFdFile.);
 //       - a duplicate (registerDup) or a forked child's copy (inherit) of
 //         a marked entry - FdFile.Dup copies the mark - and a table moved
 //         to another pid, which moves the entries themselves;

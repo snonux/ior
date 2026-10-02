@@ -186,12 +186,13 @@ func feedFcntlPair(t *testing.T, el *eventLoop, cmd uint32, arg uint64, ret int6
 	return feedRawPair(t, el, enterRaw, exitRaw)
 }
 
-// TestDroppedFcntlSetflStillUpdatesTheFdTable covers the fourth mutation that
-// used to sit behind handleFcntlExit's filter: F_SETFL promotes a
-// procfs-resolved descriptor into the fd table with its new flags. While that
-// ran after the checkpoint, a dropped F_SETFL row left the descriptor known
-// only to the (evictable) procfs cache and its flag change unrecorded.
-func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
+// TestDroppedFcntlSetflStillUpdatesTheCachedAnswer covers the fourth
+// mutation that used to sit behind handleFcntlExit's filter: F_SETFL changes
+// the flags of a procfs-resolved descriptor. While that ran after the
+// checkpoint, a dropped F_SETFL row left the flag change unrecorded. Since
+// task a23 the answer is not promoted into the fd table (storeFcntlFdFile):
+// the change is kept by the cache entry the answer is.
+func TestDroppedFcntlSetflStillUpdatesTheCachedAnswer(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
 	// Seed O_RDWR|O_APPEND and pass arg = O_RDWR|O_NONBLOCK, which is the shape
@@ -215,29 +216,18 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 		t.Fatalf("fcntl row survived a -latency filter it cannot satisfy: %v", ep)
 	}
 
-	resolved, ok := el.fdState().get(dupSourceFd, execCommPid)
-	if !ok || resolved == nil {
-		t.Fatalf("fd %d was not registered because the F_SETFL row was filtered out", dupSourceFd)
-	}
-	if resolved.Name() != cachedName {
-		t.Fatalf("fd %d resolved to %q, want %q", dupSourceFd, resolved.Name(), cachedName)
-	}
-	fdFile, ok := resolved.(*file.FdFile)
-	if !ok {
-		t.Fatalf("fd %d resolved to %T, want *file.FdFile", dupSourceFd, resolved)
-	}
 	// Both halves matter, and the access mode is the sharper one: F_SETFL
 	// changes the settable status flags only (fcntl(2)), so the O_RDWR the
 	// descriptor was opened with has to survive the call. Replacing the flag
 	// word with arg&settable instead of merging into it dropped the access
-	// mode, and because the fd table entry is what every later read/write/close
-	// on this descriptor resolves through, the whole rest of its life reported
+	// mode, and because the entry is what every later read/write/close on
+	// this descriptor resolves through, the whole rest of its life reported
 	// O_RDONLY. Under a replace the arg's own O_RDWR is masked away with
 	// everything else outside the settable set, so the defect shows up here as
 	// exactly that missing O_RDWR.
-	want := file.Flags(syscall.O_RDWR | syscall.O_NONBLOCK)
-	if fdFile.Flags() != want {
-		t.Fatalf("fd %d flags = %v, want %v", dupSourceFd, fdFile.Flags(), want)
+	assertCachedFdFlags(t, el, dupSourceFd, syscall.O_RDWR|syscall.O_NONBLOCK)
+	if cached, _ := el.fdState().cachedProcFdFile(dupSourceFd, execCommPid); cached.Name() != cachedName {
+		t.Fatalf("fd %d resolved to %q, want %q", dupSourceFd, cached.Name(), cachedName)
 	}
 }
 

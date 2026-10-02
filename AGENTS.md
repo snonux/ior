@@ -2576,11 +2576,10 @@ kernel program reports the file, and user space compares.
   call's exit record is the first moment a row of the new file can follow.
   A dup is bound at the dup's exit (`Dup` resets the time, `set` stamps); a
   fork's copy has none, i.e. is older than every row of the child, which
-  cannot have entered before the fork; a procfs answer promoted into the
-  table (fcntl on an untracked descriptor) takes its read time; an entry
-  stored again after a flag change keeps its time, and a fork's copy stays
-  unstamped (`set` looks the key up first and stamps only an object the key
-  did not already hold, `stampStored`); `rekeyTable` moves the objects.
+  cannot have entered before the fork; an entry stored again after a flag
+  change keeps its time, and a fork's copy stays unstamped (`set` looks the
+  key up first and stamps only an object the key did not already hold,
+  `stampStored`); `rekeyTable` moves the objects.
   Nothing is stamped in a run without identities. The word is in
   `FdFile` because a side map would cost a write per open and a delete per
   close; it did not grow the per-row allocation, since the open file
@@ -2588,18 +2587,28 @@ kernel program reports the file, and user space compares.
   (`FdFile.own`, 48 bytes, `TestFdFileKeepsItsSize`).
 - **Read times the rules cannot use** (`fdTracker.identReadAt`): every rule
   above that compares a procfs read time - an answer kept through a close,
-  an answer not read again, a promoted answer's binding time - keeps state
-  when the time is later than the row, so a time that is too late makes the
-  state permanent. `bootClockNs` returns `math.MaxUint64` when the clock
-  read fails, and with an unknown time-namespace offset (the boot-clock
-  warning; 0 is assumed) every reading may be in the records' future. Both
-  count as "no read time" there: the answer goes with a close, procfs is
-  read again (unrationed - a cost, not a wrong name), and a promoted answer
-  is bound at its fcntl's exit like any other entry (at worst too early,
-  which a lagging row of the previous file pays for with a procfs read).
-  Before, an entry stamped with the sentinel survived every close of its own
-  file and every row of another. The close row's own rule (`cacheReadBefore`,
+  an answer not read again - keeps state when the time is later than the
+  row, so a time that is too late makes the state permanent. `bootClockNs`
+  returns `math.MaxUint64` when the clock read fails, and with an unknown
+  time-namespace offset (the boot-clock warning; 0 is assumed) every reading
+  may be in the records' future. Both count as "no read time" there: the
+  answer goes with a close, and procfs is read again (unrationed - a cost,
+  not a wrong name). The close row's own rule (`cacheReadBefore`,
   task jr2) still reads the stamps: the sentinel withholds that one name.
+- **No promotion of procfs answers** (task a23, `storeFcntlFdFile`): an
+  fcntl (F_SETFD/F_GETFD/F_SETFL/F_GETFL) or ioctl FIOCLEX/FIONCLEX on a
+  descriptor known only to the procfs cache used to store the answer in the
+  fd table. The `fcntl_event` record has no identity word, so a lagging
+  answer (the number reused by an untraced call) became a "traced" binding:
+  dup/dup3 copied it to another number, and the next row of the file really
+  behind the number dropped it as a stale binding - in a 40 s system-wide
+  run most of the `stale fd bindings dropped`. Now only an entry the table
+  already holds is stored again; the flag change of an answer stays on the
+  cache entry (the answer object itself), which the exec-time close-on-exec
+  drop and later rows see as well. Lost: a dup of such a descriptor is not
+  copied but resolved from procfs on first use, and a change on an answer
+  that was not cached (no answer, torn) lasts for its row only. The fcntl
+  row is still named after the answer, like every row without identity.
 - **Procfs answers** carry their identity when `identOn`
   (`file.NewFdWithPidIdent`): the `ino:` line of the fdinfo read that
   supplies the flags anyway. The link is read a second time because the

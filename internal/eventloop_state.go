@@ -373,32 +373,24 @@ func (t *fdTracker) set(fd int32, pid uint32, f file.File) {
 // is shadowed and, since the traced syscall just rebound the descriptor,
 // stale. Left in place it would resurface once the table entry goes (exec
 // closing a cloexec fd, LRU eviction, close) and name the previous file (task
-// kr2). A cached answer promoted into the table (an fcntl on an untracked
-// descriptor) was seen to name its file when procfs was read, not at this
-// call's exit; identReadAt leaves out a read time that cannot be ordered
-// against the records.
+// kr2). No caller stores a cached answer itself: since task a23 an fcntl on
+// a descriptor known only to the cache leaves the answer there
+// (storeFcntlFdFile), so every new entry is bound at the exit being handled.
 //
 // again says the key already held f: a flag change (storeFcntlFdFile, the
 // FIOCLEX/FIONCLEX handler) stores the entry once more and binds nothing, so
 // it is not stamped - an entry keeps its time, and a fork's copy, which has
-// none, stays unstamped (older than every row of the child). That holds with
-// a cached answer for the key too, which only drops the answer: a state set
-// does not reach today (set drops the key's answer, and no answer is cached
-// while the table holds the key), but a cached answer's read time would not
-// be this entry's binding time either.
+// none, stays unstamped (older than every row of the child). A cached answer
+// for the key is dropped either way: a state set does not reach today (set
+// drops the key's answer, and no answer is cached while the table holds the
+// key).
 func (t *fdTracker) stampStored(key uint64, f file.File, again bool) {
-	cached, shadowed := t.procFdCache[key] // keep the common miss to one lookup
-	if !shadowed {
-		if !again {
-			t.stampBinding(f, 0, false)
-		}
-		return
-	}
 	if !again {
-		readNs, stamped := t.identReadAt(key)
-		t.stampBinding(f, readNs, stamped && file.File(cached) == f)
+		t.stampBinding(f)
 	}
-	t.deleteCacheKey(key)
+	if _, shadowed := t.procFdCache[key]; shadowed {
+		t.deleteCacheKey(key)
+	}
 }
 
 func (t *fdTracker) delete(fd int32, pid uint32) {

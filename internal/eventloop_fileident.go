@@ -161,30 +161,17 @@ func (t *fdTracker) noteExit(ep *event.Pair) {
 }
 
 // stampBinding records on a new fd table entry when its number was bound
-// (file.FdFile.BoundAt): at the exit of the pair being handled, or, for a
-// procfs answer that is promoted into the table (an fcntl on an untracked
-// descriptor), when procfs was read (readNs, known), which is when the
-// number was seen to name the file. A promoted answer without a usable read
-// time (identReadAt: none, the failed-clock sentinel, or a clock of unknown
-// offset) takes the exit time like any other entry: a stamp in the records'
-// future would make the entry outlive every close and refuse every row as
-// older than it, while the exit time is at worst too early, and too early
-// only costs a procfs read (a lagging row of the number's previous file then
-// drops the entry, and procfs, which records the identity, names the rows).
+// (file.FdFile.BoundAt): at the exit of the pair being handled. Until task
+// a23 a procfs answer promoted into the table by an fcntl took its read time
+// instead; answers are no longer promoted (storeFcntlFdFile).
 //
 // set does not call this for an object the key already held (a flag change),
 // so a fork's copy, which does not come through set, stays unstamped, i.e.
-// older than every row of the child. An object that has a time keeps it: one
-// that was evicted from the table and comes back through a flag change on an
-// in-flight row is the same binding. A duplicate arrives without one
-// (FdFile.Dup) and so gets the dup's.
-func (t *fdTracker) stampBinding(f file.File, readNs uint64, known bool) {
+// older than every row of the child. An object that has a time keeps it. A
+// duplicate arrives without one (FdFile.Dup) and so gets the dup's.
+func (t *fdTracker) stampBinding(f file.File) {
 	fdFile, isFd := f.(*file.FdFile)
 	if !t.identOn || !isFd || fdFile == nil || fdFile.BoundAt() != 0 {
-		return
-	}
-	if known {
-		fdFile.SetBoundAt(readNs)
 		return
 	}
 	fdFile.SetBoundAt(t.bindNs)
@@ -302,8 +289,9 @@ func (t *fdTracker) answerOfLaterFile(key uint64, cached *file.FdFile, ident uin
 // identReadAt returns the read time of the procfs answer cached under key
 // for the comparisons of this file that keep state because of it - an
 // answer kept through a close (answerOfLaterFile), not read again
-// (worthReadingAgain), an entry's binding time (stampBinding) - or false
-// where it has none they may use. All three treat a read time later than
+// (worthReadingAgain) - or false where it has none they may use. (A third
+// use, the binding time of an answer an fcntl promoted into the fd table,
+// went with the promotion in task a23.) Both treat a read time later than
 // the row as "the number came to name this file later", so a time that is
 // too late makes the state permanent, while "no read time" only costs a
 // procfs read. Left out, therefore:

@@ -133,7 +133,7 @@ func TestFcntlDescriptorFlagKnowledgeSurvivesUnknownStatusFlags(t *testing.T) {
 			}
 			defer getflPair.Recycle()
 			assertPairFdFlags(t, getflPair, fcntlFdFlagsFd, statusFlags|syscall.O_CLOEXEC)
-			assertTrackedFdFlags(t, el, fcntlFdFlagsFd, statusFlags|syscall.O_CLOEXEC)
+			assertCachedFdFlags(t, el, fcntlFdFlagsFd, statusFlags|syscall.O_CLOEXEC)
 		})
 	}
 }

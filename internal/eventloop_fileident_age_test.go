@@ -247,9 +247,11 @@ func TestForkedCopyIsOlderThanEveryRowOfTheChild(t *testing.T) {
 }
 
 // What set stamps: a new entry gets the exit time of the pair being handled,
-// a procfs answer promoted into the table the time procfs was read, and an
-// entry that is merely stored again (after a flag change) keeps its time.
-func TestBindingTimeOfANewAPromotedAndAReStoredEntry(t *testing.T) {
+// also when the object stored is the procfs answer cached for the key (no
+// caller stores one since task a23, storeFcntlFdFile; its read time used to
+// be taken), and an entry that is merely stored again (after a flag change)
+// keeps its time. The store drops the cached answer either way.
+func TestBindingTimeOfANewAndAReStoredEntry(t *testing.T) {
 	pid := uint32(os.Getpid())
 	n := freeFdNumber(t)
 	tr := identLoop(t).fdState()
@@ -258,13 +260,16 @@ func TestBindingTimeOfANewAPromotedAndAReStoredEntry(t *testing.T) {
 
 	tr.bindNs = 5000
 	tr.set(n, pid, answer)
-	if answer.BoundAt() != 9000 {
-		t.Fatalf("promoted answer bound at %d, want its read time 9000", answer.BoundAt())
+	if answer.BoundAt() != 5000 {
+		t.Fatalf("stored answer bound at %d, want the handled pair's exit 5000", answer.BoundAt())
+	}
+	if _, cached := tr.procFdCache[tr.key(pid, n)]; cached {
+		t.Fatal("the store left the cached answer in place")
 	}
 	tr.bindNs = 20000
 	tr.set(n, pid, answer)
-	if answer.BoundAt() != 9000 {
-		t.Fatalf("re-stored entry bound at %d, want 9000 unchanged", answer.BoundAt())
+	if answer.BoundAt() != 5000 {
+		t.Fatalf("re-stored entry bound at %d, want 5000 unchanged", answer.BoundAt())
 	}
 	// A traced call binds the number while another object's answer is
 	// cached for it: the entry is new, the answer's read time is not its.
@@ -299,7 +304,7 @@ func TestNoBindingTimeIsKeptWithoutTheCapture(t *testing.T) {
 	feedIdentRow(t, el, row)
 	verifyFdNotTracked(t, el, pid, n)
 
-	// Not even a promoted procfs answer, which has a read time to offer.
+	// Not even a stored procfs answer, which has a read time to offer.
 	answer := file.NewFd(n, "/data/cached.txt", syscall.O_RDWR)
 	el.fdState().setProcFdCacheRead(n, pid, answer, 9000)
 	el.fdState().set(n, pid, answer)

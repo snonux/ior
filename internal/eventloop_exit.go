@@ -1314,10 +1314,10 @@ func (e *eventLoop) handleNullExit(ep *event.Pair, nullEv *types.NullEvent) bool
 // resynchronization, F_SETFL/F_SETFD flag update, F_DUPFD/F_DUPFD_CLOEXEC
 // descriptor registration) before filtering the pair - see handleFdExit for
 // why the ordering matters. The flag commands belong to the same class even
-// though no filter dimension reads flags: for a descriptor known only to the
-// procfs cache they promote the entry into the fd table, so behind the
-// checkpoint a dropped row left that promotion, and the new flags with it,
-// unrecorded.
+// though no filter dimension reads flags: they change the state of the fd
+// table entry, or of the procfs cache entry of a descriptor known only to the
+// cache (storeFcntlFdFile), so behind the checkpoint a dropped row left the
+// new flags unrecorded.
 //
 // ioctl shares the fcntl_event layout (fd, cmd, arg), so its pairs arrive here
 // too. They are routed by trace ID to applyIoctlFdState: an ioctl request
@@ -1388,11 +1388,10 @@ func (e *eventLoop) applyIoctlFdState(ep *event.Pair, ioctlEv *types.FcntlEvent,
 		return false
 	}
 	// Same translation as F_SETFD: the descriptor flag lives in the model's
-	// O_CLOEXEC bit; promote a procfs-resolved entry into the fd table so the
-	// exec-time drop and later rows see the new state.
+	// O_CLOEXEC bit, and the entry is stored the same way (a procfs answer
+	// keeps the state in the cache, see storeFcntlFdFile).
 	fdFile.MergeFlags(syscall.O_CLOEXEC, cloexec)
-	ep.File = fdFile
-	e.fdState().set(fd, ioctlEv.Pid, fdFile)
+	e.storeFcntlFdFile(ep, fdFile, fd, ioctlEv.Pid)
 	return true
 }
 
@@ -1495,12 +1494,31 @@ func (e *eventLoop) applyFcntlDescriptorFlags(ep *event.Pair, fcntlEv *types.Fcn
 	return true
 }
 
-// storeFcntlFdFile publishes an updated descriptor on the pair and promotes it
-// into the fd table (a procfs-resolved entry becomes tracked), so the exec-time
-// close-on-exec drop and later rows for that fd inherit the new state.
+// storeFcntlFdFile publishes a descriptor whose flags an fcntl or an ioctl
+// FIOCLEX/FIONCLEX just changed on the pair, and stores it again in the fd
+// table when that is where it came from, so the exec-time close-on-exec drop
+// and later rows for that fd see the new state.
+//
+// A procfs answer is not promoted into the fd table (task a23). It was read
+// when the loop got to the row, possibly after the number was closed and
+// reused, and the fcntl_event record has no identity word to check it
+// against; in the table it passed for a traced binding - dup and dup3 copied
+// it to another number (registerDup) and a later row of the file actually
+// behind the number dropped it as a "stale fd binding". The flag change is
+// not lost: fdFile is the cached answer itself, so the cache keeps the new
+// state, and the exec-time drop applies the same close-on-exec rule to cached
+// answers (dropOnExec). What later rows lose is what the table gives beyond
+// the cache - a dup of the descriptor is not copied but resolved from procfs
+// on its own first use, the answer is subject to the cache's identity checks
+// and re-reads and stays out of the table's LRU - and an answer that was not
+// cached (procfs had none, or it changed under the read) keeps the change
+// for this row only. The row itself is still named after the answer, as
+// every row without an identity is.
 func (e *eventLoop) storeFcntlFdFile(ep *event.Pair, fdFile *file.FdFile, fd int32, pid uint32) {
 	ep.File = fdFile
-	e.fdState().set(fd, pid, fdFile)
+	if e.fdState().tracksExactly(fd, pid, fdFile) {
+		e.fdState().set(fd, pid, fdFile)
+	}
 }
 
 // registerDup models a successful descriptor-duplicating syscall (dup, dup2,

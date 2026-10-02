@@ -140,30 +140,55 @@ func TestUnrelatedIoctlIsNotReadAsFcntl(t *testing.T) {
 	}
 }
 
-// TestIoctlCloseOnExecOnUnknownFdPromotesIt: like F_SETFD, a successful
-// FIOCLEX on a descriptor the tracker never saw opened promotes the
-// procfs-resolved entry with known close-on-exec, so the exec drops it.
-func TestIoctlCloseOnExecOnUnknownFdPromotesIt(t *testing.T) {
+// TestIoctlCloseOnExecOnACachedAnswerStaysInTheCache: like F_SETFD, a
+// successful FIOCLEX or FIONCLEX on a descriptor the tracker never saw opened
+// changes the procfs answer it was resolved to. Since task a23 the answer is
+// not promoted into the fd table (storeFcntlFdFile): the cache entry keeps the
+// new state, and the exec drops it exactly when close-on-exec is now set.
+func TestIoctlCloseOnExecOnACachedAnswerStaysInTheCache(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cmd         uint32
+		startFlags  int32
+		wantFlags   int32
+		survivesExe bool
+	}{
+		{"FIOCLEX", ioctlFioclex, syscall.O_RDWR, syscall.O_RDWR | syscall.O_CLOEXEC, false},
+		{"FIONCLEX", ioctlFionclex, syscall.O_RDWR | syscall.O_CLOEXEC, syscall.O_RDWR, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := newFilteredEventLoop(t, globalfilter.Filter{})
+			el.fdState().setProcFdCache(ioctlCloexecFd, execCommPid,
+				file.NewFd(ioctlCloexecFd, ioctlCloexecFilename, tc.startFlags))
+			ep := feedIoctlPair(t, el, ioctlCloexecFd, tc.cmd, 0, 0)
+			if ep == nil || ep.File.Name() != ioctlCloexecFilename {
+				t.Fatalf("ioctl row = %v, want one named after the cached answer", ep)
+			}
+			ep.Recycle()
+			assertCachedFdFlags(t, el, ioctlCloexecFd, tc.wantFlags)
+
+			execPid(t, el)
+			_, cached := el.fdState().cachedProcFdFile(ioctlCloexecFd, execCommPid)
+			if cached != tc.survivesExe {
+				t.Fatalf("cached answer survived the exec = %v, want %v", cached, tc.survivesExe)
+			}
+		})
+	}
+}
+
+// TestIoctlCloseOnExecOnAnUnknownFdStoresNothing: procfs has no answer for
+// the descriptor (the task is gone), so there is nothing to keep the state
+// in. The row is unnamed, and neither map gains an entry: an unnamed entry
+// in the fd table would keep every later row on the number unnamed.
+func TestIoctlCloseOnExecOnAnUnknownFdStoresNothing(t *testing.T) {
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
 	ep := feedIoctlPair(t, el, ioctlCloexecFd, ioctlFioclex, 0, 0)
-	if ep == nil {
-		t.Fatal("an unfiltered successful ioctl must be emitted")
+	if ep == nil || ep.File.Name() != "" {
+		t.Fatalf("ioctl row = %v, want an unnamed one", ep)
 	}
 	ep.Recycle()
-
-	entry, ok := el.fdState().get(ioctlCloexecFd, execCommPid)
-	if !ok {
-		t.Fatal("FIOCLEX on an unknown fd did not promote it into the fd table")
-	}
-	tracked, ok := entry.(*file.FdFile)
-	if !ok {
-		t.Fatalf("promoted entry is %T, want *file.FdFile", entry)
-	}
-	if set, known := tracked.CloseOnExec(); !set || !known {
-		t.Fatalf("CloseOnExec() = (%v, %v), want (true, true)", set, known)
-	}
-	execPid(t, el)
 	verifyFdNotTracked(t, el, execCommPid, ioctlCloexecFd)
+	verifyProcFdNotCached(t, el, execCommPid, ioctlCloexecFd)
 }
 
 // TestDroppedIoctlRowStillUpdatesCloseOnExec: the fd-state effect runs before

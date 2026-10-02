@@ -137,15 +137,14 @@ func (d bootClockDomain) report(warn func(...any)) {
 //     (eventLoop.lostExecRecord) - the adopting side, until the total next
 //     changes; the gate's comment covers that case for an unknown offset that
 //     puts the stamps in the records' future;
-//   - the file identity's three uses of a procfs read time (task 603: an
-//     answer kept through a close, an answer not read again, the binding time
-//     of an answer promoted into the fd table): there a later time *keeps*
-//     state, so the maximum would have kept it for good - the answer through
-//     every close and never re-read, the entry through every close of its
-//     file and against every row of another. fdTracker.identReadAt therefore
-//     treats the value as no read time, which drops the answer with a close,
-//     reads procfs again, and binds the entry at its fcntl's exit
-//     (stampBinding). It does the same with every read time while the offset
+//   - the file identity's two uses of a procfs read time (task 603: an
+//     answer kept through a close, an answer not read again; a third, the
+//     binding time of an answer an fcntl promoted into the fd table, went
+//     with the promotion in task a23): there a later time *keeps* state, so
+//     the maximum would have kept it for good - the answer through every
+//     close and never re-read. fdTracker.identReadAt therefore treats the
+//     value as no read time, which drops the answer with a close and reads
+//     procfs again. It does the same with every read time while the offset
 //     is unknown (the warning below), which may put them all in the future.
 //
 // With an offset that was read from a namespace ior really runs in (matching

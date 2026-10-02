@@ -207,3 +207,21 @@ func assertTrackedFdFlags(t *testing.T, el *eventLoop, fd int32, want int32) {
 		t.Fatalf("fd %d flags = %v, want %v", fd, fdFile.Flags(), file.Flags(want))
 	}
 }
+
+// assertCachedFdFlags checks that fd of execCommPid is known to the procfs
+// cache only, with the flag word want: a flag change on a procfs answer
+// stays in the cache and is not promoted into the fd table (task a23,
+// storeFcntlFdFile).
+func assertCachedFdFlags(t *testing.T, el *eventLoop, fd int32, want int32) {
+	t.Helper()
+	if tracked, ok := el.fdState().get(fd, execCommPid); ok {
+		t.Fatalf("fd %d was promoted into the fd table: %v", fd, tracked)
+	}
+	cached, ok := el.fdState().cachedProcFdFile(fd, execCommPid)
+	if !ok {
+		t.Fatalf("fd %d is not in the procfs cache", fd)
+	}
+	if cached.Flags() != file.Flags(want) {
+		t.Fatalf("cached fd %d flags = %v, want %v", fd, cached.Flags(), file.Flags(want))
+	}
+}

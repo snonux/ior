@@ -14,7 +14,9 @@ import (
 // may put them all in the records' future. The identity rules treat a later
 // read time as "the number came to name this file later" and keep state on
 // it, so such a time must count as none (fdTracker.identReadAt); otherwise an
-// entry or answer stamped with it outlives every close and every row.
+// answer stamped with it outlives every close and every row. (The binding
+// time of an answer promoted into the fd table was the third such use; task
+// a23 removed the promotion, see storeFcntlFdFile.)
 
 // unusableReadTime is one way a read time cannot be used: its value and
 // whether the boot-clock offset is unknown.
@@ -47,35 +49,6 @@ func cachedAnswerOf(tr *fdTracker, ident uint32, readNs uint64) *file.FdFile {
 	answer.SetIdent(ident)
 	tr.setProcFdCacheRead(5, clockPid, answer, readNs)
 	return answer
-}
-
-// A procfs answer promoted into the fd table (an fcntl on an untracked
-// descriptor) is bound at the fcntl's exit when its read time is unusable:
-// a close of its own file that entered after that releases it, and a later
-// row of another file drops it as a stale binding.
-func TestPromotedAnswerWithAnUnusableReadTimeIsBoundAtTheExit(t *testing.T) {
-	for _, rt := range unusableReadTimes {
-		t.Run(rt.name, func(t *testing.T) {
-			tr := clockTracker(t, rt)
-			tr.bindNs = 5000
-			answer := cachedAnswerOf(tr, 4711, rt.readNs)
-			tr.set(5, clockPid, answer)
-			if answer.BoundAt() != 5000 {
-				t.Fatalf("promoted answer bound at %d, want the exit 5000", answer.BoundAt())
-			}
-			tr.closeIdentified(5, clockPid, 4711, 6000)
-			if _, kept := tr.get(5, clockPid); kept {
-				t.Fatalf("a close of its own file left the entry in the table")
-			}
-
-			again := cachedAnswerOf(tr, 4711, rt.readNs)
-			tr.set(5, clockPid, again)
-			if _, ok := tr.trackedFile(5, clockPid, 4712, 6000); ok || tr.staleBindings != 1 {
-				t.Fatalf("a later row of another file kept the entry (ok=%v, staleBindings=%d)",
-					ok, tr.staleBindings)
-			}
-		})
-	}
 }
 
 // A close of one file keeps a cached answer of another only when that answer
