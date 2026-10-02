@@ -319,7 +319,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `g` / `G` | jump to top / tail |
 | `j`/`k` or `↑`/`↓` | move row (pause) / scroll (live) |
 | `←`/`→` or `h`/`l` | move selected column (pause only) |
-| `enter` | push cell value as exact filter (pause) |
+| `enter` | push cell value as exact filter (pause); on a warning row, show its whole message (`esc`/`enter` close) |
 | `esc` | pop most recent filter (LIFO) |
 | `c` | clear all stream filters |
 | `f` | open advanced filter modal |

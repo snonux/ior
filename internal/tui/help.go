@@ -104,7 +104,11 @@ func dashboardTabHelpLines(exportEnabled bool) []string {
 		"files: d dirs toggle  v bubbles (dirs only)  b metric",
 		"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
 		"flame: / filter  n/N match next/prev  space pause  b metric",
-		"stream: space pause  enter push filter  esc/F undo  /? n/N search",
+		// "enter filter/warning": a filter from the selected cell, or, on
+		// a warning row, its whole message. Spelled out it is over the 70
+		// cells an 80-column overlay shows (see helpSections); the paused
+		// footer says which of the two the selected row gets.
+		"stream: space pause  enter filter/warning  esc/F undo  /? n/N search",
 	}
 	if exportEnabled {
 		lines = append(lines, "stream: x/X export  E open")

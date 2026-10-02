@@ -93,7 +93,9 @@ before the filter summary is cut. It goes away once those rows scroll out of the
 10000-row buffer or a new PID/TID selection clears the stream. The Stream tab itself shows no
 badge, although the rows need not be on screen there: a paused stream does not show warnings
 that arrived after the pause (press space to resume), and an early warning scrolls up out of
-the live view (press `g` to jump to the oldest rows).
+the live view (press `g` to jump to the oldest rows). A warning row is one line, cut at its end;
+pause the stream (space), select the row and press `Enter` to read the whole message (`Esc` or
+`Enter` closes it, `j`/`k` scroll a long one).
 
 ### Save output
 

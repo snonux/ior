@@ -288,14 +288,16 @@ func registeredTabs() map[Tab]tabDescriptor {
 			MinBodyRows:  streamTableMinRows,
 			Render:       tabRenderStream,
 			HandleScroll: tabScrollStream,
-			// The two modals and the FD-trace overlay each own the keyboard
-			// while open: without the overlay here q quit ior instead of
-			// closing it (the top-level model never re-routed it as esc).
+			// The three modals and the FD-trace overlay each own the
+			// keyboard while open: without the overlay or the warning
+			// modal here q quit ior instead of closing it (the top-level
+			// model never re-routed it as esc).
 			BlocksGlobalShortcut: func(m *Model, _ tea.KeyPressMsg) bool {
 				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible() ||
-					m.streamModel.FDTraceVisible()
+					m.streamModel.WarningModalVisible() || m.streamModel.FDTraceVisible()
 			},
-			// Both stream modals are a single text input, focused while open.
+			// The search and export modals are a single text input, focused
+			// while open; the warning modal has none.
 			TextInputFocused: func(m *Model) bool {
 				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
 			},

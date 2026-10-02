@@ -80,6 +80,7 @@ type Model struct {
 	fdTraceView     fdTraceViewState
 	exportModal     ExportModal
 	searchModal     SearchModal
+	warningModal    WarningModal
 	searchPattern   string
 	searchRegex     *regexp.Regexp
 	searchDirection SearchDirection
@@ -223,6 +224,13 @@ func (m *Model) SearchModalVisible() bool {
 	return m.searchModal.Visible()
 }
 
+// WarningModalVisible reports whether the modal showing a warning row's whole
+// message is open. It owns the keyboard like the other two (HandleKey), so
+// the parent must keep its global shortcuts, q in particular, off meanwhile.
+func (m *Model) WarningModalVisible() bool {
+	return m.warningModal.Visible()
+}
+
 // FDTraceVisible reports whether the FD-trace overlay is currently open. Like
 // the two modals it owns the keyboard while open (see handleFDTraceKey), so the
 // parent must not act on global shortcuts, q in particular, meanwhile.
@@ -236,9 +244,10 @@ func (m *Model) Paused() bool {
 }
 
 // HandleKey dispatches keyStr to the active modal or live/paused stream handlers.
-// keyStr is one key's name as tea.KeyPressMsg.String spells it; an open modal
-// gets the key press it names (keyMsgFromString) and ignores a string that
-// names no key, rather than typing it. It reports whether the key was
+// keyStr is one key's name as tea.KeyPressMsg.String spells it; an open input
+// modal gets the key press it names (keyMsgFromString) and ignores a string
+// that names no key, rather than typing it; the warning modal, which has no
+// input, takes the name itself. It reports whether the key was
 // consumed (false means the caller should handle it) and returns a command
 // for any request the stream cannot fulfil itself: it emits
 // messages.GlobalFilterRequestedMsg, messages.GlobalFilterUndoRequestedMsg
@@ -253,6 +262,13 @@ func (m *Model) HandleKey(keyStr string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		return m.handleModalKey(msg), nil
+	}
+	if m.warningModal.Visible() {
+		// The warning modal owns the keyboard like the two input modals:
+		// it takes every key, the ones it has no use for included, so none
+		// resumes the stream or reaches the dashboard behind it.
+		m.warningModal = m.warningModal.Update(keyStr, m.width, m.height)
+		return true, nil
 	}
 	if m.fdTraceView.visible {
 		return m.handleFDTraceKey(keyStr), nil
@@ -424,10 +440,7 @@ func (m *Model) handleStreamKey(keyStr string) (bool, tea.Cmd) {
 	case "x", "X", "E":
 		return m.handleStreamExportKey(keyStr)
 	case "enter":
-		if m.paused {
-			return m.requestGlobalFilterFromSelectedCell()
-		}
-		return false, nil
+		return m.handleEnterKey()
 	case "F":
 		return m.requestGlobalFilterUndo(true)
 	case "esc":
@@ -455,6 +468,30 @@ func (m *Model) handleStreamKey(keyStr string) (bool, tea.Cmd) {
 	default:
 		return false, nil
 	}
+}
+
+// handleEnterKey handles Enter on the stream table, which acts on the paused
+// selection only (live, the key is left to the caller): on a syscall row it
+// requests a filter from the selected cell, on a warning row, which has no
+// cells, it opens the modal with the row's whole message (task b23; Enter
+// did nothing there before, and the row's one line cut the message's tail).
+func (m *Model) handleEnterKey() (bool, tea.Cmd) {
+	if !m.paused {
+		return false, nil
+	}
+	if ev := m.selectedEvent(); ev != nil && ev.IsWarning {
+		m.warningModal = m.warningModal.Open(*ev)
+		return true, nil
+	}
+	return m.requestGlobalFilterFromSelectedCell()
+}
+
+// selectedEvent returns the selected row, nil when no row is selected.
+func (m *Model) selectedEvent() *StreamEvent {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
+		return nil
+	}
+	return &m.filtered[m.selectedIdx]
 }
 
 // requestGlobalFilterUndo returns a command asking the parent to pop the
@@ -644,6 +681,9 @@ func (m *Model) View(width, height int) string {
 	}
 	if m.searchModal.Visible() {
 		return m.searchModal.View(width, height)
+	}
+	if m.warningModal.Visible() {
+		return m.warningModal.View(width, height)
 	}
 	// The footer gets only the rows the table leaves of height: on a short
 	// terminal the table (never under one event row) takes them all, and the
@@ -1073,10 +1113,12 @@ func (m *Model) ensureSelectedCol() {
 // set, so it reads exactly like the filter summary. A cell that yields no
 // filter (a blank string cell, a placeholder cell - the File of a fileless
 // row, the Latency or Ret of a noreturn row - or an unknown column) is not
-// handled, so no empty undo layer is pushed. Nor is a warning row: it is
-// drawn as one spanning line without cells (renderWarningRow), every value
-// behind it is a placeholder (pid 0, ret -1, the "warning" label), and a
-// filter built from one would select by a value the user cannot see.
+// handled, so no empty undo layer is pushed. Nor does a warning row yield
+// one: it is drawn as one spanning line without cells (renderWarningRow),
+// every value behind it is a placeholder (pid 0, ret -1, the "warning"
+// label), and a filter built from one would select by a value the user
+// cannot see. Enter never gets here with one (handleEnterKey shows its
+// message instead); the check keeps that true for any other caller.
 func (m *Model) requestGlobalFilterFromSelectedCell() (bool, tea.Cmd) {
 	if m.fdTraceView.visible || m.selectedIdx < 0 || m.selectedIdx >= len(m.filtered) {
 		return false, nil

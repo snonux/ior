@@ -29,6 +29,8 @@ type columnLayout struct {
 // which floor) when the compact layout still exceeds the available width. Less
 // telling columns (TID, Gap, Bytes) go first; the final pass takes every
 // column down to a single cell so the row fits whenever width allows it.
+// A TID column too narrow for its number costs least: the cell then keeps
+// the low digits, or reads "=PID" on a main thread (tidCell).
 var columnShrinkSteps = []struct{ col, floor int }{
 	{streamColTID, 3}, {streamColGap, 5}, {streamColBytes, 5}, {streamColLatency, 6},
 	{streamColComm, 5}, {streamColPID, 5}, {streamColSyscall, 5}, {streamColRet, 3},
@@ -86,7 +88,8 @@ func longestSyscallNameWidth() int {
 // ever narrower on a wider terminal.
 //
 // The order is by what a cut cell costs: a readable File cell first, whole
-// PIDs and TIDs (7 digits with the default pid_max), then syscall names - the
+// PIDs and TIDs (7 digits with the default pid_max; narrower columns keep
+// their low digits, fitNumberCell), then syscall names - the
 // Syscall column used to stay at 9 or 11 cells at any width, so a 200-column
 // terminal showed "cloc...leep" beside a hundred-cell File column (task 923).
 // Names and paths take turns: the usual names (syscallUsualWidth), a File
@@ -95,6 +98,13 @@ func longestSyscallNameWidth() int {
 // room for paths, come the less often cut Comm, FD, Ret and Bytes cells, the
 // few names longer than syscallCommonWidth, and on very wide terminals whole
 // comms and roomier PID/TID columns.
+//
+// Ret stays at 4 cells up to 112 columns and at 5 from 113 (task b23
+// asked whether to widen it earlier): every errno down to -999 fits in 4
+// and all of them (to -4095) in 5, and the returns that do not fit are
+// sizes, offsets and addresses of 7 to 15 digits, which no width a path or
+// a syscall name could spare would show whole. They are cut at the left
+// with their sign kept (fitNumberCell) instead.
 var columnGrowSteps = []struct{ col, ceil int }{
 	{streamColFile, 20},
 	{streamColPID, 7}, {streamColTID, 7},
@@ -221,7 +231,9 @@ func streamColumns(width int) []common.TableColumn {
 }
 
 // renderEventRow renders one row of the stream or fd-trace table: the ten
-// cells of a syscall row, or the spanning line of a warning row.
+// cells of a syscall row, or the spanning line of a warning row. Text cells
+// (and the two formatted durations) are cut in the middle (fitCell), the
+// numbers at the left (fitNumberCell, tidCell).
 func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool, selectedCol int) string {
 	if ev.IsWarning {
 		return renderWarningRow(ev, columns, selected)
@@ -241,12 +253,12 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 		fitCell(formatDurationNs(ev.GapNs), columns[0].Width),
 		fitCell(latency, columns[1].Width),
 		fitCell(ev.Comm, columns[2].Width),
-		fitCell(strconv.FormatUint(uint64(ev.PID), 10), columns[3].Width),
-		fitCell(strconv.FormatUint(uint64(ev.TID), 10), columns[4].Width),
+		fitNumberCell(strconv.FormatUint(uint64(ev.PID), 10), columns[3].Width),
+		tidCell(&ev, columns[4].Width),
 		fitCell(ev.Syscall, columns[5].Width),
-		fitCell(fd, columns[6].Width),
-		fitCell(ret, columns[7].Width),
-		fitCell(strconv.FormatUint(ev.Bytes, 10), columns[8].Width),
+		fitNumberCell(fd, columns[6].Width),
+		fitNumberCell(ret, columns[7].Width),
+		fitNumberCell(strconv.FormatUint(ev.Bytes, 10), columns[8].Width),
 		fitCell(ev.FileName, columns[9].Width),
 	}
 	if ev.IsError {
@@ -263,13 +275,14 @@ func renderEventRow(ev StreamEvent, columns []common.TableColumn, selected bool,
 // that column and, like a path, in the middle, which removed exactly the
 // cause a warning names early on: "(t...may be unnamed" at 220 columns (task
 // 923). A row is one terminal line (model.visibleRows), so the message
-// cannot wrap; what the end cut drops is the trailing advice. The text is
+// cannot wrap; what the end cut drops is the trailing advice, which paused
+// Enter on the row shows whole (WarningModal, task b23). The text is
 // warningLine's, which the paused search matches too.
 //
 // The line is exactly as wide as the columns with their separators, so it
 // fills the panel like every other row. Selected, it takes the row
 // selection style as a whole: it has no cells to mark, and Enter builds no
-// filter from it (requestGlobalFilterFromSelectedCell).
+// filter from it but opens that modal (Model.handleEnterKey).
 func renderWarningRow(ev StreamEvent, columns []common.TableColumn, selected bool) string {
 	width := len(columns) - 1
 	for _, col := range columns {
@@ -290,6 +303,8 @@ func renderWarningRow(ev StreamEvent, columns []common.TableColumn, selected boo
 // space. renderWarningRow draws this string and streamEventMatchesRegex
 // searches it, so a search hit on a warning row is always text on screen
 // (or text the end cut dropped), never one of the row's hidden placeholders.
+// WarningModal shows the message alone, under its own title, with the line
+// feeds this flattens kept.
 func warningLine(ev StreamEvent) string {
 	return common.Sanitize(ev.Syscall + ": " + ev.FileName)
 }
@@ -384,6 +399,60 @@ func formatDurationNs(v uint64) string {
 // turn into invalid UTF-8; the table pads the rest.
 func fitCell(s string, width int) string {
 	return common.TruncateMiddle(common.Sanitize(s), width, common.ASCIIEllipsis)
+}
+
+// fitNumberCell shortens a decimal number (digits, with a leading "-" when
+// negative; also the "-" placeholder of an absent value) to at most width
+// cells by cutting it at the LEFT: the sign stays, then the one-cell marker
+// "…" (common.Ellipsis), then the low digits. fitCell's cut, both ends
+// around "...", suits a path but not a number (task b23): with the default
+// pid_max a PID has seven digits, and in the six-cell PID and four-cell TID
+// columns of an 80-column terminal every thread of a process read "1...30"
+// and "1...", the three-cell marker taking most of the cell and the kept
+// high digits being the ones the ids share. The low digits tell threads and
+// processes apart, and of a return value they are the errno; what the left
+// cut gives up is the magnitude, which the marker says is missing. The
+// marker is one cell, not the three of the cells' "...", because a numeric
+// column is 3 to 8 cells wide.
+//
+// common's marker rule applies to the digits: with a single cell left for
+// them the low digit is shown without a marker. A one-cell column shows the
+// sign of a negative number rather than its last digit. Numbers are ASCII,
+// so they need no sanitising.
+func fitNumberCell(number string, width int) string {
+	if len(number) <= width {
+		return number
+	}
+	sign, digits := "", number
+	if strings.HasPrefix(number, "-") {
+		sign, digits = "-", number[1:]
+	}
+	if width <= len(sign) {
+		return sign[:max(width, 0)]
+	}
+	return sign + common.TruncateLeft(digits, width-len(sign), common.Ellipsis)
+}
+
+// samePIDCell is what the TID cell of a main thread shows when the number
+// does not fit: its TID is the PID, shown in the cell to its left.
+const samePIDCell = "=PID"
+
+// tidCell is the TID cell of ev: the number, or, when the column is too
+// narrow for it and the row is its process's main thread (TID == PID, the
+// usual case), samePIDCell, cut to "=" under four cells. The low digits a
+// cut TID keeps would only repeat, in fewer cells, those of the PID cell
+// beside it, while "=PID" says the whole value. A TID that fits is always the
+// number, so the cell reads as before wherever there is room (from 92
+// columns for seven digits); Enter on it filters by the TID either way.
+func tidCell(ev *StreamEvent, width int) string {
+	tid := strconv.FormatUint(uint64(ev.TID), 10)
+	if len(tid) > width && ev.TID == ev.PID {
+		if width < len(samePIDCell) {
+			return samePIDCell[:min(max(width, 0), 1)]
+		}
+		return samePIDCell
+	}
+	return fitNumberCell(tid, width)
 }
 
 // panelContentWidth is the value passed to PanelStyle.Width for a given

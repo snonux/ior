@@ -73,23 +73,39 @@ func headerAndRows(t *testing.T, lines []string) (string, []string) {
 	return "", nil
 }
 
+// titleCell is the display-cell offset of column col's title in header. The
+// titles are ASCII, but the panel's border rune in front of them is not, so a
+// byte offset is not a cell offset.
+func titleCell(t *testing.T, header string, col int) int {
+	t.Helper()
+	index := strings.Index(header, streamColumnTitles[col])
+	if index < 1 {
+		t.Fatalf("title %q missing in header %q", streamColumnTitles[col], header)
+	}
+	return common.DisplayWidth(header[:index])
+}
+
 // cellAt returns the text of column col in line: the cells between that
 // title's offset in the header and the next title's. It fails when the cell
 // is not preceded by the separator, which is what a shifted row looks like.
+// Offsets are display cells (ansi.Cut), not bytes: a number cut from the left
+// starts with the three-byte, one-cell marker "…" (task b23), which would
+// shift every later cell of the row by two bytes.
 func cellAt(t *testing.T, header, line string, col int) string {
 	t.Helper()
-	start := strings.Index(header, streamColumnTitles[col])
-	if start < 1 || start > len(line) {
-		t.Fatalf("title %q missing or row too short\nheader %q\nrow    %q", streamColumnTitles[col], header, line)
+	start := titleCell(t, header, col)
+	if start > common.DisplayWidth(line) {
+		t.Fatalf("row too short for column %q\nheader %q\nrow    %q", streamColumnTitles[col], header, line)
 	}
-	if line[start-1] != ' ' {
+	if ansi.Cut(line, start-1, start) != " " {
 		t.Fatalf("column %q does not start at the header's offset %d\nheader %q\nrow    %q", streamColumnTitles[col], start, header, line)
 	}
-	end := len(line)
-	if col+1 < len(streamColumnTitles) {
-		end = min(strings.Index(header, streamColumnTitles[col+1]), len(line))
+	if col+1 == len(streamColumnTitles) {
+		// The last cell runs to the panel's border, which panelText drops.
+		return panelText(ansi.Cut(line, start, common.DisplayWidth(line)))
 	}
-	return panelText(line[start:end])
+	end := min(titleCell(t, header, col+1), common.DisplayWidth(line))
+	return strings.TrimSpace(ansi.Cut(line, start, end))
 }
 
 // assertRowAligned checks that every cell of an ordinary widthTestEvents row
@@ -466,14 +482,16 @@ func TestWarningRowSanitizesItsMessage(t *testing.T) {
 	assertCleanRowText(t, got, width)
 }
 
-// TestPausedEnterOnWarningRowIsNotHandled: a warning row is one spanning
+// TestPausedEnterOnWarningRowPushesNoFilter: a warning row is one spanning
 // line without cells, and every value behind it is a placeholder, so Enter
-// pushes no filter from any column, where it used to push pid=0 or ret=-1.
-func TestPausedEnterOnWarningRowIsNotHandled(t *testing.T) {
+// requests no filter from any column, where it used to push pid=0 or ret=-1.
+// The key is consumed all the same: it shows the row's whole message (task
+// b23, warningmodal_test.go).
+func TestPausedEnterOnWarningRowPushesNoFilter(t *testing.T) {
 	warning := NewWarningEvent(1, "Trace stopped: boom")
 	for col := range streamColumnCount {
-		if handled, cmd := pressEnterOnCell(t, warning, col); handled || cmd != nil {
-			t.Fatalf("column %d of a warning row: enter was handled (cmd=%v)", col, cmd != nil)
+		if handled, cmd := pressEnterOnCell(t, warning, col); !handled || cmd != nil {
+			t.Fatalf("column %d of a warning row: enter handled=%v, command=%v", col, handled, cmd != nil)
 		}
 	}
 }
