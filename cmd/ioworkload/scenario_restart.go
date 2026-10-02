@@ -200,7 +200,10 @@ func stopRestartTwice() error {
 // stopTwice stops and continues the thread tid once while it is blocked in
 // sleep and once more while it is blocked in the restart_syscall that resumes
 // it. /proc shows a thread resumed that way under restart_syscall's number,
-// not the interrupted call's.
+// not the interrupted call's. Should the sleep end before the second wait
+// sees it there, that wait runs into reexecHandshakeTimeout, longer than the
+// harness lets a workload live: the test then fails as a workload timeout,
+// not with this scenario's message.
 func stopTwice(tid int, sleep *rawSleep, stopper *reexecStopper) error {
 	if err := waitBlockedIn(tid, sleep.procState(), "clock_nanosleep"); err != nil {
 		return err

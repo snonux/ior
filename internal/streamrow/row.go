@@ -55,8 +55,9 @@ type Row struct {
 	// (event.Pair.Restarts): restart_syscall continuations of a stopped call
 	// and re-executions after a signal. 0 for a call that was not interrupted
 	// and for one whose restart was not folded (its RetVal is then the restart
-	// code). Data outputs carry it (Parquet, the stream CSV export); the Stream
-	// tab does not show it.
+	// code). A row whose later hop was refused carries both a count and a
+	// restart code. Data outputs carry it (Parquet, the stream CSV export);
+	// the Stream tab does not show it.
 	Restarts uint8
 	FD       int32
 	// EpollOp is the epoll_ctl operation as a readable token (ADD/MOD/DEL),
@@ -204,30 +205,7 @@ func (s *Sequencer) Next() uint64 {
 
 // New converts one syscall pair into the shared row model.
 func New(seq uint64, pair *event.Pair) Row {
-	row := Row{
-		Seq:               seq,
-		TimeNs:            pair.EnterEv.GetTime(),
-		Syscall:           pair.EnterEv.GetTraceId().Name(),
-		Family:            string(pair.EnterEv.GetTraceId().Family()),
-		Comm:              pair.Comm,
-		PID:               pair.EnterEv.GetPid(),
-		TID:               pair.EnterEv.GetTid(),
-		FileName:          pair.FileName(),
-		NoFile:            pair.File == nil,
-		DurationNs:        pair.Duration,
-		NoReturn:          pair.NoReturn,
-		Restarts:          pair.Restarts,
-		GapNs:             pair.DurationToPrev,
-		Bytes:             pair.Bytes,
-		AddressSpaceBytes: pair.AddressSpaceBytes,
-		RequestedSleepNs:  pair.RequestedSleepNs,
-		Nfds:              pair.Nfds,
-		TimeoutNs:         pair.TimeoutNs,
-		FD:                UnknownFD,
-		// OldName carries the rename/link source path; FileName is the new path.
-		// Empty for non-rename/link syscalls (pair.Oldname is zero there).
-		OldName: pair.Oldname,
-	}
+	row := baseRow(seq, pair)
 	if fd, ok := pair.FileDescriptor(); ok {
 		row.FD = fd
 	}
@@ -253,6 +231,36 @@ func New(seq uint64, pair *event.Pair) Row {
 	}
 
 	return row
+}
+
+// baseRow copies the fields every pair has into a row. New adds what only
+// some pairs carry: a descriptor, epoll_ctl metadata, a return value. FD
+// starts as UnknownFD, the value of a pair without a descriptor.
+func baseRow(seq uint64, pair *event.Pair) Row {
+	return Row{
+		Seq:               seq,
+		TimeNs:            pair.EnterEv.GetTime(),
+		Syscall:           pair.EnterEv.GetTraceId().Name(),
+		Family:            string(pair.EnterEv.GetTraceId().Family()),
+		Comm:              pair.Comm,
+		PID:               pair.EnterEv.GetPid(),
+		TID:               pair.EnterEv.GetTid(),
+		FileName:          pair.FileName(),
+		NoFile:            pair.File == nil,
+		DurationNs:        pair.Duration,
+		NoReturn:          pair.NoReturn,
+		Restarts:          pair.Restarts,
+		GapNs:             pair.DurationToPrev,
+		Bytes:             pair.Bytes,
+		AddressSpaceBytes: pair.AddressSpaceBytes,
+		RequestedSleepNs:  pair.RequestedSleepNs,
+		Nfds:              pair.Nfds,
+		TimeoutNs:         pair.TimeoutNs,
+		FD:                UnknownFD,
+		// OldName carries the rename/link source path; FileName is the new path.
+		// Empty for non-rename/link syscalls (pair.Oldname is zero there).
+		OldName: pair.Oldname,
+	}
 }
 
 // --- compile-time interface satisfaction assertion ---
