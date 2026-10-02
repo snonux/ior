@@ -219,7 +219,8 @@ func (e *eventLoop) requestCommSweepAfterDrop() uint64 {
 }
 
 // readDropStampClock reads the boot clock through the test seam
-// dropStampClock, or bootClockNs when none is set.
+// dropStampClock, or bootClockNs when none is set: the host's boot clock, on
+// which the records are stamped, whatever time namespace ior runs in.
 func (e *eventLoop) readDropStampClock() uint64 {
 	if e.dropStampClock != nil {
 		return e.dropStampClock()

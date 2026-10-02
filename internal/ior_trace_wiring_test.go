@@ -224,8 +224,9 @@ func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing
 // SetChangeHook, on every setup that published its manager to a TUI, before
 // the loop can run. On those only: a headless run changes no probe, and
 // listening starts with a stamp that refuses the folds of the calls interrupted
-// before it - in a time namespace with a positive boottime offset, where the
-// stamp lies in the records' future, every fold for the length of the offset.
+// before it - in a time namespace whose positive boottime offset could not be
+// determined (bootclock.go), where the stamp lies in the records' future,
+// every fold for the length of the offset.
 func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
 	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	watch := callsNamed(decl, "watchProbeChanges")

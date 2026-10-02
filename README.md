@@ -246,6 +246,17 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either.
+- **Time namespaces: timestamps are the host's.** The kernel stamps every record with the
+  host's boot clock, which a time namespace does not shift, so `time_ns` is the host's
+  `CLOCK_BOOTTIME` even when ior runs inside a namespace with a boottime offset
+  (`unshare -T --boottime N`), where `clock_gettime` and `/proc/uptime` read `N` seconds
+  more. ior reads the offset of its own namespace from `/proc/self/timens_offsets` at
+  startup and takes it out of its own clock readings, so its bookkeeping (naming the close of
+  a descriptor opened before the trace, folding an interrupted call with its restart) works
+  as it does on the host. If the offset cannot be determined (the file is unreadable or
+  malformed, or it describes another namespace than the one ior runs in), ior prints one
+  warning and assumes none; with an actual offset such closes may then be unnamed or named
+  after the file that reused the number, and interrupted calls may stay two rows.
 
 ## Bytes Classification
 

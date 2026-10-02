@@ -1227,6 +1227,9 @@ func runTraceSetup(
 	if infra.mgr != nil && hooks.probes == nil {
 		el.traceSetIsFinal(infra.mgr.IsActive)
 	}
+	// The loop orders its own boot-clock readings against record times; say so
+	// once if a time namespace's offset between the two is unknown.
+	warnUnknownBootClock(warnSetup)
 	el.trustRenameRecords(infra.renameProbeAttached)
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	signalTraceStarted(started)

@@ -260,8 +260,8 @@ import (
 // even read the interrupted exit, holds the row afterwards, and folds. The
 // clear of the map is the second line: with it the stale RESUME is not emitted
 // in the first place, which also covers a record time and a userspace clock
-// reading that cannot be compared (a time namespace with a boottime offset,
-// see probesChanged).
+// reading that cannot be compared (a time namespace whose boottime offset
+// could not be determined, see probesChanged).
 //
 // The rule is deliberately coarse. Any pair's change refuses every row
 // interrupted before it, of any syscall and any task: a family toggle is a
@@ -639,8 +639,9 @@ func (w *restartProbeWatch) changedSince(since uint64) bool {
 // reading, which keeps the invariant and refuses the folds of the calls
 // interrupted before the next read of the real total (usually one).
 //
-// The comparison of a record time with a user-space clock reading assumes no
-// time-namespace boottime offset, like every other use of bootClockNs.
+// The comparison of a record time with a user-space clock reading holds
+// inside a time namespace as well: the stamps come from bootClockNs, which
+// takes the namespace's boottime offset out of them (bootclock.go).
 type restartDropWatch struct {
 	mu          sync.Mutex
 	total       uint64 // the kernel's cumulative drop count at the latest observation
@@ -1534,15 +1535,17 @@ func (e *eventLoop) watchProbeChanges(listen func(hook func())) {
 // only the stamps are taken.
 //
 // The stamp is a user-space CLOCK_BOOTTIME reading compared with record times
-// from bpf_ktime_get_boot_ns, like every use of bootClockNs, and so assumes
-// that ior does not run in a time namespace with a boottime offset (the BPF
-// helper is not namespaced, the user-space clock is). With a positive offset
-// the stamp lies in the records' future and every fold is refused until the
-// records' clock has caught up with it - for the length of the offset after
-// each probe change, the install included. With a negative offset the stamp
-// lies in their past, the time rule refuses too little, and the clear of the
-// map is the only guard. Nothing detects or corrects the offset here, as
-// nowhere else in ior; only TUI runs take a stamp at all.
+// from bpf_ktime_get_boot_ns. Inside a time namespace with a boottime offset
+// the two clocks differ by that offset (the BPF helper is not namespaced, the
+// user-space clock is), so bootClockNs takes the offset out of its reading
+// (bootclock.go, task y13). Uncorrected, a positive offset put the stamp in
+// the records' future and every fold was refused until the records' clock had
+// caught up with it - for the length of the offset after each probe change,
+// the install included - and a negative one put it in their past, where the
+// time rule refuses too little and the clear of the map is the only guard.
+// That is still what happens when the offset cannot be determined (it is then
+// taken as 0 and warned about once, warnUnknownBootClock). Only TUI runs take a
+// stamp at all.
 func (e *eventLoop) probesChanged() {
 	e.restarts.probes.note(e.readDropStampClock())
 	if e.restartPending != nil {

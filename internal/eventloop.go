@@ -210,11 +210,12 @@ type eventLoop struct {
 	// control record) and consumed by the event-loop goroutine in
 	// applyPendingCommRefresh, which owns the comm cache's lazy init.
 	commRefreshPending atomic.Bool
-	// lastDropSeenBootNs is the CLOCK_BOOTTIME reading (the clock of the
-	// records' bpf_ktime_get_boot_ns timestamps) taken right after the newest
-	// drop-counter poll that reported lost records: every lost record was
-	// reserved before it. Written by the drop-monitor goroutine, read by the
-	// event-loop goroutine (provisionalSeedNeedsRecheck), hence atomic.
+	// lastDropSeenBootNs is the boot-clock reading (bootClockNs: the host's
+	// clock, that of the records' bpf_ktime_get_boot_ns timestamps, also
+	// inside a time namespace) taken right after the newest drop-counter poll
+	// that reported lost records: every lost record was reserved before it.
+	// Written by the drop-monitor goroutine, read by the event-loop goroutine
+	// (provisionalSeedNeedsRecheck), hence atomic.
 	lastDropSeenBootNs atomic.Uint64
 	// dropStampClock reads the clock lastDropSeenBootNs is stamped from. nil
 	// (every loop outside one test) means bootClockNs; the store-order test

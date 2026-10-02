@@ -37,6 +37,10 @@ type TestHarness struct {
 	// the test process's own), typically ior's IOR_TEST_* hooks. Honoured by
 	// every run that builds ior through iorCommand.
 	IorEnv []string
+	// IorWrapper, when set, is a command prefix ior is started through, e.g.
+	// "unshare -T --boottime 1000 --". The wrapper must exec ior rather than
+	// fork it: the harness signals and reaps the process it started.
+	IorWrapper []string
 	// IorOutput, when set, additionally receives every stdout/stderr line
 	// of ior runs that wait for readiness (RunWithIorArgs). waitBoth reads
 	// both pipes to EOF before it reaps ior, so once a run that ended on its
@@ -362,10 +366,12 @@ func (h *TestHarness) startIorArgs(args []string) (*exec.Cmd, error) {
 }
 
 // iorCommand builds the (unstarted) ior command: run in the output directory
-// and, when configured, with the BPF object override and IorEnv in its
-// environment. A nil Env (neither configured) inherits the test process's.
+// and, when configured, through IorWrapper and with the BPF object override
+// and IorEnv in its environment. A nil Env (neither configured) inherits the
+// test process's.
 func (h *TestHarness) iorCommand(args []string) *exec.Cmd {
-	cmd := exec.Command(h.IorBinary, args...)
+	argv := slices.Concat(h.IorWrapper, []string{h.IorBinary}, args)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = h.OutputDir
 	if h.BpfObject != "" || len(h.IorEnv) > 0 {
 		cmd.Env = append(os.Environ(), h.IorEnv...)

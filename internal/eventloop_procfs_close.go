@@ -43,10 +43,11 @@ import (
 //
 //   - the fd-table entry (a traced open/dup/pipe...), unchanged from before;
 //   - else the procfs-cache entry, but only when its readlink returned before
-//     the close began: the entry's read stamp (fdTracker.procFdReadAt,
-//     CLOCK_BOOTTIME taken after the read) is earlier than the close's enter
-//     time. The cache is evicted by every close, close_range and EBADF of the
-//     number, so such an entry describes the descriptor this close releases.
+//     the close began: the entry's read stamp (fdTracker.procFdReadAt, the
+//     host's boot clock read after the readlink, see bootClockNs) is earlier
+//     than the close's enter time. The cache is evicted by every close,
+//     close_range and EBADF of the number, so such an entry describes the
+//     descriptor this close releases.
 //     The stamp matters because the cache is filled at processing time, which
 //     lags the kernel: live, a write to the file just before its close was
 //     processed after the close and the pipe that reused the number, so the
@@ -124,7 +125,8 @@ func (t *fdTracker) resolveClosing(fd int32, pid uint32, closeNs uint64) file.Fi
 // time, i.e. not before.
 func (t *fdTracker) cacheReadBefore(fd int32, pid uint32, closeNs uint64) bool {
 	readNs, ok := t.cachedProcFdReadAt(fd, pid)
-	// User-space boot clock vs BPF stamps: assumes no time-namespace boottime
-	// offset (see bootClockNs).
+	// User-space boot clock vs BPF stamps: both on the host's boot clock,
+	// bootClockNs takes a time namespace's boottime offset out of its reading
+	// (bootclock.go). Uncorrected, an offset decided every comparison here.
 	return ok && readNs < closeNs
 }

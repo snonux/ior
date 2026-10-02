@@ -38,8 +38,9 @@ type fdTracker struct {
 	procFdCache  map[uint64]*file.FdFile // procfs-resolved metadata for unknown FDs
 	procFdAges   map[uint64]uint64       // access age per cache entry, for LRU eviction
 	maxCacheSize int                     // max entries before eviction; 0 = defaultMaxProcFdCacheSize
-	// procFdReadAt is when each cache entry's readlink returned, on the
-	// CLOCK_BOOTTIME scale of the BPF record timestamps (absent: unknown). A
+	// procFdReadAt is when each cache entry's readlink returned, on the host's
+	// boot clock, the scale of the BPF record timestamps (bootClockNs takes a
+	// time namespace's offset out of the reading; absent: unknown). A
 	// close row may use a cache entry only if it was read before the close
 	// entered (task jr2, eventloop_procfs_close.go). It lives beside the cache
 	// rather than in file.FdFile so the per-row files keep their size.
@@ -761,7 +762,7 @@ func (t *fdTracker) resolve(fd int32, pid uint32) file.File {
 	if discovered.Name() != "" {
 		// Stamped after the readlink returned: a close row may reuse this
 		// answer only if it was read before that close began (task jr2,
-		// eventloop_procfs_close.go). One vDSO clock read next to a readlink.
+		// eventloop_procfs_close.go). One clock_gettime(2) next to a readlink.
 		t.setProcFdCacheRead(fd, pid, discovered, bootClockNs())
 	}
 	return discovered

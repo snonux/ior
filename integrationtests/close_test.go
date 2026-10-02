@@ -4,6 +4,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	iorparquet "ior/internal/parquet"
 )
 
 func TestCloseBasic(t *testing.T) {
@@ -147,6 +149,14 @@ func TestCloseRangeEmpty(t *testing.T) {
 // so the test does not demand that these rows be unnamed.
 func TestCloseUntrackedNeverNamesTheReusingFile(t *testing.T) {
 	rows, _ := runParquetScenarioRows(t, "close-untracked", defaultDuration, nil, nil)
+	assertCloseUntrackedRows(t, rows)
+}
+
+// assertCloseUntrackedRows checks the rows of a close-untracked run: the close
+// of the first file is named, all 64 closes have a row, and none is named
+// after the pipe that reused its number.
+func assertCloseUntrackedRows(t *testing.T, rows []iorparquet.Record) {
+	t.Helper()
 	AssertRowsPresent(t, rows, []ExpectedRow{
 		{
 			FileContains: "closeuntracked-0.txt",
