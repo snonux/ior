@@ -2609,6 +2609,16 @@ kernel program reports the file, and user space compares.
   copied but resolved from procfs on first use, and a change on an answer
   that was not cached (no answer, torn) lasts for its row only. The fcntl
   row is still named after the answer, like every row without identity.
+- **open_by_handle_at's procfs fallback** (task a23, `procFdFile` in
+  `internal/eventloop_handle.go`): for a handle ior has no name for, the
+  answer is read with its fdinfo inode (`readProcFd`) and refused - row and
+  fd table entry unnamed with the call's flags, the exit record's identity
+  (`E:ino:<n>`) and the procfs mark, counted as a refused answer - when it
+  describes another file than the exit record reports, or changed under both
+  readings. That closes the reused-number residual of tasks k03/423 for a
+  reuse by a regular file, a directory, a pidfd or a namespace, which task
+  423's deny list cannot see; files the identity cannot tell apart still
+  pass. A named handle is not checked (the handle says which file it is).
 - **Procfs answers** carry their identity when `identOn`
   (`file.NewFdWithPidIdent`): the `ino:` line of the fdinfo read that
   supplies the flags anyway. The link is read a second time because the

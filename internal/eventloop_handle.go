@@ -123,11 +123,14 @@ import (
 //     handleKeyOf for why the mount cannot be had and which handles collide).
 //   - A handle ior did not see being taken is named from procfs, with the lag
 //     every procfs-resolved descriptor has: a number the task closed and
-//     reused before the loop reads it shows the newer file. Only a newer
-//     file of a kind no handle can open is recognised (reachableByHandle);
-//     the row and the fd table entry are then unnamed, as when procfs has
-//     no answer. A reuse by a file, a directory, a pidfd or a namespace
-//     still names the row after the newer one. The unnamed entry stays
+//     reused before the loop reads it shows the newer file. A newer file of
+//     a kind no handle can open is recognised (reachableByHandle), and, in a
+//     run that captures file identities, any newer file whose inode number
+//     differs in its low 32 bits from the one the exit record reports (task
+//     a23); the row and the fd table entry are then unnamed, as when procfs
+//     has no answer. Without the capture a reuse by a file, a directory, a
+//     pidfd or a namespace still names the row after the newer one, and with
+//     it one the identity cannot tell apart does. The unnamed entry stays
 //     until its close is processed (procFdFile). A failed call with such a
 //     handle has an empty name. That is a handle taken before the
 //     trace started; by a task outside a -pid/-tid scope; by a call the enter
@@ -367,8 +370,9 @@ func (e *eventLoop) openedHandleName(openByHandleEv *types.OpenByHandleAtEvent) 
 	return e.handleState().lookup(key, openByHandleEv.Pid)
 }
 
-// openedHandleFile returns the file the descriptor a successful
-// open_by_handle_at returned is labelled with, on the row and in the fd table.
+// openedHandleFile returns the file the descriptor fd a successful
+// open_by_handle_at (enter record ev, exit record exit) returned is labelled
+// with, on the row and in the fd table.
 //
 // A named handle gives the descriptor that name, and procfs is not asked: the
 // handle says which file was opened, while /proc/<pid>/fd/<fd> says what the
@@ -376,12 +380,18 @@ func (e *eventLoop) openedHandleName(openByHandleEv *types.OpenByHandleAtEvent) 
 // the caller asked for).
 //
 // An unnamed one falls back to procfs, name and flags alike, unless what
-// procfs shows is something no handle can open (procFdFile).
-func openedHandleFile(name string, named bool, pid uint32, fd int32, eventFlags int32) *file.FdFile {
+// procfs shows is something no handle can open, or another file than the one
+// the exit record says the call opened (procFdFile).
+func (t *fdTracker) openedHandleFile(name string, named bool, ev *types.OpenByHandleAtEvent,
+	fd int32, exit *types.RetEvent) *file.FdFile {
 	if named {
-		return file.NewFd(fd, name, eventFlags)
+		return file.NewFd(fd, name, ev.Flags)
 	}
-	return procFdFile(pid, fd, eventFlags)
+	opened := uint32(0)
+	if t.identOn {
+		opened = exit.FileIdent
+	}
+	return t.procFdFile(ev.Pid, fd, ev.Flags, opened)
 }
 
 // failedHandleFile returns the file a FAILED open_by_handle_at row reports: a
@@ -400,6 +410,17 @@ func failedHandleFile(name string) file.File {
 // the event's (what the caller asked for); the fdinfo of a reused number is
 // the newer file's and is not used either.
 //
+// In a run that captures file identities the exit record says which file the
+// call opened (opened, 0 = unknown), and the answer is read with the inode
+// number of its fdinfo (readProcFd, task a23). An answer of another file is
+// a file that reused the number and is refused like the deny list's kinds,
+// and counted (rejectedAnswers); so is one that changed under both readings,
+// which describes no one file. This catches what the deny list cannot: a
+// reuse by a regular file, a directory, a pidfd or a namespace. It cannot
+// tell apart what the identity cannot (eventloop_fileident.go): the low 32
+// bits of the inode number on whatever filesystem. Without the capture, or
+// with an fdinfo that has no inode line, the deny list is all there is.
+//
 // The unnamed file is what the row reports and what the fd table keeps, as
 // for the unreadable descriptor. Keeping nothing instead would send the next
 // row on the number back to procfs, which would then give that row the very
@@ -414,9 +435,12 @@ func failedHandleFile(name string) file.File {
 // cap evicts the entry - also when the close was never seen and the number
 // is somebody else's by now. The entry kept for "procfs had no answer" has
 // the same exposure.
-func procFdFile(pid uint32, fd int32, eventFlags int32) *file.FdFile {
-	fdFile := file.NewFdWithPid(fd, pid)
+func (t *fdTracker) procFdFile(pid uint32, fd int32, eventFlags int32, opened uint32) *file.FdFile {
+	fdFile, stable := t.readProcFd(fd, pid)
 	if !reachableByHandle(fdFile.Name()) {
+		fdFile = file.NewUnresolvedFd(fd)
+	} else if opened != 0 && (!stable || !describes(fdFile, opened)) {
+		t.rejectedAnswers++
 		fdFile = file.NewUnresolvedFd(fd)
 	}
 	if fdFile.Flags() == file.Flags(-1) {

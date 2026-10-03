@@ -678,7 +678,7 @@ func (e *eventLoop) handleOpenByHandleAtExit(ep *event.Pair, openByHandleEv *typ
 
 	name, named := e.openedHandleName(openByHandleEv)
 	if fd, ok := fdFromRet(retEvent.Ret); ok {
-		fdFile := openedHandleFile(name, named, openByHandleEv.Pid, fd, openByHandleEv.Flags)
+		fdFile := e.fdState().openedHandleFile(name, named, openByHandleEv, fd, retEvent)
 		e.fdState().identifyOpened(fdFile, retEvent)
 		e.fdState().set(fd, openByHandleEv.Pid, fdFile)
 		ep.File = fdFile
