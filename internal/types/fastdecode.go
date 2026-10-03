@@ -47,9 +47,9 @@ const (
 	// 36 bytes of fields, 40 as the kernel reserves it (tail padding), 36 as
 	// binary.Write writes it. The legacy record is the 32-byte one without
 	// the word, which kernel and binary.Write shared.
-	dup3EventSize                = 40
-	dup3EventCompactSize         = 36
-	dup3EventLegacySize          = 32
+	dup3EventSize        = 40
+	dup3EventCompactSize = 36
+	dup3EventLegacySize  = 32
 	// open_by_handle_at_event carries the file handle since task k03. The
 	// legacy record is the flags-only layout: 32 bytes as the kernel wrote it
 	// (4 bytes of tail padding) and 28 as binary.Write did.
