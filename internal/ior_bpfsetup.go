@@ -173,7 +173,9 @@ func setupBPFModule(ctx context.Context, cfg flags.Config, probes probeManagerPu
 
 	mgr, release, err := attachSessionProbes(ctx, libbpfTracepointModule{module: bpfModule}, cfg, probes, log)
 	if err != nil {
-		bpfModule.Close()
+		// Programs may have been attached and detached again: the module
+		// leaves the list of attached programs as it closes.
+		closeLibbpfModule(bpfModule)
 		return nil, nil, noRelease, setupBPFModuleError("attach probes", err)
 	}
 	return bpfModule, mgr, release, nil

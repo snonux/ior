@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"ior/internal/probemanager"
 	"ior/internal/tracepoints"
 	"ior/internal/types"
+
+	bpf "github.com/aquasecurity/libbpfgo"
 )
 
 // Tests for task 723: a program run the kernel skipped may lose a record
@@ -61,14 +64,16 @@ func (p *scriptedPrograms) fds() []int {
 	return slices.Clone(p.attached)
 }
 
-// fdsOn is the libbpfAttachedProgramFDsOn of the scripted kernel.
+// fdsOn is the libbpfAttachedProgramFDsOn of the scripted kernel: the
+// programs ever attached to one of tracepoints, detached since or not.
 func (p *scriptedPrograms) fdsOn(tracepoints []string) []int {
 	var fds []int
-	for _, fd := range p.attached {
-		if slices.Contains(tracepoints, p.on[fd]) {
+	for fd, tracepoint := range p.on {
+		if slices.Contains(tracepoints, tracepoint) {
 			fds = append(fds, fd)
 		}
 	}
+	slices.Sort(fds)
 	return fds
 }
 
@@ -130,13 +135,102 @@ func (f *restartFixture) countSkippedRuns() *scriptedPrograms {
 	for fd := skippedEnterProg; fd <= skippedWriteProg; fd++ {
 		programs.attachOn(fd, skippedProgramTracepoints[fd])
 	}
-	skipped, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, f.el.readDropStampClock)
+	f.countSkippedRunsOf(programs.fds, programs.fdsOn, programs.read)
+	return programs
+}
+
+// countSkippedRunsOf is countSkippedRuns over the given seam.
+func (f *restartFixture) countSkippedRunsOf(fds func() []int, fdsOn func([]string) []int, read func(int) (uint64, bool, error)) {
+	f.t.Helper()
+	skipped, err := newSkippedRunCounter(fds, fdsOn, read, f.el.readDropStampClock)
 	if err != nil {
 		f.t.Fatalf("newSkippedRunCounter: %v", err)
 	}
 	f.el.dropSrc = &recordLossSource{ring: f.el.dropSrc, skipped: skipped}
 	f.drops.monitor = newRingbufDropMonitor(f.el.dropSrc)
-	return programs
+}
+
+// countSkippedRunsOfLinks is countSkippedRuns over the real list of attached
+// programs (libbpfAttached), for a module of the test's own: each program
+// is listed by a libbpfLink, whose Destroy - libbpfgo's stubbed - is how
+// the probe manager detaches it. The counts are scripted as before; the
+// links are returned by program fd.
+func (f *restartFixture) countSkippedRunsOfLinks() (*scriptedPrograms, map[int]*libbpfLink) {
+	f.t.Helper()
+	stubDestroyBPFLink(f.t, nil)
+	module := &bpf.Module{}
+	f.t.Cleanup(func() { libbpfAttached.forget(module) })
+	programs := newScriptedPrograms()
+	links := map[int]*libbpfLink{}
+	for fd := skippedEnterProg; fd <= skippedWriteProg; fd++ {
+		programs.misses[fd] = 0
+		link := &libbpfLink{program: attachedProgram{module: module, fd: fd, tracepoint: skippedProgramTracepoints[fd]}}
+		link.link.Store(markedBPFLink(f.t))
+		libbpfAttached.add(link.program)
+		links[fd] = link
+	}
+	f.countSkippedRunsOf(func() []int { return libbpfAttachedProgramFDs(module) },
+		func(tracepoints []string) []int { return libbpfAttachedProgramFDsOn(module, tracepoints) },
+		programs.read)
+	return programs, links
+}
+
+// TestASkipOfAProgramDetachedBeforeTheProbeChangeRefusesTheFold: a probe
+// switched off unlists each of its programs as attached once that link's
+// Destroy returned, while the change is stamped for the folds
+// (noteProbeChange, restartAcrossProbeChange) only after both links went
+// and the manager reported. A lagging loop that folds in that window is not
+// refused by the probe change, so it must still ask the detached program
+// (attachedProgramSet): a run of it skipped before the detach refuses the
+// fold. Without the skip the detach alone changes nothing: the fold goes.
+func TestASkipOfAProgramDetachedBeforeTheProbeChangeRefusesTheFold(t *testing.T) {
+	for _, fd := range []int{skippedExitProg, skippedSleepExitProg} {
+		for _, skipped := range []uint64{1, 0} {
+			t.Run(fmt.Sprintf("%s skipped %d", skippedProgramTracepoints[fd], skipped), func(t *testing.T) {
+				f := newDropCountedFixture(t, globalfilter.Filter{})
+				programs, links := f.countSkippedRunsOfLinks()
+				f.interrupt(restartBase, restartTid)
+				programs.skip(fd, skipped)
+				if err := links[fd].Destroy(); err != nil {
+					t.Fatalf("detach: %v", err)
+				}
+				rows := f.foldSleepFrom(restartBase)
+				if skipped == 0 {
+					requireFoldedSleep(t, rows, restartBase, "nothing was skipped")
+					return
+				}
+				requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+			})
+		}
+	}
+}
+
+// TestASkipAFoldReadIsDatedForTheExecAdoption: a skip first seen by a fold's
+// own read is told to the drop watch by that fold (lostSince, noteSkipped)
+// and stamped then. An exec adoption that asks later about an enter after
+// that fold must take the skip for one before its enter, and refuse as
+// "nothing lost since" refuses. Were the skip stamped only by the
+// adoption's own sweep, it would date after the enter, and the exit would
+// adopt the enter (TestASkippedExecProgramRunLetsTheExitAdopt is that case
+// with a skip after the enter).
+func TestASkipAFoldReadIsDatedForTheExecAdoption(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	programs := f.countSkippedRuns()
+	f.interrupt(restartBase, restartTid)
+	programs.skip(skippedExitProg, 1)
+	requireSleepAndRestartRows(t, f.foldSleepFrom(restartBase), restartBase, restartBase+1500, restartBase+3000, 0)
+
+	const later = restartBase + 10000
+	f.interruptRead(later, restartTid, restartSys)
+	f.feedNone(f.handlerRecord(later+510, restartTid, true), "HANDLER record")
+	f.feedNone(f.execEnter(later+800, restartTid), "the handler's execve enter")
+	f.clockAt(later + 2900)
+	rows := f.feed(f.execExit(later+3000, restartPid, 0))
+	// The adopted row's gap differs from reexecutedExecveRow's: the folds
+	// before it moved the tid's baseline.
+	if slices.ContainsFunc(rows, func(row restartRow) bool { return row.name == "execve" }) {
+		t.Fatalf("rows = %+v: the exit adopted the enter on a skip a fold saw before it", rows)
+	}
 }
 
 // TestASkippedRunRefusesTheRestartSyscallFold: with no ring-buffer drop at
@@ -365,8 +459,8 @@ func (s *watchSource) SkippedRunsAsOf(uint64) (uint64, error) {
 // SkippedRunsSince is the question of a fold, which these tests do not
 // ask (evidenceSince is the exec adoption's): it answers "skipped" so that
 // a fold that asked would show.
-func (s *watchSource) SkippedRunsSince([]string, uint64, uint64) (bool, error) {
-	return true, s.skippedErr
+func (s *watchSource) SkippedRunsSince([]string, uint64, uint64) (bool, uint64, error) {
+	return true, s.skipped, s.skippedErr
 }
 
 // TestRestartDropWatchTellsTheKindsOfEvidenceApart pins the watch's answer

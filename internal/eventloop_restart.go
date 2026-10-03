@@ -1147,9 +1147,15 @@ func (w *restartDropWatch) observeSkipped(total, seenAt uint64) uint64 {
 //
 // Unlike evidenceSince it does not ask about every attached program: the
 // fold's own few are what make it right or wrong, and a sweep of all of
-// them per fold was the cost of a caught-up loop (skippedRunCounter). The
-// watch's own total of the skipped runs is therefore not told: what the
-// fold read is a part of it.
+// them per fold was the cost of a caught-up loop (skippedRunCounter). What
+// the fold read is a part of the sum the watch keeps for the exec adoption,
+// and the source returns that sum after the question: when it differs from
+// the watch's, the fold's reads raised it, and the watch is told now
+// (noteSkipped). Otherwise a skip first seen by a fold would be stamped
+// only at the next full sweep - the next monitor period or exec question -
+// and an exec adoption asking in between about an enter before the skip
+// would take it for one after that enter and adopt where "nothing lost"
+// refuses (the safe direction, but a needless one).
 func (w *restartDropWatch) lostSince(tracepoints []string, since, upTo uint64, src ringbufDropSource, clock func() uint64) bool {
 	if src == nil {
 		return true
@@ -1165,8 +1171,26 @@ func (w *restartDropWatch) lostSince(tracepoints []string, since, upTo uint64, s
 	if !ok {
 		return false
 	}
-	skipped, err := counted.SkippedRunsSince(tracepoints, since, upTo)
+	skipped, total, err := counted.SkippedRunsSince(tracepoints, since, upTo)
+	w.noteSkipped(total, clock)
 	return skipped || err != nil
+}
+
+// noteSkipped is observeSkipped for the sum a fold's question returned
+// (lostSince), which reads the clock only when the sum differs from the
+// watch's: most folds read nothing new, and the clock read is then saved.
+// The reading is taken after the question returned, so after every read
+// that made the sum, as observe's invariant wants. A sum older than the
+// watch's (the monitor told a newer one in between) is a change too, as
+// the monitor's stale reading is (handleRingbufDropResult): the next
+// reading of the newer sum stamps it once more, later: the safe side for
+// both askers (a fold refuses, an adoption adopts).
+func (w *restartDropWatch) noteSkipped(total uint64, clock func() uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if total != w.skipped.total {
+		w.skipped.observe(total, clock())
+	}
 }
 
 // evidenceSince says what evidence there is that a record was lost at or

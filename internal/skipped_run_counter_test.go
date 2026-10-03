@@ -313,12 +313,12 @@ func TestSkippedSinceAsksOnlyTheProgramsOfItsTracepoints(t *testing.T) {
 	programs, counter, clock := foldPrograms(t)
 	programs.skip(5, 1)
 	swept := programs.reads
-	skipped, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now)
+	skipped, _, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now)
 	if err != nil || skipped || programs.reads != swept+2 {
 		t.Fatalf("SkippedSince(a, b) = %v, %v after %d reads, want no skip after 2", skipped, err, programs.reads-swept)
 	}
 	programs.skip(4, 1)
-	if skipped, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now); err != nil || !skipped {
+	if skipped, _, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now); err != nil || !skipped {
 		t.Fatalf("SkippedSince(a, b) after b's skip = %v, %v, want a skip", skipped, err)
 	}
 }
@@ -334,7 +334,7 @@ func TestSkippedSinceGoesByEachProgramsOwnStamp(t *testing.T) {
 	}
 	const seenAt = 103
 	for since, want := range map[uint64]bool{seenAt: true, seenAt + 1: false} {
-		if skipped, err := counter.SkippedSince([]string{"a"}, since, clock.now); err != nil || skipped != want {
+		if skipped, _, err := counter.SkippedSince([]string{"a"}, since, clock.now); err != nil || skipped != want {
 			t.Fatalf("SkippedSince(a, since %d) = %v, %v, want %v", since, skipped, err, want)
 		}
 	}
@@ -350,7 +350,7 @@ func TestASmallReadAnswersOnlyForItsOwnPrograms(t *testing.T) {
 	ask := func(tracepoints ...string) int {
 		t.Helper()
 		before := programs.reads
-		if _, err := counter.SkippedSince(tracepoints, 0, asOf); err != nil {
+		if _, _, err := counter.SkippedSince(tracepoints, 0, asOf); err != nil {
 			t.Fatalf("SkippedSince(%v): %v", tracepoints, err)
 		}
 		return programs.reads - before
@@ -381,7 +381,7 @@ func TestAProgramsReadDoesNotAnswerForItsOwnInstant(t *testing.T) {
 	const sweptAt = 100 // the first clock reading of the first sweep
 	for upTo, wantReads := range map[uint64]int{sweptAt - 1: 0, sweptAt: 1} {
 		before := programs.reads
-		if _, err := counter.SkippedSince([]string{"a"}, 1, upTo); err != nil || programs.reads-before != wantReads {
+		if _, _, err := counter.SkippedSince([]string{"a"}, 1, upTo); err != nil || programs.reads-before != wantReads {
 			t.Fatalf("SkippedSince as of %d: %v after %d reads, want %d", upTo, err, programs.reads-before, wantReads)
 		}
 	}
@@ -393,7 +393,7 @@ func TestAProgramsReadDoesNotAnswerForItsOwnInstant(t *testing.T) {
 func TestSkippedSinceRefusesWhatItCannotRead(t *testing.T) {
 	programs, counter, clock := foldPrograms(t)
 	programs.err = errors.New("boom")
-	if skipped, err := counter.SkippedSince([]string{"a"}, 0, clock.now); err == nil || !skipped {
+	if skipped, _, err := counter.SkippedSince([]string{"a"}, 0, clock.now); err == nil || !skipped {
 		t.Fatalf("SkippedSince with an unreadable program = %v, %v, want a skip and the error", skipped, err)
 	}
 	programs.err = nil
@@ -404,7 +404,7 @@ func TestSkippedSinceRefusesWhatItCannotRead(t *testing.T) {
 	}
 	for range 2 {
 		before := programs.reads
-		if _, err := undated.SkippedSince([]string{"a"}, 0, 5000); err != nil || programs.reads != before+1 {
+		if _, _, err := undated.SkippedSince([]string{"a"}, 0, 5000); err != nil || programs.reads != before+1 {
 			t.Fatalf("SkippedSince with an unreadable clock: %v after %d reads, want a read each time", err, programs.reads-before)
 		}
 	}
@@ -711,7 +711,7 @@ func TestWithSkippedRunsCountsThemWhereTheKernelDoes(t *testing.T) {
 	}
 	// A fold asks the module's programs on its tracepoints.
 	programs.skip(9, 1)
-	if skipped, err := source.(skippedRunSource).SkippedRunsSince([]string{"sys_enter_read"}, 0, ^uint64(0)); err != nil || !skipped {
+	if skipped, _, err := source.(skippedRunSource).SkippedRunsSince([]string{"sys_enter_read"}, 0, ^uint64(0)); err != nil || !skipped {
 		t.Fatalf("SkippedRunsSince(read's) = %v, %v, want the skip of program 9", skipped, err)
 	}
 }

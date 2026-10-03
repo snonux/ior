@@ -69,8 +69,9 @@ type ringbufDropSource interface {
 // (recordLossSource, task 723): their number now; their number as of a
 // time in the past, answered from an earlier reading where that is new enough
 // (skippedRunCounter.TotalAsOf); and whether the programs attached to some
-// tracepoints had a run skipped since a time, as of another
-// (skippedRunCounter.SkippedSince). The drop monitor asks the first, the
+// tracepoints had a run skipped since a time, as of another, together with
+// the sum after that question (skippedRunCounter.SkippedSince). The drop
+// monitor asks the first, the
 // exec adoption the second and a restart fold the third, about the programs
 // its proof depends on (restartFoldTracepoints), each with the time of the
 // record it decides about (restartDropWatch). A skipped run is weaker
@@ -79,7 +80,7 @@ type ringbufDropSource interface {
 type skippedRunSource interface {
 	SkippedRuns() (uint64, error)
 	SkippedRunsAsOf(asOf uint64) (uint64, error)
-	SkippedRunsSince(tracepoints []string, since, upTo uint64) (bool, error)
+	SkippedRunsSince(tracepoints []string, since, upTo uint64) (skipped bool, total uint64, err error)
 }
 
 type eventLoopConfig struct {

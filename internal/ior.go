@@ -1331,8 +1331,10 @@ func setupTraceInfraBPF(
 	// order (ring buffer, probes, bindings, module, signal handler), which is
 	// why it is one cleanup rather than one per resource. Registering it here
 	// is what detaches the probes on every later abort (audit domain-10 F3).
+	// The module goes through libbpfModuleCloser, which takes it off the
+	// list of attached programs before it closes their fds (task 723).
 	infra.onClose(func() {
-		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
+		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, libbpfModuleCloser{bpfModule}, infra.stopSignals, infra.progress, infra.releasing)
 	})
 	return infra, bpfModule, nil
 }

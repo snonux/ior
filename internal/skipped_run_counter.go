@@ -68,7 +68,10 @@ var errSkippedRunsNotReported = errors.New("the kernel does not report skipped b
 // attached, which the TUI changes at runtime, and the hand-attached probes)
 // and, once more, those that had one at the previous sweep and lost it
 // since: a detached program keeps its count, and that last read picks up the
-// runs skipped between the previous sweep and the detach. The object's other
+// runs skipped between the previous sweep and the detach. A fold's question
+// (SkippedSince) reads its own programs whether they are attached now or
+// were before (fdsOn: libbpfAttachedProgramFDsOn), since a fold may be
+// decided between a detach and the probe change's stamp. The object's other
 // programs, some 500 in a default run, are never read. The count is kept per
 // program (programs) and the sum only ever grows, whatever is attached.
 //
@@ -92,7 +95,11 @@ var errSkippedRunsNotReported = errors.New("the kernel does not report skipped b
 // sweep per question made a caught-up loop sweep 242 programs per fold: on
 // a pipe read interrupted some 6,000 times a second, 15 million bpf(2) calls
 // in 10 s and four times the CPU of a run that did not count; with the
-// fold's own 8 programs, 0.65 million and about 1.25 times. So a fold
+// fold's own programs only, 0.65 million and about 1.25 times. Those are
+// the syscall's pair and the six hand probes' programs - 8, or 9 when
+// rt_sigreturn is traced, whose generated program shares
+// sys_enter_rt_sigreturn with the restart program - and for a -516 row
+// restart_syscall's pair as well, two more. So a fold
 // asks about the programs its proof depends on only (SkippedSince,
 // restartFoldTracepoints: the syscall's pair, restart_syscall's for -516,
 // the hand probes), per program: each program's latest read, of a full sweep
@@ -100,7 +107,8 @@ var errSkippedRunsNotReported = errors.New("the kernel does not report skipped b
 // asks, and the others are read then.
 type skippedRunCounter struct {
 	// fds returns the programs attached now, in a slice of the caller's own;
-	// fdsOn those of them attached to one of the tracepoints it is given.
+	// fdsOn those attached to one of the tracepoints it is given, now or
+	// earlier while the module is open (attachedProgramSet).
 	// Neither may block for long: the event loop calls them per question.
 	fds   func() []int
 	fdsOn func(tracepoints []string) []int
@@ -208,7 +216,11 @@ func (c *skippedRunCounter) TotalAsOf(asOf uint64) (uint64, error) {
 // tracepoints (names without the category) was skipped at or after the
 // boot-clock time since: the question of a restart fold, about the
 // programs its proof depends on (restartFoldTracepoints), between its
-// interrupted exit (since) and the record that asks (upTo).
+// interrupted exit (since) and the record that asks (upTo). It also
+// returns the counter's total after the question, whatever the answer:
+// the reads it made may have raised it, and the caller tells the drop
+// watch (restartDropWatch.lostSince), so that a skip first seen here is
+// dated now and not at the next full sweep.
 //
 // A program whose latest read - of a full sweep or of an earlier question -
 // began after upTo is answered from it (programSkips.covers); the others are
@@ -218,27 +230,32 @@ func (c *skippedRunCounter) TotalAsOf(asOf uint64) (uint64, error) {
 // be a skip among the fold's records, and refuses it. Like the watch, that
 // also refuses a fold for a skip first seen late that happened before since.
 //
-// A program detached since upTo is not read; the probe change that
-// detached it refuses the fold on its own (restartAcrossProbeChange), and
-// the hand probes stay attached for the session. An error answers true:
-// a count that cannot be read proves nothing.
-func (c *skippedRunCounter) SkippedSince(tracepoints []string, since, upTo uint64) (bool, error) {
+// A program detached before the question is asked all the same: fdsOn
+// names every program that was attached to the tracepoints while the
+// module is open (attachedProgramSet). The probe change that detached it
+// refuses the fold on its own (restartAcrossProbeChange), but only once it
+// is stamped, after both links of the pair are gone and the manager
+// reported; a fold decided in between depends on the program's skips like
+// any other. Its count stands still, so a read of it is the last one that
+// matters. An error answers true: a count that cannot be read proves
+// nothing.
+func (c *skippedRunCounter) SkippedSince(tracepoints []string, since, upTo uint64) (skipped bool, total uint64, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fds := c.fdsOn(tracepoints)
 	if stale := c.staleAsOf(fds, upTo); len(stale) > 0 {
 		if _, err := c.readLocked(stale); err != nil {
-			return true, err
+			return true, c.total, err
 		}
 	}
 	for _, fd := range fds {
 		// Every program of fds has an entry now; one without would be a
 		// count never read, which proves nothing.
 		if program := c.programs[fd]; program == nil || program.firstSeenAt >= since {
-			return true, nil
+			return true, c.total, nil
 		}
 	}
-	return false, nil
+	return false, c.total, nil
 }
 
 // staleAsOf returns the programs of fds whose latest read does not cover
@@ -364,8 +381,9 @@ func (s *recordLossSource) SkippedRunsAsOf(asOf uint64) (uint64, error) {
 }
 
 // SkippedRunsSince reports whether a program attached to one of tracepoints
-// had a run skipped at or after since, as of upTo (skippedRunSource,
+// had a run skipped at or after since, as of upTo, and the sum of the
+// skipped runs after the question (skippedRunSource,
 // skippedRunCounter.SkippedSince).
-func (s *recordLossSource) SkippedRunsSince(tracepoints []string, since, upTo uint64) (bool, error) {
+func (s *recordLossSource) SkippedRunsSince(tracepoints []string, since, upTo uint64) (bool, uint64, error) {
 	return s.skipped.SkippedSince(tracepoints, since, upTo)
 }

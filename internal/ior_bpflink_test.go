@@ -199,7 +199,8 @@ func TestLibbpfLinkDestroysThroughLibbpfgo(t *testing.T) {
 }
 
 // listedProgram returns a program of a module of its own for the list of
-// attached programs, and makes sure the test leaves the list as it found it.
+// attached programs, makes sure the test leaves no link of it live, and
+// takes the module off the list again, as closing it would.
 func listedProgram(t *testing.T, fd int) attachedProgram {
 	t.Helper()
 	prog := attachedProgram{module: &bpf.Module{}, fd: fd}
@@ -207,13 +208,16 @@ func listedProgram(t *testing.T, fd int) attachedProgram {
 		if fds := libbpfAttachedProgramFDs(prog.module); fds != nil {
 			t.Errorf("the test left the programs %v listed as attached", fds)
 		}
+		libbpfAttached.forget(prog.module)
 	})
 	return prog
 }
 
-// TestAttachedProgramSetFollowsTheLinks: a program is listed for its module
-// from its first link to its last, other modules' programs are not, and a
-// module whose last link went leaves no entry behind.
+// TestAttachedProgramSetFollowsTheLinks: a program is listed as attached
+// for its module from its first link to its last, other modules' programs
+// are not, and a module leaves no entry behind once it is forgotten
+// (closed: closeLibbpfModule) - not before, see
+// TestAttachedProgramSetAnswersPerTracepoint.
 func TestAttachedProgramSetFollowsTheLinks(t *testing.T) {
 	var set attachedProgramSet
 	module, other := &bpf.Module{}, &bpf.Module{}
@@ -236,15 +240,22 @@ func TestAttachedProgramSetFollowsTheLinks(t *testing.T) {
 	set.remove(attachedProgram{module: module, fd: 8})
 	set.remove(attachedProgram{module: other, fd: 9})
 	set.remove(attachedProgram{module: other, fd: 9})
-	if set.fds(module) != nil || len(set.links) != 0 {
-		t.Fatalf("after the last link went: fds %v, %d module entries, want none", set.fds(module), len(set.links))
+	if set.fds(module) != nil || set.fds(other) != nil {
+		t.Fatalf("after the last link went: fds %v and %v, want none", set.fds(module), set.fds(other))
+	}
+	set.forget(module)
+	set.forget(other)
+	if len(set.links) != 0 {
+		t.Fatalf("after both modules were forgotten: %d module entries, want none", len(set.links))
 	}
 }
 
 // TestAttachedProgramSetAnswersPerTracepoint: the programs of a restart
 // fold's tracepoints (fdsOn) are those attached to them in that module, each
-// once, whatever else is attached; a tracepoint whose last link went is
-// gone from the answer, and so is its index entry.
+// once, whatever else is attached. A program whose last link went is still
+// in that answer, though no longer attached (fds): a fold decided before the
+// detach is stamped must still ask it (task 723). Only forgetting the
+// module, before it is closed, takes it out.
 func TestAttachedProgramSetAnswersPerTracepoint(t *testing.T) {
 	var set attachedProgramSet
 	module, other := &bpf.Module{}, &bpf.Module{}
@@ -262,14 +273,45 @@ func TestAttachedProgramSetAnswersPerTracepoint(t *testing.T) {
 		t.Fatalf("fds = %v, want every program of the module once", got)
 	}
 	set.remove(attachedProgram{module: module, fd: 8, tracepoint: "sys_exit_read"})
-	if got := set.fdsOn(module, read); !slices.Equal(got, []int{7, 10, 11}) {
-		t.Fatalf("fdsOn after the exit's detach = %v, want [7 10 11]", got)
+	if got := set.fdsOn(module, read); !slices.Equal(got, []int{7, 8, 10, 11}) {
+		t.Fatalf("fdsOn after the exit's detach = %v, want [7 8 10 11]: the detached program is still asked", got)
 	}
-	if _, indexed := set.links[module]["sys_exit_read"]; indexed {
-		t.Fatal("a tracepoint whose last link went is still indexed")
+	if got := set.fds(module); !slices.Equal(got, []int{7, 9, 10, 11}) {
+		t.Fatalf("fds after the exit's detach = %v, want [7 9 10 11]: only the attached ones", got)
 	}
 	if got := set.fdsOn(nil, read); got != nil {
 		t.Fatalf("fdsOn of no module = %v, want none", got)
+	}
+	set.forget(module)
+	if got := set.fdsOn(module, read); got != nil {
+		t.Fatalf("fdsOn of a forgotten module = %v, want none", got)
+	}
+	if got := set.fdsOn(other, read); !slices.Equal(got, []int{12}) {
+		t.Fatalf("fdsOn of the other module = %v, want [12]: forgetting one module leaves the other", got)
+	}
+}
+
+// TestClosingAModuleForgetsItsPrograms: a session's module is closed
+// through libbpfModuleCloser (closeLibbpfModule), which takes its programs,
+// attached or detached, off the list before Close closes their fds, so
+// the list never names a descriptor that is gone. The module here is
+// libbpfgo's zero value, whose Close releases nothing (bpf_object__close
+// returns on a nil object).
+func TestClosingAModuleForgetsItsPrograms(t *testing.T) {
+	module := &bpf.Module{}
+	t.Cleanup(func() { libbpfAttached.forget(module) })
+	detached := attachedProgram{module: module, fd: 7, tracepoint: "sys_enter_read"}
+	libbpfAttached.add(detached)
+	libbpfAttached.add(attachedProgram{module: module, fd: 8, tracepoint: "sys_exit_read"})
+	libbpfAttached.remove(detached)
+	read := []string{"sys_enter_read", "sys_exit_read"}
+	if got := libbpfAttachedProgramFDsOn(module, read); !slices.Equal(got, []int{7, 8}) {
+		t.Fatalf("before the close: %v named, want [7 8]", got)
+	}
+	var closer moduleCloser = libbpfModuleCloser{module}
+	closer.Close()
+	if on, attached := libbpfAttachedProgramFDsOn(module, read), libbpfAttachedProgramFDs(module); on != nil || attached != nil {
+		t.Fatalf("after the close: %v named for the fold, %v as attached, want none", on, attached)
 	}
 }
 
@@ -292,8 +334,8 @@ func TestAttachedProgramSetIsSharedBetweenTheLoopAndTheAttaches(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if fds := set.fds(module); fds != nil || len(set.links) != 0 {
-		t.Fatalf("after every link went: fds %v, %d module entries, want none", fds, len(set.links))
+	if fds := set.fds(module); fds != nil {
+		t.Fatalf("after every link went: fds %v, want none", fds)
 	}
 }
 

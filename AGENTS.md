@@ -1127,13 +1127,29 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     (`libbpfAttachedProgramFDs`, and `libbpfAttachedProgramFDsOn` for some
     tracepoints; own tiny mutex, never the probe manager's), and a full
     sweep also reads once more what was attached at the previous sweep and
-    is gone. `NextProgram` is pinned to no place; the attach functions are
+    is gone. **A fold also asks detached programs**: `fdsOn` names every
+    program once attached to the tracepoints until the module is closed
+    (count 0 entries), because a detach is stamped for the folds
+    (`noteProbeChange`) only after both links of the pair are destroyed and
+    the manager reported - a lagging fold decided in between is not refused
+    by the probe change and must still read the program's skips. Reading a
+    detached program is safe: `bpf_link__destroy` closes the link's fds,
+    never the program's, which go with `bpf_object__close`; so the module
+    is closed through `closeLibbpfModule` / `libbpfModuleCloser`, which
+    first `forget`s it (root test `requireDetachedProgramsAsked`).
+    `NextProgram` is pinned to no place; the attach functions are
     pinned to `return libbpfLinkOf(prog, name)(attachBPF...(prog, ...,
     name))`.
   - **A fold asks about its own programs only** (`restartFoldTracepoints`,
     `skippedRunCounter.SkippedSince`): the interrupted syscall's pair,
     `restart_syscall`'s for a -516 row, and the six hand probes
-    (`restartFoldHandTracepoints`). The comment on `restartFoldTracepoints`
+    (`restartFoldHandTracepoints`) - 8 programs, 9 when `rt_sigreturn` is
+    traced (its generated program shares `sys_enter_rt_sigreturn` with the
+    restart program), two more for a -516 row. `SkippedSince` also returns
+    the counter's total, and `lostSince` tells the watch when it changed
+    (`noteSkipped`): a skip first seen by a fold's read is dated then, not at
+    the next full sweep, so a later exec adoption about an enter after that
+    fold does not take it for a skip after the enter. The comment on `restartFoldTracepoints`
     has the soundness argument: the fold's records are the held tid's own;
     between the interruption and the continuation the tid runs only a
     handler's syscalls, at depth >= 1, whose enters change nothing in BPF,
@@ -1153,7 +1169,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     (a pipe read interrupted ~6,000 times a second by an `SA_RESTART`
     signal, `-plain -pid`, 10 s, 8 CPUs: 14.2-15.9 M `bpf(2)` calls and
     2.0-2.2 s user / 6.9-7.6 s sys, against 126-131 k and 0.5-0.6 / 1.5-1.6
-    without skip counting); asking the fold's own 8 programs costs 0.65 M
+    without skip counting); asking the fold's own programs costs 0.65 M
     calls and 0.7-0.8 / 1.6-2.0 s. The
     loop never asks for "now" but for the time of the record it decides
     about (`lostSince`'s `upTo`, `TotalAsOf`), which a read begun after that

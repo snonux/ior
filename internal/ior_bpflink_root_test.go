@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -352,8 +353,9 @@ func bpfLinkPointer(link *bpf.BPFLink) string {
 // from 6.7 on; an older one may end its bpf_prog_info before the field), a
 // second read through the same reader works as the first did, and the
 // counter built over the seam sweeps them. Destroying the links empties the
-// list. It logs what one read costs, the figure behind the cost notes in
-// skipped_run_counter.go.
+// list of attached programs, but not the one a fold asks
+// (requireDetachedProgramsAsked). It logs what one read costs, the figure
+// behind the cost notes in skipped_run_counter.go.
 func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root: loads the BPF object and attaches probes")
@@ -362,7 +364,10 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load the BPF object: %s: %v", stage, err)
 	}
-	defer module.Close()
+	// Closed here at the latest, or by requireDetachedProgramsAsked: a
+	// libbpfgo module must not be closed twice.
+	closeModule := sync.OnceFunc(func() { closeLibbpfModule(module) })
+	defer closeModule()
 	classic, _ := attachThroughIor(t, module, "classic", processExecProgName)
 	raw, _ := attachThroughIor(t, module, "raw", taskRenameProgName)
 	attached := func() []int { return libbpfAttachedProgramFDs(module) }
@@ -389,7 +394,7 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	if on := attachedOn([]string{processExecProbeName, taskRenameProbeName}); len(on) != 2 {
 		t.Fatalf("programs on both tracepoints = %v, want the two attached", on)
 	}
-	if _, err := counter.SkippedSince([]string{processExecProbeName}, 1, bootClockNs()); err != nil {
+	if _, _, err := counter.SkippedSince([]string{processExecProbeName}, 1, bootClockNs()); err != nil {
 		t.Fatalf("a fold's question about the classic program: %v", err)
 	}
 	logMissesReadCost(t, reader, fds[0])
@@ -400,6 +405,29 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	}
 	if left := attached(); left != nil {
 		t.Fatalf("programs still listed as attached after their links were destroyed: %v", left)
+	}
+	requireDetachedProgramsAsked(t, module, counter, closeModule)
+}
+
+// requireDetachedProgramsAsked checks, after the links of the two programs
+// of TestSkippedRunsAreReadFromReallyAttachedPrograms were destroyed, what a
+// fold decided before the probe change is stamped relies on
+// (attachedProgramSet): the programs are still named for their tracepoints,
+// the kernel still answers for them - a destroyed link leaves the program's
+// fd open - and once the module is closed (closeModule, closeLibbpfModule)
+// nothing of it is named any more.
+func requireDetachedProgramsAsked(t *testing.T, module *bpf.Module, counter *skippedRunCounter, closeModule func()) {
+	t.Helper()
+	both := []string{processExecProbeName, taskRenameProbeName}
+	if on := libbpfAttachedProgramFDsOn(module, both); len(on) != 2 {
+		t.Fatalf("programs once on both tracepoints = %v, want the two detached ones", on)
+	}
+	if _, _, err := counter.SkippedSince(both, 1, bootClockNs()); err != nil {
+		t.Fatalf("a fold's question about the detached programs: %v", err)
+	}
+	closeModule()
+	if on := libbpfAttachedProgramFDsOn(module, both); on != nil {
+		t.Fatalf("programs named after their module was closed: %v", on)
 	}
 }
 
