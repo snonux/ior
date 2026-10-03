@@ -129,6 +129,24 @@ TAPE=07-stream-live mage demoOne       # Regen one demo tape only
 mage installDemoTools  # One-time: install vhs (go install) + ttyd (dnf) — Fedora/RHEL/Rocky only
 ```
 
+**Fold tests that cannot fold**: the integration tests that require an
+interrupted call to come out folded run through `runFoldScenarioRows`
+(`integrationtests/helpers_test.go`). ior refuses a fold when the kernel lost
+or skipped a record of the run (task 723), so such a test retries once and
+then SKIPS with the counts (`GiveUpOnFolds`, `integrationtests/kernelloss.go`).
+`IOR_REQUIRE_FOLDS=1` (read by the test binary; `mage integrationTest` passes
+its environment through `sudo -E`) makes it FAIL instead - use it where the
+folds must be shown. Since the binary runs without `-test.v`, which prints no
+skip, a skipping fold test also prints one `ior-integration: fold test
+skipped: ...` line to stdout, and `mage integrationTest` ends with a count and
+list of them (`gatecmd.FoldSkipSummary`; nothing when none skipped). One skip
+is a busy moment; most of them mean a host whose real-time tasks preempt BPF
+programs all the time, where the folds went untested.
+
+```bash
+IOR_REQUIRE_FOLDS=1 mage integrationTest
+```
+
 **Opt-in stress signals**: `IOR_STRESS_TEST=1` turns on the two timing/throughput
 signals that measure the *host* as much as the code, so neither gates
 `mage test`. `internal/flamegraph.TestLiveTrieStressHighRateConcurrentSnapshot`
@@ -1150,7 +1168,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   - Integration tests: a host with real-time tasks skips runs for real.
     `assertSkippedProbeRunsReported` only logs a non-zero count, and tests that
     require exact folds run through `runFoldScenarioRows`, which retries a
-    run that saw loss once and then skips with the counts.
+    run that saw loss once and then skips with the counts - visibly, and as
+    a failure under `IOR_REQUIRE_FOLDS=1` (see "Fold tests that cannot fold"
+    under Build/Test Commands).
   Reproduce with a `SCHED_FIFO` task that wakes up and makes a syscall on a
   CPU where another task loops over the same syscall: rows of the looper go
   missing with `ring buffer drops: 0` when the looper is traced.

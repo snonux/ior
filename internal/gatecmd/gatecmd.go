@@ -16,7 +16,9 @@
 // The root link step of `mage integrationTest` is here for the same reason,
 // although it is no static-analysis gate: which tests it runs, with which
 // arguments, and how it tells that they ran at all (RootLinkTests,
-// RootLinkTestArgs, RootLinkTestsNotPassed).
+// RootLinkTestArgs, RootLinkTestsNotPassed). So is what that target prints
+// about the fold tests that skipped, and the variable that makes them fail
+// (foldskips.go).
 package gatecmd
 
 import "strings"

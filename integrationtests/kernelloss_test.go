@@ -2,8 +2,12 @@ package integrationtests
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
+
+	"ior/internal/gatecmd"
 )
 
 // statsBlock is the part of ior's end-of-run statistics ParseKernelLoss
@@ -94,5 +98,47 @@ func TestFirstRunWithoutKernelLossStopsAtAnError(t *testing.T) {
 	})
 	if !errors.Is(err, boom) || len(lost) != 0 || calls != 1 {
 		t.Fatalf("err = %v, lost %v after %d runs, want the run's error at once", err, lost, calls)
+	}
+}
+
+// recordingVerdict is a foldVerdict that records how the test ended.
+type recordingVerdict struct {
+	skipped, failed string
+}
+
+func (v *recordingVerdict) Helper()      {}
+func (v *recordingVerdict) Name() string { return "TestFold" }
+func (v *recordingVerdict) Skipf(format string, args ...any) {
+	v.skipped = fmt.Sprintf(format, args...)
+}
+func (v *recordingVerdict) Fatalf(format string, args ...any) {
+	v.failed = fmt.Sprintf(format, args...)
+}
+
+// TestGiveUpOnFoldsSkipsVisiblyOrFailsOnRequest: by default a fold test
+// whose runs all lost records skips, and prints the marked line mage
+// summarises; with IOR_REQUIRE_FOLDS=1 it fails and prints nothing.
+func TestGiveUpOnFoldsSkipsVisiblyOrFailsOnRequest(t *testing.T) {
+	lost := []KernelLoss{{SkippedRuns: 3}, {RingDrops: 1}}
+	for value, wantFail := range map[string]bool{"": false, "1": true} {
+		var out strings.Builder
+		verdict := &recordingVerdict{}
+		getenv := func(name string) string {
+			if name == gatecmd.RequireFoldsEnv {
+				return value
+			}
+			return ""
+		}
+		GiveUpOnFolds(verdict, &out, getenv, "restart-read", lost)
+		if failed := verdict.failed != ""; failed != wantFail || (verdict.skipped != "") == wantFail {
+			t.Fatalf("%s=%q: failed %q, skipped %q", gatecmd.RequireFoldsEnv, value, verdict.failed, verdict.skipped)
+		}
+		marked := gatecmd.SkippedFoldTests(out.String())
+		if wantFail != (len(marked) == 0) || (!wantFail && !strings.HasPrefix(marked[0], "TestFold: scenario restart-read")) {
+			t.Fatalf("%s=%q: printed %q", gatecmd.RequireFoldsEnv, value, out.String())
+		}
+		if !strings.Contains(verdict.failed+verdict.skipped, "ring buffer drops: 1") {
+			t.Fatalf("the verdict does not give the last run's counts: %q", verdict.failed+verdict.skipped)
+		}
 	}
 }

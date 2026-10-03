@@ -130,8 +130,10 @@ const foldRunAttempts = 2
 // it is no failure either. So the rows of the first run whose statistics
 // report no kernel-side loss are returned; a run that reports one is logged
 // and the scenario run once more, and when that run lost something too the
-// test is SKIPPED with the counts - never passed, and never failed for what
-// the environment did.
+// test is SKIPPED with the counts - never passed, and not failed for what
+// the environment did unless IOR_REQUIRE_FOLDS=1 asks for that
+// (GiveUpOnFolds, which also prints the skip where `mage integrationTest`
+// shows and counts it).
 func runFoldScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
 	t.Helper()
 	enableParallelIfRequested(t)
@@ -147,8 +149,7 @@ func runFoldScenarioRows(t *testing.T, scenario string, duration int, extraIorAr
 		t.Logf("run %d of scenario %s lost or may have lost records (%s): ior refuses folds across that", i+1, scenario, loss)
 	}
 	if len(lost) == foldRunAttempts {
-		t.Skipf("scenario %s: every one of %d runs reported kernel-side loss (last: %s); "+
-			"folds cannot be required on this host right now", scenario, foldRunAttempts, lost[len(lost)-1])
+		GiveUpOnFolds(t, os.Stdout, os.Getenv, scenario, lost)
 	}
 	return run.rows, run.pid
 }

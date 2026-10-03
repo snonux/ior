@@ -2,8 +2,11 @@ package integrationtests
 
 import (
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
+
+	"ior/internal/gatecmd"
 )
 
 // The two lines of ior's end-of-run statistics that say what the kernel
@@ -93,4 +96,33 @@ func FirstRunWithoutKernelLoss[T any](attempts int, run func() (T, KernelLoss, e
 		lost = append(lost, loss)
 	}
 	return result, lost, nil
+}
+
+// foldVerdict is what GiveUpOnFolds needs of a test (*testing.T).
+type foldVerdict interface {
+	Helper()
+	Name() string
+	Skipf(format string, args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// GiveUpOnFolds ends a test that requires folds after every one of its runs
+// reported kernel-side loss (lost, from FirstRunWithoutKernelLoss). By
+// default it SKIPS, and first prints gatecmd.FoldSkipMarker with the test
+// and the counts to out (the test binary's standard output), because a skip
+// is invisible in `mage integrationTest`, which runs the binary without
+// -test.v and summarises these lines at the end. With
+// gatecmd.RequireFoldsEnv=1 in the environment getenv reads it FAILS
+// instead: on a host that has to show the folds, a run that cannot is an
+// error of the run.
+func GiveUpOnFolds(t foldVerdict, out io.Writer, getenv func(string) string, scenario string, lost []KernelLoss) {
+	t.Helper()
+	why := fmt.Sprintf("scenario %s: every one of %d runs reported kernel-side loss (last: %s); "+
+		"folds cannot be shown on this host right now", scenario, len(lost), lost[len(lost)-1])
+	if gatecmd.FoldsRequired(getenv) {
+		t.Fatalf("%s, and %s=1 requires them", why, gatecmd.RequireFoldsEnv)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%s%s: %s\n", gatecmd.FoldSkipMarker, t.Name(), why)
+	t.Skipf("%s (set %s=1 to fail instead)", why, gatecmd.RequireFoldsEnv)
 }

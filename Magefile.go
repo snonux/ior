@@ -692,9 +692,18 @@ func runRootLinkTests(env map[string]string) (err error) {
 }
 
 // runIntegrationTestBinary execs the compiled integration test binary as
-// root, with Dir=integrationtests.
+// root, with Dir=integrationtests, and ends with the summary of the fold
+// tests that skipped (gatecmd.FoldSkipSummary), passed or failed: the binary
+// runs without -test.v, which prints no skip, and a fold test that cannot
+// show its fold on this host skips (task 723). Its output reaches stdout as
+// before; a copy is kept for the summary.
 func runIntegrationTestBinary(env map[string]string, args ...string) error {
-	return runRootTestBinary(env, "integrationtests", os.Stdout, args...)
+	var output bytes.Buffer
+	err := runRootTestBinary(env, "integrationtests", io.MultiWriter(os.Stdout, &output), args...)
+	for _, line := range gatecmd.FoldSkipSummary(output.String()) {
+		fmt.Println(line)
+	}
+	return err
 }
 
 // runRootTestBinary execs the test binary at integrationTestBinaryName as
