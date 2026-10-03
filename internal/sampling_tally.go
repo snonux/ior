@@ -209,12 +209,13 @@ func (e *eventLoop) samplingPlan() sampling.Summary {
 // Lost rows do not make the counts unavailable, but inexact: a row that was
 // emitted and never decoded is in neither the traced count nor the kernel
 // aggregate (which only sees invocations that were not emitted). The counts are
-// then a lower bound and are marked as one. Two kinds of loss qualify: a
-// ring-buffer drop (the row never reached the loop), and a record discarded at
+// then a lower bound and are marked as one. Three kinds of loss qualify: a
+// ring-buffer drop (the row never reached the loop), a record discarded at
 // stop (it reached rawCh but the stop-time drain could not decode it, see
-// drainBacklogAtStop). Neither the drop counter nor the discard count can say
-// which syscalls lost rows, so any loss, or a drop counter that could not be
-// read, marks all of them.
+// drainBacklogAtStop), and a record left in the kernel ring buffer at stop
+// (emitted, never decoded: a lagging consumer, tasks us2 and f23). None of
+// the three counts can say which syscalls lost rows, so any loss, or a drop
+// counter that could not be read, marks all of them.
 //
 // A program run the kernel skipped marks them as well (task 723). The
 // kernel's aggregate is counted by the same program as the row, so a skipped
@@ -236,9 +237,9 @@ func (e *eventLoop) samplingResult() sampling.Summary {
 		return t.summary("reading the kernel counters failed")
 	}
 	summary := t.summary("")
-	// numDiscardedAtStop is written by the event-loop goroutine only and is
-	// final here: the caller runs after run returned.
-	if e.kernelLossPossible() || e.numDiscardedAtStop > 0 {
+	// numDiscardedAtStop and numLeftInKernelRing are written by the event-loop
+	// goroutine only and are final here: the caller runs after run returned.
+	if e.kernelLossPossible() || e.numDiscardedAtStop > 0 || e.numLeftInKernelRing > 0 {
 		return summary.AtLeast()
 	}
 	return summary

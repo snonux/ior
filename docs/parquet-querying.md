@@ -499,7 +499,8 @@ traced everything:
   is counted as traced but has no row, so compare `total`, not the row count, with the
   population (headless `-parquet` never sheds rows, it waits for the writer; for TUI
   recordings see below). When events were lost (the run statistics say
-  `ring buffer drops: N` or `records discarded at stop: N`), the lost rows are in neither
+  `ring buffer drops: N`, `records discarded at stop: N` or `records left in the kernel
+  ring buffer at stop: N`), the lost rows are in neither
   `traced` nor `counted_only`: every element then carries `"lower_bound":true` and its
   numbers are a lower bound (the true total is at least that). The same mark is set when
   events may have been lost because the kernel skipped probe runs (`probe runs skipped by

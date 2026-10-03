@@ -203,9 +203,10 @@ type eventLoop struct {
 	// stop (task us2); nil disables the report (tests, a failed attach).
 	ringUnread ringbufUnreadSource
 	// numLeftInKernelRing counts the committed records still in the kernel ring
-	// buffer when the stop-time drain finished: delivered to neither rawCh nor
-	// the decoder, and not counted as drops. Written by the event-loop
-	// goroutine only; stats() reads it after <-e.done.
+	// buffer at the stop, before the stop-time drain (backlogAtStop): never
+	// decoded, not in the drain's snapshot of rawCh, and not counted as drops.
+	// Written by the event-loop goroutine only; stats() reads it after
+	// <-e.done.
 	numLeftInKernelRing uint
 	// stopOnTargetExit arms endTraceOnTargetExit and
 	// endTraceOnTargetThreadExit, the record-based triggers: the -pid

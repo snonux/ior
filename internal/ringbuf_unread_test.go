@@ -83,17 +83,18 @@ func (f fakeRingUnread) Unread() (ringbufUnread, error) { return f.unread, f.err
 // TestStopReportsRecordsLeftInTheKernelRing is the task us2 accounting: a
 // consumer that lagged leaves committed records in the kernel ring, and the
 // stop reports them in the statistics and as a warning instead of letting
-// "ring buffer drops: 0" read as complete.
+// "ring buffer drops: 0" read as complete. rawCh is full, as with a poller
+// blocked on it.
 func TestStopReportsRecordsLeftInTheKernelRing(t *testing.T) {
-	el := newPairEvictionEventLoop(t)
+	el, pairs := newDrainHarness(t)
 	var warnings []string
 	el.SetWarningCallback(func(msg string) { warnings = append(warnings, msg) })
 	el.ringUnread = fakeRingUnread{unread: ringbufUnread{records: 18000, bytes: 1 << 20}}
 
-	el.countKernelRingLeftAtStop()
+	el.drainBacklogAtStop(filledRawChannel(syncPairStream(t, 0, 4)), pairs, nil)
 
-	if el.numLeftInKernelRing != 18000 {
-		t.Fatalf("numLeftInKernelRing = %d, want 18000", el.numLeftInKernelRing)
+	if el.numLeftInKernelRing != 18000 || el.numTracepoints != 8 {
+		t.Fatalf("left %d, tracepoints %d; want 18000 left behind the 8 drained", el.numLeftInKernelRing, el.numTracepoints)
 	}
 	if line := el.leftInKernelRingStatLine(); !strings.Contains(line, "left in the kernel ring buffer at stop: 18000") {
 		t.Fatalf("stat line = %q", line)
@@ -104,24 +105,30 @@ func TestStopReportsRecordsLeftInTheKernelRing(t *testing.T) {
 }
 
 func TestStopSaysNothingWhenTheConsumerKeptUp(t *testing.T) {
-	el := newPairEvictionEventLoop(t)
+	el, pairs := newDrainHarness(t)
 	var warnings []string
 	el.SetWarningCallback(func(msg string) { warnings = append(warnings, msg) })
 	el.ringUnread = fakeRingUnread{}
-	el.countKernelRingLeftAtStop()
+	el.drainBacklogAtStop(make(chan []byte, 4), pairs, nil)
 	if el.leftInKernelRingStatLine() != "" || len(warnings) != 0 {
 		t.Fatalf("empty ring: line %q, warnings %q; want neither", el.leftInKernelRingStatLine(), warnings)
 	}
-	(&eventLoop{}).countKernelRingLeftAtStop() // no reader: nothing to do, no panic
+	// No reader: nothing to do, no panic.
+	(&eventLoop{}).drainBacklogAtStop(make(chan []byte, 4), pairs, nil)
 }
 
+// A ring that cannot be read costs only its own line: the warning says so and
+// the backlog in rawCh is drained all the same.
 func TestStopWarnsWhenTheRingBacklogCannotBeRead(t *testing.T) {
-	el := newPairEvictionEventLoop(t)
+	el, pairs := newDrainHarness(t)
 	var warnings []string
 	el.SetWarningCallback(func(msg string) { warnings = append(warnings, msg) })
 	el.ringUnread = fakeRingUnread{err: errors.New("mmap failed")}
-	el.countKernelRingLeftAtStop()
+	el.drainBacklogAtStop(filledRawChannel(syncPairStream(t, 0, 4)), pairs, nil)
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "could not read the kernel ring buffer backlog") || el.numLeftInKernelRing != 0 {
 		t.Fatalf("warnings = %q, left = %d", warnings, el.numLeftInKernelRing)
+	}
+	if el.numTracepoints != 8 {
+		t.Fatalf("numTracepoints = %d, want the 8 buffered records drained", el.numTracepoints)
 	}
 }

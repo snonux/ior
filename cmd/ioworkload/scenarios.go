@@ -48,6 +48,7 @@ var scenarios = map[string]func() error{
 	"pipe-basic":                    pipeBasic,
 	"pipe2-basic":                   pipe2Basic,
 	"thread-exit-keeps-fd":          threadExitKeepsFd,
+	"getppid-burst":                 getppidBurst,
 	"thread-exit-tid-worker":        threadExitTidWorker,
 	"thread-comm-short-lived":       threadCommShortLived,
 	"thread-comm-renamed":           threadCommRenamed,

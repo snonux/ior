@@ -175,6 +175,7 @@ func TestHeadlessParquetFooterMarksLowerBoundsUnderRingbufDrops(t *testing.T) {
 	}{
 		{"ring-buffer drops", func(el *eventLoop) { el.numRingbufDrops.Store(17) }},
 		{"records discarded at stop", func(el *eventLoop) { el.numDiscardedAtStop = 5 }},
+		{"records left in the kernel ring", func(el *eventLoop) { el.numLeftInKernelRing = 4096 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) { testHeadlessParquetFooterLowerBound(t, tc.loss) })
 	}

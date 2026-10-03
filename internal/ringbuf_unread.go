@@ -12,8 +12,9 @@ import (
 )
 
 // Task us2: records that are still in the kernel's BPF ring buffer when the
-// trace stops. The libbpfgo poller feeds rawCh ahead of the decoder and blocks
-// when it is full, so a lagging consumer leaves records in the kernel ring;
+// trace stops (read before the stop-time drain, see backlogAtStop). The
+// libbpfgo poller feeds rawCh ahead of the decoder and blocks when it is
+// full, so a lagging consumer leaves records in the kernel ring;
 // RingBuffer.Stop abandons them. They are in neither "tracepoints" (never
 // decoded) nor "ring buffer drops" (the kernel did not drop them), nor in
 // "discarded at stop" (that counts only what had reached rawCh), so "drops: 0"
@@ -100,7 +101,9 @@ func newKernelRingUnread(module *bpf.Module) (*kernelRingUnread, error) {
 }
 
 // Unread reads the consumer and producer positions and counts the committed
-// records between them. libbpf maps the consumer page at offset 0 and the
+// records between them. The consumer position is read first: an empty answer
+// then means every record produced up to that read had been consumed (the
+// producer position only grows), which backlogAtStop relies on. libbpf maps the consumer page at offset 0 and the
 // producer page plus the doubled data area from offset one page; read-only
 // mappings of both are allowed.
 func (r *kernelRingUnread) Unread() (ringbufUnread, error) {
