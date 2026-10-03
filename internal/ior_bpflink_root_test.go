@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -372,12 +373,24 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	reader := newProgMissesReader()
 	requireMissesReported(t, reader, fds)
 	requireMissesReported(t, reader, fds)
-	counter, err := newSkippedRunCounter(attached, reader.misses, bootClockNs)
+	attachedOn := func(tracepoints []string) []int { return libbpfAttachedProgramFDsOn(module, tracepoints) }
+	counter, err := newSkippedRunCounter(attached, attachedOn, reader.misses, bootClockNs)
 	if err != nil {
 		t.Fatalf("a counter over the attached programs: %v", err)
 	}
 	if total, err := counter.Total(); err != nil {
 		t.Fatalf("sweep: %d, %v", total, err)
+	}
+	// A fold asks by tracepoint name: the raw program is listed under its
+	// tracepoint alone, and both answer a question naming both.
+	if on := attachedOn([]string{taskRenameProbeName}); len(on) != 1 || !slices.Contains(fds, on[0]) {
+		t.Fatalf("programs on %s = %v, want one of %v", taskRenameProbeName, on, fds)
+	}
+	if on := attachedOn([]string{processExecProbeName, taskRenameProbeName}); len(on) != 2 {
+		t.Fatalf("programs on both tracepoints = %v, want the two attached", on)
+	}
+	if _, err := counter.SkippedSince([]string{processExecProbeName}, 1, bootClockNs()); err != nil {
+		t.Fatalf("a fold's question about the classic program: %v", err)
 	}
 	logMissesReadCost(t, reader, fds[0])
 	for name, link := range map[string]probemanager.Link{"classic": classic, "raw": raw} {

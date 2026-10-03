@@ -69,8 +69,8 @@ var errSkippedRunsNotReported = errors.New("the kernel does not report skipped b
 // and, once more, those that had one at the previous sweep and lost it
 // since: a detached program keeps its count, and that last read picks up the
 // runs skipped between the previous sweep and the detach. The object's other
-// programs, some 500 in a default run, are never read. The sum is kept per
-// program (last) and only ever grows, whatever is attached.
+// programs, some 500 in a default run, are never read. The count is kept per
+// program (programs) and the sum only ever grows, whatever is attached.
 //
 // The cost. A read is one system call in which the kernel adds the program's
 // per-CPU counters up over every POSSIBLE CPU (bpf_prog_get_stats), so it
@@ -82,48 +82,92 @@ var errSkippedRunsNotReported = errors.New("the kernel does not report skipped b
 // per program; read in a tight loop the same program takes 0.3 to 0.9
 // (TestSkippedRunsAreReadFromReallyAttachedPrograms logs it), so most of a
 // sweep is cache misses on counters the other CPUs keep writing. The drop
-// monitor pays that once per period. The restart fold and
-// the exec adoption ask per interrupted call, on the event loop, and get the
-// last sweep when it is new enough for the question (TotalAsOf): a miss is
-// counted when it happens, so a sweep that began after the record that asks
-// was stamped has every miss among the records before it. A loop that lags
-// behind the kernel therefore sweeps once per backlog, not once per
-// question; a loop that has caught up sweeps per question.
+// monitor pays that once per period, and the exec adoption, which asks
+// rarely, with TotalAsOf: it gets the last sweep when that is new enough for
+// the question (a miss is counted when it happens, so a sweep that began
+// after the record that asks was stamped has every miss among the records
+// before it), and sweeps otherwise.
+//
+// A restart fold asks per interrupted call, on the event loop, and a full
+// sweep per question made a caught-up loop sweep 242 programs per fold: on
+// a pipe read interrupted some 6,000 times a second, 15 million bpf(2) calls
+// in 10 s and four times the CPU of a run that did not count; with the
+// fold's own 8 programs, 0.65 million and about 1.25 times. So a fold
+// asks about the programs its proof depends on only (SkippedSince,
+// restartFoldTracepoints: the syscall's pair, restart_syscall's for -516,
+// the hand probes), per program: each program's latest read, of a full sweep
+// or of an earlier question, answers when it began after the record that
+// asks, and the others are read then.
 type skippedRunCounter struct {
-	// fds returns the programs attached now, in a slice of the caller's own.
-	// It must not block for long: the event loop calls it per sweep.
-	fds  func() []int
-	read func(fd int) (misses uint64, reported bool, err error)
+	// fds returns the programs attached now, in a slice of the caller's own;
+	// fdsOn those of them attached to one of the tracepoints it is given.
+	// Neither may block for long: the event loop calls them per question.
+	fds   func() []int
+	fdsOn func(tracepoints []string) []int
+	read  func(fd int) (misses uint64, reported bool, err error)
 	// clock is the boot clock the drop watch stamps its observations with
 	// (eventLoop.readDropStampClock), comparable with a record's time.
 	clock func() uint64
 
-	// mu serialises the sweeps of the monitor's goroutine and the loop's and
+	// mu serialises the reads of the monitor's goroutine and the loop's and
 	// guards everything below.
 	mu sync.Mutex
-	// last is the latest count read of every program ever swept, and total
-	// their sum. A program's count stands still while it is detached, so its
-	// entry stays true without a read.
-	last  map[int]uint64
-	total uint64
-	// attached are the programs the latest sweep found attached; the next
-	// one reads those of them that are gone once more.
+	// programs is what is known of every program ever read, and total the
+	// sum of their counts. A program's count stands still while it is
+	// detached, so its entry stays true without a read.
+	programs map[int]*programSkips
+	total    uint64
+	// attached are the programs the latest full sweep found attached; the
+	// next one reads those of them that are gone once more.
 	attached []int
-	// reusable says that the latest sweep succeeded and has a time
+	// reusable says that the latest full sweep succeeded and has a time
 	// (sweptAt, a clock reading taken before its first read), so that it
 	// can answer for the past (TotalAsOf).
 	reusable bool
 	sweptAt  uint64
+	// reads is the buffer of one batch of reads (readLocked), kept to spare
+	// the event loop an allocation per question.
+	reads []programRead
 }
 
-// newSkippedRunCounter returns a counter over the programs fds names, after
-// one sweep that proves the kernel reports the field for each of them. With
-// nothing attached yet (a TUI run with every probe off whose hand probes
-// failed) there is nothing to prove it with, and nothing that could be
-// skipped; a kernel that does not report shows at the first sweep that reads
-// a program, as a failed read.
-func newSkippedRunCounter(fds func() []int, read func(int) (uint64, bool, error), clock func() uint64) (*skippedRunCounter, error) {
-	counter := &skippedRunCounter{fds: fds, read: read, clock: clock, last: map[int]uint64{}}
+// programSkips is what the counter knows of one program: the count of its
+// latest read, the stamp of the earliest read that returned that count (a
+// clock reading taken after that read), and when its latest read began (a
+// clock reading taken before it; dated says it is one). The zero value is
+// true of a program never read: a program is loaded with a count of 0, so
+// "0, first seen at time 0" holds until a read says otherwise.
+//
+// This is restartDropWatch's stampedTotal per program, under the same
+// invariant: the program's count was `count` in a read that finished at or
+// before firstSeenAt. A fold asks it per program (SkippedSince).
+type programSkips struct {
+	count       uint64
+	firstSeenAt uint64
+	readFrom    uint64
+	dated       bool
+}
+
+// covers reports whether the latest read of the program holds every run of
+// it skipped at or before the boot-clock time asOf: it began after asOf. A
+// skip is counted when it happens, so a read begun later sees it.
+func (p *programSkips) covers(asOf uint64) bool {
+	return p != nil && p.dated && p.readFrom > asOf
+}
+
+// programRead is one successful read of a program's count.
+type programRead struct {
+	fd     int
+	misses uint64
+}
+
+// newSkippedRunCounter returns a counter over the programs fds names (and
+// fdsOn, per tracepoint), after one sweep that proves the kernel reports the
+// field for each of them. With nothing attached yet (a TUI run with every
+// probe off whose hand probes failed) there is nothing to prove it with, and
+// nothing that could be skipped; a kernel that does not report shows at the
+// first sweep that reads a program, as a failed read.
+func newSkippedRunCounter(fds func() []int, fdsOn func([]string) []int, read func(int) (uint64, bool, error), clock func() uint64) (*skippedRunCounter, error) {
+	counter := &skippedRunCounter{fds: fds, fdsOn: fdsOn, read: read, clock: clock, programs: map[int]*programSkips{}}
 	if _, err := counter.Total(); err != nil {
 		return nil, err
 	}
@@ -139,9 +183,11 @@ func (c *skippedRunCounter) Total() (uint64, error) {
 }
 
 // TotalAsOf returns a sum that includes every run skipped at or before the
-// boot-clock time asOf: the last sweep's when that sweep began after asOf,
-// and a new sweep's otherwise. asOf is the time of a record the loop is
-// processing, so "after asOf" is in the past for a loop that lags.
+// boot-clock time asOf: the last full sweep's when that sweep began after
+// asOf, and a new sweep's otherwise. asOf is the time of a record the loop is
+// processing, so "after asOf" is in the past for a loop that lags. (The sum
+// may also hold reads of single programs made since that sweep; they only
+// add what is newer.)
 //
 // The comparison is between a record's time and a clock reading of ior's
 // own (bootclock.go). With an unknown POSITIVE boottime offset of ior's time
@@ -158,6 +204,56 @@ func (c *skippedRunCounter) TotalAsOf(asOf uint64) (uint64, error) {
 	return c.sweepLocked()
 }
 
+// SkippedSince reports whether a run of one of the programs attached to
+// tracepoints (names without the category) was skipped at or after the
+// boot-clock time since: the question of a restart fold, about the
+// programs its proof depends on (restartFoldTracepoints), between its
+// interrupted exit (since) and the record that asks (upTo).
+//
+// A program whose latest read - of a full sweep or of an earlier question -
+// began after upTo is answered from it (programSkips.covers); the others are
+// read now, together. So a lagging loop reads nothing, and a caught-up one
+// reads the fold's few programs, not every attached one. Each program's
+// answer goes by its own stamp: its count first seen at or after since may
+// be a skip among the fold's records, and refuses it. Like the watch, that
+// also refuses a fold for a skip first seen late that happened before since.
+//
+// A program detached since upTo is not read; the probe change that
+// detached it refuses the fold on its own (restartAcrossProbeChange), and
+// the hand probes stay attached for the session. An error answers true:
+// a count that cannot be read proves nothing.
+func (c *skippedRunCounter) SkippedSince(tracepoints []string, since, upTo uint64) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fds := c.fdsOn(tracepoints)
+	if stale := c.staleAsOf(fds, upTo); len(stale) > 0 {
+		if _, err := c.readLocked(stale); err != nil {
+			return true, err
+		}
+	}
+	for _, fd := range fds {
+		// Every program of fds has an entry now; one without would be a
+		// count never read, which proves nothing.
+		if program := c.programs[fd]; program == nil || program.firstSeenAt >= since {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// staleAsOf returns the programs of fds whose latest read does not cover
+// the time asOf, in a slice of its own (nil when there are none: a lagging
+// loop allocates nothing).
+func (c *skippedRunCounter) staleAsOf(fds []int, asOf uint64) []int {
+	var stale []int
+	for _, fd := range fds {
+		if !c.programs[fd].covers(asOf) {
+			stale = append(stale, fd)
+		}
+	}
+	return stale
+}
+
 // sweepLocked reads every attached program, and every program detached since
 // the previous sweep, and returns the sum.
 //
@@ -169,26 +265,57 @@ func (c *skippedRunCounter) TotalAsOf(asOf uint64) (uint64, error) {
 // would answer every later question for the rest of the run.
 func (c *skippedRunCounter) sweepLocked() (uint64, error) {
 	c.reusable = false
-	startedAt := c.clock()
 	attached := c.fds()
-	for _, fd := range c.sweepSet(attached) {
-		misses, reported, err := c.read(fd)
-		if err != nil {
-			return 0, fmt.Errorf("skipped program runs: %w", err)
-		}
-		if !reported {
-			return 0, errSkippedRunsNotReported
-		}
-		// The kernel's count only grows; one that reads lower is ignored
-		// rather than taken out of a sum that must never fall.
-		if misses > c.last[fd] {
-			c.total += misses - c.last[fd]
-			c.last[fd] = misses
-		}
+	startedAt, err := c.readLocked(c.sweepSet(attached))
+	if err != nil {
+		return 0, err
 	}
 	c.attached = attached
 	c.sweptAt, c.reusable = startedAt, startedAt != math.MaxUint64
 	return c.total, nil
+}
+
+// readLocked reads the programs of fds as one batch between two clock
+// readings and returns the first: each count read is stamped with the
+// second, its read with the first (record). A failed read ends the batch;
+// the reads before it are recorded all the same.
+func (c *skippedRunCounter) readLocked(fds []int) (startedAt uint64, err error) {
+	startedAt = c.clock()
+	c.reads = c.reads[:0]
+	for _, fd := range fds {
+		misses, reported, readErr := c.read(fd)
+		if readErr != nil {
+			err = fmt.Errorf("skipped program runs: %w", readErr)
+			break
+		}
+		if !reported {
+			err = errSkippedRunsNotReported
+			break
+		}
+		c.reads = append(c.reads, programRead{fd: fd, misses: misses})
+	}
+	seenAt := c.clock()
+	for _, read := range c.reads {
+		c.record(read, startedAt, seenAt)
+	}
+	return startedAt, err
+}
+
+// record takes one read into the program's entry and the total.
+func (c *skippedRunCounter) record(read programRead, startedAt, seenAt uint64) {
+	program := c.programs[read.fd]
+	if program == nil {
+		program = &programSkips{}
+		c.programs[read.fd] = program
+	}
+	// The kernel's count only grows; one that reads lower is ignored
+	// rather than taken out of a sum that must never fall.
+	if read.misses > program.count {
+		c.total += read.misses - program.count
+		program.count = read.misses
+		program.firstSeenAt = seenAt
+	}
+	program.readFrom, program.dated = startedAt, startedAt != math.MaxUint64
 }
 
 // sweepSet returns the programs a sweep reads: the attached ones, and those
@@ -196,8 +323,12 @@ func (c *skippedRunCounter) sweepLocked() (uint64, error) {
 // their detach was not read yet.
 func (c *skippedRunCounter) sweepSet(attached []int) []int {
 	set := slices.Clone(attached)
+	now := make(map[int]struct{}, len(attached))
+	for _, fd := range attached {
+		now[fd] = struct{}{}
+	}
 	for _, fd := range c.attached {
-		if !slices.Contains(attached, fd) {
+		if _, still := now[fd]; !still {
 			set = append(set, fd)
 		}
 	}
@@ -230,4 +361,11 @@ func (s *recordLossSource) SkippedRuns() (uint64, error) {
 // (skippedRunSource, skippedRunCounter.TotalAsOf).
 func (s *recordLossSource) SkippedRunsAsOf(asOf uint64) (uint64, error) {
 	return s.skipped.TotalAsOf(asOf)
+}
+
+// SkippedRunsSince reports whether a program attached to one of tracepoints
+// had a run skipped at or after since, as of upTo (skippedRunSource,
+// skippedRunCounter.SkippedSince).
+func (s *recordLossSource) SkippedRunsSince(tracepoints []string, since, upTo uint64) (bool, error) {
+	return s.skipped.SkippedSince(tracepoints, since, upTo)
 }

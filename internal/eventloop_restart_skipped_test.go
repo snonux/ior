@@ -3,9 +3,13 @@ package internal
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"ior/internal/globalfilter"
+	"ior/internal/probemanager"
+	"ior/internal/tracepoints"
+	"ior/internal/types"
 )
 
 // Tests for task 723: a program run the kernel skipped may lose a record
@@ -19,11 +23,13 @@ import (
 
 // scriptedPrograms are the programs of a fixture whose kernel counts skipped
 // runs: one count per program fd, moved by the test (skip), the fds that are
-// attached, which is what a sweep is told to read (fds), and the number of
+// attached, which is what a sweep is told to read (fds), the tracepoint each
+// is attached to, which is what a fold asks by (fdsOn), and the number of
 // reads made, which is what a sweep costs.
 type scriptedPrograms struct {
 	misses   map[int]uint64
 	attached []int
+	on       map[int]string
 	reads    int
 	err      error
 	// unreported makes the kernel fill less than the field, as one that
@@ -31,18 +37,39 @@ type scriptedPrograms struct {
 	unreported bool
 }
 
-// newScriptedPrograms returns the programs behind fds, all attached.
+// newScriptedPrograms returns the programs behind fds, all attached, to no
+// tracepoint a fold asks about until attachOn names one.
 func newScriptedPrograms(fds ...int) *scriptedPrograms {
-	programs := &scriptedPrograms{misses: map[int]uint64{}, attached: fds}
+	programs := &scriptedPrograms{misses: map[int]uint64{}, attached: fds, on: map[int]string{}}
 	for _, fd := range fds {
 		programs.misses[fd] = 0
 	}
 	return programs
 }
 
+// attachOn attaches the program behind fd to tracepoint.
+func (p *scriptedPrograms) attachOn(fd int, tracepoint string) {
+	if _, known := p.misses[fd]; !known {
+		p.misses[fd] = 0
+		p.attached = append(p.attached, fd)
+	}
+	p.on[fd] = tracepoint
+}
+
 // fds is the libbpfAttachedProgramFDs of the scripted kernel.
 func (p *scriptedPrograms) fds() []int {
 	return slices.Clone(p.attached)
+}
+
+// fdsOn is the libbpfAttachedProgramFDsOn of the scripted kernel.
+func (p *scriptedPrograms) fdsOn(tracepoints []string) []int {
+	var fds []int
+	for _, fd := range p.attached {
+		if slices.Contains(tracepoints, p.on[fd]) {
+			fds = append(fds, fd)
+		}
+	}
+	return fds
 }
 
 // detach is the probe of the program behind fd being switched off.
@@ -64,21 +91,46 @@ func (p *scriptedPrograms) skip(fd int, n uint64) {
 	p.misses[fd] += n
 }
 
-// The two programs of countSkippedRuns: stand-ins for the handlers of a
-// syscall's enter and exit.
+// The programs of countSkippedRuns, by the tracepoint each is attached to:
+// restart_syscall's pair, the fixture's two interrupted syscalls' pairs
+// (clock_nanosleep for -516, read for the re-executions), a hand probe, and
+// a syscall none of the fixture's folds depends on.
 const (
-	skippedEnterProg = 11
-	skippedExitProg  = 12
+	skippedEnterProg = 11 + iota
+	skippedExitProg
+	skippedSleepEnterProg
+	skippedSleepExitProg
+	skippedReadEnterProg
+	skippedReadExitProg
+	skippedDeliverProg
+	skippedWriteProg
 )
+
+// skippedProgramTracepoints are the tracepoints of countSkippedRuns's
+// programs.
+var skippedProgramTracepoints = map[int]string{
+	skippedEnterProg:      "sys_enter_restart_syscall",
+	skippedExitProg:       "sys_exit_restart_syscall",
+	skippedSleepEnterProg: "sys_enter_clock_nanosleep",
+	skippedSleepExitProg:  "sys_exit_clock_nanosleep",
+	skippedReadEnterProg:  "sys_enter_read",
+	skippedReadExitProg:   "sys_exit_read",
+	skippedDeliverProg:    signalDeliverProbeName,
+	skippedWriteProg:      "sys_enter_write",
+}
 
 // countSkippedRuns turns the fixture's scripted drop counter into the source
 // of a kernel that counts skipped runs: the same ring counter, plus a
-// skipped-run counter over two attached programs, dated by the fixture's
-// clock. The monitor is rebuilt on the new source, as trace setup builds it.
+// skipped-run counter over the attached programs above, dated by the
+// fixture's clock. The monitor is rebuilt on the new source, as trace setup
+// builds it.
 func (f *restartFixture) countSkippedRuns() *scriptedPrograms {
 	f.t.Helper()
-	programs := newScriptedPrograms(skippedEnterProg, skippedExitProg)
-	skipped, err := newSkippedRunCounter(programs.fds, programs.read, f.el.readDropStampClock)
+	programs := newScriptedPrograms()
+	for fd := skippedEnterProg; fd <= skippedWriteProg; fd++ {
+		programs.attachOn(fd, skippedProgramTracepoints[fd])
+	}
+	skipped, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, f.el.readDropStampClock)
 	if err != nil {
 		f.t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -191,8 +243,58 @@ func TestAFoldBehindTheLastSweepDoesNotSweepAgain(t *testing.T) {
 
 	const second = restartBase + 10000
 	requireFoldedSleep(t, f.foldSleep(second), second, "nothing was skipped")
-	if got, want := programs.reads-swept, 2*len(programs.misses); got != want {
-		t.Fatalf("the caught-up fold made %d program reads, want %d (one sweep at RESUME, one at the exit)", got, want)
+	// restart_syscall's pair, clock_nanosleep's and the hand probe: the
+	// fold's own programs, once at RESUME and once at the exit.
+	if got, want := programs.reads-swept, 2*5; got != want {
+		t.Fatalf("the caught-up fold made %d program reads, want %d (its 5 programs at RESUME and at the exit)", got, want)
+	}
+}
+
+// foldSkipCases says, per program of countSkippedRuns, whether its skipped
+// run refuses the fold of a stopped clock_nanosleep (-516, continued by
+// restart_syscall) and of a read re-executed after an SA_RESTART handler:
+// a fold asks about its own syscall's pair, restart_syscall's for -516 and
+// the hand probes (restartFoldTracepoints), and about nothing else.
+var foldSkipCases = map[string]struct {
+	fd                        int
+	refusesSleep, refusesRead bool
+}{
+	"restart_syscall enter": {skippedEnterProg, true, false},
+	"restart_syscall exit":  {skippedExitProg, true, false},
+	"clock_nanosleep enter": {skippedSleepEnterProg, true, false},
+	"clock_nanosleep exit":  {skippedSleepExitProg, true, false},
+	"read enter":            {skippedReadEnterProg, false, true},
+	"read exit":             {skippedReadExitProg, false, true},
+	"signal_deliver":        {skippedDeliverProg, true, true},
+	"write enter":           {skippedWriteProg, false, false},
+}
+
+// TestOnlyTheFoldsOwnProgramsRefuseIt: a run skipped while a row is held
+// refuses its fold when it is one of the programs the fold depends on, and
+// only then - a skip of another syscall's program leaves the fold to go on
+// (restartFoldTracepoints argues why that is sound).
+func TestOnlyTheFoldsOwnProgramsRefuseIt(t *testing.T) {
+	for name, tc := range foldSkipCases {
+		t.Run(name, func(t *testing.T) {
+			f := newReexecFixture(t, globalfilter.Filter{})
+			programs := f.countSkippedRuns()
+			f.interrupt(restartBase, restartTid)
+			programs.skip(tc.fd, 1)
+			rows := f.foldSleepFrom(restartBase)
+			folded := len(rows) == 1 && rows[0].ret == 0 && rows[0].duration == 3000
+			if folded == tc.refusesSleep {
+				t.Fatalf("sleep: rows = %+v, folded = %v, want the fold refused: %v", rows, folded, tc.refusesSleep)
+			}
+			const later = restartBase + 10000
+			f.interruptRead(later, restartTid, restartSys)
+			f.feedNone(f.handlerRecord(later+510, restartTid, true), "HANDLER record")
+			programs.skip(tc.fd, 1)
+			rows = f.foldReadFrom(later)
+			folded = len(rows) == 1 && rows[0].ret == 1 && rows[0].duration == 3000
+			if folded == tc.refusesRead {
+				t.Fatalf("read: rows = %+v, folded = %v, want the fold refused: %v", rows, folded, tc.refusesRead)
+			}
+		})
 	}
 }
 
@@ -260,6 +362,13 @@ func (s *watchSource) SkippedRunsAsOf(uint64) (uint64, error) {
 	return s.skipped, s.skippedErr
 }
 
+// SkippedRunsSince is the question of a fold, which these tests do not
+// ask (evidenceSince is the exec adoption's): it answers "skipped" so that
+// a fold that asked would show.
+func (s *watchSource) SkippedRunsSince([]string, uint64, uint64) (bool, error) {
+	return true, s.skippedErr
+}
+
 // TestRestartDropWatchTellsTheKindsOfEvidenceApart pins the watch's answer
 // by kind: each counter has its own total and stamp, a moved one is evidence
 // for the questions about a time at or before its first observation, a
@@ -277,7 +386,7 @@ func TestRestartDropWatchTellsTheKindsOfEvidenceApart(t *testing.T) {
 		t.Fatalf("two counters that never moved: %v, want no evidence", got)
 	}
 	src.skipped, now = 4, 200
-	if got := ask(150); got != maybeSkippedRecord || watch.lostSince(201, 201, src, func() uint64 { return now }) {
+	if got := ask(150); got != maybeSkippedRecord || ask(201) != noLossEvidence {
 		t.Fatalf("a skipped run first seen at 200: %v for 150, want a possible skip, and nothing for 201", got)
 	}
 	src.drops, now = 1, 300
@@ -294,5 +403,60 @@ func TestRestartDropWatchTellsTheKindsOfEvidenceApart(t *testing.T) {
 	src.dropsErr = errors.New("unreadable")
 	if got := ask(9000); got != countedRecordLoss {
 		t.Fatalf("a drop counter that cannot be read: %v, want a counted loss", got)
+	}
+}
+
+// namingProbeProgram records the tracepoint names it is attached to, classic
+// or raw, in the list of its attacher.
+type namingProbeProgram struct{ names *[]string }
+
+func (p namingProbeProgram) AttachTracepoint(_, name string) (probemanager.Link, error) {
+	*p.names = append(*p.names, name)
+	return &fakeProbeLink{}, nil
+}
+
+func (p namingProbeProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
+	*p.names = append(*p.names, name)
+	return &fakeProbeLink{}, nil
+}
+
+// namingAttacher hands out namingProbeProgram for every program.
+type namingAttacher struct{ names []string }
+
+func (a *namingAttacher) GetProgram(string) (probemanager.Program, error) {
+	return namingProbeProgram{names: &a.names}, nil
+}
+
+// TestRestartFoldTracepointsAreTheNamesProgramsAreAttachedUnder: a fold
+// asks the list of attached programs by tracepoint name, and a name it
+// spells differently from the attach finds nothing - silently, as a fold
+// that depends on no program. The hand probes' names must be those the
+// hand attaches use, and a syscall's those of tracepoints.List, which the
+// probe manager attaches by.
+func TestRestartFoldTracepointsAreTheNamesProgramsAreAttachedUnder(t *testing.T) {
+	attacher := &namingAttacher{}
+	log := bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)}
+	for _, attach := range []func(probemanager.Attacher, bpfSetupLog) func(){attachProcessExecProbe,
+		attachProcessExitProbe, attachTaskNewtaskProbe, attachTaskRenameProbe, attachSignalDeliverProbe,
+		attachRestartSigreturnProbe} {
+		attach(attacher, log)()
+	}
+	slices.Sort(attacher.names)
+	hand := slices.Sorted(slices.Values(restartFoldHandTracepoints))
+	if !slices.Equal(attacher.names, hand) {
+		t.Fatalf("hand probes attached under %v, a fold asks for %v", attacher.names, hand)
+	}
+	named := map[string]bool{}
+	for id := range types.TraceId(4096) {
+		if strings.HasPrefix(id.Name(), "unknown_trace_id") {
+			continue
+		}
+		enter, exit := syscallTracepoints(id)
+		named[enter], named[exit] = true, true
+	}
+	for _, tracepoint := range tracepoints.List {
+		if !named[tracepoint] {
+			t.Errorf("the probe manager attaches %s, which no trace ID's syscallTracepoints names", tracepoint)
+		}
 	}
 }

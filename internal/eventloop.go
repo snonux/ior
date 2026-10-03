@@ -66,15 +66,20 @@ type ringbufDropSource interface {
 
 // skippedRunSource is what a drop source can say besides its ring-buffer
 // drops when the kernel counts the program runs it skipped
-// (recordLossSource, task 723): their number now, and their number as of a
+// (recordLossSource, task 723): their number now; their number as of a
 // time in the past, answered from an earlier reading where that is new enough
-// (skippedRunCounter.TotalAsOf). The drop monitor asks the first, the drop
-// watch the second, with the time of the record it decides about
-// (restartDropWatch). A skipped run is weaker evidence than a drop - a
-// record MAY be missing - and is never added to Total.
+// (skippedRunCounter.TotalAsOf); and whether the programs attached to some
+// tracepoints had a run skipped since a time, as of another
+// (skippedRunCounter.SkippedSince). The drop monitor asks the first, the
+// exec adoption the second and a restart fold the third, about the programs
+// its proof depends on (restartFoldTracepoints), each with the time of the
+// record it decides about (restartDropWatch). A skipped run is weaker
+// evidence than a drop - a record MAY be missing - and is never added to
+// Total.
 type skippedRunSource interface {
 	SkippedRuns() (uint64, error)
 	SkippedRunsAsOf(asOf uint64) (uint64, error)
+	SkippedRunsSince(tracepoints []string, since, upTo uint64) (bool, error)
 }
 
 type eventLoopConfig struct {

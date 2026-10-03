@@ -307,7 +307,9 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   on the host, so it says that events *may* be missing, not how many: with `-pid`, `-tid` or
   `-comm` it includes the calls of tasks outside the filter, and can be large while the
   trace is complete. ior acts on it on the safe side: an interrupted call is not folded with
-  its restart across a skipped run (two rows instead of one), and sampling totals are
+  its restart across a skipped run of the probes that fold depends on (the call's own
+  syscall, `restart_syscall` for a stopped sleep, and the process and signal probes; two
+  rows instead of one), and sampling totals are
   labelled `at least`. On an older kernel the line reads `not counted`, and such a loss
   leaves no trace. It needs a preemption inside the kernel, so it is rare on a desktop and
   common where real-time tasks or `preempt=full` preempt a syscall-heavy CPU.

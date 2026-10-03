@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -64,11 +65,11 @@ var libbpfAttachMu sync.Mutex
 
 // attachLibbpfTracepoint attaches prog to the classic tracepoint
 // category/name, one attach at a time (libbpfAttachMu), and hands out the
-// link wrapped and its program listed as attached (libbpfLinkOf).
+// link wrapped and its program listed as attached to name (libbpfLinkOf).
 func attachLibbpfTracepoint(prog *bpf.BPFProg, category, name string) (probemanager.Link, error) {
 	libbpfAttachMu.Lock()
 	defer libbpfAttachMu.Unlock()
-	return libbpfLinkOf(prog)(attachBPFTracepoint(prog, category, name))
+	return libbpfLinkOf(prog, name)(attachBPFTracepoint(prog, category, name))
 }
 
 // attachLibbpfRawTracepoint is attachLibbpfTracepoint for the raw tracepoint
@@ -76,21 +77,27 @@ func attachLibbpfTracepoint(prog *bpf.BPFProg, category, name string) (probemana
 func attachLibbpfRawTracepoint(prog *bpf.BPFProg, name string) (probemanager.Link, error) {
 	libbpfAttachMu.Lock()
 	defer libbpfAttachMu.Unlock()
-	return libbpfLinkOf(prog)(attachBPFRawTracepoint(prog, name))
+	return libbpfLinkOf(prog, name)(attachBPFRawTracepoint(prog, name))
 }
 
 // attachedProgram names one loaded program for the list of attached ones:
-// the module it belongs to and its file descriptor, which is all that ever
-// leaves the seam of a program (libbpfAttachedProgramFDs). The zero value
-// names no program and is never listed.
+// the module it belongs to, its file descriptor, which is all that ever
+// leaves the seam of a program (libbpfAttachedProgramFDs), and the
+// tracepoint its link attached it to, by name without the category
+// ("sys_enter_read", "signal_deliver", "task_rename"), which is how the
+// event loop asks for the programs of one syscall
+// (libbpfAttachedProgramFDsOn). The zero value names no program and is
+// never listed.
 type attachedProgram struct {
-	module *bpf.Module
-	fd     int
+	module     *bpf.Module
+	fd         int
+	tracepoint string
 }
 
-// attachedProgramOf names prog. A nil program (the tests' seam without a
-// kernel) and one the kernel did not load have no name.
-func attachedProgramOf(prog *bpf.BPFProg) attachedProgram {
+// attachedProgramOf names prog, attached to tracepoint. A nil program (the
+// tests' seam without a kernel) and one the kernel did not load have no
+// name.
+func attachedProgramOf(prog *bpf.BPFProg, tracepoint string) attachedProgram {
 	if prog == nil {
 		return attachedProgram{}
 	}
@@ -98,7 +105,7 @@ func attachedProgramOf(prog *bpf.BPFProg) attachedProgram {
 	if fd < 0 {
 		return attachedProgram{}
 	}
-	return attachedProgram{module: prog.GetModule(), fd: fd}
+	return attachedProgram{module: prog.GetModule(), fd: fd, tracepoint: tracepoint}
 }
 
 // attachedProgramSet lists, per module, the programs that have a live link:
@@ -110,15 +117,18 @@ func attachedProgramOf(prog *bpf.BPFProg) attachedProgram {
 // manager: its lock is held across attaches that take milliseconds, and the
 // event loop reads this list while it decides about a fold.
 //
-// The mutex guards two map operations and is never held across a system
+// The mutex guards a few map operations and is never held across a system
 // call. A module's entry goes with its last link, so a closed module leaves
 // nothing behind: teardown destroys every link before it closes the module.
 type attachedProgramSet struct {
 	mu sync.Mutex
-	// links counts the live links of each program, by module and fd. ior
-	// attaches every program once; the count only keeps a second link of
-	// the same program from being unlisted by the first one's Destroy.
-	links map[*bpf.Module]map[int]int
+	// links counts the live links of each program, by module, by the
+	// tracepoint the link attached it to and by fd: the index by tracepoint
+	// is what answers the event loop's question about one syscall's
+	// programs without a walk over all of them (fdsOn). ior attaches every
+	// program once; the count only keeps a second link of the same program
+	// from being unlisted by the first one's Destroy.
+	links map[*bpf.Module]map[string]map[int]int
 }
 
 // libbpfAttached is the list for the process. One list serves every module:
@@ -132,12 +142,17 @@ func (s *attachedProgramSet) add(prog attachedProgram) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.links == nil {
-		s.links = map[*bpf.Module]map[int]int{}
+		s.links = map[*bpf.Module]map[string]map[int]int{}
 	}
-	if s.links[prog.module] == nil {
-		s.links[prog.module] = map[int]int{}
+	ofModule := s.links[prog.module]
+	if ofModule == nil {
+		ofModule = map[string]map[int]int{}
+		s.links[prog.module] = ofModule
 	}
-	s.links[prog.module][prog.fd]++
+	if ofModule[prog.tracepoint] == nil {
+		ofModule[prog.tracepoint] = map[int]int{}
+	}
+	ofModule[prog.tracepoint][prog.fd]++
 }
 
 func (s *attachedProgramSet) remove(prog attachedProgram) {
@@ -147,18 +162,22 @@ func (s *attachedProgramSet) remove(prog attachedProgram) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ofModule := s.links[prog.module]
-	if ofModule[prog.fd] > 1 {
-		ofModule[prog.fd]--
+	onTracepoint := ofModule[prog.tracepoint]
+	if onTracepoint[prog.fd] > 1 {
+		onTracepoint[prog.fd]--
 		return
 	}
-	delete(ofModule, prog.fd)
+	delete(onTracepoint, prog.fd)
+	if len(onTracepoint) == 0 {
+		delete(ofModule, prog.tracepoint)
+	}
 	if len(ofModule) == 0 {
 		delete(s.links, prog.module)
 	}
 }
 
-// fds returns the descriptors of module's attached programs, in a slice of
-// the caller's own.
+// fds returns the descriptors of module's attached programs, each once, in
+// a slice of the caller's own.
 func (s *attachedProgramSet) fds(module *bpf.Module) []int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,11 +185,36 @@ func (s *attachedProgramSet) fds(module *bpf.Module) []int {
 	if len(ofModule) == 0 {
 		return nil
 	}
-	fds := make([]int, 0, len(ofModule))
-	for fd := range ofModule {
-		fds = append(fds, fd)
+	var fds []int
+	for _, onTracepoint := range ofModule {
+		for fd := range onTracepoint {
+			fds = append(fds, fd)
+		}
 	}
-	return fds
+	return uniqueFDs(fds)
+}
+
+// fdsOn returns the descriptors of module's programs attached to one of
+// tracepoints (names without the category), each once, in a slice of the
+// caller's own; nil when none is.
+func (s *attachedProgramSet) fdsOn(module *bpf.Module, tracepoints []string) []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ofModule := s.links[module]
+	var fds []int
+	for _, tracepoint := range tracepoints {
+		for fd := range ofModule[tracepoint] {
+			fds = append(fds, fd)
+		}
+	}
+	return uniqueFDs(fds)
+}
+
+// uniqueFDs sorts fds and drops repeats: a program attached to two
+// tracepoints, or a tracepoint asked for twice.
+func uniqueFDs(fds []int) []int {
+	slices.Sort(fds)
+	return slices.Compact(fds)
 }
 
 // libbpfAttachedProgramFDs returns the file descriptor of every program of
@@ -181,6 +225,14 @@ func (s *attachedProgramSet) fds(module *bpf.Module) []int {
 // are valid until it is closed.
 func libbpfAttachedProgramFDs(module *bpf.Module) []int {
 	return libbpfAttached.fds(module)
+}
+
+// libbpfAttachedProgramFDsOn is libbpfAttachedProgramFDs for the programs
+// attached to one of tracepoints, by name without the category: what a
+// restart fold asks about (task 723, restartFoldTracepoints). It takes the
+// list's own mutex, never the probe manager's.
+func libbpfAttachedProgramFDsOn(module *bpf.Module, tracepoints []string) []int {
+	return libbpfAttached.fdsOn(module, tracepoints)
 }
 
 // libbpfLink is the probemanager.Link ior hands out for every link it attaches
@@ -241,18 +293,19 @@ type libbpfLink struct {
 // newLibbpfLink wraps the result of a libbpfgo attach for which no program
 // is listed as attached (libbpfLinkOf of no program).
 func newLibbpfLink(link *bpf.BPFLink, err error) (probemanager.Link, error) {
-	return libbpfLinkOf(nil)(link, err)
+	return libbpfLinkOf(nil, "")(link, err)
 }
 
 // libbpfLinkOf returns the function that wraps the result of a libbpfgo
-// attach of prog; it takes the attach call's two results as they come, so
-// that no bare link is ever held in a variable (the attach functions are
-// pinned to `return libbpfLinkOf(prog)(attachBPF...(...))`). A failed attach
-// hands out no link, as an untyped nil: libbpfgo returns a nil *bpf.BPFLink
-// then, which must become neither a non-nil probemanager.Link nor a wrapper
-// around nothing. A link that is handed out lists prog as attached until its
-// Destroy (attachedProgramSet).
-func libbpfLinkOf(prog *bpf.BPFProg) func(*bpf.BPFLink, error) (probemanager.Link, error) {
+// attach of prog to tracepoint (its name without the category); it takes
+// the attach call's two results as they come, so that no bare link is ever
+// held in a variable (the attach functions are pinned to
+// `return libbpfLinkOf(prog, name)(attachBPF...(prog, ..., name))`). A
+// failed attach hands out no link, as an untyped nil: libbpfgo returns a nil
+// *bpf.BPFLink then, which must become neither a non-nil probemanager.Link
+// nor a wrapper around nothing. A link that is handed out lists prog as
+// attached, under that tracepoint, until its Destroy (attachedProgramSet).
+func libbpfLinkOf(prog *bpf.BPFProg, tracepoint string) func(*bpf.BPFLink, error) (probemanager.Link, error) {
 	return func(link *bpf.BPFLink, err error) (probemanager.Link, error) {
 		if err != nil {
 			return nil, err
@@ -260,7 +313,7 @@ func libbpfLinkOf(prog *bpf.BPFProg) func(*bpf.BPFLink, error) (probemanager.Lin
 		if link == nil {
 			return nil, errNoLibbpfLink
 		}
-		wrapped := &libbpfLink{program: attachedProgramOf(prog)}
+		wrapped := &libbpfLink{program: attachedProgramOf(prog, tracepoint)}
 		wrapped.link.Store(link)
 		libbpfAttached.add(wrapped.program)
 		return wrapped, nil

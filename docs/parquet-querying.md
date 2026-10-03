@@ -288,7 +288,9 @@ followed by a second row for the continuation (if that was recorded at all), whe
   (-512/-513/-514) are not affected by that rate;
 - ior cannot rule out that the kernel dropped a record, any record of any process, between
   the interruption and the continuation's exit (see the drop counter), or the kernel skipped
-  a run of one of ior's probes in that time (the statistics' `probe runs skipped by the
+  a run of one of the probes the fold depends on in that time - the call's own syscall,
+  `restart_syscall` for a stopped sleep, and the process and signal probes (the statistics'
+  `probe runs skipped by the
   kernel`, counted from Linux 6.7 on and for every task on the host, traced or not: a busy
   real-time task elsewhere on the CPU can refuse folds of a trace that lost nothing). This
   applies to both

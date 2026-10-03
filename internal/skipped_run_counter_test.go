@@ -116,7 +116,7 @@ func TestSkippedRunCounterSumsTheAttachedPrograms(t *testing.T) {
 	// cannot move - never added.
 	programs.misses[6] = 1000
 	clock := &steppingClock{}
-	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestSkippedRunCounterSumsTheAttachedPrograms(t *testing.T) {
 // the probe is attached again only what was skipped since is added.
 func TestSkippedRunCounterReadsADetachedProgramOnceMore(t *testing.T) {
 	programs := newScriptedPrograms(3, 4)
-	counter, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, (&steppingClock{}).read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSkippedRunCounterReadsADetachedProgramOnceMore(t *testing.T) {
 // that: nothing can be skipped, and 0 is the count.
 func TestSkippedRunCounterNeedsAKernelThatReports(t *testing.T) {
 	none := newScriptedPrograms()
-	counter, err := newSkippedRunCounter(none.fds, none.read, (&steppingClock{}).read)
+	counter, err := newSkippedRunCounter(none.fds, none.fdsOn, none.read, (&steppingClock{}).read)
 	if err != nil {
 		t.Fatalf("a counter over no attached program: %v", err)
 	}
@@ -174,13 +174,13 @@ func TestSkippedRunCounterNeedsAKernelThatReports(t *testing.T) {
 	}
 	programs := newScriptedPrograms(3)
 	programs.unreported = true
-	if _, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read); !errors.Is(err, errSkippedRunsNotReported) {
+	if _, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, (&steppingClock{}).read); !errors.Is(err, errSkippedRunsNotReported) {
 		t.Errorf("err = %v, want errSkippedRunsNotReported", err)
 	}
 	boom := errors.New("boom")
 	programs = newScriptedPrograms(3)
 	programs.err = boom
-	if _, err := newSkippedRunCounter(programs.fds, programs.read, (&steppingClock{}).read); !errors.Is(err, boom) {
+	if _, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, (&steppingClock{}).read); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want the read's error", err)
 	}
 }
@@ -193,7 +193,7 @@ func TestSkippedRunCounterNeedsAKernelThatReports(t *testing.T) {
 func TestSkippedRunCounterAnswersThePastFromItsLastSweep(t *testing.T) {
 	programs := newScriptedPrograms(3, 4)
 	clock := &steppingClock{now: 99}
-	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -208,8 +208,10 @@ func TestSkippedRunCounterAnswersThePastFromItsLastSweep(t *testing.T) {
 		t.Fatalf("TotalAsOf(the sweep's own stamp) = %d, %v after %d reads, want a new sweep's 5",
 			total, err, programs.reads-swept)
 	}
-	if clock.now != sweptAt+1 {
-		t.Fatalf("the clock was read %d times for two sweeps, want once each", clock.now-99)
+	// Before the reads, which dates the sweep, and after them, which stamps
+	// a count read in it (restartDropWatch's rule, per program).
+	if clock.now != sweptAt+3 {
+		t.Fatalf("the clock was read %d times for two sweeps, want twice each", clock.now-99)
 	}
 }
 
@@ -223,7 +225,7 @@ func TestSkippedRunCounterStampsASweepBeforeItsReads(t *testing.T) {
 		readAt = clock.read()
 		return programs.read(fd)
 	}
-	counter, err := newSkippedRunCounter(programs.fds, read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -241,7 +243,7 @@ func TestSkippedRunCounterStampsASweepBeforeItsReads(t *testing.T) {
 func TestSkippedRunCounterNeverReusesASweepWithoutATime(t *testing.T) {
 	programs := newScriptedPrograms(3)
 	now := uint64(math.MaxUint64)
-	counter, err := newSkippedRunCounter(programs.fds, programs.read, func() uint64 { return now })
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, func() uint64 { return now })
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -269,7 +271,7 @@ func TestSkippedRunCounterNeverReusesASweepWithoutATime(t *testing.T) {
 func TestSkippedRunCounterForgetsItsSweepWhenOneFails(t *testing.T) {
 	programs := newScriptedPrograms(3)
 	clock := &steppingClock{now: 99}
-	counter, err := newSkippedRunCounter(programs.fds, programs.read, clock.read)
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, clock.read)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -287,11 +289,132 @@ func TestSkippedRunCounterForgetsItsSweepWhenOneFails(t *testing.T) {
 	}
 }
 
+// foldPrograms returns scripted programs 3, 4 and 5 attached to the
+// tracepoints "a", "b" and "c", and a counter over them that has swept once,
+// on a clock that moves by one per reading from 100.
+func foldPrograms(t *testing.T) (*scriptedPrograms, *skippedRunCounter, *steppingClock) {
+	t.Helper()
+	programs := newScriptedPrograms()
+	for fd, tracepoint := range map[int]string{3: "a", 4: "b", 5: "c"} {
+		programs.attachOn(fd, tracepoint)
+	}
+	clock := &steppingClock{now: 99}
+	counter, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, clock.read)
+	if err != nil {
+		t.Fatalf("newSkippedRunCounter: %v", err)
+	}
+	return programs, counter, clock
+}
+
+// TestSkippedSinceAsksOnlyTheProgramsOfItsTracepoints: a fold's question
+// reads the programs on its tracepoints and no other, and a skip of another
+// program is no answer to it.
+func TestSkippedSinceAsksOnlyTheProgramsOfItsTracepoints(t *testing.T) {
+	programs, counter, clock := foldPrograms(t)
+	programs.skip(5, 1)
+	swept := programs.reads
+	skipped, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now)
+	if err != nil || skipped || programs.reads != swept+2 {
+		t.Fatalf("SkippedSince(a, b) = %v, %v after %d reads, want no skip after 2", skipped, err, programs.reads-swept)
+	}
+	programs.skip(4, 1)
+	if skipped, err := counter.SkippedSince([]string{"a", "b"}, 1, clock.now); err != nil || !skipped {
+		t.Fatalf("SkippedSince(a, b) after b's skip = %v, %v, want a skip", skipped, err)
+	}
+}
+
+// TestSkippedSinceGoesByEachProgramsOwnStamp: a program's count first seen
+// before since lies before the fold's records; one first seen at or after
+// it may be among them. A count read without a change keeps its stamp.
+func TestSkippedSinceGoesByEachProgramsOwnStamp(t *testing.T) {
+	programs, counter, clock := foldPrograms(t)
+	programs.skip(3, 1)
+	if _, err := counter.Total(); err != nil { // reads the clock at 102 and 103
+		t.Fatalf("Total: %v", err)
+	}
+	const seenAt = 103
+	for since, want := range map[uint64]bool{seenAt: true, seenAt + 1: false} {
+		if skipped, err := counter.SkippedSince([]string{"a"}, since, clock.now); err != nil || skipped != want {
+			t.Fatalf("SkippedSince(a, since %d) = %v, %v, want %v", since, skipped, err, want)
+		}
+	}
+}
+
+// TestASmallReadAnswersOnlyForItsOwnPrograms is the reuse rule of the
+// fold's question: a program's latest read answers for the records before
+// it began, whether a full sweep or another fold's question made it, and a
+// question's reads answer for no program they did not read.
+func TestASmallReadAnswersOnlyForItsOwnPrograms(t *testing.T) {
+	programs, counter, clock := foldPrograms(t)
+	asOf := clock.now // after the first sweep began
+	ask := func(tracepoints ...string) int {
+		t.Helper()
+		before := programs.reads
+		if _, err := counter.SkippedSince(tracepoints, 0, asOf); err != nil {
+			t.Fatalf("SkippedSince(%v): %v", tracepoints, err)
+		}
+		return programs.reads - before
+	}
+	if reads := ask("a"); reads != 1 {
+		t.Fatalf("a, newer than the sweep: %d reads, want 1", reads)
+	}
+	if reads := ask("a"); reads != 0 {
+		t.Fatalf("a again: %d reads, want none: its read began after asOf", reads)
+	}
+	if reads := ask("a", "b"); reads != 1 {
+		t.Fatalf("a and b: %d reads, want b's alone: a's read is not b's", reads)
+	}
+	if _, err := counter.Total(); err != nil {
+		t.Fatalf("Total: %v", err)
+	}
+	asOf = clock.now - 2 // before the full sweep began
+	if reads := ask("a", "b", "c"); reads != 0 {
+		t.Fatalf("a, b and c behind a full sweep: %d reads, want none", reads)
+	}
+}
+
+// A read answers for the records before it began, not for one stamped at
+// that very instant: a run skipped then may have been skipped after the
+// program was read.
+func TestAProgramsReadDoesNotAnswerForItsOwnInstant(t *testing.T) {
+	programs, counter, _ := foldPrograms(t)
+	const sweptAt = 100 // the first clock reading of the first sweep
+	for upTo, wantReads := range map[uint64]int{sweptAt - 1: 0, sweptAt: 1} {
+		before := programs.reads
+		if _, err := counter.SkippedSince([]string{"a"}, 1, upTo); err != nil || programs.reads-before != wantReads {
+			t.Fatalf("SkippedSince as of %d: %v after %d reads, want %d", upTo, err, programs.reads-before, wantReads)
+		}
+	}
+}
+
+// A count that cannot be read proves nothing: the fold's question answers
+// "skipped" with the error. A read without a time - the boot clock could
+// not be read - answers its own question and no later one.
+func TestSkippedSinceRefusesWhatItCannotRead(t *testing.T) {
+	programs, counter, clock := foldPrograms(t)
+	programs.err = errors.New("boom")
+	if skipped, err := counter.SkippedSince([]string{"a"}, 0, clock.now); err == nil || !skipped {
+		t.Fatalf("SkippedSince with an unreadable program = %v, %v, want a skip and the error", skipped, err)
+	}
+	programs.err = nil
+	now := uint64(math.MaxUint64)
+	undated, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, func() uint64 { return now })
+	if err != nil {
+		t.Fatalf("newSkippedRunCounter: %v", err)
+	}
+	for range 2 {
+		before := programs.reads
+		if _, err := undated.SkippedSince([]string{"a"}, 0, 5000); err != nil || programs.reads != before+1 {
+			t.Fatalf("SkippedSince with an unreadable clock: %v after %d reads, want a read each time", err, programs.reads-before)
+		}
+	}
+}
+
 // lossSourceOver builds the drop source of a kernel that counts skipped runs
 // over a scripted ring counter and scripted programs.
 func lossSourceOver(t *testing.T, ring ringbufDropSource, programs *scriptedPrograms, clock func() uint64) *recordLossSource {
 	t.Helper()
-	skipped, err := newSkippedRunCounter(programs.fds, programs.read, clock)
+	skipped, err := newSkippedRunCounter(programs.fds, programs.fdsOn, programs.read, clock)
 	if err != nil {
 		t.Fatalf("newSkippedRunCounter: %v", err)
 	}
@@ -553,16 +676,17 @@ func TestSkippedRunsRequestTheCommSweep(t *testing.T) {
 	}
 }
 
-// skippedRunSetup replaces the three questions withSkippedRuns asks the
+// skippedRunSetup replaces the four questions withSkippedRuns asks the
 // system for one test.
 func skippedRunSetup(t *testing.T, release string, programs *scriptedPrograms) {
 	t.Helper()
-	oldRelease, oldFDs, oldMisses := skippedRunKernelRelease, skippedRunProgramFDs, skippedRunProgramMisses
+	oldRelease, oldFDs, oldFDsOn, oldMisses := skippedRunKernelRelease, skippedRunProgramFDs, skippedRunProgramFDsOn, skippedRunProgramMisses
 	t.Cleanup(func() {
-		skippedRunKernelRelease, skippedRunProgramFDs, skippedRunProgramMisses = oldRelease, oldFDs, oldMisses
+		skippedRunKernelRelease, skippedRunProgramFDs, skippedRunProgramFDsOn, skippedRunProgramMisses = oldRelease, oldFDs, oldFDsOn, oldMisses
 	})
 	skippedRunKernelRelease = func() string { return release }
 	skippedRunProgramFDs = func(*bpf.Module) []int { return programs.fds() }
+	skippedRunProgramFDsOn = func(_ *bpf.Module, tracepoints []string) []int { return programs.fdsOn(tracepoints) }
 	skippedRunProgramMisses = func() func(int) (uint64, bool, error) { return programs.read }
 }
 
@@ -580,10 +704,15 @@ func TestWithSkippedRunsCountsThemWhereTheKernelDoes(t *testing.T) {
 	}
 	// The counter follows what is attached: a probe switched on later is
 	// read by the next sweep.
-	programs.attached = append(programs.attached, 9)
+	programs.attachOn(9, "sys_enter_read")
 	programs.skip(9, 1)
 	if skipped, err := source.(skippedRunSource).SkippedRuns(); err != nil || skipped != 6 {
 		t.Fatalf("SkippedRuns after a probe was attached = %d, %v, want 6", skipped, err)
+	}
+	// A fold asks the module's programs on its tracepoints.
+	programs.skip(9, 1)
+	if skipped, err := source.(skippedRunSource).SkippedRunsSince([]string{"sys_enter_read"}, 0, ^uint64(0)); err != nil || !skipped {
+		t.Fatalf("SkippedRunsSince(read's) = %v, %v, want the skip of program 9", skipped, err)
 	}
 }
 
@@ -635,6 +764,9 @@ func TestWithSkippedRunsAsksTheSeamForTheAttachedPrograms(t *testing.T) {
 	}
 	if fds := libbpfAttachedProgramFDs(nil); fds != nil {
 		t.Fatalf("libbpfAttachedProgramFDs(nil) = %v, want none", fds)
+	}
+	if got, want := reflect.ValueOf(skippedRunProgramFDsOn).Pointer(), reflect.ValueOf(libbpfAttachedProgramFDsOn).Pointer(); got != want {
+		t.Fatal("skippedRunProgramFDsOn is not libbpfAttachedProgramFDsOn")
 	}
 	if _, _, err := skippedRunProgramMisses()(-1); !errors.Is(err, unix.EBADFD) {
 		t.Fatalf("skippedRunProgramMisses does not read through bpf(2): err = %v", err)

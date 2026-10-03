@@ -241,6 +241,38 @@ func TestAttachedProgramSetFollowsTheLinks(t *testing.T) {
 	}
 }
 
+// TestAttachedProgramSetAnswersPerTracepoint: the programs of a restart
+// fold's tracepoints (fdsOn) are those attached to them in that module, each
+// once, whatever else is attached; a tracepoint whose last link went is
+// gone from the answer, and so is its index entry.
+func TestAttachedProgramSetAnswersPerTracepoint(t *testing.T) {
+	var set attachedProgramSet
+	module, other := &bpf.Module{}, &bpf.Module{}
+	set.add(attachedProgram{module: module, fd: 7, tracepoint: "sys_enter_read"})
+	set.add(attachedProgram{module: module, fd: 8, tracepoint: "sys_exit_read"})
+	set.add(attachedProgram{module: module, fd: 9, tracepoint: "sys_enter_write"})
+	set.add(attachedProgram{module: module, fd: 10, tracepoint: "sys_enter_rt_sigreturn"})
+	set.add(attachedProgram{module: module, fd: 11, tracepoint: "sys_enter_rt_sigreturn"})
+	set.add(attachedProgram{module: other, fd: 12, tracepoint: "sys_enter_read"})
+	read := []string{"sys_enter_read", "sys_exit_read", "sys_enter_read", "sys_enter_rt_sigreturn", "absent"}
+	if got := set.fdsOn(module, read); !slices.Equal(got, []int{7, 8, 10, 11}) {
+		t.Fatalf("fdsOn(read's) = %v, want [7 8 10 11]: write's program and the other module's are not asked", got)
+	}
+	if got := set.fds(module); !slices.Equal(got, []int{7, 8, 9, 10, 11}) {
+		t.Fatalf("fds = %v, want every program of the module once", got)
+	}
+	set.remove(attachedProgram{module: module, fd: 8, tracepoint: "sys_exit_read"})
+	if got := set.fdsOn(module, read); !slices.Equal(got, []int{7, 10, 11}) {
+		t.Fatalf("fdsOn after the exit's detach = %v, want [7 10 11]", got)
+	}
+	if _, indexed := set.links[module]["sys_exit_read"]; indexed {
+		t.Fatal("a tracepoint whose last link went is still indexed")
+	}
+	if got := set.fdsOn(nil, read); got != nil {
+		t.Fatalf("fdsOn of no module = %v, want none", got)
+	}
+}
+
 // The event loop asks for the attached programs while the TUI's goroutines
 // attach and detach probes. Run under -race, this is what notices the list's
 // lock going missing.
@@ -251,9 +283,11 @@ func TestAttachedProgramSetIsSharedBetweenTheLoopAndTheAttaches(t *testing.T) {
 	for fd := range 8 {
 		wg.Go(func() {
 			for range 200 {
-				set.add(attachedProgram{module: module, fd: fd})
+				prog := attachedProgram{module: module, fd: fd, tracepoint: "sys_enter_read"}
+				set.add(prog)
 				_ = set.fds(module)
-				set.remove(attachedProgram{module: module, fd: fd})
+				_ = set.fdsOn(module, []string{prog.tracepoint})
+				set.remove(prog)
 			}
 		})
 	}
@@ -305,11 +339,11 @@ func TestLibbpfLinkListsItsProgramUntilItsDestroyReturned(t *testing.T) {
 // take anything off the list later.
 func TestLibbpfLinkOfNoProgramListsNothing(t *testing.T) {
 	stubDestroyBPFLink(t, nil)
-	if got := attachedProgramOf(nil); got != (attachedProgram{}) {
-		t.Fatalf("attachedProgramOf(nil) = %+v, want no program", got)
+	if got := attachedProgramOf(nil, "sys_enter_read"); got != (attachedProgram{}) {
+		t.Fatalf("attachedProgramOf(nil, ...) = %+v, want no program", got)
 	}
 	before := len(libbpfAttached.links)
-	link, err := libbpfLinkOf(nil)(markedBPFLink(t), nil)
+	link, err := libbpfLinkOf(nil, "sys_enter_read")(markedBPFLink(t), nil)
 	if err != nil || len(libbpfAttached.links) != before {
 		t.Fatalf("libbpfLinkOf(nil): err %v, %d module entries, want none added", err, len(libbpfAttached.links)-before)
 	}
@@ -322,11 +356,12 @@ func TestLibbpfLinkOfNoProgramListsNothing(t *testing.T) {
 // every link it returns has to be a libbpfLink attached under libbpfAttachMu.
 // Its two methods are therefore pinned to the one-line
 // form `return attachLibbpf...(p.prog, ...)`, and the attach functions behind
-// them to a single return, `return libbpfLinkOf(prog)(attachBPF...(prog,
-// ...))`: a method that returned the *bpf.BPFLink itself would compile (it
-// has a Destroy) and bring the double destroy back, and a link wrapped for
-// another program than the one attached would list the wrong program as
-// attached (attachedProgramSet, task 723). The root tests check the same
+// them to a single return, `return libbpfLinkOf(prog, name)(attachBPF...(prog,
+// ..., name))`: a method that returned the *bpf.BPFLink itself would compile
+// (it has a Destroy) and bring the double destroy back, and a link wrapped
+// for another program, or another tracepoint, than the one attached would
+// list the wrong program as attached, or under the wrong tracepoint
+// (attachedProgramSet, task 723). The root tests check the same
 // on real links; this one runs unprivileged. That nothing attaches beside
 // these four functions is TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks
 // and, for the one function that holds the bare program,
@@ -354,7 +389,7 @@ func TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks(t *testing.T) {
 		}
 		attaches++
 		if !returnsOnlyAWrappedAttach(decl) {
-			t.Errorf("%s does not end in its only return, `return libbpfLinkOf(prog)(attachBPF...(prog, ...))`", decl.Name.Name)
+			t.Errorf("%s does not end in its only return, `return libbpfLinkOf(prog, name)(attachBPF...(prog, ..., name))`", decl.Name.Name)
 		}
 	}
 	if attaches < 2 {
@@ -467,9 +502,10 @@ func passesProgField(call *ast.CallExpr) bool {
 
 // returnsOnlyAWrappedAttach reports whether decl has exactly one return
 // statement, its last statement, of the form
-// `return libbpfLinkOf(prog)(attachBPF<...>(prog, ...))`: the attach call's
-// results go straight into the wrapper, and the wrapper is made for the
-// program that is attached.
+// `return libbpfLinkOf(prog, name)(attachBPF<...>(prog, ..., name))`: the
+// attach call's results go straight into the wrapper, and the wrapper is made
+// for the program that is attached and the tracepoint it is attached to (the
+// attach call's last argument, the same identifier).
 func returnsOnlyAWrappedAttach(decl *ast.FuncDecl) bool {
 	if decl.Body == nil || len(decl.Body.List) == 0 {
 		return false
@@ -486,11 +522,15 @@ func returnsOnlyAWrappedAttach(decl *ast.FuncDecl) bool {
 		return false
 	}
 	wrapper, ok := wrap.Fun.(*ast.CallExpr)
-	if !ok || !isIdentifier(wrapper.Fun, "libbpfLinkOf") || !passesProgFirst(wrapper) {
+	if !ok || !isIdentifier(wrapper.Fun, "libbpfLinkOf") || !passesProgFirst(wrapper) || len(wrapper.Args) != 2 {
 		return false
 	}
 	attach, ok := wrap.Args[0].(*ast.CallExpr)
-	return ok && callsIdentWithPrefix(attach, "attachBPF") && passesProgFirst(attach)
+	if !ok || !callsIdentWithPrefix(attach, "attachBPF") || !passesProgFirst(attach) {
+		return false
+	}
+	name, ok := wrapper.Args[1].(*ast.Ident)
+	return ok && isIdentifier(attach.Args[len(attach.Args)-1], name.Name)
 }
 
 // passesProgFirst reports whether call's first argument is the plain
@@ -508,26 +548,35 @@ var wrappedAttachSources = map[string]struct {
 	"the seam's form": {`func a(prog *P, n string) (L, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	return libbpfLinkOf(prog)(attachBPFRawTracepoint(prog, n))
+	return libbpfLinkOf(prog, n)(attachBPFRawTracepoint(prog, n))
 }`, true},
+	"the classic form": {`func a(prog *P, c, n string) (L, error) {
+	return libbpfLinkOf(prog, n)(attachBPFTracepoint(prog, c, n))
+}`, true},
+	"a link listed under another tracepoint": {`func a(prog *P, c, n string) (L, error) {
+	return libbpfLinkOf(prog, c)(attachBPFTracepoint(prog, c, n))
+}`, false},
+	"a link listed under no tracepoint": {`func a(prog *P, n string) (L, error) {
+	return libbpfLinkOf(prog)(attachBPFRawTracepoint(prog, n))
+}`, false},
 	"a link wrapped without its program": {`func a(prog *P, n string) (L, error) {
 	return newLibbpfLink(attachBPFRawTracepoint(prog, n))
 }`, false},
 	"a link wrapped for another program": {`func a(prog, other *P, n string) (L, error) {
-	return libbpfLinkOf(other)(attachBPFRawTracepoint(prog, n))
+	return libbpfLinkOf(other, n)(attachBPFRawTracepoint(prog, n))
 }`, false},
 	"another program attached than the one wrapped": {`func a(prog, other *P, n string) (L, error) {
-	return libbpfLinkOf(prog)(attachBPFRawTracepoint(other, n))
+	return libbpfLinkOf(prog, n)(attachBPFRawTracepoint(other, n))
 }`, false},
 	"a bare link in a variable": {`func a(prog *P, n string) (L, error) {
 	link, err := attachBPFRawTracepoint(prog, n)
-	return libbpfLinkOf(prog)(link, err)
+	return libbpfLinkOf(prog, n)(link, err)
 }`, false},
 	"a second return": {`func a(prog *P, n string) (L, error) {
 	if n == "" {
 		return nil, nil
 	}
-	return libbpfLinkOf(prog)(attachBPFRawTracepoint(prog, n))
+	return libbpfLinkOf(prog, n)(attachBPFRawTracepoint(prog, n))
 }`, false},
 }
 

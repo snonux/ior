@@ -1102,29 +1102,53 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     "exact" is not known). The warning and the statistics line say `events
     may be missing; the count includes tasks outside the trace filter`
     (`skippedRunsMeaning`), never that events ARE missing.
-  - **Only attached programs are swept**: `libbpfLinkOf(prog)` lists the
-    program of every link ior hands out in `attachedProgramSet` until that
-    link's `Destroy` returned (`libbpfAttachedProgramFDs`, own tiny mutex,
-    never the probe manager's), and a sweep also reads once more what was
-    attached at the previous sweep and is gone. `NextProgram` is pinned to no
-    place; the attach functions are pinned to
-    `return libbpfLinkOf(prog)(attachBPF...(prog, ...))`.
+  - **Only attached programs are swept**: `libbpfLinkOf(prog, name)` lists
+    the program of every link ior hands out in `attachedProgramSet`, under
+    the tracepoint name it was attached to (no category: `sys_enter_read`,
+    `signal_deliver`, `task_rename`), until that link's `Destroy` returned
+    (`libbpfAttachedProgramFDs`, and `libbpfAttachedProgramFDsOn` for some
+    tracepoints; own tiny mutex, never the probe manager's), and a full
+    sweep also reads once more what was attached at the previous sweep and
+    is gone. `NextProgram` is pinned to no place; the attach functions are
+    pinned to `return libbpfLinkOf(prog, name)(attachBPF...(prog, ...,
+    name))`.
+  - **A fold asks about its own programs only** (`restartFoldTracepoints`,
+    `skippedRunCounter.SkippedSince`): the interrupted syscall's pair,
+    `restart_syscall`'s for a -516 row, and the six hand probes
+    (`restartFoldHandTracepoints`). The comment on `restartFoldTracepoints`
+    has the soundness argument: the fold's records are the held tid's own;
+    between the interruption and the continuation the tid runs only a
+    handler's syscalls, at depth >= 1, whose enters change nothing in BPF,
+    and a skipped exit of an inner interrupted call leaves the outer entry
+    as the kernel will resume it. A program's latest read (of a full sweep
+    or of another fold's question) answers when it began after the record
+    that asks; the counts and stamps are kept per program, so a read made
+    for one fold never answers for a program it did not read. The drop
+    monitor's full sweep keeps counting every program for the statistics,
+    the comm sweep and sampling; the exec adoption still asks the full sum
+    (`TotalAsOf`).
   - **Cost**: one `BPF_OBJ_GET_INFO_BY_FD` per attached program, in which the
     kernel sums per-CPU counters over every possible CPU, so it scales with
     the host's CPU count (8 CPUs, 7.2.5: 0.24-0.38 ms for the 242 programs
-    of a default run, 8-20 us for the 8 of a one-syscall run). So the loop
-    never asks for "now" but for the time of the record it decides about
-    (`lostSince`'s `upTo`, `TotalAsOf`), which a sweep begun after that time
-    answers; a caught-up loop still sweeps per fold. A sweep stamped by an unreadable
-    clock (`math.MaxUint64`) is never reused: for this one comparison the
-    maximum is the accepting side (`bootclock.go`).
+    of a default run, 8-20 us for the 8 of a one-syscall run). A full sweep
+    per fold made a caught-up default run sweep 242 programs per question
+    (a pipe read interrupted ~6,000 times a second by an `SA_RESTART`
+    signal, `-plain -pid`, 10 s, 8 CPUs: 14.2-15.9 M `bpf(2)` calls and
+    2.0-2.2 s user / 6.9-7.6 s sys, against 126-131 k and 0.5-0.6 / 1.5-1.6
+    without skip counting); asking the fold's own 8 programs costs 0.65 M
+    calls and 0.7-0.8 / 1.6-2.0 s. The
+    loop never asks for "now" but for the time of the record it decides
+    about (`lostSince`'s `upTo`, `TotalAsOf`), which a read begun after that
+    time answers. A read stamped by an unreadable clock (`math.MaxUint64`)
+    is never reused: for this one comparison the maximum is the accepting
+    side (`bootclock.go`).
   - `bpf_prog_info` is input too: `progMissesReader` clears its reused
     buffer before each call, or the kernel answers `EFAULT` for the lengths
     the previous call left in it. A closed fd is `EBADFD`, not `EBADF`.
   - A kernel before 6.7 gets the ring counter alone and the statistics line
     says `not counted`, never `0`.
   - Integration tests: a host with real-time tasks skips runs for real.
-    `assertNoSkippedProbeRuns` only logs a non-zero count, and tests that
+    `assertSkippedProbeRunsReported` only logs a non-zero count, and tests that
     require exact folds run through `runFoldScenarioRows`, which retries a
     run that saw loss once and then skips with the counts.
   Reproduce with a `SCHED_FIFO` task that wakes up and makes a syscall on a

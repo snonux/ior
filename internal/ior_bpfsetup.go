@@ -515,6 +515,11 @@ const processExitProbeName = "sched_process_exit"
 // syscall instead of after an asynchronous procfs lookup.
 const taskNewtaskProgName = "handle_task_newtask"
 
+// taskNewtaskProbeName is the probe name attachTaskNewtaskProbe reports, in
+// warnings and through bpfSetupLog.attached; like the others it is also the
+// tracepoint's name.
+const taskNewtaskProbeName = "task_newtask"
+
 // attachProcessExecProbe attaches sched:sched_process_exec, whose records keep
 // the pid->comm cache correct across execve (see internal/c/exec.c and
 // eventLoop.handleProcessExecEvent). It is not a syscall tracepoint, so it is
@@ -541,7 +546,7 @@ func attachProcessExitProbe(attacher probemanager.Attacher, log bpfSetupLog) fun
 // probes: direct attach, whole run, independent of -trace-* selection. Without
 // it comms of new tids fall back to the racy procfs lookup.
 func attachTaskNewtaskProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
-	return attachHandTracepoint(attacher, taskNewtaskProgName, "task", "task_newtask", log)
+	return attachHandTracepoint(attacher, taskNewtaskProgName, "task", taskNewtaskProbeName, log)
 }
 
 // taskRenameProgName is the BPF program in internal/c/exec.c that reports a

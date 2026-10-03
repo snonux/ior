@@ -1571,13 +1571,14 @@ func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, warnSetup fu
 	el.dropSrc = withSkippedRuns(dropCounter, bpfModule, el.readDropStampClock, warnSetup)
 }
 
-// The three things withSkippedRuns asks the system: the running kernel's
-// release, the descriptors of the module's attached programs and one
-// program's skipped runs. They are variables so that a test can answer
-// without a kernel.
+// The four things withSkippedRuns asks the system: the running kernel's
+// release, the descriptors of the module's attached programs (all of them,
+// and those on some tracepoints) and one program's skipped runs. They are
+// variables so that a test can answer without a kernel.
 var (
 	skippedRunKernelRelease = runningKernelRelease
 	skippedRunProgramFDs    = libbpfAttachedProgramFDs
+	skippedRunProgramFDsOn  = libbpfAttachedProgramFDsOn
 	skippedRunProgramMisses = func() func(int) (uint64, bool, error) {
 		return newProgMissesReader().misses
 	}
@@ -1607,7 +1608,8 @@ func withSkippedRuns(ring ringbufDropSource, bpfModule *bpf.Module, clock func()
 		return ring
 	}
 	attached := func() []int { return skippedRunProgramFDs(bpfModule) }
-	skipped, err := newSkippedRunCounter(attached, skippedRunProgramMisses(), clock)
+	attachedOn := func(tracepoints []string) []int { return skippedRunProgramFDsOn(bpfModule, tracepoints) }
+	skipped, err := newSkippedRunCounter(attached, attachedOn, skippedRunProgramMisses(), clock)
 	if err != nil {
 		warnSetup("Probe runs skipped by the kernel will not be counted (events lost that way go unreported):", err)
 		return ring

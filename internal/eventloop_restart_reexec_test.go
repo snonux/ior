@@ -92,6 +92,12 @@ func (f *restartFixture) monitorPoll(now uint64) {
 func (f *restartFixture) foldRead(base uint64) []restartRow {
 	f.t.Helper()
 	f.interruptRead(base, restartTid, restartSys)
+	return f.foldReadFrom(base)
+}
+
+// foldReadFrom is foldRead for a read already interrupted at base.
+func (f *restartFixture) foldReadFrom(base uint64) []restartRow {
+	f.t.Helper()
 	f.clockAt(base + 850)
 	if rows := f.feed(f.resumeRecord(base+800, restartTid)); len(rows) != 0 {
 		return rows
@@ -809,15 +815,15 @@ func TestRestartDropWatch(t *testing.T) {
 	now, total := uint64(100), uint64(0)
 	src := ringbufDropSourceFunc(func() (uint64, error) { return total, nil })
 	clock := func() uint64 { return now }
-	if watch.lostSince(50, 50, src, clock) {
+	if watch.lostSince(nil, 50, 50, src, clock) {
 		t.Fatal("a counter that never moved reported a loss")
 	}
 	total, now = 3, 200
-	if !watch.lostSince(150, 150, src, clock) || !watch.lostSince(200, 200, src, clock) {
+	if !watch.lostSince(nil, 150, 150, src, clock) || !watch.lostSince(nil, 200, 200, src, clock) {
 		t.Fatal("a loss first seen at 200 was not reported for a row interrupted at or before 200")
 	}
 	now = 900
-	if watch.lostSince(201, 201, src, clock) {
+	if watch.lostSince(nil, 201, 201, src, clock) {
 		t.Fatal("an unchanged total was stamped again: the loss predates a row interrupted at 201")
 	}
 	// An observation from elsewhere (the monitor) counts like the watch's own.
@@ -829,14 +835,14 @@ func TestRestartDropWatch(t *testing.T) {
 		t.Fatalf("observe(7, 1500) = %d, want 1000: a repeated total keeps its first stamp", seen)
 	}
 	now = 5000
-	if watch.lostSince(1001, 1001, src, clock) || !watch.lostSince(1000, 1000, src, clock) {
+	if watch.lostSince(nil, 1001, 1001, src, clock) || !watch.lostSince(nil, 1000, 1000, src, clock) {
 		t.Fatal("a loss first observed at 1000 must refuse a row interrupted at 1000 and no row interrupted later")
 	}
-	if !watch.lostSince(0, 0, nil, clock) {
+	if !watch.lostSince(nil, 0, 0, nil, clock) {
 		t.Fatal("a missing counter did not report a loss")
 	}
 	failing := ringbufDropSourceFunc(func() (uint64, error) { return 0, errors.New("unreadable") })
-	if !watch.lostSince(9000, 9000, failing, clock) {
+	if !watch.lostSince(nil, 9000, 9000, failing, clock) {
 		t.Fatal("an unreadable counter did not report a loss")
 	}
 }
@@ -2696,7 +2702,7 @@ func TestRestartDropWatchIsSharedBetweenTheMonitorAndTheLoop(t *testing.T) {
 		}
 	}()
 	for range rounds {
-		el.restarts.drops.lostSince(now.Load(), now.Load(), src, el.readDropStampClock)
+		el.restarts.drops.lostSince(nil, now.Load(), now.Load(), src, el.readDropStampClock)
 	}
 	<-done
 	if seen := el.restarts.drops.observe(total.Load(), now.Add(1)); seen == 0 || seen > now.Load() {
@@ -2719,7 +2725,7 @@ func TestRestartDropWatchStampsAfterTheCounterRead(t *testing.T) {
 		now = 500
 		return 3, nil
 	})
-	if !watch.lostSince(300, 300, slow, clock) {
+	if !watch.lostSince(nil, 300, 300, slow, clock) {
 		t.Fatal("a new total was stamped with a clock reading taken before the counter was read")
 	}
 	if seen := watch.observe(3, 9000); seen != 500 {

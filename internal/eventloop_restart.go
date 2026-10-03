@@ -137,12 +137,14 @@ import (
 // A record is also lost when the kernel skips the program that would have
 // written it, which no ring-buffer counter sees (task 723). On a kernel that
 // counts those runs (Linux 6.7 and later; recordLossSource) the proof asks
-// about them as well: a fold is refused when a run of any of ior's attached
-// programs was skipped since the interruption. That count is taken before
-// ior's filter and covers every task on the host, so it refuses folds that
-// lost nothing (one row then stays two, as after a drop), which is the safe
-// side. On an older kernel a skipped run is invisible and the proof is of
-// ring-buffer drops alone (restartDropWatch says what that leaves open).
+// about them as well: a fold is refused when a run of one of the programs it
+// depends on (restartFoldTracepoints: its syscall's pair, restart_syscall's
+// for -516, the hand probes) was skipped since the interruption. That count
+// is taken before ior's filter and covers every task on the host, so it
+// refuses folds that lost nothing (one row then stays two, as after a drop),
+// which is the safe side. On an older kernel a skipped run is invisible and
+// the proof is of ring-buffer drops alone (restartDropWatch says what that
+// leaves open).
 //
 // The two folds differ in what they do WITHOUT a drop counter (the counter
 // map could not be opened, or an object override without it; ior warns at
@@ -1033,10 +1035,13 @@ func (w *restartProbeWatch) takeClearWarning() string {
 // was raised on its CPU, or while the same program was in flight there
 // (skippedRunCounter has the facts) - loses its record without touching that
 // counter. A drop source that counts those runs (skippedRunSource: Linux 6.7
-// and later) is asked for them too, and the watch keeps a second total and
-// stamp for them, under the same invariant and the same rule. They are kept
-// apart because they are not the same evidence: the kernel counts a skipped
-// run before any program code ran, so for every task on the host, traced or
+// and later) is asked for them too, under the same invariant and the same
+// rule: the watch keeps a second total and stamp for the sum over every
+// attached program (evidenceSince, the exec adoption's question), and the
+// source keeps one per program (skippedRunCounter), which a fold asks for
+// its own programs only (lostSince). They are kept apart from the drops
+// because they are not the same evidence: the kernel counts a skipped run
+// before any program code ran, so for every task on the host, traced or
 // not. A grown count says that a record MAY be missing. evidenceSince
 // therefore answers with the kind (lossEvidence), and each asker takes it by
 // what its mistake costs:
@@ -1054,9 +1059,11 @@ func (w *restartProbeWatch) takeClearWarning() string {
 // the wrong instruction and is not closed on such a kernel.
 //
 // The read and the record that asks. The skipped runs are read with one
-// system call per attached program, which a fold cannot pay per question on
-// a busy loop. evidenceSince therefore passes the time of the record it
-// decides about (upTo) to the source (SkippedRunsAsOf): the records a fold
+// system call per program, which a fold cannot pay per question for every
+// attached program on a busy loop. A fold therefore asks about its own few
+// programs (lostSince, restartFoldTracepoints), each kept with its own count
+// and stamp (skippedRunCounter.SkippedSince), and both askers pass the time
+// of the record they decide about (upTo) to the source: the records a fold
 // reasons about were stamped before that record, and a miss is counted when
 // it happens, so a reading that began after upTo holds every one of them,
 // however long ago it was made. The ring buffer's counter is read anew each
@@ -1130,11 +1137,36 @@ func (w *restartDropWatch) observeSkipped(total, seenAt uint64) uint64 {
 	return w.skipped.observe(total, seenAt)
 }
 
-// lostSince reports whether a record may have been lost at or after since,
-// on either kind of evidence (evidenceSince). It is the question of a fold,
-// which is refused on both.
-func (w *restartDropWatch) lostSince(since, upTo uint64, src ringbufDropSource, clock func() uint64) bool {
-	return w.evidenceSince(since, upTo, src, clock) != noLossEvidence
+// lostSince reports whether a record a fold depends on may have been lost
+// at or after since: a ring-buffer drop, read and judged as evidenceSince
+// judges it, or a skipped run of one of the programs attached to
+// tracepoints (restartFoldTracepoints), asked per program
+// (skippedRunSource.SkippedRunsSince). It is the question of a fold, which
+// is refused on both. A source that counts no skipped runs answers for the
+// ring buffer alone; one whose skipped runs cannot be read refuses.
+//
+// Unlike evidenceSince it does not ask about every attached program: the
+// fold's own few are what make it right or wrong, and a sweep of all of
+// them per fold was the cost of a caught-up loop (skippedRunCounter). The
+// watch's own total of the skipped runs is therefore not told: what the
+// fold read is a part of it.
+func (w *restartDropWatch) lostSince(tracepoints []string, since, upTo uint64, src ringbufDropSource, clock func() uint64) bool {
+	if src == nil {
+		return true
+	}
+	drops, err := src.Total()
+	if err != nil {
+		return true
+	}
+	if w.observe(drops, clock()) >= since {
+		return true
+	}
+	counted, ok := src.(skippedRunSource)
+	if !ok {
+		return false
+	}
+	skipped, err := counted.SkippedRunsSince(tracepoints, since, upTo)
+	return skipped || err != nil
 }
 
 // evidenceSince says what evidence there is that a record was lost at or
@@ -1145,7 +1177,8 @@ func (w *restartDropWatch) lostSince(since, upTo uint64, src ringbufDropSource, 
 // it always did: without it nothing vouches for the stream. (The
 // restart_syscall fold of a run that has no counter at all does not ask,
 // restartProofLost.) Skipped runs that cannot be read count as a possible
-// skip: the stream is vouched for as far as the ring buffer goes.
+// skip: the stream is vouched for as far as the ring buffer goes. It asks
+// about every attached program; a fold asks lostSince.
 func (w *restartDropWatch) evidenceSince(since, upTo uint64, src ringbufDropSource, clock func() uint64) lossEvidence {
 	if src == nil {
 		return countedRecordLoss
@@ -1930,8 +1963,9 @@ func reportsTaskGone(ev runtimeDecodedEvent) bool {
 // rows, the interrupted one and the continuation: at the exit, the release
 // parks the enter taken for the fold again and the exit pairs with it. Each
 // question is one read of the drop counter, paid only by interrupted calls,
-// and names the record that asks (ev, restartProofUpTo), which spares a
-// lagging loop the sweep over the attached programs' skipped runs
+// and of the skipped runs of the fold's own programs
+// (restartFoldTracepoints), and names the record that asks (ev,
+// restartProofUpTo), which spares a lagging loop even those reads
 // (restartDropWatch). Skipped runs refuse the fold like drops, although they
 // only say that a record may be missing: the refusal is the safe side.
 //
@@ -1949,8 +1983,79 @@ func (e *eventLoop) restartProofLost(held *heldRestart, action restartAction, ev
 	if e.dropSrc == nil && !held.reexecuted() {
 		return false
 	}
-	return e.restarts.drops.lostSince(held.pair.ExitEv.GetTime(), restartProofUpTo(held, action, ev),
-		e.dropSrc, e.readDropStampClock)
+	return e.restarts.drops.lostSince(restartFoldTracepoints(held), held.pair.ExitEv.GetTime(),
+		restartProofUpTo(held, action, ev), e.dropSrc, e.readDropStampClock)
+}
+
+// restartFoldHandTracepoints are the tracepoints of the hand-attached probes
+// (ior_bpfsetup.go), by name without the category, as the attached-program
+// list knows them: the restart fold's own two (signal_deliver and the
+// restart program on sys_enter_rt_sigreturn, which also catches the
+// generated rt_sigreturn program when that syscall is traced) and those of
+// internal/c/exec.c. See restartFoldTracepoints for why each is asked.
+var restartFoldHandTracepoints = []string{
+	signalDeliverProbeName,
+	"sys_enter_rt_sigreturn",
+	processExitProbeName,
+	processExecProbeName,
+	taskNewtaskProbeName,
+	taskRenameProbeName,
+}
+
+// restartFoldTracepoints returns the tracepoints whose programs' skipped
+// runs could make held's fold wrong (task 723), and so the only ones a fold
+// asks about (restartDropWatch.lostSince). A fold joins the interrupted exit
+// with the continuation's enter and exit on BPF's proof - RESUME, which the
+// enter hook emits for the first enter of a task restart_pending_map holds
+// at depth 0 - so a skip can make it wrong in two ways: a record the rules
+// read is missing, or restart_pending_map was not updated. The records of
+// the fold are the held tid's own; another task's skipped records change
+// neither its stream nor its entry. Of the tid's programs:
+//
+//   - the syscall's enter and exit, and restart_syscall's for a -516 row:
+//     the continuation's records and RESUME. A skipped continuation enter
+//     leaves the entry standing (an exit outside the restart codes does not
+//     clear it), so the task's NEXT enter is announced: after a handler's
+//     detour, where the continuation's exit passes as the handler's, a later
+//     read of the same thread was folded in.
+//   - signal_deliver and the restart program on sys_enter_rt_sigreturn: the
+//     handler bookkeeping. A skipped delivery leaves an EINTR'd call pending,
+//     and the handler's first syscall is announced (a read in the handler
+//     would fold); a skipped sigreturn leaves the depth too high.
+//   - sched_process_exit, which forgets a dying task's entry, and the
+//     records that end a row by saying the task is gone or changed
+//     (sched_process_exec, task_newtask; task_rename's record releases a
+//     row whose handler runs too). Asked for the release they would have
+//     made, although with the entry handled as above a missing one should
+//     leave the fold right; six reads cost less than that argument.
+//
+// What is not asked: every other syscall program. Between an interrupted
+// exit and its continuation the task runs no user code unless a handler
+// runs, so its other syscalls are a handler's, at depth 1 or more, where an
+// enter changes nothing in BPF and the rows pass (restartInHandler). Their
+// exits do change the entry when they carry a restart code - an inner call
+// interrupted in turn takes the task's one entry, and the row is released
+// on that exit (stepHandlerRecord). A skipped such exit leaves both alone:
+// the entry keeps the outer call at its depth, and the outer call is what
+// the kernel re-executes once the handler returned (the inner call's
+// interruption is resumed or ended inside the handler, at depth 1 or more,
+// where it announces nothing). The fold that follows is the right one.
+func restartFoldTracepoints(held *heldRestart) []string {
+	enter, exit := syscallTracepoints(held.pair.ExitEv.GetTraceId())
+	tracepoints := make([]string, 0, 4+len(restartFoldHandTracepoints))
+	tracepoints = append(tracepoints, enter, exit)
+	if !held.reexecuted() {
+		enter, exit = syscallTracepoints(types.SYS_EXIT_RESTART_SYSCALL)
+		tracepoints = append(tracepoints, enter, exit)
+	}
+	return append(tracepoints, restartFoldHandTracepoints...)
+}
+
+// syscallTracepoints returns the names of the enter and exit tracepoints of
+// the syscall of id, as the probe manager attaches them (tracepoints.List).
+func syscallTracepoints(id types.TraceId) (enter, exit string) {
+	name := id.Name()
+	return "sys_enter_" + name, "sys_exit_" + name
 }
 
 // restartProofUpTo returns the time of the record that asks for a fold's
