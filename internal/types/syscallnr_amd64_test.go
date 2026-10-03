@@ -20,6 +20,15 @@ func TestEveryTracedSyscallHasItsNumber(t *testing.T) {
 	if len(syscallNumbers) == 0 {
 		t.Fatal("syscallNumbers is empty")
 	}
+	traced := make(map[string]bool, len(traceId2Name))
+	for _, name := range traceId2Name {
+		traced[name] = true
+	}
+	for name := range syscallNumbers {
+		if !traced[name] {
+			t.Errorf("syscallNumbers names %q, which is no traced syscall", name)
+		}
+	}
 	if nr, known := TraceId(0).SyscallNumber(); known {
 		t.Fatalf("an unknown trace ID has syscall number %d", nr)
 	}

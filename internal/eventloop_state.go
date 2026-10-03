@@ -1574,7 +1574,7 @@ func (p *pairTracker) prunePrevTimes() {
 	if len(p.prevTimes) <= limit {
 		return
 	}
-	trimLRU(p.prevTimes, p.prevTimeAges, trimTarget(limit), nil)
+	trimLRU(p.prevTimes, p.prevTimeAges, trimTarget(limit))
 }
 
 // prune trims the oldest pending enters once the table is over its limit.
@@ -1605,23 +1605,21 @@ func (p *pairTracker) limit() int {
 
 // trimLRU evicts the oldest entries from state (and their corresponding ages
 // entries) until len(state) == targetSize. Keys are compared by their age
-// value in ages; smaller age means older. The optional cleanup callback is
-// called with each evicted value before it is removed from state — use it to
-// recycle pooled objects (e.g. event.Pair.Recycle).
-func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int, cleanup func(V)) {
+// value in ages; smaller age means older. It is for maps whose values need no
+// clean-up; a table that has to recycle or un-index what it evicts walks
+// lruVictims itself.
+func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int) {
 	for _, key := range lruVictims(state, ages, targetSize) {
-		if cleanup != nil {
-			cleanup(state[key])
-		}
 		delete(state, key)
 		delete(ages, key)
 	}
 }
 
 // lruVictims returns the keys trimLRU would evict to shrink state to
-// targetSize, oldest first, without removing them. The fdTracker uses it
-// directly so each eviction goes through its own removal helper, which also
-// maintains the per-pid index.
+// targetSize, oldest first, without removing them. The fdTracker, the handle
+// tracker and the pair tracker (prune) use it directly so each eviction goes
+// through their own removal helper, which recycles the value or maintains an
+// index.
 func lruVictims[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int) []K {
 	excess := len(state) - targetSize
 	if excess <= 0 {

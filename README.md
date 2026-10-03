@@ -281,8 +281,11 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either, but they do show in the `exits without an enter`
   statistic (see *Lost enter and exit records* below), among those that look like a
-  filter's answer. The same holds for a call a filter traps (`SECCOMP_RET_TRAP`, as browser
-  sandboxes do) or hands to a supervisor (`SECCOMP_RET_USER_NOTIF`).
+  filter's answer. So does a call a filter traps (`SECCOMP_RET_TRAP`, as browser sandboxes
+  do). A call handed to a supervisor (`SECCOMP_RET_USER_NOTIF`) is counted in that line
+  too, but in the share only when the supervisor fails it: a success it makes up cannot be
+  told from a lost enter. All of this needs a thread ior has seen before and a syscall
+  that is not sampled.
 - **Time namespaces: timestamps are the host's.** The kernel stamps every record with the
   host's boot clock, which a time namespace does not shift, so `time_ns` is the host's
   `CLOCK_BOOTTIME` even when ior runs inside a namespace with a boottime offset

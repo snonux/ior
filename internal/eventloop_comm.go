@@ -661,7 +661,7 @@ func (r *commResolver) pruneCommsLocked() {
 	if len(r.comms) <= limit {
 		return
 	}
-	trimLRU(r.comms, r.commAges, trimTarget(limit), nil)
+	trimLRU(r.comms, r.commAges, trimTarget(limit))
 }
 
 // commsLimit reports the maximum number of cached comms before pruning.
