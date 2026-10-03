@@ -2470,9 +2470,24 @@ kernel program reports the file, and user space compares.
   exits of the open kinds and `creat` (`returnsOpenedFile`:
   `kindMeta.returnsFile` plus `openedFileSyscalls`); every other `ret_event`
   writes 0. The word took the tail padding of both records (offsets 28 and
-  36), so they are still 32 and 40 bytes. Records without a spare word carry
-  none: `fd_size_event`, `fcntl_event`, `dup3_event`, mmap, epoll_ctl, poll,
-  two_fd, accept.
+  36), so they are still 32 and 40 bytes. The other descriptor records carry
+  none. `fd_size_event` (48 bytes), `fcntl_event` (40), `dup3_event` (32) and
+  `epoll_ctl_event` (40) have no spare word and would grow by 8 bytes;
+  `mmap_event` (tail, offset 60), `poll_event` (28), `accept_event` (28) and
+  `two_fd_event` (tail, 44) do have one (task a23 corrected "none of them"),
+  but the decoders and the tests' `Bytes()` layouts would change all the
+  same. The walk costs the same everywhere: measured for `fcntl_event`
+  (task a23, an experimental object with the word and the walk in
+  `sys_enter_fcntl`, 40 -> 48 bytes; 1M `fcntl(F_GETFL)` pinned with
+  `taskset`, `-comm` of the loop, `-mapSize 268435456`, no drops, 16
+  interleaved runs each on a loaded host) +80 `instructions:k` per call
+  (medians 2.000G -> 2.080G, minima 1.817G -> 1.907G), about 4% of a traced
+  fcntl. Not added: since the no-promotion rule below, a wrong name on
+  these rows mostly stays on the one row. The exception is dup3 and fcntl
+  F_DUPFD*, which copy a table entry to a new number unchecked (dup and dup2
+  are `fd_event`s and are checked); dup3 is the one kind where the word
+  would pay (rare call, +8 bytes). The design per kind is in task a23's
+  annotations.
 - **Cost is why the walk has no probe read.** `current->files->fdt->fd[fd]
   ->f_inode->i_ino` through seven `bpf_probe_read_kernel` calls cost +645
   instructions per event (each ~90), half of what a traced syscall costs. The
@@ -2668,7 +2683,11 @@ kernel program reports the file, and user space compares.
   (re-read rationing, also for alternating files, and torn answers through a
   scripted reader, `fdTracker.readFdIdent`),
   `internal/eventloop_fileident_clock_test.go` (read times the rules cannot
-  use), `internal/bpfsetup_fileident_test.go`,
+  use), `internal/eventloop_fcntl_promote_test.go` (task a23: no promotion,
+  no dup3 copy of an answer, a marked table entry's dup3 copy keeps the
+  mark), `internal/eventloop_handle_ident_test.go` (task a23: the
+  open_by_handle_at fallback against the exit identity, torn answers),
+  `internal/bpfsetup_fileident_test.go`,
   `internal/bpfsetup_kfunc_test.go`, and the integration tests
   `TestIouringReopenRowsFollowTheFile` (scenario `iouring-reopen`),
   `TestIouringReopenWithoutFileIdentityKeepsTheOpenedName` (the control,
