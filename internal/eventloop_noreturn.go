@@ -34,9 +34,8 @@ import (
 // enters it does not emit (sampling) untimed in the aggregate map, so the
 // stream and the aggregate keep partitioning the invocations.
 func (e *eventLoop) completeNoReturnEnter(enterEv event.Event, ch chan<- *event.Pair) {
-	tid := enterEv.GetTid()
-	e.queueCommLookup(tid)
-	e.dropSupersededEnter(tid)
+	e.queueCommLookup(enterEv.GetTid())
+	e.dropSupersededEnter(enterEv)
 
 	ep := event.NewPair(enterEv)
 	ep.ExitEv = noReturnExit(enterEv)
@@ -51,17 +50,18 @@ func (e *eventLoop) completeNoReturnEnter(enterEv event.Event, ch chan<- *event.
 	sendPair(ch, ep)
 }
 
-// dropSupersededEnter recycles an enter still parked under tid. A task that
-// enters a syscall is at the syscall boundary, so whatever enter it left
-// parked lost its exit record and can never pair any more; storeEnter's
-// pairTracker.set recycles it for the same reason when the next enter is
-// parked. A noreturn enter is not parked, so it has to do that itself, or the
-// stale enter would outlive the row - for exit/exit_group until the
-// sched_process_exit eviction, for rt_sigreturn until the thread's next enter.
-func (e *eventLoop) dropSupersededEnter(tid uint32) {
-	if stale, ok := e.pairs.consume(tid); ok && stale != nil {
-		stale.Recycle()
-	}
+// dropSupersededEnter recycles an enter still parked under the noreturn
+// enterEv's tid. A task that enters a syscall is at the syscall boundary, so
+// whatever enter it left parked lost its exit record and can never pair any
+// more; storeEnter's pairTracker.set recycles it for the same reason when the
+// next enter is parked. A noreturn enter is not parked, so it has to do that
+// itself, or the stale enter would outlive the row - for exit/exit_group until
+// the sched_process_exit eviction, for rt_sigreturn until the thread's next
+// enter. The superseded enter is counted as an enter without an exit, and the
+// noreturn enter is remembered as the thread's latest (passEnter), like a
+// parked one.
+func (e *eventLoop) dropSupersededEnter(enterEv event.Event) {
+	e.countSupersededEnter(e.pairs.passEnter(enterEv, 0))
 }
 
 // noReturnExit builds the stand-in exit event of a noreturn pair: a

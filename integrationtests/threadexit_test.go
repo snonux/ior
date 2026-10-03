@@ -197,6 +197,12 @@ func assertSkippedProbeRunsReported(t *testing.T, logged string) {
 	if loss.SkippedRuns > 0 {
 		t.Logf("the kernel skipped %d probe runs during this run (any task on the host, traced or not)", loss.SkippedRuns)
 	}
+	// The trace's own lost halves (task c23) are logged, not failed, for the
+	// same reason: a skipped run of a traced task loses one half of its call.
+	if loss.EntersWithoutExit > 0 || loss.ExitsWithoutEnter > 0 {
+		t.Logf("ior found %d enters without an exit and %d exits without an enter",
+			loss.EntersWithoutExit, loss.ExitsWithoutEnter)
+	}
 }
 
 // assertStablePipeWriteName requires every pipe write to carry one tracked

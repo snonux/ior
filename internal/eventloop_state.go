@@ -1311,6 +1311,14 @@ type pairTracker struct {
 	// the pending-enter limit.
 	execCallers     map[uint32][]uint32
 	execCallerHints int // total tids across execCallers
+	// lastEnters remembers each thread's latest enter record, parked or
+	// not, so that a half the kernel lost can be told from a benign gap
+	// (eventloop_losthalves.go): an enter superseded by its thread's next
+	// one lost its exit, and an exit without an enter of a thread seen
+	// before lost its enter. Bounded by lastEnterLimit, dropped with the
+	// tid (evictTid), moved with an exec (moveExecCaller) and forgotten
+	// for an enter the LRU trims (forgetTrimmed).
+	lastEnters map[uint32]lastEnter
 }
 
 func newPairTracker() pairTracker {
@@ -1326,15 +1334,20 @@ func newPairTracker() pairTracker {
 // prior unmatched enter for the same TID, then prunes if over the limit.
 // Maps are initialized lazily on first write; consume is safe on a nil map because
 // Go map reads on nil return the zero value.
-func (p *pairTracker) set(enterEv event.Event) {
-	p.setWithFile(enterEv, nil)
+//
+// The prior enter, or a shed one whose exit never came (lastEnter.shed), lost
+// its exit record: a thread that enters a syscall has returned from its
+// previous one. superseded reports that, and at is the superseded enter's
+// time, which the caller judges the loss by (eventLoop.countSupersededEnter).
+func (p *pairTracker) set(enterEv event.Event) (at uint64, superseded bool) {
+	return p.setWithFile(enterEv, nil)
 }
 
 // setWithFile is set for an enter whose target was already resolved when the
 // enter arrived (see eventLoop.storeEnter): the pending pair carries target as
 // its File, so the exit handler sees the enter-time resolution even if a
 // control record processed in between changed the fd table.
-func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) {
+func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) (at uint64, superseded bool) {
 	if p.enters == nil {
 		p.enters = make(map[uint32]*event.Pair)
 		p.enterAges = make(map[uint32]uint64)
@@ -1344,7 +1357,9 @@ func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) {
 	tid := enterEv.GetTid()
 	pair := event.NewPair(enterEv)
 	pair.File = target
+	at, superseded = p.noteEnter(enterEv, 0)
 	if prev, ok := p.enters[tid]; ok && prev != nil {
+		at, superseded = prev.EnterEv.GetTime(), true
 		prev.Recycle()
 	}
 	p.age++
@@ -1352,6 +1367,7 @@ func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) {
 	p.enterAges[tid] = p.age
 	p.indexExecCaller(enterEv)
 	p.prune()
+	return at, superseded
 }
 
 // indexExecCaller records enterEv in execCallers when it is an exec enter of
@@ -1472,6 +1488,9 @@ func (p *pairTracker) evictTid(tid uint32) {
 	}
 	delete(p.prevTimes, tid)
 	delete(p.prevTimeAges, tid)
+	// The next owner of the number is a thread not seen yet: an exit of its
+	// without an enter is no loss (unpairedExit).
+	delete(p.lastEnters, tid)
 }
 
 // moveExecCaller carries a non-leader exec's per-tid state from the caller's
@@ -1480,15 +1499,19 @@ func (p *pairTracker) evictTid(tid uint32) {
 //
 // Whatever newTid still holds belongs to the dead leader and is dropped first
 // (its own exit record normally evicted it already; this covers a lost one).
+// That drop is no lost half: de_thread killed the leader inside its syscall.
 // The enter parked under oldTid is then moved only when it is an exec enter,
 // i.e. the execve the task is still inside: its exit arrives under newTid and
 // must find it there. Any other enter under oldTid is left over from a lost
-// exit record, can never pair any more, and is recycled. The gap baseline
-// moves too, because applyDerivedPairValues and finalizeTracepointPair key it
-// by the exit's tid: the execve row keeps its gap to the caller's previous
+// exit record, can never pair any more, and is recycled; superseded reports
+// it, with its time in at, like a superseded enter of set (the thread
+// entered execve, traced or not, after it). The gap baseline and what the
+// tracker remembers of the thread's last enter (lastEnters) move too,
+// because applyDerivedPairValues and finalizeTracepointPair key the gap by
+// the exit's tid: the execve row keeps its gap to the caller's previous
 // syscall, and the new program's first syscall measures its gap from the
 // execve's return.
-func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) {
+func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) (at uint64, superseded bool) {
 	p.evictTid(newTid)
 	if pair, ok := p.consume(oldTid); ok && pair != nil {
 		if _, isExec := pair.EnterEv.(*types.ExecEvent); isExec {
@@ -1496,14 +1519,20 @@ func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) {
 			p.enters[newTid] = pair
 			p.enterAges[newTid] = p.age
 		} else {
+			at, superseded = pair.EnterEv.GetTime(), true
 			pair.Recycle()
 		}
+	}
+	if last, ok := p.lastEnters[oldTid]; ok {
+		delete(p.lastEnters, oldTid)
+		p.lastEnters[newTid] = last
 	}
 	if prev, ok := p.prevTimes[oldTid]; ok {
 		delete(p.prevTimes, oldTid)
 		delete(p.prevTimeAges, oldTid)
 		p.setPrevTime(newTid, prev)
 	}
+	return at, superseded
 }
 
 // pending returns the still-unmatched enter pair for tid without consuming it,
@@ -1548,12 +1577,17 @@ func (p *pairTracker) prunePrevTimes() {
 	trimLRU(p.prevTimes, p.prevTimeAges, trimTarget(limit), nil)
 }
 
+// prune trims the oldest pending enters once the table is over its limit.
+// A trimmed enter's exit may still come - the oldest are typically calls
+// that block for long - and finds no enter then, which is no lost half:
+// forgetTrimmed makes the thread unknown again, so unpairedExit lets that
+// exit pass uncounted.
 func (p *pairTracker) prune() {
 	limit := p.limit()
 	if len(p.enters) <= limit {
 		return
 	}
-	trimOldestPendingPairs(p.enters, p.enterAges, trimTarget(limit))
+	trimLRU(p.enters, p.enterAges, trimTarget(limit), p.forgetTrimmed)
 }
 
 func (p *pairTracker) limit() int {
@@ -1601,15 +1635,6 @@ func lruVictims[K comparable, V any](state map[K]V, ages map[K]uint64, targetSiz
 		victims[i] = e.key
 	}
 	return victims
-}
-
-func trimOldestPendingPairs(state map[uint32]*event.Pair, ages map[uint32]uint64, targetSize int) {
-	// Recycle evicted pairs back to the pool before deletion.
-	trimLRU(state, ages, targetSize, func(pair *event.Pair) {
-		if pair != nil {
-			pair.Recycle()
-		}
-	})
 }
 
 func trimTarget(limit int) int {

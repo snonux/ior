@@ -544,12 +544,17 @@ func (e *eventLoop) rawRuntimeEventHandler(rawEvent rawRuntimeEvent) rawEventHan
 // syscallEntered handles a decoded syscall enter record: it seeds the comm
 // cache, applies the kind's raw enter filter, and then either parks the enter
 // for its exit (tracepointEntered) or, for a syscall that never returns,
-// completes the row right away (completeNoReturnEnter).
+// completes the row right away (completeNoReturnEnter). Each of the three
+// ends whatever enter the thread still had parked, which lost its exit and
+// is counted as such (countSupersededEnter).
 func (e *eventLoop) syscallEntered(rawEvent rawRuntimeEvent, enterEv event.Event, ch chan<- *event.Pair) {
 	// Before the enter filter: the payload comm is true whether or not this
 	// run wants the row, and a filtered-out enter must still heal the cache.
 	e.seedCommFromEnterPayload(enterEv)
 	if rawEvent.filter != nil && !rawEvent.filter(e.Filter(), enterEv) {
+		// Shed, but remembered: its exit, which will find no enter, is
+		// the filter's doing and no lost half (eventloop_losthalves.go).
+		e.countSupersededEnter(e.pairs.passEnter(enterEv, enterEv.GetTraceId()))
 		enterEv.Recycle()
 		return
 	}
@@ -615,13 +620,16 @@ func (e *eventLoop) tracepointEntered(enterEv event.Event) {
 // usually finished the exec, so an untracked O_CLOEXEC dirfd is already closed
 // (or its number reused by the new program) and still resolves to the fd
 // number with an empty name.
+//
+// An enter the thread still had parked is superseded and counted as an enter
+// without an exit (countSupersededEnter).
 func (e *eventLoop) storeEnter(enterEv event.Event) {
 	execEv, ok := enterEv.(*types.ExecEvent)
 	if !ok {
-		e.pairs.set(enterEv)
+		e.countSupersededEnter(e.pairs.set(enterEv))
 		return
 	}
-	e.pairs.setWithFile(enterEv, e.snapshotExecTarget(execEv))
+	e.countSupersededEnter(e.pairs.setWithFile(enterEv, e.snapshotExecTarget(execEv)))
 }
 
 // enterOfExit takes the pending enter exitEv completes: the one parked under
@@ -633,15 +641,17 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 // adopted one only when the adoption had evidence of the lost exec record
 // (lostExecRecord).
 //
-// An exit with no enter is dropped by the caller without a row and without a
-// count (it is neither a mismatch nor a syscall ior saw start). Besides a
-// lost enter record it is ordinary kernel behaviour: the first return of a
-// clone/fork child, a call already in flight when the probes attached, and a
-// call a seccomp filter denies with an errno - the filter runs before
-// sys_enter, so only sys_exit fires and there is nothing to build the row's
-// arguments from (task qr2; such calls are invisible in the trace, but they
-// no longer consume a parked enter and inflate the mismatch count now that
-// noreturn enters are not parked, task pr2).
+// An exit with no enter is dropped by the caller without a row, and it is
+// neither a mismatch nor a syscall ior saw start. Besides a lost enter record
+// it is ordinary kernel behaviour: the first return of a clone/fork child, a
+// call already in flight when the probes attached, and a call a seccomp
+// filter denies with an errno - the filter runs before sys_enter, so only
+// sys_exit fires and there is nothing to build the row's arguments from (task
+// qr2; such calls are invisible in the trace, but they no longer consume a
+// parked enter and inflate the mismatch count now that noreturn enters are
+// not parked, task pr2). countUnpairedExit counts it as an exit without an
+// enter when the thread was seen before, which rules out the first two
+// (eventloop_losthalves.go, task c23).
 func (e *eventLoop) enterOfExit(exitEv event.Event, ch chan<- *event.Pair) (ep *event.Pair, proven, ok bool) {
 	if ep, ok = e.pairs.consume(exitEv.GetTid()); ok {
 		return ep, true, true
@@ -652,6 +662,7 @@ func (e *eventLoop) enterOfExit(exitEv event.Event, ch chan<- *event.Pair) (ep *
 func (e *eventLoop) tracepointExited(exitEv event.Event, ch chan<- *event.Pair) {
 	ep, provenPairing, ok := e.enterOfExit(exitEv, ch)
 	if !ok {
+		e.countUnpairedExit(exitEv)
 		exitEv.Recycle()
 		return
 	}

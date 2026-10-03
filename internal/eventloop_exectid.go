@@ -227,8 +227,11 @@ func (e *eventLoop) lostExecRecord(entered, exited uint64) (adopt, proven bool) 
 // recycled owner. (The handle NAMES are not per-tid state and stay, the
 // scoped ones of the process included: a handle is as valid after the exec
 // as before, see handleTracker and dropProcessState.)
+//
+// A non-exec enter still parked under oldTid lost its exit and is counted as
+// an enter without an exit (moveExecCaller, countSupersededEnter).
 func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
-	e.pairs.moveExecCaller(oldTid, newTid)
+	e.countSupersededEnter(e.pairs.moveExecCaller(oldTid, newTid))
 	e.evictCachedComm(oldTid)
 	handles := e.handleState()
 	handles.dropTaken(oldTid)

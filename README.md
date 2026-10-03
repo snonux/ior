@@ -279,7 +279,8 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   ior's environment switches the check off.
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
-  mismatched enter/exit pairs either.
+  mismatched enter/exit pairs either, but they do show in the `exits without an enter`
+  statistic (see *Lost enter and exit records* below), among those that returned an error.
 - **Time namespaces: timestamps are the host's.** The kernel stamps every record with the
   host's boot clock, which a time namespace does not shift, so `time_ns` is the host's
   `CLOCK_BOOTTIME` even when ior runs inside a namespace with a boottime offset
@@ -313,6 +314,22 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   labelled `at least`. On an older kernel the line reads `not counted`, and such a loss
   leaves no trace. It needs a preemption inside the kernel, so it is rare on a desktop and
   common where real-time tasks or `preempt=full` preempt a syscall-heavy CPU.
+- **Lost enter and exit records.** A dropped record or a skipped probe run usually costs a
+  call one of its two halves, and such a call has no row. The end-of-run statistics count
+  them for the traced calls themselves, next to the mismatched pairs (an exit paired with
+  the enter of another syscall): `enters without an exit: N` is an enter the same thread's
+  next enter superseded, so its exit record was lost; `exits without an enter: N` is an exit
+  of a thread ior had seen enter a syscall before, so its enter record was lost - or the call
+  was one a seccomp filter denied (or a ptrace tracer skipped), which fires `sys_exit`
+  only; the line says how many of them returned an error, which such a call always does.
+  Calls that only look like that are not counted: a call in flight when the trace started
+  or stopped, a new thread's first return from `clone`/`fork`, a task killed inside a
+  syscall, `exit`/`exit_group`/`rt_sigreturn` (they never return), an open the `-path` or
+  `-comm` filter dropped at its enter, a call whose enter fell out of ior's bounded table of
+  pending enters, an `execve` returning under another thread id, a call ior folds with its
+  restart, and a call that may have run while its probes were still being attached, or
+  while the TUI's probes dialog attached or detached one. Sampling never cuts a call in
+  half: an exit is recorded exactly when its enter was.
 
 ## Bytes Classification
 

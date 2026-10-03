@@ -11,10 +11,43 @@ import (
 )
 
 // statsBlock is the part of ior's end-of-run statistics ParseKernelLoss
-// reads, with the two figures as given.
+// reads, with the kernel's two figures as given and no lost half.
 func statsBlock(ringDrops, skippedRuns string) string {
-	return "Statistics:\n\tring buffer drops: " + ringDrops + "\n" +
+	return statsBlockWithHalves(ringDrops, skippedRuns, "0", "0")
+}
+
+// statsBlockWithHalves is statsBlock with the two lost-half figures as given.
+func statsBlockWithHalves(ringDrops, skippedRuns, entersWithoutExit, exitsWithoutEnter string) string {
+	return "Statistics:\n\tsyscalls: 10 (1.00/s) with 0 mismatched enter/exit pairs (0.00%)\n" +
+		"\tenters without an exit: " + entersWithoutExit + "\n" +
+		"\texits without an enter: " + exitsWithoutEnter + "\n" +
+		"\tring buffer drops: " + ringDrops + "\n" +
 		"\tprobe runs skipped by the kernel: " + skippedRuns + "\n\tgroup-dead exits: 1\n"
+}
+
+// The lost halves are read too, and are not what Any asks about.
+func TestParseKernelLossReadsTheLostHalves(t *testing.T) {
+	const zero = "0 (0.00/s, 0.00% of events)"
+	logged := statsBlockWithHalves(zero, "0",
+		"12 (superseded by the thread's next enter: exit record lost)",
+		"7 (thread seen before: enter record lost, or a seccomp-denied call; 2 returned an error)")
+	got, err := ParseKernelLoss(logged)
+	want := KernelLoss{EntersWithoutExit: 12, ExitsWithoutEnter: 7}
+	if err != nil || got != want {
+		t.Fatalf("ParseKernelLoss = %+v, %v, want %+v", got, err, want)
+	}
+	if got.Any() {
+		t.Fatalf("Any() = true for lost halves alone: %+v", got)
+	}
+	for name, logged := range map[string]string{
+		"no enter line": strings.Replace(logged, "enters without an exit", "x", 1),
+		"no exit line":  strings.Replace(logged, "exits without an enter", "x", 1),
+		"no figure":     statsBlockWithHalves(zero, "0", "many", "0"),
+	} {
+		if got, err := ParseKernelLoss(logged); err == nil {
+			t.Fatalf("%s: ParseKernelLoss = %+v without an error", name, got)
+		}
+	}
 }
 
 func TestParseKernelLossReadsBothFigures(t *testing.T) {

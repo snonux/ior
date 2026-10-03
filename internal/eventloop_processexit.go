@@ -54,7 +54,9 @@ import (
 //
 // The drop is deliberately not counted anywhere. Nothing already tallied
 // disappears: numTracepoints counted the enter record when it was seen, and
-// numSyscalls is only reached by a pair that found its enter.
+// numSyscalls is only reached by a pair that found its enter. Nor is it an
+// enter without an exit (numEntersWithoutExit, task c23): that counts exit
+// records the kernel lost, and this exit never existed.
 //
 // It is emphatically not a mismatch. numTracepointMismatches means the tracker
 // paired two records that do not belong together, and a task killed inside a
@@ -74,13 +76,13 @@ import (
 // row carries the enter's own timestamp and no latency, whereas the enter
 // dropped here belongs to a call that was cut short and never completed.)
 //
-// A statistic of its own is a judgement call rather than an impossibility. An
-// enter can die unpaired four ways - here, superseded in set() when an exit
-// record is lost, trimmed from the pending-enter LRU, and left parked at
-// end of run - and all four are reachable, so a counter *could* be complete.
-// It is not worth one: the number would mix a kernel fact (tasks die inside
-// syscalls) with a tracer symptom (records were lost), and a reader cannot act
-// on the sum.
+// An enter can die unpaired four ways - here, superseded in set() when an exit
+// record is lost, trimmed from the pending-enter LRU, and left parked at end
+// of run. Only the second is counted, as an enter without an exit
+// (eventloop_losthalves.go): a sum of all four would mix a kernel fact (tasks
+// die inside syscalls, calls are in flight at the stop) and the tracer's own
+// bound with a tracer symptom (records were lost), and a reader could not act
+// on it.
 //
 // sched_process_exit fires per *task*, which lands differently on the four:
 //   - For the fd table, keyed by tgid, per-task is the wrong granularity, so

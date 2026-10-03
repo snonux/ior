@@ -172,6 +172,19 @@ type eventLoop struct {
 	numTracepointMismatches uint
 	numSyscalls             uint
 	numSyscallsAfterFilter  uint
+	// numEntersWithoutExit and numExitsWithoutEnter count the calls whose
+	// exit, or enter, record the kernel lost, as the pairing sees them
+	// (eventloop_losthalves.go, task c23); numFailedExitsWithoutEnter is
+	// the part of the latter that returned an error, which is also what a
+	// seccomp-denied call leaves. Written by the event-loop goroutine only;
+	// stats() reads them after <-e.done.
+	numEntersWithoutExit       uint
+	numExitsWithoutEnter       uint
+	numFailedExitsWithoutEnter uint
+	// lostHalvesFrom is the boot-clock time from which the run's initial
+	// probes are all attached (judgeHalvesFrom); a half of a call that may
+	// have begun before it is not counted. 0 (tests) judges every half.
+	lostHalvesFrom uint64
 	// numGroupDeadExits counts sched_process_exit records flagged group_dead,
 	// i.e. traced processes that ended and had their fd entries evicted
 	// (handleProcessExitEvent). Written only by the event-loop goroutine;
@@ -443,12 +456,14 @@ func (e *eventLoop) stats() string {
 			"\tduration: %v\n"+
 			"\ttracepoints: %v (%.2f/s)\n"+
 			"\tsyscalls: %d (%.2f/s) with %d mismatched enter/exit pairs (%.2f%%)\n"+
+			"%s"+
 			"\tsyscalls after filter: %d (%.2f/s)\n"+
 			"\tgroup-dead exits: %d\n"+
 			"%s%s",
 		duration,
 		e.numTracepoints, rate(uint64(e.numTracepoints)),
 		e.numSyscalls, rate(uint64(e.numSyscalls)), e.numTracepointMismatches, e.mismatchPercent(),
+		e.lostHalfStatLines(),
 		e.numSyscallsAfterFilter, rate(uint64(e.numSyscallsAfterFilter)),
 		e.numGroupDeadExits,
 		e.outputLossStatLine()+e.ringbufDropStatLine(rate)+e.skippedRunStatLine()+e.discardedAtStopStatLine()+e.leftInKernelRingStatLine()+e.fdCopySkipStatLine()+e.fileIdentStatLine(),

@@ -1276,7 +1276,9 @@ func runTraceSetup(
 // tasks 103 and t13); exec records count as complete only when the
 // sched_process_exec probe did (trustExecRecords, task v13); and the file
 // identity words are read only when the loaded object writes them
-// (trustFileIdents, task 603). runTraceSetup calls it after the factory,
+// (trustFileIdents, task 603); and a lost enter or exit half is judged
+// only for calls begun after the attach (judgeHalvesFrom, task c23).
+// runTraceSetup calls it after the factory,
 // which wires the drop counter two of them read, and before the start
 // signal, after which the loop may already consume records. Nothing here can
 // fail.
@@ -1285,6 +1287,10 @@ func applyProbeCapabilities(el *eventLoop, infra *traceInfra) {
 	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
 	el.trustExecRecords(infra.execProbeAttached)
 	el.trustFileIdents(infra.fileIdentCaptured)
+	// The initial attach is over (setupTraceInfraBPF ran before the loop
+	// was built): a half of a call begun before now may have had its probe
+	// still off, and is not counted as lost (task c23).
+	el.judgeHalvesFrom(bootClockNs())
 }
 
 // setupTraceInfraBPF loads the BPF module, attaches the probes (publishing the
