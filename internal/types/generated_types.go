@@ -1718,10 +1718,11 @@ type Dup3Event struct {
 	Tid       uint32
 	Fd        int32
 	Flags     int32
+	FileIdent uint32
 }
 
 func (d Dup3Event) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v", d.EventType, d.TraceId, d.Time, d.Pid, d.Tid, d.Fd, d.Flags)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v FileIdent:%v", d.EventType, d.TraceId, d.Time, d.Pid, d.Tid, d.Fd, d.Flags, d.FileIdent)
 }
 
 func (d Dup3Event) Equals(other any) bool {
@@ -1729,7 +1730,7 @@ func (d Dup3Event) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return d.EventType == otherConcrete.EventType && d.TraceId == otherConcrete.TraceId && d.Time == otherConcrete.Time && d.Pid == otherConcrete.Pid && d.Tid == otherConcrete.Tid && d.Fd == otherConcrete.Fd && d.Flags == otherConcrete.Flags
+	return d.EventType == otherConcrete.EventType && d.TraceId == otherConcrete.TraceId && d.Time == otherConcrete.Time && d.Pid == otherConcrete.Pid && d.Tid == otherConcrete.Tid && d.Fd == otherConcrete.Fd && d.Flags == otherConcrete.Flags && d.FileIdent == otherConcrete.FileIdent
 }
 
 func (d *Dup3Event) GetEventType() EventType {

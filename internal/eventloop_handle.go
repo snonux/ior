@@ -127,7 +127,8 @@ import (
 //     a kind no handle can open is recognised (reachableByHandle), and, in a
 //     run that captures file identities, any newer file whose inode number
 //     differs in its low 32 bits from the one the exit record reports (task
-//     a23); the row and the fd table entry are then unnamed, as when procfs
+//     a23), and in such a run an answer that changed under the read (task
+//     d23); the row and the fd table entry are then unnamed, as when procfs
 //     has no answer. Without the capture a reuse by a file, a directory, a
 //     pidfd or a namespace still names the row after the newer one, and with
 //     it one the identity cannot tell apart does. The unnamed entry stays
@@ -414,12 +415,23 @@ func failedHandleFile(name string) file.File {
 // call opened (opened, 0 = unknown), and the answer is read with the inode
 // number of its fdinfo (readProcFd, task a23). An answer of another file is
 // a file that reused the number and is refused like the deny list's kinds,
-// and counted (rejectedAnswers); so is one that changed under both readings,
-// which describes no one file. This catches what the deny list cannot: a
+// and counted (rejectedAnswers). This catches what the deny list cannot: a
 // reuse by a regular file, a directory, a pidfd or a namespace. It cannot
 // tell apart what the identity cannot (eventloop_fileident.go): the low 32
 // bits of the inode number on whatever filesystem. Without the capture, or
 // with an fdinfo that has no inode line, the deny list is all there is.
+//
+// An answer that changed under both readings (torn) describes no one file
+// and is refused whenever the capture is on, also when the exit record
+// carries no identity (task d23). Before, such a row was named after the
+// torn answer and the fd table kept that name for every later row; a row
+// without an identity elsewhere (resolve) still takes a torn answer, but
+// for itself only, since it is not cached. The refusal is not counted:
+// like resolveUntracked, which refuses a torn answer for a row with an
+// identity without counting it, the stat line counts answers known to be
+// of another file, and a torn one may hold the opened file's name in one
+// of its readings. Without the capture readProcFd reads once and never
+// reports a torn answer.
 //
 // The unnamed file is what the row reports and what the fd table keeps, as
 // for the unreadable descriptor. Keeping nothing instead would send the next
@@ -437,9 +449,10 @@ func failedHandleFile(name string) file.File {
 // the same exposure.
 func (t *fdTracker) procFdFile(pid uint32, fd int32, eventFlags int32, opened uint32) *file.FdFile {
 	fdFile, stable := t.readProcFd(fd, pid)
-	if !reachableByHandle(fdFile.Name()) {
+	switch {
+	case !reachableByHandle(fdFile.Name()), !stable:
 		fdFile = file.NewUnresolvedFd(fd)
-	} else if opened != 0 && (!stable || !describes(fdFile, opened)) {
+	case opened != 0 && !describes(fdFile, opened):
 		t.rejectedAnswers++
 		fdFile = file.NewUnresolvedFd(fd)
 	}

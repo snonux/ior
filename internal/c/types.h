@@ -331,7 +331,16 @@ struct fcntl_event {
     __u64 arg;
 };
 
-// dup and dup2 are just fd_events, but dup3 also has the additional flags
+// dup and dup2 are just fd_events, but dup3 also has the additional flags.
+//
+// file_ident is fd_event's identity word for the old descriptor: which file
+// fd named when the call entered (ior_file_ident in fileident.c, task d23),
+// 0 = unknown. dup3 copies the fd table entry of fd to the new number, so
+// userspace checks that entry against the word exactly as it does for dup
+// and dup2. The 32-byte record had no padding to take, so it grew to 40
+// (36 bytes of fields plus tail padding); an older object's 32-byte record
+// decodes with identity 0. As for fd_event, userspace reads the word only
+// in a run that switched IOR_FILE_IDENT on (flags.h).
 struct dup3_event {
     __u32 event_type;
     __u32 trace_id;
@@ -340,6 +349,7 @@ struct dup3_event {
     __u32 tid;
     __s32 fd;
     __s32 flags;
+    __u32 file_ident;
 };
 
 // A struct file_handle as the handle syscalls pass it: handle_bytes says how

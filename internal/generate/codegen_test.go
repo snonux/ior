@@ -1732,6 +1732,9 @@ func TestGenerateDup3Handler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_DUP3_EVENT;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+	// The old descriptor's file identity (task d23), after ev->fd is set.
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"+
+		"    ev->file_ident = ior_file_ident(ev->fd);\n")
 }
 
 // TestGenerateDup2Handler locks in the generated BPF C for dup2(2):

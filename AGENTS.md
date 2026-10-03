@@ -2594,12 +2594,17 @@ kernel program reports the file, and user space compares.
   counts from the same start) and in different subvolumes or snapshots of one
   btrfs filesystem (`i_ino` is unique per subvolume only); inode numbers that
   differ only above bit 31.
-- **Capture**: every `fd_event` enter (`generateExtraFd`) and the `ret_event`
-  exits of the open kinds and `creat` (`returnsOpenedFile`:
+- **Capture**: every `fd_event` enter (`generateExtraFd`), the `dup3_event`
+  enter (`generateExtraDup3`, the old descriptor; task d23) and the
+  `ret_event` exits of the open kinds and `creat` (`returnsOpenedFile`:
   `kindMeta.returnsFile` plus `openedFileSyscalls`); every other `ret_event`
-  writes 0. The word took the tail padding of both records (offsets 28 and
-  36), so they are still 32 and 40 bytes. The other descriptor records carry
-  none. `fd_size_event` (48 bytes), `fcntl_event` (40), `dup3_event` (32) and
+  writes 0. The word took the tail padding of `fd_event` and `ret_event`
+  (offsets 28 and 36), so they are still 32 and 40 bytes. `dup3_event` had
+  none and grew from 32 to 40 bytes (word at 32, then tail padding; 36 as
+  `binary.Write` writes it); `NewDup3EventFast` still takes an older
+  object's 32-byte record, with identity 0, and the `IOR_FILE_IDENT` gate
+  below decides whether the word is read at all. The other descriptor
+  records carry none. `fd_size_event` (48 bytes), `fcntl_event` (40) and
   `epoll_ctl_event` (40) have no spare word and would grow by 8 bytes;
   `mmap_event` (tail, offset 60), `poll_event` (28), `accept_event` (28) and
   `two_fd_event` (tail, 44) do have one (task a23 corrected "none of them"),
@@ -2611,11 +2616,19 @@ kernel program reports the file, and user space compares.
   interleaved runs each on a loaded host) +80 `instructions:k` per call
   (medians 2.000G -> 2.080G, minima 1.817G -> 1.907G), about 4% of a traced
   fcntl. Not added: since the no-promotion rule below, a wrong name on
-  these rows mostly stays on the one row. The exception is dup3 and fcntl
-  F_DUPFD*, which copy a table entry to a new number unchecked (dup and dup2
-  are `fd_event`s and are checked); dup3 is the one kind where the word
-  would pay (rare call, +8 bytes). The design per kind is in task a23's
-  annotations.
+  these rows mostly stays on the one row. The exception was dup3, which
+  copies a table entry to a new number (dup and dup2 are `fd_event`s and
+  were checked): task d23 gave it the word. Measured the same way (1M
+  `dup3(fd, 100, O_CLOEXEC)` pinned with `taskset -c 3`, `-comm` of the
+  loop, `-mapSize 268435456`, no drops, 8 interleaved runs each, load 1 to
+  6): `instructions:k` medians 1.8830G -> 1.9660G, minima 1.8823G ->
+  1.9655G, spread within each set 0.1% => +83 per dup3 (4.4% of a traced
+  dup3, a rare call). `handleDup3Exit` resolves the old descriptor with
+  `resolveIdentifiedOnExit`, so a stale entry is dropped (or, bound after
+  the call entered, left alone with the row unnamed) and `registerDup`
+  copies nothing: the new number goes to procfs on first use, as for a dup
+  of a procfs answer. fcntl F_DUPFD* still copies unchecked (no word in
+  `fcntl_event`). The design per kind is in task a23's annotations.
 - **Cost is why the walk has no probe read.** `current->files->fdt->fd[fd]
   ->f_inode->i_ino` through seven `bpf_probe_read_kernel` calls cost +645
   instructions per event (each ~90), half of what a traced syscall costs. The
@@ -2676,7 +2689,7 @@ kernel program reports the file, and user space compares.
   scalar (the verifier's "invalid mem access" on the first load, a normal
   trace after the retry).
 - **Rules** (`internal/eventloop_fileident.go`, `resolveIdentifiedOnExit`,
-  called by `handleFdExit` only). For a row with identity r != 0:
+  called by `handleFdExit` and, since task d23, `handleDup3Exit`). For a row with identity r != 0:
   - *fd-table entry* (`trackedFile`): of the file r, it names the row. One
     that disagrees (another file, or no identity yet) is judged by age: an
     entry remembers when it was bound (`FdFile.BoundAt`, below). Bound
@@ -2763,9 +2776,13 @@ kernel program reports the file, and user space compares.
   `internal/eventloop_handle.go`): for a handle ior has no name for, the
   answer is read with its fdinfo inode (`readProcFd`) and refused - row and
   fd table entry unnamed with the call's flags, the exit record's identity
-  (`E:ino:<n>`) and the procfs mark, counted as a refused answer - when it
-  describes another file than the exit record reports, or changed under both
-  readings. That closes the reused-number residual of tasks k03/423 for a
+  (`E:ino:<n>`) and the procfs mark - when it describes another file than
+  the exit record reports (counted as a refused answer), or, with the
+  capture on, changed under both readings, also when the exit record has no
+  identity (task d23: such a torn name used to become the table entry). A
+  torn answer is not counted, as in `resolveUntracked`: the stat line counts
+  answers of another file, and a torn one may name the opened file in one
+  of its readings (task a23 had counted it here only). That closes the reused-number residual of tasks k03/423 for a
   reuse by a regular file, a directory, a pidfd or a namespace, which task
   423's deny list cannot see; files the identity cannot tell apart still
   pass. A named handle is not checked (the handle says which file it is).
@@ -2803,8 +2820,10 @@ kernel program reports the file, and user space compares.
   concurrently) is left unnamed although it may be of the new file.
 - **Tests**: `fileident_harness_test.go` (the committed C helper against a
   simulated task, 22 cases, 13 mutations), `syscall_semantics_fileident_test.go`
-  (which handlers capture, with an independent list of the open syscalls; it
-  caught `creat`, a pathname-kind call), `internal/types/fileident_test.go`,
+  (which handlers capture, with independent lists of the open syscalls and
+  of the enter records with the word - `fd_event`, `dup3_event`; it caught
+  `creat`, a pathname-kind call), `internal/types/fileident_test.go` (also
+  the three dup3 layouts),
   `internal/eventloop_fileident_test.go` (real descriptors and procfs),
   `internal/eventloop_fileident_age_test.go` (both orders of row and
   binding, per way an entry is made), `internal/eventloop_fileident_procfs_test.go`
@@ -2813,8 +2832,11 @@ kernel program reports the file, and user space compares.
   `internal/eventloop_fileident_clock_test.go` (read times the rules cannot
   use), `internal/eventloop_fcntl_promote_test.go` (task a23: no promotion,
   no dup3 copy of an answer, a marked table entry's dup3 copy keeps the
-  mark), `internal/eventloop_handle_ident_test.go` (task a23: the
-  open_by_handle_at fallback against the exit identity, torn answers),
+  mark), `internal/eventloop_dup3_ident_test.go` (task d23: dup3 of a stale,
+  a matching and a later entry; capture off and the 32-byte record copy as
+  before), `internal/eventloop_handle_ident_test.go` (task a23: the
+  open_by_handle_at fallback against the exit identity, torn answers with
+  and without one, uncounted),
   `internal/bpfsetup_fileident_test.go`,
   `internal/bpfsetup_kfunc_test.go`, and the integration tests
   `TestIouringReopenRowsFollowTheFile` (scenario `iouring-reopen`),

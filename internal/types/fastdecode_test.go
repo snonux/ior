@@ -192,7 +192,7 @@ func fastMatchesNamePathAndFcntl(t *testing.T) {
 // open_by_handle_at and socket records.
 func fastMatchesDup3HandleAndSocket(t *testing.T) {
 	t.Run("Dup3Event", func(t *testing.T) {
-		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5}
+		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5, FileIdent: 6}
 		raw := rawBytes(t, ev)
 
 		slow := NewDup3Event(raw)

@@ -6,7 +6,8 @@ import (
 )
 
 // The file identity word (task 603) sits in the last four bytes of the lean
-// fd_event (28..32) and of ret_event (36..40), which were tail padding. These
+// fd_event (28..32) and of ret_event (36..40), which were tail padding, and
+// after the flags of dup3_event (32..36), which grew for it (task d23). These
 // tests pin where the decoders read it, that the layouts without the word
 // decode with 0 - never with the bytes another field owns at that offset or
 // with what a pooled struct held before - and that Bytes writes it back.
@@ -151,5 +152,75 @@ func TestRetEventWithoutTheWordDecodesWithNoFileIdent(t *testing.T) {
 	defer ev.Recycle()
 	if ev.FileIdent != 0 || ev.Ret != 5 {
 		t.Fatalf("FileIdent=%#x Ret=%d for a 36-byte record, want 0 and 5", ev.FileIdent, ev.Ret)
+	}
+}
+
+// dup3Payload builds a dup3 record of size bytes for old descriptor 9 with
+// flags 0x80000 whose bytes 32..36, when it has them, are word.
+func dup3Payload(size int, word uint32) []byte {
+	raw := make([]byte, size)
+	fillCommonHeader(raw, ENTER_DUP3_EVENT, SYS_ENTER_DUP3)
+	binary.LittleEndian.PutUint32(raw[24:28], 9)
+	binary.LittleEndian.PutUint32(raw[28:32], 0x80000)
+	if size >= dup3EventCompactSize {
+		binary.LittleEndian.PutUint32(raw[32:36], word)
+	}
+	return raw
+}
+
+// TestDup3EventCarriesTheFileIdentAfterTheFlags pins the word dup3_event
+// grew for the old descriptor (task d23): read at 32..36 from the kernel's
+// padded record and from binary.Write's compact one, 0 for the 32-byte record
+// of an object built before it.
+func TestDup3EventCarriesTheFileIdentAfterTheFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		size int
+		want uint32
+	}{
+		{name: "kernel record", size: dup3EventSize, want: testFileIdent},
+		{name: "compact record", size: dup3EventCompactSize, want: testFileIdent},
+		{name: "legacy record has no such word", size: dup3EventLegacySize, want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := NewDup3EventFast(dup3Payload(tc.size, testFileIdent))
+			if ev == nil {
+				t.Fatal("payload did not decode")
+			}
+			defer ev.Recycle()
+			if ev.FileIdent != tc.want || ev.Fd != 9 || ev.Flags != 0x80000 {
+				t.Fatalf("FileIdent=%#x Fd=%d Flags=%#x, want FileIdent=%#x Fd=9 Flags=0x80000",
+					ev.FileIdent, ev.Fd, ev.Flags, tc.want)
+			}
+		})
+	}
+}
+
+// TestDup3EventRejectsSizesBetweenTheLayouts keeps the decoder from reading
+// a truncated record as one of the known layouts.
+func TestDup3EventRejectsSizesBetweenTheLayouts(t *testing.T) {
+	for _, size := range []int{28, 31, 33, 35, 37, 39} {
+		if ev := NewDup3EventFast(dup3Payload(dup3EventSize, testFileIdent)[:size]); ev != nil {
+			t.Errorf("decoded a %d-byte payload: %v", size, ev)
+		}
+	}
+}
+
+func TestDup3EventDecoderClearsAPooledFileIdent(t *testing.T) {
+	ev := decodeAfterIdent(t,
+		func() *Dup3Event { return NewDup3EventFast(dup3Payload(dup3EventSize, testFileIdent)) },
+		func(ev *Dup3Event) { ev.Recycle() },
+		func() *Dup3Event { return NewDup3EventFast(dup3Payload(dup3EventLegacySize, 0)) })
+	defer ev.Recycle()
+	if ev.FileIdent != 0 {
+		t.Fatalf("FileIdent = %#x after a legacy dup3 record, want 0", ev.FileIdent)
+	}
+}
+
+func TestDup3EventBytesWritesTheFileIdent(t *testing.T) {
+	raw := rawBytes(t, &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Fd: 9, FileIdent: testFileIdent})
+	if len(raw) != dup3EventCompactSize || binary.LittleEndian.Uint32(raw[32:36]) != testFileIdent {
+		t.Fatalf("record = % x, want 36 bytes ending in the identity", raw)
 	}
 }

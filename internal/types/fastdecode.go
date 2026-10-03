@@ -43,7 +43,13 @@ const (
 	fdPathEventSize              = 304
 	fdPathEventCompactSize       = 300
 	fcntlEventSize               = 40
-	dup3EventSize                = 32
+	// dup3_event carries the old descriptor's file identity since task d23:
+	// 36 bytes of fields, 40 as the kernel reserves it (tail padding), 36 as
+	// binary.Write writes it. The legacy record is the 32-byte one without
+	// the word, which kernel and binary.Write shared.
+	dup3EventSize                = 40
+	dup3EventCompactSize         = 36
+	dup3EventLegacySize          = 32
 	// open_by_handle_at_event carries the file handle since task k03. The
 	// legacy record is the flags-only layout: 32 bytes as the kernel wrote it
 	// (4 bytes of tail padding) and 28 as binary.Write did.
@@ -509,16 +515,21 @@ func NewFcntlEventFast(raw []byte) *FcntlEvent {
 	return f
 }
 
-// NewDup3EventFast decodes one dup3 ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// NewDup3EventFast decodes one dup3 ring-buffer payload in a single pass.
+// Three layouts are accepted: the current record (40 bytes as the kernel
+// wrote it, 36 as binary.Write did) and the 32-byte record of an object
+// built before task d23, which has no identity word and decodes with
+// FileIdent 0 ("unknown", which contradicts nothing). A longer payload falls
+// back to the slow binary.Read decoder, which reads the known prefix; a
+// shorter one, or one between the layouts, is rejected (nil).
 func NewDup3EventFast(raw []byte) *Dup3Event {
-	if len(raw) < dup3EventSize {
+	switch len(raw) {
+	case dup3EventSize, dup3EventCompactSize, dup3EventLegacySize:
+	default:
+		if len(raw) > dup3EventSize {
+			return NewDup3Event(raw)
+		}
 		return nil
-	}
-	if len(raw) != dup3EventSize {
-		return NewDup3Event(raw)
 	}
 	d := poolOfDup3Events.Get().(*Dup3Event)
 	d.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -528,6 +539,10 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 	d.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	d.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	d.Flags = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	d.FileIdent = 0
+	if len(raw) != dup3EventLegacySize {
+		d.FileIdent = binary.LittleEndian.Uint32(raw[32:36])
+	}
 	return d
 }
 

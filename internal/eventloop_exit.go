@@ -644,9 +644,18 @@ func (e *eventLoop) applyFdTransferOp(ep *event.Pair, fdEv *types.FdEvent) bool 
 // handleDup3Exit registers the duplicated descriptor before filtering the pair,
 // for the reason spelled out on handleFdExit: the fd table must stay correct
 // for the rows the run does want even when this row is dropped.
+//
+// The record says which file the old descriptor named at enter (task d23), so
+// the source is resolved like a dup/dup2 row's (resolveIdentifiedOnExit): an
+// fd table entry of another file is a stale binding and is dropped, one bound
+// after the call entered leaves the row unnamed. Either way the source is no
+// longer the table's entry, and registerDup then copies nothing: the new
+// number is resolved from procfs on its own first use. Before, dup3 copied
+// whatever the table held for the old number onto the new one, unchecked.
 func (e *eventLoop) handleDup3Exit(ep *event.Pair, dup3Ev *types.Dup3Event) bool {
 	fd := int32(dup3Ev.Fd)
-	ep.File = e.resolveOnExit(ep, fd, dup3Ev.Pid)
+	ident := e.fdState().dup3Ident(dup3Ev)
+	ep.File = e.resolveIdentifiedOnExit(ep, fd, dup3Ev.Pid, ident)
 	ep.Comm = e.comm(dup3Ev.GetTid())
 
 	fdFile, ok := ep.File.(*file.FdFile)

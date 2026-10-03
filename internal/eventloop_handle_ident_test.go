@@ -118,18 +118,42 @@ func TestNamedHandleIsNotCheckedAgainstProcfs(t *testing.T) {
 }
 
 // An answer that changed under both readings mixes two files and is refused
-// for a call whose exit record names the opened file; one consistent reading
-// of that file names the row. Read twice either way (readProcFd).
+// in a run with the capture, whether or not the exit record names the opened
+// file (task d23: without an identity it used to name the row); one
+// consistent reading names the row. Read twice either way (readProcFd). A
+// torn answer is not counted as refused for another file, as in
+// resolveUntracked.
 func TestUnknownHandleProcfsNameThatChangedUnderTheReadIsRefused(t *testing.T) {
-	for _, stable := range []bool{false, true} {
-		feed := newIdentHandleFeed(t, true)
-		proc := &scriptedProc{answers: []procAnswer{{name: "/data/torn.txt", ident: 4711, stable: stable}}}
-		feed.el.fdState().readFdIdent = proc.read
-		ep := feed.openByHandleWithIdent(testHandleB, 9, 4711)
-		want := map[bool]string{true: "/data/torn.txt", false: ""}[stable]
-		assertHandleIdentRow(t, feed, ep, 9, want)
-		if wantReads := map[bool]int{true: 1, false: 2}[stable]; proc.reads != wantReads {
-			t.Fatalf("stable=%v: procfs read %d times, want %d", stable, proc.reads, wantReads)
+	for _, opened := range []uint32{4711, 0} {
+		for _, stable := range []bool{false, true} {
+			feed := newIdentHandleFeed(t, true)
+			proc := &scriptedProc{answers: []procAnswer{{name: "/data/torn.txt", ident: 4711, stable: stable}}}
+			feed.el.fdState().readFdIdent = proc.read
+			ep := feed.openByHandleWithIdent(testHandleB, 9, opened)
+			want := map[bool]string{true: "/data/torn.txt", false: ""}[stable]
+			assertHandleRow(t, feed, ep, 9, want)
+			if got := identOf(ep.File); got != opened {
+				t.Fatalf("opened=%d stable=%v: row identity %d, want %d", opened, stable, got, opened)
+			}
+			if wantReads := map[bool]int{true: 1, false: 2}[stable]; proc.reads != wantReads {
+				t.Fatalf("opened=%d stable=%v: procfs read %d times, want %d", opened, stable, proc.reads, wantReads)
+			}
+			requireNothingCounted(t, feed.el)
 		}
+	}
+}
+
+// Without the capture there is no second reading, so nothing is torn: the
+// fallback names the row from its one reading, as before task a23.
+func TestUnknownHandleProcfsNameWithoutTheCaptureIsReadOnce(t *testing.T) {
+	feed := newIdentHandleFeed(t, false)
+	proc := &scriptedProc{answers: []procAnswer{{name: "/data/torn.txt", ident: 4711, stable: false}}}
+	feed.el.fdState().readFdIdent = proc.read
+	n := freeFdNumber(t)
+	name, _ := placeFileOn(t, n, "read-once.txt")
+	ep := feed.openByHandleWithIdent(testHandleB, n, 0)
+	assertHandleRow(t, feed, ep, n, name)
+	if proc.reads != 0 {
+		t.Fatalf("scripted reader asked %d times in a run without the capture", proc.reads)
 	}
 }

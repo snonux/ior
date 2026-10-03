@@ -9294,6 +9294,7 @@ int handle_sys_enter_dup3(struct syscall_trace_enter *ctx) {
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
     ev->flags = (__s32)ctx->args[2];
+    ev->file_ident = ior_file_ident(ev->fd);
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

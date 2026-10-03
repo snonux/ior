@@ -6,13 +6,14 @@ import (
 	"testing"
 )
 
-// The file identity words of fd_event and ret_event (task 603;
-// internal/c/fileident.c) are part of what a committed handler means, so the
-// semantics oracle checks them with every other capture:
+// The file identity words of fd_event, dup3_event (task d23) and ret_event
+// (task 603; internal/c/fileident.c) are part of what a committed handler
+// means, so the semantics oracle checks them with every other capture:
 //
-//   - an enter handler that reserves an fd_event writes ev->file_ident exactly
-//     once, from the record's own descriptor field and after that field is
-//     set, so the identity is that of the descriptor the row reports;
+//   - an enter handler that reserves a record of identEnterRecords writes
+//     ev->file_ident exactly once, from the record's own descriptor field and
+//     after that field is set, so the identity is that of the descriptor the
+//     row reports (dup3's oldfd);
 //   - an exit handler that reserves a ret_event writes it exactly once: the
 //     identity of the returned descriptor for the syscalls of
 //     returnedFileSyscalls, and 0 for every other one (the word used to be
@@ -31,6 +32,15 @@ var returnedFileSyscalls = map[string]struct{}{
 	"open_tree_attr":    {},
 	"openat":            {},
 	"openat2":           {},
+}
+
+// identEnterRecords is reviewed data: the enter records that carry the
+// identity of their descriptor. dup3_event grew the word in task d23 because
+// dup3 copies the old descriptor's fd table entry (dup and dup2 are
+// fd_events).
+var identEnterRecords = map[string]struct{}{
+	"fd_event":   {},
+	"dup3_event": {},
 }
 
 const (
@@ -59,13 +69,15 @@ func validateFileIdentCapture(name, enterBody, exitBody string) error {
 }
 
 // validateEnterFileIdent is the enter half: the capture is there exactly when
-// the record is an fd_event, and follows the descriptor it identifies.
+// the record is one of identEnterRecords, and follows the descriptor it
+// identifies.
 func validateEnterFileIdent(name, body string) error {
 	handler := "sys_enter_" + name
 	writes := cLValueWriteLocations(body, "ev->file_ident")
-	if eventStruct := eventStructRE.FindStringSubmatch(body); eventStruct == nil || eventStruct[1] != "fd_event" {
+	eventStruct := eventStructRE.FindStringSubmatch(body)
+	if _, carries := identEnterRecords[structOf(eventStruct)]; !carries {
 		if len(writes) != 0 {
-			return fmt.Errorf("%s writes ev->file_ident %d times but reserves no fd_event", handler, len(writes))
+			return fmt.Errorf("%s writes ev->file_ident %d times but reserves no record with the word", handler, len(writes))
 		}
 		return nil
 	}
@@ -78,6 +90,15 @@ func validateEnterFileIdent(name, body string) error {
 		return fmt.Errorf("%s reads the file identity before its one ev->fd assignment", handler)
 	}
 	return validateBeforeSubmit(handler, body, captures[0][1])
+}
+
+// structOf returns the struct name an eventStructRE match captured, or ""
+// for no match.
+func structOf(match []string) string {
+	if match == nil {
+		return ""
+	}
+	return match[1]
 }
 
 // validateExitFileIdent is the exit half: a ret_event says which file the
@@ -120,6 +141,9 @@ func fileIdentEnterMutations() []semanticMutation {
 		{"file identity overwritten", enter("read", fileIdentEnterLine, fileIdentEnterLine+fileIdentZeroLine)},
 		{"file identity written after submission", enter("read", fileIdentEnterLine+"\n    bpf_ringbuf_submit(ev, 0);\n",
 			"\n    bpf_ringbuf_submit(ev, 0);\n"+fileIdentEnterLine)},
+		{"dup3's file identity not captured", enter("dup3", fileIdentEnterLine, "")},
+		{"dup3's file identity of the new descriptor", enter("dup3", fileIdentEnterLine,
+			"    ev->file_ident = ior_file_ident((__s32)ctx->args[1]);\n")},
 		{"file identity written into a record without the word", enter("recvfrom",
 			"    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n",
 			"    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n"+fileIdentEnterLine)},

@@ -30,9 +30,10 @@ import (
 //     answer was cached for the number).
 //
 // The single-descriptor enter records (fd_event: read, write, close, fsync,
-// ...) therefore say which file the number named when the call entered, and
-// the exits of the open kinds which file they returned (the low 32 bits of
-// the inode number, 0 = unknown; internal/c/fileident.c). A tracked or cached
+// ..., and dup3_event since task d23) therefore say which file the number
+// named when the call entered, and the exits of the open kinds which file
+// they returned (the low 32 bits of the inode number, 0 = unknown;
+// internal/c/fileident.c). A tracked or cached
 // file remembers the same about itself (file.FdFile.Ident), and a row is
 // given a name only when the two do not contradict each other:
 //
@@ -79,9 +80,9 @@ import (
 // row is resolved exactly as before the identity existed. That covers a
 // kernel without the capture (no bpf_rdonly_cast kfunc: mainline before
 // 6.2), an object built before it, a run that switched it off, the records
-// without an identity word (fd_size_event, fcntl_event, dup3_event, ...:
-// recvfrom, ioctl, mmap, ... rows) and a procfs answer whose fdinfo has no
-// inode line.
+// without an identity word (fd_size_event, fcntl_event, ...: recvfrom,
+// ioctl, mmap, ... rows), the 32-byte dup3 record of an object built before
+// task d23, and a procfs answer whose fdinfo has no inode line.
 //
 // What the identity cannot tell apart, so those stale bindings still go
 // unnoticed and such an answer still passes:
@@ -117,10 +118,24 @@ func (e *eventLoop) trustFileIdents(captured bool) {
 // 0 when the run does not capture identities. A wide or compact fd record
 // has no identity word and decodes with 0.
 func (t *fdTracker) rowIdent(fdEv *types.FdEvent) uint32 {
+	return t.trustedIdent(fdEv.FileIdent)
+}
+
+// dup3Ident is rowIdent for a dup3 record: the identity of its old
+// descriptor (task d23). The 32-byte record of an older object has no word
+// and decodes with 0.
+func (t *fdTracker) dup3Ident(dup3Ev *types.Dup3Event) uint32 {
+	return t.trustedIdent(dup3Ev.FileIdent)
+}
+
+// trustedIdent returns a record's identity word, or 0 when the run does not
+// capture identities: then the word is stale padding of an older object, or
+// a 0 nobody could match.
+func (t *fdTracker) trustedIdent(word uint32) uint32 {
 	if !t.identOn {
 		return 0
 	}
-	return fdEv.FileIdent
+	return word
 }
 
 // identifyOpened records which file the descriptor f was registered for is,
@@ -358,7 +373,10 @@ func (t *fdTracker) resolveUntracked(fd int32, pid uint32, ident uint32, enterNs
 	}
 	if !stable {
 		// The number was rebound under both readings: the answer describes
-		// no one file. It is neither cached nor believed.
+		// no one file. It is neither cached nor believed, and not counted
+		// as refused: rejectedAnswers counts answers of another file, and
+		// a torn one may name the row's file in one of its readings. The
+		// open_by_handle_at fallback (procFdFile) does the same (task d23).
 		return unnamedFile(fd, ident)
 	}
 	t.setProcFdCacheRead(fd, pid, discovered, bootClockNs())

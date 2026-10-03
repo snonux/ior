@@ -451,9 +451,14 @@ func generateExtraRet(tp GeneratedTracepoint) string {
 		ClassifyRet(tp.Format.Name), ident)
 }
 
-// generateExtraDup3 emits fd and flags from fixed argument positions.
+// generateExtraDup3 emits fd (oldfd) and flags from fixed argument positions,
+// and the identity of the file oldfd names as the call enters (task d23), as
+// generateExtraFd does for dup and dup2: dup3 copies the fd table entry of
+// oldfd to the new number, and the word lets userspace check that entry
+// first. It is read from the record's own fd field, after that is set.
 func generateExtraDup3() string {
-	return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"
+	return "    ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n" +
+		"    ev->file_ident = ior_file_ident(ev->fd);\n"
 }
 
 // generateExtraOpenByHandleAt emits flags from argument position 2 and the
