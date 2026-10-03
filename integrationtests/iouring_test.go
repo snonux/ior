@@ -116,6 +116,38 @@ func TestIouringRegisteredRing(t *testing.T) {
 	}
 }
 
+// TestIouringRegisteredRingRegisteredBySampledOutCall pins that the
+// registration is learned from a call whose own row the sampling rate drops:
+// io_uring_register is sampled 1 in a million, so the run has (almost surely)
+// no row of the registration, and the io_uring_enter rows through the index
+// must be named after the ring all the same. A registration that went with
+// its row would leave an index naming whatever ring it held before.
+func TestIouringRegisteredRingRegisteredBySampledOutCall(t *testing.T) {
+	requireIoUring(t)
+	args := append(append([]string{}, iouringRingTraceArgs...), "-syscall-sampling-syscalls", "io_uring_register=1000000")
+	rows, _ := runParquetScenarioRows(t, "iouring-registered-ring", defaultDuration, args, nil)
+	setup := ringSetupRow(t, rows)
+	var enterRows, registerRows int
+	for _, row := range rows {
+		switch row.Syscall {
+		case "io_uring_register":
+			registerRows++
+		case "io_uring_enter":
+			enterRows++
+			if row.File != iouringRingName || row.FD != setup.FD {
+				t.Errorf("io_uring_enter row is not named after the ring on fd %d: %+v", setup.FD, row)
+			}
+		}
+	}
+	if enterRows != 5 {
+		t.Errorf("%d io_uring_enter rows, want 5", enterRows)
+		logRowSummary(t, rows)
+	}
+	if registerRows == 6 {
+		t.Fatal("every io_uring_register has a row: the sampling rate did not apply, and the test proves nothing")
+	}
+}
+
 // Calls per phase of the iouring-ring-lifecycle scenario
 // (cmd/ioworkload/scenario_iouring_ringfds.go).
 const (
