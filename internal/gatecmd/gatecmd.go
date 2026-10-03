@@ -18,7 +18,8 @@
 // arguments, and how it tells that they ran at all (RootLinkTests,
 // RootLinkTestArgs, RootLinkTestsNotPassed). So is what that target prints
 // about the fold tests that skipped, and the variable that makes them fail
-// (foldskips.go).
+// (foldskips.go), and about the tests whose case no run exercised
+// (unexercisedskips.go).
 package gatecmd
 
 import "strings"

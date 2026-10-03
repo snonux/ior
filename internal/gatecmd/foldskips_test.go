@@ -38,3 +38,25 @@ func TestFoldSkipSummaryListsTheMarkedLines(t *testing.T) {
 		t.Fatalf("FoldSkipSummary without a skip = %q, want nothing", got)
 	}
 }
+
+// A test whose case was not exercised is listed under its own heading, after
+// the fold tests, and SkipSummary is both lists.
+func TestSkipSummaryListsUnexercisedTestsBehindTheFoldTests(t *testing.T) {
+	output := UnexercisedSkipMarker + "TestStop: no lagging stop in 5 runs\n" +
+		"    stop_test.go:1: " + UnexercisedSkipMarker + "TestX: quoted\n" +
+		FoldSkipMarker + "TestA: scenario a: lost\nok\n"
+	if got, want := SkippedUnexercisedTests(output), []string{"TestStop: no lagging stop in 5 runs"}; !slices.Equal(got, want) {
+		t.Fatalf("SkippedUnexercisedTests = %q, want %q", got, want)
+	}
+	summary := SkipSummary(output)
+	if len(summary) != 4 || !strings.HasPrefix(summary[0], "1 fold test(s) SKIPPED") || summary[1] != "  TestA: scenario a: lost" ||
+		!strings.HasPrefix(summary[2], "1 test(s) SKIPPED because no run exercised") || summary[3] != "  TestStop: no lagging stop in 5 runs" {
+		t.Fatalf("SkipSummary = %q", summary)
+	}
+	if got := SkipSummary(FoldSkipMarker + "TestA: lost\n"); len(got) != 2 {
+		t.Fatalf("SkipSummary with only a fold skip = %q, want its two lines", got)
+	}
+	if got := SkipSummary("ok\nPASS\n"); len(got) != 0 {
+		t.Fatalf("SkipSummary without a skip = %q, want nothing", got)
+	}
+}

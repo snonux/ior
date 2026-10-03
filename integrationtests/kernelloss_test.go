@@ -177,3 +177,21 @@ func TestGiveUpOnFoldsSkipsVisiblyOrFailsOnRequest(t *testing.T) {
 		}
 	}
 }
+
+// TestSkipUnexercisedSkipsVisibly: a test whose case no run exercised skips
+// and prints the marked line `mage integrationTest` summarises.
+func TestSkipUnexercisedSkipsVisibly(t *testing.T) {
+	var out strings.Builder
+	verdict := &recordingVerdict{}
+	SkipUnexercised(verdict, &out, "no run stopped with ior lagging")
+	if verdict.skipped != "no run stopped with ior lagging" || verdict.failed != "" {
+		t.Fatalf("skipped %q, failed %q", verdict.skipped, verdict.failed)
+	}
+	marked := gatecmd.SkippedUnexercisedTests(out.String())
+	if len(marked) != 1 || marked[0] != "TestFold: no run stopped with ior lagging" {
+		t.Fatalf("printed %q", out.String())
+	}
+	if summary := gatecmd.SkipSummary(out.String()); len(summary) != 2 {
+		t.Fatalf("summary = %q, want a count and the test", summary)
+	}
+}

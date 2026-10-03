@@ -57,6 +57,13 @@ type TestHarness struct {
 	// workload when an error is returned, whereas an unwound goroutine would
 	// skip that cleanup and leave the workload to time out as a zombie.
 	IorArgsForPID func(pid int) ([]string, error)
+	// ReleaseDelay is waited on top of iorReadySettleDelay before the
+	// workload is released. The harness's timing is otherwise the same in
+	// every run, to the millisecond, and so is its phase against ior's
+	// periodic work (the 500 ms liveness check of a -pid target); a test
+	// whose case depends on where the workload's exit falls in that period
+	// varies the delay from run to run (task f23).
+	ReleaseDelay time.Duration
 }
 
 // OutputCapture is a goroutine-safe line sink: ior's stdout and stderr are
@@ -126,7 +133,7 @@ func (h *TestHarness) runFlamegraph(scenario string, duration int, extraIorArgs 
 		_ = workloadCmd.Wait()
 		return TestResult{}, workloadPID, err
 	}
-	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready); err != nil {
+	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready, h.ReleaseDelay); err != nil {
 		return TestResult{}, workloadPID, err
 	}
 
@@ -178,7 +185,7 @@ func (h *TestHarness) RunParquetWithIorArgs(scenario string, duration int, extra
 		_ = workloadCmd.Wait()
 		return "", workloadPID, err
 	}
-	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready); err != nil {
+	if err := releaseWorkloadWhenIorReady(startupFile, workloadCmd, ior.cmd, ior.ready, h.ReleaseDelay); err != nil {
 		return "", workloadPID, err
 	}
 
@@ -473,7 +480,10 @@ func scanIorOutput(r io.Reader, w io.Writer, signalReady func(error), wg *sync.W
 	}
 }
 
-func releaseWorkloadWhenIorReady(startupFile string, workloadCmd, iorCmd *exec.Cmd, readyCh <-chan error) error {
+// releaseWorkloadWhenIorReady writes the startup file the workload waits for
+// once ior reported readiness and iorReadySettleDelay plus extraDelay
+// (TestHarness.ReleaseDelay) have passed.
+func releaseWorkloadWhenIorReady(startupFile string, workloadCmd, iorCmd *exec.Cmd, readyCh <-chan error, extraDelay time.Duration) error {
 	if startupFile == "" {
 		return nil
 	}
@@ -488,7 +498,7 @@ func releaseWorkloadWhenIorReady(startupFile string, workloadCmd, iorCmd *exec.C
 			killAndWait(iorCmd)
 			return fmt.Errorf("wait for ior readiness: %w", err)
 		}
-		time.Sleep(iorReadySettleDelay)
+		time.Sleep(iorReadySettleDelay + extraDelay)
 		if err := os.WriteFile(startupFile, []byte("ready\n"), 0o600); err != nil {
 			killAndWait(workloadCmd)
 			killAndWait(iorCmd)

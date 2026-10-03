@@ -19,7 +19,8 @@ import (
 //     integrationTest` is all it takes.
 //   - FoldSkipMarker: a test that skips prints one line beginning with it to
 //     its standard output, at once and whatever the verbosity, and the mage
-//     target ends its run with FoldSkipSummary over what the binary printed.
+//     target ends its run with SkipSummary over what the binary printed,
+//     which includes FoldSkipSummary.
 
 // RequireFoldsEnv names the environment variable that turns a fold test
 // none of whose runs could show the fold into a failure.
@@ -38,17 +39,25 @@ func FoldsRequired(getenv func(string) string) bool {
 // SkippedFoldTests returns what follows FoldSkipMarker on each line of
 // output that begins with it, in order.
 func SkippedFoldTests(output string) []string {
-	var skipped []string
+	return markedLines(output, FoldSkipMarker)
+}
+
+// markedLines returns what follows marker on each line of output that begins
+// with it, in order. Only the beginning of a line counts: the same text
+// indented, as a t.Log of another test would print it, is no skip.
+func markedLines(output, marker string) []string {
+	var marked []string
 	for line := range strings.SplitSeq(output, "\n") {
-		if rest, ok := strings.CutPrefix(line, FoldSkipMarker); ok {
-			skipped = append(skipped, rest)
+		if rest, ok := strings.CutPrefix(line, marker); ok {
+			marked = append(marked, rest)
 		}
 	}
-	return skipped
+	return marked
 }
 
 // FoldSkipSummary returns the lines `mage integrationTest` prints after the
-// run: none when no fold test skipped, else a count with the way to make
+// run about the fold tests (as part of SkipSummary): none when no fold test
+// skipped, else a count with the way to make
 // them fail, and one line per test. The count is the plausibility check a
 // reader needs: one skip is a busy moment of the host, most of them a host
 // whose real-time tasks preempt BPF programs all the time, where the folds
