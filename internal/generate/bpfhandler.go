@@ -24,24 +24,34 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 
 	eventStruct := eventStructName(tp.Classification.Kind)
 
-	return renderHandler(handlerSpec{
-		name:           f.Name,
-		ctxStruct:      ctxStruct,
-		eventStruct:    eventStruct,
-		comment:        handlerComment(tp, eventStruct),
-		eventTypeConst: eventTypeConstant(tp.Classification.Kind, isEnter),
-		extra:          generateExtra(tp, isEnter),
-		sideMapTake:    generateSideMapTake(tp, isEnter),
-		isEnter:        isEnter,
+	spec := handlerSideSpec(tp, isEnter)
+	spec.name = f.Name
+	spec.ctxStruct = ctxStruct
+	spec.eventStruct = eventStruct
+	spec.comment = handlerComment(tp, eventStruct)
+	spec.eventTypeConst = eventTypeConstant(tp.Classification.Kind, isEnter)
+	spec.extra = generateExtra(tp, isEnter)
+	spec.sideMapTake = generateSideMapTake(tp, isEnter)
+	return renderHandler(spec)
+}
+
+// handlerSideSpec returns the part of tp's handlerSpec that says which hook
+// the handler calls and what travels on the enter state between its two
+// sides: everything that depends on the syscall and the side, nothing that
+// depends on the record the handler fills (generateBPFHandler adds that).
+func handlerSideSpec(tp GeneratedTracepoint, isEnter bool) handlerSpec {
+	name := tp.Format.Name
+	return handlerSpec{
+		isEnter: isEnter,
 		// Noreturn syscalls (exit, exit_group, rt_sigreturn) get a special
 		// enter hook that skips the syscall_enter_state_map write. Their exit
 		// handler is suppressed (see codegen.go), so nothing would ever clear a
 		// recorded enter-state entry; recording it would only leak stale
 		// per-tid entries in the bounded map.
-		noreturn: isEnter && isNoreturnSyscall(syscallName(f.Name)),
+		noreturn: isEnter && isNoreturnSyscall(syscallName(name)),
 		// The explicit enter trace ID constant, so an exit handler does not
 		// rely on numeric adjacency between kernel-assigned enter/exit IDs.
-		enterName: enterConstForHandler(f.Name, isEnter),
+		enterName: enterConstForHandler(name, isEnter),
 		// Only an exit handler recovers a filename, and only for a syscall
 		// whose enter side captured one. A sys_exit_* format is always just
 		// "long ret", so the exit's own classification cannot tell us that -
@@ -50,10 +60,10 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		// The two-path kinds (rename/link, move_mount) have a second path
 		// with its own slot.
 		recoverSecondFilename: !isEnter && kindRecoversSecondFilename(tp.EnterKind),
-		outputPathArg:         outputPathArgForHandler(f.Name),
-		outputHandleArg:       outputHandleArgForHandler(f.Name),
-		ringFds:               ringFdsArgsForHandler(f.Name),
-	})
+		outputPathArg:         outputPathArgForHandler(name),
+		outputHandleArg:       outputHandleArgForHandler(name),
+		ringFds:               ringFdsArgsForHandler(name),
+	}
 }
 
 // ringFdsArgsForHandler returns the argument slots of the registered-ring

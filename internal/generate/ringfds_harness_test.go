@@ -252,19 +252,19 @@ var ringFdsReadCases = []ringFdsCase{
 }
 
 // ringFdsEmitCases cover ior_emit_ring_fds, called with pid 7, tid 8, enter
-// trace ID 9 and clock read 1234: "opcode mapped ret ringfull". Event type 66
+// trace ID 9 and clock read 1234: "opcode mapped ret ringfull". Event type 67
 // is RING_FDS_EVENT.
 var ringFdsEmitCases = []ringFdsCase{
 	{"registration published", "emit 20 4096 2 0",
-		"submitted=1 drops=0 event=66 id=9 time=1234 pid=7 tid=8 opcode=20 status=1 count=2 reserved=0" +
+		"submitted=1 drops=0 event=67 id=9 time=1234 pid=7 tid=8 opcode=20 status=1 count=2 reserved=0" +
 			" prefix=2 clean=1 guard=1 reads=1 maxread=32"},
 	{"release published", "emit 21 4096 1 0",
-		"submitted=1 drops=0 event=66 id=9 time=1234 pid=7 tid=8 opcode=21 status=1 count=1 reserved=0" +
+		"submitted=1 drops=0 event=67 id=9 time=1234 pid=7 tid=8 opcode=21 status=1 count=1 reserved=0" +
 			" prefix=1 clean=1 guard=1 reads=1 maxread=16"},
 	// An unreadable array is reported, not dropped: userspace has to learn
 	// that the table changed.
 	{"unreadable array published as such", "emit 20 8 1 0",
-		"submitted=1 drops=0 event=66 id=9 time=1234 pid=7 tid=8 opcode=20 status=2 count=0 reserved=0" +
+		"submitted=1 drops=0 event=67 id=9 time=1234 pid=7 tid=8 opcode=20 status=2 count=0 reserved=0" +
 			" prefix=0 clean=1 guard=1 reads=1 maxread=16"},
 	{"another opcode publishes nothing", "emit 0 4096 1 0", "submitted=0 drops=0 prefix=0 clean=0 guard=1 reads=0 maxread=0"},
 	{"nothing registered publishes nothing", "emit 20 4096 0 0", "submitted=0 drops=0 prefix=0 clean=0 guard=1 reads=0 maxread=0"},

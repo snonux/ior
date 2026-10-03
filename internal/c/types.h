@@ -80,8 +80,10 @@
 #define FILE_HANDLE_EVENT 65
 // Control record carrying the registered-ring table entries a successful
 // io_uring_register(IORING_REGISTER_RING_FDS / IORING_UNREGISTER_RING_FDS)
-// set or released (ior_emit_ring_fds, iouring.c).
-#define RING_FDS_EVENT 66
+// set or released (ior_emit_ring_fds, iouring.c). 66 is skipped on purpose:
+// it is ENTER_FD_NAME_EVENT's on the branch of task xz2, and the ids only
+// have to be distinct, not dense.
+#define RING_FDS_EVENT 67
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
