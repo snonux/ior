@@ -26,10 +26,12 @@ const closeUntrackedSettle = 500 * time.Millisecond
 // closeUntrackedState carries the descriptors close-untracked opened in its
 // prestart hook over to the scenario proper: the regular files, and both
 // descriptors of the FIFO whose write is blocked across the close and reuse
-// of its number (closeUnderBlockedWrite).
+// of its number (closeUnderBlockedWrite), and a descriptor of the directory
+// "/" (rootFd).
 var closeUntrackedState struct {
 	fds             []int
 	fifoFd, drainFd int
+	rootFd          int
 	cleanup         func()
 }
 
@@ -55,6 +57,25 @@ func openUntrackedFiles() error {
 		cleanup()
 		return err
 	}
+	if err := openUntrackedRoot(); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+// openUntrackedRoot opens the directory "/" before ior attaches. It is the
+// root of its mount whatever the host, so its close must not be named by a
+// last path component (task xz2): where "/" is not also the root of its
+// filesystem - a btrfs subvolume, a bind mount - the dentry has a name, the
+// one it has in that filesystem ("root" for Fedora's subvolume), which is
+// not what the process opened.
+func openUntrackedRoot() error {
+	fd, err := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open /: %w", err)
+	}
+	closeUntrackedState.rootFd = fd
 	return nil
 }
 
@@ -76,6 +97,9 @@ func openUntrackedFiles() error {
 // Whether ior gets to such a write before or after the pipe is a race; the
 // last step is one it always loses: a FIFO write blocked across the close and
 // the reuse of its number (closeUnderBlockedWrite, task a23).
+//
+// The descriptor of "/" is closed last, and nothing takes its number: it is
+// there for its close row alone (openUntrackedRoot).
 func closeUntracked() error {
 	defer closeUntrackedState.cleanup()
 	fds := closeUntrackedState.fds
@@ -88,7 +112,13 @@ func closeUntracked() error {
 			return err
 		}
 	}
-	return closeUnderBlockedWrite(closeUntrackedState.fifoFd, closeUntrackedState.drainFd)
+	if err := closeUnderBlockedWrite(closeUntrackedState.fifoFd, closeUntrackedState.drainFd); err != nil {
+		return err
+	}
+	if err := syscall.Close(closeUntrackedState.rootFd); err != nil {
+		return fmt.Errorf("close /: %w", err)
+	}
+	return nil
 }
 
 // closeAndReuse closes fd, after writing to it when writeFirst is set, and

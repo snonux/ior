@@ -709,18 +709,42 @@ func NewFdNameEventFast(raw []byte) *FdEvent {
 }
 
 // LeafName returns the last path component an fd_name_event carried for the
-// file behind the descriptor, and whether the kernel program had to cut it
-// (NameLen, the component's real length, is more than the name field holds).
+// file behind the descriptor, and whether the kernel program had to cut it.
 // "" when the event carries none: every record but fd_name_event, and one
 // whose name could not be read (NameLen 0). The text stops at the first NUL,
 // which can come earlier than NameLen says (a close that raced a rename,
 // internal/c/fdname.c); the bytes behind it are stale ring-buffer memory.
+//
+// A name was cut when NameLen, the component's real length, is more than
+// the field holds and the text fills the field up to its terminator. The
+// length alone does not say so: in the rename race the length can be the
+// long name's while the bytes are the short name's, which end at their own
+// NUL, and a short name is not to be shown as the beginning of a longer one.
 func (f *FdEvent) LeafName() (name string, cut bool) {
 	if f.NameLen == 0 {
 		return "", false
 	}
 	name = StringValue(f.Name[:])
-	return name, name != "" && f.NameLen >= IOR_FD_NAME_LENGTH
+	return name, f.NameLen >= IOR_FD_NAME_LENGTH && len(name) == IOR_FD_NAME_LENGTH-1
+}
+
+// AsFdEvent returns the FdEvent the event loop handles an fd_size_event as:
+// the record's fields, no file identity (the record has no such word) and no
+// name. The FdEvent comes from the pool its Recycle returns it to, like
+// every other decoded fd record. It used to be allocated per record, which
+// went unnoticed while the struct fitted the 64-byte size class; with the
+// name of fd_name_event (task xz2) it is 128 bytes, and every recvfrom,
+// recvmsg, fgetxattr and flistxattr row would have paid for a field only a
+// close fills.
+func (f *FdSizeEvent) AsFdEvent() *FdEvent {
+	out := poolOfFdEvents.Get().(*FdEvent)
+	out.EventType, out.TraceId, out.Time = f.EventType, f.TraceId, f.Time
+	out.Pid, out.Tid, out.Fd = f.Pid, f.Tid, f.Fd
+	out.FileIdent = 0
+	out.Flags, out.Size = f.Flags, f.Size
+	out.SizeValid, out.SchemaVersion = f.SizeValid, f.SchemaVersion
+	out.clearName()
+	return out
 }
 
 // NewSocketEventFast decodes one socket ring-buffer payload in a

@@ -284,6 +284,23 @@ func TestNewFdLeaf(t *testing.T) {
 
 // TestNewFdLeafMarksACutComponent: a cut name ends in "...", and the
 // cut does not leave half a character behind.
+// TestIsLeafName: only NewFdLeaf's form counts, the prefix and one path
+// component; a longer relative path below a directory called "*" is a path.
+func TestIsLeafName(t *testing.T) {
+	cases := map[string]bool{
+		NewFdLeaf(3, "app.log", false, 0).Name():              true,
+		NewFdLeaf(3, strings.Repeat("n", 67), true, 0).Name(): true,
+		LeafPrefix: true, "*/sub/app.log": false, "/*/app.log": false,
+		"*": false, "": false, "app.log": false, "/var/log/app.log": false,
+		"pipe:[7]": false, "**/app.log": false,
+	}
+	for name, want := range cases {
+		if got := IsLeafName(name); got != want {
+			t.Errorf("IsLeafName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestNewFdLeafMarksACutComponent(t *testing.T) {
 	tests := []struct{ name, leaf, want string }{
 		{"ascii", "abcdef", "*/abcdef..."},

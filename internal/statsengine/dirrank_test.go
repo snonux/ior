@@ -2,6 +2,8 @@ package statsengine
 
 import (
 	"fmt"
+	"maps"
+	"strings"
 	"testing"
 
 	"ior/internal/event"
@@ -16,6 +18,55 @@ func buildDirs(t *testing.T, r *dirRanker, topN int) ([]DirSnapshot, DirSnapshot
 		t.Fatalf("buildDirSnapshots: %v", err)
 	}
 	return rows, other
+}
+
+// TestDirOfALastComponentNameIsNoDirectory: "*/a.log" is the close of a file
+// whose directories ior does not know (file.NewFdLeaf, task xz2). Its "*" is
+// not a directory: taken for one it made a single row (and icicle tile) out
+// of the files of unrelated directories.
+func TestDirOfALastComponentNameIsNoDirectory(t *testing.T) {
+	leaf := file.NewFdLeaf(3, "a.log", false, 0).Name()
+	cut := file.NewFdLeaf(3, strings.Repeat("n", 67), true, 0).Name()
+	cases := map[string]string{
+		leaf: NoDirGroup, cut: NoDirGroup, "*/": NoDirGroup,
+		// A path of several components below a directory really called "*"
+		// is no last-component name, and neither is an absolute one.
+		"*/sub/a.log": "*/sub", "/*/a.log": "/*", "**/a.log": "**", "x*/a.log": "x*",
+	}
+	for path, want := range cases {
+		if got := DirOf(path); got != want {
+			t.Errorf("DirOf(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestLastComponentNamesAreRankedWithoutADirectory is the same through both
+// directory rankings: the engine's, and the fallback over a file list.
+func TestLastComponentNamesAreRankedWithoutADirectory(t *testing.T) {
+	e := NewEngine(DefaultTopN)
+	paths := []string{"*/a.log", "*/b.log", "pipe:[7]", "/var/log/a.log"}
+	files := make([]FileSnapshot, 0, len(paths))
+	for _, path := range paths {
+		e.Ingest(newFilePair(path, 10, 5, types.READ_CLASSIFIED))
+		files = append(files, FileSnapshot{Path: path, Accesses: 1})
+	}
+	snap, err := e.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	want := map[string]uint64{NoDirGroup: 3, "/var/log": 1}
+	rankings := map[string][]DirSnapshot{
+		"engine": snap.Dirs(), "file list": AggregateFilesByDir(files),
+	}
+	for name, dirs := range rankings {
+		got := map[string]uint64{}
+		for _, d := range dirs {
+			got[d.Dir] = d.Accesses
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("%s ranking: accesses by directory %v, want %v", name, got, want)
+		}
+	}
 }
 
 func TestDirOf(t *testing.T) {

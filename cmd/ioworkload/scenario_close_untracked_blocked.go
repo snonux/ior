@@ -38,9 +38,14 @@ func openUntrackedFifo(dir string) error {
 // is closed and a pipe takes the number (closeAndReuse), and only then is the
 // FIFO drained through drain, which lets the write return. Its exit record -
 // the moment ior resolves the row - therefore always comes after the pipe2
-// exit that put the pipe on the number: ior's fd table and /proc/<pid>/fd both
-// show the pipe, whatever the load. The write keeps its own reference to the
-// FIFO, so the close does not disturb it.
+// exit that put the pipe on the number. What ior then sees there depends on
+// the trace set: with pipe2 traced its fd table has the pipe, whatever the
+// load; without (the default, the FS family) it has no entry and reads
+// /proc/<pid>/fd, which shows the pipe only while this process is alive -
+// and it exits right after this write, so a lagging ior finds nothing. A
+// test that needs the pipe on that row traces pipe2
+// (closeUntrackedPipeTraceArgs in integrationtests). The write keeps its own
+// reference to the FIFO, so the close does not disturb it.
 func closeUnderBlockedWrite(fd, drain int) error {
 	tids := make(chan int, 1)
 	done := make(chan error, 1)

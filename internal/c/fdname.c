@@ -22,12 +22,23 @@
 // A last component is honest about being one: userspace shows it as
 // "*/foo.log" (file.NewFdLeaf).
 //
-// Not captured: a dentry that is its own parent. That is the root directory
-// of a filesystem, whose name "/" says nothing about where it is mounted, and
-// every file without a directory: pipes and sockets (empty name), the
-// anonymous-inode files ("[eventfd]", "[eventpoll]", ...) and memfds. Those
-// closes are the plain fd_event they always were and stay unnamed
-// ("E:ino:<n>").
+// Not captured, two kinds of dentry; their closes are the plain fd_event
+// they always were and stay unnamed ("E:ino:<n>"):
+//   - one that is its own parent. That is the root directory of a
+//     filesystem, whose name "/" says nothing about where it is mounted, and
+//     every file without a directory: pipes and sockets (empty name), the
+//     anonymous-inode files ("[eventfd]", "[eventpoll]", ...) and memfds;
+//   - the root of the mount the file was opened through
+//     (file->f_path.mnt->mnt_root). Its d_name is what the dentry is called
+//     in the filesystem it comes from, not what the process opened: the "/"
+//     of a btrfs subvolume mounted as the root filesystem is the subvolume's
+//     name ("root"), a bind-mounted directory or single file (a container
+//     volume, a Kubernetes subPath) has the name of its source. The name
+//     the process used belongs to the mount point's dentry in the parent
+//     mount, which is not reachable from the file without the mount tree
+//     (struct mount is private to fs/). A file below a bind-mounted
+//     directory is not a mount root and has its own last component, which
+//     is the one the process used.
 //
 // Why every close of a named file, tracked or not: the kernel program does
 // not know which descriptors userspace can name. A map of "tracked"
@@ -68,13 +79,24 @@
 //     prefix of the new name;
 //   - the old name read with the new length: the same two outcomes;
 //   - nothing, when a read that ran past a short name's allocation faulted.
-// Either name is one the file had; a prefix is wrong for that one row.
+// One more outcome for a short name, which lives inline in the dentry and is
+// overwritten in place by a rename: a copy that runs while the bytes are
+// being replaced can hold some of the old name and some of the new. So the
+// text of such a row is not always a name the file had, or a prefix of one;
+// it is wrong for that one row. What does hold in every case: the copy
+// never runs past the record's name field, the record's name is terminated
+// inside that field, and nothing outside the bytes the kernel let the
+// program read reaches user space.
 
 // ior_file_leaf_dentry returns the dentry file was opened through when it has
-// a name worth reporting, or NULL: no file, no dentry, or a dentry that is
-// its own parent (see above).
+// a name worth reporting, or NULL: no file, no dentry, a dentry that is its
+// own parent, or the root of the file's mount (see above for both). A file
+// without a mount does not exist in the kernel; the test for one is there so
+// that the comparison never reads through a null pointer, and such a file
+// is judged by its parent alone.
 static __always_inline struct dentry *ior_file_leaf_dentry(struct file *file) {
     struct dentry *dentry;
+    struct vfsmount *mnt;
 
     if (!file)
         return 0;
@@ -82,6 +104,9 @@ static __always_inline struct dentry *ior_file_leaf_dentry(struct file *file) {
     if (!dentry)
         return 0;
     if (dentry->d_parent == dentry)
+        return 0;
+    mnt = file->f_path.mnt;
+    if (mnt && mnt->mnt_root == dentry)
         return 0;
     return dentry;
 }

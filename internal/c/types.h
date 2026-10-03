@@ -520,8 +520,10 @@ struct ring_fds_event {
 // about a descriptor that is closed by the time its row is processed, so the
 // close of a descriptor ior never saw opened had no name at all
 // (internal/eventloop_procfs_close.go). Every other close - a pipe, a
-// socket, an anonymous-inode file, the root directory of a filesystem, any
-// close on a kernel that cannot run the walk or in a run that switched
+// socket, an anonymous-inode file, the root of a mount (the root directory
+// of a filesystem, a mounted subvolume, a bind-mounted directory or single
+// file: its dentry is named after its source, not after what was opened),
+// any close on a kernel that cannot run the walk or in a run that switched
 // IOR_FILE_IDENT off - is the plain 32-byte fd_event as before.
 //
 // The first 32 bytes are fd_event's, file_ident included, so userspace
@@ -530,9 +532,11 @@ struct ring_fds_event {
 // IOR_FD_NAME_LENGTH - 1 bytes (the bytes after the NUL are stale ring-buffer
 // memory, see "String fields in ring-buffer records" in filter.c); name_len
 // is its real length, so a value of IOR_FD_NAME_LENGTH or more says the name
-// was cut. 0 says there is no name after all (the read failed). The name
-// can hold an earlier NUL than name_len says when the close raced a rename
-// of its file (fdname.c); userspace stops at the first one. The
+// was cut - provided the text also fills the field. 0 says there is no name
+// after all (the read failed). The name can hold an earlier NUL than
+// name_len says when the close raced a rename of its file (fdname.c);
+// userspace stops at the first one and then does not take the name for a cut
+// one, whatever the length (FdEvent.LeafName). The
 // length is a compromise: every close of a file below a directory pays for
 // the record, a component may be 255 bytes long, and 67 hold a 64-digit
 // content hash with a short suffix. The layout has no implicit padding, so

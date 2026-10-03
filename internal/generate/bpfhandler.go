@@ -9,24 +9,11 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 	f := tp.Format
 	isEnter := strings.Split(f.Name, "_")[1] == "enter"
 
-	// Use the kernel's actual tracepoint context structs (syscall_trace_enter/exit)
-	// rather than the BTF-emitted trace_event_raw_sys_enter/exit aliases. On RHEL 9
-	// kernels (5.14 with the rt-merge backport that added preempt_lazy_count to
-	// trace_entry) the two diverge: trace_event_raw_sys_* grows by 8 bytes and
-	// the args/ret offsets shift, but the real context handed to the BPF program
-	// is still syscall_trace_*. Reading via the wider alias trips the verifier's
-	// max_ctx_offset check and the attach fails with EACCES. The two structs are
-	// identical on non-RHEL kernels, so this is a no-op everywhere else.
-	ctxStruct := "syscall_trace_exit"
-	if isEnter {
-		ctxStruct = "syscall_trace_enter"
-	}
-
 	eventStruct := eventStructName(tp.Classification.Kind)
 
 	spec := handlerSideSpec(tp, isEnter)
 	spec.name = f.Name
-	spec.ctxStruct = ctxStruct
+	spec.ctxStruct = handlerCtxStruct(isEnter)
 	spec.eventStruct = eventStruct
 	spec.comment = handlerComment(tp, eventStruct)
 	spec.eventTypeConst = eventTypeConstant(tp.Classification.Kind, isEnter)
@@ -106,6 +93,24 @@ func outputHandleArgForHandler(name string) int {
 		return idx
 	}
 	return -1
+}
+
+// handlerCtxStruct returns the context struct of an enter or exit handler.
+//
+// These are the kernel's actual tracepoint context structs
+// (syscall_trace_enter/exit), not the BTF-emitted
+// trace_event_raw_sys_enter/exit aliases. On RHEL 9 kernels (5.14 with the
+// rt-merge backport that added preempt_lazy_count to trace_entry) the two
+// diverge: trace_event_raw_sys_* grows by 8 bytes and the args/ret offsets
+// shift, but the real context handed to the BPF program is still
+// syscall_trace_*. Reading via the wider alias trips the verifier's
+// max_ctx_offset check and the attach fails with EACCES. The two structs are
+// identical on non-RHEL kernels, so this is a no-op everywhere else.
+func handlerCtxStruct(isEnter bool) string {
+	if isEnter {
+		return "syscall_trace_enter"
+	}
+	return "syscall_trace_exit"
 }
 
 // handlerComment renders the /// reason line of a handler. It is also the line

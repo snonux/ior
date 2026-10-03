@@ -6,15 +6,18 @@ import (
 	"slices"
 
 	"ior/internal/event"
+	"ior/internal/file"
 	"ior/internal/globalfilter"
 )
 
 // NoDirGroup is the Dir of the row collecting every file name without a
-// separator: relative names such as "a.log", and non-path names such as
-// "socket:[123]" or "pipe:[456]". It matches filepath.Dir's answer for those
-// names. "./a" lands here too (its literal directory text is "."), so the
-// group mixes names that share no path prefix; the dashboard therefore cannot
-// turn it into a filter.
+// directory: relative names such as "a.log", non-path names such as
+// "socket:[123]" or "pipe:[456]", and the names that are a last path
+// component only, "*/a.log" (file.IsLeafName: the close of a descriptor ior
+// never saw opened, task xz2). It matches filepath.Dir's answer for the
+// names without a separator. "./a" lands here too (its literal directory
+// text is "."), so the group mixes names that share no path prefix; the
+// dashboard therefore cannot turn it into a filter.
 const NoDirGroup = "."
 
 // DirOf returns the directory-group key of a file path: its literal
@@ -27,7 +30,17 @@ const NoDirGroup = "."
 // rows) and none outside. With filepath.Dir, "./src/main.go" grouped under
 // "src", "//usr/lib/x" under "/usr/lib" and "a/../b/c" under "b", and Enter
 // on those rows selected none of the files they counted.
+//
+// A last-component name ("*/a.log") is the one exception to the literal
+// rule: its text before the separator is no directory, and taken as one it
+// made a row "*" (and an icicle tile "root/*") that lumped together files of
+// unrelated directories and offered a filter, ^*/*, for a directory that
+// does not exist. Those names go to NoDirGroup, which says what is known
+// about their directory: nothing.
 func DirOf(path string) string {
+	if file.IsLeafName(path) {
+		return NoDirGroup
+	}
 	if dir, ok := globalfilter.LiteralDir(path); ok {
 		return dir
 	}

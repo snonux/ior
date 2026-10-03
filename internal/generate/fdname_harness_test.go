@@ -23,12 +23,19 @@ import (
 // object (TestCloseUntrackedClosesAreNamedByTheirLastComponent).
 
 // fdNameHarnessTemplate wraps types.h, fileident.c and fdname.c (the three
-// %s verbs). The table has 8 descriptors:
+// %s verbs). The table has 10 descriptors:
 //
-//	fd 0: /dir/foo.log, inode 100       fd 1: a pipe (own parent, ""), inode 42
-//	fd 2: empty slot                    fd 3: a root directory "/", inode 3
-//	fd 4: a 100-byte name, inode 4      fd 5: a file without a dentry, inode 5
-//	fd 6: a 67-byte name, inode 6       fd 7: a dentry without a name, inode 7
+//	fd 0: /dir/foo.log, inode 100     fd 1: a pipe (own parent, ""), inode 42
+//	fd 2: empty slot                  fd 3: a root directory "/", inode 3
+//	fd 4: a 100-byte name, inode 4    fd 5: a file without a dentry, inode 5
+//	fd 6: a 67-byte name, inode 6     fd 7: a dentry without a name, inode 7
+//	fd 8: the root of its mount, "subvol" below a directory, inode 8
+//	fd 9: /dir/nomount.txt, a file without a mount, inode 9
+//
+// Every file but fd 8 and fd 9 was opened through the mount whose root is
+// the directory the named files are in, as files below "/" are; fd 3 is that
+// kind of root too, but is refused as its own parent before the mount is
+// looked at.
 //
 // Input lines are "on kfunc full readfail fd"; each prints what the helper
 // returned and stored, how the ring buffer was used and the record. The
@@ -57,7 +64,8 @@ typedef unsigned long long __u64;
 struct inode { unsigned long i_ino; };
 struct qstr { union { struct { u32 hash; u32 len; }; u64 hash_len; }; const unsigned char *name; };
 struct dentry { struct dentry *d_parent; struct qstr d_name; };
-struct path { struct dentry *dentry; };
+struct vfsmount { struct dentry *mnt_root; };
+struct path { struct vfsmount *mnt; struct dentry *dentry; };
 struct file { struct inode *f_inode; struct path f_path; };
 struct kiocb { struct file *ki_filp; };
 struct fdtable { unsigned int max_fds; struct file **fd; };
@@ -103,11 +111,12 @@ static long bpf_probe_read_kernel(void *dst, unsigned int size, const void *src)
 %s
 
 static char long_name[101], fit_name[68];
-static struct inode inodes[8] = {{100}, {42}, {0}, {3}, {4}, {5}, {6}, {7}};
-static struct dentry dir, dentries[8];
-static struct file files[8];
-static struct file *slots[8];
-static struct fdtable fdt = {8, slots};
+static struct inode inodes[10] = {{100}, {42}, {0}, {3}, {4}, {5}, {6}, {7}, {8}, {9}};
+static struct dentry dir, dentries[10];
+static struct vfsmount dir_mount = {&dir}, sub_mount = {&dentries[8]};
+static struct file files[10];
+static struct file *slots[10];
+static struct fdtable fdt = {10, slots};
 static struct files_struct fs = {&fdt};
 
 static void name_dentry(int i, struct dentry *parent, const char *name) {
@@ -121,8 +130,9 @@ static void build_world(void) {
     memset(long_name, 'L', 100);
     memset(fit_name, 'F', 67);
     dir.d_parent = &dir;
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 10; i++) {
         files[i].f_inode = &inodes[i];
+        files[i].f_path.mnt = &dir_mount;
         files[i].f_path.dentry = &dentries[i];
         slots[i] = &files[i];
     }
@@ -132,6 +142,10 @@ static void build_world(void) {
     name_dentry(4, &dir, long_name);
     name_dentry(6, &dir, fit_name);
     name_dentry(7, &dir, 0);
+    name_dentry(8, &dir, "subvol");
+    name_dentry(9, &dir, "nomount.txt");
+    files[8].f_path.mnt = &sub_mount;
+    files[9].f_path.mnt = 0;
     slots[2] = 0;
     files[5].f_path.dentry = 0;
     task.files = &fs;
@@ -196,6 +210,8 @@ var fdNameRecordCases = []fdNameCase{
 	{name: "dentry without a name", fd: 7, want: "sent=1 ident=7" + fdNameSent + "7/7 len=0 name="},
 	{name: "name that cannot be read", fd: 0, readFails: true,
 		want: "sent=1 ident=100" + fdNameSent + "0/100 len=0 name="},
+	{name: "file without a mount", fd: 9,
+		want: "sent=1 ident=9" + fdNameSent + "9/9 len=11 name=nomount.txt"},
 	{name: "no room in the ring buffer", fd: 0, full: true,
 		want: "sent=1 ident=100 task=1 reserve=1/104 submit=0 discard=0 drop=1 canary=ok"},
 }
@@ -205,9 +221,10 @@ var fdNameRecordCases = []fdNameCase{
 var fdNamePlainCases = []fdNameCase{
 	{name: "pipe", fd: 1, want: "sent=0 ident=42" + fdNamePlain},
 	{name: "root directory", fd: 3, want: "sent=0 ident=3" + fdNamePlain},
+	{name: "root of a mount", fd: 8, want: "sent=0 ident=8" + fdNamePlain},
 	{name: "file without a dentry", fd: 5, want: "sent=0 ident=5" + fdNamePlain},
 	{name: "empty slot", fd: 2, want: "sent=0 ident=0" + fdNamePlain},
-	{name: "number past the table", fd: 8, want: "sent=0 ident=0" + fdNamePlain},
+	{name: "number past the table", fd: 10, want: "sent=0 ident=0" + fdNamePlain},
 	{name: "negative number", fd: -1, want: "sent=0 ident=0" + fdNamePlain},
 	{name: "capture switched off", off: true, fd: 0, want: fdNameOff},
 	{name: "kernel without the kfunc", noKfunc: true, fd: 0, want: fdNameOff},
@@ -243,6 +260,10 @@ const (
 var fdNameMutations = []fdNameMutation{
 	{"file without a directory named", "    if (dentry->d_parent == dentry)\n        return 0;\n", "", "pipe"},
 	{"only a parentless file named", "dentry->d_parent == dentry", "dentry->d_parent != dentry", "file below a directory"},
+	{"root of a mount named after its source", "    if (mnt && mnt->mnt_root == dentry)\n        return 0;\n", "",
+		"root of a mount"},
+	{"every file of a mount refused", "mnt->mnt_root == dentry", "mnt->mnt_root != dentry", "file below a directory"},
+	{"missing mount dereferenced", "if (mnt && mnt->mnt_root", "if (mnt->mnt_root", "file without a mount"},
 	{"missing dentry dereferenced", "    if (!dentry)\n        return 0;\n    if (dentry->d_parent", "    if (dentry->d_parent",
 		"file without a dentry"},
 	{"off switch ignored", "!IOR_FILE_IDENT || ", "", "capture switched off"},

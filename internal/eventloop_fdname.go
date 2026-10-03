@@ -28,19 +28,35 @@ import (
 // component is not used to check them either: a file renamed since its open
 // is still correctly reported under the name it was opened as.
 //
-// Unlike a procfs answer the component cannot describe another file: it was
-// read from the file the descriptor named when the close entered, by the
-// task that closed it. So it also names the rows the identity rules leave
-// unnamed on purpose - an fd table entry bound after the close entered, a
-// cached answer of another file or one read too late - and the close rows of
-// a table ior stopped tracking (a blind table). What it can be is out of
-// date: the name of a file that was renamed while the close was entering.
+// Unlike a procfs answer the component is not read after the fact: the task
+// that closes reads it from the file its descriptor names as the close
+// enters. So it also names the rows the identity rules leave unnamed on
+// purpose - an fd table entry bound after the close entered, a cached answer
+// of another file or one read too late - and the close rows of a table ior
+// stopped tracking (a blind table).
+//
+// It is not proof either. Two things can make it wrong for a row, both
+// races inside the closing process:
+//   - the file is renamed while the close enters: the row shows the old
+//     name, a prefix of one, or for a short name a mix of old and new bytes
+//     (internal/c/fdname.c);
+//   - another thread closes the same number at the same moment. The kernel
+//     program holds no reference to the file it walked to, and struct file
+//     is SLAB_TYPESAFE_BY_RCU: the memory can be given to another open while
+//     the program reads it, and the dentry is then that file's. As
+//     fileident.c says of the identity, a wrong word, not a fault - here a
+//     wrong name. The second close of such a pair fails with EBADF or
+//     closes whatever took the number, so this needs a program that already
+//     races its own descriptors.
 //
 // No name is captured, and the row stays unnamed, for a pipe, a socket, an
-// anonymous-inode file, a memfd and the root directory of a filesystem
-// (nothing below a directory), for close_range (a range, not a file), for a
-// close of a number that was not open (EBADF), and on a kernel without the
-// identity capture or in a run with IOR_FILE_IDENT=0.
+// anonymous-inode file and a memfd (nothing below a directory), for the root
+// of a mount - the root directory of a filesystem, a mounted subvolume, a
+// bind-mounted directory or single file, whose own name is the one it has
+// where it comes from and not the one the process opened -, for close_range
+// (a range, not a file), for a close of a number that was not open (EBADF),
+// and on a kernel without the identity capture or in a run with
+// IOR_FILE_IDENT=0.
 
 // leafNamed returns the file of a row whose enter record fdEv carries the
 // last path component of its descriptor's file: resolved, the file the

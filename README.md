@@ -292,9 +292,18 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   from the file as the close begins. Such a row's file is `*/name` (`*/app.log` for
   `/var/log/app.log`; `*/<first 67 bytes>...` for a longer component): the directories are
   not known, so it does not match a `-path` filter for a directory and is not grouped with
-  rows that carry the file's full path. Pipes, sockets, eventfd and the like, memfds and
-  the root directory of a filesystem have no such component and stay `E:ino:<n>`, as do
-  `close_range` rows. Not checked, so still named by descriptor number alone: every row on a
+  rows that carry the file's full path. Files of different directories that share a last
+  component share the name too: two such closes of `/var/log/app.log` and `/srv/app.log`
+  are both `*/app.log`, one file in the Files views and one value of the Parquet `file`
+  column, and the directory-grouped views count them in the row of names without a
+  directory (`.`), next to pipes and sockets. Pipes, sockets, eventfd and the like and
+  memfds have no such component and stay `E:ino:<n>`, as do `close_range` rows and the
+  close of the root of a mount: the root directory of a filesystem, a mounted subvolume, a
+  bind-mounted directory, and a single file that is bind-mounted (a container volume, a
+  Kubernetes `subPath`) - the kernel knows such a root by the name it has where it comes
+  from, not by the name the process opened. A file *below* a bind-mounted directory is
+  named, by its own last component. On a rename racing the close the component can be the
+  old name, a prefix, or for a short name a mix of old and new bytes. Not checked, so still named by descriptor number alone: every row on a
   kernel without the kfunc (mainline before 6.2 and RHEL 8; RHEL 9 backports much of BPF and
   may have it, which is unverified - ior asks the kernel's BTF and switches the check off
   where it is missing), rows of syscalls whose record has no identity (`recvfrom`, `ioctl`,

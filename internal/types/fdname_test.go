@@ -77,6 +77,12 @@ func TestLeafName(t *testing.T) {
 		// A close that raced a rename: the terminator comes before the length
 		// the record reports. The name is whole, not cut.
 		{name: "terminator before the reported length", nameLen: 40, bytes: "a.b\x00stale", wantName: "a.b"},
+		// The same race the other way round: the length is that of a long
+		// name, the bytes are a short name's and end at its own terminator.
+		// The length alone must not mark the short name as cut.
+		{name: "short name under a long length", nameLen: 200, bytes: "a.b\x00stale", wantName: "a.b"},
+		{name: "one byte short of the field under a long length", nameLen: IOR_FD_NAME_LENGTH,
+			bytes: long[1:], wantName: long[1:]},
 		{name: "unread name", nameLen: 0, bytes: "stale"},
 		{name: "empty name", nameLen: 5, bytes: "\x00tale"},
 	}
@@ -136,5 +142,59 @@ func TestFdEventBytesWritesTheNameRecord(t *testing.T) {
 	}
 	if binary.LittleEndian.Uint32(got[32:36]) != 7 || string(got[36:43]) != "foo.log" {
 		t.Fatalf("name_len/name are not at offsets 32 and 36: % x", got)
+	}
+}
+
+// fdSizePayload is the 48-byte fd_size_event of a recvfrom on descriptor 9.
+func fdSizePayload(t *testing.T) []byte {
+	t.Helper()
+	return rawBytes(t, &FdSizeEvent{EventType: ENTER_FD_SIZE_EVENT, TraceId: SYS_ENTER_RECVFROM, Time: 77,
+		Pid: 11, Tid: 12, Fd: 9, Flags: 0x40, Size: 4096, SizeValid: 1,
+		SchemaVersion: FD_SIZE_EVENT_SCHEMA_VERSION})
+}
+
+// TestFdSizeEventBecomesAPooledFdEventWithoutAName: the FdEvent an
+// fd_size_event is handled as comes from the pool, so it may be the struct a
+// named close used before. It must carry the record's fields and nothing of
+// that close: no name, no identity.
+func TestFdSizeEventBecomesAPooledFdEventWithoutAName(t *testing.T) {
+	// A pool mostly hands back what was put last, so the struct taken below
+	// is most likely one of these; when it is not, the test passes without
+	// having shown anything.
+	for range 8 {
+		NewFdNameEventFast(fdNamePayload(t, 7, "foo.log")).Recycle()
+	}
+	size := NewFdSizeEventFast(fdSizePayload(t))
+	if size == nil {
+		t.Fatal("fd_size_event did not decode")
+	}
+	defer size.Recycle()
+	ev := size.AsFdEvent()
+	defer ev.Recycle()
+	want := FdEvent{EventType: ENTER_FD_SIZE_EVENT, TraceId: SYS_ENTER_RECVFROM, Time: 77, Pid: 11, Tid: 12,
+		Fd: 9, Flags: 0x40, Size: 4096, SizeValid: 1, SchemaVersion: FD_SIZE_EVENT_SCHEMA_VERSION}
+	if *ev != want {
+		t.Fatalf("AsFdEvent() = %+v\nwant          %+v", *ev, want)
+	}
+	if name, cut := ev.LeafName(); name != "" || cut {
+		t.Fatalf("LeafName() = %q, cut %v; an fd_size_event has no name", name, cut)
+	}
+}
+
+// TestFdSizeEventDoesNotAllocateItsFdEvent: one record took a fresh FdEvent
+// each (128 bytes since the name fields) although Recycle fed the pool. A
+// decode and recycle now reuses both structs. The bound is below one
+// allocation per record and not zero, because a pool may drop what it is
+// given (a GC cycle, the race detector's random drops).
+func TestFdSizeEventDoesNotAllocateItsFdEvent(t *testing.T) {
+	raw := fdSizePayload(t)
+	allocs := testing.AllocsPerRun(2000, func() {
+		size := NewFdSizeEventFast(raw)
+		ev := size.AsFdEvent()
+		size.Recycle()
+		ev.Recycle()
+	})
+	if allocs >= 1 {
+		t.Fatalf("%.2f allocations per fd_size_event, want the pooled structs reused", allocs)
 	}
 }

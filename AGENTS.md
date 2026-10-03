@@ -2905,6 +2905,14 @@ kernel program reports the file, and user space compares.
   takes the number, and only then is the FIFO drained
   (`closeUnderBlockedWrite`, `cmd/ioworkload`), so its exit record follows
   the pipe2's. Capture off it is named after the pipe, on it is unnamed.
+  Both runs trace pipe2 (`-trace-families FS,IPC`,
+  `closeUntrackedPipeTraceArgs`): the default set (FS) has no pipe2, so the
+  pipe was not in the fd table, the write's name was a live read of
+  `/proc/<pid>/fd` when ior got to the row, and the workload exits about
+  0.5 ms after that write - under load procfs was gone and the control
+  failed (3/10 to 9/40 at load 25-100; cause found in the review of task
+  xz2: zero pipe2 rows in 30 of 30 runs). With the table entry the name
+  does not depend on the lag.
   The integration tests show what the identities lead to; none compares an
   identity with `stat(2)`.
 
@@ -2925,6 +2933,20 @@ file is called.
   is not). Not captured when the dentry is its own parent: pipes and sockets
   (empty name), anon-inode files (`[eventfd]`), memfds, and the root
   directory of a filesystem (`/` says nothing about where it is mounted).
+  Not captured either when the dentry is the **root of the mount** the file
+  was opened through (`file->f_path.mnt->mnt_root`, two loads and a
+  compare): its `d_name` is the name it has in the filesystem it comes from.
+  The parent test alone let those through whenever the mount root is not a
+  filesystem root - found in review on a btrfs host, where `close(open("/"))`
+  printed `*/root` (the subvolume) and `/home` `*/home` by luck; a
+  bind-mounted directory, and a bind-mounted single **file** (container
+  volumes, Kubernetes `subPath`), showed the source's name instead of the
+  one the process opened. The name the process used is the mount point's
+  dentry in the parent mount, reachable only through `struct mount`, which
+  is private to `fs/`. A file **below** a bind-mounted directory is no mount
+  root and keeps its own last component, which is right. Checked live on 7.2
+  (`/`, `/home`, a bind-mounted directory and a bind-mounted file:
+  `E:ino:<n>`; a file below the bind mount and its source directory: named).
 - **Record**: `fd_name_event` (`ENTER_FD_NAME_EVENT` 66; `EXIT_` 67 is
   reserved by convention, nothing sends it), 104 bytes: `fd_event`'s 32
   bytes, `name_len` (the component's real length; 0 = not readable) and
@@ -2960,7 +2982,11 @@ file is called.
   `d_name.len`, not `_str`: the byte-wise string copy cost 115 instructions
   more for a 15-byte name (+261 against +146). The price is in `fdname.c`:
   length and pointer are two loads, so a close racing a rename of its own
-  file can report a prefix of the name for that row.
+  file can report a prefix of the name for that row, and for a short
+  (inline) name, which a rename overwrites in place, a mix of old and new
+  bytes. Always terminated inside the record. (These figures are from before
+  the mount-root test, which adds two loads, a null test and a compare to a
+  close of a file with a parent; not measured again.)
 - **Why every close of a named file**: BPF does not know which descriptors
   user space tracks, a tracked-fd map costs more than the capture (603), and
   `struct file` does not say when it was opened.
@@ -2975,19 +3001,34 @@ file is called.
   `types.FdEvent` (`NewFdNameEventFast`; `NameLen`/`Name` are
   `compatibilityFields`, so the struct is 128 bytes, and the hot decoder
   clears a pooled name with one comparison of the last word of the first
-  cache line). `handleFdExit` resolves the row as always and then, only for
+  cache line; `decodeFdSizeEvent` takes its `FdEvent` from the pool too
+  since the review of this task - it allocated one per recvfrom, recvmsg,
+  fgetxattr and flistxattr record, 64-byte class before the name, 128 with
+  it: `FdSizeEvent.AsFdEvent`). The name fields were left in `FdEvent`:
+  pooled records pay no allocation for them (pipeline benchmarks against
+  develop: allocs/op and B/op equal within 0.3%; `BenchmarkHandleFdExit`
+  153 -> 226 B/op is the benchmark's own per-iteration copy of the struct
+  escaping to the heap, not a path of the loop). `handleFdExit` resolves
+  the row as always and then, only for
   a record with a name, `leafNamed` replaces an **unnamed** result by
   `file.NewFdLeaf`. A name from the fd table or from a procfs answer read
   before the close is never replaced (a full path says more, and a file
   renamed since its open is still right under the name it was opened as).
-  The component is of the file the task closed, so it also names the rows
-  the identity rules refuse on purpose (an entry bound after the close, an
-  answer of another file or read too late) and the closes of a blind table.
-  It is not stored for the number.
+  The component is read by the closing task from the file its descriptor
+  names as the close enters, so it also names the rows the identity rules
+  refuse on purpose (an entry bound after the close, an answer of another
+  file or read too late) and the closes of a blind table. It is not proof:
+  the program holds no reference to the file, `struct file` is
+  `SLAB_TYPESAFE_BY_RCU`, and a close racing another thread's close of the
+  same number can in theory read the dentry of the file the slab gave the
+  memory to - "a wrong word, not a fault", as for the identity. It is not
+  stored for the number.
 - **Notation and what sees it**: `Name()` is `*/app.log`
   (`file.LeafPrefix`), `*/<67 bytes>...` for a cut component
   (`types.TruncatedPathSuffix`, as for a cut getcwd path; a half character
-  at the cut is dropped). Unknown flags, the cannot-vouch mark
+  at the cut is dropped; cut means `name_len >= 68` **and** 67 bytes of
+  text - the length alone marked a short name as cut when a rename raced
+  the close). Unknown flags, the cannot-vouch mark
   (`NameFromProcFS`), the row's identity. The partial name **is** the name:
   the stream, the Files tab, the flamegraph (under a top-level `*`), the
   Parquet `file` column and `-path` see it. Decided against keeping `Name()`
@@ -2995,11 +3036,19 @@ file is called.
   but `-plain` reads `Name()`, so the name would have reached almost nobody.
   Cost of the decision: such a row is not grouped with the rows that carry
   the file's full path, and a `-path` filter for a directory does not match
-  it (it did not match the unnamed row either). No name ior reads from
+  it (it did not match the unnamed row either). Files of different
+  directories with the same last component are **one** name, hence one file
+  in the Files views and one `file` value in Parquet (README "Known
+  limitations", docs/parquet-querying.md). In the directory-grouped views
+  (dir rows, treemap, icicle) such names count under `NoDirGroup` (`.`),
+  with the pipes and sockets: `statsengine.DirOf` asks `file.IsLeafName`.
+  Before that `DirOf("*/x")` was `"*"`, a pseudo-directory row (icicle
+  `root/*`) lumping unrelated directories together and offering the filter
+  `^*/*`. No name ior reads from
   procfs begins with `*/`; a traced relative pathname could, if a program
   opens a file below a directory literally called `*`.
 - **Not done**: `close_range` (a range, not a file; `two_fd_event`); more
-  than one component; pseudo files; kernels without the kfunc.
+  than one component; pseudo files; mount roots; kernels without the kfunc.
 - **Rows of an exited process (task as2) stay `E:ino:<n>`**. Evaluated with
   this task, nothing sound and cheap was found:
   - *The exit record*: in `do_exit` (kernel/exit.c, 6.19.8)
@@ -3019,7 +3068,7 @@ file is called.
   Such rows keep the identity label of task 603. `fdNameSyscalls` is the
   place to add a syscall should a run ever want names at that price.
 - **Tests**: `internal/generate/fdname_harness_test.go` (the committed
-  helper against a simulated task and ring buffer: 14 cases, 21 mutations),
+  helper against a simulated task and ring buffer: 16 cases, 24 mutations),
   `syscall_semantics_fileident_test.go` (the attempt belongs to close only,
   once, for its own trace ID and descriptor argument, between hook and
   reserve; 9 mutations), `internal/types/fdname_test.go` (layout against the
@@ -3029,7 +3078,9 @@ file is called.
   refused answers and later bindings, records without a component, cut and
   stale-tail names, nothing kept for the number), and the integration tests
   `TestCloseUntrackedClosesAreNamedByTheirLastComponent` (all 64 files of
-  `close-untracked` and its FIFO, whose close no procfs read can name) and
+  `close-untracked` and its FIFO, whose close no procfs read can name; the
+  workload's close of `/` must not be named, which bites where `/` is a
+  mount root but no filesystem root, e.g. a btrfs subvolume) and
   the control `TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed`
   (`IOR_FILE_IDENT=0`).
 

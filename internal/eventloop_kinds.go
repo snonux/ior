@@ -258,14 +258,15 @@ func rawCallControlEvents() []rawRuntimeEvent {
 // The new wire kinds retain the established userspace event types after
 // decoding, including fields needed by older IOR_BPF_OBJECT payloads. This
 // keeps filtering, descriptor state and output on their existing paths.
+//
+// decodeFdSizeEvent hands out a pooled FdEvent (types.FdSizeEvent.AsFdEvent),
+// which the row's Recycle returns; the two below still allocate theirs.
 func decodeFdSizeEvent(raw []byte) runtimeDecodedEvent {
 	ev := types.NewFdSizeEventFast(raw)
 	if ev == nil {
 		return nil
 	}
-	out := &types.FdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
-		Pid: ev.Pid, Tid: ev.Tid, Fd: ev.Fd, Flags: ev.Flags, Size: ev.Size,
-		SizeValid: ev.SizeValid, SchemaVersion: ev.SchemaVersion}
+	out := ev.AsFdEvent()
 	ev.Recycle()
 	return out
 }

@@ -51,7 +51,13 @@ kernel where ior captures file identities (see "Known limitations" in the README
 component longer than 67 bytes is cut and ends in `...`. Reads and writes of the same file
 are stored under its full path, or with an empty `file`, so match such rows by component
 (`WHERE file LIKE '%/app.log'` selects both forms) and do not expect them under a directory
-prefix.
+prefix: a `-path /var/log/` filter at capture time, or `file LIKE '/var/log/%'` in a query,
+does not match `*/app.log`. The value is the last component and nothing else, so rows of
+files in different directories that have the same last component carry the same `file`:
+`*/app.log` may be `/var/log/app.log` in one row and `/srv/app.log` in the next. Group such
+rows by `pid` and `fd` as well, or do not count distinct `file` values among them as
+distinct files. The close of a mount's root directory, or of a single file that is
+bind-mounted, has no such value (an empty `file`).
 
 A row whose syscall has no file (for example `sync`) has an empty `file` and
 `fd = -1`. The terminal views and `-plain` show such rows with the placeholder `N:file`, but the

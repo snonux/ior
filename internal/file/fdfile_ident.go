@@ -56,10 +56,11 @@ func (f *FdFile) SetIdent(ident uint32) {
 // call nor procfs could name it - the process had exited or closed and
 // reused the number before the event loop got to the row (tasks as2, yz2), or
 // the row is the close of a descriptor ior never saw opened and of a file
-// without a last path component to report (a pipe, a socket; task xz2,
-// NewFdLeaf names the others) - the identity is all ior has and is shown
-// instead: "E:ino:<n>", n being the low 32 bits of the inode number. It tells rows on different unnamed files
-// apart and is enough to look the file up while it exists (find -inum).
+// without a last path component to report (a pipe, a socket, the root of a
+// mount; task xz2, NewFdLeaf names the others) - the identity is all ior has
+// and is shown instead: "E:ino:<n>", n being the low 32 bits of the inode
+// number. It tells rows on different unnamed files apart and is enough to
+// look the file up while it exists (find -inum).
 // Name() stays empty either way, so filters and aggregations see no name.
 func (f *FdFile) appendUnnamed(dst []byte) []byte {
 	if f.ident == 0 {
@@ -170,6 +171,18 @@ func parseInodeFromFdInfo(data []byte) (uint64, bool) {
 // "type:[...]"), and a traced pathname does only if the program itself opened
 // a file below a directory literally called "*" by a relative path.
 const LeafPrefix = "*/"
+
+// IsLeafName reports whether name has the form NewFdLeaf gives a file:
+// LeafPrefix and one path component. Such a name has no directory - the
+// asterisk is the absence of one, not a directory called "*" - so whoever
+// groups files by directory must not take its text before the separator for
+// one (statsengine.DirOf). A component holds no "/", so a relative path of
+// several components below a real directory "*" is not taken for one; a
+// traced "*/x" cannot be told apart and counts as a leaf name.
+func IsLeafName(name string) bool {
+	leaf, ok := strings.CutPrefix(name, LeafPrefix)
+	return ok && !strings.Contains(leaf, "/")
+}
 
 // NewFdLeaf is the descriptor of a file ior has only the last path component
 // of: the close of a descriptor ior never saw opened, whose name the kernel

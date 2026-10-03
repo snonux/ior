@@ -142,9 +142,13 @@ func TestIouringReopenWithoutFileIdentityKeepsTheOpenedName(t *testing.T) {
 // wrote, so the pipe's answer is refused. The first descriptor is written
 // while it is still open, so its write is named - which also shows that the
 // kernel's identity and procfs's agree for a regular file.
+//
+// pipe2 is traced too (closeUntrackedPipeTraceArgs), for the blocked write
+// at the end; the 63 racing writes are untouched by that, because each is
+// processed before the pipe2 that follows it and still asks procfs.
 func TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe(t *testing.T) {
 	requireFileIdentCapture(t)
-	rows := closeUntrackedRows(t)
+	rows := closeUntrackedRows(t, closeUntrackedPipeTraceArgs)
 
 	writes, named, afterPipe := closeUntrackedWriteNames(t, rows)
 	if afterPipe != 0 {
@@ -154,9 +158,10 @@ func TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe(t *testing.T) {
 		t.Errorf("%d write rows, %d named after their file; want >= 65 rows and the first one named", writes, named)
 		logRowSummary(t, rows)
 	}
-	// The write that was blocked across the close and the pipe: ior always
-	// gets to it after the pipe2 that rebound the number, and the identity
-	// (with the binding time of the pipe's entry) refuses the pipe.
+	// The write that was blocked across the close and the pipe: its exit
+	// record follows the pipe2's in the ring, so ior meets the pipe's fd table
+	// entry, and the identity (with the binding time of that entry) refuses
+	// it.
 	if name := blockedFifoWriteName(t, rows); name != "" {
 		t.Errorf("blocked fifo write named %q, want no name", name)
 	}
@@ -181,14 +186,21 @@ func blockedFifoWriteName(t *testing.T, rows []iorparquet.Record) string {
 	return names[0]
 }
 
-// closeUntrackedRows runs the close-untracked scenario with iorEnv added to
-// ior's environment and returns its rows.
-func closeUntrackedRows(t *testing.T, iorEnv ...string) []iorparquet.Record {
+// closeUntrackedPipeTraceArgs adds the IPC family, and with it pipe2, to the
+// default trace set (the FS family) of a close-untracked run. The pipes that
+// reuse the closed numbers are then in ior's fd table, in ring order, and a
+// row processed after such a pipe2 meets the table entry instead of reading
+// /proc/<pid>/fd, which exists only as long as the workload does.
+var closeUntrackedPipeTraceArgs = []string{"-trace-families", "FS,IPC"}
+
+// closeUntrackedRows runs the close-untracked scenario with iorArgs added to
+// ior's arguments and iorEnv to its environment, and returns its rows.
+func closeUntrackedRows(t *testing.T, iorArgs []string, iorEnv ...string) []iorparquet.Record {
 	t.Helper()
 	enableParallelIfRequested(t)
 	h := newTestHarness(t)
 	h.IorEnv = iorEnv
-	path, pid, err := h.RunParquetWithIorArgs("close-untracked", defaultDuration, nil)
+	path, pid, err := h.RunParquetWithIorArgs("close-untracked", defaultDuration, iorArgs)
 	if err != nil {
 		t.Fatalf("run parquet scenario close-untracked: %v", err)
 	}
@@ -230,10 +242,21 @@ func closeUntrackedWriteNames(t *testing.T, rows []iorparquet.Record) (writes, n
 // loop cannot win (task a23): the workload's last write blocks on a full FIFO
 // in a thread of its own while the main thread closes the descriptor, puts a
 // pipe on the number and only then drains the FIFO. The write's exit record,
-// where ior resolves it, comes after the pipe2 exit, so by then the number is
-// the pipe's in ior's fd table (pipe2 is traced) and in /proc/<pid>/fd alike.
+// where ior resolves it, comes after the pipe2 exit in the ring, so by then
+// the number is the pipe's in ior's fd table.
+//
+// That needs pipe2 in the trace set, which the default (the FS family) does
+// not have: closeUntrackedPipeTraceArgs. Without it there is no table entry
+// and the write's name is a read of /proc/<pid>/fd at the moment ior gets to
+// the row - and the workload exits about half a millisecond after that
+// write. On a loaded host ior was later than that, procfs was gone and the
+// row had no name: the control failed 3 of 10 to 9 of 40 runs at load 25 to
+// 100 (task xz2 found the cause; no run had a single pipe2 row). The table
+// entry is there whatever the lag. The 63 racing writes still show the
+// procfs form of the defect when the loop loses: each is processed before
+// the pipe2 that follows it, so it finds no entry and asks procfs.
 func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *testing.T) {
-	rows := closeUntrackedRows(t, "IOR_FILE_IDENT=0")
+	rows := closeUntrackedRows(t, closeUntrackedPipeTraceArgs, "IOR_FILE_IDENT=0")
 
 	writes, _, afterPipe := closeUntrackedWriteNames(t, rows)
 	if writes < 65 || afterPipe < 1 {
@@ -253,7 +276,8 @@ func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *t
 // write row had read procfs before the close began. The kernel program now
 // reads the file's last path component as the close enters, so every one of
 // the 65 closes is named: in full where procfs was read in time, else as
-// "*/closeuntracked-N.txt".
+// "*/closeuntracked-N.txt". The close of "/", the root of a mount, is the
+// one that must not get such a name (assertOnlyWorkloadLeafNames).
 //
 // The FIFO's close is the deterministic one. Its descriptor is only ever
 // used by the write that is still blocked when the close happens, so no row
@@ -261,7 +285,7 @@ func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *t
 // the load (the control below).
 func TestCloseUntrackedClosesAreNamedByTheirLastComponent(t *testing.T) {
 	requireFileIdentCapture(t)
-	rows := closeUntrackedRows(t)
+	rows := closeUntrackedRows(t, nil)
 
 	names := closeNamesByLeaf(rows, "closeuntracked-")
 	for i := range 64 {
@@ -273,10 +297,33 @@ func TestCloseUntrackedClosesAreNamedByTheirLastComponent(t *testing.T) {
 	if got := names["closeuntracked-fifo"]; len(got) != 1 || got[0] != "*/closeuntracked-fifo" {
 		t.Errorf("close of the fifo's write descriptor named %q, want the one name */closeuntracked-fifo", got)
 	}
+	assertOnlyWorkloadLeafNames(t, rows)
 	if t.Failed() {
 		logRowSummary(t, rows)
 	}
 	assertCloseUntrackedRows(t, rows)
+}
+
+// assertOnlyWorkloadLeafNames fails for a close row named by a component
+// that is not one of close-untracked's own files. The workload also closes a
+// descriptor of "/", opened before ior attached: the root of a mount, whose
+// dentry is named after where the mount comes from and not after what the
+// process opened, so that close must stay without a name. It bites where "/"
+// is not the root of its filesystem as well (a btrfs subvolume, as on
+// Fedora: the row read "*/root"); on a host whose "/" is a filesystem root
+// the dentry is its own parent and was never named.
+func assertOnlyWorkloadLeafNames(t *testing.T, rows []iorparquet.Record) {
+	t.Helper()
+	for _, row := range rows {
+		if row.Syscall != "close" {
+			continue
+		}
+		leaf, isLeaf := strings.CutPrefix(row.File, "*/")
+		if isLeaf && !strings.HasPrefix(leaf, "closeuntracked-") {
+			t.Errorf("close of fd %d is named %q: not a file of the workload, a mount root named after its source?",
+				row.FD, row.File)
+		}
+	}
 }
 
 // TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed is the control of
@@ -284,7 +331,7 @@ func TestCloseUntrackedClosesAreNamedByTheirLastComponent(t *testing.T) {
 // component, so no row carries the "*/" form and the FIFO's close - which no
 // procfs read can name - has no name.
 func TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed(t *testing.T) {
-	rows := closeUntrackedRows(t, "IOR_FILE_IDENT=0")
+	rows := closeUntrackedRows(t, nil, "IOR_FILE_IDENT=0")
 
 	closes := 0
 	for _, row := range rows {
