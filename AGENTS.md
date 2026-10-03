@@ -2805,8 +2805,32 @@ kernel program reports the file, and user space compares.
   answer refused: `N stale fd bindings dropped, M rows refused a procfs
   answer for another file`. M counts rows, not answers (task a23; it said
   "answers not used", but a cached answer refused for a write is refused
-  again for the close after it). System-wide 20 s runs on the development
-  host, other workers loading it: 5 stale / 60 refused before task a23's
+  again for the close after it). Both figures are of the rows the run
+  reported (task e23). The exit handler runs for every pair before the
+  userspace pair filter decides (`finishPair`): a descriptor table belongs
+  to the process while `-comm` judges the thread, and `-path` judges the
+  name the handler has yet to find, so the tracker counts for rows the
+  filter then drops as well - a 1000-call dup3 loop traced under `-comm`
+  printed 2242 refused rows, nearly all of other processes.
+  `handleTracepointExit` reads the two counters before the handler and
+  books what a dropped pair added as `droppedRowStale` /
+  `droppedRowRejected` (`fdTracker.bookDroppedRow`; two loads per pair,
+  no flag through the resolvers, no allocation). The line prints the
+  difference and, only when a dropped row counted, the rest behind it:
+  `... for another file (not counting rows a filter dropped: S and R)`,
+  with `0 ..., 0 ...` in front when only dropped rows counted. The rest is
+  kept because under `-path` a refused row is unnamed and therefore always
+  dropped, and a binding dropped for a filtered thread was stale for its
+  reported siblings too. Filters the kernel applies (`-pid`, `-tid`, the
+  syscall set) never reach the handler and are in neither figure. The
+  other lines of the block need no such split: `syscalls` and its
+  mismatches are by their label counts before the filter (`syscalls after
+  filter` follows), `group-dead exits` and `fd-table copies skipped` count
+  processes ior tracks, not rows, the sampling totals are withheld under a
+  filter the kernel aggregate cannot apply, and the drop and skipped-run
+  lines say they are host-wide. Tests:
+  `internal/eventloop_fileident_filter_test.go`. System-wide 20 s runs on
+  the development host, other workers loading it: 5 stale / 60 refused before task a23's
   no-promotion rule, 0 / 64 after (different load, so only indicative; the
   task's own 40 s run had traced the stale ones to promoted answers).
 - **What it does not do**: name a file that is no longer open when the loop

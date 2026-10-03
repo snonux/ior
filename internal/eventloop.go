@@ -480,6 +480,8 @@ func (e *eventLoop) outputLossStatLine() string {
 // (pipe:[N]) or E:name instead of the tracked name; the line explains such
 // rows. Like the other
 // conditional lines it is empty when nothing was skipped, the common case.
+// The count is of processes ior tracks, not of rows, so a userspace row
+// filter (-comm, -path) has no say in it (task e23 looked).
 // stats() reads the counter only after e.done is closed, so the event-loop
 // goroutine that writes it has finished.
 func (e *eventLoop) fdCopySkipStatLine() string {
@@ -524,6 +526,12 @@ func perSecondRate(secs float64) func(uint64) float64 {
 // ringbufDropStatLine instead: there the numerator (kernel drop counter)
 // counts records, control records included (internal/c/exec.c), so the
 // records-seen total is the matching unit.
+//
+// Both sides are counted before the userspace pair filter, as the line's
+// label says ("syscalls after filter" is the next line): a mismatched pair
+// is dropped before its exit handler, where that filter sits, could judge
+// it (task e23 looked; the file identity line is the one that is split by
+// the filter's verdict, fileIdentStatLine).
 func (e *eventLoop) mismatchPercent() float64 {
 	if e.numSyscalls == 0 {
 		return 0

@@ -87,10 +87,16 @@ type fdTracker struct {
 	// staleBindings counts the fd table entries dropped because a row showed
 	// the number naming another file; rejectedAnswers the rows that were
 	// refused a procfs answer because it described another file (per row: an
-	// answer refused twice counts twice). Printed in the
-	// end-of-run statistics when non-zero (eventLoop.fileIdentStatLine).
-	staleBindings   uint64
-	rejectedAnswers uint64
+	// answer refused twice counts twice). Both count every row whose exit
+	// handler ran, also one a userspace filter (-comm, -path, ...) dropped
+	// afterwards; droppedRowStale and droppedRowRejected are that part of
+	// them (bookDroppedRow, task e23). The end-of-run statistics print the
+	// reported rows' share and the dropped rows' apart, when non-zero
+	// (eventLoop.fileIdentStatLine).
+	staleBindings      uint64
+	rejectedAnswers    uint64
+	droppedRowStale    uint64
+	droppedRowRejected uint64
 	// bindNs is the exit time of the pair whose handler is running (noteExit),
 	// which set stamps a new entry with (stampBinding): a row that entered
 	// before an entry was bound says nothing against it.

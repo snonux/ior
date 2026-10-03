@@ -68,7 +68,14 @@ func (e *eventLoop) initRuntimeEventKinds() {
 }
 
 // handleTracepointExit routes a completed enter/exit pair to the runtime
-// handler registered for the enter event kind.
+// handler registered for the enter event kind, and reports whether the pair
+// is still a row (the handler applies the pair filter last, finishPair).
+//
+// The handler runs for every pair, also one the filter then drops: a
+// descriptor table belongs to the process while -comm judges the thread, and
+// -path judges the name the handler has yet to find. So what the handler
+// counted for the file identity line is booked here by the row's fate
+// (fdTracker.bookDroppedRow, task e23).
 func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 	e.initRuntimeEventKinds()
 	eventType, ok := eventTypeForRuntimeEvent(ep.EnterEv)
@@ -81,8 +88,14 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 		e.recyclePair(ep, "Dropped malformed enter event")
 		return false
 	}
-	e.fdState().noteExit(ep)
-	return handler(e, ep)
+	t := e.fdState()
+	t.noteExit(ep)
+	stale, rejected := t.staleBindings, t.rejectedAnswers
+	if handler(e, ep) {
+		return true
+	}
+	t.bookDroppedRow(stale, rejected)
+	return false
 }
 
 func eventTypeForRuntimeEvent(ev event.Event) (types.EventType, bool) {

@@ -506,6 +506,27 @@ func unnamedFile(fd int32, ident uint32) *file.FdFile {
 	return f
 }
 
+// bookDroppedRow books what the exit handler of a pair that did not become a
+// row added to the two identity counters, which stood at stale and rejected
+// before it ran (handleTracepointExit), as counted for a dropped row.
+//
+// The handler has to run before the pair filter decides: a close, dup or
+// open of a thread -comm does not select changes the table its selected
+// siblings use (tracepointEntered), and -path needs the name the handler
+// resolves. The counters therefore saw every traced process, and the line
+// said so nowhere: a 1000-call dup3 loop traced under -comm on a busy host
+// printed 2242 refused rows (task e23). Moving the increments behind the
+// filter would thread a flag through every resolver; two subtractions on
+// the drop path cost nothing on a reported row.
+//
+// The dropped part is kept, not thrown away: a refused row is unnamed, so
+// under -path it is always a dropped one, and a binding dropped for a
+// filtered thread was stale for its reported siblings too.
+func (t *fdTracker) bookDroppedRow(stale, rejected uint64) {
+	t.droppedRowStale += t.staleBindings - stale
+	t.droppedRowRejected += t.rejectedAnswers - rejected
+}
+
 // fileIdentStatLine reports what the identity check changed in this run:
 // the fd table entries dropped because the number had come to name another
 // file, and the rows that were refused a procfs answer because it described
@@ -514,16 +535,33 @@ func unnamedFile(fd int32, ident uint32) *file.FdFile {
 // close after it (63 writes and closes of close-untracked count 125), so
 // "answers not used" overstated it. Since task a23 the first count no
 // longer includes the procfs answers an fcntl promoted into the fd table,
-// which were most of it. Empty when neither happened, like the other
-// conditional lines. stats() reads the counters only after the event-loop
-// goroutine that writes them has finished.
+// which were most of it.
+//
+// Both figures are of the rows the run reported (task e23): what the same
+// checks did for rows a userspace filter dropped afterwards (bookDroppedRow)
+// follows in parentheses, and only when there was any. Empty when nothing
+// happened at all, like the other conditional lines. stats() reads the
+// counters only after the event-loop goroutine that writes them has
+// finished.
 func (e *eventLoop) fileIdentStatLine() string {
 	t := e.fdState()
 	if t.staleBindings == 0 && t.rejectedAnswers == 0 {
 		return ""
 	}
 	return fmt.Sprintf(
-		"\tfile identity: %d stale fd bindings dropped, %d rows refused a procfs answer for another file\n",
-		t.staleBindings, t.rejectedAnswers,
+		"\tfile identity: %d stale fd bindings dropped, %d rows refused a procfs answer for another file%s\n",
+		t.staleBindings-t.droppedRowStale, t.rejectedAnswers-t.droppedRowRejected,
+		t.droppedRowIdentNote(),
 	)
+}
+
+// droppedRowIdentNote is the tail of the file identity line for the rows a
+// filter dropped: their bindings and refusals, which the two figures before
+// it leave out. Empty when no such row was counted.
+func (t *fdTracker) droppedRowIdentNote() string {
+	if t.droppedRowStale == 0 && t.droppedRowRejected == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (not counting rows a filter dropped: %d and %d)",
+		t.droppedRowStale, t.droppedRowRejected)
 }
