@@ -56,8 +56,17 @@ func TestCountUnreadRingRecordsStopsAtABusyRecord(t *testing.T) {
 	pos := putRecord(data, 0, 56, 0)
 	pos = putRecord(data, pos, 56, ringbufBusyBit) // reserved, not committed
 	end := putRecord(data, pos, 56, 0)             // behind the busy one: not readable yet
-	if got := countUnreadRingRecords(0, end, data); got.records != 1 {
-		t.Fatalf("unread = %+v, want only the record before the busy one", got)
+	got := countUnreadRingRecords(0, end, data)
+	if got.records != 1 || !got.busy {
+		t.Fatalf("unread = %+v, want only the record before the busy one, and told so", got)
+	}
+	// A busy record at the head leaves nothing to count, which must not
+	// read as an empty ring: the stop looks again when told (task f23).
+	if got := countUnreadRingRecords(pos-64, end, data); got != (ringbufUnread{busy: true}) {
+		t.Fatalf("unread behind a busy head = %+v, want nothing counted and busy", got)
+	}
+	if got := countUnreadRingRecords(0, pos-64, data); got.busy {
+		t.Fatalf("unread = %+v, want no busy record before the producer position", got)
 	}
 }
 
@@ -80,6 +89,11 @@ type fakeRingUnread struct {
 
 func (f fakeRingUnread) Unread() (ringbufUnread, error) { return f.unread, f.err }
 
+// Positions answers like a ring holding the bytes Unread reports.
+func (f fakeRingUnread) Positions() (ringbufPositions, error) {
+	return ringbufPositions{producer: f.unread.bytes}, f.err
+}
+
 // TestStopReportsRecordsLeftInTheKernelRing is the task us2 accounting: a
 // consumer that lagged leaves committed records in the kernel ring, and the
 // stop reports them in the statistics and as a warning instead of letting
@@ -96,10 +110,15 @@ func TestStopReportsRecordsLeftInTheKernelRing(t *testing.T) {
 	if el.numLeftInKernelRing != 18000 || el.numTracepoints != 8 {
 		t.Fatalf("left %d, tracepoints %d; want 18000 left behind the 8 drained", el.numLeftInKernelRing, el.numTracepoints)
 	}
-	if line := el.leftInKernelRingStatLine(); !strings.Contains(line, "left in the kernel ring buffer at stop: 18000") {
+	line := el.leftInKernelRingStatLine()
+	if !strings.Contains(line, "left in the kernel ring buffer at stop: 18000") {
 		t.Fatalf("stat line = %q", line)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "18000 records were still in the kernel ring buffer") {
+	if !strings.Contains(line, "(not decoded: behind the stop-time backlog when the trace stopped;") {
+		t.Fatalf("stat line = %q", line)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0],
+		"18000 records were still in the kernel ring buffer at stop and were not decoded: the consumer lagged") {
 		t.Fatalf("warnings = %q", warnings)
 	}
 }

@@ -20,22 +20,28 @@ import (
 // fakeRingPoller stands in for the kernel ring buffer and libbpfgo's poller.
 // Like the real one it handles one record at a time: it sends the record to
 // rawCh, blocking while that is full, and advances the consumer position only
-// after the send returned. Unread answers from that position, as
+// after the send returned. Positions and Unread answer from that position, as
 // kernelRingUnread does from the ring's own bookkeeping.
 type fakeRingPoller struct {
 	stream [][]byte
 	rawCh  chan []byte
 	// consumed is the consumer position, in records.
 	consumed atomic.Uint64
-	// holdSendAt and holdStoreAt (-1: never) make the poller wait for the
-	// first Unread call before it sends that record, or before it advances
-	// the consumer position behind it: the states a stop can find it in.
-	// The first Unread returns only when a held advance has happened (stored
-	// is closed), so the second look sees it however the poller is scheduled.
-	holdSendAt, holdStoreAt int
-	looked, stored          chan struct{}
-	lookedOnce              sync.Once
-	quit                    chan struct{}
+	// holdSendAt (-1: never) makes the poller wait for the stop's first look
+	// at the positions before it sends that record. holdStoreAt (-1: never)
+	// makes it wait for the second look before it advances the consumer
+	// position behind that record, and that look returns only when the
+	// advance has happened (stored is closed): a stop that counts the ring
+	// after one look finds the record still in it, one that looks twice
+	// finds it gone, however the poller is scheduled.
+	holdSendAt, holdStoreAt   int
+	looked, lookedTwice       chan struct{}
+	stored                    chan struct{}
+	lookedOnce, lookedTwiceDo sync.Once
+	looks                     atomic.Int32
+	// walks counts the Unread calls: the walks over the ring's records.
+	walks atomic.Int32
+	quit  chan struct{}
 }
 
 // fakeRingRecordSpan is the size the fake ring gives every record.
@@ -51,6 +57,7 @@ func startFakeRingPoller(t *testing.T, stream [][]byte, capacity, holdSendAt, ho
 		holdSendAt:  holdSendAt,
 		holdStoreAt: holdStoreAt,
 		looked:      make(chan struct{}),
+		lookedTwice: make(chan struct{}),
 		stored:      make(chan struct{}),
 		quit:        make(chan struct{}),
 	}
@@ -68,7 +75,7 @@ func startFakeRingPoller(t *testing.T, stream [][]byte, capacity, holdSendAt, ho
 
 func (r *fakeRingPoller) poll() {
 	for i, raw := range r.stream {
-		if i == r.holdSendAt && !r.waitForLook() {
+		if i == r.holdSendAt && !r.waitFor(r.looked) {
 			return
 		}
 		select {
@@ -80,7 +87,7 @@ func (r *fakeRingPoller) poll() {
 			r.consumed.Add(1)
 			continue
 		}
-		if !r.waitForLook() {
+		if !r.waitFor(r.lookedTwice) {
 			return
 		}
 		r.consumed.Add(1)
@@ -88,25 +95,40 @@ func (r *fakeRingPoller) poll() {
 	}
 }
 
-// waitForLook blocks until the stop looked at the ring once; false: quit.
-func (r *fakeRingPoller) waitForLook() bool {
+// waitFor blocks until the stop has looked at the ring as often as look
+// stands for; false: quit.
+func (r *fakeRingPoller) waitFor(look <-chan struct{}) bool {
 	select {
-	case <-r.looked:
+	case <-look:
 		return true
 	case <-r.quit:
 		return false
 	}
 }
 
-func (r *fakeRingPoller) Unread() (ringbufUnread, error) {
+// Positions is the stop's look at the ring: the positions as they are when
+// it is called, and the release of a poller held for that look.
+func (r *fakeRingPoller) Positions() (ringbufPositions, error) {
 	consumed := r.consumed.Load()
-	r.lookedOnce.Do(func() {
-		close(r.looked)
+	if r.looks.Add(1) == 1 {
+		r.lookedOnce.Do(func() { close(r.looked) })
+	} else {
+		r.lookedTwiceDo.Do(func() { close(r.lookedTwice) })
 		if r.holdStoreAt >= 0 {
 			<-r.stored
+			consumed = r.consumed.Load()
 		}
-	})
-	left := uint64(len(r.stream)) - consumed
+	}
+	return ringbufPositions{
+		consumer: consumed * fakeRingRecordSpan,
+		producer: uint64(len(r.stream)) * fakeRingRecordSpan,
+	}, nil
+}
+
+// Unread counts the records behind the consumer position.
+func (r *fakeRingPoller) Unread() (ringbufUnread, error) {
+	r.walks.Add(1)
+	left := uint64(len(r.stream)) - r.consumed.Load()
 	return ringbufUnread{records: left, bytes: left * fakeRingRecordSpan}, nil
 }
 
@@ -174,12 +196,18 @@ func TestStopAccountsForAFullRawChannelRefilledDuringTheDrain(t *testing.T) {
 	if len(ring.rawCh) != capacity {
 		t.Fatalf("rawCh holds %d records after the drain, want it refilled to %d", len(ring.rawCh), capacity)
 	}
+	// The poller is waited for on the positions alone; the records are
+	// counted in one walk, whose cost grows with the ring.
+	if walks := ring.walks.Load(); walks != 1 {
+		t.Fatalf("the stop walked the ring %d times, want once", walks)
+	}
 }
 
 // TestStopWaitsForThePollerToAdvanceBehindItsLastSend catches the poller
-// between the send that filled rawCh and the consumer position's advance: on
-// the first look that record is in rawCh and still in the ring's count. The
-// stop must look again, or it counts the record twice.
+// between the send that filled rawCh and the consumer position's advance:
+// until the stop's second look that record is in rawCh and still in the
+// ring's count. The stop must look again before it counts the ring, or it
+// counts the record twice.
 func TestStopWaitsForThePollerToAdvanceBehindItsLastSend(t *testing.T) {
 	const pairsProduced, capacity = 100, 16
 	el, pairs := newDrainHarness(t)
@@ -209,6 +237,9 @@ func TestStopDecodesWhatThePollerStillDelivers(t *testing.T) {
 	requireStopAccounting(t, el, 2*pairsProduced, 2*pairsProduced, 0, 0)
 	if len(warnings) != 0 || el.leftInKernelRingStatLine() != "" || el.discardedAtStopStatLine() != "" {
 		t.Fatalf("a complete stop reported a loss: warnings %q", warnings)
+	}
+	if walks := ring.walks.Load(); walks != 0 {
+		t.Fatalf("the stop walked the ring %d times, want none: it was empty", walks)
 	}
 }
 
