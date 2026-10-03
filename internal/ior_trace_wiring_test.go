@@ -571,3 +571,25 @@ func assertRunsUnconditionallyOnceManagerExists(t *testing.T, decl *ast.FuncDecl
 	t.Fatal(name + " must be a plain statement of the setup body or of an `if " + guard +
 		"` directly in it, not inside a closure, go/defer, or another construct")
 }
+
+// TestSetupTraceInfraBPFClosesTheModuleThroughTheCloser pins how a session's
+// teardown closes its module (task 723): closeTraceInfra gets
+// libbpfModuleCloser{bpfModule}, whose Close takes the module off the list of
+// attached programs before closing their fds. *bpf.Module has a Close of its
+// own and satisfies moduleCloser as well, so passing the raw module would
+// compile and close it - but never forget it, and the list would go on
+// holding its closed descriptors, gone or reused by another file
+// (closeLibbpfModule). Nor may the setup close anything itself.
+func TestSetupTraceInfraBPFClosesTheModuleThroughTheCloser(t *testing.T) {
+	decl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
+	call := singleBareCall(t, decl, "closeTraceInfra")
+	assertCallArguments(t, call, []string{
+		"logTeardown", "infra.rb", "mgr", "releaseBindings",
+		"libbpfModuleCloser{bpfModule}",
+		"infra.stopSignals", "infra.progress", "infra.releasing",
+	})
+	if closes := callsNamed(decl, "Close"); len(closes) != 0 {
+		t.Fatalf("setupTraceInfraBPF calls Close %d times itself; the "+
+			"module is closed by closeTraceInfra alone", len(closes))
+	}
+}

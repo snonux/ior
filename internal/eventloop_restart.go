@@ -1153,9 +1153,10 @@ func (w *restartDropWatch) observeSkipped(total, seenAt uint64) uint64 {
 // the watch's, the fold's reads raised it, and the watch is told now
 // (noteSkipped). Otherwise a skip first seen by a fold would be stamped
 // only at the next full sweep - the next monitor period or exec question -
-// and an exec adoption asking in between about an enter before the skip
-// would take it for one after that enter and adopt where "nothing lost"
-// refuses (the safe direction, but a needless one).
+// and an exec adoption asking in between about an enter made after the
+// fold's read (so after the skip) would take the skip for one after that
+// enter and adopt where "nothing lost" refuses (the safe direction, but a
+// needless one).
 func (w *restartDropWatch) lostSince(tracepoints []string, since, upTo uint64, src ringbufDropSource, clock func() uint64) bool {
 	if src == nil {
 		return true

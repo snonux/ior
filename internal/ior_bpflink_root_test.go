@@ -378,6 +378,29 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	reader := newProgMissesReader()
 	requireMissesReported(t, reader, fds)
 	requireMissesReported(t, reader, fds)
+	counter := requireFoldQuestionsAnswered(t, module, reader, fds)
+	logMissesReadCost(t, reader, fds[0])
+	for name, link := range map[string]probemanager.Link{"classic": classic, "raw": raw} {
+		if err := link.Destroy(); err != nil {
+			t.Fatalf("destroy the %s link: %v", name, err)
+		}
+	}
+	if left := attached(); left != nil {
+		t.Fatalf("programs still listed as attached after their links were destroyed: %v", left)
+	}
+	requireDetachedProgramsAsked(t, module, counter, closeModule)
+}
+
+// requireFoldQuestionsAnswered builds the skipped-run counter over the
+// attached programs fds of TestSkippedRunsAreReadFromReallyAttachedPrograms
+// and checks what the drop monitor and a fold ask of it: a full sweep works,
+// the seam names the raw program under its tracepoint alone and both
+// programs for a question naming both tracepoints, and a fold's question
+// about the classic program is answered. It returns the counter for the
+// checks made after the links are destroyed.
+func requireFoldQuestionsAnswered(t *testing.T, module *bpf.Module, reader *progMissesReader, fds []int) *skippedRunCounter {
+	t.Helper()
+	attached := func() []int { return libbpfAttachedProgramFDs(module) }
 	attachedOn := func(tracepoints []string) []int { return libbpfAttachedProgramFDsOn(module, tracepoints) }
 	counter, err := newSkippedRunCounter(attached, attachedOn, reader.misses, bootClockNs)
 	if err != nil {
@@ -397,16 +420,7 @@ func TestSkippedRunsAreReadFromReallyAttachedPrograms(t *testing.T) {
 	if _, _, err := counter.SkippedSince([]string{processExecProbeName}, 1, bootClockNs()); err != nil {
 		t.Fatalf("a fold's question about the classic program: %v", err)
 	}
-	logMissesReadCost(t, reader, fds[0])
-	for name, link := range map[string]probemanager.Link{"classic": classic, "raw": raw} {
-		if err := link.Destroy(); err != nil {
-			t.Fatalf("destroy the %s link: %v", name, err)
-		}
-	}
-	if left := attached(); left != nil {
-		t.Fatalf("programs still listed as attached after their links were destroyed: %v", left)
-	}
-	requireDetachedProgramsAsked(t, module, counter, closeModule)
+	return counter
 }
 
 // requireDetachedProgramsAsked checks, after the links of the two programs
