@@ -127,7 +127,10 @@ func TestEntryWithoutAnIdentityDoesNotTakeThatOfAnEarlierRow(t *testing.T) {
 // A close releases the file it closed. When another thread's open returned
 // the number and was processed before the close's exit record, the entry is
 // of a later binding and must survive the close, whatever the close row says
-// about its file; a close that entered after the binding releases it.
+// about its file; a close that entered after the binding releases it. The
+// close row is named after the entry only when it is of the entry's file: a
+// close without an identity that entered before the binding is unnamed (task
+// a23; it used to be named after the later file).
 func TestCloseThatEnteredBeforeTheBindingDoesNotReleaseTheNewerEntry(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -139,8 +142,9 @@ func TestCloseThatEnteredBeforeTheBindingDoesNotReleaseTheNewerEntry(t *testing.
 	}{
 		{name: "close of another file, entered before", ident: 4711, beforeNs: 1000, wantKept: true},
 		{name: "close of the same file, entered before", ident: 4712, beforeNs: 1000, wantKept: true, wantNamed: true},
-		{name: "close without identity, entered before", beforeNs: 1000, wantKept: true, wantNamed: true},
+		{name: "close without identity, entered before", beforeNs: 1000, wantKept: true},
 		{name: "close of the same file, entered after", ident: 4712, afterNs: 1000, wantNamed: true},
+		{name: "close without identity, entered after", afterNs: 1000, wantNamed: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -366,4 +370,52 @@ func TestFlagChangeDoesNotBindAForkedCopy(t *testing.T) {
 	if _, kept := tr.get(5, child); kept {
 		t.Fatalf("a close of the copy's file left it in the child's table")
 	}
+}
+
+// An EBADF row without an identity says the number was not open when the
+// call looked at it, so an entry bound after the call entered (another
+// thread's open returned the number and was processed first) is not the
+// row's file: the row is unnamed and the entry stays. Entered after the
+// binding, the row is named after the entry as before (the call's own error,
+// or an entry ior does not know is stale), and the entry stays as well:
+// EBADF never touches the fd table. Close and read rows alike.
+func TestEBADFRowWithoutAnIdentityIsNotNamedAfterALaterBinding(t *testing.T) {
+	for _, enter := range []types.TraceId{types.SYS_ENTER_CLOSE, types.SYS_ENTER_READ} {
+		for _, entered := range []struct {
+			name      string
+			before    bool
+			wantNamed bool
+		}{{"before the binding", true, false}, {"after the binding", false, true}} {
+			t.Run(enter.Name()+" "+entered.name, func(t *testing.T) {
+				pid := uint32(os.Getpid())
+				n := freeFdNumber(t)
+				el := identLoop(t)
+				boundNs := bootClockNs()
+				feedIdentOpenAt(t, el, laterOpenName, n, 4712, boundNs-openPairLatency)
+
+				row := ebadfRow(enter, n, boundNs, entered.before)
+				ep := feedIdentRow(t, el, row)
+				if named := ep.File.Name() == laterOpenName; named != entered.wantNamed {
+					t.Fatalf("EBADF row file = %v, want named=%v", ep.File, entered.wantNamed)
+				}
+				verifyFileDescriptor(t, el, pid, n, laterOpenName)
+				requireNothingCounted(t, el)
+			})
+		}
+	}
+}
+
+// ebadfRow is a call (close or read) on fd without an identity that failed
+// with EBADF; it entered 1000 ns before boundNs and returned after it, or
+// entered 1000 ns after it.
+func ebadfRow(enter types.TraceId, fd int32, boundNs uint64, before bool) identRow {
+	exit := types.SYS_EXIT_CLOSE
+	if enter == types.SYS_ENTER_READ {
+		exit = types.SYS_EXIT_READ
+	}
+	row := identRow{enter: enter, exit: exit, fd: fd, enterNs: boundNs + 1000, ret: -int64(syscall.EBADF)}
+	if before {
+		row.enterNs, row.exitNs = boundNs-1000, boundNs+2000
+	}
+	return row
 }

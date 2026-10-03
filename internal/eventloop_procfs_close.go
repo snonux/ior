@@ -113,9 +113,21 @@ func exitFailed(ep *event.Pair) bool {
 // entered at closeNs (boot clock): the fd-table entry, else a procfs-cache
 // entry read before closeNs, else an unnamed file with unknown flags. It does
 // not change either map; the close state transition (applyFdCloseState,
-// applyCloseRangeState) evicts the entries afterwards.
+// applyCloseRangeState) evicts the entries afterwards - except an fd-table
+// entry bound after closeNs, which closeIdentified keeps.
+//
+// That entry does not name the row either (task a23): it is of a file the
+// number came to name after the close entered - another thread's open
+// returned the number and was processed before this close's exit - so it is
+// not what the close released, and the row is unnamed (FdFile.BoundAt; a
+// close whose record has an identity is judged by trackedFile instead). In a
+// run without file identities nothing has a binding time and the entry names
+// the row as before.
 func (t *fdTracker) resolveClosing(fd int32, pid uint32, closeNs uint64) file.File {
 	if fdFile, ok := t.get(fd, pid); ok {
+		if boundAfter(fdFile, closeNs) {
+			return file.NewFd(fd, "", -1)
+		}
 		return fdFile
 	}
 	if fd >= 0 {

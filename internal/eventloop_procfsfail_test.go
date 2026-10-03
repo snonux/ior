@@ -280,18 +280,20 @@ func TestResolveOnExitEBADFCoversRetCarriers(t *testing.T) {
 	n := freeFdNumber(t)
 	placePipeOn(t, n)
 	el := newFilteredEventLoop(t, globalfilter.Filter{})
+	// Every pair has its enter; the EBADF rule reads its time (task a23).
+	readEnter := &types.FdEvent{TraceId: types.SYS_ENTER_READ, Time: bootClockNs()}
 
 	for name, exitEv := range map[string]event.Event{
 		"RetEvent":    &types.RetEvent{Ret: -int64(syscall.EBADF)},
 		"AcceptEvent": &types.AcceptEvent{Ret: -int64(syscall.EBADF)},
 	} {
-		got := el.resolveOnExit(&event.Pair{ExitEv: exitEv}, n, pid)
+		got := el.resolveOnExit(&event.Pair{EnterEv: readEnter, ExitEv: exitEv}, n, pid)
 		if got.Name() != "" {
 			t.Errorf("%s: EBADF resolved %q from procfs", name, got.Name())
 		}
 	}
 	// Negative: another errno, or no exit record, resolves from procfs.
-	ok := el.resolveOnExit(&event.Pair{ExitEv: &types.RetEvent{Ret: -int64(syscall.EAGAIN)}}, n, pid)
+	ok := el.resolveOnExit(&event.Pair{EnterEv: readEnter, ExitEv: &types.RetEvent{Ret: -int64(syscall.EAGAIN)}}, n, pid)
 	if !strings.HasPrefix(ok.Name(), "pipe:[") {
 		t.Errorf("EAGAIN exit resolved %q, want the pipe from procfs", ok.Name())
 	}

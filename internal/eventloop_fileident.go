@@ -68,6 +68,11 @@ import (
 //   - a close forgets the number's entries (applyFdCloseState), except what
 //     describes a later file: an fd table entry bound after the close
 //     entered, a procfs answer of another file read after it.
+//   - a row without an identity that cannot have used the fd table entry -
+//     an EBADF row, or a close row - is not named after one bound after the
+//     row's call entered, and leaves it alone (resolveAfterEBADF,
+//     resolveClosing; task a23). Other rows without an identity are named as
+//     before the identity existed.
 //
 // An unnamed row keeps the row's own identity, so it is not mistaken for an
 // unusable descriptor. "Unknown" on either side contradicts nothing: such a

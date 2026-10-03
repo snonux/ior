@@ -2570,6 +2570,13 @@ kernel program reports the file, and user space compares.
   - EBADF with a known identity is the call's own error (the descriptor was
     open), so the row is named. Identity 0 on either side contradicts
     nothing.
+  - *rows without identity* still consult the binding time where the row
+    cannot be of a later binding (task a23): an EBADF row (the number was not
+    open, or was another file, when the call looked) and a close row
+    (`resolveAfterEBADF`, `resolveClosing`) are unnamed when the fd-table
+    entry was bound after the call entered, and the entry stays. They used
+    to be named after the later file. Every other row without identity
+    (the record kinds that have no word) is named by the entry as before.
 - **Binding time** (`FdFile.BoundAt`, `fdTracker.stampBinding`): the exit
   time of the pair whose handler created the entry (`noteExit` keeps it in
   `fdTracker.bindNs`; every `set` call is in an exit handler), because the

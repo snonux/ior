@@ -25,7 +25,8 @@ import (
 // traced syscalls, and with several threads per process an EBADF exit can be
 // processed after a later traced open of the same number, so erasing the table
 // entry could drop a correct name. A table entry that IS present is therefore
-// still used to label the row.
+// still used to label the row - unless it was bound after the call entered
+// (task a23, resolveAfterEBADF), which is exactly that later open.
 //
 // Known gaps, all bounded and deliberate:
 //   - an fd-table entry whose close event was lost (ring overflow) stays
@@ -68,7 +69,7 @@ func exitedEBADF(ep *event.Pair) bool {
 // exit resolves as usual (fd table, procfs cache, procfs).
 func (e *eventLoop) resolveOnExit(ep *event.Pair, fd int32, pid uint32) file.File {
 	if exitedEBADF(ep) {
-		return e.fdState().resolveAfterEBADF(fd, pid)
+		return e.fdState().resolveAfterEBADF(fd, pid, ep.EnterEv.GetTime())
 	}
 	if closesDescriptor(ep) {
 		return e.fdState().resolveClosing(fd, pid, ep.EnterEv.GetTime())
@@ -77,11 +78,19 @@ func (e *eventLoop) resolveOnExit(ep *event.Pair, fd int32, pid uint32) file.Fil
 }
 
 // resolveAfterEBADF is resolve for a descriptor the kernel just reported as not
-// open: it evicts the procfs-cache entry, prefers the fd-table entry, and
-// otherwise returns an unnamed file with unknown flags without touching procfs.
-func (t *fdTracker) resolveAfterEBADF(fd int32, pid uint32) file.File {
+// open, by a call that entered at enterNs (boot clock): it evicts the
+// procfs-cache entry, prefers the fd-table entry, and otherwise returns an
+// unnamed file with unknown flags without touching procfs.
+//
+// An fd-table entry bound after the call entered (FdFile.BoundAt, task a23)
+// does not name the row: the number was not open, or was another file, when
+// the call looked at it - another thread's open, dup or pipe returned it
+// later and was processed first. The row is unnamed and the entry stays (the
+// table is never touched here, see above). In a run without file identities
+// nothing has a binding time and the entry names the row as before.
+func (t *fdTracker) resolveAfterEBADF(fd int32, pid uint32, enterNs uint64) file.File {
 	t.deleteProcFdCache(fd, pid)
-	if fdFile, ok := t.get(fd, pid); ok {
+	if fdFile, ok := t.get(fd, pid); ok && !boundAfter(fdFile, enterNs) {
 		return fdFile
 	}
 	return file.NewFd(fd, "", -1)
