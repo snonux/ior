@@ -645,8 +645,9 @@ func (e *eventLoop) storeEnter(enterEv event.Event) {
 // neither a mismatch nor a syscall ior saw start. Besides a lost enter record
 // it is ordinary kernel behaviour: the first return of a clone/fork child, a
 // call already in flight when the probes attached, and a call a seccomp
-// filter denies with an errno - the filter runs before sys_enter, so only
-// sys_exit fires and there is nothing to build the row's arguments from (task
+// filter answers itself (an errno, a trap, a supervisor's answer) - the
+// filter runs before sys_enter, so only sys_exit fires and there is nothing
+// to build the row's arguments from (task
 // qr2; such calls are invisible in the trace, but they no longer consume a
 // parked enter and inflate the mismatch count now that noreturn enters are
 // not parked, task pr2). countUnpairedExit counts it as an exit without an

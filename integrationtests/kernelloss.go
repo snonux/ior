@@ -20,6 +20,7 @@ var (
 	skippedRunsLine       = regexp.MustCompile(`probe runs skipped by the kernel: ([^\n]+)`)
 	entersWithoutExitLine = regexp.MustCompile(`enters without an exit: ([^\n]+)`)
 	exitsWithoutEnterLine = regexp.MustCompile(`exits without an enter: ([^\n]+)`)
+	filterLikeShare       = regexp.MustCompile(`(\d+) look like`)
 	leadingCount          = regexp.MustCompile(`^\d+`)
 )
 
@@ -39,6 +40,10 @@ type KernelLoss struct {
 	// on the host.
 	EntersWithoutExit uint64
 	ExitsWithoutEnter uint64
+	// FilterLikeExits is the part of ExitsWithoutEnter that has the shape
+	// of a seccomp filter's answer (an error, or the syscall's own number)
+	// and so points at a filter rather than at a lost enter record.
+	FilterLikeExits uint64
 }
 
 // Any reports whether the run lost a record, or may have: a skipped probe
@@ -51,11 +56,12 @@ func (l KernelLoss) Any() bool {
 
 func (l KernelLoss) String() string {
 	return fmt.Sprintf("ring buffer drops: %d, probe runs skipped by the kernel: %d, "+
-		"enters without an exit: %d, exits without an enter: %d",
-		l.RingDrops, l.SkippedRuns, l.EntersWithoutExit, l.ExitsWithoutEnter)
+		"enters without an exit: %d, exits without an enter: %d (%d look like a seccomp filter's answer)",
+		l.RingDrops, l.SkippedRuns, l.EntersWithoutExit, l.ExitsWithoutEnter, l.FilterLikeExits)
 }
 
-// ParseKernelLoss reads the four figures from ior's output. A line that is
+// ParseKernelLoss reads the figures from ior's output: the four counts, and
+// the filter-like share of the last line ("N look like ..."). A line that is
 // missing, or that states no figure ("unknown ..."), is an error: a test
 // that depends on the figures must not take silence for zero. The one
 // exception is a skipped-run line that says "not counted", taken for 0.
@@ -77,7 +83,21 @@ func ParseKernelLoss(logged string) (KernelLoss, error) {
 	if loss.ExitsWithoutEnter, err = statFigure(logged, exitsWithoutEnterLine, "exits without an enter"); err != nil {
 		return KernelLoss{}, err
 	}
+	if loss.FilterLikeExits, err = filterLikeFigure(logged); err != nil {
+		return KernelLoss{}, err
+	}
 	return loss, nil
+}
+
+// filterLikeFigure returns the filter-like share the "exits without an
+// enter" line states behind its count. The line is known to be there.
+func filterLikeFigure(logged string) (uint64, error) {
+	line := exitsWithoutEnterLine.FindStringSubmatch(logged)[1]
+	m := filterLikeShare.FindStringSubmatch(line)
+	if m == nil {
+		return 0, fmt.Errorf("ior's %q line states no filter-like share: %q", "exits without an enter", line)
+	}
+	return strconv.ParseUint(m[1], 10, 64)
 }
 
 // statFigure returns the count a statistics line begins with.

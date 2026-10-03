@@ -174,13 +174,14 @@ type eventLoop struct {
 	numSyscallsAfterFilter  uint
 	// numEntersWithoutExit and numExitsWithoutEnter count the calls whose
 	// exit, or enter, record the kernel lost, as the pairing sees them
-	// (eventloop_losthalves.go, task c23); numFailedExitsWithoutEnter is
-	// the part of the latter that returned an error, which is also what a
-	// seccomp-denied call leaves. Written by the event-loop goroutine only;
+	// (eventloop_losthalves.go, task c23); numFilterLikeExitsWithoutEnter is
+	// the part of the latter with the shape of a seccomp filter's answer:
+	// an error, or the syscall's own number as the return value
+	// (looksLikeSeccompAnswer). Written by the event-loop goroutine only;
 	// stats() reads them after <-e.done.
-	numEntersWithoutExit       uint
-	numExitsWithoutEnter       uint
-	numFailedExitsWithoutEnter uint
+	numEntersWithoutExit           uint
+	numExitsWithoutEnter           uint
+	numFilterLikeExitsWithoutEnter uint
 	// lostHalvesFrom is the boot-clock time from which the run's initial
 	// probes are all attached (judgeHalvesFrom); a half of a call that may
 	// have begun before it is not counted. 0 (tests) judges every half.

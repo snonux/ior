@@ -13,7 +13,7 @@ import (
 // statsBlock is the part of ior's end-of-run statistics ParseKernelLoss
 // reads, with the kernel's two figures as given and no lost half.
 func statsBlock(ringDrops, skippedRuns string) string {
-	return statsBlockWithHalves(ringDrops, skippedRuns, "0", "0")
+	return statsBlockWithHalves(ringDrops, skippedRuns, "0", "0 (0 look like a filter's answer)")
 }
 
 // statsBlockWithHalves is statsBlock with the two lost-half figures as given.
@@ -30,9 +30,10 @@ func TestParseKernelLossReadsTheLostHalves(t *testing.T) {
 	const zero = "0 (0.00/s, 0.00% of events)"
 	logged := statsBlockWithHalves(zero, "0",
 		"12 (superseded by the thread's next enter: exit record lost)",
-		"7 (thread seen before: enter record lost, or a seccomp-denied call; 2 returned an error)")
+		"7 (thread seen before: enter record lost, or a call a seccomp filter answered; "+
+			"2 look like a filter's answer: an error or the syscall's own number)")
 	got, err := ParseKernelLoss(logged)
-	want := KernelLoss{EntersWithoutExit: 12, ExitsWithoutEnter: 7}
+	want := KernelLoss{EntersWithoutExit: 12, ExitsWithoutEnter: 7, FilterLikeExits: 2}
 	if err != nil || got != want {
 		t.Fatalf("ParseKernelLoss = %+v, %v, want %+v", got, err, want)
 	}
@@ -42,7 +43,8 @@ func TestParseKernelLossReadsTheLostHalves(t *testing.T) {
 	for name, logged := range map[string]string{
 		"no enter line": strings.Replace(logged, "enters without an exit", "x", 1),
 		"no exit line":  strings.Replace(logged, "exits without an enter", "x", 1),
-		"no figure":     statsBlockWithHalves(zero, "0", "many", "0"),
+		"no figure":     statsBlockWithHalves(zero, "0", "many", "0 (0 look like a filter's answer)"),
+		"no share":      statsBlockWithHalves(zero, "0", "0", "7 (2 returned an error)"),
 	} {
 		if got, err := ParseKernelLoss(logged); err == nil {
 			t.Fatalf("%s: ParseKernelLoss = %+v without an error", name, got)

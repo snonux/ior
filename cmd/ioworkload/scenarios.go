@@ -162,6 +162,7 @@ var scenarios = map[string]func() error{
 	"xattr-fd":                      xattrFd,
 	"chmod-basic":                   chmodBasic,
 	"chown-basic":                   chownBasic,
+	"seccomp-denied":                seccompDenied,
 	"utime-basic":                   utimeBasic,
 	"utime-utimes":                  utimeUtimes,
 	"utime-futimesat":               utimeFutimesat,

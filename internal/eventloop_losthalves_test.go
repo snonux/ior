@@ -72,14 +72,14 @@ func (f *halfFeed) call(at uint64, tid uint32) {
 }
 
 // want fails unless the counters are as given and no pair mismatched.
-func (f *halfFeed) want(entersWithoutExit, exitsWithoutEnter, failed uint) {
+func (f *halfFeed) want(entersWithoutExit, exitsWithoutEnter, filterLike uint) {
 	f.t.Helper()
 	el := f.el
 	if el.numEntersWithoutExit != entersWithoutExit || el.numExitsWithoutEnter != exitsWithoutEnter ||
-		el.numFailedExitsWithoutEnter != failed {
-		f.t.Fatalf("enters without exit/exits without enter/failed = %d/%d/%d, want %d/%d/%d",
-			el.numEntersWithoutExit, el.numExitsWithoutEnter, el.numFailedExitsWithoutEnter,
-			entersWithoutExit, exitsWithoutEnter, failed)
+		el.numFilterLikeExitsWithoutEnter != filterLike {
+		f.t.Fatalf("enters without exit/exits without enter/filter-like = %d/%d/%d, want %d/%d/%d",
+			el.numEntersWithoutExit, el.numExitsWithoutEnter, el.numFilterLikeExitsWithoutEnter,
+			entersWithoutExit, exitsWithoutEnter, filterLike)
 	}
 	if el.numTracepointMismatches != 0 {
 		f.t.Fatalf("numTracepointMismatches = %d, want 0", el.numTracepointMismatches)
@@ -334,17 +334,17 @@ func TestReexecFoldLosesNoHalf(t *testing.T) {
 	(&halfFeed{t: t, el: f.el}).want(0, 0, 0)
 }
 
-// The statistics always print both lines, with the failed share.
+// The statistics always print both lines, with the filter-like share.
 func TestStatsReportLostHalves(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
-	el.numEntersWithoutExit, el.numExitsWithoutEnter, el.numFailedExitsWithoutEnter = 7, 5, 2
+	el.numEntersWithoutExit, el.numExitsWithoutEnter, el.numFilterLikeExitsWithoutEnter = 7, 5, 2
 	el.startTime = time.Now().Add(-time.Second)
 	close(el.done)
 	stats := el.stats()
 	for _, want := range []string{
 		"\tenters without an exit: 7 (",
 		"\texits without an enter: 5 (",
-		"; 2 returned an error)",
+		"; 2 look like a filter's answer: an error or the syscall's own number)\n",
 	} {
 		if !strings.Contains(stats, want) {
 			t.Fatalf("stats lack %q:\n%s", want, stats)

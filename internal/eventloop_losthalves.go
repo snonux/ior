@@ -40,9 +40,10 @@ import (
 //     row parks its kept enter again through syscallEntered);
 //   - an enter the pending table's LRU trims (prune), and the enters still
 //     parked when the trace stops: calls in flight, not lost;
-//   - an enter older than the last runtime probe change, or older than the
-//     end of the trace's own attach (judgeHalvesFrom): its syscall's exit
-//     probe may not have been attached when it returned.
+//   - an enter not younger than the last runtime probe change, or older than
+//     the end of the trace's own attach (judgeHalvesFrom): its syscall's exit
+//     probe may not have been attached when it returned ("A runtime probe
+//     change" below says what a detach leaves open).
 //
 // An exit without an enter (numExitsWithoutEnter) is an exit that finds no
 // enter (enterOfExit) of a thread the tracker has seen enter a syscall before
@@ -64,11 +65,64 @@ import (
 //     exit record evicted the tid, and a delivered exec record moved the
 //     caller's enter there (adoptLostExecCaller covers a lost one).
 //
-// What is counted all the same: a call a seccomp filter denies (or a ptrace
-// tracer skips) never fires sys_enter, so its exit comes alone from a thread
-// seen before. Those calls return an error (-EPERM, -ENOSYS, ...), so the
-// failed exits are counted apart as well (numFailedExitsWithoutEnter), and a
-// count made of failed exits only points at a filter rather than at loss.
+// What is counted all the same: a call a seccomp filter answers itself. The
+// filter runs before sys_enter and the skipped call still fires sys_exit, so
+// its exit comes alone from a thread seen before. What it returns depends on
+// the filter's action, and only two of the shapes can be recognised:
+//   - SECCOMP_RET_ERRNO returns the errno the filter chose, SECCOMP_RET_TRACE
+//     without a tracer -ENOSYS: a failed exit (an errno of 0 is allowed and
+//     looks like a success);
+//   - SECCOMP_RET_TRAP does not fail. It rolls the return register back to
+//     the syscall number and raises SIGSYS, so the exit record carries the
+//     call's own number as its return value (sched_getscheduler "returns"
+//     145 on x86_64; seen on a desktop under a browser's sandbox, which
+//     emulates the call in its SIGSYS handler);
+//   - SECCOMP_RET_USER_NOTIF returns whatever the supervisor answered, a
+//     success included, and cannot be told from a lost enter.
+//
+// A ptrace tracer does not make one, with one exception: a tracer that
+// cancels a call by setting the syscall number to -1 silences both halves
+// (the tracepoints see no syscall), and only PTRACE_SYSEMU skips the call
+// before sys_enter and leaves the exit alone.
+//
+// So the exits of the two recognisable shapes are counted apart as well
+// (numFilterLikeExitsWithoutEnter, looksLikeSeccompAnswer), and a count made
+// of those only points at a filter rather than at loss. It is a hint in both
+// directions: a call that lost its enter record can fail too, or return its
+// own number (on x86_64 a read of 0 bytes, a write of 1), and a filter can
+// answer in a shape that is not recognised. The syscall number is known for
+// x86_64 only (types.TraceId.SyscallNumber); elsewhere only the failed exits
+// are recognised.
+//
+// What the two counts miss (they are lower bounds, and no measure of the
+// kernel's own figures, the ring buffer drops and the skipped probe runs):
+//   - a lost exit is found only when its thread enters another traced
+//     syscall, so the lost exit of a thread's last traced call (or of a call
+//     whose thread dies next) is never counted;
+//   - a thread that loses the exit of one call and then the enter of its
+//     next call of the SAME syscall pairs the first enter with the second
+//     exit: one wrong row and no count (with different syscalls it is a
+//     mismatch);
+//   - a call that loses both halves leaves nothing to count, and a lost
+//     enter of a thread not seen before (or forgotten: lastEnterLimit, a
+//     trimmed enter, an evicted tid) passes as the thread's first record.
+//     With ring buffer drops whole runs of records go, so the counts stay
+//     far below the drop count;
+//   - the TUI shows neither count: the statistics block is printed at the
+//     end of a headless run only (startTraceShutdownWatcher);
+//   - a syscall that is sampled or aggregate-only emits no exit without an
+//     enter (internal/c/filter.c, ior_stateless_exit_emits), so neither a
+//     lost enter nor a filter's answer of such a syscall is seen.
+//
+// A runtime probe change (the TUI's probes dialog) is covered as far as its
+// report reaches: a half whose thread was last seen at or before the change's
+// stamp, or while an attach is in flight, is not judged. A detach has no
+// in-flight count (restartProbeWatch: it needs none for the folds), and the
+// probe manager reports it only after both links are gone, so a thread whose
+// exit goes unseen while the detach is under way and whose next enter the
+// loop processes before the report is counted as a lost exit although the
+// kernel lost nothing. That is left as it is: the counts are printed only by
+// headless runs, whose probe set never changes after the initial attach.
 //
 // The bookkeeping is one map read and one map write per enter (noteEnter),
 // allocation-free once the map has grown, and a lookup per exit that found no
@@ -144,17 +198,17 @@ func (p *pairTracker) unpairedExit(exitEv event.Event) (since uint64, lost bool)
 	return prev.time, known && !ownShedExit
 }
 
-// forgetTrimmed is prune's cleanup for one trimmed pending enter: the pair
-// goes back to the pool, and its thread becomes unknown, so the trimmed
-// call's exit, should it still come, is no lost half (unpairedExit).
-func (p *pairTracker) forgetTrimmed(pair *event.Pair) {
-	if pair == nil {
-		return
+// forgetTrimmed is prune's cleanup for one trimmed pending enter, parked
+// under tid: the pair goes back to the pool, and its thread becomes unknown,
+// so the trimmed call's exit, should it still come, is no lost half
+// (unpairedExit). The thread is named by the table's key, not by the enter's
+// own tid: an exec enter moveExecCaller moved sits under the leader's tid,
+// where its exit will arrive, and still carries the caller's.
+func (p *pairTracker) forgetTrimmed(tid uint32, pair *event.Pair) {
+	delete(p.lastEnters, tid)
+	if pair != nil {
+		pair.Recycle()
 	}
-	if pair.EnterEv != nil {
-		delete(p.lastEnters, pair.EnterEv.GetTid())
-	}
-	pair.Recycle()
 }
 
 // judgeHalvesFrom tells the loop the boot-clock time from which every syscall
@@ -184,24 +238,46 @@ func (e *eventLoop) countSupersededEnter(at uint64, superseded bool) {
 }
 
 // countUnpairedExit counts an exit that found no enter when its enter record
-// must have been lost (pairTracker.unpairedExit), and those that returned an
-// error apart, the shape a seccomp-denied call has too.
+// must have been lost (pairTracker.unpairedExit), and apart those that have
+// the shape of a seccomp filter's answer.
 func (e *eventLoop) countUnpairedExit(exitEv event.Event) {
 	since, lost := e.pairs.unpairedExit(exitEv)
 	if !lost || e.halfMayBeUnseen(since) {
 		return
 	}
 	e.numExitsWithoutEnter++
-	if carrier, ok := exitEv.(event.RetCarrier); ok && carrier.GetRet() < 0 {
-		e.numFailedExitsWithoutEnter++
+	if looksLikeSeccompAnswer(exitEv) {
+		e.numFilterLikeExitsWithoutEnter++
 	}
 }
 
+// looksLikeSeccompAnswer reports whether an exit without an enter returned
+// what a call a seccomp filter answered returns: an error (SECCOMP_RET_ERRNO,
+// or SECCOMP_RET_TRACE without a tracer) or the syscall's own number
+// (SECCOMP_RET_TRAP rolls the return register back to it). An exit kind
+// without a return value, or a syscall whose number is not known on this
+// architecture, is recognised by neither.
+func looksLikeSeccompAnswer(exitEv event.Event) bool {
+	carrier, ok := exitEv.(event.RetCarrier)
+	if !ok {
+		return false
+	}
+	ret := carrier.GetRet()
+	if ret < 0 {
+		return true
+	}
+	nr, known := exitEv.GetTraceId().SyscallNumber()
+	return known && ret == nr
+}
+
 // lostHalfStatLines renders the two lost-half lines of the statistics. They
-// are always printed, so a 0 states that no half was found lost.
+// are always printed, so a 0 states that no half was found lost. Each line
+// begins with its count, and the second names its filter-like share as
+// "N look like", which integrationtests.ParseKernelLoss reads.
 func (e *eventLoop) lostHalfStatLines() string {
 	return fmt.Sprintf(
 		"\tenters without an exit: %d (superseded by the thread's next enter: exit record lost)\n"+
-			"\texits without an enter: %d (thread seen before: enter record lost, or a seccomp-denied call; %d returned an error)\n",
-		e.numEntersWithoutExit, e.numExitsWithoutEnter, e.numFailedExitsWithoutEnter)
+			"\texits without an enter: %d (thread seen before: enter record lost, or a call a seccomp filter answered; "+
+			"%d look like a filter's answer: an error or the syscall's own number)\n",
+		e.numEntersWithoutExit, e.numExitsWithoutEnter, e.numFilterLikeExitsWithoutEnter)
 }

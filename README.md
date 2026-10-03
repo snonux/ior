@@ -280,7 +280,9 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either, but they do show in the `exits without an enter`
-  statistic (see *Lost enter and exit records* below), among those that returned an error.
+  statistic (see *Lost enter and exit records* below), among those that look like a
+  filter's answer. The same holds for a call a filter traps (`SECCOMP_RET_TRAP`, as browser
+  sandboxes do) or hands to a supervisor (`SECCOMP_RET_USER_NOTIF`).
 - **Time namespaces: timestamps are the host's.** The kernel stamps every record with the
   host's boot clock, which a time namespace does not shift, so `time_ns` is the host's
   `CLOCK_BOOTTIME` even when ior runs inside a namespace with a boottime offset
@@ -320,16 +322,39 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   the enter of another syscall): `enters without an exit: N` is an enter the same thread's
   next enter superseded, so its exit record was lost; `exits without an enter: N` is an exit
   of a thread ior had seen enter a syscall before, so its enter record was lost - or the call
-  was one a seccomp filter denied (or a ptrace tracer skipped), which fires `sys_exit`
-  only; the line says how many of them returned an error, which such a call always does.
-  Calls that only look like that are not counted: a call in flight when the trace started
-  or stopped, a new thread's first return from `clone`/`fork`, a task killed inside a
-  syscall, `exit`/`exit_group`/`rt_sigreturn` (they never return), an open the `-path` or
+  was one a seccomp filter answered itself, which fires `sys_exit` only. The line says how
+  many of them `look like a filter's answer`: they returned an error (`SECCOMP_RET_ERRNO`,
+  or `SECCOMP_RET_TRACE` without a tracer), or they "returned" the syscall's own number,
+  which is what a trapped call leaves (`SECCOMP_RET_TRAP` does not fail: the kernel rolls
+  the return register back to the syscall number and raises `SIGSYS`; on x86_64 a trapped
+  `sched_getscheduler` shows a return value of 145). A count made of those only points at
+  a filter, not at loss - on a desktop a browser's sandbox produces them all the time. It
+  is a hint, not a proof: a call that lost its enter can fail too or return its own number
+  (on x86_64 a `read` of 0 bytes, a `write` of 1 byte), a filter that answers with errno 0
+  or through a supervisor (`SECCOMP_RET_USER_NOTIF`, which may report success) is not
+  recognised, and the syscall numbers are known for x86_64 only (elsewhere only the failed
+  exits are recognised). A ptrace tracer normally makes no such exit: one that cancels a
+  call by setting its number to -1 silences both halves, and only `PTRACE_SYSEMU` leaves the
+  exit alone. Syscalls that are sampled or aggregate-only (`-syscall-sampling-syscalls` and
+  the built-in defaults) emit no exit without an enter at all, so neither a lost enter nor
+  a filter's answer shows for them.
+  Calls that only look like a lost half are not counted: a call in flight when the trace
+  started or stopped, a new thread's first return from `clone`/`fork`, a task killed inside
+  a syscall, `exit`/`exit_group`/`rt_sigreturn` (they never return), an open the `-path` or
   `-comm` filter dropped at its enter, a call whose enter fell out of ior's bounded table of
   pending enters, an `execve` returning under another thread id, a call ior folds with its
-  restart, and a call that may have run while its probes were still being attached, or
-  while the TUI's probes dialog attached or detached one. Sampling never cuts a call in
-  half: an exit is recorded exactly when its enter was.
+  restart, and a call that may have run while its probes were still being attached.
+  Sampling never cuts a call in half: an exit is recorded exactly when its enter was.
+  Both counts are lower bounds and stay far below the kernel's own figures when records are
+  dropped in bulk: a lost exit is only found when its thread enters another traced syscall
+  (never for a thread's last traced call); a thread that loses the exit of one call and the
+  enter of its next call of the same syscall pairs the two leftovers into one wrong row,
+  with no count; a call that lost both halves, or a lost enter of a thread ior had not seen
+  yet, leaves nothing to count. The statistics block is printed by headless runs only; the
+  TUI does not show these counts. Where the TUI's probes dialog
+  attaches or detaches a probe, halves around the change are left out as far as the change
+  is known to the event loop, but a detach in progress can still count an exit that was
+  merely no longer traced.
 
 ## Bytes Classification
 

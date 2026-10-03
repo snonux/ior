@@ -1581,13 +1581,19 @@ func (p *pairTracker) prunePrevTimes() {
 // A trimmed enter's exit may still come - the oldest are typically calls
 // that block for long - and finds no enter then, which is no lost half:
 // forgetTrimmed makes the thread unknown again, so unpairedExit lets that
-// exit pass uncounted.
+// exit pass uncounted. The thread is the one the enter is parked under,
+// which is where its exit arrives (an exec enter moved by moveExecCaller
+// carries another tid), so the victims are walked by key.
 func (p *pairTracker) prune() {
 	limit := p.limit()
 	if len(p.enters) <= limit {
 		return
 	}
-	trimLRU(p.enters, p.enterAges, trimTarget(limit), p.forgetTrimmed)
+	for _, tid := range lruVictims(p.enters, p.enterAges, trimTarget(limit)) {
+		p.forgetTrimmed(tid, p.enters[tid])
+		delete(p.enters, tid)
+		delete(p.enterAges, tid)
+	}
 }
 
 func (p *pairTracker) limit() int {
