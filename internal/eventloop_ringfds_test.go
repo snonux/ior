@@ -289,7 +289,45 @@ func ringLossCases() []ringLabelCase {
 			withoutRecord(ringOpRegister)(f)
 		}},
 		{"the ring buffer dropped records", func(f *ringFeed) { f.el.commRefreshPending.Store(true) }},
+		{"a record reserved before a drop, read after its sweep", func(f *ringFeed) {
+			dropNoticedAt(f, f.time+5*ringCallDuration)
+			f.raw(eventBytes(f.t, staleRegistration(f, f.time+5*ringCallDuration)))
+		}},
+		{"a record reserved before a drop, read ahead of its sweep", func(f *ringFeed) {
+			f.el.lastDropSeenBootNs.Store(f.time + 5*ringCallDuration)
+			f.raw(eventBytes(f.t, staleRegistration(f, f.time+1)))
+		}},
+		{"a record published for a call of another opcode", func(f *ringFeed) {
+			rec := f.record(0, ringOpRegister, ringUpdate{1, uint64(secondRingFd)})
+			f.call(types.SYS_ENTER_IO_URING_REGISTER, types.SYS_EXIT_IO_URING_REGISTER, uint32(realRingFd), 6, 3, rec)
+		}},
 	}
+}
+
+// dropNoticedAt has the drop monitor report a ring-buffer drop it saw at
+// stamp (boot clock), and the loop run the sweep that notice asks for.
+func dropNoticedAt(f *ringFeed, stamp uint64) {
+	f.el.lastDropSeenBootNs.Store(stamp)
+	f.el.commRefreshPending.Store(true)
+	f.el.applyPendingCommRefresh()
+}
+
+// staleRegistration is the control record of a registration under indexes 0
+// and 1 that returned at exitTime: what the loop finds in the buffer after a
+// drop, from before the records the drop lost.
+func staleRegistration(f *ringFeed, exitTime uint64) *types.RingFdsEvent {
+	return f.record(exitTime, ringOpRegister,
+		ringUpdate{0, uint64(realRingFd)}, ringUpdate{1, uint64(secondRingFd)})
+}
+
+// Only a record that may predate the drop notice is refused: the thread's
+// next registration, newer than the notice, names its rows again.
+func TestRingFdsRecordNewerThanADropIsApplied(t *testing.T) {
+	f := newRingFeed(t)
+	dropNoticedAt(f, f.time+5*ringCallDuration)
+	f.raw(eventBytes(t, staleRegistration(f, f.time+5*ringCallDuration+1)))
+	wantRing(t, f.enter(0), 0, realRingFd, realRingFd)
+	wantRing(t, f.enter(1), 1, secondRingFd, secondRingFd)
 }
 
 func TestRegisteredRingRowKeepsItsIndexLabel(t *testing.T) {
@@ -469,23 +507,69 @@ func TestRingTrackerIsBounded(t *testing.T) {
 	wantIndexLabel(t, f.enter(0), 0)
 }
 
-// A ring named from procfs was not in the fd table when it was registered:
-// its number stays the ring's until the table gets an entry for it.
-func TestRingSlotFromProcfsLosesItsNumberToATrackedFile(t *testing.T) {
+// procfsRingFd is a ring descriptor the trace never saw being created: ior
+// knows it from /proc/<pid>/fd alone.
+const procfsRingFd = int32(7)
+
+// newProcfsRingFeed is newRingFeed whose thread registered, under index 0,
+// a ring that ior names from the procfs cache, not from the fd table.
+func newProcfsRingFeed(t *testing.T) *ringFeed {
+	t.Helper()
+	f := newRingFeed(t)
+	f.el.fdState().setProcFdCache(procfsRingFd, f.pid, file.NewFd(procfsRingFd, realRingName, 2))
+	f.register(0, procfsRingFd)
+	wantRing(t, f.enter(0), 0, procfsRingFd, procfsRingFd)
+	return f
+}
+
+// A ring named from procfs keeps its number while the procfs answer the
+// slot was made of is what ior holds for the number, and loses it for good
+// with that answer: to a close ior traced, to a traced call that bound the
+// number, to an answer read anew.
+func TestRingFromProcfsLosesItsNumberWithTheProcfsAnswer(t *testing.T) {
+	tests := map[string]func(f *ringFeed){
+		"the descriptor was closed": func(f *ringFeed) { f.closeFd(procfsRingFd) },
+		"closed, then reused untraced": func(f *ringFeed) {
+			f.closeFd(procfsRingFd)
+			f.el.fdState().setProcFdCache(procfsRingFd, f.pid, file.NewFd(procfsRingFd, "/tmp/untraced", 0))
+		},
+		"a traced call bound the number": func(f *ringFeed) { reuseFd(f, procfsRingFd, "/tmp/newer") },
+		"procfs was read again": func(f *ringFeed) {
+			f.el.fdState().setProcFdCache(procfsRingFd, f.pid, file.NewFd(procfsRingFd, realRingName, 2))
+		},
+	}
+	for name, rebind := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newProcfsRingFeed(t)
+			rebind(f)
+			wantRing(t, f.enter(0), 0, procfsRingFd, -1)
+			// A number given up does not come back with a later answer.
+			f.el.fdState().forget(procfsRingFd, f.pid)
+			wantRing(t, f.enter(0), 0, procfsRingFd, -1)
+		})
+	}
+}
+
+// What must NOT cost a procfs-named ring its number: other rows of the
+// thread, and descriptor 7 of another process.
+func TestRingFromProcfsKeepsItsNumber(t *testing.T) {
+	f := newProcfsRingFeed(t)
+	f.el.fdState().set(procfsRingFd, f.pid+1, file.NewFd(procfsRingFd, "/other/process", 0))
+	f.closeFd(secondRingFd)
+	wantRing(t, f.enter(0), 0, procfsRingFd, procfsRingFd)
+	wantRing(t, f.enter(0), 0, procfsRingFd, procfsRingFd)
+}
+
+// A slot made of a procfs answer that was not kept has nothing to vouch for
+// its number, and one that lost it does not ask again.
+func TestRingSlotWithoutAnEntryShowsNoNumber(t *testing.T) {
 	fds := newFDTracker(nil)
-	slot := ringSlot{ring: file.NewFd(7, realRingName, 2)}
-	if !slot.stillBound(fds, execCommPid) {
-		t.Fatal("an untracked ring descriptor lost its number without any binding")
-	}
-	fds.set(7, execCommPid+1, file.NewFd(7, "/other/process", 0))
-	if !slot.stillBound(fds, execCommPid) {
-		t.Fatal("another process's descriptor 7 took the ring's number")
-	}
-	fds.set(7, execCommPid, file.NewFd(7, "/tmp/newer", 0))
+	slot := ringSlot{ring: file.NewFd(procfsRingFd, realRingName, 2)}
 	if slot.stillBound(fds, execCommPid) {
-		t.Fatal("the ring kept its number although the fd table bound it to a newer file")
+		t.Fatal("a ring that no entry of ior vouches for shows a descriptor number")
 	}
-	fds.delete(7, execCommPid)
+	fds.setProcFdCache(procfsRingFd, execCommPid, slot.ring)
+	slot.bound, slot.cached = slot.ring, true
 	if slot.stillBound(fds, execCommPid) {
 		t.Fatal("a number given up came back")
 	}

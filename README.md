@@ -261,7 +261,12 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   descriptor. ior follows `IORING_REGISTER_RING_FDS`/`IORING_UNREGISTER_RING_FDS` and
   names such rows after the ring (`anon_inode:[io_uring]`, with the ring's descriptor
   while that number still is the ring's, fd -1 once it was closed - a registered ring
-  stays usable after its descriptor is closed). A ring registered before the trace
+  stays usable after its descriptor is closed). `-plain` prints the index in front of the
+  name, `io_uring:reg[0]=anon_inode:[io_uring]%(5,O_RDWR|O_CLOEXEC)`; everywhere else
+  (the `-path` filter, the file ranking, the stream CSV export and Parquet recordings) the
+  file is the plain ring name `anon_inode:[io_uring]`, so these rows count with the ones
+  that address the same ring by its descriptor, and `-path 'io_uring:reg'` matches only
+  the rows of a ring ior could not name. A ring registered before the trace
   started, by a thread or `io_uring_register` probe the trace does not cover, or whose
   registration record was lost keeps the label `io_uring:reg[<index>]` with fd -1, and so
   does a ring created with `IORING_SETUP_REGISTERED_FD_ONLY`, which has no descriptor.

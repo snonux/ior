@@ -36,6 +36,25 @@
 // would leave userspace with the index's PREVIOUS ring, and rows named after
 // the wrong file rather than after none.
 //
+// The read is not atomic with the kernel's own copy of the array. The kernel
+// copied each entry in and wrote the index back while the call ran; this read
+// comes after it returned, from memory another thread of the process may
+// have rewritten in between (as handle.c says of its handle). What is
+// published is then not what the kernel registered. Userspace cannot tell and
+// only refuses what cannot be: an index outside the table, and a descriptor
+// that ior does not know as an io_uring file.
+//
+// A leftover enter state can also publish a record for a call that is no
+// ring-fds call. At rate 1 every other io_uring_register neither writes the
+// state nor clears one, so the entry of a ring-fds call whose exit never ran
+// (exit probe detached and attached again, or the task died in the call and
+// its tid was reused) is matched by the trace id at the next
+// io_uring_register exit, whatever its opcode, and a positive return value
+// has the array read through the stale pointer. The opcode of the exiting
+// call is not known here - what is parked is the stale call's - so this is
+// caught in userspace: the exit row carries the real opcode
+// (confirmRingFdsRecord drops the thread's table).
+//
 // Cost. Only the two opcodes pay: every other io_uring_register adds one
 // masked compare at enter (ior_ring_fds_opcode) and a zero test at exit, and
 // its exit hook takes the two slots from the lookup it does anyway. No other

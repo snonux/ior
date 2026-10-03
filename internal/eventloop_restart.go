@@ -1764,6 +1764,14 @@ func amendsPendingEnter(ev runtimeDecodedEvent) bool {
 // whose path read faulted again): it is spliced into the kept enter, as
 // handleOpenNameFixupEvent would splice it into a parked one, so the enter is
 // complete should a release park it again, and then goes with it.
+//
+// The other two records that amend a pending enter (amendsPendingEnter) are
+// not spliced: a FileHandleEvent or a RingFdsEvent between the kept enter and
+// its exit releases the row unfolded. For the ring-fds record that is
+// theory: it is published only for an io_uring_register of opcode 20/21,
+// and neither path returns a restart code (io_ringfd_register and
+// io_ringfd_unregister, io_uring/tctx.c, Linux 6.19), so such a call is
+// never the continuation of a held row.
 func (h *heldRestart) stepContinuation(direction rawEventDirection, ev runtimeDecodedEvent) restartAction {
 	if fixup, isFixup := ev.(*types.OpenNameFixupEvent); isFixup && h.reexecuted() {
 		applyRecoveredFilename(h.continuation, fixup)

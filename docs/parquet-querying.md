@@ -55,6 +55,19 @@ under that name. To count descriptor-carrying rows use `fd >= 0`. Recordings mad
 this change hold `N:file` and `fd = -1` in those rows; filter them with
 `file NOT IN ('', 'N:file')`.
 
+An `io_uring_enter` or `io_uring_register` row that addresses its ring through the calling
+thread's registered-ring table (`IORING_ENTER_REGISTERED_RING`,
+`IORING_REGISTER_USE_REGISTERED_RING`) passes a table index where a descriptor would be. When
+ior saw the ring being registered, `file` is the plain ring name `anon_inode:[io_uring]`, the
+same value as in the rows that address the ring by its descriptor, and `fd` is the descriptor
+the ring was registered from, or `-1` once ior saw that number closed or rebound (the
+registered ring stays usable). The index is not stored: only `-plain` prints it
+(`io_uring:reg[0]=anon_inode:[io_uring]%(5,O_RDWR|O_CLOEXEC)`). The same holds for everything
+else that goes by the file name: the stream CSV export, the file ranking and the `-path`
+filter. A ring ior could not name keeps `file = 'io_uring:reg[<index>]'` with `fd = -1`, so
+`WHERE file LIKE 'io_uring:reg[%'` and `-path 'io_uring:reg'` select exactly those unnamed
+rows. Recordings made before this change hold the index label in all registered-ring rows.
+
 ### Stream CSV export columns
 
 The TUI stream CSV export (`e`, and `x`/`X` on the paused Stream tab; `E` only opens the last
