@@ -149,11 +149,35 @@ func TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe(t *testing.T) {
 	if afterPipe != 0 {
 		t.Errorf("%d of %d writes are named after the pipe that reused their number", afterPipe, writes)
 	}
-	if writes < 64 || named < 1 {
-		t.Errorf("%d write rows, %d named after their file; want >= 64 rows and the first one named", writes, named)
+	if writes < 65 || named < 1 {
+		t.Errorf("%d write rows, %d named after their file; want >= 65 rows and the first one named", writes, named)
 		logRowSummary(t, rows)
 	}
+	// The write that was blocked across the close and the pipe: ior always
+	// gets to it after the pipe2 that rebound the number, and the identity
+	// (with the binding time of the pipe's entry) refuses the pipe.
+	if name := blockedFifoWriteName(t, rows); name != "" {
+		t.Errorf("blocked fifo write named %q, want no name", name)
+	}
 	assertCloseUntrackedRows(t, rows)
+}
+
+// blockedFifoWriteName returns the file name of close-untracked's blocked
+// FIFO write (the one write of closeUntrackedBlockedBytes, 256 KiB, in
+// cmd/ioworkload), and fails the test unless there is exactly one.
+func blockedFifoWriteName(t *testing.T, rows []iorparquet.Record) string {
+	t.Helper()
+	const blockedBytes = 256 * 1024
+	var names []string
+	for _, row := range rows {
+		if row.Syscall == "write" && row.Ret == blockedBytes {
+			names = append(names, row.File)
+		}
+	}
+	if len(names) != 1 {
+		t.Fatalf("%d write rows of %d bytes %q, want the one blocked fifo write", len(names), blockedBytes, names)
+	}
+	return names[0]
 }
 
 // closeUntrackedRows runs the close-untracked scenario with iorEnv added to
@@ -198,16 +222,25 @@ func closeUntrackedWriteNames(t *testing.T, rows []iorparquet.Record) (writes, n
 // shows task yz2's defect, writes reported on the pipe that took the number
 // after them. It proves that the test above passes because the answers are
 // checked against the identity, not because the workload stopped racing the
-// event loop. The race is the workload's whole design (a write, at once the
-// close, at once a pipe, 63 times over) and ior reads procfs when it gets to
-// the row, so one wrongly named write among them is all the control asks for.
+// event loop.
+//
+// The 63 write-close-pipe iterations race the loop, and on an idle host the
+// loop can win every one of them; so the control asks for the one write the
+// loop cannot win (task a23): the workload's last write blocks on a full FIFO
+// in a thread of its own while the main thread closes the descriptor, puts a
+// pipe on the number and only then drains the FIFO. The write's exit record,
+// where ior resolves it, comes after the pipe2 exit, so by then the number is
+// the pipe's in ior's fd table (pipe2 is traced) and in /proc/<pid>/fd alike.
 func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *testing.T) {
 	rows := closeUntrackedRows(t, "IOR_FILE_IDENT=0")
 
 	writes, _, afterPipe := closeUntrackedWriteNames(t, rows)
-	if writes < 64 || afterPipe < 1 {
-		t.Errorf("%d write rows, %d named after the reusing pipe; want >= 64 rows and at least one such write with the capture off",
+	if writes < 65 || afterPipe < 1 {
+		t.Errorf("%d write rows, %d named after the reusing pipe; want >= 65 rows and at least one such write with the capture off",
 			writes, afterPipe)
 		logRowSummary(t, rows)
+	}
+	if name := blockedFifoWriteName(t, rows); !strings.Contains(name, "pipe") {
+		t.Errorf("blocked fifo write named %q, want the reusing pipe with the capture off", name)
 	}
 }

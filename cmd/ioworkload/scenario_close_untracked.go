@@ -24,10 +24,13 @@ const closeUntrackedFiles = 64
 const closeUntrackedSettle = 500 * time.Millisecond
 
 // closeUntrackedState carries the descriptors close-untracked opened in its
-// prestart hook over to the scenario proper.
+// prestart hook over to the scenario proper: the regular files, and both
+// descriptors of the FIFO whose write is blocked across the close and reuse
+// of its number (closeUnderBlockedWrite).
 var closeUntrackedState struct {
-	fds     []int
-	cleanup func()
+	fds             []int
+	fifoFd, drainFd int
+	cleanup         func()
 }
 
 // openUntrackedFiles is close-untracked's prestart hook: it runs before the
@@ -48,6 +51,10 @@ func openUntrackedFiles() error {
 		}
 		closeUntrackedState.fds = append(closeUntrackedState.fds, fd)
 	}
+	if err := openUntrackedFifo(dir); err != nil {
+		cleanup()
+		return err
+	}
 	return nil
 }
 
@@ -65,6 +72,10 @@ func openUntrackedFiles() error {
 // stamped after the close entered. That exercises the close row's read-time
 // rule: a resolver that took any cached procfs answer would name the close
 // after the pipe.
+//
+// Whether ior gets to such a write before or after the pipe is a race; the
+// last step is one it always loses: a FIFO write blocked across the close and
+// the reuse of its number (closeUnderBlockedWrite, task a23).
 func closeUntracked() error {
 	defer closeUntrackedState.cleanup()
 	fds := closeUntrackedState.fds
@@ -77,7 +88,7 @@ func closeUntracked() error {
 			return err
 		}
 	}
-	return nil
+	return closeUnderBlockedWrite(closeUntrackedState.fifoFd, closeUntrackedState.drainFd)
 }
 
 // closeAndReuse closes fd, after writing to it when writeFirst is set, and

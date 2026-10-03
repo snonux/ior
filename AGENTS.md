@@ -2669,6 +2669,12 @@ kernel program reports the file, and user space compares.
   `IOR_FILE_IDENT=0`), `TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe`
   and its control
   `TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe`.
+  The control used to need the loop to lose one race of 63; since task a23
+  it checks the scenario's last write, which ior cannot win: it blocks on a
+  full FIFO in its own thread while the descriptor is closed and a pipe
+  takes the number, and only then is the FIFO drained
+  (`closeUnderBlockedWrite`, `cmd/ioworkload`), so its exit record follows
+  the pipe2's. Capture off it is named after the pipe, on it is unnamed.
   The integration tests show what the identities lead to; none compares an
   identity with `stat(2)`.
 
