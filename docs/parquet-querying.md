@@ -502,7 +502,9 @@ traced everything:
   `ring buffer drops: N`, `records discarded at stop: N` or `records left in the kernel
   ring buffer at stop: N`), the lost rows are in neither
   `traced` nor `counted_only`: every element then carries `"lower_bound":true` and its
-  numbers are a lower bound (the true total is at least that). The same mark is set when
+  numbers are a lower bound (the true total is at least that). The last of the three lines
+  does not always mean that ior lagged: stopping a busy trace that had kept up can leave
+  the records produced during the stop itself in the ring, undecoded. The same mark is set when
   events may have been lost because the kernel skipped probe runs (`probe runs skipped by
   the kernel: N` above zero): that counter covers every task on the host, so with a `-pid`,
   `-tid` or `-comm` filter the numbers may in fact be exact, and ior cannot tell. The value is the word `unavailable` when the totals cannot be

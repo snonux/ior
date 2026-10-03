@@ -118,8 +118,13 @@ func TestStopReportsRecordsLeftInTheKernelRing(t *testing.T) {
 		t.Fatalf("stat line = %q", line)
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0],
-		"18000 records were still in the kernel ring buffer at stop and were not decoded: the consumer lagged") {
+		"18000 records were still in the kernel ring buffer when the trace stopped and were not decoded") {
 		t.Fatalf("warnings = %q", warnings)
+	}
+	// The count is a fact, the cause is not known: a busy trace that kept up
+	// leaves the records produced during the stop itself there too.
+	if strings.Contains(warnings[0], "lagged") {
+		t.Fatalf("the warning blames a lagging consumer: %q", warnings[0])
 	}
 }
 

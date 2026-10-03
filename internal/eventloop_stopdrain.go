@@ -238,32 +238,40 @@ func (e *eventLoop) discardedAtStopStatLine() string {
 	)
 }
 
-// countKernelRingLeftAtStop records what the consumer left in the kernel ring
-// buffer (task us2), as backlogAtStop saw it at the stop. The libbpfgo poller
-// feeds rawCh ahead of the decoder and blocks when it is full, so a consumer
-// that lagged until the stop leaves records in the kernel's ring. The poller
-// still moves some of them into rawCh while the drain makes room there, and
-// RingBuffer.Stop abandons those like the rest: none of them is decoded
-// (only the poller consumes the ring, and the trace window ended), which is
-// why the count is the one from before the drain (task f23). They are counted
-// so "drops: 0" does not read as a complete trace.
+// countKernelRingLeftAtStop records what the stop left in the kernel ring
+// buffer (task us2), as backlogAtStop saw it. The libbpfgo poller feeds rawCh
+// ahead of the decoder and blocks when it is full, so a consumer that lagged
+// until the stop leaves records in the kernel's ring. Lag is the usual
+// reason, not the only one: nothing receives from rawCh while backlogAtStop
+// waits for the poller to rest, and the probes stay attached, so a trace
+// whose tasks produce faster than the poller hands on fills rawCh during
+// that wait although the loop had kept up, and the records produced during
+// the stop itself are then counted here. The count is true either way
+// (records produced before the snapshot and not decoded), so the warning
+// names the fact and no cause. The poller still moves some of them into
+// rawCh while the drain makes room there, and RingBuffer.Stop abandons those
+// like the rest: none of them is decoded (only the poller consumes the ring,
+// and the trace window ended), which is why the count is the one from before
+// the drain (task f23). They are counted so "drops: 0" does not read as a
+// complete trace.
 func (e *eventLoop) countKernelRingLeftAtStop(unread ringbufUnread) {
 	if unread.records == 0 {
 		return
 	}
 	e.numLeftInKernelRing += uint(unread.records)
 	e.notifyWarningOrLog(fmt.Sprintf(
-		"%d records were still in the kernel ring buffer at stop and were not decoded: the consumer lagged",
+		"%d records were still in the kernel ring buffer when the trace stopped and were not decoded",
 		unread.records,
 	))
 }
 
 // leftInKernelRingStatLine renders the end-of-run "left in the kernel ring
-// buffer" line, empty when the consumer kept up. These records were not
-// decoded: they were still in the kernel ring at the stop (the poller may
+// buffer" line, empty when the stop found nothing there. These records were
+// not decoded: they were still in the kernel ring at the stop (the poller may
 // hand up to a channel's worth of them to rawCh afterwards, where
 // RingBuffer.Stop discards them), so they appear in none of "tracepoints",
-// "ring buffer drops" and "discarded at stop".
+// "ring buffer drops" and "discarded at stop". The line says where they
+// were, not why (see countKernelRingLeftAtStop).
 func (e *eventLoop) leftInKernelRingStatLine() string {
 	if e.numLeftInKernelRing == 0 {
 		return ""

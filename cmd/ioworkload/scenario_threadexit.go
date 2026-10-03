@@ -26,6 +26,7 @@ var scenarioPrestarts = map[string]func() error{
 	"thread-exit-tid-worker":     startTidWorker,
 	"exec-non-leader-thread-tid": startExecWorker,
 	"close-untracked":            openUntrackedFiles,
+	"getppid-burst":              startGetppidBurstChild,
 }
 
 // parkedWorker is a goroutine locked to its own non-main OS thread, parked

@@ -3,7 +3,9 @@ package integrationtests
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -18,10 +20,8 @@ const (
 	stopAccountingAttempts = 5
 	// stopAccountingDelayStep is added to the workload's release delay with
 	// every attempt (0, 100, ... 400 ms): the attempts then spread the
-	// workload's exit over ior's 500 ms liveness period.
+	// traced child's exit over ior's 500 ms liveness period.
 	stopAccountingDelayStep = 100 * time.Millisecond
-	// threadWatchInterval is how often the workload's threads are listed.
-	threadWatchInterval = 2 * time.Millisecond
 )
 
 var (
@@ -47,28 +47,22 @@ func (f stopFigures) lagged() bool {
 	return f.discarded+f.leftInRing > 0
 }
 
-// burstRun is one traced getppid-burst run: ior's figures and the number of
-// threads the workload had, each of which leaves one exit record that passes
-// the -pid filter.
-type burstRun struct {
-	figures stopFigures
-	threads uint64
-}
-
-// produced is the number of records the kernel produced for the run, or
-// counted as dropped: an enter and an exit per getppid call and the exit
-// record of every thread.
-func (r burstRun) produced() uint64 {
-	return 2*getppidBurstCalls + r.threads
-}
+// getppidBurstRecords is the number of records the kernel produces for a
+// traced getppid-burst child, or counts as dropped: an enter and an exit per
+// getppid call and the exit record of the child, which is one thread.
+const getppidBurstRecords = 2*getppidBurstCalls + 1
 
 // TestStopAccountsForEveryRecord is the accounting identity of task f23, end
-// to end: the workload makes a known number of getppid calls and exits, the
-// trace stops on that exit, and every record the kernel produced must be in
+// to end: the traced process makes a known number of getppid calls and exits,
+// the trace stops on that exit, and every record the kernel produced must be in
 // exactly one figure - decoded (tracepoints), dropped by the full ring,
 // discarded at stop, or left in the kernel ring buffer. The identity is
-// exact: the records are two per call plus one exit record per thread of the
-// workload, and the threads are counted while it runs (watchThreads).
+// exact because the traced process is the workload's forked child, a single
+// thread that the Go runtime knows nothing of (startGetppidBurstChild in
+// cmd/ioworkload): two records per call and its one exit record pass the
+// -pid filter, and nothing else can. The workload itself is not traced. Its
+// runtime starts threads when it likes, each with records of its own, and
+// counting them from /proc while it ran missed one about once in 13 runs.
 //
 // The case the test is there for is the LAGGING stop: ior's liveness watcher
 // sees the target gone while the event loop is still behind, so the stop
@@ -94,20 +88,20 @@ func TestStopAccountsForEveryRecord(t *testing.T) {
 	judged := 0
 	for attempt := range stopAccountingAttempts {
 		delay := time.Duration(attempt) * stopAccountingDelayStep
-		run := runGetppidBurst(t, delay)
-		if run.figures.loss.SkippedRuns > 0 {
+		figures := runGetppidBurst(t, delay)
+		if figures.loss.SkippedRuns > 0 {
 			t.Logf("attempt %d: the kernel skipped %d probe runs; the records produced are not known, not judged",
-				attempt+1, run.figures.loss.SkippedRuns)
+				attempt+1, figures.loss.SkippedRuns)
 			continue
 		}
 		judged++
-		t.Logf("attempt %d (release delayed by %v): lagging stop exercised: %s; %d threads; %+v",
-			attempt+1, delay, yesNo(run.figures.lagged()), run.threads, run.figures)
-		if got, want := run.figures.accounted(), run.produced(); got != want {
-			t.Fatalf("the figures account for %d records, want %d (2 per getppid call of %d, 1 per thread of %d): %+v",
-				got, want, getppidBurstCalls, run.threads, run.figures)
+		t.Logf("attempt %d (release delayed by %v): lagging stop exercised: %s; %+v",
+			attempt+1, delay, yesNo(figures.lagged()), figures)
+		if got := figures.accounted(); got != getppidBurstRecords {
+			t.Fatalf("the figures account for %d records, want %d (2 per getppid call of %d and the exit record): %+v",
+				got, getppidBurstRecords, getppidBurstCalls, figures)
 		}
-		if run.figures.lagged() {
+		if figures.lagged() {
 			return
 		}
 	}
@@ -125,43 +119,28 @@ func yesNo(yes bool) string {
 }
 
 // runGetppidBurst traces one getppid-burst run, released releaseDelay later
-// than the harness does by itself, and returns its figures.
-func runGetppidBurst(t *testing.T, releaseDelay time.Duration) burstRun {
+// than the harness does by itself, and returns its figures. The trace is of
+// the workload's forked child, whose pid the workload publishes before the
+// harness starts ior; the trace stops on the child's exit.
+func runGetppidBurst(t *testing.T, releaseDelay time.Duration) stopFigures {
 	t.Helper()
 	h := newTestHarness(t)
 	h.IorOutput = &OutputCapture{}
 	h.ReleaseDelay = releaseDelay
-	threads := make(chan int, 1)
-	// The hook is where the harness tells the workload's pid; it adds no
-	// argument.
-	h.IorArgsForPID = func(pid int) ([]string, error) {
-		go func() { threads <- watchThreads(pid) }()
-		return nil, nil
+	pidFile := filepath.Join(h.OutputDir, "burst-child.pid")
+	h.WorkloadEnv = append(h.WorkloadEnv, forkChildPidFileEnv+"="+pidFile)
+	// The -pid given here follows the harness's own and overrides it.
+	h.IorArgsForPID = func(int) ([]string, error) {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			return nil, err
+		}
+		return []string{"-pid", strings.TrimSpace(string(raw))}, nil
 	}
 	if _, _, err := h.RunWithIorArgs(getppidBurstScenario, defaultDuration, []string{"-trace-syscalls", "getppid"}); err != nil {
 		t.Fatalf("run scenario %s: %v", getppidBurstScenario, err)
 	}
-	// The workload was reaped by the run, which ends the watch.
-	return burstRun{figures: parseStopFigures(t, h.IorOutput.String()), threads: uint64(<-threads)}
-}
-
-// watchThreads lists the threads of pid until the process is gone and
-// returns how many different ones it saw. The workload starts its threads
-// long before the harness releases it and its getppid loop starts none, so
-// the list is the same on every look but the last ones (a zombie leader has
-// only itself); the union is the threads that exited with the process.
-func watchThreads(pid int) int {
-	seen := make(map[string]struct{})
-	for {
-		entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
-		if err != nil {
-			return len(seen)
-		}
-		for _, entry := range entries {
-			seen[entry.Name()] = struct{}{}
-		}
-		time.Sleep(threadWatchInterval)
-	}
+	return parseStopFigures(t, h.IorOutput.String())
 }
 
 // parseStopFigures reads the figures a record can end up in from ior's

@@ -151,9 +151,13 @@ marks the files: Parquet footer keys `ior.sampling` and `ior.sampling.totals` (s
 reports on stderr; unsampled recordings keep version 1). Totals are reported as unavailable
 under a filter the kernel counters cannot apply (`-comm`, `-path`, ...). If the kernel's ring
 buffer dropped events (`ring buffer drops: N` in the statistics), records still buffered at
-stop could not be decoded (`records discarded at stop: N`) or a lagging ior left records in
-the ring (`records left in the kernel ring buffer at stop: N`), the lost rows are in neither
+stop could not be decoded (`records discarded at stop: N`) or the stop left records in the
+ring (`records left in the kernel ring buffer at stop: N`), the lost rows are in neither
 count, so the totals are labelled `at least` (Parquet: `"lower_bound":true`) instead of exact.
+Records are left in the ring when ior lagged behind the kernel at the stop, and also when a
+busy trace that had kept up is stopped (`-duration`, Ctrl-C) while its tasks produce faster
+than ior takes records out of the ring: the records produced during the stop itself are not
+decoded, and the line counts them.
 They are labelled the same way when the kernel skipped probe runs (`probe runs skipped by the
 kernel: N`, see Known limitations): a skipped run of a traced task is in neither count, and
 since that counter covers every task on the host ior cannot tell whether one was.
