@@ -76,7 +76,9 @@ import (
 //     before the identity existed.
 //
 // An unnamed row keeps the row's own identity, so it is not mistaken for an
-// unusable descriptor. "Unknown" on either side contradicts nothing: such a
+// unusable descriptor. (A close row left unnamed by these rules is then named
+// by the last path component its record carries, when the closed file has
+// one: eventloop_fdname.go, task xz2.) "Unknown" on either side contradicts nothing: such a
 // row is resolved exactly as before the identity existed. That covers a
 // kernel without the capture (no bpf_rdonly_cast kfunc: mainline before
 // 6.2), an object built before it, a run that switched it off, the records

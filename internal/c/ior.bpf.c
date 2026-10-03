@@ -32,6 +32,10 @@
 // generated single-descriptor enter handlers and the exits of the open kinds.
 #include "fileident.c"
 
+// Name of the file a close releases, read through the same walk, used by the
+// generated close handler.
+#include "fdname.c"
+
 // Restart fold: the pending-restart state behind filter.c's enter/exit hooks
 // and its two probes (signal:signal_deliver, a second sys_enter_rt_sigreturn).
 #include "restart.c"

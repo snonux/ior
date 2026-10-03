@@ -77,6 +77,10 @@
 // 0 the load would read the wrong slot, so the capture checks the offset and
 // switches itself off.
 //
+// close's enter handler reads the closed file's last path component through
+// the same walk (fdname.c, task xz2); it calls ior_file_of_table itself, so
+// that close pays for one walk.
+//
 // The walk runs in the context of the task whose table it reads, inside the
 // RCU read-side section every non-sleepable program runs in, and all loads
 // are fault-safe, so a table being resized or a file being freed by another
@@ -94,18 +98,18 @@ static __always_inline int ior_file_ident_supported(void) {
            bpf_core_field_offset(struct kiocb, ki_filp) == 0;
 }
 
-// ior_file_ident_of_table returns the identity of the file at descriptor fd
-// of the table files, or 0 when there is none to report: no table (a kernel
-// thread, a task past exit_files), a number outside the table, an empty slot,
-// or an inode whose low word is 0. The bounds check against max_fds comes
-// before the slot is touched: the slot of a number past the table is some
-// other object's memory.
-static __always_inline __u32 ior_file_ident_of_table(struct files_struct *files, __s32 fd) {
+// ior_file_of_table returns the file at descriptor fd of the table files, or
+// NULL when there is none: no table (a kernel thread, a task past
+// exit_files), a number outside the table, or an empty slot. The bounds check
+// against max_fds comes before the slot is touched: the slot of a number past
+// the table is some other object's memory. The pointer is one the verifier
+// typed by the load from the cast slot, so its fields load directly; it is
+// not a reference, and is only good inside the program run that walked to it
+// (fdname.c reads the dentry's name through it).
+static __always_inline struct file *ior_file_of_table(struct files_struct *files, __s32 fd) {
     struct fdtable *fdt;
     struct file **fds;
     struct kiocb *slot;
-    struct file *file;
-    struct inode *inode;
 
     if (!files)
         return 0;
@@ -118,7 +122,17 @@ static __always_inline __u32 ior_file_ident_of_table(struct files_struct *files,
     if (!fds)
         return 0;
     slot = bpf_rdonly_cast(fds + fd, bpf_core_type_id_kernel(struct kiocb));
-    file = slot->ki_filp;
+    return slot->ki_filp;
+}
+
+// ior_file_ident_of_table returns the identity of the file at descriptor fd
+// of the table files, or 0 when there is none to report: no file there
+// (ior_file_of_table), or an inode whose low word is 0.
+static __always_inline __u32 ior_file_ident_of_table(struct files_struct *files, __s32 fd) {
+    struct file *file;
+    struct inode *inode;
+
+    file = ior_file_of_table(files, fd);
     if (!file)
         return 0;
     inode = file->f_inode;

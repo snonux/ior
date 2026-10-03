@@ -29,20 +29,24 @@ const (
 	fdEventCompactSize           = 28
 	fdEventLegacyKernelSize      = 48
 	fdEventLegacyCompactSize     = 44
-	fdSizeEventSize              = 48
-	fdSizeEventCompactSize       = 44
-	retEventSize                 = 40
-	retEventSizeV1               = 36
-	nameEventSize                = 560
-	nameEventLegacySize          = 536
-	pathEventSize                = 312
-	pathEventCompactSize         = 312
-	pathEventV3KernelSize        = 304
-	pathEventV3CompactSize       = 300
-	pathEventLegacySize          = 280
-	fdPathEventSize              = 304
-	fdPathEventCompactSize       = 300
-	fcntlEventSize               = 40
+	// fd_name_event is fd_event plus name_len and the name (task xz2); no
+	// padding, so the kernel and binary.Write agree on its size.
+	fdNameEventSize        = 36 + IOR_FD_NAME_LENGTH
+	fdNameEventNameOffset  = 36
+	fdSizeEventSize        = 48
+	fdSizeEventCompactSize = 44
+	retEventSize           = 40
+	retEventSizeV1         = 36
+	nameEventSize          = 560
+	nameEventLegacySize    = 536
+	pathEventSize          = 312
+	pathEventCompactSize   = 312
+	pathEventV3KernelSize  = 304
+	pathEventV3CompactSize = 300
+	pathEventLegacySize    = 280
+	fdPathEventSize        = 304
+	fdPathEventCompactSize = 300
+	fcntlEventSize         = 40
 	// dup3_event carries the old descriptor's file identity since task d23:
 	// 36 bytes of fields, 40 as the kernel reserves it (tail padding), 36 as
 	// binary.Write writes it. The legacy record is the 32-byte one without
@@ -301,6 +305,7 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.Size = 0
 	f.SizeValid = 0
 	f.SchemaVersion = 0
+	f.clearName()
 	if current {
 		sizeOffset := 28
 		if len(raw) == fdEventLegacyKernelSize {
@@ -667,6 +672,55 @@ func (r *RingFdsEvent) Update(i int) (RingFdUpdate, bool) {
 		Index: binary.LittleEndian.Uint32(r.Updates[at : at+4]),
 		Fd:    binary.LittleEndian.Uint64(r.Updates[at+8 : at+16]),
 	}, true
+}
+
+// clearName takes the name of an fd_name_event off a pooled FdEvent that
+// last carried one. Almost none did, so the hot records pay one comparison
+// (of the last word of the struct's first cache line), not a 68-byte clear.
+func (f *FdEvent) clearName() {
+	if f.NameLen != 0 {
+		f.NameLen = 0
+		f.Name = [IOR_FD_NAME_LENGTH]byte{}
+	}
+}
+
+// NewFdNameEventFast decodes an fd_name_event, the record close sends in
+// place of its fd_event when the file it releases has a last path component
+// (internal/c/fdname.c, task xz2), into an FdEvent: the first 32 bytes are
+// fd_event's, and the pair is a close like any other. NameLen and Name are
+// the record's; FdEvent.LeafName reads them. There is one layout, 104 bytes;
+// any other size returns nil.
+func NewFdNameEventFast(raw []byte) *FdEvent {
+	if len(raw) != fdNameEventSize {
+		return nil
+	}
+	f := poolOfFdEvents.Get().(*FdEvent)
+	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	f.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	f.Time = binary.LittleEndian.Uint64(raw[8:16])
+	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	f.FileIdent = binary.LittleEndian.Uint32(raw[28:32])
+	f.Flags, f.Size, f.SizeValid, f.SchemaVersion = 0, 0, 0, 0
+	f.NameLen = binary.LittleEndian.Uint32(raw[32:36])
+	copy(f.Name[:], raw[fdNameEventNameOffset:])
+	return f
+}
+
+// LeafName returns the last path component an fd_name_event carried for the
+// file behind the descriptor, and whether the kernel program had to cut it
+// (NameLen, the component's real length, is more than the name field holds).
+// "" when the event carries none: every record but fd_name_event, and one
+// whose name could not be read (NameLen 0). The text stops at the first NUL,
+// which can come earlier than NameLen says (a close that raced a rename,
+// internal/c/fdname.c); the bytes behind it are stale ring-buffer memory.
+func (f *FdEvent) LeafName() (name string, cut bool) {
+	if f.NameLen == 0 {
+		return "", false
+	}
+	name = StringValue(f.Name[:])
+	return name, name != "" && f.NameLen >= IOR_FD_NAME_LENGTH
 }
 
 // NewSocketEventFast decodes one socket ring-buffer payload in a

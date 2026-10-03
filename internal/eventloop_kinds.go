@@ -109,6 +109,7 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_FD_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdPathExit)},
 		{enterEventType: types.ENTER_FD_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_FD_SIZE_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
+		{enterEventType: types.ENTER_FD_NAME_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_DUP3_EVENT, exit: typedRuntimeExit((*eventLoop).handleDup3Exit)},
 		{enterEventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT, exit: typedRuntimeExit((*eventLoop).handleOpenByHandleAtExit)},
 		{enterEventType: types.ENTER_SOCKET_EVENT, exit: typedRuntimeExit((*eventLoop).handleSocketExit)},
@@ -150,6 +151,10 @@ func rawSyscallEvents() []rawRuntimeEvent {
 		exitRaw(types.EXIT_OPEN_EVENT, rawDecoder[types.RetEvent](types.NewRetEventFast)),
 		enterRaw(types.ENTER_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast), nil),
 		enterRaw(types.ENTER_FD_SIZE_EVENT, decodeFdSizeEvent, nil),
+		// close's enter when the file it releases has a last path component:
+		// an fd_event with that name behind it, decoded into the same event
+		// (internal/eventloop_fdname.go).
+		enterRaw(types.ENTER_FD_NAME_EVENT, rawDecoder[types.FdEvent](types.NewFdNameEventFast), nil),
 		exitRaw(types.EXIT_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast)),
 		enterRaw(types.ENTER_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast), nil),
 		exitRaw(types.EXIT_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast)),

@@ -14309,6 +14309,10 @@ int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     if (!ior_on_syscall_enter(tid, SYS_ENTER_CLOSE, now))
         return 0;
 
+    __u32 file_ident;
+    if (ior_emit_fd_name_enter(pid, tid, SYS_ENTER_CLOSE, now, (__s32)ctx->args[0], &file_ident))
+        return 0;
+
     struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);
     if (!ev) {
         ior_count_ringbuf_drop();
@@ -14321,7 +14325,7 @@ int handle_sys_enter_close(struct syscall_trace_enter *ctx) {
     ev->tid = tid;
     ev->time = now;
     ev->fd = (__s32)ctx->args[0];
-    ev->file_ident = ior_file_ident(ev->fd);
+    ev->file_ident = file_ident;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

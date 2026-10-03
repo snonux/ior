@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -258,5 +259,51 @@ func TestBoundAtBelongsToTheBinding(t *testing.T) {
 func TestFdFileKeepsItsSize(t *testing.T) {
 	if got := unsafe.Sizeof(FdFile{}); got != 48 {
 		t.Fatalf("sizeof(FdFile) = %d, want 48", got)
+	}
+}
+
+// TestNewFdLeaf: a file known by its last path component only is named
+// "*/<component>" everywhere a name is read, with unknown flags, the row's
+// identity and the cannot-vouch mark (task xz2).
+func TestNewFdLeaf(t *testing.T) {
+	f := NewFdLeaf(7, "app.log", false, 4711)
+	if f.Name() != "*/app.log" || f.FD() != 7 || f.Ident() != 4711 || f.Flags() != unknownFlag || !f.NameFromProcFS() {
+		t.Fatalf("leaf file = %v ident %d flags %v vouched %v", f, f.Ident(), f.Flags(), !f.NameFromProcFS())
+	}
+	if got, want := f.String(), "*/app.log%(7,"+unknownFlag.String()+")"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	escaped := string(f.AppendString(nil, func(s string) string { return "<" + s + ">" }))
+	if !strings.HasPrefix(escaped, "<*/app.log>%(") {
+		t.Fatalf("AppendString passed %q through the escaper, want the whole name", escaped)
+	}
+	if set, known := f.CloseOnExec(); set || known {
+		t.Fatalf("CloseOnExec() = %v, %v; nothing but the name was read", set, known)
+	}
+}
+
+// TestNewFdLeafMarksACutComponent: a cut name ends in "...", and the
+// cut does not leave half a character behind.
+func TestNewFdLeafMarksACutComponent(t *testing.T) {
+	tests := []struct{ name, leaf, want string }{
+		{"ascii", "abcdef", "*/abcdef..."},
+		{"complete two-byte character", "abé", "*/abé..."},
+		{"half of a two-byte character", "ab\xc3", "*/ab..."},
+		{"two bytes of a three-byte character", "ab\xe2\x82", "*/ab..."},
+		{"three bytes of a four-byte character", "ab\xf0\x9f\x98", "*/ab..."},
+		{"complete four-byte character", "ab\U0001f600", "*/ab\U0001f600..."},
+		{"byte that begins nothing", "ab\xff", "*/ab\xff..."},
+		{"stray continuation bytes", "\x82\x82\x82\x82", "*/\x82\x82\x82\x82..."},
+		{"empty", "", "*/..."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NewFdLeaf(3, tc.leaf, true, 0).Name(); got != tc.want {
+				t.Fatalf("cut %q named %q, want %q", tc.leaf, got, tc.want)
+			}
+			if got := NewFdLeaf(3, tc.leaf, false, 0).Name(); got != "*/"+tc.leaf {
+				t.Fatalf("uncut %q named %q, want it unchanged", tc.leaf, got)
+			}
+		})
 	}
 }

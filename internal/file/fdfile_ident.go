@@ -5,6 +5,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"ior/internal/textsafe"
+	"ior/internal/types"
 )
 
 // File identity (task 603).
@@ -52,9 +55,10 @@ func (f *FdFile) SetIdent(ident uint32) {
 // the row's record said which file the descriptor was, but neither a traced
 // call nor procfs could name it - the process had exited or closed and
 // reused the number before the event loop got to the row (tasks as2, yz2), or
-// the row is the close of a descriptor ior never saw opened (task xz2) - the
-// identity is all ior has and is shown instead: "E:ino:<n>", n being the low
-// 32 bits of the inode number. It tells rows on different unnamed files
+// the row is the close of a descriptor ior never saw opened and of a file
+// without a last path component to report (a pipe, a socket; task xz2,
+// NewFdLeaf names the others) - the identity is all ior has and is shown
+// instead: "E:ino:<n>", n being the low 32 bits of the inode number. It tells rows on different unnamed files
 // apart and is enough to look the file up while it exists (find -inum).
 // Name() stays empty either way, so filters and aggregations see no name.
 func (f *FdFile) appendUnnamed(dst []byte) []byte {
@@ -157,4 +161,46 @@ func parseInodeFromFdInfo(data []byte) (uint64, bool) {
 		return ino, err == nil
 	}
 	return 0, false
+}
+
+// LeafPrefix starts the name of a file ior knows only the last path component
+// of (NewFdLeaf): "*/foo.log" is a file called foo.log in a directory ior
+// cannot name. The asterisk stands for the unknown directories, as in a glob.
+// No name read from procfs begins this way (those are absolute, or
+// "type:[...]"), and a traced pathname does only if the program itself opened
+// a file below a directory literally called "*" by a relative path.
+const LeafPrefix = "*/"
+
+// NewFdLeaf is the descriptor of a file ior has only the last path component
+// of: the close of a descriptor ior never saw opened, whose name the kernel
+// program read from the file as the close entered (internal/c/fdname.c, task
+// xz2). cut says the component was longer than the record holds; the name
+// then ends in types.TruncatedPathSuffix like every other cut path
+// ("*/0123...": a file whose name begins that way). ident is the row's file
+// identity, 0 when unknown.
+//
+// The name is LeafPrefix plus the component, so Name() is not a path. It is
+// still a name: the stream, the Files tab, the Parquet "file" column and a
+// -path filter see "*/foo.log", which says more than the empty name these
+// rows had, and a filter for the component matches it. Rows on the same file
+// that were named in full (from a traced open or from procfs) are not
+// grouped with it - a full path cannot be made from a component.
+//
+// Flags are unknown: nothing but the name was read. The name carries the
+// "cannot vouch" mark (NameFromProcFS): no traced call gave it, so it must
+// not be passed on as the name of a file (it never is: the file belongs to
+// one close row and is not stored in the fd table).
+//
+// A cut component may end in the middle of a multi-byte character; those
+// bytes are dropped (textsafe.TrimPartialRune), so that the cut does not turn
+// a valid name into an invalid one.
+func NewFdLeaf(fd int32, leaf string, cut bool, ident uint32) *FdFile {
+	name := LeafPrefix + leaf
+	if cut {
+		name = LeafPrefix + textsafe.TrimPartialRune(leaf) + types.TruncatedPathSuffix
+	}
+	f := NewFd(fd, name, -1)
+	f.ident = ident
+	f.fromProcFS = true
+	return f
 }

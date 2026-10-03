@@ -40,8 +40,8 @@ var structsWithComm = map[string]bool{"open_event": true, "exec_event": true}
 
 // handWrittenStringStructs are the structs with a string field that only
 // hand-written BPF code fills; TestHandWrittenBPFStringCapturesNeedNoMemset
-// covers them.
-var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true, "task_rename_event": true}
+// covers them, and fdname_harness_test.go the name of fd_name_event.
+var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true, "task_rename_event": true, "fd_name_event": true}
 
 var handlerStructRE = regexp.MustCompile(`(?m)^/// \S+ is a struct (\w+)`)
 

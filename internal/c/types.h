@@ -78,11 +78,14 @@
 // Control record carrying the file handle a successful name_to_handle_at
 // returned (ior_emit_file_handle, handle.c).
 #define FILE_HANDLE_EVENT 65
+// close's enter record when the file it releases has a name to report:
+// fd_event plus the last path component (ior_emit_fd_name_enter, fdname.c).
+// Only the enter side exists; the exit of close is a ret_event.
+#define ENTER_FD_NAME_EVENT 66
 // Control record carrying the registered-ring table entries a successful
 // io_uring_register(IORING_REGISTER_RING_FDS / IORING_UNREGISTER_RING_FDS)
-// set or released (ior_emit_ring_fds, iouring.c). 66 is skipped on purpose:
-// it is ENTER_FD_NAME_EVENT's on the branch of task xz2, and the ids only
-// have to be distinct, not dense.
+// set or released (ior_emit_ring_fds, iouring.c). 66 is ENTER_FD_NAME_EVENT;
+// the ids only have to be distinct, not dense.
 #define RING_FDS_EVENT 67
 
 #define UNCLASSIFIED 0
@@ -215,7 +218,8 @@ struct null_event {
 
 // fd_event is the hot single-descriptor record (read, write, close, ...): 32
 // bytes in the ring buffer. It has no schema field; its layout is the legacy
-// one, which userspace has always decoded.
+// one, which userspace has always decoded. A close of a file that has a last
+// path component is sent as the wider fd_name_event instead (below).
 //
 // file_ident says which file fd named when the call entered: the low 32 bits
 // of its inode number, or 0 for "unknown" (ior_file_ident in fileident.c,
@@ -507,6 +511,43 @@ struct ring_fds_event {
     __u32 count;
     __u32 reserved;
     __u8 updates[IOR_RING_FDS_BYTES];
+};
+
+// fd_name_event is fd_event plus the last path component of the file the
+// descriptor names while the call enters. The enter handler of close sends
+// it instead of an fd_event when that file has such a name
+// (ior_emit_fd_name_enter in fdname.c, task xz2): userspace cannot ask procfs
+// about a descriptor that is closed by the time its row is processed, so the
+// close of a descriptor ior never saw opened had no name at all
+// (internal/eventloop_procfs_close.go). Every other close - a pipe, a
+// socket, an anonymous-inode file, the root directory of a filesystem, any
+// close on a kernel that cannot run the walk or in a run that switched
+// IOR_FILE_IDENT off - is the plain 32-byte fd_event as before.
+//
+// The first 32 bytes are fd_event's, file_ident included, so userspace
+// decodes the record into the same event and handles the pair as any close.
+// name is the dentry's own name, NUL-terminated and cut to
+// IOR_FD_NAME_LENGTH - 1 bytes (the bytes after the NUL are stale ring-buffer
+// memory, see "String fields in ring-buffer records" in filter.c); name_len
+// is its real length, so a value of IOR_FD_NAME_LENGTH or more says the name
+// was cut. 0 says there is no name after all (the read failed). The name
+// can hold an earlier NUL than name_len says when the close raced a rename
+// of its file (fdname.c); userspace stops at the first one. The
+// length is a compromise: every close of a file below a directory pays for
+// the record, a component may be 255 bytes long, and 67 hold a 64-digit
+// content hash with a short suffix. The layout has no implicit padding, so
+// the kernel record and a binary.Write payload share one size, 104 bytes.
+#define IOR_FD_NAME_LENGTH 68
+struct fd_name_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __s32 fd;
+    __u32 file_ident;
+    __u32 name_len;
+    char name[IOR_FD_NAME_LENGTH];
 };
 
 struct socket_event {

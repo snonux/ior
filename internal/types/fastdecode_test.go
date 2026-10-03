@@ -1864,12 +1864,19 @@ type fdLayoutCase struct {
 }
 
 func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
-	// The Go struct holds the fields of both wire layouts: the wide layout's
+	// The Go struct holds the fields of every wire layout: the wide layout's
 	// 48 bytes plus the identity word only the lean record carries (task
-	// 603), rounded up to the struct's 8-byte alignment.
+	// 603), rounded up to the struct's 8-byte alignment, and behind them the
+	// name tail of fd_name_event (task xz2: name_len and the name), which
+	// ends on that alignment. 128 bytes is also the allocator's size class,
+	// and the hot records touch only the first cache line of it (NameLen is
+	// the last word of that line).
 	fdLayout := FdEvent{}
-	if got := unsafe.Sizeof(fdLayout); got != fdEventLegacyKernelSize+8 {
-		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventLegacyKernelSize+8)
+	if got, want := unsafe.Sizeof(fdLayout), uintptr(fdEventLegacyKernelSize+8+4+IOR_FD_NAME_LENGTH); got != want || got != 128 {
+		t.Fatalf("sizeof(FdEvent) = %d, want %d = 128", got, want)
+	}
+	if at := unsafe.Offsetof(fdLayout.NameLen); at != 56 {
+		t.Fatalf("FdEvent.NameLen is at offset %d, want 56 (inside the first cache line)", at)
 	}
 	if got := len(rawBytes(t, &fdLayout)); got != fdEventSize {
 		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventSize)

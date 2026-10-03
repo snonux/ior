@@ -34,10 +34,13 @@ import (
 //
 // An enter-time read never once saw the closed file and still picked up the
 // reusing pipe (without the pipes both variants left all 600 rows unnamed).
-// Only BPF could see the file before the close takes effect (its
+// Only BPF can see the file before the close takes effect (its
 // sys_enter_close program runs before the descriptor is released).
-// bpf_d_path is not callable from tracepoints, so that needs a dentry walk in
-// the kernel program for every close, and it is left as a follow-up.
+// bpf_d_path is not callable from tracepoints, so what the program reads is
+// the file's last path component (task xz2, internal/c/fdname.c): on a
+// kernel that captures file identities, a close row none of the rules below
+// can name is named "*/<component>" (eventloop_fdname.go). It is the name of
+// last resort; everything here is unchanged and comes first.
 //
 // So a closing row is labelled from what ior learned *before* the close:
 //
@@ -60,15 +63,17 @@ import (
 //     write read and cached the pipe and the close row repeated it. A later
 //     stamp, or none, says nothing about the closed descriptor and the entry
 //     is ignored;
-//   - else nothing: the fd number with an empty name and unknown flags, the
-//     same as an EBADF row. An honest blank beats the name of another file.
+//   - else nothing from user space: the fd number with an empty name and
+//     unknown flags, the same as an EBADF row. An honest blank beats the name
+//     of another file. (handleFdExit then gives such a row the component the
+//     kernel program captured, when there is one.)
 //
 // A blind table (eventloop_fdshare.go: the process shares its table with a
 // CLONE_FILES child the trace cannot see, so ior stopped tracking it) keeps
 // neither fd-table entries nor cache answers, so every close row of such a
-// process is unnamed, even for a descriptor ior saw being opened. Before jr2
-// those rows were read from procfs after the close, i.e. empty or wrong, so
-// this loses no correct name.
+// process is unnamed here, even for a descriptor ior saw being opened (and
+// gets the captured component, if any). Before jr2 those rows were read from
+// procfs after the close, i.e. empty or wrong, so this loses no correct name.
 //
 // Dropping the readlink also takes one procfs read (~4-13 us) off every close
 // of an untracked descriptor.

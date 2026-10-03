@@ -63,6 +63,7 @@ func handlerSideSpec(tp GeneratedTracepoint, isEnter bool) handlerSpec {
 		outputPathArg:         outputPathArgForHandler(name),
 		outputHandleArg:       outputHandleArgForHandler(name),
 		ringFds:               ringFdsArgsForHandler(name),
+		fdNameArg:             fdNameArgForHandler(tp, isEnter),
 	}
 }
 
@@ -75,6 +76,17 @@ func ringFdsArgsForHandler(name string) *ringFdsArgs {
 		return &args
 	}
 	return nil
+}
+
+// fdNameArgForHandler returns the argument index of the descriptor whose
+// file name the handler reports (fdNameSyscalls), or -1 for every other
+// handler: exits, and enters of other syscalls. Only an fd_event enter
+// qualifies: the named record is that event plus the name.
+func fdNameArgForHandler(tp GeneratedTracepoint, isEnter bool) int {
+	if !isEnter || tp.Classification.Kind != KindFd || !emitsFdName(syscallName(tp.Format.Name)) {
+		return -1
+	}
+	return fdArgumentIndex(tp.Format)
 }
 
 // outputPathArgForHandler returns the output-buffer argument index of the
@@ -139,6 +151,9 @@ type handlerSpec struct {
 	// io_uring_register (ringFdsSyscalls), nil for every other syscall. Its
 	// two values occupy both pending slots.
 	ringFds *ringFdsArgs
+	// fdNameArg is the argument index of the descriptor whose file name the
+	// handler reports in place of its plain record (fdNameSyscalls), or -1.
+	fdNameArg int
 }
 
 // takesPendingFilename reports whether this exit handler takes the pointer the
@@ -387,6 +402,7 @@ func renderHandler(h handlerSpec) string {
 		b.WriteString(h.sideMapTake)
 		b.WriteString("\n")
 	}
+	renderFdNameEnter(&b, h)
 	fmt.Fprintf(&b, "    struct %s *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct %s), 0);\n", h.eventStruct, h.eventStruct)
 	// A NULL reserve means event_map is full: the event is lost right here.
 	// Count it (ior_count_ringbuf_drop, internal/c/filter.c) so kernel-side
@@ -410,6 +426,25 @@ func renderHandler(h handlerSpec) string {
 	b.WriteString("    return 0;\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// renderFdNameEnter writes, for an enter handler that names its descriptor's
+// file (close; fdNameSyscalls), the attempt to send the enter as an
+// fd_name_event: ior_emit_fd_name_enter (internal/c/fdname.c) walks to the
+// file once, sends the wide record when the file has a last path component
+// and otherwise hands back the identity for the plain fd_event below, which
+// generateExtraFd then takes from the local instead of walking again. It
+// sits between the enter hook and the handler's own reserve: only an emitted
+// enter may send either record, and a handler sends exactly one of them.
+func renderFdNameEnter(b *strings.Builder, h handlerSpec) {
+	if h.fdNameArg < 0 {
+		return
+	}
+	b.WriteString("    __u32 file_ident;\n")
+	fmt.Fprintf(b, "    if (ior_emit_fd_name_enter(pid, tid, %s, now, (__s32)ctx->args[%d], &file_ident))\n",
+		strings.ToUpper(h.name), h.fdNameArg)
+	b.WriteString("        return 0;\n")
+	b.WriteString("\n")
 }
 
 // extraEmitter produces the kind-specific C body lines for a tracepoint handler.
@@ -549,7 +584,14 @@ func generateFdCapture(f *Format) string {
 // the identity of the file it names as the call enters (ior_file_ident in
 // internal/c/fileident.c, task 603). The identity is read from the record's
 // own fd field, so the two always describe the same argument.
+//
+// A handler that reports its file's name (close; fdNameSyscalls) has done
+// the walk already, for the same argument, and takes the identity from the
+// local renderFdNameEnter declared.
 func generateExtraFd(f *Format) string {
+	if emitsFdName(syscallName(f.Name)) {
+		return generateFdCapture(f) + "    ev->file_ident = file_ident;\n"
+	}
 	return generateFdCapture(f) + "    ev->file_ident = ior_file_ident(ev->fd);\n"
 }
 

@@ -581,6 +581,11 @@ func (e *eventLoop) handleFdExit(ep *event.Pair, fdEv *types.FdEvent) bool {
 	// file's (eventloop_fileident.go).
 	ident := e.fdState().rowIdent(fdEv)
 	ep.File = e.resolveIdentifiedOnExit(ep, fd, fdEv.Pid, ident)
+	if fdEv.NameLen != 0 {
+		// A close whose record says what the file was called: the name of
+		// last resort (eventloop_fdname.go).
+		ep.File = leafNamed(ep.File, fdEv, ident)
+	}
 	e.applyFdCloseState(ep, fd, fdEv.Pid, ident)
 	ep.Comm = e.comm(fdEv.GetTid())
 	if ok := e.applyFdTransferOp(ep, fdEv); !ok {

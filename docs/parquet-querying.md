@@ -44,6 +44,15 @@ Fields that do not apply to a row use zero or an empty string, except `fd` (`-1`
 `timeout_ns` (`-1`/`-2`), where zero is a real value. In particular, `file` is the
 new path for rename and link calls, and `old_file` is the source path.
 
+A `file` that begins with `*/` is not a path but the last path component of a file whose
+directories ior does not know: `*/app.log`. Only `close` rows have it, for a descriptor ior
+never saw opened (opened before the trace began or by a syscall outside the trace set) on a
+kernel where ior captures file identities (see "Known limitations" in the README); a
+component longer than 67 bytes is cut and ends in `...`. Reads and writes of the same file
+are stored under its full path, or with an empty `file`, so match such rows by component
+(`WHERE file LIKE '%/app.log'` selects both forms) and do not expect them under a directory
+prefix.
+
 A row whose syscall has no file (for example `sync`) has an empty `file` and
 `fd = -1`. The terminal views and `-plain` show such rows with the placeholder `N:file`, but the
 placeholder is display text only and is never written to a Parquet recording, to the stream CSV

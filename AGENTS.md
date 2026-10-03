@@ -2377,8 +2377,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   processed is no better: user space consumes it after the kernel finished the
   close (prototype, 200 pre-attach fds closed and each reused by a pipe, 3 runs:
   exit-time 0/600 correct names, 181 reuser's pipe; enter-time 0/600 correct, 29
-  pipe). Only BPF could name the file before the close (no `bpf_d_path` in
-  tracepoints; a dentry walk per close), not done. The read time is needed
+  pipe). Only BPF can name the file before the close: since task xz2 it
+  reports the last path component, which names a close row these rules leave
+  unnamed ("Name of a closed file" below). The read time is needed
   because the cache itself lags: a write processed after its fd's close and
   reuse caches the reuser. It lives in a side map, not in `file.FdFile`, so
   per-row files keep their size; `copyTable`/`rekeyTable` carry it along and
@@ -2864,9 +2865,10 @@ kernel program reports the file, and user space compares.
   task's own 40 s run had traced the stale ones to promoted answers).
 - **What it does not do**: name a file that is no longer open when the loop
   looks (a rebound descriptor is named only while procfs still shows that
-  file; the close of an untracked descriptor and the rows of an exited
-  process stay unnamed, now as `E:ino:<n>`). That needs the name from BPF (a
-  dentry walk) and a way to limit it to rows user space cannot name. An entry
+  file; the rows of an exited process stay unnamed, as `E:ino:<n>`). The one
+  exception is the close of an untracked descriptor, which BPF names by its
+  last path component ("Name of a closed file" below, task xz2); why the
+  other rows do not get that is in "Rows of an exited process" there. An entry
   that takes its identity from the first row was not checked against it. A
   call that entered between another thread's fd install and that call's exit
   record on the very number being installed (a dup2 target written to
@@ -2905,6 +2907,131 @@ kernel program reports the file, and user space compares.
   the pipe2's. Capture off it is named after the pipe, on it is unnamed.
   The integration tests show what the identities lead to; none compares an
   identity with `stat(2)`.
+
+### Name of a closed file (task xz2)
+
+The close of a descriptor ior never saw opened (opened before the trace, by
+a call outside the trace set, evicted, or in a blind table) cannot be named
+from procfs: the descriptor is gone when the row is processed (task jr2).
+The kernel program sees the file as the close enters, so it says what the
+file is called.
+
+- **What**: the dentry's own name, `file->f_path.dentry->d_name` - the last
+  path component - through the task-603 walk (`ior_file_of_table`, split out
+  of `ior_file_ident_of_table`). No more: `bpf_d_path` is not available to
+  tracepoint programs, every parent costs a `d_parent` load and another
+  copy, a walk to the root needs a loop bound and ends at the root of the
+  file's filesystem, not of the mount tree (a path that looks absolute and
+  is not). Not captured when the dentry is its own parent: pipes and sockets
+  (empty name), anon-inode files (`[eventfd]`), memfds, and the root
+  directory of a filesystem (`/` says nothing about where it is mounted).
+- **Record**: `fd_name_event` (`ENTER_FD_NAME_EVENT` 66; `EXIT_` 67 is
+  reserved by convention, nothing sends it), 104 bytes: `fd_event`'s 32
+  bytes, `name_len` (the component's real length; 0 = not readable) and
+  `name[IOR_FD_NAME_LENGTH = 68]`. close sends it **instead of** its
+  `fd_event` when the file has such a name; `fd_event` did not grow and
+  every other handler is byte-for-byte the object it was (`llvm-objdump -d`
+  of read, write, pread64, fsync, dup3 and the exits before/after: equal;
+  close 205 -> 254 instructions). `ior_emit_fd_name_enter`
+  (`internal/c/fdname.c`) does the one walk, returns 1 when it sent the wide
+  record (or had no room for it: counted, and no second attempt) and
+  otherwise hands the identity to the plain record, so no close walks twice.
+  The generator emits the attempt between the enter hook and the reserve for
+  `fdNameSyscalls` (`close` only; `internal/generate/classify.go`,
+  `renderFdNameEnter`), and `generateExtraFd` then stores the local
+  `file_ident`.
+- **Rejected: a control record behind the enter** (the `FILE_HANDLE_EVENT`
+  pattern of task k03, paired by tid and time). Measured first, because it
+  needs no new enter type: +477 `instructions:k` per close (open+close of
+  one file x300k, pinned, `-comm`, `-mapSize 268435456`, no drops, medians
+  of 6 interleaved runs: the walk done again +117, the second reserve and
+  submit +200, `bpf_probe_read_kernel_str` +110..160).
+- **Cost of the committed form** (same method; `dup(fd)` + `close` x300k
+  with `-trace-syscalls close`, which spreads 0.2% where the open+close loop
+  spreads 1%; 7 usable interleaved runs each, load 9-10): a close of a
+  named file +146 instructions (medians 768.37M -> 812.24M; 5.7% of that
+  loop's kernel instructions, i.e. of an untraced dup plus a traced close);
+  a close of a pipe +21..28 (767.99M -> 776.40M, and 768.38M -> 774.54M in
+  an earlier set: the dentry loads and the compare); open+close x300k +110
+  per iteration (3.4549G -> 3.4878G, +0.95%). One run of the 8 was thrown
+  out: ior had not attached within the 4 s the script waits (half the
+  instruction count in both columns). read and write: no change, by the
+  disassembly above. The name is copied with `bpf_probe_read_kernel` and
+  `d_name.len`, not `_str`: the byte-wise string copy cost 115 instructions
+  more for a 15-byte name (+261 against +146). The price is in `fdname.c`:
+  length and pointer are two loads, so a close racing a rename of its own
+  file can report a prefix of the name for that row.
+- **Why every close of a named file**: BPF does not know which descriptors
+  user space tracks, a tracked-fd map costs more than the capture (603), and
+  `struct file` does not say when it was opened.
+- **Gate**: `IOR_FILE_IDENT` and the kfunc, as for the identity - a kernel
+  before 6.2, an older `IOR_BPF_OBJECT` and `IOR_FILE_IDENT=0` send no such
+  record and rows are as before. The record is an event type of its own, so
+  user space needs no capability flag for it. Loaded and run on Linux 7.2
+  only; the variable-length read into the ring-buffer record is one more
+  thing `loadWithIdentFallback` covers on a kernel whose verifier refuses
+  it.
+- **User space** (`internal/eventloop_fdname.go`): the record decodes into
+  `types.FdEvent` (`NewFdNameEventFast`; `NameLen`/`Name` are
+  `compatibilityFields`, so the struct is 128 bytes, and the hot decoder
+  clears a pooled name with one comparison of the last word of the first
+  cache line). `handleFdExit` resolves the row as always and then, only for
+  a record with a name, `leafNamed` replaces an **unnamed** result by
+  `file.NewFdLeaf`. A name from the fd table or from a procfs answer read
+  before the close is never replaced (a full path says more, and a file
+  renamed since its open is still right under the name it was opened as).
+  The component is of the file the task closed, so it also names the rows
+  the identity rules refuse on purpose (an entry bound after the close, an
+  answer of another file or read too late) and the closes of a blind table.
+  It is not stored for the number.
+- **Notation and what sees it**: `Name()` is `*/app.log`
+  (`file.LeafPrefix`), `*/<67 bytes>...` for a cut component
+  (`types.TruncatedPathSuffix`, as for a cut getcwd path; a half character
+  at the cut is dropped). Unknown flags, the cannot-vouch mark
+  (`NameFromProcFS`), the row's identity. The partial name **is** the name:
+  the stream, the Files tab, the flamegraph (under a top-level `*`), the
+  Parquet `file` column and `-path` see it. Decided against keeping `Name()`
+  empty and printing a label in `-plain` only, as `E:ino` does: every view
+  but `-plain` reads `Name()`, so the name would have reached almost nobody.
+  Cost of the decision: such a row is not grouped with the rows that carry
+  the file's full path, and a `-path` filter for a directory does not match
+  it (it did not match the unnamed row either). No name ior reads from
+  procfs begins with `*/`; a traced relative pathname could, if a program
+  opens a file below a directory literally called `*`.
+- **Not done**: `close_range` (a range, not a file; `two_fd_event`); more
+  than one component; pseudo files; kernels without the kfunc.
+- **Rows of an exited process (task as2) stay `E:ino:<n>`**. Evaluated with
+  this task, nothing sound and cheap was found:
+  - *The exit record*: in `do_exit` (kernel/exit.c, 6.19.8)
+    `trace_sched_process_exit` runs **before** `exit_files`, so the table is
+    intact at the tracepoint. But the process's rows are ahead of the exit
+    record in the ring and are emitted in stream order, and naming a table
+    is a bounded loop over all its descriptors per exit.
+  - *Reading procfs earlier* (in the ring-reader goroutine, or for all
+    descriptors on first sight of a pid): gains at most the raw channel's
+    lag, needs the fd tracker shared between goroutines, and still loses to
+    a process that exits inside that lag or while ior is stopped - the
+    task's own repro.
+  - *The name on every descriptor row*: what close now does, +146
+    instructions per call, would be about 10% of a traced read or write
+    (the identity walk is +83 and was the budget task 603 accepted), and a
+    BPF-side "already named" map costs more than the walk.
+  Such rows keep the identity label of task 603. `fdNameSyscalls` is the
+  place to add a syscall should a run ever want names at that price.
+- **Tests**: `internal/generate/fdname_harness_test.go` (the committed
+  helper against a simulated task and ring buffer: 14 cases, 21 mutations),
+  `syscall_semantics_fileident_test.go` (the attempt belongs to close only,
+  once, for its own trace ID and descriptor argument, between hook and
+  reserve; 9 mutations), `internal/types/fdname_test.go` (layout against the
+  generated C struct, `LeafName`, pooled reuse), `internal/file`
+  (`TestNewFdLeaf*`), `internal/eventloop_fdname_test.go` (through the
+  loop's decoder table: untracked close named, names never replaced,
+  refused answers and later bindings, records without a component, cut and
+  stale-tail names, nothing kept for the number), and the integration tests
+  `TestCloseUntrackedClosesAreNamedByTheirLastComponent` (all 64 files of
+  `close-untracked` and its FIFO, whose close no procfs read can name) and
+  the control `TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed`
+  (`IOR_FILE_IDENT=0`).
 
 ## Code Style
 

@@ -3,6 +3,8 @@ package generate
 import (
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +20,14 @@ import (
 //     identity of the returned descriptor for the syscalls of
 //     returnedFileSyscalls, and 0 for every other one (the word used to be
 //     padding and the reservation is not zeroed);
-//   - no other handler writes the word.
+//   - no other handler writes the word;
+//   - the enter handlers of namedFdSyscalls (close; task xz2) first try to
+//     send the enter as an fd_name_event: one call of ior_emit_fd_name_enter
+//     for the syscall's own trace ID and the very argument ev->fd is set
+//     from, ahead of the reserve, whose "sent" answer ends the handler. The
+//     call also walks to the identity, so these handlers store its result
+//     (the local file_ident) instead of walking again. No other handler
+//     makes that call.
 
 // returnedFileSyscalls is reviewed data, not derived from the generator's kind
 // table: the syscalls whose successful return value is a new descriptor of
@@ -43,7 +52,16 @@ var identEnterRecords = map[string]struct{}{
 	"dup3_event": {},
 }
 
+// namedFdSyscalls is reviewed data: the fd_event syscalls whose enter
+// reports the last path component of the file behind the descriptor. Only a
+// close qualifies: userspace cannot ask procfs about a descriptor that is
+// gone when its row is processed.
+var namedFdSyscalls = map[string]struct{}{
+	"close": {},
+}
+
 const (
+	fileIdentLocalLine = "    ev->file_ident = file_ident;\n"
 	fileIdentEnterLine = "    ev->file_ident = ior_file_ident(ev->fd);\n"
 	fileIdentRetLine   = "    ev->file_ident = ior_file_ident_of_ret(ctx->ret);\n"
 	fileIdentZeroLine  = "    ev->file_ident = 0;\n"
@@ -53,7 +71,13 @@ var (
 	fileIdentEnterRE = regexp.MustCompile(`(?m)^    ev->file_ident = ior_file_ident\(ev->fd\);$`)
 	fileIdentRetRE   = regexp.MustCompile(`(?m)^    ev->file_ident = ior_file_ident_of_ret\(ctx->ret\);$`)
 	fileIdentZeroRE  = regexp.MustCompile(`(?m)^    ev->file_ident = 0;$`)
-	fdAssignmentRE   = regexp.MustCompile(`(?m)^    ev->fd = [^;\n]*;$`)
+	fileIdentLocalRE = regexp.MustCompile(`(?m)^    ev->file_ident = file_ident;$`)
+	fdAssignmentRE   = regexp.MustCompile(`(?m)^    ev->fd = ([^;\n]*);$`)
+	// fdNameEnterRE matches the whole attempt, declaration and early return
+	// included: trace ID in group 1, descriptor expression in group 2.
+	fdNameEnterRE = regexp.MustCompile(`(?m)^    __u32 file_ident;\n` +
+		`    if \(ior_emit_fd_name_enter\(pid, tid, (SYS_ENTER_[A-Z0-9_]+), now, ([^;\n]*), &file_ident\)\)\n` +
+		`        return 0;$`)
 )
 
 // validateFileIdentCapture checks both handlers of one syscall against the
@@ -75,21 +99,59 @@ func validateEnterFileIdent(name, body string) error {
 	handler := "sys_enter_" + name
 	writes := cLValueWriteLocations(body, "ev->file_ident")
 	eventStruct := eventStructRE.FindStringSubmatch(body)
+	_, named := namedFdSyscalls[name]
+	if !named && strings.Contains(body, "ior_emit_fd_name_enter") {
+		return fmt.Errorf("%s reports a file name, which only %v may", handler, namedFdSyscalls)
+	}
 	if _, carries := identEnterRecords[structOf(eventStruct)]; !carries {
-		if len(writes) != 0 {
+		if len(writes) != 0 || named {
 			return fmt.Errorf("%s writes ev->file_ident %d times but reserves no record with the word", handler, len(writes))
 		}
 		return nil
 	}
-	captures := fileIdentEnterRE.FindAllStringIndex(body, -1)
+	capture := fileIdentEnterRE
+	if named {
+		capture = fileIdentLocalRE
+	}
+	captures := capture.FindAllStringIndex(body, -1)
 	if len(writes) != 1 || len(captures) != 1 {
 		return fmt.Errorf("%s has %d writes/%d captures of ev->file_ident, want 1/1", handler, len(writes), len(captures))
 	}
-	fds := fdAssignmentRE.FindAllStringIndex(body, -1)
+	fds := fdAssignmentRE.FindAllStringSubmatchIndex(body, -1)
 	if len(fds) != 1 || fds[0][1] > captures[0][0] {
 		return fmt.Errorf("%s reads the file identity before its one ev->fd assignment", handler)
 	}
+	if named {
+		if err := validateFdNameEnter(name, body, body[fds[0][2]:fds[0][3]]); err != nil {
+			return err
+		}
+	}
 	return validateBeforeSubmit(handler, body, captures[0][1])
+}
+
+// validateFdNameEnter checks the fd_name_event attempt of a namedFdSyscalls
+// enter handler: exactly one call, with its declaration and early return, for
+// this syscall's trace ID and the argument fdExpr the plain record reports,
+// after the enter hook and ahead of the handler's own reserve.
+func validateFdNameEnter(name, body, fdExpr string) error {
+	handler := "sys_enter_" + name
+	attempts := fdNameEnterRE.FindAllStringSubmatchIndex(body, -1)
+	if len(attempts) != 1 || strings.Count(body, "ior_emit_fd_name_enter") != 1 {
+		return fmt.Errorf("%s has %d complete fd-name attempts, want 1", handler, len(attempts))
+	}
+	at := attempts[0]
+	if traceID := body[at[2]:at[3]]; traceID != "SYS_ENTER_"+strings.ToUpper(name) {
+		return fmt.Errorf("%s reports its file name under trace ID %s", handler, traceID)
+	}
+	if got := body[at[4]:at[5]]; got != fdExpr {
+		return fmt.Errorf("%s names the file of %q but reports descriptor %q", handler, got, fdExpr)
+	}
+	hook := strings.Index(body, "ior_on_syscall_enter")
+	reserve := strings.Index(body, "bpf_ringbuf_reserve")
+	if hook < 0 || hook > at[0] || reserve < at[1] {
+		return fmt.Errorf("%s does not try the fd-name record between its enter hook and its reserve", handler)
+	}
+	return nil
 }
 
 // structOf returns the struct name an eventStructRE match captured, or ""
@@ -135,7 +197,7 @@ func fileIdentEnterMutations() []semanticMutation {
 		{"file identity not captured", enter("read", fileIdentEnterLine, "")},
 		{"file identity of another argument", enter("read", fileIdentEnterLine,
 			"    ev->file_ident = ior_file_ident((__s32)ctx->args[1]);\n")},
-		{"file identity constant", enter("close", fileIdentEnterLine, fileIdentZeroLine)},
+		{"file identity constant", enter("fsync", fileIdentEnterLine, fileIdentZeroLine)},
 		{"file identity read before the descriptor is set", enter("write", fdLine+fileIdentEnterLine,
 			fileIdentEnterLine+fdLine)},
 		{"file identity overwritten", enter("read", fileIdentEnterLine, fileIdentEnterLine+fileIdentZeroLine)},
@@ -147,6 +209,35 @@ func fileIdentEnterMutations() []semanticMutation {
 		{"file identity written into a record without the word", enter("recvfrom",
 			"    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n",
 			"    ev->schema_version = FD_SIZE_EVENT_SCHEMA_VERSION;\n"+fileIdentEnterLine)},
+	}
+}
+
+// fdNameEnterMutations break the fd_name_event attempt of close's enter
+// (task xz2), or add one where it does not belong.
+func fdNameEnterMutations() []semanticMutation {
+	enter := func(name, old, replacement string) func(*testing.T, string) string {
+		return func(t *testing.T, source string) string {
+			return replaceInHandler(t, source, "enter", name, old, replacement)
+		}
+	}
+	const (
+		decl    = "    __u32 file_ident;\n"
+		attempt = "    if (ior_emit_fd_name_enter(pid, tid, SYS_ENTER_CLOSE, now, (__s32)ctx->args[0], &file_ident))\n"
+		leave   = "        return 0;\n\n"
+		reserve = "    struct fd_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fd_event), 0);\n"
+	)
+	return []semanticMutation{
+		{"closed file's name not reported", enter("close", decl+attempt+leave, decl)},
+		{"closed file's name of another argument", enter("close", "now, (__s32)ctx->args[0], &file_ident", "now, (__s32)ctx->args[1], &file_ident")},
+		{"closed file's name under another trace ID", enter("close", "(pid, tid, SYS_ENTER_CLOSE, now, ", "(pid, tid, SYS_ENTER_READ, now, ")},
+		{"plain record sent behind the named one", enter("close", attempt+leave, "    ior_emit_fd_name_enter(pid, tid, SYS_ENTER_CLOSE, now, (__s32)ctx->args[0], &file_ident);\n\n")},
+		{"close's identity walked a second time", enter("close", fileIdentLocalLine, fileIdentEnterLine)},
+		{"close's identity dropped", enter("close", fileIdentLocalLine, fileIdentZeroLine)},
+		{"closed file's name reported twice", enter("close", attempt+leave, attempt+leave+attempt+leave)},
+		{"file name reported by a hot call", enter("read", "    struct fd_event *ev = bpf_ringbuf_reserve(",
+			"    __u32 file_ident;\n    if (ior_emit_fd_name_enter(pid, tid, SYS_ENTER_READ, now, (__s32)ctx->args[0], &file_ident))\n"+
+				"        return 0;\n\n    struct fd_event *ev = bpf_ringbuf_reserve(")},
+		{"closed file's name tried after the reserve", enter("close", decl+attempt+leave+reserve, reserve+decl+attempt+leave)},
 	}
 }
 
@@ -171,14 +262,16 @@ func fileIdentExitMutations() []semanticMutation {
 }
 
 // TestSyscallSemanticsOracleRejectsFileIdentMutations keeps the oracle honest
-// about the file identity words (task 603): each mutation of the committed
-// handlers must fail parsing or the comparison with the reviewed rows.
+// about the file identity words (task 603) and the name close reports with
+// its identity (task xz2): each mutation of the committed handlers must fail
+// parsing or the comparison with the reviewed rows.
 func TestSyscallSemanticsOracleRejectsFileIdentMutations(t *testing.T) {
 	source, err := readGeneratedTracepointsC()
 	if err != nil {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
-	for _, mutation := range append(fileIdentEnterMutations(), fileIdentExitMutations()...) {
+	mutations := slices.Concat(fileIdentEnterMutations(), fileIdentExitMutations(), fdNameEnterMutations())
+	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
 			actual, err := parseGeneratedSyscallSemantics(mutation.mutate(t, source))
 			if err == nil && len(compareSyscallSemantics(syscallSemanticExpectations, actual)) == 0 {

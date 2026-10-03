@@ -279,13 +279,22 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   descriptor that was rebound behind ior's back (io_uring, an untraced or lost call) is
   looked up again, and a `/proc/<pid>/fd` answer that describes another file - the number
   was closed and reused before ior got to the row - is not used. Such a row has no name;
-  the plain output shows `E:ino:<n>` (the identity) instead of `E:name`, also for the close
-  of a descriptor ior never saw opened and for rows of a process that exited first. ior
-  cannot name a file that is no longer open when it looks. A row whose call began before
+  the plain output shows `E:ino:<n>` (the identity) instead of `E:name`, also for rows of a
+  process that exited before ior got to them (when ior did not see the descriptor opened):
+  ior cannot name a file that is no longer open when it looks, and the kernel side reports
+  no name for `read`, `write` and the other frequent calls, where it would cost too much.
+  A row whose call began before
   the descriptor number was bound to its current file (a `read` that blocked while another
-  thread closed the number and an `open` returned it again) is left unnamed as well, and the
-  close of a descriptor ior never saw opened is named only from a `/proc` answer read before
-  that close began. Not checked, so still named by descriptor number alone: every row on a
+  thread closed the number and an `open` returned it again) is left unnamed as well. The
+  exception is `close`: for a descriptor ior never saw opened (opened before the trace, or
+  by a call outside the trace set) it is named from a `/proc` answer read before that close
+  began, and otherwise by the **last path component only**, which the kernel side reads
+  from the file as the close begins. Such a row's file is `*/name` (`*/app.log` for
+  `/var/log/app.log`; `*/<first 67 bytes>...` for a longer component): the directories are
+  not known, so it does not match a `-path` filter for a directory and is not grouped with
+  rows that carry the file's full path. Pipes, sockets, eventfd and the like, memfds and
+  the root directory of a filesystem have no such component and stay `E:ino:<n>`, as do
+  `close_range` rows. Not checked, so still named by descriptor number alone: every row on a
   kernel without the kfunc (mainline before 6.2 and RHEL 8; RHEL 9 backports much of BPF and
   may have it, which is unverified - ior asks the kernel's BTF and switches the check off
   where it is missing), rows of syscalls whose record has no identity (`recvfrom`, `ioctl`,
@@ -296,7 +305,8 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   different subvolumes or snapshots of one btrfs filesystem, and inode numbers that differ
   only above bit 31. The check was loaded and run on Linux 7.2 only; if another kernel's
   verifier refuses it, ior warns and loads once more without it. `IOR_FILE_IDENT=0` in
-  ior's environment switches the check off.
+  ior's environment switches the check off, and with it the `*/name` of a close; neither
+  exists on a kernel without the kfunc.
 - **Calls a seccomp filter denies have no row.** The filter runs before `sys_enter`, so only
   `sys_exit` fires; ior drops an exit it has no enter for. They are not counted as
   mismatched enter/exit pairs either, but they do show in the `exits without an enter`

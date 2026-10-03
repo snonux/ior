@@ -2,6 +2,7 @@ package integrationtests
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -243,4 +244,74 @@ func TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe(t *t
 	if name := blockedFifoWriteName(t, rows); !strings.Contains(name, "pipe") {
 		t.Errorf("blocked fifo write named %q, want the reusing pipe with the capture off", name)
 	}
+}
+
+// TestCloseUntrackedClosesAreNamedByTheirLastComponent is task xz2 end to
+// end, on the close-untracked workload: 64 files and a FIFO are opened
+// before ior attaches, so their closes have no fd table entry, and each
+// number is taken by a pipe at once. Such a close was unnamed unless a
+// write row had read procfs before the close began. The kernel program now
+// reads the file's last path component as the close enters, so every one of
+// the 65 closes is named: in full where procfs was read in time, else as
+// "*/closeuntracked-N.txt".
+//
+// The FIFO's close is the deterministic one. Its descriptor is only ever
+// used by the write that is still blocked when the close happens, so no row
+// resolved it before; without the capture that close has no name whatever
+// the load (the control below).
+func TestCloseUntrackedClosesAreNamedByTheirLastComponent(t *testing.T) {
+	requireFileIdentCapture(t)
+	rows := closeUntrackedRows(t)
+
+	names := closeNamesByLeaf(rows, "closeuntracked-")
+	for i := range 64 {
+		leaf := fmt.Sprintf("closeuntracked-%d.txt", i)
+		if got := names[leaf]; len(got) != 1 {
+			t.Errorf("closes named after %s: %q, want exactly one", leaf, got)
+		}
+	}
+	if got := names["closeuntracked-fifo"]; len(got) != 1 || got[0] != "*/closeuntracked-fifo" {
+		t.Errorf("close of the fifo's write descriptor named %q, want the one name */closeuntracked-fifo", got)
+	}
+	if t.Failed() {
+		logRowSummary(t, rows)
+	}
+	assertCloseUntrackedRows(t, rows)
+}
+
+// TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed is the control of
+// the test above: with the capture switched off the kernel program sends no
+// component, so no row carries the "*/" form and the FIFO's close - which no
+// procfs read can name - has no name.
+func TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed(t *testing.T) {
+	rows := closeUntrackedRows(t, "IOR_FILE_IDENT=0")
+
+	closes := 0
+	for _, row := range rows {
+		if row.Syscall != "close" {
+			continue
+		}
+		closes++
+		if strings.HasPrefix(row.File, "*/") {
+			t.Errorf("close of fd %d is named by a component with the capture off: %q", row.FD, row.File)
+		}
+	}
+	if got := closeNamesByLeaf(rows, "closeuntracked-")["closeuntracked-fifo"]; len(got) != 0 || closes < 65 {
+		t.Errorf("%d close rows, fifo close named %q; want >= 65 rows and no name for the fifo's close", closes, got)
+		logRowSummary(t, rows)
+	}
+}
+
+// closeNamesByLeaf returns the file names of the close rows whose name has a
+// last path component starting with prefix, by that component: the full path
+// of a row named from procfs or a traced open and the "*/leaf" form alike.
+func closeNamesByLeaf(rows []iorparquet.Record, prefix string) map[string][]string {
+	names := map[string][]string{}
+	for _, row := range rows {
+		leaf := row.File[strings.LastIndex(row.File, "/")+1:]
+		if row.Syscall == "close" && strings.HasPrefix(leaf, prefix) {
+			names[leaf] = append(names[leaf], row.File)
+		}
+	}
+	return names
 }

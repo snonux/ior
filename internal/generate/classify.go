@@ -800,6 +800,29 @@ var ringFdsSyscalls = map[string]ringFdsArgs{
 	"io_uring_register": {opcode: 1, array: 2},
 }
 
+// fdNameSyscalls lists the fd_event syscalls whose enter handler reports the
+// name of the file behind their descriptor: when that file has a last path
+// component the handler sends an fd_name_event - fd_event plus the name -
+// instead of its fd_event (ior_emit_fd_name_enter, internal/c/fdname.c; task
+// xz2).
+//
+// close is the only one: its descriptor is gone before userspace gets to the
+// row, so a close of a descriptor ior never saw opened cannot be named from
+// procfs (internal/eventloop_procfs_close.go). Every other descriptor call
+// leaves the descriptor open and is named there. The name costs a string
+// read and a record three times the size, which is why the hot calls (read,
+// write) are not here; close_range is a two_fd_event and releases a range,
+// not a file.
+var fdNameSyscalls = map[string]bool{
+	"close": true,
+}
+
+// emitsFdName reports whether the enter handler of syscall reports the name
+// of its descriptor's file (see fdNameSyscalls).
+func emitsFdName(syscall string) bool {
+	return fdNameSyscalls[syscall]
+}
+
 var retClassifications = map[string]RetClassification{
 	"fgetxattr":  ReadClassified,
 	"flistxattr": ReadClassified,

@@ -289,6 +289,34 @@ func TestGenerateTypesGoEventfdCodecPreservesKernelPadding(t *testing.T) {
 	requireContains(t, output, "copy(raw[44:300], e.Filename[:])")
 }
 
+// TestGenerateTypesGoFdCodecCarriesTheNameTail pins the Go side of
+// fd_name_event (task xz2): FdEvent holds the record's name fields behind
+// the compatibility fields, and Bytes writes an event of that type back as
+// the 104-byte record - fd_event's 32 bytes with the identity, then name_len
+// and the name.
+func TestGenerateTypesGoFdCodecCarriesTheNameTail(t *testing.T) {
+	structs := []CStruct{{
+		Name: "fd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "fd"},
+			{TypeName: "__u32", FieldName: "file_ident"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "SchemaVersion uint32; NameLen uint32; Name [IOR_FD_NAME_LENGTH]byte")
+	requireContains(t, output, "StringValue(f.Name[:])")
+	requireContains(t, output, "if f.EventType == ENTER_FD_NAME_EVENT {")
+	requireContains(t, output, "raw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)\n\t\tbinary.LittleEndian.PutUint32(raw[32:36], f.NameLen)")
+	requireContains(t, output, "copy(raw[36:], f.Name[:])")
+}
+
 func TestGenerateTypesGoTwoFdCodecPinsCurrentAndLegacyLayouts(t *testing.T) {
 	structs := []CStruct{{
 		Name: "two_fd_event",

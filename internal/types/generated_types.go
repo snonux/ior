@@ -147,6 +147,7 @@ const TASK_NEWTASK_EVENT = 62
 const TASK_RENAME_EVENT = 63
 const SYSCALL_RESTART_EVENT = 64
 const FILE_HANDLE_EVENT = 65
+const ENTER_FD_NAME_EVENT = 66
 const RING_FDS_EVENT = 67
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
@@ -190,6 +191,7 @@ const IOR_RING_FDS_BYTES = 256
 const RING_FDS_OK = 1
 const RING_FDS_READ_FAILED = 2
 const RING_FDS_TOO_MANY = 3
+const IOR_FD_NAME_LENGTH = 68
 const RESTART_PHASE_HANDLER = 1
 const RESTART_PHASE_RESUME = 2
 const SYS_ENTER_SOCKET TraceId = 1899
@@ -1209,10 +1211,12 @@ type FdEvent struct {
 	Size          uint64
 	SizeValid     uint32
 	SchemaVersion uint32
+	NameLen       uint32
+	Name          [IOR_FD_NAME_LENGTH]byte
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.Flags, f.Size, f.SizeValid, f.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v NameLen:%v Name:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.Flags, f.Size, f.SizeValid, f.SchemaVersion, f.NameLen, StringValue(f.Name[:]))
 }
 
 func (f FdEvent) Equals(other any) bool {
@@ -1220,7 +1224,7 @@ func (f FdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion && f.NameLen == otherConcrete.NameLen && f.Name == otherConcrete.Name
 }
 
 func (f *FdEvent) GetEventType() EventType {
@@ -1267,6 +1271,12 @@ func (f *FdEvent) Bytes() ([]byte, error) {
 		binary.LittleEndian.PutUint64(raw[32:40], f.Size)
 		binary.LittleEndian.PutUint32(raw[40:44], f.SizeValid)
 		binary.LittleEndian.PutUint32(raw[44:48], f.SchemaVersion)
+	}
+	if f.EventType == ENTER_FD_NAME_EVENT {
+		raw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)
+		binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)
+		binary.LittleEndian.PutUint32(raw[32:36], f.NameLen)
+		copy(raw[36:], f.Name[:])
 	}
 	return raw, nil
 }
@@ -2004,6 +2014,77 @@ func (r *RingFdsEvent) Bytes() ([]byte, error) {
 
 func (r *RingFdsEvent) Recycle() {
 	poolOfRingFdsEvents.Put(r)
+}
+
+type FdNameEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Fd        int32
+	FileIdent uint32
+	NameLen   uint32
+	Name      [IOR_FD_NAME_LENGTH]byte
+}
+
+func (f FdNameEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v NameLen:%v Name:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.NameLen, StringValue(f.Name[:]))
+}
+
+func (f FdNameEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FdNameEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.NameLen == otherConcrete.NameLen && f.Name == otherConcrete.Name
+}
+
+func (f *FdNameEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FdNameEvent) GetTraceId() TraceId {
+	return f.TraceId
+}
+
+func (f *FdNameEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FdNameEvent) GetTid() uint32 {
+	return f.Tid
+}
+
+func (f *FdNameEvent) GetTime() uint64 {
+	return f.Time
+}
+
+var poolOfFdNameEvents = sync.Pool{
+	New: func() any { return &FdNameEvent{} },
+}
+
+func NewFdNameEvent(raw []byte) *FdNameEvent {
+	f := poolOfFdNameEvents.Get().(*FdNameEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		*f = FdNameEvent{}
+		poolOfFdNameEvents.Put(f)
+		return nil
+	}
+	return f
+}
+
+func (f *FdNameEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *FdNameEvent) Recycle() {
+	poolOfFdNameEvents.Put(f)
 }
 
 type SocketEvent struct {

@@ -357,6 +357,12 @@ var compatibilityFields = map[string][]CMember{
 		{TypeName: "__u64", FieldName: "size"},
 		{TypeName: "__u32", FieldName: "size_valid"},
 		{TypeName: "__u32", FieldName: "schema_version"},
+		// Not an older layout: the name tail of fd_name_event, the record
+		// close sends in place of fd_event when its file has a last path
+		// component (task xz2). It decodes into FdEvent like the wide
+		// layouts, so the pair is handled as any other close.
+		{TypeName: "__u32", FieldName: "name_len"},
+		{TypeName: "char", FieldName: "name", ArraySize: "IOR_FD_NAME_LENGTH"},
 	},
 	"EventfdEvent": {
 		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
@@ -536,7 +542,9 @@ var specialCodecs = map[string]func(b *strings.Builder, selfRef string){
 // public constructors disagree on schema or padding.
 //
 // The lean record ends in the file identity word (task 603), the wide one
-// has the flags word at that offset and no identity.
+// has the flags word at that offset and no identity. An event that was
+// decoded from an fd_name_event (ENTER_FD_NAME_EVENT, task xz2) is written
+// back as one: the lean record plus name_len and name, 104 bytes.
 func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("var poolOfFdEvents = sync.Pool{\n\tNew: func() any { return &FdEvent{} },\n}\n\n")
 	b.WriteString("func NewFdEvent(raw []byte) *FdEvent { return NewFdEventFast(raw) }\n\n")
@@ -556,6 +564,12 @@ func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tif %s.EventType == ENTER_FD_NAME_EVENT {\n", selfRef)
+	b.WriteString("\t\traw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[28:32], %s.FileIdent)\n", selfRef)
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[32:36], %s.NameLen)\n", selfRef)
+	fmt.Fprintf(b, "\t\tcopy(raw[36:], %s.Name[:])\n", selfRef)
 	b.WriteString("\t}\n\treturn raw, nil\n}\n\n")
 	fmt.Fprintf(b, "func (%s *FdEvent) Recycle() {\n\tpoolOfFdEvents.Put(%s)\n}\n", selfRef, selfRef)
 }
