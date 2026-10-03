@@ -94,7 +94,7 @@ func TestRefusalOfARowTheCommFilterDropsIsCountedApart(t *testing.T) {
 	requireIdentCounts(t, el, 0, 1, 0, 1)
 
 	const want = "\tfile identity: 0 stale fd bindings dropped, 1 rows refused a procfs answer for another file" +
-		" (not counting rows a filter dropped: 0 and 1)\n"
+		" (rows a filter dropped, not counted: 0 stale fd bindings, 1 refused)\n"
 	if got := el.fileIdentStatLine(); got != want {
 		t.Fatalf("stat line = %q, want %q", got, want)
 	}
@@ -159,13 +159,13 @@ func TestFileIdentStatLineNamesDroppedRowsApart(t *testing.T) {
 	}
 	tr.staleBindings, tr.rejectedAnswers = 3, 10
 	tr.droppedRowStale, tr.droppedRowRejected = 1, 7
-	want := figures + " (not counting rows a filter dropped: 1 and 7)\n"
+	want := figures + " (rows a filter dropped, not counted: 1 stale fd bindings, 7 refused)\n"
 	if got := el.fileIdentStatLine(); got != want {
 		t.Fatalf("stat line = %q, want %q", got, want)
 	}
 	tr.staleBindings, tr.rejectedAnswers = 1, 7
 	if got := el.fileIdentStatLine(); !strings.HasPrefix(got, "\tfile identity: 0 stale fd bindings dropped, 0 rows refused") ||
-		!strings.HasSuffix(got, "(not counting rows a filter dropped: 1 and 7)\n") {
+		!strings.HasSuffix(got, "(rows a filter dropped, not counted: 1 stale fd bindings, 7 refused)\n") {
 		t.Fatalf("stat line of dropped rows only = %q, want zeroes and their note", got)
 	}
 }

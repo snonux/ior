@@ -2817,7 +2817,7 @@ kernel program reports the file, and user space compares.
   `droppedRowRejected` (`fdTracker.bookDroppedRow`; two loads per pair,
   no flag through the resolvers, no allocation). The line prints the
   difference and, only when a dropped row counted, the rest behind it:
-  `... for another file (not counting rows a filter dropped: S and R)`,
+  `... for another file (rows a filter dropped, not counted: S stale fd bindings, R refused)`,
   with `0 ..., 0 ...` in front when only dropped rows counted. The rest is
   kept because under `-path` a refused row is unnamed and therefore always
   dropped, and a binding dropped for a filtered thread was stale for its
@@ -2830,8 +2830,8 @@ kernel program reports the file, and user space compares.
   filter the kernel aggregate cannot apply, and the drop and skipped-run
   lines say they are host-wide. Tests:
   `internal/eventloop_fileident_filter_test.go`. System-wide 20 s runs on
-  the development host, other workers loading it: 5 stale / 60 refused before task a23's
-  no-promotion rule, 0 / 64 after (different load, so only indicative; the
+  the development host, other workers loading it: 5 stale / 60 refused
+  before task a23's no-promotion rule, 0 / 64 after (different load, so only indicative; the
   task's own 40 s run had traced the stale ones to promoted answers).
 - **What it does not do**: name a file that is no longer open when the loop
   looks (a rebound descriptor is named only while procfs still shows that

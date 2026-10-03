@@ -562,6 +562,7 @@ func (t *fdTracker) droppedRowIdentNote() string {
 	if t.droppedRowStale == 0 && t.droppedRowRejected == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (not counting rows a filter dropped: %d and %d)",
+	return fmt.Sprintf(
+		" (rows a filter dropped, not counted: %d stale fd bindings, %d refused)",
 		t.droppedRowStale, t.droppedRowRejected)
 }

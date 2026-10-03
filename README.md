@@ -269,7 +269,7 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   kernel without the kfunc (mainline before 6.2 and RHEL 8; RHEL 9 backports much of BPF and
   may have it, which is unverified - ior asks the kernel's BTF and switches the check off
   where it is missing), rows of syscalls whose record has no identity (`recvfrom`, `ioctl`,
-  `fcntl`, `mmap`, `epoll_ctl`, `dup3`, ...), and files the identity cannot tell apart: the
+  `fcntl`, `mmap`, `epoll_ctl`, ...), and files the identity cannot tell apart: the
   descriptors that share the kernel's anonymous inode (eventfd, epoll, io_uring, timerfd), a
   file that got the inode number of one unlinked just before (ext4 and xfs reuse a freed
   number at once), files with the same inode number on different filesystems or in

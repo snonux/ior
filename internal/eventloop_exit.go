@@ -94,6 +94,8 @@ func (e *eventLoop) handleTracepointExit(ep *event.Pair) bool {
 	if handler(e, ep) {
 		return true
 	}
+	// Every pair the handler did not report is booked alike: the one a
+	// filter dropped, and the rare one recycled as malformed.
 	t.bookDroppedRow(stale, rejected)
 	return false
 }
