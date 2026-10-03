@@ -1405,6 +1405,38 @@ func TestGenerateIoUringRegisterHandler(t *testing.T) {
 	requireContains(t, output, "ev->cmd = ctx->args[1];")
 }
 
+// TestGenerateIoUringRegisterCapturesRingFds pins the generator output of the
+// registered-ring capture (task js2): io_uring_register's handlers keep their
+// hook's verdict in a local, stash and publish around it, and leave the
+// sampled-out return for afterwards. io_uring_enter and io_uring_setup, which
+// are generated next to it, get none of it: their handlers are the plain
+// hook-and-return every other syscall has.
+func TestGenerateIoUringRegisterCapturesRingFds(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t, strings.Join([]string{FormatIoUringRegister, FormatExitIoUringRegister,
+		FormatIoUringEnter, FormatExitIoUringEnter, FormatIoUringSetup, FormatExitIoUringSetup}, "\n")+"\n"))
+	handlers := splitGeneratedHandlers(t, out)
+	requireContains(t, handlers["sys_enter_io_uring_register"],
+		"    int emits = ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_REGISTER, now);\n\n"+
+			"    ior_stash_ring_fds(tid, SYS_ENTER_IO_URING_REGISTER, now, emits, ctx->args[1], ctx->args[2]);\n"+
+			"    if (!emits)\n        return 0;\n\n    struct fcntl_event *ev = bpf_ringbuf_reserve(")
+	requireContains(t, handlers["sys_exit_io_uring_register"],
+		"    __u64 ring_fds_array;\n    __u64 ring_fds_opcode;\n\n    __u64 now = bpf_ktime_get_boot_ns();\n"+
+			"    int emits = ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_IO_URING_REGISTER, ctx->ret, now, "+
+			"&ring_fds_array, &ring_fds_opcode);\n\n"+
+			"    ior_emit_ring_fds(pid, tid, SYS_ENTER_IO_URING_REGISTER, now, ring_fds_opcode, ring_fds_array, ctx->ret);\n"+
+			"    if (!emits)\n        return 0;\n\n    struct ret_event *ev = bpf_ringbuf_reserve(")
+	for _, name := range []string{"io_uring_enter", "io_uring_setup"} {
+		enterConst := "SYS_ENTER_" + strings.ToUpper(name)
+		enter, exit := handlers["sys_enter_"+name], handlers["sys_exit_"+name]
+		requireContains(t, enter, "    if (!ior_on_syscall_enter(tid, "+enterConst+", now))\n        return 0;\n")
+		requireContains(t, exit, "    if (!ior_on_syscall_exit(tid, "+enterConst+", ctx->ret, now))\n        return 0;\n")
+		for _, body := range []string{enter, exit} {
+			requireNotContains(t, body, "ring_fds")
+			requireNotContains(t, body, "emits")
+		}
+	}
+}
+
 func TestGenerateIoUringSetupHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringSetup, FormatExitIoUringSetup)
 
@@ -3780,9 +3812,12 @@ func checkArtifactRecoveringHandlers(t *testing.T, artifact string) (firstSlot, 
 // two-path kinds (rename/link, move_mount) also use the second for a path,
 // and the output-handle syscalls (name_to_handle_at) use it for their handle
 // pointer. The handle capture is pinned to its two syscalls the same way.
+// The registered-ring capture (ringFdsSyscalls: io_uring_register) takes
+// both slots through the two-slot hook as well, with its own stash and emit.
 func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, secondSlot int) {
 	t.Helper()
 	handles := len(outputHandleSyscalls)
+	ringFds := len(ringFdsSyscalls)
 	for helper, want := range map[string]int{
 		// Every recovering exit takes through exactly one hook call: the
 		// single-slot hook for the one-path handlers, the two-slot one for the
@@ -3790,7 +3825,9 @@ func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, se
 		// returns the enter time, for name_to_handle_at. No standalone take
 		// remains.
 		"ior_on_syscall_exit_take_filename(":  firstSlot - secondSlot - handles,
-		"ior_on_syscall_exit_take_filenames(": secondSlot,
+		"ior_on_syscall_exit_take_filenames(": secondSlot + ringFds,
+		"ior_stash_ring_fds(":                 ringFds,
+		"ior_emit_ring_fds(":                  ringFds,
 		"ior_on_syscall_exit_take_handle(":    handles,
 		"ior_emit_open_name_fixup(":           firstSlot,
 		"ior_stash_pending_filename(":         firstSlot,

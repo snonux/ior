@@ -142,6 +142,10 @@ func (e *eventLoop) handleProcessExitEvent(ev *types.ProcessExitEvent) {
 	// took it is gone, and a scoped one belongs to the process and goes when
 	// the whole thread group has (applyProcessDeath, dropProcessState).
 	e.handleState().dropTaken(ev.Tid)
+	// The registered-ring table is the thread's and ends with it (the kernel
+	// releases it in do_exit); kept, it would name the rows of the tid's
+	// next owner.
+	e.ringState().dropThread(ev.Tid)
 	// Last: every piece of state the exit retires is gone before a -tid trace
 	// is told to end, so the shutdown statistics see the final picture (the
 	// -pid half does the same at the end of applyProcessDeath). An inherited

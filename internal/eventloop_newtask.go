@@ -192,6 +192,9 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 	e.evictCachedComm(tid)
 	e.pairs.evictTid(tid)
 	e.handleState().dropTaken(tid)
+	// A new task starts without a registered-ring table, whatever its clone
+	// flags (eventloop_ringfds.go).
+	e.ringState().dropThread(tid)
 }
 
 // retireRecycledPid drops the handle names scoped to the pid of a new

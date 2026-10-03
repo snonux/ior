@@ -147,6 +147,7 @@ const TASK_NEWTASK_EVENT = 62
 const TASK_RENAME_EVENT = 63
 const SYSCALL_RESTART_EVENT = 64
 const FILE_HANDLE_EVENT = 65
+const RING_FDS_EVENT = 66
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -181,6 +182,14 @@ const FILE_HANDLE_OK = 1
 const FILE_HANDLE_NULL = 2
 const FILE_HANDLE_READ_FAILED = 3
 const FILE_HANDLE_TOO_LARGE = 4
+const IOR_REGISTER_RING_FDS = 20
+const IOR_UNREGISTER_RING_FDS = 21
+const IOR_RING_FDS_MAX = 16
+const IOR_RING_FD_UPDATE_SIZE = 16
+const IOR_RING_FDS_BYTES = 256
+const RING_FDS_OK = 1
+const RING_FDS_READ_FAILED = 2
+const RING_FDS_TOO_MANY = 3
 const RESTART_PHASE_HANDLER = 1
 const RESTART_PHASE_RESUME = 2
 const SYS_ENTER_SOCKET TraceId = 1899
@@ -1923,6 +1932,78 @@ func (f *FileHandleEvent) Bytes() ([]byte, error) {
 
 func (f *FileHandleEvent) Recycle() {
 	poolOfFileHandleEvents.Put(f)
+}
+
+type RingFdsEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Opcode    uint32
+	Status    uint32
+	Count     uint32
+	Reserved  uint32
+	Updates   [IOR_RING_FDS_BYTES]byte
+}
+
+func (r RingFdsEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Opcode:%v Status:%v Count:%v Reserved:%v Updates:%v", r.EventType, r.TraceId, r.Time, r.Pid, r.Tid, r.Opcode, r.Status, r.Count, r.Reserved, hex.EncodeToString(r.Updates[:]))
+}
+
+func (r RingFdsEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*RingFdsEvent)
+	if !ok {
+		return false
+	}
+	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.Opcode == otherConcrete.Opcode && r.Status == otherConcrete.Status && r.Count == otherConcrete.Count && r.Reserved == otherConcrete.Reserved && r.Updates == otherConcrete.Updates
+}
+
+func (r *RingFdsEvent) GetEventType() EventType {
+	return r.EventType
+}
+
+func (r *RingFdsEvent) GetTraceId() TraceId {
+	return r.TraceId
+}
+
+func (r *RingFdsEvent) GetPid() uint32 {
+	return r.Pid
+}
+
+func (r *RingFdsEvent) GetTid() uint32 {
+	return r.Tid
+}
+
+func (r *RingFdsEvent) GetTime() uint64 {
+	return r.Time
+}
+
+var poolOfRingFdsEvents = sync.Pool{
+	New: func() any { return &RingFdsEvent{} },
+}
+
+func NewRingFdsEvent(raw []byte) *RingFdsEvent {
+	r := poolOfRingFdsEvents.Get().(*RingFdsEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, r); err != nil {
+		*r = RingFdsEvent{}
+		poolOfRingFdsEvents.Put(r)
+		return nil
+	}
+	return r
+}
+
+func (r *RingFdsEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, r)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (r *RingFdsEvent) Recycle() {
+	poolOfRingFdsEvents.Put(r)
 }
 
 type SocketEvent struct {

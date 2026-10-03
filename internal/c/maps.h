@@ -22,7 +22,10 @@ struct {
 // can fault, both or neither. For name_to_handle_at, a single-path kind, the
 // second slot instead carries the output struct file_handle pointer its exit
 // handler reads the returned handle through (ior_stash_pending_handle in
-// handle.c). 0 means "nothing to read" and is the state
+// handle.c). io_uring_register, which captures no path, uses both slots for
+// its two ring-fds opcodes: the pointer to the io_uring_rsrc_update array in
+// the first and the opcode in the second (ior_stash_ring_fds in iouring.c).
+// 0 means "nothing to read" and is the state
 // ior_on_syscall_enter leaves behind for every other syscall (the struct is
 // zero-initialised there).
 struct syscall_enter_state {

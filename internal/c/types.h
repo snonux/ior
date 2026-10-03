@@ -78,6 +78,10 @@
 // Control record carrying the file handle a successful name_to_handle_at
 // returned (ior_emit_file_handle, handle.c).
 #define FILE_HANDLE_EVENT 65
+// Control record carrying the registered-ring table entries a successful
+// io_uring_register(IORING_REGISTER_RING_FDS / IORING_UNREGISTER_RING_FDS)
+// set or released (ior_emit_ring_fds, iouring.c).
+#define RING_FDS_EVENT 66
 
 #define UNCLASSIFIED 0
 #define READ_CLASSIFIED 1
@@ -446,6 +450,61 @@ struct file_handle_event {
     __s32 handle_type;
     __u8 f_handle[IOR_MAX_HANDLE_SZ];
     __u64 enter_time;
+};
+
+// The two io_uring_register opcodes that change a thread's registered-ring
+// table (<linux/io_uring.h>: IORING_REGISTER_RING_FDS and
+// IORING_UNREGISTER_RING_FDS), the table's size (IO_RINGFD_REG_MAX, the most
+// entries one call takes) and the size of one array element, struct
+// io_uring_rsrc_update {__u32 offset; __u32 resv; __u64 data;}. All four are
+// syscall ABI.
+#define IOR_REGISTER_RING_FDS 20
+#define IOR_UNREGISTER_RING_FDS 21
+#define IOR_RING_FDS_MAX 16
+#define IOR_RING_FD_UPDATE_SIZE 16
+#define IOR_RING_FDS_BYTES 256
+
+// Status of the array read of a ring_fds_event:
+//   - RING_FDS_OK: updates holds count entries.
+//   - RING_FDS_READ_FAILED: the nofault read of the array failed.
+//   - RING_FDS_TOO_MANY: the call returned more entries than the table has,
+//     which these opcodes cannot; nothing was read.
+// For both failures count is 0, and userspace forgets the thread's table.
+#define RING_FDS_OK 1
+#define RING_FDS_READ_FAILED 2
+#define RING_FDS_TOO_MANY 3
+
+// ring_fds_event is a control record, not a syscall event: the exit handler
+// of io_uring_register emits it for the two opcodes above after a return
+// that processed at least one entry, ahead of the call's exit record and
+// whether or not the sampling rate emits that one (ior_emit_ring_fds,
+// iouring.c). It is never rendered as a row; userspace applies it to the
+// registered-ring table of the thread tid (handleRingFdsEvent,
+// internal/eventloop_ringfds.go).
+//
+// trace_id is the ENTER trace ID of the call (SYS_ENTER_IO_URING_REGISTER),
+// opcode the io_uring_register opcode without the
+// IORING_REGISTER_USE_REGISTERED_RING bit. time is the exit handler's single
+// clock read and therefore equals the time of the exit record that follows,
+// bit for bit: an exit of such a call without a record of that time tells
+// userspace that the record was lost.
+//
+// updates holds the first count elements of the caller's array as the kernel
+// left them, IOR_RING_FD_UPDATE_SIZE bytes each in host byte order: offset
+// (the index, after IORING_REGISTER_RING_FDS the one the kernel allocated),
+// resv, and data (the ring descriptor of a registration, 0 of a release).
+// The bytes past them are zeros. No implicit padding, 296 bytes.
+struct ring_fds_event {
+    __u32 event_type;
+    __u32 trace_id;
+    __u64 time;
+    __u32 pid;
+    __u32 tid;
+    __u32 opcode;
+    __u32 status;
+    __u32 count;
+    __u32 reserved;
+    __u8 updates[IOR_RING_FDS_BYTES];
 };
 
 struct socket_event {

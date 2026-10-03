@@ -25,6 +25,9 @@
 // open_by_handle_at handlers.
 #include "handle.c"
 
+// Registered-ring capture used by the generated io_uring_register handlers.
+#include "iouring.c"
+
 // File identity of a descriptor (the inode behind an fd number), used by the
 // generated single-descriptor enter handlers and the exits of the open kinds.
 #include "fileident.c"

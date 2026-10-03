@@ -53,12 +53,16 @@ const (
 	// open_by_handle_at_event carries the file handle since task k03. The
 	// legacy record is the flags-only layout: 32 bytes as the kernel wrote it
 	// (4 bytes of tail padding) and 28 as binary.Write did.
-	openByHandleAtEventSize      = 168
-	openByHandleAtEventLegacy    = 32
-	openByHandleAtEventSizeV1    = 28
-	fileHandleEventSize          = 176
-	fileHandleEnterTimeOffset    = 168
-	fileHandleFieldsOffset       = 28
+	openByHandleAtEventSize   = 168
+	openByHandleAtEventLegacy = 32
+	openByHandleAtEventSizeV1 = 28
+	fileHandleEventSize       = 176
+	fileHandleEnterTimeOffset = 168
+	fileHandleFieldsOffset    = 28
+	// ring_fds_event (task js2): six header words, then the caller's
+	// io_uring_rsrc_update array, IOR_RING_FDS_BYTES bytes at offset 40.
+	ringFdsEventSize             = 296
+	ringFdsUpdatesOffset         = 40
 	socketEventSize              = 40
 	socketEventSizeV1            = 36
 	socketpairEventSize          = 56
@@ -618,6 +622,51 @@ func NewFileHandleEventFast(raw []byte) *FileHandleEvent {
 	at := fileHandleEnterTimeOffset
 	f.EnterTime = binary.LittleEndian.Uint64(raw[at : at+8])
 	return f
+}
+
+// NewRingFdsEventFast decodes the control record that carries the
+// registered-ring table entries an io_uring_register set or released. There
+// is one layout, 296 bytes. A longer payload decodes its prefix and a shorter
+// one returns nil: a record without its whole array says nothing about the
+// table that userspace could apply.
+func NewRingFdsEventFast(raw []byte) *RingFdsEvent {
+	if len(raw) < ringFdsEventSize {
+		return nil
+	}
+	r := poolOfRingFdsEvents.Get().(*RingFdsEvent)
+	r.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	r.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	r.Time = binary.LittleEndian.Uint64(raw[8:16])
+	r.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	r.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	r.Opcode = binary.LittleEndian.Uint32(raw[24:28])
+	r.Status = binary.LittleEndian.Uint32(raw[28:32])
+	r.Count = binary.LittleEndian.Uint32(raw[32:36])
+	r.Reserved = binary.LittleEndian.Uint32(raw[36:40])
+	copy(r.Updates[:], raw[ringFdsUpdatesOffset:ringFdsEventSize])
+	return r
+}
+
+// RingFdUpdate is one element of a RingFdsEvent: the registered-ring index
+// and, for a registration, the ring descriptor (struct io_uring_rsrc_update:
+// offset, resv, data).
+type RingFdUpdate struct {
+	Index uint32
+	Fd    uint64
+}
+
+// Update returns element i of the record's array. It reports false for an
+// index at or past Count, or past the array: a record whose count exceeds
+// what it can hold is malformed, and its surplus is not read.
+func (r *RingFdsEvent) Update(i int) (RingFdUpdate, bool) {
+	if i < 0 || uint32(i) >= r.Count || i >= IOR_RING_FDS_MAX {
+		return RingFdUpdate{}, false
+	}
+	at := i * IOR_RING_FD_UPDATE_SIZE
+	return RingFdUpdate{
+		Index: binary.LittleEndian.Uint32(r.Updates[at : at+4]),
+		Fd:    binary.LittleEndian.Uint64(r.Updates[at+8 : at+16]),
+	}, true
 }
 
 // NewSocketEventFast decodes one socket ring-buffer payload in a

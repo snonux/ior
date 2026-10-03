@@ -212,9 +212,10 @@ func TestGeneratedStringShowsAMissingTerminator(t *testing.T) {
 
 // TestStringBearingEventsListIsComplete fails when generated_types.go gains a
 // struct with a byte-array field that stringBearingEvents does not list. A
-// file handle field ([IOR_MAX_HANDLE_SZ]byte, a C __u8 array) is not a
-// string: it is binary, has no terminator, is zero-filled by BPF and rendered
-// whole, as hex (TestFileHandleFieldRendersAsHex).
+// binary field (binaryFieldSizes: a file handle, the array of a
+// registered-ring record; C __u8 arrays) is not a string: it has no
+// terminator, is zero-filled by BPF and rendered whole, as hex
+// (TestFileHandleFieldRendersAsHex, TestRingFdsFieldRendersAsHex).
 func TestStringBearingEventsListIsComplete(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "generated_types.go", nil, 0)
 	if err != nil {
@@ -236,7 +237,7 @@ func TestStringBearingEventsListIsComplete(t *testing.T) {
 		}
 		for _, field := range st.Fields.List {
 			if arr, ok := field.Type.(*ast.ArrayType); ok && arr.Len != nil {
-				if size, ok := arr.Len.(*ast.Ident); ok && size.Name == "IOR_MAX_HANDLE_SZ" {
+				if size, ok := arr.Len.(*ast.Ident); ok && binaryFieldSizes[size.Name] {
 					continue
 				}
 				if ident, ok := arr.Elt.(*ast.Ident); ok && ident.Name == "byte" {
@@ -255,6 +256,31 @@ func TestStringBearingEventsListIsComplete(t *testing.T) {
 		if !found[name] {
 			t.Errorf("%s is listed in stringBearingEvents but has no string field", name)
 		}
+	}
+}
+
+// binaryFieldSizes are the size constants of the byte arrays that hold binary
+// data, not a NUL-terminated string: a file handle and the
+// io_uring_rsrc_update array of a registered-ring record. String() renders
+// them as hex (TestFileHandleFieldRendersAsHex, TestRingFdsFieldRendersAsHex).
+var binaryFieldSizes = map[string]bool{
+	"IOR_MAX_HANDLE_SZ":  true,
+	"IOR_RING_FDS_BYTES": true,
+}
+
+// TestRingFdsFieldRendersAsHex: the array of a registered-ring record is
+// binary like a file handle, so String() renders all of it as hex instead of
+// cutting it at the first zero byte or handing raw bytes to a terminal.
+func TestRingFdsFieldRendersAsHex(t *testing.T) {
+	var updates [IOR_RING_FDS_BYTES]byte
+	copy(updates[:], []byte{0x1b, 0x00, 0xff, 0x41})
+	want := "Updates:1b00ff41" + strings.Repeat("00", IOR_RING_FDS_BYTES-4)
+	got := RingFdsEvent{Updates: updates}.String()
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("RingFdsEvent renders its array as %q, want it to end in %q", got, want)
+	}
+	if strings.ContainsAny(got, "\x1b\x00") {
+		t.Errorf("raw array bytes reached String(): %q", got)
 	}
 }
 

@@ -240,6 +240,13 @@ func rawCallControlEvents() []rawRuntimeEvent {
 		// open_by_handle_at to look up (internal/eventloop_handle.go).
 		controlRaw(types.FILE_HANDLE_EVENT, rawDecoder[types.FileHandleEvent](types.NewFileHandleEventFast),
 			typedRuntimeControl((*eventLoop).handleFileHandleEvent)),
+		// The ring-fds record carries the registered-ring table entries an
+		// io_uring_register set or released, reserved ahead of that call's
+		// exit record whether or not the call's own records are sampled; the
+		// rows that pass an index are named from it
+		// (internal/eventloop_ringfds.go).
+		controlRaw(types.RING_FDS_EVENT, rawDecoder[types.RingFdsEvent](types.NewRingFdsEventFast),
+			typedRuntimeControl((*eventLoop).handleRingFdsEvent)),
 	}
 }
 

@@ -226,7 +226,7 @@ var syscallSemanticExpectations = map[string]syscallSemanticExpectation{
 	"io_setup":                {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_submit":               {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_uring_enter":          {kind: "fd", args: map[string]int{"cmd": 3, "fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
-	"io_uring_register":       {kind: "fd", args: map[string]int{"cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "AIO"},
+	"io_uring_register":       {kind: "fd", args: map[string]int{"cmd": 1, "fd": 0, "ring_fds_array": 2, "ring_fds_opcode": 1}, ret: "UNCLASSIFIED", family: "AIO"},
 	"io_uring_setup":          {kind: "null", args: map[string]int{"cmd": 1}, ret: "UNCLASSIFIED", family: "AIO"},
 	"ioctl":                   {kind: "fcntl", args: map[string]int{"arg": 2, "cmd": 1, "fd": 0}, ret: "UNCLASSIFIED", family: "FS"},
 	"ioperm":                  {kind: "null", args: map[string]int{}, ret: "UNCLASSIFIED", family: "Misc"},
@@ -2244,8 +2244,9 @@ func addCaptureArgSources(name, enterBody, exitBody string, result map[string]in
 }
 
 // addOutputCaptureArgSources records the captures of output buffers, which
-// the exit handler reads back: an output path ("buf") and an output file
-// handle ("handle").
+// the exit handler reads back: an output path ("buf"), an output file
+// handle ("handle") and the array of a registered-ring io_uring_register
+// ("ring_fds_opcode", "ring_fds_array"; syscall_semantics_ringfds_test.go).
 func addOutputCaptureArgSources(name, enterBody, exitBody string, result map[string]int) error {
 	argIndex, ok, err := parseOutputBufferCapture(name, enterBody, exitBody)
 	if err != nil {
@@ -2257,10 +2258,15 @@ func addOutputCaptureArgSources(name, enterBody, exitBody string, result map[str
 		}
 	}
 	argIndex, ok, err = parseOutputHandleCapture(name, enterBody, exitBody)
-	if err != nil || !ok {
+	if err != nil {
 		return err
 	}
-	return addArgSource(name, result, "handle", argIndex)
+	if ok {
+		if err := addArgSource(name, result, "handle", argIndex); err != nil {
+			return err
+		}
+	}
+	return addRingFdsArgSources(name, enterBody, exitBody, result)
 }
 
 // validateHandleRead checks the capture of an input file handle: a handler

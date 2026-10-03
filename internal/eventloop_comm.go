@@ -849,7 +849,9 @@ func (e *eventLoop) seedCommFromEnterPayload(ev event.Event) {
 }
 
 // applyPendingCommRefresh consumes a refresh request raised by the ring-buffer
-// drop monitor and flags the whole comm cache for re-resolution.
+// drop monitor and flags the whole comm cache for re-resolution. The
+// registered-ring tables, the other state a lost control record leaves wrong
+// without a trace, are forgotten on the same notice.
 //
 // It runs on the event-loop goroutine, not on the monitor's: commState() lazily
 // initialises the resolver and its callbacks without holding a lock, so calling
@@ -864,6 +866,11 @@ func (e *eventLoop) applyPendingCommRefresh() {
 		return
 	}
 	e.commState().markAllStale()
+	// The lost records may include a registered-ring control record, after
+	// which a table names an index after the ring it held before; nothing
+	// says whose, so every table goes and the rows fall back to their index
+	// until the next registration (eventloop_ringfds.go).
+	e.ringState().dropAll()
 }
 
 func (e *eventLoop) queueCommLookup(tid uint32) {
@@ -926,6 +933,9 @@ func (e *eventLoop) handleProcessExecEvent(ev *types.ProcessExecEvent, ch chan<-
 	e.fdState().dropOnExec(ev.Pid)
 	// The new program has a fresh address space and so a fresh program break.
 	e.brkState.forget(ev.Pid)
+	// An exec cancels the caller's io_uring context and with it its
+	// registered-ring table (eventloop_ringfds.go).
+	e.ringState().dropThread(ev.Tid)
 	e.rekeyExecCaller(ev)
 	if ev.ExitUntraced != 0 {
 		e.completeUntracedExec(ev, ch)

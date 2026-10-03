@@ -466,41 +466,102 @@ func (anonymousMappingFile) AppendString(dst []byte, _ func(string) string) []by
 // table (io_uring_register_ring_fd() in liburing; typically 0). The number
 // looks like a descriptor but names no entry of the fd table: resolving it
 // there attributes the call to whatever file happens to sit at that fd
-// (stdin for index 0). The index is all that is known about the ring, so the
-// row is labelled with it.
+// (stdin for index 0).
+//
+// Which ring the index stands for is known when ior saw the thread register
+// it (task js2, internal/eventloop_ringfds.go): ring is then a snapshot of the
+// ring's descriptor taken at that moment, and the file reports that ring -
+// its name, flags and descriptor number. Without it (ring nil) the index is
+// all that is known, and the row is labelled with it.
+//
+// The descriptor number needs care. A registered ring stays usable after its
+// descriptor is closed (the table holds its own reference to the file), and
+// the task may then be handed the number again for another file. closed says
+// that ior saw the number given up or rebound since the registration: the
+// name still is the ring's, the number is not, and FD reports -1.
 type registeredRingFile struct {
-	index int32
+	index  int32
+	closed bool
+	ring   *FdFile
 }
 
 // NewRegisteredRing creates the file representation for an io_uring ring that
-// is addressed by its registered-ring index instead of a file descriptor.
+// is addressed by its registered-ring index instead of a file descriptor, and
+// of which nothing but the index is known.
 func NewRegisteredRing(index int32) registeredRingFile {
 	return registeredRingFile{index: index}
 }
 
-func (f registeredRingFile) Name() string {
-	return string(f.AppendString(nil, nil))
+// NewRegisteredRingOf is NewRegisteredRing for an index whose ring is known:
+// ring is the snapshot of the ring's descriptor taken when the thread
+// registered it. It must not change afterwards (use Detach), because every
+// row of the index shares it. closed says that the descriptor number has
+// been given up or rebound since. A nil ring is NewRegisteredRing.
+func NewRegisteredRingOf(index int32, ring *FdFile, closed bool) registeredRingFile {
+	if ring == nil {
+		return NewRegisteredRing(index)
+	}
+	return registeredRingFile{index: index, closed: closed, ring: ring}
 }
 
-func (registeredRingFile) Flags() Flags {
+// Name returns the ring's name when the ring is known, so that the row is
+// counted and filtered with the rows that address the same ring by its
+// descriptor, and the "io_uring:reg[<index>]" label otherwise.
+func (f registeredRingFile) Name() string {
+	if f.ring != nil {
+		return f.ring.Name()
+	}
+	return string(f.appendLabel(nil))
+}
+
+// Flags returns the flags of the ring's descriptor, unknown without a ring.
+func (f registeredRingFile) Flags() Flags {
+	if f.ring != nil {
+		return f.ring.Flags()
+	}
 	return unknownFlag
 }
 
-// FD reports -1: the index is not a descriptor, and callers that key state on
-// FD() must not mistake it for one.
-func (registeredRingFile) FD() int32 {
-	return -1
+// FD reports the descriptor the ring was registered from while that number
+// still is the ring's as far as ior knows, and -1 otherwise: the index is not
+// a descriptor, and callers that key state on FD() must not mistake it for
+// one.
+func (f registeredRingFile) FD() int32 {
+	if f.ring == nil || f.closed {
+		return -1
+	}
+	return f.ring.FD()
 }
 
 func (f registeredRingFile) String() string {
-	return f.Name()
+	var scratch [128]byte
+	return string(f.AppendString(scratch[:0], nil))
 }
 
-// AppendString implements StringAppender, rendering "io_uring:reg[<index>]".
-func (f registeredRingFile) AppendString(dst []byte, _ func(string) string) []byte {
+// appendLabel appends "io_uring:reg[<index>]".
+func (f registeredRingFile) appendLabel(dst []byte) []byte {
 	dst = append(dst, "io_uring:reg["...)
 	dst = strconv.AppendInt(dst, int64(f.index), 10)
 	return append(dst, ']')
+}
+
+// AppendString implements StringAppender, rendering "io_uring:reg[<index>]"
+// and, for a known ring, "=<name>%(<fd>,<flags>)" behind it: the index the
+// call passed, then the ring the way a row that addresses it by descriptor
+// shows it. The name is what procfs or a traced call said, so it goes
+// through text like every other name.
+func (f registeredRingFile) AppendString(dst []byte, text func(string) string) []byte {
+	dst = f.appendLabel(dst)
+	if f.ring == nil {
+		return dst
+	}
+	dst = append(dst, '=')
+	dst = appendText(dst, f.ring.Name(), text)
+	dst = append(dst, "%("...)
+	dst = strconv.AppendInt(dst, int64(f.FD()), 10)
+	dst = append(dst, ',')
+	dst = f.ring.Flags().AppendTo(dst)
+	return append(dst, ')')
 }
 
 // --- compile-time interface satisfaction assertions ---

@@ -1718,7 +1718,8 @@ func (h *heldRestart) stepRestartRecord(rec *types.SyscallRestartEvent) restartA
 
 // stepHandlerRecord lets the syscalls of a running signal handler through:
 // its enters and exits and the records that amend a call between the two (a
-// name fixup, a returned file handle: amendsPendingEnter). Any other record of
+// name fixup, a returned file handle, changed registered-ring slots:
+// amendsPendingEnter). Any other record of
 // the tid (its exit, a new task with its tid, an exec) ends the wait, and so
 // does a handler that outlasts maxHandlerRecords.
 //
@@ -1746,12 +1747,13 @@ func (h *heldRestart) stepHandlerRecord(direction rawEventDirection, ev runtimeD
 }
 
 // amendsPendingEnter reports whether a control record only adds to a syscall
-// the task has in flight - a path recovered at sys_exit, or the handle a
-// name_to_handle_at returned - and therefore belongs between that call's
+// the task has in flight - a path recovered at sys_exit, the handle a
+// name_to_handle_at returned, or the registered-ring slots an
+// io_uring_register changed - and therefore belongs between that call's
 // enter and exit like the two of them.
 func amendsPendingEnter(ev runtimeDecodedEvent) bool {
 	switch ev.(type) {
-	case *types.OpenNameFixupEvent, *types.FileHandleEvent:
+	case *types.OpenNameFixupEvent, *types.FileHandleEvent, *types.RingFdsEvent:
 		return true
 	}
 	return false

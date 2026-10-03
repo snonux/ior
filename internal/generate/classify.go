@@ -779,6 +779,27 @@ func outputHandleArgIndex(syscall string) (int, bool) {
 	return idx, ok
 }
 
+// ringFdsArgs names the two io_uring_register arguments the registered-ring
+// capture needs: the opcode and the pointer to the io_uring_rsrc_update array.
+type ringFdsArgs struct {
+	opcode int
+	array  int
+}
+
+// ringFdsSyscalls maps the syscall that changes a thread's registered-ring
+// table to those argument slots: io_uring_register(fd, opcode, arg, nr_args)
+// with opcode IORING_REGISTER_RING_FDS or IORING_UNREGISTER_RING_FDS. Its
+// generated handlers park opcode and pointer at enter and publish the entries
+// the call processed as a RING_FDS_EVENT control record at exit
+// (renderRingFdsHook, internal/c/iouring.c, task js2); the opcode decides in
+// BPF, so every other io_uring_register passes through untouched.
+//
+// The capture uses both pending slots, so a syscall listed here must capture
+// no pathname.
+var ringFdsSyscalls = map[string]ringFdsArgs{
+	"io_uring_register": {opcode: 1, array: 2},
+}
+
 var retClassifications = map[string]RetClassification{
 	"fgetxattr":  ReadClassified,
 	"flistxattr": ReadClassified,

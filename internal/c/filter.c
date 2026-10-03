@@ -321,7 +321,10 @@ static __always_inline int ior_stateless_exit_emits(__u32 enter_trace_id) {
 // second slot (ior_stash_pending_handle, ior_on_syscall_exit_take_handle). The
 // generator emits ior_on_syscall_enter_stateful for those enter handlers
 // (handlerSpec.keepsEnterState in internal/generate/bpfhandler.go), which
-// always writes the entry. Other rates need it everywhere: they carry the
+// always writes the entry. io_uring_register needs it for two of its opcodes
+// only and keeps the plain hook: ior_stash_ring_fds (iouring.c) writes the
+// entry itself for those two, so that every other opcode stays off the map.
+// Other rates need it everywhere: they carry the
 // per-invocation sampling decision and the start time to the exit.
 static __always_inline int ior_on_syscall_enter_impl(__u32 tid, __u32 enter_trace_id, __u64 now, int keep_state) {
     struct syscall_enter_state state = {};
@@ -524,7 +527,10 @@ static __always_inline int ior_on_syscall_exit_take_filename(__u32 tid, __u32 en
 }
 
 // ior_on_syscall_exit_take_filenames is the same for the two-path kinds
-// (rename/link, move_mount): it also returns the second slot.
+// (rename/link, move_mount): it also returns the second slot. The exit of
+// io_uring_register takes its array pointer and opcode through it as well
+// (iouring.c), and is the one handler that acts on what it took before it
+// looks at the verdict.
 static __always_inline int ior_on_syscall_exit_take_filenames(__u32 tid, __u32 enter_trace_id, __s64 ret, __u64 now,
                                                               __u64 *pending_filename, __u64 *pending_filename2) {
     return ior_restart_on_exit(tid, ret,

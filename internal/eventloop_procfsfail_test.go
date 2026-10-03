@@ -342,6 +342,7 @@ var directResolveAllowlist = map[string]string{
 	"eventloop_procfs_ebadf.go resolveOnExit": "the helper itself: its non-EBADF branch is the plain resolve",
 	"eventloop_exit.go resolveDirfdPath":      "a dirfd has no exit record to inspect; documented gap",
 	"eventloop_exit.go registerEventfdResult": "runs only for a successful exit (fd is the return value), EBADF cannot occur",
+	"eventloop_ringfds.go snapshotRing":       "runs for the control record of a successful registration (the kernel just took the descriptor), EBADF cannot occur",
 	"ior_mode_registry.go dispatch":           "unrelated: modeRegistry.resolve picks a CLI mode",
 	"ior_mode_registry.go validate":           "unrelated: modeRegistry.resolve picks a CLI mode",
 }

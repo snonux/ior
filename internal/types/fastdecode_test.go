@@ -2243,6 +2243,82 @@ func TestNewFileHandleEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+// ringFdsRecordBytes builds a ring_fds_event the way the kernel lays it out,
+// field by field, so the test does not depend on the decoder's own offsets:
+// two array elements, (index 3, fd 7) and (index 0, fd 0x100000009).
+func ringFdsRecordBytes() []byte {
+	raw := binary.LittleEndian.AppendUint32(nil, uint32(RING_FDS_EVENT))
+	raw = binary.LittleEndian.AppendUint32(raw, uint32(SYS_ENTER_IO_URING_REGISTER))
+	raw = binary.LittleEndian.AppendUint64(raw, 111)
+	for _, word := range []uint32{22, 33, IOR_REGISTER_RING_FDS, RING_FDS_OK, 2, 0} {
+		raw = binary.LittleEndian.AppendUint32(raw, word)
+	}
+	for _, update := range []struct {
+		index, resv uint32
+		data        uint64
+	}{{3, 0xdead, 7}, {0, 0, 0x100000009}} {
+		raw = binary.LittleEndian.AppendUint32(raw, update.index)
+		raw = binary.LittleEndian.AppendUint32(raw, update.resv)
+		raw = binary.LittleEndian.AppendUint64(raw, update.data)
+	}
+	return append(raw, make([]byte, 14*IOR_RING_FD_UPDATE_SIZE)...)
+}
+
+// TestNewRingFdsEventFastKernelLayout pins the registered-ring control
+// record (task js2): 296 bytes, the array at offset 40, and a shorter record
+// refused rather than decoded with a partial array.
+func TestNewRingFdsEventFastKernelLayout(t *testing.T) {
+	raw := ringFdsRecordBytes()
+	if len(raw) != ringFdsEventSize {
+		t.Fatalf("test record is %d bytes, want %d", len(raw), ringFdsEventSize)
+	}
+	slow := NewRingFdsEvent(raw)
+	fast := NewRingFdsEventFast(raw)
+	if slow == nil || fast == nil {
+		t.Fatalf("ring fds record did not decode: slow=%v fast=%v", slow, fast)
+	}
+	defer slow.Recycle()
+	defer fast.Recycle()
+	if !slow.Equals(fast) {
+		t.Fatalf("ring fds decode mismatch: slow=%v fast=%v", slow, fast)
+	}
+	if fast.EventType != RING_FDS_EVENT || fast.TraceId != SYS_ENTER_IO_URING_REGISTER || fast.Time != 111 ||
+		fast.Pid != 22 || fast.Tid != 33 || fast.Opcode != 20 || fast.Status != 1 || fast.Count != 2 {
+		t.Fatalf("unexpected ring fds decode: %#v", fast)
+	}
+	for _, size := range []int{ringFdsEventSize - 1, ringFdsUpdatesOffset} {
+		if ev := NewRingFdsEventFast(raw[:size]); ev != nil {
+			t.Fatalf("a %d-byte ring fds record decoded: %#v", size, ev)
+		}
+	}
+}
+
+// TestRingFdsEventUpdate pins how the array elements are read: index and
+// descriptor from the element's first and last word (resv is skipped), and
+// nothing at or past the record's count, however large that claims to be.
+func TestRingFdsEventUpdate(t *testing.T) {
+	ev := NewRingFdsEventFast(ringFdsRecordBytes())
+	defer ev.Recycle()
+	want := []RingFdUpdate{{Index: 3, Fd: 7}, {Index: 0, Fd: 0x100000009}}
+	for i, w := range want {
+		if got, ok := ev.Update(i); !ok || got != w {
+			t.Errorf("Update(%d) = %+v, %v; want %+v", i, got, ok, w)
+		}
+	}
+	for _, i := range []int{-1, 2, IOR_RING_FDS_MAX} {
+		if got, ok := ev.Update(i); ok {
+			t.Errorf("Update(%d) = %+v past the count", i, got)
+		}
+	}
+	ev.Count = 1 << 20
+	if _, ok := ev.Update(IOR_RING_FDS_MAX - 1); !ok {
+		t.Error("the last element of a full array was refused")
+	}
+	if got, ok := ev.Update(IOR_RING_FDS_MAX); ok {
+		t.Errorf("Update read element %d of a %d-element array: %+v", IOR_RING_FDS_MAX, IOR_RING_FDS_MAX, got)
+	}
+}
+
 func TestNewMmapEventFastKernelLayout(t *testing.T) {
 	ev := &MmapEvent{
 		EventType: ENTER_MMAP_EVENT,
@@ -2342,6 +2418,7 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "Dup3Event", decode: func(raw []byte) bool { return NewDup3EventFast(raw) == nil }},
 		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
 		{name: "FileHandleEvent", decode: func(raw []byte) bool { return NewFileHandleEventFast(raw) == nil }},
+		{name: "RingFdsEvent", decode: func(raw []byte) bool { return NewRingFdsEventFast(raw) == nil }},
 		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
 		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
 		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},

@@ -236,6 +236,10 @@ func (e *eventLoop) applyExecTidChange(oldTid, newTid uint32) {
 	handles := e.handleState()
 	handles.dropTaken(oldTid)
 	handles.dropTaken(newTid)
+	// The exec emptied the caller's registered-ring table, and the dead
+	// leader's went with it (handleProcessExecEvent drops newTid's as well,
+	// for the exec that keeps its tid).
+	e.ringState().dropThread(oldTid)
 }
 
 // adoptLostExecCaller is the fallback pairing for a non-leader execve whose

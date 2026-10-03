@@ -255,6 +255,16 @@ sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
   reads the new file). Descriptors the program opens and closes with
   ordinary syscalls are tracked correctly; the `io_uring_setup`, `io_uring_enter` and
   `io_uring_register` calls themselves are traced as usual.
+- **A ring addressed through the registered-ring table is named only when ior saw it
+  being registered.** `io_uring_enter` with `IORING_ENTER_REGISTERED_RING` (what liburing
+  does after `io_uring_register_ring_fd()`) passes a per-thread table index instead of a
+  descriptor. ior follows `IORING_REGISTER_RING_FDS`/`IORING_UNREGISTER_RING_FDS` and
+  names such rows after the ring (`anon_inode:[io_uring]`, with the ring's descriptor
+  while that number still is the ring's, fd -1 once it was closed - a registered ring
+  stays usable after its descriptor is closed). A ring registered before the trace
+  started, by a thread or `io_uring_register` probe the trace does not cover, or whose
+  registration record was lost keeps the label `io_uring:reg[<index>]` with fd -1, and so
+  does a ring created with `IORING_SETUP_REGISTERED_FD_ONLY`, which has no descriptor.
 - **Rows are checked against the file behind the descriptor only on kernels with the
   `bpf_rdonly_cast` kfunc (mainline 6.2 and newer), and only for some syscalls.** On such a
   kernel the records of the single-descriptor

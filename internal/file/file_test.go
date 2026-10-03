@@ -114,6 +114,56 @@ func TestNewRegisteredRing(t *testing.T) {
 	}
 }
 
+// TestNewRegisteredRingOf pins the file of a registered-ring index whose
+// ring is known (task js2): the row reports the ring - name, flags and
+// descriptor - and its text keeps the index in front of it.
+func TestNewRegisteredRingOf(t *testing.T) {
+	ring := NewFd(5, "anon_inode:[io_uring]", syscall.O_RDWR|syscall.O_CLOEXEC)
+	f := NewRegisteredRingOf(2, ring, false)
+	if got := f.Name(); got != "anon_inode:[io_uring]" {
+		t.Errorf("Name() = %q, want the ring's name", got)
+	}
+	if got := f.FD(); got != 5 {
+		t.Errorf("FD() = %d, want the ring's descriptor 5", got)
+	}
+	if got := f.Flags(); got != ring.Flags() {
+		t.Errorf("Flags() = %v, want the ring's %v", got, ring.Flags())
+	}
+	if got, want := f.String(), "io_uring:reg[2]=anon_inode:[io_uring]%(5,O_RDWR|O_CLOEXEC)"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestRegisteredRingWithoutItsDescriptor: once the number is no longer the
+// ring's, the file still is the ring but claims no descriptor, in FD() and
+// in its text alike.
+func TestRegisteredRingWithoutItsDescriptor(t *testing.T) {
+	f := NewRegisteredRingOf(0, NewFd(5, "anon_inode:[io_uring]", syscall.O_RDWR), true)
+	if got := f.Name(); got != "anon_inode:[io_uring]" {
+		t.Errorf("Name() = %q, want the ring's name", got)
+	}
+	if got := f.FD(); got != -1 {
+		t.Errorf("FD() = %d, want -1", got)
+	}
+	if got, want := f.String(), "io_uring:reg[0]=anon_inode:[io_uring]%(-1,O_RDWR)"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestRegisteredRingOfNothingIsTheIndexLabel: without a ring the constructor
+// is NewRegisteredRing, whatever it is told about the descriptor.
+func TestRegisteredRingOfNothingIsTheIndexLabel(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		f := NewRegisteredRingOf(4, nil, closed)
+		if f != NewRegisteredRing(4) {
+			t.Errorf("closed=%v: %+v, want NewRegisteredRing(4)", closed, f)
+		}
+		if f.Name() != "io_uring:reg[4]" || f.String() != "io_uring:reg[4]" || f.FD() != -1 || f.Flags() != unknownFlag {
+			t.Errorf("closed=%v: name %q text %q fd %d flags %v, want the bare label", closed, f.Name(), f.String(), f.FD(), f.Flags())
+		}
+	}
+}
+
 func TestFdFileSetFlags(t *testing.T) {
 	fdFile := NewFd(1, "test.txt", 0)
 	if fdFile.Flags() != Flags(0) {
@@ -339,6 +389,9 @@ func TestAppendStringMatchesString(t *testing.T) {
 		{"anonymous", NewAnonymousMapping(), "anon"},
 		// Fixed decoration plus a number: nothing attacker-controlled to escape.
 		{"registered ring", NewRegisteredRing(3), "io_uring:reg[3]"},
+		// The ring's name is traced text; the label and "%(fd,flags)" are not.
+		{"registered ring of a known ring", NewRegisteredRingOf(3, NewFd(5, "/tmp/a", 0), false),
+			"io_uring:reg[3]=[/tmp/a]%(5,O_RDONLY)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

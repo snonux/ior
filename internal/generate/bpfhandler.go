@@ -52,7 +52,19 @@ func generateBPFHandler(tp GeneratedTracepoint) string {
 		recoverSecondFilename: !isEnter && kindRecoversSecondFilename(tp.EnterKind),
 		outputPathArg:         outputPathArgForHandler(f.Name),
 		outputHandleArg:       outputHandleArgForHandler(f.Name),
+		ringFds:               ringFdsArgsForHandler(f.Name),
 	})
+}
+
+// ringFdsArgsForHandler returns the argument slots of the registered-ring
+// capture of the syscall behind tracepoint name, or nil when it has none
+// (ringFdsSyscalls). Both sides need to know: the enter handler stashes, the
+// exit handler takes and publishes.
+func ringFdsArgsForHandler(name string) *ringFdsArgs {
+	if args, ok := ringFdsSyscalls[syscallName(name)]; ok {
+		return &args
+	}
+	return nil
 }
 
 // outputPathArgForHandler returns the output-buffer argument index of the
@@ -113,6 +125,10 @@ type handlerSpec struct {
 	// the exit handler captures (outputHandleSyscalls), or -1 for every other
 	// syscall. Its pointer occupies the second pending slot.
 	outputHandleArg int
+	// ringFds holds the argument slots of the registered-ring capture of
+	// io_uring_register (ringFdsSyscalls), nil for every other syscall. Its
+	// two values occupy both pending slots.
+	ringFds *ringFdsArgs
 }
 
 // takesPendingFilename reports whether this exit handler takes the pointer the
@@ -132,7 +148,9 @@ func (h handlerSpec) takesPendingFilename() bool {
 // keeps its entry without anyone remembering to flag it. Every other enter
 // handler uses ior_on_syscall_enter, which writes no entry at rate 1
 // (internal/c/filter.c, task 2s2: it removes the hash update, lookup and
-// delete from the hot path of the common syscall).
+// delete from the hot path of the common syscall). That includes
+// io_uring_register, although two of its opcodes do stash: its stash writes
+// the entry it needs (renderRingFdsHook), so the other opcodes pay nothing.
 func (h handlerSpec) keepsEnterState() bool {
 	if !h.isEnter || h.noreturn {
 		return false
@@ -154,10 +172,12 @@ func enterConstForHandler(name string, isEnter bool) string {
 }
 
 // renderHandlerPrologue writes everything ahead of the ring-buffer reserve: the
-// scope gate, the per-tid enter/exit hook, and - for the path-capturing kinds
-// and the output-path and output-handle syscalls (outputPathSyscalls,
-// outputHandleSyscalls) only - the stash/take/emit of a user pointer (two for
-// rename/link, move_mount and name_to_handle_at) carried on the enter state.
+// scope gate, the per-tid enter/exit hook (for io_uring_register with its
+// registered-ring capture around it, renderRingFdsHook), and - for the
+// path-capturing kinds and the output-path and output-handle syscalls
+// (outputPathSyscalls, outputHandleSyscalls) only - the stash/take/emit of a
+// user pointer (two for rename/link, move_mount and name_to_handle_at)
+// carried on the enter state.
 // Those lines are position-critical, which is why they live here rather than
 // in the kind emitters: the enter-side stash must follow
 // ior_on_syscall_enter_stateful (which creates this tid's enter-state entry
@@ -190,6 +210,8 @@ func renderHandlerPrologue(b *strings.Builder, h handlerSpec) {
 // exactly the enter record's time, which is how userspace matches the two.
 func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 	switch {
+	case h.ringFds != nil:
+		renderRingFdsHook(b, h)
 	case h.isEnter && h.noreturn:
 		// Noreturn enter: only the sampling decision (a sampled-out enter is
 		// counted untimed in the kernel aggregate by the hook itself), no
@@ -219,6 +241,42 @@ func renderSyscallHook(b *strings.Builder, h handlerSpec) {
 		fmt.Fprintf(b, "    if (!ior_on_syscall_exit(tid, %s, ctx->ret, now))\n", h.enterName)
 		b.WriteString("        return 0;\n")
 	}
+}
+
+// renderRingFdsHook writes both hooks of io_uring_register, whose handlers
+// capture what its two ring-fds opcodes do to the thread's registered-ring
+// table (internal/c/iouring.c, task js2).
+//
+// They differ from every other handler in one way: the hook's verdict is kept
+// in a local and acted on only after the capture, because the control record
+// is published whether or not the call's own records are sampled out (a
+// registration userspace does not hear of leaves the index naming its
+// previous ring). The enter side stashes right after the hook, which at any
+// rate but 1 has written the enter state the stash goes onto (at rate 1
+// ior_stash_ring_fds writes it, for the two opcodes only, so the plain hook
+// stays and every other io_uring_register keeps off the map). The exit side
+// takes both slots with the hook's one lookup and hands them to
+// ior_emit_ring_fds, which does nothing for an opcode that stashed nothing
+// or a return that registered nothing.
+func renderRingFdsHook(b *strings.Builder, h handlerSpec) {
+	if h.isEnter {
+		b.WriteString(clockReadLine)
+		fmt.Fprintf(b, "    int emits = ior_on_syscall_enter(tid, %s, now);\n", h.enterName)
+		b.WriteString("\n")
+		fmt.Fprintf(b, "    ior_stash_ring_fds(tid, %s, now, emits, ctx->args[%d], ctx->args[%d]);\n",
+			h.enterName, h.ringFds.opcode, h.ringFds.array)
+		b.WriteString("    if (!emits)\n        return 0;\n")
+		return
+	}
+	b.WriteString("    __u64 ring_fds_array;\n")
+	b.WriteString("    __u64 ring_fds_opcode;\n")
+	b.WriteString("\n")
+	b.WriteString(clockReadLine)
+	fmt.Fprintf(b, "    int emits = ior_on_syscall_exit_take_filenames(tid, %s, ctx->ret, now, "+
+		"&ring_fds_array, &ring_fds_opcode);\n", h.enterName)
+	b.WriteString("\n")
+	fmt.Fprintf(b, "    ior_emit_ring_fds(pid, tid, %s, now, ring_fds_opcode, ring_fds_array, ctx->ret);\n", h.enterName)
+	b.WriteString("    if (!emits)\n        return 0;\n")
 }
 
 // renderTakingExitHook writes the exit hook of a handler that recovers the

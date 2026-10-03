@@ -115,6 +115,7 @@ type eventLoop struct {
 	pairs        pairTracker    // enter/exit pairing state and inter-syscall duration tracking
 	restarts     restartTracker // interrupted rows held for the kernel's continuation of the call, by tid (eventloop_restart.go)
 	handles      *handleTracker // file handle → pathname from name_to_handle_at, for open_by_handle_at naming
+	rings        *ringTracker   // registered-ring tables by tid, for naming io_uring rows that pass an index (eventloop_ringfds.go)
 	fdTracker    *fdTracker     // fd table and procfs resolution cache
 	commResolver *commResolver
 	// commWired is the resolver commState last completed and wired to this

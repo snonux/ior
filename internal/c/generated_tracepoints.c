@@ -1910,7 +1910,10 @@ int handle_sys_enter_io_uring_register(struct syscall_trace_enter *ctx) {
         return 0;
 
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_REGISTER, now))
+    int emits = ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_REGISTER, now);
+
+    ior_stash_ring_fds(tid, SYS_ENTER_IO_URING_REGISTER, now, emits, ctx->args[1], ctx->args[2]);
+    if (!emits)
         return 0;
 
     struct fcntl_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct fcntl_event), 0);
@@ -1939,8 +1942,14 @@ int handle_sys_exit_io_uring_register(struct syscall_trace_exit *ctx) {
     if (filter(&pid, &tid))
         return 0;
 
+    __u64 ring_fds_array;
+    __u64 ring_fds_opcode;
+
     __u64 now = bpf_ktime_get_boot_ns();
-    if (!ior_on_syscall_exit(tid, SYS_ENTER_IO_URING_REGISTER, ctx->ret, now))
+    int emits = ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_IO_URING_REGISTER, ctx->ret, now, &ring_fds_array, &ring_fds_opcode);
+
+    ior_emit_ring_fds(pid, tid, SYS_ENTER_IO_URING_REGISTER, now, ring_fds_opcode, ring_fds_array, ctx->ret);
+    if (!emits)
         return 0;
 
     struct ret_event *ev = bpf_ringbuf_reserve(&event_map, sizeof(struct ret_event), 0);
