@@ -69,7 +69,7 @@ const getppidBurstRecords = 2*getppidBurstCalls + 1
 // finds rawCh full and the ring behind it filled. Before the fix such a run
 // was short of exactly one channel's worth (4096). Whether a run stops that
 // way is the host's timing: the loop outruns ior, but when the loop reaches
-// the workload's exit record before the watcher's next 500 ms check, the
+// the traced child's exit record before the watcher's next 500 ms check, the
 // trace stops there with everything decoded, and the identity holds without
 // having tested anything. With the harness's fixed timing that was every
 // run on the development host when it was idle. So every run is judged, each

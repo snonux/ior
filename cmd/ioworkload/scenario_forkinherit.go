@@ -83,8 +83,11 @@ func forkChildReadAndExit(fd int) {
 }
 
 // publishChildPid writes the forked child's pid to $IOR_WORKLOAD_CHILD_PID_FILE
-// (a no-op when unset). The child is already running; whether the file appears
-// before or after its read does not matter, the test reads it after the run.
+// (a no-op when unset). It has two callers. In fork-inherit-fds the child is
+// already running and the test reads the file after the run, so its order
+// against the child's read does not matter. In getppid-burst the test reads
+// the file before it starts ior, to trace that pid: there the prestart hook
+// must have written it before the workload announces its own pid.
 func publishChildPid(pid int) error {
 	path := os.Getenv(childPidFileEnv)
 	if path == "" {
