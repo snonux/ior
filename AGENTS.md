@@ -1664,7 +1664,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     is a *wrong* row rather than a missing one. Unlike the numeric dimensions
     this was CLI-reachable. Pinned by
     `TestDroppedDupStillRegistersTheDuplicatedFd` and
-    `TestDroppedFcntlSetflStillUpdatesTheFdTable`
+    `TestDroppedFcntlSetflStillUpdatesTheCachedAnswer` (it updates the cached
+    procfs answer since task a23, which no longer promotes it into the table)
     (`internal/eventloop_dupfilter_test.go`). Eviction is the same rule from the
     other side — `applyFdCloseState` and `applyCloseRangeState` also run ahead of
     the checkpoint, because a *stale* entry mislabels the next syscall that
@@ -1792,10 +1793,12 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
       resolved through the fd table only (`fdTracker.get`, not `resolve`),
       and a table entry that was itself named from procfs
       (`FdFile.NameFromProcFS`, the mark of a name ior cannot vouch for: an
-      `open_by_handle_at` of an unknown handle, `io_uring_setup`, a
-      procfs-resolved descriptor an `fcntl` or an `ioctl`
-      `FIOCLEX`/`FIONCLEX` promoted, and the duplicate, the forked child's
-      copy and the re-keyed table's entry of any of them) is refused. So is
+      `open_by_handle_at` of an unknown handle, `io_uring_setup`, and the
+      duplicate, the forked child's copy and the re-keyed table's entry of
+      any of them; a procfs answer an `fcntl` or an `ioctl`
+      `FIOCLEX`/`FIONCLEX` touches is no longer promoted into the table
+      since task a23 and stays in the procfs cache, `storeFcntlFdFile`) is
+      refused. So is
       an entry whose name was *built* from such a look (task 523):
       `resolveDirfdPath` passes the mark of the directory it resolved - an
       untracked dirfd read from procfs, or a marked table entry - on to the
@@ -2188,7 +2191,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   every fd-resolving exit handler (read/write family, fcntl/ioctl, dup3, mmap,
   two-fd, epoll_ctl, poll, accept, inotify/fanotify, io_uring) calls
   `eventLoop.resolveOnExit`, which on an EBADF exit evicts the procfs-cache
-  entry and uses the fd-table entry if present, else an unnamed file with
+  entry and uses the fd-table entry if present (unless, in a run with the
+  file identity capture, that entry was bound after the call entered: then
+  the row stays unnamed and the entry is kept, task a23), else an unnamed file with
   unknown flags, with no procfs read (`TestEveryFdResolveGoesThroughTheEBADFHelper`
   parses the package's non-test sources and fails on any function outside its
   explicit allowlist that mentions a `resolve` selector, so aliasing the tracker
@@ -2203,7 +2208,8 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
   pidfd_getfd's targetfd, fanotify_mark's dirfd, and read/write on an open fd
   of the wrong access mode) leaves its row unnamed when the labelled fd is
   valid but has no table entry (the next non-EBADF event resolves it;
-  close_range never returns EBADF). fanotify_mark is the exception to
+  close_range never returns EBADF) - and, since task a23, also when the
+  labelled fd's entry was bound after the call entered (a narrow race). fanotify_mark is the exception to
   "unnamed": `handleFdPathExit` names the row from the captured pathname, so
   only its flags are unknown (-1);
   dirfd-relative path resolution (`resolveDirfdPath`) has no exit record and is
