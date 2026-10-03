@@ -2642,7 +2642,13 @@ kernel program reports the file, and user space compares.
   `E:name` (`FdFile.appendUnnamed`); `Name()` stays empty, so filters, the
   Files tab and the Parquet `file` column are unchanged. The end-of-run
   statistics get a `file identity:` line when a binding was dropped or an
-  answer refused.
+  answer refused: `N stale fd bindings dropped, M rows refused a procfs
+  answer for another file`. M counts rows, not answers (task a23; it said
+  "answers not used", but a cached answer refused for a write is refused
+  again for the close after it). System-wide 20 s runs on the development
+  host, other workers loading it: 5 stale / 60 refused before task a23's
+  no-promotion rule, 0 / 64 after (different load, so only indicative; the
+  task's own 40 s run had traced the stale ones to promoted answers).
 - **What it does not do**: name a file that is no longer open when the loop
   looks (a rebound descriptor is named only while procfs still shows that
   file; the close of an untracked descriptor and the rows of an exited

@@ -515,7 +515,7 @@ func TestFileIdentStatLine(t *testing.T) {
 	}
 	el.fdState().staleBindings, el.fdState().rejectedAnswers = 3, 5
 	got := el.fileIdentStatLine()
-	if !strings.Contains(got, "3 stale fd bindings dropped") || !strings.Contains(got, "5 procfs answers for another file not used") {
+	if !strings.Contains(got, "3 stale fd bindings dropped") || !strings.Contains(got, "5 rows refused a procfs answer for another file") {
 		t.Fatalf("stat line = %q, want both counts", got)
 	}
 }

@@ -490,17 +490,22 @@ func unnamedFile(fd int32, ident uint32) *file.FdFile {
 
 // fileIdentStatLine reports what the identity check changed in this run:
 // the fd table entries dropped because the number had come to name another
-// file, and the procfs answers not used because they described another file
-// than the row's. Empty when neither happened, like the other conditional
-// lines. stats() reads the counters only after the event-loop goroutine that
-// writes them has finished.
+// file, and the rows that were refused a procfs answer because it described
+// another file than the row's. The second count is per row, not per answer
+// (task a23): a cached answer refused for a write is refused again for the
+// close after it (63 writes and closes of close-untracked count 125), so
+// "answers not used" overstated it. Since task a23 the first count no
+// longer includes the procfs answers an fcntl promoted into the fd table,
+// which were most of it. Empty when neither happened, like the other
+// conditional lines. stats() reads the counters only after the event-loop
+// goroutine that writes them has finished.
 func (e *eventLoop) fileIdentStatLine() string {
 	t := e.fdState()
 	if t.staleBindings == 0 && t.rejectedAnswers == 0 {
 		return ""
 	}
 	return fmt.Sprintf(
-		"\tfile identity: %d stale fd bindings dropped, %d procfs answers for another file not used\n",
+		"\tfile identity: %d stale fd bindings dropped, %d rows refused a procfs answer for another file\n",
 		t.staleBindings, t.rejectedAnswers,
 	)
 }

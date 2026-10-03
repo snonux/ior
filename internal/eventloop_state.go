@@ -85,8 +85,9 @@ type fdTracker struct {
 	// reads an identity and nothing is stamped.
 	identOn bool
 	// staleBindings counts the fd table entries dropped because a row showed
-	// the number naming another file; rejectedAnswers the procfs answers not
-	// used for a row because they described another file. Printed in the
+	// the number naming another file; rejectedAnswers the rows that were
+	// refused a procfs answer because it described another file (per row: an
+	// answer refused twice counts twice). Printed in the
 	// end-of-run statistics when non-zero (eventLoop.fileIdentStatLine).
 	staleBindings   uint64
 	rejectedAnswers uint64
