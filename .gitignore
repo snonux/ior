@@ -28,7 +28,6 @@ internal/c/generated_tracepoints.c.tmp-*
 perf/.bench-*
 perf/.static-*
 
-# Generated test and audit output
+# Generated test output
 *.test
 *.log
-/audit/check/

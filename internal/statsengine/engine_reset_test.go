@@ -171,8 +171,7 @@ func ingestAcc(a *processAccumulator, pid uint32) {
 }
 
 // TestEngineResetConcurrentWithIngestAndSnapshot is the regression guard for
-// audit finding M5 (AUDIT-REPORT.md section 3, evidence
-// audit/domain-03-statsengine.md F2): Reset, Ingest and Snapshot all serialize
+// audit finding M5: Reset, Ingest and Snapshot all serialize
 // on the engine mutex, so a baseline reset while events stream in must never
 // expose a half-reset engine. The test hammers all three operations from
 // concurrent goroutines (run under -race in the task verification) and asserts

@@ -142,8 +142,8 @@ func TestRecorderShedsRowsOnQueueOverflowInsteadOfAborting(t *testing.T) {
 }
 
 // TestRecorderStressQueueSaturation reproduces the audit's total-abort
-// scenario (queue saturation under sustained load, AUDIT-REPORT.md M14 /
-// domain-09 Y1) with concurrent producers hammering a blocked writer. It
+// scenario (queue saturation under sustained load, audit finding M14) with
+// concurrent producers hammering a blocked writer. It
 // asserts the shed-mode invariants: every attempted row is either written
 // or counted as dropped, accounting is exact, and the session finalizes
 // the partial recording instead of aborting it.
