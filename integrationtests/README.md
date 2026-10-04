@@ -24,10 +24,13 @@ This builds `ior`, `ioworkload` and `integrationtests.test`, then runs the suite
 `INTEGRATION_PARALLEL=2`. For serial execution, use `mage integrationTestSerial`.
 
 To collect a verdict for every test after one fails, run the compiled binary without
-`-test.failfast`.
-[The Fedora handoff](../docs/fedora-gate-handoff.md#5-privileged-integration-suite) has the
-command, output filter and skip criteria. The test binary runs from `integrationtests/` so
-it can find `../ior` and `../ioworkload`.
+`-test.failfast` (from `integrationtests/` so it finds `../ior` and `../ioworkload`):
+
+```sh
+cd integrationtests
+sudo -E ../integrationtests.test -test.count=1 -test.v 2>&1 | grep -aE '^\s*--- |_test\.go:'
+cd ..
+```
 
 The four `*xattrat` tests and some mount and io_uring expectations need newer or less
 restricted kernels. The probes in `kernel_support_test.go` check tracefs and
