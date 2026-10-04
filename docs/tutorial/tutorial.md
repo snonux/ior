@@ -205,7 +205,11 @@ progress line while the batch runs; failures are reported (first error) without 
 the rest. By default only the FS family is traced, so this is the way to start tracing
 e.g. Network without restarting ior with `-trace-families`. Your runtime selection
 persists across trace restarts (PID/TID reselect, filter changes), replacing the startup
-`-trace-*` flags for the rest of the session. The `[` / `]` keys only re-scope the view to
+`-trace-*` flags for the rest of the session. Newly attached syscalls get the same
+sampling rates as at startup. The carried set is what you asked for: if a change finishes
+after the trace restarted, its unattachable probes are retried and skipped with a log line
+until your next probe change. Detaching everything makes later sessions attach nothing;
+only restarting `ior` brings back the startup selection. The `[` / `]` keys only re-scope the view to
 a family; cycling onto one with no attached probe shows
 `<Family> not traced: press O, tab, space to attach` in the status line (capital `O`
 opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the frame order).

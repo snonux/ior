@@ -28,20 +28,6 @@ func TestSyscallTracingPlanBytesClassificationStaysInSync(t *testing.T) {
 	assertBytesClassificationMatchesGenerator(t, documented)
 }
 
-func TestReadmeBytesClassificationStaysInSync(t *testing.T) {
-	doc, err := readRepoFile("README.md")
-	if err != nil {
-		t.Fatalf("read README: %v", err)
-	}
-
-	documented, err := parseDocListSection(doc, "## Bytes Classification")
-	if err != nil {
-		t.Fatalf("parse README bytes classification section: %v", err)
-	}
-	delete(documented, "Non-bytes")
-	assertBytesClassificationMatchesGenerator(t, documented)
-}
-
 func assertBytesClassificationMatchesGenerator(t *testing.T, documented map[string][]string) {
 	t.Helper()
 	expected := map[string][]string{

@@ -105,7 +105,7 @@ func newRecordingHeader(records map[recordKey]Counter, samples sampling.Summary)
 // tz2, 2^17 and 2^19 records with 30-60 character paths): the peak extra heap
 // while saving fell from ~240-390 bytes per record (GOGC 10 and 100; ~580-660
 // bytes per record allocated) to a constant ~1-2 MB, which the flag help and
-// README state as "adds only ~1-2 MB". Even at MaxRecordKeysLimit plus
+// docs/output.md state as "adds only ~1-2 MB". Even at MaxRecordKeysLimit plus
 // headroom the message stays far below gob's 8 GB message limit on 64-bit
 // builds, which writeRecordsMessage enforces like gob does.
 func encodeRecords(w io.Writer, records map[recordKey]Counter, samples sampling.Summary) error {

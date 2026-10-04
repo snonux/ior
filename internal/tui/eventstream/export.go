@@ -393,7 +393,7 @@ func ExportSourceSnapshotToCSV(source Source, filter Filter, exportDir, filename
 // dashboard-wide 'e' export is a fresh snapshot of the ring that works outside
 // paused mode too (task 364), whereas the Stream tab's x/X export writes the
 // frozen paused rows (exportFilteredToCSV). The two differ on purpose, which
-// README.md and AGENTS.md state, and the 'e' modal warns about it while the
+// docs/output.md and AGENTS.md state, and the 'e' modal warns about it while the
 // stream is paused (export.Model.OpenFor). TestExportInputsStayLiveWhilePaused
 // pins it.
 func (m *Model) ExportInputs() (Source, Filter, string) {

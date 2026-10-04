@@ -31,8 +31,7 @@ const NoFileName = "N:file"
 
 // Pair represents a matched syscall enter/exit pair together with derived metadata.
 //
-// Timing semantics for Duration (durationNs) and DurationToPrev (durationToPrevNs),
-// mirroring the README:
+// Timing semantics for Duration (durationNs) and DurationToPrev (durationToPrevNs):
 //   - Duration is the syscall runtime on the same thread: exit(current) - enter(current).
 //     For a call interrupted with -516 and resumed through restart_syscall, the event loop
 //     folds the continuation into the pair (task fs2, internal/eventloop_restart.go): ExitEv

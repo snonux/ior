@@ -145,7 +145,7 @@ func TestFDTraceStatusClearDoesNotTouchOtherMessages(t *testing.T) {
 	}
 }
 
-// The two export paths differ on purpose (task 364; README.md and AGENTS.md
+// The two export paths differ on purpose (task 364; docs/output.md and AGENTS.md
 // document it, the 'e' modal warns about it while paused): the
 // dashboard-wide 'e' (ExportInputs) writes a fresh snapshot of the live ring
 // even while paused, while the stream tab's x writes the frozen paused rows.

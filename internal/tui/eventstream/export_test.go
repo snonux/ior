@@ -468,7 +468,7 @@ func TestWriteStreamCSVAppendsRestartsLast(t *testing.T) {
 
 // TestWriteStreamCSVCarriesFullPerEventSchema is the task rq2 regression: the
 // export used to drop old_file, address_space_bytes and the epoll_* columns
-// that the Parquet recording and the README promise ("full per-event
+// that the Parquet recording and the tutorial promise ("full per-event
 // schema"). Every cell is checked by header name against distinct values, so a
 // swapped or missing column fails.
 func TestWriteStreamCSVCarriesFullPerEventSchema(t *testing.T) {
