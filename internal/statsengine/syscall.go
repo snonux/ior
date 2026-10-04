@@ -2,7 +2,6 @@ package statsengine
 
 import (
 	"cmp"
-	"math"
 	"math/rand/v2"
 	"slices"
 	"time"
@@ -30,15 +29,60 @@ type syscallStats struct {
 	totalLatency uint64
 	minLatency   uint64
 	maxLatency   uint64
+	// untimedCount is the part of count that carries no latency (see
+	// SyscallAggregate.UntimedCount); the mean divides by the timed rest.
+	untimedCount uint64
+	// hasTimed records whether min/max hold a real latency yet. A flag, not
+	// count - untimedCount == 1: untimed counts are an estimate the consumer
+	// may book one too high after a torn per-CPU read, and an off-by-one
+	// there must not let a later sample overwrite a smaller minimum.
+	hasTimed bool
 
 	seenLatencies uint64
 	samples       []uint64
+	// scratch is a reusable buffer the snapshot capture copies samples into
+	// (under the engine lock) so that it neither allocates under the lock
+	// nor reorders the live reservoir. A capture takes it (leaving nil) and
+	// storePercentileJobs hands it back. At most one buffer per reservoir is
+	// retained, and it is freed together with the stats on Reset.
+	scratch []uint64
 
 	sampleVersion         uint64
 	lastPercentileVersion uint64
 	cachedP50             uint64
 	cachedP95             uint64
 	cachedP99             uint64
+}
+
+// percentileJob carries a private copy of one syscall's latency reservoir from
+// snapshot capture (which runs under the engine lock) to the lock-free
+// percentile computation, and from there back to the cached values in stats.
+// Selecting the percentiles from a full 10k-sample reservoir costs ~0.16ms
+// (~0.5ms with a full sort), so doing it for every active syscall under the
+// engine lock used to stall Engine.Ingest for tens of ms per refresh. Under
+// the lock only a copy per stale reservoir (80KB when full) remains, into the
+// stats' reusable scratch buffer, so the lock is normally not also held across
+// allocation and GC assists.
+type percentileJob struct {
+	stats    *syscallStats
+	version  uint64   // stats.sampleVersion at the time samples was copied
+	samples  []uint64 // private copy, reordered in place by latencyPercentiles outside the lock
+	inputIdx int      // index of the matching entry in syscallCapture.inputs
+	p50      uint64
+	p95      uint64
+	p99      uint64
+}
+
+// syscallCapture is the syscall part of a snapshot capture: per-syscall
+// inputs (percentiles pre-filled from the cache) and the percentile jobs for
+// reservoirs whose cached percentiles are stale. scratchMisses counts the jobs
+// whose buffer had to be allocated under the lock because the stats' scratch
+// buffer was missing (first capture, or held by a concurrent Snapshot) or too
+// small (the reservoir grew).
+type syscallCapture struct {
+	inputs        []syscallSnapshotInput
+	jobs          []percentileJob
+	scratchMisses int
 }
 
 type syscallSnapshotInput struct {
@@ -50,9 +94,16 @@ type syscallSnapshotInput struct {
 	totalLatency uint64
 	minLatency   uint64
 	maxLatency   uint64
-	p50Latency   uint64
-	p95Latency   uint64
-	p99Latency   uint64
+	untimedCount uint64
+	// hasTimed is syscallStats.hasTimed: whether any invocation carried a
+	// latency (SyscallSnapshot.NoLatency is its negation).
+	hasTimed bool
+	// hasSamples is whether the percentile reservoir holds any latency
+	// (SyscallSnapshot.NoPercentiles is its negation).
+	hasSamples bool
+	p50Latency uint64
+	p95Latency uint64
+	p99Latency uint64
 }
 
 func newSyscallAccumulator() *syscallAccumulator {
@@ -90,13 +141,20 @@ func (a *syscallAccumulator) Add(pair *event.Pair) {
 
 	stats.count++
 	stats.totalBytes += pair.Bytes
-	stats.totalLatency += pair.Duration
-	stats.updateMinMax(pair.Duration)
-	stats.addSample(pair.Duration, a.sampleCap, a.rng)
+	if pair.NoReturn {
+		// A noreturn syscall has no latency (event.Pair.NoReturn): count it
+		// untimed, so it neither seeds min/max nor enters the percentile
+		// reservoir, and the mean divides by the timed rest.
+		stats.untimedCount++
+	} else {
+		stats.totalLatency += pair.Duration
+		stats.updateMinMax(pair.Duration)
+		stats.addSample(pair.Duration, a.sampleCap, a.rng)
+	}
 
 	// Any ret-carrying exit event counts here, including the kind-specific
 	// exits (accept/accept4, pipe/pipe2, socketpair, eventfd/pidfd).
-	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && event.IsErrnoRet(retEv.GetRet()) {
+	if retEv, ok := pair.ExitEv.(event.RetCarrier); ok && event.IsErrorRet(retEv.GetRet()) {
 		stats.errorCount++
 	}
 }
@@ -112,55 +170,111 @@ func (a *syscallAccumulator) AddAggregate(row SyscallAggregate) {
 		a.byID[row.TraceID] = stats
 	}
 
-	prevCount := stats.count
+	// Only a row with timed invocations has latency extrema; a row of
+	// untimed counts carries min = max = 0, which must neither seed nor lower
+	// the minimum. Likewise the minimum is seeded by the first *timed*
+	// invocation, not by the first counted one.
 	stats.count += row.Count
+	stats.untimedCount += row.Count - row.timedCount()
 	stats.errorCount += row.Errors
 	stats.totalLatency += row.TotalLatencyNs
-	if prevCount == 0 || row.MinLatencyNs < stats.minLatency {
+	if row.timedCount() == 0 {
+		return
+	}
+	if !stats.hasTimed || row.MinLatencyNs < stats.minLatency {
 		stats.minLatency = row.MinLatencyNs
 	}
 	if row.MaxLatencyNs > stats.maxLatency {
 		stats.maxLatency = row.MaxLatencyNs
 	}
+	stats.hasTimed = true
 }
 
 // Snapshot returns a slice of SyscallSnapshots for all tracked syscalls.
 // It panics on build error, which should never happen for a valid accumulator.
+// The accumulator is not safe for concurrent use on its own, so capture,
+// percentile computation and write-back simply run back to back here; Engine
+// splits them to keep the percentile selection out of its lock.
 func (a *syscallAccumulator) Snapshot(elapsed time.Duration) []SyscallSnapshot {
 	if a == nil {
 		return nil
 	}
 
-	snap, err := buildSyscallSnapshots(a.snapshotInputs(), elapsed)
+	capture := a.captureInputs()
+	capture.resolvePercentiles()
+	storePercentileJobs(capture.jobs)
+	snap, err := buildSyscallSnapshots(capture.inputs, elapsed)
 	if err != nil {
 		panic("buildSyscallSnapshots: " + err.Error())
 	}
 	return snap
 }
 
-func (a *syscallAccumulator) snapshotInputs() []syscallSnapshotInput {
+// captureInputs copies the per-syscall counters and, for every reservoir whose
+// cached percentiles are stale, a private copy of its samples. It must run
+// under the lock guarding the accumulator but computes no percentiles, and after
+// the first capture it normally does not allocate either: samples are copied
+// into the stats' own scratch buffer (see takeScratch). The returned inputs
+// carry the cached percentiles; resolvePercentiles overwrites the stale ones.
+func (a *syscallAccumulator) captureInputs() syscallCapture {
 	if a == nil {
-		return nil
+		return syscallCapture{}
 	}
 
-	inputs := make([]syscallSnapshotInput, 0, len(a.byID))
+	capture := syscallCapture{inputs: make([]syscallSnapshotInput, 0, len(a.byID))}
 	for _, stats := range a.byID {
-		stats.ensurePercentiles()
-		inputs = append(inputs, syscallSnapshotInput{
-			traceID:      stats.traceID,
-			name:         stats.name,
-			count:        stats.count,
-			errorCount:   stats.errorCount,
-			totalBytes:   stats.totalBytes,
-			totalLatency: stats.totalLatency,
-			minLatency:   stats.minLatency,
-			maxLatency:   stats.maxLatency,
-			p50Latency:   stats.cachedP50,
-			p95Latency:   stats.cachedP95,
-			p99Latency:   stats.cachedP99,
-		})
+		if stats.needsPercentileRecompute() {
+			buf, reused := stats.takeScratch()
+			if !reused {
+				capture.scratchMisses++
+			}
+			capture.jobs = append(capture.jobs, percentileJob{
+				stats:    stats,
+				version:  stats.sampleVersion,
+				samples:  append(buf, stats.samples...),
+				inputIdx: len(capture.inputs),
+			})
+		}
+		capture.inputs = append(capture.inputs, stats.snapshotInput())
 	}
-	return inputs
+	return capture
+}
+
+// resolvePercentiles computes each job's percentiles from its private sample
+// copy (reordering it in place) and fills them in both on the job (for
+// storePercentileJobs) and on the matching input. It touches no accumulator
+// state, so callers run it without holding any lock.
+func (c *syscallCapture) resolvePercentiles() {
+	for i := range c.jobs {
+		job := &c.jobs[i]
+		job.p50, job.p95, job.p99 = latencyPercentiles(job.samples)
+
+		in := &c.inputs[job.inputIdx]
+		in.p50Latency, in.p95Latency, in.p99Latency = job.p50, job.p95, job.p99
+	}
+}
+
+// storePercentileJobs writes resolved percentiles back into the per-syscall
+// cache so later snapshots can reuse them, and hands each job's sample buffer
+// back as the stats' scratch buffer. It must run under the lock guarding the
+// accumulator, after the job's samples are no longer used. A job's
+// percentiles are dropped when the cache already holds percentiles for the
+// same or a newer sample version (a concurrent Snapshot got there first), so
+// an older result never replaces a fresher one; likewise a buffer is dropped
+// when a concurrent Snapshot already returned one.
+func storePercentileJobs(jobs []percentileJob) {
+	for i := range jobs {
+		job := &jobs[i]
+		stats := job.stats
+		if stats.scratch == nil {
+			stats.scratch = job.samples[:0]
+		}
+		if stats.lastPercentileVersion >= job.version {
+			continue
+		}
+		stats.cachedP50, stats.cachedP95, stats.cachedP99 = job.p50, job.p95, job.p99
+		stats.lastPercentileVersion = job.version
+	}
 }
 
 // buildSyscallSnapshots converts raw syscall accumulator inputs into sorted
@@ -181,10 +295,13 @@ func buildSyscallSnapshots(inputs []syscallSnapshotInput, elapsed time.Duration)
 	return result, nil
 }
 
+// updateMinMax folds one timed invocation into the latency extrema; the
+// first timed one seeds the minimum.
 func (s *syscallStats) updateMinMax(duration uint64) {
-	if s.count == 1 || duration < s.minLatency {
+	if !s.hasTimed || duration < s.minLatency {
 		s.minLatency = duration
 	}
+	s.hasTimed = true
 	if duration > s.maxLatency {
 		s.maxLatency = duration
 	}
@@ -206,25 +323,49 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 	s.sampleVersion++
 }
 
-func (s *syscallStats) ensurePercentiles() {
-	if s.lastPercentileVersion == s.sampleVersion {
-		return
+// needsPercentileRecompute reports whether the cached percentiles must be
+// recomputed from the samples. An empty reservoir (e.g. a syscall only seen
+// through AddAggregate) never needs a job: its cached zero percentiles are
+// already correct. Otherwise the first computation always happens, later ones
+// are batched by percentilesStale.
+func (s *syscallStats) needsPercentileRecompute() bool {
+	if s.lastPercentileVersion == s.sampleVersion || len(s.samples) == 0 {
+		return false
 	}
-	if s.lastPercentileVersion != 0 && !s.percentilesStale() {
-		return
-	}
-	if len(s.samples) == 0 {
-		s.cachedP50, s.cachedP95, s.cachedP99 = 0, 0, 0
-		s.lastPercentileVersion = s.sampleVersion
-		return
-	}
+	return s.lastPercentileVersion == 0 || s.percentilesStale()
+}
 
-	sorted := append([]uint64(nil), s.samples...)
-	slices.Sort(sorted)
-	s.cachedP50 = samplePercentile(sorted, 0.50)
-	s.cachedP95 = samplePercentile(sorted, 0.95)
-	s.cachedP99 = samplePercentile(sorted, 0.99)
-	s.lastPercentileVersion = s.sampleVersion
+// takeScratch removes the stats' scratch buffer and returns it emptied, with
+// room for the whole reservoir. If the buffer is missing (first capture, or a
+// concurrent Snapshot still holds it) or too small (the reservoir grew), it
+// allocates one matching the reservoir's capacity and reports reused=false.
+// Must run under the lock guarding the stats.
+func (s *syscallStats) takeScratch() (buf []uint64, reused bool) {
+	buf, s.scratch = s.scratch, nil
+	if cap(buf) >= len(s.samples) && buf != nil {
+		return buf[:0], true
+	}
+	return make([]uint64, 0, cap(s.samples)), false
+}
+
+// snapshotInput copies the counters and the cached percentiles of s.
+func (s *syscallStats) snapshotInput() syscallSnapshotInput {
+	return syscallSnapshotInput{
+		traceID:      s.traceID,
+		name:         s.name,
+		count:        s.count,
+		errorCount:   s.errorCount,
+		totalBytes:   s.totalBytes,
+		totalLatency: s.totalLatency,
+		minLatency:   s.minLatency,
+		maxLatency:   s.maxLatency,
+		untimedCount: s.untimedCount,
+		hasTimed:     s.hasTimed,
+		hasSamples:   len(s.samples) > 0,
+		p50Latency:   s.cachedP50,
+		p95Latency:   s.cachedP95,
+		p99Latency:   s.cachedP99,
+	}
 }
 
 // percentilesStale reports whether enough new samples arrived since the last
@@ -250,33 +391,17 @@ func (s syscallSnapshotInput) toSnapshot(rateDiv float64) SyscallSnapshot {
 		Bytes:          s.totalBytes,
 		LatencyMinNs:   s.minLatency,
 		LatencyMaxNs:   s.maxLatency,
-		LatencyMeanNs:  float64(s.totalLatency) / float64(maxU64(s.count, 1)),
+		LatencyMeanNs:  float64(s.totalLatency) / float64(maxU64(timedCount(s.count, s.untimedCount), 1)),
 		TotalLatencyNs: s.totalLatency,
 		LatencyP50Ns:   s.p50Latency,
 		LatencyP95Ns:   s.p95Latency,
 		LatencyP99Ns:   s.p99Latency,
+		// The flag, not timedCount(count, untimedCount) == 0: the untimed
+		// count of a kernel aggregate row is an estimate that may be one too
+		// high after a torn per-CPU read (see syscallStats.hasTimed).
+		NoLatency:     !s.hasTimed,
+		NoPercentiles: !s.hasSamples,
 	}
-}
-
-func samplePercentile(sorted []uint64, p float64) uint64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	if p <= 0 {
-		return sorted[0]
-	}
-	if p >= 1 {
-		return sorted[len(sorted)-1]
-	}
-
-	rank := int(math.Ceil(p*float64(len(sorted)))) - 1
-	if rank < 0 {
-		rank = 0
-	}
-	if rank >= len(sorted) {
-		rank = len(sorted) - 1
-	}
-	return sorted[rank]
 }
 
 func safeRate(count uint64, elapsedSeconds float64) float64 {
@@ -284,6 +409,17 @@ func safeRate(count uint64, elapsedSeconds float64) float64 {
 		return 0
 	}
 	return float64(count) / elapsedSeconds
+}
+
+// timedCount returns the part of count that carries a latency, i.e. the
+// denominator of a latency mean. Untimed invocations add to count but not to
+// total latency (see SyscallAggregate.UntimedCount); dividing by the full
+// count would understate the mean exactly when the kernel falls back to them.
+func timedCount(count, untimed uint64) uint64 {
+	if untimed >= count {
+		return 0
+	}
+	return count - untimed
 }
 
 func maxU64(a, b uint64) uint64 {

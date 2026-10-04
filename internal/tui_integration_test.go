@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,7 @@ import (
 	"ior/internal/runtime"
 	"ior/internal/streamrow"
 	"ior/internal/tui"
+	"ior/internal/types"
 )
 
 const (
@@ -139,6 +141,14 @@ func tuiNewFakeProbeManager() tuiFakeProbeManager {
 
 func (f tuiFakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f tuiFakeProbeManager) Toggle(string) error               { return nil }
+func (f tuiFakeProbeManager) Attach(string) error               { return nil }
+func (f tuiFakeProbeManager) Detach(string) error               { return nil }
+func (f tuiFakeProbeManager) AttachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
+func (f tuiFakeProbeManager) DetachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
 
 // ActiveCount reports the number of active probes and the total.
 func (f tuiFakeProbeManager) ActiveCount() (int, int) {
@@ -222,6 +232,49 @@ func (f *tuiStatefulProbeManager) Toggle(syscall string) error {
 		}
 	}
 	return nil
+}
+
+// Attach and Detach set the named probe's Active flag.
+func (f *tuiStatefulProbeManager) Attach(syscall string) error { return f.set(syscall, true) }
+func (f *tuiStatefulProbeManager) Detach(syscall string) error { return f.set(syscall, false) }
+
+func (f *tuiStatefulProbeManager) set(syscall string, active bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.states {
+		if f.states[i].Syscall == syscall {
+			f.states[i].Active = active
+		}
+	}
+	return nil
+}
+
+// AttachFamily activates every inactive probe of family, reporting one
+// progress step per probe like the real manager.
+func (f *tuiStatefulProbeManager) AttachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, true, progress), nil
+}
+
+// DetachFamily deactivates every active probe of family.
+func (f *tuiStatefulProbeManager) DetachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, false, progress), nil
+}
+
+func (f *tuiStatefulProbeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result probemanager.BatchResult
+	for i := range f.states {
+		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+			f.states[i].Active = active
+			result.Total++
+			result.Changed++
+		}
+	}
+	if progress != nil {
+		progress(result.Total, result.Total)
+	}
+	return result
 }
 
 func (f *tuiStatefulProbeManager) ActiveCount() (int, int) {
@@ -590,36 +643,41 @@ func TestTUIIntegration_Flame_MatchNextPrev(t *testing.T) {
 }
 
 // TestTUIIntegration_Flame_ResetBaseline presses "r" on the flame tab and
-// asserts the baseline reset actually took effect. While TabFlame is active the
-// key is consumed by the flamegraph model itself (ConsumesKey ->
-// flamegraph.Model.resetBaseline), so this covers the flame-local reset: the
-// live trie is cleared and the cached snapshot state is dropped.
-//
-// The static test-flames fixture is seeded exactly once, at starter time
-// (tuiTestFlamesStarter -> buildTestFlamesRuntime); nothing refills the trie
-// afterwards. So a working reset empties it for good and the tab falls back to
-// its empty state ("... has no visible frames" + "sel:none"), while the seeded
-// breadcrumb ("view:root") disappears.
+// asserts the baseline reset actually took effect. The baseline is shared by
+// every tab (task 1r2): while TabFlame is active the dashboard intercepts the
+// key (flamegraph.Model.WantsBaselineReset) and runs resetBaselineCmd, which
+// clears the live trie AND the stats engine and bumps the stats generation;
+// the flame then drops its cached view state (ClearBaseline). The static
+// test-flames fixture is seeded once at starter time (tuiTestFlamesStarter ->
+// buildTestFlamesRuntime) and nothing refills the trie afterwards, so a working
+// reset empties the flame for good: it shows "... has no visible frames" +
+// "sel:none" (the seeded breadcrumb "view:root" disappears). The synthetic stats
+// engine, in contrast, reseeds itself on Reset (task xs2, reseedingEngine),
+// because nothing else would ever feed it: the Syscalls tab must stay
+// populated, not fall to "Syscalls: no data".
 //
 // Observing that state has to be forced: teatest's screen() replays only the
 // bytes produced so far and the cursed renderer flushes asynchronously, so a
 // stale pre-reset frame can otherwise satisfy the match (which is what made the
 // previous version of this test pass even with the reset broken). Following the
-// pattern of TestTUIIntegration_Global_ResetKeepsStreamRows (commit 1d95fd4),
-// round-trip through another tab after pressing "r": any frame rendered for the
-// later keypresses is provably after "r" was handled, because the message queue
-// is FIFO.
+// pattern of TestTUIIntegration_Global_ResetClearsCounts, round-trip through
+// another tab after pressing "r". The Syscalls tab was never visited before the
+// reset, so any frame it shows is the post-reset state (the stats snapshot is
+// rebuilt off the UI goroutine, so the fence polls until that snapshot has been
+// delivered rather than assuming the keypress order alone).
 func TestTUIIntegration_Flame_ResetBaseline(t *testing.T) {
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root", "Selected: root", "total(events):")
 
-	// "r" clears the live trie; the one-shot fixture is never re-seeded.
+	// "r" resets the shared baseline; the one-shot fixture is never re-seeded.
 	s.press('r')
-	// Hop to the Syscalls tab and back. Its seeded table (unaffected by the
-	// flame-local reset) proves the "3" keypress - queued after "r" - has been
-	// processed and has repainted the screen over the old flame frame.
+	// Hop to the Syscalls tab: the stats engine was reset too and reseeded
+	// itself (task xs2), so the table is still populated and never shows the
+	// "no data" placeholder; the "3" keypress - queued after "r" - repainted
+	// over the old frame.
 	s.typeStr("3")
-	s.waitFor("Syscall", "epoll_wait")
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+	s.waitForAbsent("Syscalls: no data")
 	// Back on the flame tab, the repaint is provably post-reset: the flame must
 	// now be empty.
 	s.typeStr("1")
@@ -745,8 +803,9 @@ func TestTUIIntegration_Stream_ExportModal_OpenCancel(t *testing.T) {
 // and runs them in the export command
 // (eventstream.ExportSourceSnapshotToCSV, writing the filtered
 // snapshot via exportRowsToCSV), and the resulting CompletedMsg sets the modal's
-// "Exported: <path>" status. The test asserts that status, then polls the temp
-// dir for the ior-stream-*.csv and asserts it contains the CSV header plus a
+// "Exported: <path>" status. The test waits for that status, polls the temp
+// dir for the ior-stream-*.csv, checks the status (its wrapped lines rejoined)
+// names that file, and asserts the file contains the CSV header plus a
 // seeded data row (a "batch" comm on a "/srv" path), proving the seeded rows were
 // exported.
 func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
@@ -764,11 +823,16 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	s.waitFor("Export Stream CSV", "CSV stream rows", "Enter confirm")
 
 	// Enter submits OptionCSV; the export runs and the modal reports success with
-	// the written path.
+	// the written path. The path is longer than the box is wide, so the modal
+	// hard-wraps it at some column of the temp dir's name: match the status
+	// lines rejoined (tuiExportedStatus), never a fragment of one line.
 	s.press(tea.KeyEnter)
-	s.waitFor("Exported: ", "ior-stream-")
+	s.waitFor("Exported:")
 
 	path := tuiWaitForFile(t, dir, "ior-stream-*.csv")
+	if shown := tuiExportedStatus(s.screen()); !strings.HasSuffix(shown, string(filepath.Separator)+filepath.Base(path)) {
+		t.Fatalf("export status shows %q, want the written file %q.\n--- screen ---\n%s", shown, path, s.screen())
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -788,6 +852,41 @@ func TestTUIIntegration_Export_SubmitWritesCSV(t *testing.T) {
 	if got := tuiCSVDataRows(csv); got != streamrow.TestStreamRowCount() {
 		t.Fatalf("exported csv %q has %d data rows, want %d:\n%s", path, got, streamrow.TestStreamRowCount(), csv)
 	}
+}
+
+// tuiExportedStatus is the path the export modal's "Exported: <path>" status
+// shows on scr, its wrapped lines rejoined: the text after "Exported:" on its
+// line, then each following line's text from the same column (the box's
+// padding aligns them) up to the box's right border, until an empty one.
+func tuiExportedStatus(scr string) string {
+	lines := strings.Split(scr, "\n")
+	for i, line := range lines {
+		runes := []rune(line)
+		col := strings.Index(line, "Exported:")
+		if col < 0 {
+			continue
+		}
+		col = len([]rune(line[:col]))
+		shown := tuiBoxText(runes[col+len("Exported:"):])
+		for _, next := range lines[i+1:] {
+			piece := tuiBoxText([]rune(next)[min(col, len([]rune(next))):])
+			if piece == "" {
+				break
+			}
+			shown += piece
+		}
+		return shown
+	}
+	return ""
+}
+
+// tuiBoxText is the text of runes up to the next box border, trimmed.
+func tuiBoxText(runes []rune) string {
+	text := string(runes)
+	if end := strings.Index(text, "│"); end >= 0 {
+		text = text[:end]
+	}
+	return strings.TrimSpace(text)
 }
 
 // tuiCSVDataRows counts the non-empty lines of a CSV beyond its header row.
@@ -894,9 +993,10 @@ func TestTUIIntegration_Stream_PauseSelectsAndNavigates(t *testing.T) {
 
 // TestTUIIntegration_Stream_EnterPushFilterThenUndo pauses, anchors the
 // selection on row 0 (comm "api"), advances two columns to the Comm column,
-// and presses Enter to push a "comm~api" filter. The paused footer's "Col"
-// counter makes the column advance observable (Col 1/10 -> Col 3/10), so the
-// push targets Comm; the resulting predicate is observable on the stream's
+// and presses Enter to push the exact "comm~^api$" filter (a Stream cell
+// filter selects exactly the cell's value). The paused footer's "Col" counter
+// makes the column advance observable (Col 1/10 -> Col 3/10), so the push
+// targets Comm; the resulting predicate is observable on the stream's
 // "Filter:" summary line. F then pops the filter stack, reverting to
 // "Filter: all".
 func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
@@ -917,10 +1017,10 @@ func TestTUIIntegration_Stream_EnterPushFilterThenUndo(t *testing.T) {
 	s.waitFor("Col 3/10")
 
 	// Enter clones the stream filter and adds the selected cell's predicate; the
-	// Comm cell of row 0 is "api", so the filter becomes "comm~api" (synced into
-	// the stream's own Filter line via the dashboard global filter).
+	// Comm cell of row 0 is "api", so the filter becomes the exact "comm~^api$"
+	// (synced into the stream's own Filter line via the dashboard global filter).
 	s.press(tea.KeyEnter)
-	s.waitFor("Filter:", "comm~api")
+	s.waitFor("Filter:", "comm~^api$")
 
 	// F pops the filter stack, reverting to the cleared "all" filter.
 	s.press('F')
@@ -1308,6 +1408,34 @@ func TestTUIIntegration_ProbesModal_NavSearchToggleClose(t *testing.T) {
 	s.waitForAbsent("Probes (", "Trends:")
 }
 
+// TestTUIIntegration_ProbesModal_FamiliesViewTogglesFamily drives the
+// Families view end to end: tab switches the modal to it, the FS row shows
+// the seeded 2 of 3 FS probes attached, and space detaches the whole family
+// through the asynchronous batch, whose result updates the counts and the
+// outcome line.
+func TestTUIIntegration_ProbesModal_FamiliesViewTogglesFamily(t *testing.T) {
+	s := tuiNewStatefulProbesModel(t)
+	s.waitFor("view:root")
+	s.typeStr("2")
+	s.waitFor("Trends:")
+
+	s.typeStr("o")
+	s.waitFor("Probes (2/3 active) - Syscalls")
+	s.press(tea.KeyTab)
+	s.waitFor("Probes (2/3 active) - Families", "> [ ] Network")
+
+	// FS is the ninth family in display order.
+	for range 8 {
+		s.press('j')
+	}
+	s.waitFor("> [~] FS            2/3")
+	s.press(' ')
+	s.waitFor("FS: detached 2 of 2 probes", "> [ ] FS            0/3", "Probes (0/3 active)")
+
+	s.press(tea.KeyEsc)
+	s.waitForAbsent("Probes (", "Trends:")
+}
+
 // --- Populated dashboard tabs (seeded in --testflames) ----------------------
 
 // tuiChrome is a stable token from the persistent dashboard tab bar, which is
@@ -1507,25 +1635,31 @@ func TestTUIIntegration_Syscalls_MetricToggle(t *testing.T) {
 
 // TestTUIIntegration_Syscalls_EnterPushesFilter presses Enter on the selected
 // table row and asserts the resulting global filter (shown in the dashboard
-// status line) gains a "syscall~<name>" predicate for the seeded top row.
+// status line) gains an exact "syscall~^<name>$" predicate for the seeded top
+// row (row filters select exactly the row, task yo2).
 func TestTUIIntegration_Syscalls_EnterPushesFilter(t *testing.T) {
 	s := tuiNewFlamesModelWithPidFilter(t, 1)
 	s.waitFor("view:root")
 
 	s.typeStr("3")
-	// The session was built with -pid 1; the status line shows it verbatim.
-	s.waitFor("Syscall", "filter: pid=1")
+	// The session was built with -pid 1; the status line shows it verbatim. The
+	// seeded "epoll_wait" row must be on screen before Enter is pressed: "Syscall"
+	// alone also matches the "3:Syscalls" tab label, and since the stats snapshot
+	// is built asynchronously (task 8r2) the tab can render its "no data"
+	// placeholder first, in which case Enter has no selected row and is ignored.
+	s.waitFor("Syscall", "filter: pid=1", "epoll_wait")
 
 	// Enter on the table's selected (top) row clones the active filter and adds a
-	// syscall predicate for that row's name; "write" is the seeded top row by the
-	// default count-descending order.
+	// syscall predicate for that row's name, anchored so it cannot also select
+	// e.g. writev; "write" is the seeded top row by the default
+	// count-descending order.
 	s.press(tea.KeyEnter)
-	s.waitFor("syscall~write")
+	s.waitFor("syscall~^write$")
 
 	// The Syscalls tab now render-scopes by the active syscall predicate: only
 	// the "write" row survives; the distinctive seeded "epoll_wait" row (which is
 	// present in the unfiltered table) is gone.
-	s.waitForAbsent("epoll_wait", "syscall~write", "write")
+	s.waitForAbsent("epoll_wait", "syscall~^write$", "write")
 }
 
 // TestTUIIntegration_Syscalls_EnterFamilyColumnPushesFilter moves the column
@@ -1841,34 +1975,118 @@ func TestTUIIntegration_Processes_ReanchorsSelectionAfterRefresh(t *testing.T) {
 // Passing initialPID=-1 to tui.NewModel selects the PID picker screen instead
 // of the dashboard (tuiNewPickerModel). The picker (internal/tui/pidpicker/
 // model.go) reads the host's real /proc, so its process rows are
-// non-deterministic; these tests assert only the deterministic chrome: the
-// "Select PID" header, the "Filter: " input prompt, and the synthetic "All
-// PIDs" row that always occupies index 0 (selected on entry as "> All PIDs").
-// Selecting that row emits PidSelectedMsg{Pid:0}, which the tui model handles
+// non-deterministic; these tests assert only the deterministic chrome (the
+// "Select PID" header, the "Filter: " input prompt and the synthetic "All
+// PIDs" row at index 0, selected on entry as "> All PIDs") plus behaviour that
+// holds for whatever rows exist.
+//
+// Selection contract (task hs2): typing a filter hands the selection to the
+// filter, so the FIRST MATCHING process row is highlighted (and Enter attaches
+// to it); a filter that matches nothing highlights nothing, shows the notice
+// "no process matches the filter" and makes Enter a no-op; deleting the filter
+// back to empty returns to the "All PIDs" row. Selecting a row emits
+// PidSelectedMsg{Pid: N} (Pid:0 for the All row), which the tui model handles
 // by attaching and transitioning to the populated dashboard (asserted via the
-// flame tab's "view:root" token).
+// flame tab's "view:root" token and the "filter: pid=N" status line).
 
-// TestTUIIntegration_PidPicker_FilterSelectAllToDashboard starts on the PID
-// picker, asserts its chrome and the selected "All PIDs" row, types a filter
-// string (echoed in the "Filter: " input), then presses Enter on the still-
-// selected "All PIDs" row (index 0). The resulting PidSelectedMsg{Pid:0}
-// transitions to the dashboard, asserted via the seeded flame view.
-func TestTUIIntegration_PidPicker_FilterSelectAllToDashboard(t *testing.T) {
+// pickerNoMatchNeedle returns a filter that no row of the real /proc picker
+// can match, so the no-match test does not depend on what runs on the host. A
+// fixed word such as "zzz" could occur in any comm or command line. This one is
+// made up at run time (the nanosecond clock in base 36 plus this test's pid)
+// and lives only in this process's memory and the picker's input: it is never
+// part of an argv, so not even the test binary's own command line, nor any
+// command line of another process, can contain it. Its letters keep it from
+// matching the pid column (digits only), and it is lowercase because the
+// picker lowercases the query and the searched text alike.
+func pickerNoMatchNeedle() string {
+	return "nomatch" + strconv.FormatInt(time.Now().UnixNano(), 36) + "x" + strconv.Itoa(os.Getpid())
+}
+
+// TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard starts on
+// the PID picker and types a filter that matches no process
+// (pickerNoMatchNeedle): the filter is echoed, the no-match notice is shown, no
+// row is highlighted and Enter does nothing (the picker stays up, no
+// dashboard). Backspacing the filter empty returns the highlight to "All PIDs"
+// (derived from the filter, not sticky), and Enter on it then emits
+// PidSelectedMsg{Pid:0}, which transitions to the dashboard, asserted via the
+// seeded flame view.
+func TestTUIIntegration_PidPicker_NoMatchThenClearSelectsAllToDashboard(t *testing.T) {
 	s := tuiNewPickerModel(t)
 	// Picker chrome: the header, the filter input prompt, and the synthetic
 	// "All PIDs" row, which starts selected ("> ").
 	s.waitFor("Select PID", "Filter: ", "> All PIDs")
 
-	// Typing focuses the input and echoes into the "Filter: " prompt; "zzz" is an
-	// unlikely comm/pid substring, so the real process rows narrow away while the
-	// always-present "All PIDs" row stays at index 0.
-	s.typeStr("zzz")
-	s.waitFor("Filter: zzz", "All PIDs")
+	// Typing focuses the input and echoes into the "Filter: " prompt; the needle
+	// matches no process, so the notice appears and the selection is dropped
+	// instead of silently staying on All PIDs.
+	needle := pickerNoMatchNeedle()
+	s.typeStr(needle)
+	s.waitFor("Filter: "+needle, "no process matches the filter")
+	if scr := s.screen(); strings.Contains(scr, "> All PIDs") {
+		t.Fatalf("no-match filter must not leave All PIDs highlighted.\n--- screen ---\n%s", scr)
+	}
 
-	// Enter on the selected index-0 row emits PidSelectedMsg{Pid:0}; the model
-	// attaches and lands on the populated dashboard (seeded flame view).
+	// Enter without a selection is a no-op. Give the program a moment to (wrongly)
+	// process the key, then require the picker to be the current screen and the
+	// dashboard's flame token to be absent.
+	s.press(tea.KeyEnter)
+	time.Sleep(300 * time.Millisecond)
+	scr := s.screen()
+	if !strings.Contains(scr, "Select PID") || strings.Contains(scr, "view:root") {
+		t.Fatalf("Enter on a no-match filter must stay on the picker.\n--- screen ---\n%s", scr)
+	}
+
+	// Clearing the filter re-derives the selection: the empty filter highlights
+	// All PIDs again and the notice goes away.
+	for range len(needle) {
+		s.press(tea.KeyBackspace)
+	}
+	s.waitForAbsent("no process matches the filter", "Select PID", "> All PIDs")
+
+	// Enter on All PIDs emits PidSelectedMsg{Pid:0}; the model attaches and lands
+	// on the populated dashboard (seeded flame view).
 	s.press(tea.KeyEnter)
 	s.waitFor("view:root")
+}
+
+// pickerHighlightedPID matches the highlighted PID-mode process row of the
+// rendered picker, "> <pid>  <comm> ...", capturing the pid. The "All PIDs"
+// row starts with a letter, so it never matches.
+var pickerHighlightedPID = regexp.MustCompile(`(?m)^\s*> (\d+)\b`)
+
+// TestTUIIntegration_PidPicker_FilterSelectsFirstMatchToDashboard types this
+// test process's own PID (a string that certainly matches at least one real
+// /proc row) and requires the filter to hand the selection to the first match:
+// a process row, not "All PIDs", is highlighted. Which process comes first is
+// host-dependent (another pid or command line may contain the digits), so the
+// test reads the highlighted pid back from the screen and asserts that Enter
+// attaches to exactly that pid, via the dashboard's "filter: pid=N" status line.
+func TestTUIIntegration_PidPicker_FilterSelectsFirstMatchToDashboard(t *testing.T) {
+	s := tuiNewPickerModel(t)
+	s.waitFor("Select PID", "Filter: ", "> All PIDs")
+
+	own := strconv.Itoa(os.Getpid())
+	s.typeStr(own)
+	s.waitFor("Filter: " + own)
+
+	// Wait for the derived selection to move off the All row onto a process row.
+	var pid string
+	deadline := time.Now().Add(tuiWaitFor)
+	for {
+		scr := s.screen()
+		if m := pickerHighlightedPID.FindStringSubmatch(scr); m != nil && !strings.Contains(scr, "> All PIDs") {
+			pid = m[1]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no process row highlighted for filter %q.\n--- screen ---\n%s", own, scr)
+		}
+		time.Sleep(tuiWaitTick)
+	}
+
+	// Enter attaches to the highlighted first match, not to all PIDs.
+	s.press(tea.KeyEnter)
+	s.waitFor("view:root", "filter: pid="+pid)
 }
 
 // TestTUIIntegration_PidPicker_ReselectEscReturns starts on the dashboard,
@@ -1960,11 +2178,13 @@ func TestTUIIntegration_TidPicker_EscReturnsToDashboard(t *testing.T) {
 // baseline status is "auto-reset: .../30s".
 
 // TestTUIIntegration_Global_ResetClearsCounts presses "r" and asserts the stats
-// baseline is really cleared. The static test-flames fixture is seeded exactly
-// once, at starter time (tuiTestFlamesStarter -> buildTestFlamesRuntime), so the
-// aggregates never come back: after the reset the Syscalls tab must lose its
-// seeded rows and render the "Syscalls: no data" placeholder, while the
-// persistent chrome (the tab bar) survives.
+// baseline reset leaves the test-flames session usable. The synthetic engine is
+// seeded at starter time and, because nothing else feeds it, reseeds itself on
+// every Reset (task xs2, reseedingEngine): after the reset the Syscalls tab must
+// still render its seeded rows and never the "Syscalls: no data" placeholder
+// (before xs2 the first reset emptied the tab for the rest of the session),
+// while the persistent chrome (the tab bar) survives. That the reset itself
+// reaches the engine is pinned in testflames_reset_test.go.
 //
 // The assertion has to be forced onto a post-reset frame: teatest's screen()
 // replays only the bytes produced so far and the cursed renderer flushes
@@ -1988,7 +2208,8 @@ func TestTUIIntegration_Global_ResetClearsCounts(t *testing.T) {
 	s.typeStr("7")
 	s.waitFor("buffer:")
 	s.typeStr("3")
-	s.waitForAbsent("epoll_wait", "Syscalls: no data", tuiChrome)
+	s.waitFor("Syscall", "epoll_wait", tuiChrome)
+	s.waitForAbsent("Syscalls: no data")
 }
 
 // TestTUIIntegration_Global_ResetKeepsStreamRows locks the documented stream
@@ -2034,6 +2255,42 @@ func TestTUIIntegration_Global_AutoResetCycleShowsInterval(t *testing.T) {
 	// status line's total segment flips accordingly.
 	s.press('I')
 	s.waitFor("auto-reset: ", "/1m0s")
+}
+
+// tuiNewFlamesModelFromArgs starts a static test-flames session from a real
+// command line (flags.ParseArgs), so the auto-reset default that the CLI
+// resolves for -testflames reaches the model, unlike tuiTestConfig, which
+// starts from the bare flags.NewFlags defaults.
+func tuiNewFlamesModelFromArgs(t *testing.T, args ...string) *tuiSession {
+	t.Helper()
+	cfg, err := flags.ParseArgs(args)
+	if err != nil {
+		t.Fatalf("ParseArgs(%q): %v", args, err)
+	}
+	return tuiNewSession(t, tui.NewTestFlamesModel(cfg, tuiTestFlamesStarter(cfg)))
+}
+
+// TestTUIIntegration_TestFlamesCLI_AutoResetOffByDefault guards the regression
+// where `ior -testflames` ran the 30s auto-reset: the reset clears the stats
+// engine, the static seed is never re-injected, and the dashboard went empty
+// for good. Through the real CLI resolution the status line must say "off".
+func TestTUIIntegration_TestFlamesCLI_AutoResetOffByDefault(t *testing.T) {
+	s := tuiNewFlamesModelFromArgs(t, "-testflames")
+	s.waitFor("view:root")
+	s.typeStr("3")
+	s.waitFor("Syscall", "auto-reset: off")
+	if scr := s.screen(); strings.Contains(scr, "auto-reset: ") && strings.Contains(scr, "/30s") {
+		t.Fatalf("-testflames armed the 30s auto-reset:\n%s", scr)
+	}
+}
+
+// TestTUIIntegration_TestFlamesCLI_ExplicitResetTimerIsHonoured is the negative
+// counterpart: a user who passes -resetTimer to -testflames still gets it.
+func TestTUIIntegration_TestFlamesCLI_ExplicitResetTimerIsHonoured(t *testing.T) {
+	s := tuiNewFlamesModelFromArgs(t, "-testflames", "-resetTimer", "5m")
+	s.waitFor("view:root")
+	s.typeStr("3")
+	s.waitFor("Syscall", "auto-reset: ", "/5m0s")
 }
 
 // --- Terminal resize (tea.WindowSizeMsg) ------------------------------------

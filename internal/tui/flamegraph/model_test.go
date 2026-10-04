@@ -872,6 +872,39 @@ func TestControlResetBaseline(t *testing.T) {
 	}
 }
 
+// TestWantsBaselineResetAndClearBaseline pins the parent-facing pair the
+// dashboard uses so `r` restarts the shared baseline: the key is recognised
+// unless the search input is open (where it is typed text), and ClearBaseline
+// drops the view state without touching the live trie.
+func TestWantsBaselineResetAndClearBaseline(t *testing.T) {
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path", "tracepoint"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
+	m := NewModel(liveTrie)
+	rKey := tea.KeyPressMsg{Code: 'r', Text: "r"}
+
+	if !m.WantsBaselineReset(rKey) {
+		t.Fatalf("expected r to be the baseline-reset key")
+	}
+	if m.WantsBaselineReset(tea.KeyPressMsg{Code: 'o', Text: "o"}) {
+		t.Fatalf("expected o not to be the baseline-reset key")
+	}
+	m.openSearch()
+	if m.WantsBaselineReset(rKey) {
+		t.Fatalf("r typed into the search input must not reset the baseline")
+	}
+	m.clearSearch()
+
+	m.snapshot = &snapshotNode{Name: "root", Total: 10}
+	versionBefore := liveTrie.Version()
+	m.ClearBaseline()
+	if m.snapshot != nil || m.statusMessage != "Baseline reset" {
+		t.Fatalf("expected ClearBaseline to drop the snapshot and set the status, got %q", m.statusMessage)
+	}
+	if liveTrie.Version() != versionBefore {
+		t.Fatalf("ClearBaseline must leave the live trie to the caller")
+	}
+}
+
 func TestViewIncludesSelectionStatusBar(t *testing.T) {
 	m := NewModel(nil)
 	m.width = 120

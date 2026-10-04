@@ -1,10 +1,12 @@
 package pidpicker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestFormatProcessWithParent verifies that formatProcess includes parent PID
@@ -188,5 +190,49 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writeFile %s: %v", path, err)
+	}
+}
+
+// TestFormatProcessSanitizesForeignArgv verifies a process whose comm and
+// argv (read from /proc, owned by any user) carry newlines, an OSC 8
+// hyperlink, SGR hidden text and a raw C1 CSI byte renders as one row with no
+// terminal control byte, while ProcessInfo keeps the raw values (task io2).
+func TestFormatProcessSanitizesForeignArgv(t *testing.T) {
+	root := t.TempDir()
+	mkProc(t, root, "42", "42 (ev\x1b[8mil) S 1 1 1 0",
+		"sh\x00-c\x00echo\nfake row\x00\x1b]8;;http://evil\aclick\x1b]8;;\a\x00\x9b31m\x00")
+	processes, err := scanProcessesFrom(root)
+	if err != nil || len(processes) != 1 {
+		t.Fatalf("scanProcessesFrom = %v, %v", processes, err)
+	}
+	if !strings.Contains(processes[0].Cmdline, "\n") {
+		t.Fatalf("ProcessInfo.Cmdline should keep the raw argv, got %q", processes[0].Cmdline)
+	}
+
+	out := formatProcess(processes[0])
+	for _, r := range out {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == utf8.RuneError {
+			t.Fatalf("formatProcess left control rune %U in %q", r, out)
+		}
+	}
+	want := "42  ev?[8mil  sh -c echo fake row ?]8;;http://evil?click?]8;;? ?31m"
+	if out != want {
+		t.Fatalf("formatProcess = %q, want %q", out, want)
+	}
+}
+
+// TestViewSanitizesScanError verifies the "scan error:" line (which echoes
+// /proc paths) carries no OSC 8 link, SGR hidden text or raw C1 CSI byte.
+func TestViewSanitizesScanError(t *testing.T) {
+	m := New()
+	m.lastErr = errors.New("read /proc/\x1b]8;;http://evil\aclick\x1b]8;;\a/\x1b[8mhidden\x9b31m")
+	out := m.View().Content
+	for _, bad := range []string{"\x1b]8", "\x1b[8m", "\a", "\x9b"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("view contains injected %q: %q", bad, out)
+		}
+	}
+	if !strings.Contains(out, "scan error: read /proc/?]8;;http://evil?click") {
+		t.Fatalf("view lost the sanitised scan error: %q", out)
 	}
 }

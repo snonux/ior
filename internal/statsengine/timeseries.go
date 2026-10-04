@@ -8,13 +8,17 @@ const (
 
 var timeSeriesSlotWidthDefault = 500 * time.Millisecond
 
+// timeSeriesSlot accumulates the samples of one time bucket. weight is the
+// number of samples behind sum; it is fractional because AddSpread splits a
+// batch across the slots its interval overlaps.
 type timeSeriesSlot struct {
-	key   int64
-	sum   float64
-	count uint64
+	key    int64
+	sum    float64
+	weight float64
 }
 
-// ringTimeSeries stores fixed-width time buckets in a circular buffer.
+// ringTimeSeries stores fixed-width time buckets in a circular buffer; each
+// bucket reports the (weighted) mean of the samples that fell into it.
 type ringTimeSeries struct {
 	slots    []timeSeriesSlot
 	slotSize time.Duration
@@ -40,24 +44,57 @@ func newRingTimeSeriesWithConfig(slotSize time.Duration, slots int) *ringTimeSer
 	}
 }
 
+// Add records one sample of value at t.
 func (r *ringTimeSeries) Add(value float64, t time.Time) {
 	if r == nil {
 		return
 	}
+	r.addWeighted(value, 1, r.slotKey(t))
+}
 
-	key := r.slotKey(t)
-	if r.isTooOld(key) {
+// AddSpread records a pre-aggregated batch of count samples summing to sum
+// that accrued over [from, to), such as one kernel aggregate drain. The batch
+// is split across the slots the interval overlaps, each receiving the share
+// of sum and count proportional to its overlap, so:
+//   - it weighs count samples, as many as the per-event samples it stands
+//     for, instead of one sample next to them;
+//   - a drain interval longer than a slot fills every slot it covers with
+//     the batch mean, instead of piling onto one slot and leaving the others
+//     empty (a comb of spikes and zeros that fakes trends).
+//
+// The interval is measured on the wall clock (UnixNano), like the slot keys,
+// never with the monotonic readings time.Now attaches: mixing both would
+// split a batch by a monotonic span over wall-clock slots that a clock step
+// has moved apart. So after a backward wall-clock step (wall span <= 0) the
+// whole batch goes into to's slot, and after a forward step only the slots
+// still in the window are visited, at most len(slots)+1 of them. Shares
+// falling before the window are dropped like any too-old sample. A zero
+// count carries no sample and is ignored, so it can neither create a slot
+// nor advance the window.
+func (r *ringTimeSeries) AddSpread(sum float64, count uint64, from, to time.Time) {
+	if r == nil || count == 0 {
 		return
 	}
-	if !r.hasData || key > r.lastKey {
-		r.lastKey = key
-		r.hasData = true
+	fromNs, toNs := from.UnixNano(), to.UnixNano()
+	if toNs <= fromNs {
+		r.addWeighted(sum, float64(count), r.slotKey(to))
+		return
 	}
 
-	idx := r.slotIndex(key)
-	r.resetSlotIfNeeded(idx, key)
-	r.slots[idx].sum += value
-	r.slots[idx].count++
+	total := float64(toNs - fromNs)
+	slotNs := r.slotSize.Nanoseconds()
+	// Only the last len(slots) slots can be kept; skip iterating older ones.
+	startNs := max(fromNs, toNs-slotNs*int64(len(r.slots)))
+	firstKey := r.slotKeyNs(startNs)
+	lastKey := min(r.slotKeyNs(toNs), firstKey+int64(len(r.slots)))
+	for key := firstKey; key <= lastKey; key++ {
+		overlap := r.overlapNs(key, startNs, toNs)
+		if overlap <= 0 {
+			continue
+		}
+		frac := float64(overlap) / total
+		r.addWeighted(sum*frac, float64(count)*frac, key)
+	}
 }
 
 // Values returns the window ending at the most recent slot that has data.
@@ -87,17 +124,46 @@ func (r *ringTimeSeries) ValuesAt(now time.Time) []float64 {
 		key := start + int64(i)
 		idx := r.slotIndex(key)
 		slot := r.slots[idx]
-		if slot.key != key || slot.count == 0 {
+		if slot.key != key || slot.weight == 0 {
 			continue
 		}
-		result[i] = slot.sum / float64(slot.count)
+		result[i] = slot.sum / slot.weight
 	}
 
 	return result
 }
 
+// addWeighted adds sum and weight to the slot with key, advancing the window
+// when key is newer than every slot so far.
+func (r *ringTimeSeries) addWeighted(sum, weight float64, key int64) {
+	if r.isTooOld(key) {
+		return
+	}
+	if !r.hasData || key > r.lastKey {
+		r.lastKey = key
+		r.hasData = true
+	}
+
+	idx := r.slotIndex(key)
+	r.resetSlotIfNeeded(idx, key)
+	r.slots[idx].sum += sum
+	r.slots[idx].weight += weight
+}
+
+// overlapNs returns how many nanoseconds of [fromNs, toNs) fall into the
+// slot with key.
+func (r *ringTimeSeries) overlapNs(key, fromNs, toNs int64) int64 {
+	slotNs := r.slotSize.Nanoseconds()
+	slotStart := key * slotNs
+	return min(toNs, slotStart+slotNs) - max(fromNs, slotStart)
+}
+
 func (r *ringTimeSeries) slotKey(t time.Time) int64 {
-	return t.UnixNano() / r.slotSize.Nanoseconds()
+	return r.slotKeyNs(t.UnixNano())
+}
+
+func (r *ringTimeSeries) slotKeyNs(ns int64) int64 {
+	return ns / r.slotSize.Nanoseconds()
 }
 
 func (r *ringTimeSeries) isTooOld(key int64) bool {

@@ -1,6 +1,10 @@
 package internal
 
-import "ior/internal/event"
+import (
+	"fmt"
+
+	"ior/internal/event"
+)
 
 // outputFormatter bundles the pair-emission and warning-notification callbacks
 // used by the event loop. Extracting these two concerns into a dedicated type
@@ -17,6 +21,15 @@ type outputFormatter struct {
 	// (ep.Recycle) or hand it off to another owner.
 	printCb func(ep *event.Pair)
 
+	// flusher is the buffered sink behind printCb, when there is one (the
+	// default -plain sink). The event loop flushes it when the loop stops and
+	// within plainFlushInterval of a row being buffered, so buffering never
+	// hides output for long. nil for every callback installed through
+	// SetPrintCallback (TUI, parquet, flamegraph, pprof), which write
+	// synchronously or hand the pair off; WrapPrintCallback keeps it,
+	// because its wrapper still feeds the same sink.
+	flusher pairFlusher
+
 	// warningCb is an optional callback for non-fatal event-processing
 	// warnings (e.g. malformed events, unresolved comms). nil means silent.
 	warningCb func(message string)
@@ -29,6 +42,26 @@ type outputFormatter struct {
 	// trace setup - tests, benchmarks - keep the historical behaviour.
 	statusCb func(args ...any)
 
+	// outputErr is the first fatal output error (a failed stdout write in
+	// -plain mode), rowsLost the rows the failed writes dropped. Both are
+	// written on the event-loop goroutine only and read after run returned.
+	outputErr error
+	rowsLost  int
+
+	// stopTrace ends the trace from inside the event loop: when output fails
+	// (there is no point tracing on once the rows have nowhere to go) and, in
+	// the headless modes, when the -pid process or -tid thread exits
+	// (endTraceOnTargetExit, endTraceOnTargetThreadExit).
+	// runTraceLoop wires it to the trace's cancel func; nil (tests, other
+	// modes) just records the error / does nothing.
+	stopTrace func()
+
+	// traceEnding reports whether the trace is already shutting down (its
+	// context is cancelled). outputFailed uses it to keep the warning honest:
+	// the shutdown flush of a user-initiated stop can fail too, and "stopping
+	// the trace" would then be wrong. nil (tests, other modes) means not ending.
+	traceEnding func() bool
+
 	// pendingWarnings are warnings raised before the loop's output was wired
 	// (see setupWarnings). run replays them through notifyWarningOrLog before
 	// the first event, by which time every mode has installed its sinks.
@@ -39,8 +72,28 @@ type outputFormatter struct {
 // each pair after the call: it must either recycle it (ep.Recycle) or hand it
 // off to another owner. This is the production wiring seam for the mode
 // packages (plain output, TUI ingest, parquet/flamegraph recorders).
+//
+// It also drops the default -plain sink's flusher, because it replaces the
+// callback outright: that sink is no longer fed, so there is nothing left for
+// the loop to flush. Use it for a callback that wraps but does NOT feed the
+// previous callback/sink (TUI ingest, recorders). A wrapper that still feeds
+// the previous callback must use WrapPrintCallback instead, which keeps the
+// flusher; using SetPrintCallback there would leave the sink fed but never
+// flushed on the timer or at shutdown.
 func (e *eventLoop) SetPrintCallback(cb func(ep *event.Pair)) {
 	e.printCb = cb
+	e.flusher = nil
+}
+
+// WrapPrintCallback replaces the pair-emission callback with wrap(current).
+// The wrapper must hand every pair it does not consume itself on to next (or
+// recycle it), so the buffered sink behind the current callback keeps being
+// fed and its flusher stays valid: unlike SetPrintCallback this does NOT drop
+// the flusher. That is what keeps the -plain buffer flushed (timer and
+// shutdown) when trace setup puts the active-probe filter in front of it.
+// A nil current callback is passed to wrap as nil.
+func (e *eventLoop) WrapPrintCallback(wrap func(next func(ep *event.Pair)) func(ep *event.Pair)) {
+	e.printCb = wrap(e.printCb)
 }
 
 // SetWarningCallback replaces the warning-notification sink. nil silences
@@ -64,6 +117,52 @@ func (f *outputFormatter) notifyStatus(args ...any) {
 		return
 	}
 	f.statusCb(args...)
+}
+
+// outputFailed is the -plain sink's reaction to a failed stdout write
+// (plainSink.onErr): it adds the dropped rows to rowsLost and, on the first
+// failure, records the error, tells the user on stderr and stops the trace,
+// so a full disk or a dead consumer no longer ends in exit 0 with statistics
+// that claim every row was written. Later failures only add to rowsLost, since
+// rows still in flight while the loop winds down are lost too. The warning
+// goes through notifyWarningOrLog because it reports lost data.
+//
+// A failed run therefore prints two stderr lines: this warning, when the
+// failure happens, and the caller's "Failed to run: ..." with the final
+// error. That is deliberate: the warning is the only signal a user sees
+// while the trace is still running (and it names the lost rows at once),
+// the final line is what decides the exit status.
+func (f *outputFormatter) outputFailed(err error, droppedRows int) {
+	f.rowsLost += droppedRows
+	if f.outputErr != nil {
+		return
+	}
+	f.outputErr = err
+	ending := f.traceEnding != nil && f.traceEnding()
+	f.notifyWarningOrLog(outputFailedMessage(err, ending))
+	if f.stopTrace != nil {
+		f.stopTrace()
+	}
+}
+
+// outputFailedMessage words the warning for a failed stdout write. When the
+// trace is already ending (user-initiated stop, -duration, target exit) the
+// failure came from the shutdown flush, so promising to stop the trace would
+// be wrong; only the data loss is news then.
+func outputFailedMessage(err error, traceEnding bool) string {
+	if traceEnding {
+		return fmt.Sprintf("writing the -plain output to stdout failed: %v; rows are lost", err)
+	}
+	return fmt.Sprintf("writing the -plain output to stdout failed: %v; stopping the trace, rows are lost", err)
+}
+
+// outputError is the error ior exits with after a run whose output could not
+// be written, or nil. Call it only after run returned.
+func (f *outputFormatter) outputError() error {
+	if f.outputErr == nil {
+		return nil
+	}
+	return fmt.Errorf("writing -plain output to stdout: %w (up to %d rows lost)", f.outputErr, f.rowsLost)
 }
 
 // deferWarnings queues warnings for replay when the loop starts running. It

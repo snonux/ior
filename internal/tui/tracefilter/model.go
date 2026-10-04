@@ -7,10 +7,10 @@ import (
 
 	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/parser"
+	common "ior/internal/tui/common"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 type fieldKey int
@@ -46,12 +46,23 @@ type filterField struct {
 // fields slice explicitly so the shared-backing-array write is visible
 // instead of implied by an addressable receiver.
 type Model struct {
-	visible     bool
-	fields      []filterField
+	visible bool
+	fields  []filterField
+	// opened is a private copy of the field values as Open initialised
+	// them from the opened filter; buildFilterFromFields compares against
+	// it to tell user edits from untouched fields (see fieldUnchanged).
+	opened      []filterField
 	activeField int
 	editing     bool
 	textInput   textinput.Model
 	filter      globalfilter.Filter
+	// width is the view width the modal is drawn in, as the last Resize
+	// reported (0: not reported, taken as 80); the edited field's input is
+	// fitted to it. inputStart is the rune the input's drawn window starts
+	// at, kept so the window stays put while the cursor is drawn in it
+	// (common.FitTextInput).
+	width      int
+	inputStart int
 }
 
 var compareOps = []globalfilter.CompareOp{
@@ -70,7 +81,7 @@ func NewModel() Model {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
-	input.SetWidth(24)
+	input.SetWidth(filterInputWidth)
 	input.SetStyles(textinput.DefaultStyles(true))
 
 	model := Model{textInput: input}
@@ -83,7 +94,16 @@ func (m Model) Visible() bool {
 	return m.visible
 }
 
-// Filter returns the filter built from the last applied modal edit.
+// TextInputFocused reports whether a field is being edited, i.e. the text
+// input is receiving typed text. Outside edit mode the keys are navigation
+// commands (j/k, c, Space, ...).
+func (m Model) TextInputFocused() bool {
+	return m.visible && m.editing
+}
+
+// Filter returns the filter built from the last applied modal edit. It
+// carries over any dimension the modal has no field for (Family, set outside
+// the modal) from the filter passed to Open.
 func (m Model) Filter() globalfilter.Filter {
 	return m.filter
 }
@@ -102,6 +122,9 @@ func (m Model) Open(initial globalfilter.Filter) Model {
 	m.textInput.Blur()
 	m.fields = defaultFilterFields()
 	applyFilterToFields(m.fields, initial)
+	// Snapshot into a fresh backing array: m.fields elements are written in
+	// place later, and the snapshot must keep the as-opened values.
+	m.opened = append([]filterField(nil), m.fields...)
 	m.filter = initial.Clone()
 	return m
 }
@@ -116,22 +139,46 @@ func (m Model) Close() Model {
 
 // Update processes a Bubble Tea message and returns the updated model.
 // Key handling is split between an active text-edit state and navigation state.
+// A bracketed paste (tea.PasteMsg, which bubbletea v2 requests by default and
+// the terminal delivers as one message instead of key presses) is inserted into
+// the field being edited; outside edit mode it is ignored, because the keys of
+// the navigation state are commands and pasted text must never run them.
 func (m Model) Update(msg tea.Msg) Model {
 	if !m.visible {
 		return m
 	}
-	keyMsg, ok := msg.(tea.KeyPressMsg)
-	if !ok {
+	switch msg := msg.(type) {
+	case tea.PasteMsg:
+		return m.updatePaste(msg)
+	case tea.KeyPressMsg:
+		if m.editing {
+			return m.updateEditing(msg)
+		}
+		return m.updateNavigating(msg)
+	}
+	return m
+}
+
+// updatePaste inserts pasted text into the field being edited. The text input
+// flattens newlines and tabs to spaces; Enter or Esc commits the value (and
+// trims it) as it does for typed text.
+func (m Model) updatePaste(msg tea.PasteMsg) Model {
+	if !m.editing {
 		return m
 	}
-	if m.editing {
-		return m.updateEditing(keyMsg)
-	}
-	return m.updateNavigating(keyMsg)
+	var cmd tea.Cmd
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
+	_ = cmd // only ever a cursor-blink command, which nothing routes back
+	// Keep the cursor drawn after the edit (common.FitTextInput).
+	return m.fitInput()
 }
 
 // updateEditing handles key presses while the user is typing into the text
 // input for the active field. Esc commits and closes; Enter confirms the value.
+// Every other key edits the field through common.UpdateTextInput (as
+// updatePaste does), which keeps Alt+D on the last rune from panicking
+// bubbles (task kz2), and the input's window is re-fitted so the cursor
+// stays drawn (fitInput).
 func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 	switch keyMsg.String() {
 	case "esc":
@@ -145,9 +192,9 @@ func (m Model) updateEditing(keyMsg tea.KeyPressMsg) Model {
 		return m.commitEdit()
 	}
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(keyMsg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, keyMsg)
 	_ = cmd
-	return m
+	return m.fitInput()
 }
 
 // updateNavigating handles key presses while the user is navigating the field
@@ -199,46 +246,6 @@ func (m Model) toggleBoolField(index int) Model {
 	return m
 }
 
-// View renders the centered modal box within the given viewport.
-func (m Model) View(width, height int) string {
-	if !m.visible {
-		return ""
-	}
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-
-	modalWidth := 64
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 40 {
-			modalWidth = 40
-		}
-	}
-
-	lines := []string{"Filter"}
-	for i, field := range m.fields {
-		prefix := "  "
-		if i == m.activeField {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+m.renderField(field, i == m.activeField))
-	}
-	lines = append(lines, "", "j/k move • Enter edit/apply • Tab op • Space toggle errors • c clear • Esc apply+close")
-	lines = append(lines, "strings: substring by default, use ^prefix, suffix$, or ^exact$")
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
-}
-
 func (m Model) clearAll() Model {
 	for i := range m.fields {
 		m.fields[i].value = ""
@@ -257,7 +264,10 @@ func (m Model) startEdit() Model {
 	m.textInput.SetValue(m.fields[m.activeField].value)
 	m.textInput.CursorEnd()
 	m.textInput.Focus()
-	return m
+	// The window starts at the value's end, as the cursor does; fitInput
+	// pulls it back to the last screenful (common.WindowStart).
+	m.inputStart = len([]rune(m.textInput.Value()))
+	return m.fitInput()
 }
 
 func (m Model) commitEdit() Model {
@@ -276,7 +286,10 @@ func (m Model) renderField(field filterField, active bool) string {
 		return fmt.Sprintf("%-8s %s", field.label+":", checked)
 	}
 
-	value := field.value
+	// Field values are seeded from the active filter, whose patterns are often
+	// pushed from traced comm/file values, so they are sanitised for display
+	// (the stored value stays raw so the filter still matches).
+	value := common.Sanitize(field.value)
 	if active && m.editing {
 		value = m.textInput.View()
 	}
@@ -288,64 +301,94 @@ func (m Model) renderField(field filterField, active bool) string {
 
 // buildFilterFromFields converts the current field values into a globalfilter.Filter.
 // String fields use substring matching; numeric fields use the selected compare op.
+//
+// The result starts from a clone of the filter the modal was opened with, so
+// dimensions the modal has no field for (currently Family, which is set
+// outside the modal: the [ / ] family cycle or the Syscalls-tab Family row
+// filter) survive an open+Esc or an edit+apply unchanged. Without that,
+// closing the modal would silently drop Family, and the caller would see an
+// unequal filter and reset the stats baseline and push an undo level even
+// though the user changed nothing.
+//
+// For the same reason a field the user did not change keeps the opened
+// dimension verbatim instead of being rebuilt from its text: rebuilding is
+// not an identity for every filter the modal can be opened with. An
+// untrimmed pattern ("foo ", e.g. the Stream tab's Enter-on-cell filter on a
+// comm or path with trailing blanks) would come back trimmed, and an empty
+// non-nil pattern would come back nil; neither is Equal to the original even
+// though both match identically (every matcher trims the pattern and treats
+// blank as "no constraint"). Keeping the original, rather than trimming
+// patterns where filters are created, leaves the filter exactly as its
+// producer made it. (Dashboard row filters are anchored - ^value$, ^dir/*,
+// which no trim alters - or, for a process's Comm, already trimmed, so they
+// would survive a rebuild anyway.)
+// Every changed modal-owned dimension is then overwritten unconditionally by
+// applyFieldToFilter, so a blanked or invalid field removes the constraint
+// it replaced instead of inheriting it.
 func (m Model) buildFilterFromFields() globalfilter.Filter {
-	var out globalfilter.Filter
-	for _, field := range m.fields {
-		value := strings.TrimSpace(field.value)
-		applyFieldToFilter(field, value, &out)
+	out := m.filter.Clone()
+	for i, field := range m.fields {
+		if i < len(m.opened) && fieldUnchanged(field, m.opened[i]) {
+			continue
+		}
+		applyFieldToFilter(field, strings.TrimSpace(field.value), &out)
 	}
 	return out
 }
 
+// fieldUnchanged reports whether field still holds the value (and, for a
+// numeric field, the compare op) it was opened with. Values are compared
+// trimmed because commitEdit trims what the user typed: opening a field
+// holding "foo " and confirming it unedited yields "foo", which is no edit.
+func fieldUnchanged(field, opened filterField) bool {
+	return field.opIndex == opened.opIndex &&
+		strings.TrimSpace(field.value) == strings.TrimSpace(opened.value)
+}
+
 // applyFieldToFilter writes a single field value into the appropriate slot of
-// out. It is split out of buildFilterFromFields to keep each function concise.
+// out. It always assigns (nil / false when the value is empty or invalid):
+// out starts as a clone of the opened filter, so skipping the write would
+// leak the old constraint through a field the user just cleared. It is split
+// out of buildFilterFromFields to keep each function concise.
 func applyFieldToFilter(field filterField, value string, out *globalfilter.Filter) {
 	switch field.fieldKey {
 	case fieldSyscall:
-		if value != "" {
-			out.Syscall = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.Syscall = stringFilterOrNil(value)
 	case fieldComm:
-		if value != "" {
-			out.Comm = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.Comm = stringFilterOrNil(value)
 	case fieldFile:
-		if value != "" {
-			out.File = &globalfilter.StringFilter{Pattern: value}
-		}
+		out.File = stringFilterOrNil(value)
 	case fieldPID:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.PID = f
-		}
+		out.PID, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldTID:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.TID = f
-		}
+		out.TID, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldFD:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.FD = f
-		}
+		out.FD, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldLatency:
-		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
-			out.LatencyNs = f
-		}
+		out.LatencyNs, _ = parseNumericFilter(value, field.opIndex, true)
 	case fieldGap:
-		if f, ok := parseNumericFilter(value, field.opIndex, true); ok {
-			out.GapNs = f
-		}
+		out.GapNs, _ = parseNumericFilter(value, field.opIndex, true)
 	case fieldBytes:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.Bytes = f
-		}
+		out.Bytes, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldReturn:
-		if f, ok := parseNumericFilter(value, field.opIndex, false); ok {
-			out.RetVal = f
-		}
+		out.RetVal, _ = parseNumericFilter(value, field.opIndex, false)
 	case fieldErrorsOnly:
 		out.ErrorsOnly = strings.EqualFold(value, "true")
 	}
 }
 
+// stringFilterOrNil returns a substring filter for value, or nil (no
+// constraint) when value is empty.
+func stringFilterOrNil(value string) *globalfilter.StringFilter {
+	if value == "" {
+		return nil
+	}
+	return &globalfilter.StringFilter{Pattern: value}
+}
+
+// parseNumericFilter parses value into a numeric filter with the op at
+// opIndex. It returns (nil, false) for an empty or unparsable value, which
+// callers store as "no constraint".
 func parseNumericFilter(value string, opIndex int, duration bool) (*globalfilter.NumericFilter, bool) {
 	if value == "" {
 		return nil, false

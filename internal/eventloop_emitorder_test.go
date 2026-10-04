@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,23 +208,20 @@ func TestRunDoesNotDecodeAheadOfEmission(t *testing.T) {
 	}
 }
 
-// TestRunStopsPromptlyAfterCancel pins how much a cancelled run can still
-// emit - what a TUI restart (tracer.stop() then resetStreamBuffer) can leak
-// into the next session. Nothing is decoded ahead, so the only pairs after
-// the one that cancelled come from raw records the loop's select picked over
-// ctx.Done(); each pick is a coin flip, so a backlog of hundreds of pairs
-// (as a buffered handoff produced) is out of reach while every emitted pair
-// is still accounted for.
+// TestRunStopsPromptlyAfterCancel pins what a cancelled run does with the raw
+// backlog: it decodes the records already buffered at the cancel (bounded by
+// the snapshot taken then, see drainBacklogAtStop) and stops. Everything still
+// happens inside run(), so nothing is emitted after it returned - what a TUI
+// restart (tracer.stop() then resetStreamBuffer) could otherwise leak into the
+// next session, as a buffered handoff did. Whether the select or the drain
+// consumes a given record is a coin flip, so the assertion is the accounting
+// that holds for both: every record of the backlog was taken and every pair it
+// formed was emitted (task tq2 - they used to be discarded at stop).
 func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 	const (
 		n        = 512
 		cancelAt = 10
 		trials   = 20
-		// Each pair takes two raw records, so more than 32 trailing pairs
-		// need at least 66 consecutive picks of rawCh over the ready
-		// ctx.Done() (select picks uniformly among ready cases): P = 2^-66
-		// per trial.
-		maxTrailer = 32
 	)
 	for trial := 0; trial < trials; trial++ {
 		el := newEmitOrderEventLoop(t)
@@ -241,12 +239,26 @@ func TestRunStopsPromptlyAfterCancel(t *testing.T) {
 
 		el.run(ctx, rawCh)
 		cancel()
+		emittedAtReturn := len(times)
 
-		if trailer := len(times) - (cancelAt + 1); trailer < 0 || trailer > maxTrailer {
-			t.Fatalf("trial %d: %d pairs emitted after the cancelling one, want 0..%d", trial, trailer, maxTrailer)
+		if len(rawCh) != 0 {
+			t.Fatalf("trial %d: %d buffered records left behind by run()", trial, len(rawCh))
+		}
+		if emittedAtReturn != n {
+			t.Fatalf("trial %d: %d pairs emitted, want all %d", trial, emittedAtReturn, n)
 		}
 		requireOrderedPairs(t, times, len(times))
-		requireEveryProducedPairEmitted(t, el, len(times), 2*n-len(rawCh))
+		requireEveryProducedPairEmitted(t, el, len(times), 2*n)
+		if el.numDiscardedAtStop != 0 {
+			t.Fatalf("trial %d: numDiscardedAtStop = %d, want 0", trial, el.numDiscardedAtStop)
+		}
+		// Nothing may be emitted once run() returned: give a stray goroutine
+		// (a late flush, a leaked handoff) a moment to misbehave, then check
+		// that the count did not move (and, under -race, that nobody wrote).
+		time.Sleep(time.Millisecond)
+		if len(times) != emittedAtReturn {
+			t.Fatalf("trial %d: %d pairs emitted after run() returned", trial, len(times)-emittedAtReturn)
+		}
 	}
 }
 
@@ -361,23 +373,34 @@ func runCancelWithPairPending(t *testing.T, n, k int, viaWarning bool) (emitted,
 	return len(times), warnings
 }
 
-// TestRunSurvivesHandlerProducingTwoPairs pins that a handler breaking the
-// one-pair-per-record rule cannot deadlock the loop on the one-slot pair
-// channel: the extra pair is dropped with a warning, the first is emitted,
-// and the run goes on to the end of the stream.
-func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
-	const otherTid = emitOrderTestTid + 1
+// TestRunSurvivesHandlerProducingTooManyPairs pins that a handler breaking the
+// pairs-per-record rule cannot deadlock the loop on the pair channel. Its
+// pairChannelSlots slots hold a record's own pair plus the held interrupted
+// rows it may release first (tasks fs2, 103); one pair more is dropped with a
+// warning, the ones that fit are emitted in order, and the run goes on to the
+// end of the stream.
+func TestRunSurvivesHandlerProducingTooManyPairs(t *testing.T) {
 	const after = 3
 	el := newEmitOrderEventLoop(t)
-	el.setCachedComm(otherTid, "emitorder2")
 	var log streamLog
 	log.attach(el)
 
+	// One pair per extra tid: pairs 1..pairChannelSlots-1 fill the channel
+	// behind the record's own pair 0, and the last one (far in the future, so
+	// it would break the order if it were emitted) finds no slot.
 	gen := benchutil.NewEventGenerator()
-	otherEnter, otherExit, err := gen.NullPair(emitOrderTestTime(100), otherTid, otherTid,
-		types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
-	if err != nil {
-		t.Fatalf("NullPair error = %v", err)
+	var extraEnters, extraExits [][]byte
+	for i := 1; i <= pairChannelSlots; i++ {
+		tid, at := uint32(emitOrderTestTid+i), emitOrderTestTime(i)
+		if i == pairChannelSlots {
+			at = emitOrderTestTime(100)
+		}
+		el.setCachedComm(tid, "emitorder-extra")
+		enter, exit, err := gen.NullPair(at, tid, tid, types.SYS_ENTER_SYNC, types.SYS_EXIT_SYNC)
+		if err != nil {
+			t.Fatalf("NullPair error = %v", err)
+		}
+		extraEnters, extraExits = append(extraEnters, enter), append(extraExits, exit)
 	}
 	first := syncPairStream(t, 0, 1)
 	exitType := types.EventType(first[1][0])
@@ -386,14 +409,15 @@ func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
 	el.rawHandlers[exitType] = func(raw []byte, ch chan<- *event.Pair) {
 		exitHandler(raw, ch)
 		if !broken {
-			// Complete the other tid's pair from the same record.
+			// Complete the other tids' pairs from the same record.
 			broken = true
-			exitHandler(otherExit, ch)
+			for _, exit := range extraExits {
+				exitHandler(exit, ch)
+			}
 		}
 	}
 
-	stream := [][]byte{otherEnter, first[0], first[1]}
-	stream = append(stream, syncPairStream(t, 1, after)...)
+	stream := slices.Concat(extraEnters, first, syncPairStream(t, pairChannelSlots, after))
 	rawCh := filledRawChannel(stream)
 	close(rawCh)
 
@@ -407,20 +431,21 @@ func TestRunSurvivesHandlerProducingTwoPairs(t *testing.T) {
 	select {
 	case <-el.done:
 	case <-time.After(emitOrderTestWait):
-		t.Fatal("run() hung on a handler that produced two pairs for one record")
+		t.Fatal("run() hung on a handler that produced more pairs for one record than the channel holds")
 	}
 
-	if len(log.entries) != 1+1+after {
-		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+1+after)
+	const emitted = pairChannelSlots + after
+	if len(log.entries) != 1+emitted {
+		t.Fatalf("callbacks saw %d entries, want %d", len(log.entries), 1+emitted)
 	}
-	if !strings.Contains(log.entries[0].warning, secondPairPanic) {
+	if !strings.Contains(log.entries[0].warning, extraPairPanic) {
 		t.Fatalf("entry 0 = %+v, want the extra-pair warning", log.entries[0])
 	}
-	requireOrderedPairs(t, log.pairTimes(), 1+after)
+	requireOrderedPairs(t, log.pairTimes(), emitted)
 	// The dropped pair was produced, so it is counted in numSyscalls only.
-	if el.numSyscalls != 1+after+1 || el.numSyscallsAfterFilter != 1+after {
+	if el.numSyscalls != emitted+1 || el.numSyscallsAfterFilter != emitted {
 		t.Fatalf("numSyscalls=%d numSyscallsAfterFilter=%d, want %d and %d",
-			el.numSyscalls, el.numSyscallsAfterFilter, 1+after+1, 1+after)
+			el.numSyscalls, el.numSyscallsAfterFilter, emitted+1, emitted)
 	}
 }
 

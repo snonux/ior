@@ -990,8 +990,11 @@ failures, and eight skips (the seven kernel-limited tests plus
 `lint` and `test` pass.
 
 This does not close x4: a skip is not a pass. The remaining work is a run on a
-kernel that provides those syscalls and permits io_uring, described step by step
-in [`docs/fedora-gate-handoff.md`](../docs/fedora-gate-handoff.md).
+kernel that provides those syscalls and permits io_uring (the one-shot Fedora
+handoff checklist that used to live in `docs/fedora-gate-handoff.md` was removed
+once the modern-kernel host became the default; see
+[`integrationtests/README.md`](../integrationtests/README.md) and
+`integrationtests/kernel_support_test.go`).
 `scripts/compare-generated-handlers.py` makes the generation half of that check
 repeatable by comparing handler bodies by name and ignoring the kernel-specific
 tracepoint IDs.

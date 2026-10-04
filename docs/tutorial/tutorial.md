@@ -107,7 +107,11 @@ selected column; `s` sorts by the selected column using its default direction; `
 ### 4 · Files
 
 Press `4` for per-path counters. `d` toggles **directory grouping**, which rolls paths up to
-their parent directory.
+their parent directory. A directory row counts only the files directly in that directory
+(subdirectories get rows of their own), and `Enter` on it filters on exactly those files with
+the pattern `^dir/*` (case-sensitive; like a shell glob, `*` does not cross a `/`), so the `/`
+row selects only top-level entries such as `/etc`, not all of `/etc/passwd`'s tree. You can
+type the same `^dir/*` form in the filter modal (`f`).
 
 ![Files tab toggling directory grouping](./assets/04-files-tab.gif)
 
@@ -123,6 +127,10 @@ column.
 Press `6`. Two histograms: syscall **latency** (how long the syscall ran) and the
 inter-syscall **gap** (idle time on the same thread between syscalls). The big-write
 workload running in the background spreads the latency distribution noticeably.
+The gap is measured between consecutive *traced* calls on a thread: with syscall sampling
+(`-syscall-sampling-*` rate N), or for syscalls only counted in kernel aggregates (such as
+futex), it spans the untraced calls in between. The Overview tab's `Traced gap` mean uses
+the same samples.
 
 ![Latency + gap histograms](./assets/06-latency-gaps-tab.gif)
 
@@ -142,9 +150,14 @@ select cells and build filters.
 
 In pause mode, navigate with `j` / `k` (rows) and `←` / `→` (columns). Pressing `Enter` on
 the selected cell **pushes a new filter onto a stack** and immediately re-filters the ring
-buffer. Filters are stackable, so you can drill down: first by `Comm`, then by `Syscall`,
-then by `File`. `Esc` pops the most recent filter (LIFO); keep hitting `Esc` to undo all
-the way back.
+buffer. A `Comm`, `Syscall` or `File` cell filters on exactly that value (`^value$`, case-sensitive), so
+`read` does not also select `readv` or `READ`, and `/tmp/a` not `/tmp/ab`; numeric cells filter on
+equality, and `Gap`/`Latency` on "at least this long". Filters are stackable, so you can
+drill down: first by `Comm`, then by `Syscall`, then by `File`. `Esc` pops the most
+recent filter (LIFO); keep hitting `Esc` to undo all the way back. The `-` Latency and Ret
+cells of `exit`, `exit_group` and `rt_sigreturn` rows push no filter: these syscalls never
+return, so they have no latency or return value, and a `latency` or `ret` filter never selects
+them (see `docs/parquet-querying.md`, "Syscalls that never return").
 
 ![Pause, push two filters, undo with Esc](./assets/08-stream-pause-filter.gif)
 
@@ -179,9 +192,23 @@ Three modal pickers reshape what the rest of the TUI sees:
 
 - `p`: **PID picker** (re-opens the launch picker).
 - `t`: **TID picker** for thread-level focus.
-- `o`: **Probes** dialog: enable / disable individual syscall tracepoints.
+- `o` / `O`: **Probes** dialog (on the Flame tab, the default, `o` cycles the frame order, so use `O` there): enable / disable individual syscall tracepoints. Press `tab` inside
+  the dialog to switch between the **Syscalls** view (single probes: `space`/`enter` toggles,
+  `a` all on, `n` all off, `/` search) and the **Families** view.
 
 ![PID, TID, and probe pickers](./assets/11-pid-tid-probe.gif)
+
+The **Families** view lists all 12 syscall families with attached/total probe counts
+(`[x]` all attached, `[~]` some, `[ ]` none). `space` or `enter` detaches a family that has
+any attached probe and attaches it otherwise, with a live `attaching <family>... n/total`
+progress line while the batch runs; failures are reported (first error) without aborting
+the rest. By default only the FS family is traced, so this is the way to start tracing
+e.g. Network without restarting ior with `-trace-families`. Your runtime selection
+persists across trace restarts (PID/TID reselect, filter changes), replacing the startup
+`-trace-*` flags for the rest of the session. The `[` / `]` keys only re-scope the view to
+a family; cycling onto one with no attached probe shows
+`<Family> not traced: press O, tab, space to attach` in the status line (capital `O`
+opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the frame order).
 
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
 filtering (`-comm`, `-path`). Tracepoint subsetting on the command line uses `-tps <regex>`
@@ -233,7 +260,7 @@ count, `requested_sleep_ns`, `nfds`, or `timeout_ns` column, and pid/tid share o
 dot-separated column. Fields that may contain commas (process names, file paths) are
 CSV-quoted, so parse the rows with any CSV reader rather than a naive comma split. For the
 full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`,
-`requested_sleep_ns`, `nfds`, `timeout_ns`, ...) use the TUI stream CSV export (`e` in
+`requested_sleep_ns`, `nfds`, `timeout_ns`, `address_space_bytes`, `old_file`, `epoll_*`) use the TUI stream CSV export (`e` in
 the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
 
 ## Regenerating the demo
@@ -271,7 +298,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `R` | start / stop Parquet recording |
 | `p` | re-open PID picker |
 | `t` | open TID picker |
-| `o` | open probe selection dialog |
+| `o` / `O` | open probe selection dialog (`O` on the Flame tab, where `o` cycles the frame order; `tab` there: Syscalls / Families view; `space`/`enter` toggles a whole family) |
 | `r` | refresh dashboard snapshot |
 | `q` / `ctrl+c` | quit |
 
@@ -292,7 +319,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `g` / `G` | jump to top / tail |
 | `j`/`k` or `↑`/`↓` | move row (pause) / scroll (live) |
 | `←`/`→` or `h`/`l` | move selected column (pause only) |
-| `enter` | push cell value as filter (pause) |
+| `enter` | push cell value as exact filter (pause); on a warning row, show its whole message (`esc`/`enter` close) |
 | `esc` | pop most recent filter (LIFO) |
 | `c` | clear all stream filters |
 | `f` | open advanced filter modal |

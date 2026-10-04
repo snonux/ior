@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -14,11 +13,12 @@ import (
 	"ior/internal/flags"
 	"ior/internal/flamegraph"
 	"ior/internal/globalfilter"
-	"ior/internal/parquet"
 	"ior/internal/probemanager"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
+	"ior/internal/tracepoints"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 )
@@ -56,6 +56,9 @@ func Run(cfg flags.Config, tui TUIRunners) error {
 	if err != nil {
 		return err
 	}
+	// Before the first write of any kind: the banner itself already hits a
+	// closed stdout when the launcher exited right away (`ior ... | head -1`).
+	guardBrokenPipe(cfg)
 	printStartupBanner(cfg)
 	return newModeRegistry(deps).dispatch(cfg)
 }
@@ -115,9 +118,26 @@ func publishTestFlamesRuntime(
 	if publisher == nil {
 		return
 	}
-	publisher.SetDashboardSnapshotSource(engine)
+	publisher.SetDashboardSnapshotSource(reseedingEngine{engine})
 	publisher.SetEventStreamSource(streamBuf)
 	publisher.SetLiveTrie(liveTrie)
+}
+
+// reseedingEngine is the dashboard's stats source in the test-flames modes: a
+// Reset (the refresh key, the auto-reset cycle, a probe toggle) clears the
+// engine like it does in a real trace, and then seeds the synthetic data again,
+// because nothing else ever feeds this engine. Without it the Syscalls, Files
+// and Processes tabs showed "no data" from the first reset on (task xs2). The
+// reseed uses the same seed as the start, so the tabs look as they did at the
+// beginning of the session.
+type reseedingEngine struct {
+	*statsengine.Engine
+}
+
+// Reset clears the engine and seeds it with the synthetic test data again.
+func (r reseedingEngine) Reset() {
+	r.Engine.Reset()
+	statsengine.SeedTestStatsData(r.Engine)
 }
 
 // buildTestFlamesRuntime allocates a stats engine, stream buffer, and seeded
@@ -189,15 +209,29 @@ type tuiRuntime struct {
 	streamSrc   runtime.StreamSource
 	streamSeq   runtime.Sequencer
 	liveTrie    *flamegraph.LiveTrie
-	// recorder stays behind the one-method runtime.RowRecorder seam: the
-	// core only records rows, so parquet's wider surface (start/stop/status,
-	// the TUI's concern) cannot ripple into this wiring.
+	// recorder stays behind the narrow runtime.RowRecorder seam: the core
+	// only records rows and claims failures to report, so parquet's wider
+	// surface (start/stop/status, the TUI's concern) cannot ripple into this
+	// wiring. It is set only when there is no emitter: the emitter reads the
+	// recorder from the live bindings itself, so the plain fallback is the
+	// sole reader of this field.
 	recorder runtime.RowRecorder
+	// emitter, when non-nil, is the session's single-gate event output (push,
+	// record and recorder warning behind one session gate); the TUI's session
+	// view provides it. Nil (headless modes, fakes) leaves the print callback on
+	// the separate streamBuf.Push and recordRow calls (see rowEmitter).
+	emitter runtime.RowEmitter
 	// filterEpochFn reads the live filter epoch from the TUI-owned runtime
 	// bindings at row-stamp time, so in-place filter swaps advance the epoch
-	// recorded in parquet rows without a trace restart. Nil (headless modes
-	// without TUI bindings) stamps epoch 0.
+	// recorded in parquet rows without a trace restart. Like recorder, it is
+	// set only for the plain fallback (an emitter reads the epoch from the
+	// live bindings). Nil (headless modes without TUI bindings) stamps epoch 0.
 	filterEpochFn func() uint64
+	// samplingCounter receives the kernel counts and loss signals of the
+	// active Parquet recording's sampling totals: the session-gated recorder
+	// when the bindings' recorder keeps such totals, else nil (see
+	// recording_sampling.go).
+	samplingCounter runtime.RecordingSamplingCounter
 }
 
 // currentFilterEpoch returns the live filter epoch for parquet row stamping.
@@ -245,19 +279,42 @@ func buildTUIRuntime(cfg flags.Config, bindings runtime.TraceRuntimeBindings) (*
 func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) error {
 	// StreamBuffer returns the EventSink the core needs directly - the old
 	// read-only StreamSource return forced a downcast here, which turned a
-	// compile-time contract into a runtime failure path.
+	// compile-time contract into a runtime failure path. In the TUI it is the
+	// session's gated sink, which is also what gets published as the stream
+	// source below; it keeps the ring buffer's AppendSnapshot fast path, so
+	// the stream tab's refresh stays allocation-free.
 	if persistent := bindings.StreamBuffer(); persistent != nil {
 		rt.streamSrc = persistent
 		rt.streamBuf = persistent
+		// The single-gate emitter pushes into the bindings' own buffer, so it
+		// is only valid next to that buffer: without one the rows stay on the
+		// fresh local buffer through the plain fallback.
+		if source, ok := bindings.(runtime.RowEmitterSource); ok {
+			rt.emitter = source.RowEmitter()
+		}
 	}
 	if persistentSeq := bindings.StreamSequencer(); persistentSeq != nil {
 		rt.streamSeq = persistentSeq
 	}
-	rt.recorder = bindings.Recorder()
-	// Capture the epoch provider, not the value: the TUI advances the epoch on
-	// every filter change (including in-place swaps that never re-wire the
-	// runtime), and recorded rows must stamp the epoch current at record time.
-	rt.filterEpochFn = bindings.FilterEpoch
+	// Two owners of the row output, never both: with an emitter, the session
+	// gate reads the recorder and the filter epoch from the live bindings on
+	// every event, so those bindings are the single source of truth and the
+	// runtime keeps no copy. Only the plain fallback (plainRowEmitter) has no
+	// gate to read them through and uses the runtime's own recorder and epoch
+	// provider, captured here.
+	if rt.emitter == nil {
+		rt.recorder = bindings.Recorder()
+		// Capture the epoch provider, not the value: the TUI advances the
+		// epoch on every filter change (including in-place swaps that never
+		// re-wire the runtime), and recorded rows must stamp the epoch
+		// current at record time.
+		rt.filterEpochFn = bindings.FilterEpoch
+	}
+	// Independent of the emitter: the kernel counts reach the recording from
+	// the aggregate drain loop, not from the per-event output.
+	if counter, ok := bindings.Recorder().(runtime.RecordingSamplingCounter); ok {
+		rt.samplingCounter = counter
+	}
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
 	bindings.SetDashboardSnapshotSource(rt.snapSource)
@@ -266,18 +323,72 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	return nil
 }
 
+// warnRecorderResult reports one recorder.Record result as a stream warning
+// when it is news (see runtime.RecorderWarningText). It is the fallback for a
+// recorder without a session gate; the gap between the claim inside
+// runtime.RecorderWarningText and this delivery is harmless there because
+// nothing can retire the session in between (see runtime.WarningRecorder).
+func warnRecorderResult(el *eventLoop, rec runtime.RowRecorder, err error) {
+	el.notifyWarning(runtime.RecorderWarningText(rec, err))
+}
+
+// recordRow records one stream row and reports the result when it is news.
+// A session-gated recorder (runtime.WarningRecorder) records, claims a failure
+// and publishes its warning in one atomic step, so a session retired in the
+// middle can neither drop the warning of a failure it already claimed nor
+// consume one it can no longer show; the failure then stays with the recorder
+// for the next session or the record modal. Other recorders use the plain
+// three-step form.
+func recordRow(el *eventLoop, rec runtime.RowRecorder, row streamrow.Row, filterEpoch uint64) {
+	if gated, ok := rec.(runtime.WarningRecorder); ok {
+		gated.RecordWarning(row, filterEpoch, runtime.RecorderWarningText)
+		return
+	}
+	warnRecorderResult(el, rec, rec.Record(row, filterEpoch))
+}
+
+// rowEmitter returns the output the print callback delivers each row to: the
+// session's single-gate emitter when the bindings provided one, otherwise the
+// plain push-then-record fallback bound to el's warning sink. It is resolved
+// once per event loop, not per event.
+func (rt *tuiRuntime) rowEmitter(el *eventLoop) runtime.RowEmitter {
+	if rt.emitter != nil {
+		return rt.emitter
+	}
+	return plainRowEmitter{rt: rt, el: el}
+}
+
+// plainRowEmitter is the ungated RowEmitter: the stream push followed by
+// recordRow, for runtimes whose bindings have no session gate to share
+// (headless modes, test fakes). It reads rt's fields on every call, like the
+// print callback did before the emitter existed, so a recorder or buffer
+// swapped in after wiring is honoured.
+type plainRowEmitter struct {
+	rt *tuiRuntime
+	el *eventLoop
+}
+
+// EmitRow pushes row to the stream and records it when a recorder is wired.
+func (p plainRowEmitter) EmitRow(row streamrow.Row) {
+	p.rt.streamBuf.Push(row)
+	if p.rt.recorder != nil {
+		recordRow(p.el, p.rt.recorder, row, p.rt.currentFilterEpoch())
+	}
+}
+
 // makeTUIEventLoopConfigurer returns the func(*eventLoop) callback that wires
 // the event loop into the TUI runtime and an ownership-aware function that
 // unregisters its live-filter setter. The callback sets the initial filter,
 // installs the print callback that fans out to engine/stream/trie, and
 // registers the setter with publisher so the TUI can swap filters without
 // restarting BPF probes. A nil publisher (no TUI attached) registers nothing.
+// In TUI mode publisher is the session's bindings view, so a session that a
+// restart has already superseded registers nothing either: its setter would
+// otherwise replace the newer session's (see tui.traceSessionBindings). The
+// row emitter (or, without one, the stream buffer and recorder) in rt comes
+// from that same view, which drops the rows and warnings a stopped session
+// still pushes, so the callbacks below need no session check of their own.
 func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runtime.RuntimePublisher) (func(*eventLoop), func()) {
-	// Overflow and genuine failures are warned about independently: a shed
-	// storm must not consume the once-guard that would later surface a
-	// real recorder error in the stream.
-	var recorderOverflowWarningOnce sync.Once
-	var recorderFailureWarningOnce sync.Once
 	var unregisterLiveFilterSetter func()
 	type aggregateSink interface {
 		IngestSyscallAggregates([]statsengine.SyscallAggregate)
@@ -286,24 +397,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		// Seed the event loop's filter from config so subsequent reads via
 		// el.Filter() see the same filter the trace was started with.
 		el.SetFilter(cfg.GlobalFilter)
-		warnRecorderIssue := func(err error) {
-			if err == nil {
-				return
-			}
-			if errors.Is(err, parquet.ErrRecorderQueueFull) {
-				recorderOverflowWarningOnce.Do(func() {
-					if el.warningCb != nil {
-						el.warningCb("Parquet recorder queue full: rows are being dropped")
-					}
-				})
-				return
-			}
-			recorderFailureWarningOnce.Do(func() {
-				if el.warningCb != nil {
-					el.warningCb(fmt.Sprintf("Parquet recorder failed: %v", err))
-				}
-			})
-		}
+		emitter := rt.rowEmitter(el)
 		el.SetPrintCallback(func(ep *event.Pair) {
 			if !shouldIngestTracePair(el.Filter(), ep) {
 				ep.Recycle()
@@ -311,10 +405,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 			}
 			row := streamrow.New(rt.streamSeq.Next(), ep)
 			rt.accumulator.Ingest(ep)
-			rt.streamBuf.Push(row)
-			if rt.recorder != nil {
-				warnRecorderIssue(rt.recorder.Record(row, rt.currentFilterEpoch()))
-			}
+			emitter.EmitRow(row)
 			rt.liveTrie.Ingest(ep)
 			// Both downstream consumers snapshot the pair synchronously, so
 			// the pooled pair can be recycled immediately afterwards.
@@ -326,6 +417,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		if sink, ok := rt.snapSource.(aggregateSink); ok {
 			el.SetAggregateSink(sink)
 		}
+		wireRecordingSampling(cfg, el, rt, publisher)
 		if publisher != nil {
 			unregisterLiveFilterSetter = publisher.SetLiveFilterSetter(el.SetFilter)
 		}
@@ -339,87 +431,131 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 }
 
 // tuiTraceStarterFromRunTrace returns a runtime.TraceStarter that drives a
-// full BPF trace session from within the TUI lifecycle. It derives the
-// session config from the request's filter, allocates per-restart state via
-// buildTUIRuntime, wires the event loop via makeTUIEventLoopConfigurer, and
-// hands the request's bindings and shutdown reporter explicitly down to setup
-// (traceSetupHooks). It starts the trace in a goroutine, signalling
-// the TUI once BPF probes are attached (via startedCh) or returning an error
-// if startup fails.
-//
-// A dedicated done channel is closed by a defer when the outer function
-// returns for any reason (ctx cancellation, successful start, or startup
-// error).  The trace goroutine selects on both errCh and done when delivering
-// its result, so it can always exit regardless of which exit arm the outer
-// caller took.  A result that arrives on the done arm has no caller left to
-// return it to, so it goes to reportLateTraceError instead of being dropped -
-// unless the context was cancelled, which means the caller asked for the stop.
+// full BPF trace session from within the TUI lifecycle; each start request is
+// handled by startTUITrace.
 func tuiTraceStarterFromRunTrace(
 	baseCfg flags.Config,
 	startTrace traceRunFunc,
 ) runtime.TraceStarter {
 	return func(ctx context.Context, req runtime.TraceRequest) error {
-		shutdownReporter := req.ShutdownReporter
-		if shutdownReporter != nil && !shutdownReporter.Claim() {
-			return context.Canceled
+		return startTUITrace(ctx, req, baseCfg, startTrace)
+	}
+}
+
+// startTUITrace starts one TUI trace session. It claims the request's
+// shutdown reporter, derives the session config from the request's filter,
+// allocates per-restart state via buildTUIRuntime, wires the event loop via
+// makeTUIEventLoopConfigurer, and hands the request's bindings and shutdown
+// reporter explicitly down to setup (traceSetupHooks). The trace itself runs
+// in the background (tuiTraceLaunch.start); from then on that goroutine owns
+// completing the shutdown reporter, while every earlier return completes it
+// here.
+func startTUITrace(
+	ctx context.Context,
+	req runtime.TraceRequest,
+	baseCfg flags.Config,
+	startTrace traceRunFunc,
+) error {
+	shutdownReporter := req.ShutdownReporter
+	if shutdownReporter != nil && !shutdownReporter.Claim() {
+		return context.Canceled
+	}
+	// libbpf's output must never reach stderr while the dashboard owns the
+	// screen; its WARN lines are collected as setup warnings instead (see
+	// libbpfLogger and setupTraceInfraBPF), the rest is dropped. This only
+	// selects the mode: the previous session is cancelled without being
+	// awaited, so it may still be loading, and its warning routing is not
+	// this call's to reset.
+	setLibbpfLogging(true)
+	backgroundOwnsCompletion := false
+	defer func() {
+		if !backgroundOwnsCompletion {
+			shutdownReporter.Complete()
 		}
-		bpf.SetLoggerCbs(bpf.Callbacks{Log: func(int, string) {}})
-		backgroundOwnsCompletion := false
-		defer func() {
-			if !backgroundOwnsCompletion {
-				shutdownReporter.Complete()
-			}
-		}()
+	}()
 
-		cfg := traceConfigForRequest(baseCfg, req.Filter)
+	cfg := traceConfigForRequest(baseCfg, req)
+	rt, err := buildTUIRuntime(cfg, req.Bindings)
+	if err != nil {
+		return err
+	}
+	configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(cfg, rt, req.Bindings)
+	launch := tuiTraceLaunch{
+		cfg:                        cfg,
+		rt:                         rt,
+		configureEl:                configureEl,
+		unregisterLiveFilterSetter: unregisterLiveFilterSetter,
+		hooks:                      traceSetupHooks{probes: req.Bindings, shutdown: shutdownReporter},
+		startTrace:                 startTrace,
+	}
+	backgroundOwnsCompletion = true
+	return launch.start(ctx)
+}
 
-		rt, err := buildTUIRuntime(cfg, req.Bindings)
-		if err != nil {
-			return err
-		}
-		configureEl, unregisterLiveFilterSetter := makeTUIEventLoopConfigurer(cfg, rt, req.Bindings)
-		hooks := traceSetupHooks{probes: req.Bindings, shutdown: shutdownReporter}
-		startedCh := make(chan struct{})
-		// errCh carries at most one result from the trace goroutine to the
-		// outer select below.  done is closed on return so the goroutine can
-		// always exit even when the outer caller already left via startedCh or
-		// ctx.Done() and nobody is draining errCh.
-		errCh := make(chan error)
-		done := make(chan struct{})
-		defer close(done)
+// tuiTraceLaunch bundles everything one background TUI trace run needs.
+type tuiTraceLaunch struct {
+	cfg                        flags.Config
+	rt                         *tuiRuntime
+	configureEl                func(*eventLoop)
+	unregisterLiveFilterSetter func()
+	hooks                      traceSetupHooks
+	startTrace                 traceRunFunc
+}
 
-		backgroundOwnsCompletion = true
-		go func() {
-			defer shutdownReporter.Complete()
-			err := startTrace(ctx, cfg, startedCh, configureEl, hooks)
-			unregisterLiveFilterSetter()
-			// Deliver the result only if the caller is still selecting.
-			// done is closed when the outer function returns, so the goroutine
-			// will always proceed through this select and never block.
-			select {
-			case errCh <- err:
-			case <-done:
-				reportLateTraceError(ctx, rt, err)
-			}
-		}()
+// start runs the trace in a goroutine and waits until the BPF probes are
+// attached (startedCh), startup fails, or ctx is cancelled.
+//
+// A dedicated done channel is closed by a defer when start returns for any
+// reason (ctx cancellation, successful start, or startup error). The trace
+// goroutine selects on both errCh and done when delivering its result, so it
+// can always exit regardless of which exit arm start took.
+func (l tuiTraceLaunch) start(ctx context.Context) error {
+	startedCh := make(chan struct{})
+	// errCh carries at most one result from the trace goroutine to the select
+	// below. done is closed on return so the goroutine can always exit even
+	// when start already left via startedCh or ctx.Done() and nobody is
+	// draining errCh.
+	errCh := make(chan error)
+	done := make(chan struct{})
+	defer close(done)
 
-		select {
-		case <-ctx.Done():
+	go l.run(ctx, startedCh, errCh, done)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-startedCh:
+		return nil
+	case err := <-errCh:
+		// A stop that races the failure leaves both this arm and
+		// ctx.Done() ready, and Go picks between them at random, so this
+		// one has to apply the same rule: the user asked for the trace to
+		// end. Returning the failure instead raises TracingErrorMsg
+		// against the *next* session, clearing its attach spinner and
+		// showing it an error the previous trace produced.
+		if ctx.Err() != nil {
 			return ctx.Err()
-		case <-startedCh:
-			return nil
-		case err := <-errCh:
-			// A stop that races the failure leaves both this arm and
-			// ctx.Done() ready, and Go picks between them at random, so this
-			// one has to apply the same rule: the user asked for the trace to
-			// end. Returning the failure instead raises TracingErrorMsg
-			// against the *next* session, clearing its attach spinner and
-			// showing it an error the previous trace produced.
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
 		}
+		return err
+	}
+}
+
+// run is the trace goroutine body. It completes the shutdown reporter when it
+// exits. A result that arrives after start has returned (the done arm) has no
+// caller left to return it to, so it goes to reportLateTraceError instead of
+// being dropped - unless the context was cancelled, which means the caller
+// asked for the stop.
+func (l tuiTraceLaunch) run(ctx context.Context, startedCh chan<- struct{}, errCh chan<- error, done <-chan struct{}) {
+	defer l.hooks.shutdown.Complete()
+	err := l.startTrace(ctx, l.cfg, startedCh, l.configureEl, l.hooks)
+	l.unregisterLiveFilterSetter()
+	// Deliver the result only if start is still selecting. done is closed
+	// when start returns, so the goroutine will always proceed through this
+	// select and never block.
+	select {
+	case errCh <- err:
+	case <-done:
+		reportLateTraceError(ctx, l.rt, err)
 	}
 }
 
@@ -470,18 +606,36 @@ func shouldIngestTracePair(filter globalfilter.Filter, pair *event.Pair) bool {
 }
 
 // traceConfigForRequest returns the config one TUI trace session runs with:
-// baseCfg with the request's filter applied. A nil filter keeps baseCfg's
-// filter and PID/TID scope as configured; a non-nil one replaces the global
-// filter with a clone (so the caller may keep mutating its own copy) and
-// derives the scope from it.
-func traceConfigForRequest(baseCfg flags.Config, filter *globalfilter.Filter) flags.Config {
+// baseCfg with the request's filter and probe selection applied. A nil filter
+// keeps baseCfg's filter and PID/TID scope as configured; a non-nil one
+// replaces the global filter with a clone (so the caller may keep mutating its
+// own copy) and derives the scope from it. The probe selection is applied by
+// applyProbeSelection.
+func traceConfigForRequest(baseCfg flags.Config, req runtime.TraceRequest) flags.Config {
 	cfg := baseCfg
-	if filter == nil {
+	applyProbeSelection(&cfg, req.AttachSyscalls)
+	if req.Filter == nil {
 		return cfg
 	}
-	cfg.GlobalFilter = filter.Clone()
+	cfg.GlobalFilter = req.Filter.Clone()
 	applyTraceScopeFromGlobalFilter(&cfg, cfg.GlobalFilter)
 	return cfg
+}
+
+// applyProbeSelection replaces the configured tracepoint selector with one
+// attaching exactly syscalls when the TUI carried a runtime probe selection
+// into this session (non-nil, see runtime.TraceRequest.AttachSyscalls); nil
+// keeps the startup -trace-* / -tps selection. Only attachment changes: the
+// sampling rates are configured for every syscall at load time
+// (buildSyscallSamplingRates walks all trace IDs, not just attached ones), so
+// a syscall attached through the selection - or later at runtime from the
+// probes modal - gets the same sampling / aggregate-only treatment as one
+// attached through the startup flags.
+func applyProbeSelection(cfg *flags.Config, syscalls []string) {
+	if syscalls == nil {
+		return
+	}
+	cfg.TracepointSelector = tracepoints.SelectorForSyscalls(syscalls)
 }
 
 func applyTraceScopeFromGlobalFilter(cfg *flags.Config, filter globalfilter.Filter) {
@@ -513,10 +667,14 @@ func runTrace(cfg flags.Config) error {
 func newEventLoopConfig(cfg flags.Config) eventLoopConfig {
 	return eventLoopConfig{
 		pidFilter:               cfg.PidFilter,
+		tidFilter:               cfg.TidFilter,
 		filter:                  traceFilterFromConfig(cfg),
 		pprofEnable:             cfg.PprofEnable,
 		plainMode:               cfg.PlainMode,
+		escapeMode:              cfg.EscapeMode,
 		aggregateIngestTraceIDs: buildAggregateIngestTraceIDs(cfg),
+		samplingRates:           rawModeSamplingRates(cfg),
+		samplingFamilyRates:     rawModeSamplingFamilyRates(cfg),
 	}
 }
 
@@ -551,7 +709,7 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 	}
 
 	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(signalCh, shutdownSignals(cfg)...)
 	stopSignals := func() {
 		signal.Stop(signalCh)
 	}
@@ -566,18 +724,86 @@ func setupTraceContext(parentCtx context.Context, cfg flags.Config, logln func(.
 	return ctx, cancel, stopSignals
 }
 
+// shutdownSignals lists the signals that end a trace gracefully, so the
+// recorder is finalised and the output published instead of the process
+// dying with the recording unwritten. SIGINT/SIGTERM apply everywhere. SIGHUP
+// (the controlling terminal or SSH session went away, e.g. a dropped
+// connection or a closed terminal window) is added for the headless modes
+// only: there it used to kill the process before -flamegraph/-parquet wrote
+// anything. In TUI mode this handler is not what ends the program: the TUI
+// owns terminal teardown and routes SIGTERM/SIGINT/SIGHUP through its own quit
+// path (tui.watchTerminationSignals: first signal = the 'q' cleanup, a later
+// one aborts a hung shutdown; task rr2) so an active 'R' recording is
+// finalised, which is why SIGHUP is not added here.
+//
+// SIGHUP is claimed only when the process did not start with it ignored.
+// signal.Notify installs a handler even over an inherited SIG_IGN, which would
+// silently undo `nohup ior -flamegraph -duration 3600 &` (or a shell wrapper
+// that traps HUP to nothing): the run would end at the first hangup instead of
+// surviving it as the user asked. signal.Ignored reflects that inherited state as long as
+// nothing has called Notify for SIGHUP yet, which holds here because this runs
+// before the only Notify that can name it.
+func shutdownSignals(cfg flags.Config) []os.Signal {
+	return shutdownSignalsFor(cfg, signal.Ignored(syscall.SIGHUP))
+}
+
+// shutdownSignalsFor is shutdownSignals with the process's SIGHUP disposition
+// passed in, so the decision is testable without touching process signal state.
+func shutdownSignalsFor(cfg flags.Config, sighupIgnored bool) []os.Signal {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if shouldAutoStopByDuration(cfg) && !sighupIgnored {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	return sigs
+}
+
+// guardBrokenPipe makes a write to a closed stdout/stderr return EPIPE instead
+// of terminating the process, for the file-output headless modes
+// (-flamegraph, -parquet). Go's default is to die from SIGPIPE on a broken
+// fd 1 or 2, which happens as soon as the reader of `ior ... | head` or
+// `ior ... 2>&1 | grep -m1 ...` exits - long before the recording is written,
+// and again on the very last "Shutdown complete." line, which would turn a
+// finished run into a death by signal. Every status write to those fds
+// discards its error, so ignoring the signal loses nothing and lets the
+// recording finish.
+//
+// It is installed once from Run and never undone: the process ends with Run,
+// and the teardown logging after the trace (which outlives any per-trace
+// signal registration) needs the guard too. -plain is deliberately excluded:
+// its product IS the stream on stdout, and dying on a closed reader is the
+// right Unix behaviour there. Notify without a reader is enough: the runtime
+// drops what a full channel cannot take, and the mere registration is what
+// switches off the die-on-SIGPIPE default.
+func guardBrokenPipe(cfg flags.Config) {
+	if cfg.PlainMode || !(cfg.FlamegraphOutput || isHeadlessParquetMode(cfg)) {
+		return
+	}
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
 func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configure func(*eventLoop)) {
 	if configure != nil {
 		configure(el)
 	}
-	origPrintCb := el.printCb
-	el.SetPrintCallback(func(ep *event.Pair) {
-		if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
-			ep.Recycle()
-			return
-		}
-		if origPrintCb != nil {
-			origPrintCb(ep)
+	// The active-probe filter sits in front of whatever callback is now
+	// installed. It must wrap rather than replace via SetPrintCallback: when
+	// configure left the default -plain sink in place, replacing would drop
+	// the sink's flusher, and the buffered rows would then only leave in 64 KiB
+	// chunks and never at shutdown. Modes whose configure installed their own
+	// callback already dropped the flusher through SetPrintCallback.
+	//
+	// The syscalls of the raw syscall prototype (IOR_RAW_SYSCALLS, task 703)
+	// are not in the manager at all, so they pass on its say-so instead.
+	el.WrapPrintCallback(func(next func(*event.Pair)) func(*event.Pair) {
+		return func(ep *event.Pair) {
+			name := ep.EnterEv.GetTraceId().Name()
+			if !mgr.IsActive(name) && !rawSyscallTracedByPrototype(name) {
+				ep.Recycle()
+				return
+			}
+			if next != nil {
+				next(ep)
+			}
 		}
 	})
 }
@@ -605,11 +831,12 @@ func startTraceShutdownWatcher(ctx context.Context, verbose bool, el *eventLoop,
 // maybePrependFlamegraphConfigure wraps configure so that, when flamegraph
 // output is requested, each event pair is also forwarded to the recorder.
 // Returns the (possibly wrapped) configure func and the recorder (or nil).
+// The recorder's cap on distinct records is -flamegraph-max-keys (task rs2).
 func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop)) (func(*eventLoop), *flamegraph.Recorder) {
 	if !cfg.FlamegraphOutput {
 		return configure, nil
 	}
-	recorder := flamegraph.NewRecorder(cfg.OutputName)
+	recorder := flamegraph.NewRecorderWithMaxKeys(cfg.OutputName, cfg.FlamegraphMaxKeys)
 	recordOutput := func(el *eventLoop) {
 		el.SetPrintCallback(func(ep *event.Pair) {
 			recorder.AddPair(ep)
@@ -629,23 +856,69 @@ func maybePrependFlamegraphConfigure(cfg flags.Config, configure func(*eventLoop
 // the caller's.
 func runTraceLoop(infra *traceInfra, verbose bool, configure func(*eventLoop), logln func(...any)) time.Duration {
 	configureEventLoopOutput(infra.el, infra.mgr, configure)
+	// A failed stdout write ends the trace instead of tracing on into the void.
+	infra.el.stopTrace = infra.cancel
+	// A failure during an already-cancelled trace is the shutdown flush
+	// failing: the warning must not claim the trace is being stopped then.
+	infra.el.traceEnding = func() bool { return infra.ctx.Err() != nil }
+	// A headless -pid / -tid run ends with its target (strace -p semantics)
+	// instead of idling to -duration and later tracing a recycled id; verbose
+	// is true for exactly the headless modes. The TUI keeps its session open
+	// (see eventLoop.endTraceOnTargetExit). Two triggers: the exit records
+	// here (the -pid process's group-dead record; for -tid the thread's own
+	// exit record and, when the target is a leader, the group-dead record of
+	// its process, which ends the run whichever task holds the tid by then),
+	// and the liveness watcher started below for the records that never
+	// arrive (dropped, or the target died during the probe attach).
+	infra.el.stopOnTargetExit = verbose && !targetExitRecordDisabled()
 	// The watcher's done channel is drained below: returning while it is
 	// still running would leak it when ctx is cancelled but the goroutine has
 	// not yet exited.
 	watcherDone := startTraceShutdownWatcher(infra.ctx, verbose, infra.el, infra.profiling, logln)
 
+	stopTargetWatch := startTargetLivenessWatcher(infra, verbose)
 	startTime := time.Now()
 	infra.el.run(infra.ctx, infra.ch)
 	totalDuration := time.Since(startTime)
 	<-watcherDone
+	stopTargetWatch()
 	<-infra.profiling.done
 	return totalDuration
 }
 
+// startTargetLivenessWatcher starts the fallback trigger for a headless -pid
+// or -tid run (watchTargetLiveness): it polls infra.targetGone, which
+// runTraceWithContext set up before the probes attached, so a target whose
+// exit record never reaches the loop (ring-buffer drop, death during the
+// attach) still ends the run. Nothing starts for the TUI or without a
+// liveness function, nor under the IOR_TEST_DISABLE_TARGET_WATCH test hook
+// (targetWatchDisabled). The returned func stops the watcher and waits for
+// it, so no goroutine outlives runTraceLoop; call it once the event loop
+// returned.
+func startTargetLivenessWatcher(infra *traceInfra, verbose bool) (stop func()) {
+	if !verbose || infra.targetGone == nil || targetWatchDisabled() {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(infra.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		infra.el.watchTargetLiveness(ctx, targetWatchInterval, infra.targetGone)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 // finaliseTrace flushes the flamegraph recorder if one was created and logs
-// the total run duration. It runs after runTraceLoop has returned.
-func finaliseTrace(recorder *flamegraph.Recorder, totalDuration time.Duration, logln func(...any)) error {
+// the total run duration. It runs after runTraceLoop has returned, which is
+// what makes samples final: the recording's header carries them, so a run that
+// sampled says so and keeps the exact totals (a run that sampled nothing passes
+// the zero Summary and writes the plain format).
+func finaliseTrace(recorder *flamegraph.Recorder, samples sampling.Summary, totalDuration time.Duration, logln func(...any)) error {
 	if recorder != nil {
+		recorder.SetSampling(samples)
 		if err := recorder.Write(); err != nil {
 			return err
 		}
@@ -671,7 +944,10 @@ type traceRunFunc func(
 
 // probeManagerPublisher is the one publisher method trace setup needs: handing
 // the attached probe manager to the TUI probes view (and clearing it on
-// release). runtime.RuntimePublisher satisfies it.
+// release). runtime.RuntimePublisher satisfies it. In TUI mode it is the
+// session-scoped view of the TUI bindings, which drops the publish and the
+// clear of a session a newer one has superseded, so trace setup can publish
+// and clear unconditionally.
 type probeManagerPublisher interface {
 	SetProbeManager(manager runtime.ProbeManager)
 }
@@ -697,15 +973,39 @@ func runTraceWithContext(parentCtx context.Context, cfg flags.Config, started ch
 	verbose := started == nil
 	logln := newLogger(verbose)
 	configure, recorder := maybePrependFlamegraphConfigure(cfg, configure)
+	// Before BPF setup and the trace itself: an output that cannot be written
+	// (unwritable directory, name the filesystem rejects) must fail now, not
+	// after -duration seconds of tracing with nothing saved. Nil (no
+	// -flamegraph) is a no-op.
+	if err := recorder.Prepare(); err != nil {
+		return err
+	}
+
+	// Opened before the probes attach (about five seconds): a target that dies
+	// in that window leaves no exit record, and only a snapshot of the process
+	// taken now can tell a recycled pid from the original (targetWatch).
+	watch := openHeadlessTargetWatch(cfg, verbose)
+	defer watch.Close()
 
 	infra, err := setupTraceInfra(parentCtx, cfg, started, hooks, logln)
 	if err != nil {
 		return err
 	}
 	defer infra.Close()
+	watch.attachTo(infra)
 
 	totalDuration := runTraceLoop(infra, verbose, configure, logln)
-	return finaliseTrace(recorder, totalDuration, logln)
+	// The event loop has returned, so the sampling totals are final.
+	return traceResult(infra.el, finaliseTrace(recorder, infra.el.samplingResult(), totalDuration, logln))
+}
+
+// traceResult is the error of a finished trace run: the -plain sink's write
+// error (nil in every other mode) joined with the finalisation error. A run
+// whose rows could not be written must not exit 0, and a failing flamegraph
+// write must not hide it (or vice versa), hence errors.Join rather than
+// "first non-nil". Call it only after the event loop has returned.
+func traceResult(el *eventLoop, finaliseErr error) error {
+	return errors.Join(el.outputError(), finaliseErr)
 }
 
 // traceInfra is the runtime infrastructure of one trace run - BPF module and
@@ -746,6 +1046,40 @@ type traceInfra struct {
 	shutdownLog func(...any)
 	progress    func(completed, total int)
 	releasing   func()
+
+	// targetGone reports that the -pid process or -tid thread exited or its id
+	// was recycled (targetWatch.gone); nil when there is nothing to watch (no
+	// -pid / -tid, the TUI). Set by runTraceWithContext, whose watch predates the probe attach.
+	targetGone func() bool
+
+	// renameProbeAttached records that the task_rename probe attached during
+	// setup (bpfSetupLog.attached through handProbeAttachRecorder); runTraceSetup
+	// hands it to the event loop
+	// (eventLoop.trustRenameRecords) once that exists.
+	renameProbeAttached bool
+
+	// signalProbeAttached records that the signal_deliver probe attached
+	// during setup (signalAttachRecorder); runTraceSetup hands it to the
+	// event loop (eventLoop.foldProvenRestarts).
+	signalProbeAttached bool
+
+	// exitProbeAttached records that the sched_process_exit probe attached
+	// during setup (exitAttachRecorder). The restart folds need it too:
+	// that probe is what makes BPF forget a task that died with a call
+	// pending (eventLoop.foldProvenRestarts).
+	exitProbeAttached bool
+
+	// execProbeAttached records that the sched_process_exec probe attached
+	// during setup (execAttachRecorder); runTraceSetup hands it to the
+	// event loop (eventLoop.trustExecRecords), which judges a successful
+	// exec exit without an enter by whether an exec record can be missing.
+	execProbeAttached bool
+
+	// fileIdentCaptured records that the loaded BPF object writes the file
+	// identity words of its records (bpfSetupLog.fileIdent); runTraceSetup
+	// hands it to the event loop (applyProbeCapabilities,
+	// eventLoop.trustFileIdents).
+	fileIdentCaptured bool
 
 	cleanups []func()
 }
@@ -810,7 +1144,17 @@ func setupTraceInfra(
 // setupTraceInfraWithEventLoop owns the setup sequence shared by interactive,
 // raw, and headless Parquet traces. The factory preserves the one intentional
 // mode difference: regular traces wire the syscall aggregate source, while
-// headless Parquet has no aggregate sink and leaves that source unwired.
+// headless Parquet wires it only when the run samples (it has no TUI aggregate
+// sink, so nothing else would consume it).
+//
+// It also owns the setup warning collector, because a failed setup is the one
+// moment the collector would otherwise be lost: the warnings are replayed
+// only when the event loop starts, so on failure runTraceSetup returns early
+// and the libbpf WARN lines that explain the failed load or attach (the
+// returned error is often just "failed to load BPF object: -22") never
+// reached the user, least of all in the TUI where stderr is not available.
+// Every failure therefore leaves through explainFailure, which appends the
+// still-undelivered warnings (bounded and escaped) to the error.
 func setupTraceInfraWithEventLoop(
 	parentCtx context.Context,
 	cfg flags.Config,
@@ -819,43 +1163,93 @@ func setupTraceInfraWithEventLoop(
 	logln func(...any),
 	buildEventLoop traceEventLoopFactory,
 ) (*traceInfra, error) {
-	// Reject a filter the trace cannot honour before touching the kernel:
-	// newEventLoop below matches comm/path patterns against fixed-size kernel
-	// event fields and refuses over-long ones. Doing it here means the caller
-	// gets that error instead of a running trace that never matches, and it
-	// costs no probe attach/detach cycle.
+	warnings := &setupWarnings{}
+	infra, err := runTraceSetup(parentCtx, cfg, started, hooks, logln, buildEventLoop, warnings)
+	if err != nil {
+		return nil, warnings.explainFailure(err)
+	}
+	return infra, nil
+}
+
+// runTraceSetup is the setup sequence itself; setupTraceInfraWithEventLoop
+// wraps it to attach the collected warnings to a failure.
+// The BPF load/attach half lives in setupTraceInfraBPF; the filter guard, the
+// event-loop build, its wiring and the start signal stay in this body because
+// the structural tests (ior_setup_test.go, console_routing_test.go,
+// ior_trace_wiring_test.go, eventloop_newtask_recheck_test.go) pin their
+// statements and relative order here. The steps, in order:
+//
+//   - Reject a filter the trace cannot honour before touching the kernel:
+//     newEventLoop matches comm/path patterns against fixed-size kernel event
+//     fields and refuses over-long ones. Doing it first means the caller gets
+//     that error instead of a running trace that never matches, and it costs
+//     no probe attach/detach cycle.
+//   - Non-fatal setup degradations are collected (warnSetup) and replayed as
+//     event-loop warnings once output is wired (see setupWarnings); on failure
+//     the caller appends them to the returned error instead.
+//   - Load and attach (setupTraceInfraBPF), start the runtime.
+//   - Warn if the boottime offset of ior's time namespace is unknown
+//     (warnUnknownBootClock, task y13), then build the loop. Both add to the
+//     collected warnings, so both come before the wiring that drains them: a
+//     warning added after wireEventLoopLogging is shown to nobody when setup
+//     succeeds (pinned by TestTraceSetupCollectsNoWarningAfterTheDrain).
+//   - Wire the loop: logging right after it is stored; sampling reported only
+//     for syscalls that really attached (raw modes; a no-op for the TUI, which
+//     has no tally); the probe manager's runtime changes reported to the
+//     loop, which then keeps the restart folds off the calls interrupted
+//     before one (task o03) and holds no stopped sleep's row while
+//     restart_syscall's probes are off (task 023; the loop asks IsActive
+//     once, for the state it starts from) - only when the manager was
+//     published to a TUI
+//     (hooks.probes, the same test attachSessionProbes calls headless): no
+//     headless run can change a probe, and listening is not free, it starts
+//     with a stamp that refuses the folds of every call interrupted before
+//     it; a manager published to nobody is the other case, a trace set that
+//     is final, which the loop is told so that it does not hold a stopped
+//     sleep's row for a restart_syscall the run does not trace (task u13).
+//   - Tell the loop what the BPF setup can vouch for
+//     (applyProbeCapabilities), after the factory because two of those
+//     decisions rest on the drop counter it wires: whether the rename
+//     records are complete (task xr2), which of the hand-attached
+//     probes attached - the restart folds are on only when the
+//     signal_deliver and sched_process_exit probes attached, the
+//     re-execution fold only with the counter besides (foldProvenRestarts,
+//     tasks 103 and t13), and exec records count as complete only when the
+//     sched_process_exec probe did (trustExecRecords, task v13), which is
+//     what lets a successful exec exit without an enter adopt another
+//     thread's enter only on a counted drop - and whether the loaded object
+//     writes the file identity words (trustFileIdents, task 603).
+//   - Signal the start last. Nothing fallible may follow: every step above
+//     still reaches the caller through err, and in TUI mode that is the only
+//     path an error has - once started is closed the starter has already
+//     reported success and nobody is left to receive one. Pinned by
+//     TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
+func runTraceSetup(
+	parentCtx context.Context,
+	cfg flags.Config,
+	started chan<- struct{},
+	hooks traceSetupHooks,
+	logln func(...any),
+	buildEventLoop traceEventLoopFactory,
+	warnings *setupWarnings,
+) (*traceInfra, error) {
 	if err := traceFilterFromConfig(cfg).ValidateTracepointFields(); err != nil {
 		return nil, err
 	}
-
-	// Teardown errors must stay visible in every mode: the mode-dependent
-	// logln is a no-op in TUI mode, which previously silently discarded
-	// probe-detach failures (audit domain-10 F2).
-	logTeardown := newLogger(true)
-	// Non-fatal setup degradations are collected and replayed as event-loop
-	// warnings once output is wired (see setupWarnings).
-	warnings := &setupWarnings{}
 	warnSetup := warnings.add
-
-	bpfModule, mgr, releaseBindings, err := setupBPFModule(cfg, hooks.probes, bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown})
+	infra, bpfModule, err := setupTraceInfraBPF(parentCtx, cfg, hooks, logln, warnSetup)
 	if err != nil {
 		return nil, err
 	}
-
-	infra := newTraceInfra(mgr, hooks.shutdown, logln)
-	// The BPF side is released as one unit in closeTraceInfra's canonical
-	// order (ring buffer, probes, bindings, module, signal handler), which is
-	// why it is one cleanup rather than one per resource. Registering it here
-	// is what detaches the probes on every later abort (audit domain-10 F3).
-	infra.onClose(func() {
-		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, bpfModule, infra.stopSignals, infra.progress, infra.releasing)
-	})
-
 	if err := infra.setupRuntime(parentCtx, cfg, bpfModule, started, logln); err != nil {
 		infra.Close()
 		return nil, err
 	}
-
+	// The loop orders its own boot-clock readings against record times; say so
+	// if a time namespace's offset between the two is unknown. Here and not
+	// further down: wireEventLoopLogging drains the collector, and nothing
+	// replays what is added after that.
+	warnUnknownBootClock(warnSetup)
 	el, err := buildEventLoop(cfg, bpfModule, warnSetup)
 	if err != nil {
 		infra.Close()
@@ -863,14 +1257,190 @@ func setupTraceInfraWithEventLoop(
 	}
 	infra.el = el
 	wireEventLoopLogging(el, logln, warnings)
-
-	// Nothing fallible may follow. Every step above still reaches the caller
-	// through err, and in TUI mode that is the only path an error has: once
-	// started is closed the starter has already reported success and nobody is
-	// left to receive one. Pinned by
-	// TestSetupTraceInfraSignalsStartAfterEveryFallibleStep.
+	if infra.mgr != nil {
+		el.restrictSamplingToActive(infra.mgr.IsActive)
+	}
+	if infra.mgr != nil && hooks.probes != nil {
+		el.watchProbeChanges(infra.mgr.SetChangeHook, infra.mgr.IsActive)
+	}
+	if infra.mgr != nil && hooks.probes == nil {
+		el.traceSetIsFinal(infra.mgr.IsActive)
+	}
+	applyProbeCapabilities(el, infra)
 	signalTraceStarted(started)
 	return infra, nil
+}
+
+// applyProbeCapabilities tells the loop what this run's BPF setup can vouch
+// for, each a decision the loop makes per record and gets wrong if it
+// assumes: the rename records are complete only when the task_rename probe
+// attached (trustRenameRecords, task xr2); the restart folds are on only when
+// the signal_deliver and sched_process_exit probes attached, the
+// re-execution fold only with the drop counter besides (foldProvenRestarts,
+// tasks 103 and t13); exec records count as complete only when the
+// sched_process_exec probe did (trustExecRecords, task v13); and the file
+// identity words are read only when the loaded object writes them
+// (trustFileIdents, task 603); and a lost enter or exit half is judged
+// only for calls begun after the attach (judgeHalvesFrom, task c23).
+// runTraceSetup calls it after the factory,
+// which wires the drop counter two of them read, and before the start
+// signal, after which the loop may already consume records. Nothing here can
+// fail.
+func applyProbeCapabilities(el *eventLoop, infra *traceInfra) {
+	el.trustRenameRecords(infra.renameProbeAttached)
+	el.foldProvenRestarts(infra.signalProbeAttached, infra.exitProbeAttached)
+	el.trustExecRecords(infra.execProbeAttached)
+	el.trustFileIdents(infra.fileIdentCaptured)
+	// The initial attach is over (setupTraceInfraBPF ran before the loop
+	// was built): a half of a call begun before now may have had its probe
+	// still off, and is not counted as lost (task c23).
+	el.judgeHalvesFrom(bootClockNs())
+}
+
+// setupTraceInfraBPF loads the BPF module, attaches the probes (publishing the
+// probe manager to hooks.probes), and returns the new traceInfra that owns
+// their release, with its shutdown progress wired to hooks.shutdown. Status
+// output goes to logln and non-fatal degradations to warnSetup. On failure
+// nothing is left attached and no infra is returned.
+func setupTraceInfraBPF(
+	parentCtx context.Context,
+	cfg flags.Config,
+	hooks traceSetupHooks,
+	logln func(...any),
+	warnSetup func(...any),
+) (*traceInfra, *bpf.Module, error) {
+	// Teardown errors must stay visible in every mode: the mode-dependent
+	// logln is a no-op in TUI mode, which previously silently discarded
+	// probe-detach failures (audit domain-10 F2).
+	logTeardown := newLogger(true)
+	// libbpf's WARN lines explain a failed load or attach. In TUI mode they
+	// join the setup warnings for the duration of the load/attach only (the
+	// collector is drained once: when the event loop starts, or into the
+	// error of a failed setup); headless they already went to stderr and
+	// this is a no-op. The route belongs to this
+	// call: ending it never disturbs a newer session's routing.
+	endLibbpfRouting := libbpfLog.routeWarnings(warnSetup)
+	defer endLibbpfRouting()
+	var handAttach handProbeAttachRecorder
+	noteAttached := handAttach.note
+	var fileIdentCaptured bool
+	noteFileIdent := func(captured bool) { fileIdentCaptured = captured }
+	bpfModule, mgr, releaseBindings, err := setupBPFModule(parentCtx, cfg, hooks.probes,
+		bpfSetupLog{status: logln, warn: warnSetup, teardown: logTeardown, attached: noteAttached, fileIdent: noteFileIdent})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	infra := newTraceInfra(mgr, hooks.shutdown, logln)
+	infra.fileIdentCaptured = fileIdentCaptured
+	infra.renameProbeAttached = handAttach.rename.attached
+	infra.signalProbeAttached = handAttach.signal.attached
+	infra.exitProbeAttached = handAttach.exit.attached
+	infra.execProbeAttached = handAttach.exec.attached
+	// The BPF side is released as one unit in closeTraceInfra's canonical
+	// order (ring buffer, probes, bindings, module, signal handler), which is
+	// why it is one cleanup rather than one per resource. Registering it here
+	// is what detaches the probes on every later abort (audit domain-10 F3).
+	// The module goes through libbpfModuleCloser, which takes it off the
+	// list of attached programs before it closes their fds (task 723).
+	infra.onClose(func() {
+		closeTraceInfra(logTeardown, infra.rb, mgr, releaseBindings, libbpfModuleCloser{bpfModule}, infra.stopSignals, infra.progress, infra.releasing)
+	})
+	return infra, bpfModule, nil
+}
+
+// handProbeAttachRecorder is setupTraceInfraBPF's bpfSetupLog.attached sink:
+// it shows every hand-written probe that attached to the recorders whose
+// facts the event loop needs.
+type handProbeAttachRecorder struct {
+	rename renameAttachRecorder
+	signal signalAttachRecorder
+	exit   exitAttachRecorder
+	exec   execAttachRecorder
+}
+
+// note records one probe that attached (called by attachHandProbe).
+func (r *handProbeAttachRecorder) note(probeName string) {
+	r.rename.note(probeName)
+	r.signal.note(probeName)
+	r.exit.note(probeName)
+	r.exec.note(probeName)
+}
+
+// renameAttachRecorder remembers whether the task_rename probe was among the
+// probes that attached.
+// That one fact is what lets the event loop trust rename records and skip the
+// newtask seed's corrective /proc read (eventLoop.trustRenameRecords, task
+// xr2), so a sink that never turned it on would silently disable the
+// optimisation, and one that turned it on for any other probe would skip the
+// read with no rename record to replace it. Pinned by
+// TestRenameAttachRecorderNotesOnlyTheRenameProbe.
+type renameAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *renameAttachRecorder) note(probeName string) {
+	if probeName == taskRenameProbeName {
+		r.attached = true
+	}
+}
+
+// signalAttachRecorder is the same for the signal_deliver probe: it remembers
+// whether that probe was among the probes that attached. Only then does BPF
+// see every handler delivered to an interrupted task, which is what makes its
+// RESUME record a proof (eventLoop.foldProvenRestarts, tasks 103 and t13); a
+// sink that turned it on for any other probe would fold a program's own retry
+// after EINTR into the interrupted call, or a later call's restart_syscall
+// into a sleep a handled signal ended. Pinned by
+// TestSignalAttachRecorderNotesOnlyTheSignalProbe.
+type signalAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *signalAttachRecorder) note(probeName string) {
+	if probeName == signalDeliverProbeName {
+		r.attached = true
+	}
+}
+
+// exitAttachRecorder remembers whether the sched_process_exit probe was among
+// the probes that attached. Its program is where BPF forgets the pending
+// restart of a dying task (ior_restart_forget in internal/c/restart.c); a run
+// without it would let a recycled tid inherit the dead task's entry, so the
+// restart folds are switched on only when it attached as well
+// (eventLoop.foldProvenRestarts, tasks 103 and t13). Pinned by
+// TestExitAttachRecorderNotesOnlyTheExitProbe.
+type exitAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *exitAttachRecorder) note(probeName string) {
+	if probeName == processExitProbeName {
+		r.attached = true
+	}
+}
+
+// execAttachRecorder remembers whether the sched_process_exec probe was among
+// the probes that attached. Only then does every exec of a traced task leave
+// an exec record or a counted drop, which is what lets the event loop refuse
+// to pair a successful exec exit that has no enter with another thread's
+// exec enter when nothing was dropped (eventLoop.trustExecRecords, task
+// v13). A sink that turned it on for any other probe would refuse every such
+// exit in a run without exec records, where that pairing is the only way a
+// non-leader thread's exec gets its row. Pinned by
+// TestExecAttachRecorderNotesOnlyTheExecProbe.
+type execAttachRecorder struct {
+	attached bool
+}
+
+// note records one probe that attached.
+func (r *execAttachRecorder) note(probeName string) {
+	if probeName == processExecProbeName {
+		r.attached = true
+	}
 }
 
 // newTraceInfra returns the still-empty infrastructure of one run, with its
@@ -948,14 +1518,49 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(.
 	if err != nil {
 		return nil, err
 	}
-	aggregateConsumer, err := newSyscallAggregateConsumer(bpfModule)
+	aggregateSrc, err := openAggregateSource(bpfModule)
 	if err != nil {
 		return nil, err
 	}
-	el.aggregateSrc = aggregateConsumer
+	el.aggregateSrc = aggregateSrc
 	// Deliberately non-fatal, see attachRingbufDropCounter.
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
+	attachRingbufUnreadReader(el, bpfModule, warnSetup)
+	attachRestartPendingMap(el, bpfModule)
 	return el, nil
+}
+
+// attachRestartPendingMap gives the event loop the kernel's
+// restart_pending_map to clear when a syscall's probes are attached or
+// detached at runtime (eventLoop.probesChanged, task o03). Only this factory
+// wires it: runtime probe changes come from the TUI's probes modal, and the
+// headless Parquet run has no way to make one.
+//
+// A missing map is not reported. The object is then an IOR_BPF_OBJECT override
+// from before the restart folds, which has no restart probes either: nothing
+// in it makes a task pending or announces a continuation, so there is nothing
+// to clear and nothing the loop holds. The loop's time rule works without the
+// map in any case.
+func attachRestartPendingMap(el *eventLoop, bpfModule *bpf.Module) {
+	pending, err := newRestartPendingMap(bpfModule)
+	if err != nil {
+		return
+	}
+	el.restartPending = pending
+}
+
+// openAggregateSource opens the kernel's syscall_aggregate_map of a loaded BPF
+// module as an aggregate source. It is a variable so a test can give the trace
+// setup (newTraceEventLoop, newHeadlessParquetEventLoop) a fake source instead
+// of a real module, which is what makes their wiring testable without root.
+// The error path returns an untyped nil source, never a nil *consumer wrapped
+// in a non-nil interface.
+var openAggregateSource = func(module *bpf.Module) (syscallAggregateSource, error) {
+	consumer, err := newSyscallAggregateConsumer(module)
+	if err != nil {
+		return nil, err
+	}
+	return consumer, nil
 }
 
 // attachRingbufDropCounter wires the kernel-side ring-buffer drop counter into
@@ -966,13 +1571,62 @@ func newTraceEventLoop(cfg flags.Config, bpfModule *bpf.Module, warnSetup func(.
 // the setup-warning collector, which replays the message as an event-loop
 // warning: a warning row in the TUI (instead of stderr text written over the
 // screen on every trace start) and stderr in the headless modes.
+//
+// The source the loop gets also counts the program runs the kernel skipped,
+// where it can (withSkippedRuns).
 func attachRingbufDropCounter(el *eventLoop, bpfModule *bpf.Module, warnSetup func(...any)) {
 	dropCounter, err := newRingbufDropCounter(bpfModule)
 	if err != nil {
 		warnSetup("Ring-buffer drop counter unavailable (kernel-side drops will not be reported):", err)
 		return
 	}
-	el.dropSrc = dropCounter
+	el.dropSrc = withSkippedRuns(dropCounter, bpfModule, el.readDropStampClock, warnSetup)
+}
+
+// The four things withSkippedRuns asks the system: the running kernel's
+// release, the descriptors of the module's attached programs (all of them,
+// and those on some tracepoints) and one program's skipped runs. They are
+// variables so that a test can answer without a kernel.
+var (
+	skippedRunKernelRelease = runningKernelRelease
+	skippedRunProgramFDs    = libbpfAttachedProgramFDs
+	skippedRunProgramFDsOn  = libbpfAttachedProgramFDsOn
+	skippedRunProgramMisses = func() func(int) (uint64, bool, error) {
+		return newProgMissesReader().misses
+	}
+)
+
+// withSkippedRuns returns the drop source of a run: ring, the ring-buffer
+// drop counter, together with the count of the program runs the kernel
+// skipped (recordLossSource), where the kernel counts them. A skipped run
+// may lose a record the ring buffer's counter never hears of, so on such a
+// kernel the loop's "nothing was lost" asks both, each for what it is
+// evidence of (task 723; skippedRunCounter has the kernel facts,
+// restartDropWatch what is made of them).
+//
+// A kernel before 6.7 does not count the skips of classic tracepoint
+// programs, and its zeroes would be read as "none": the ring counter is
+// returned alone, without a warning - nothing is wrong with the run, and the
+// end-of-run statistics say "not counted" (skippedRunStatLine).
+// A kernel that should count them and cannot be read is warned about, since
+// that is a degradation of this run, and gets the ring counter alone too.
+// clock is the loop's drop-stamp clock, which dates the sweeps. The counter
+// follows the module's attached programs from here on (it is built after the
+// probes were attached, which its first sweep reads), and like the ring
+// counter's map their descriptors must not be read once the module is
+// closed: the monitor and the loop that ask stop before the teardown.
+func withSkippedRuns(ring ringbufDropSource, bpfModule *bpf.Module, clock func() uint64, warnSetup func(...any)) ringbufDropSource {
+	if !kernelCountsSkippedRuns(skippedRunKernelRelease()) {
+		return ring
+	}
+	attached := func() []int { return skippedRunProgramFDs(bpfModule) }
+	attachedOn := func(tracepoints []string) []int { return skippedRunProgramFDsOn(bpfModule, tracepoints) }
+	skipped, err := newSkippedRunCounter(attached, attachedOn, skippedRunProgramMisses(), clock)
+	if err != nil {
+		warnSetup("Probe runs skipped by the kernel will not be counted (events lost that way go unreported):", err)
+		return ring
+	}
+	return &recordLossSource{ring: ring, skipped: skipped}
 }
 
 // ringBufferStopper abstracts the ring-buffer polling control for teardown.
@@ -1041,6 +1695,8 @@ func closeTraceInfra(
 	}
 	if bpfModule != nil {
 		bpfModule.Close()
+		// libbpf's load allocations are freed now; give them back (task yr2).
+		releaseFreedHeap()
 	}
 	if stopSignals != nil {
 		stopSignals()

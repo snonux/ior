@@ -134,6 +134,7 @@ func TestCTypeToGoType(t *testing.T) {
 		input, want string
 	}{
 		{"char", "byte"},
+		{"__u8", "byte"},
 		{"__s32", "int32"},
 		{"__u32", "uint32"},
 		{"__s64", "int64"},
@@ -220,6 +221,23 @@ func TestGenerateTypesGoMethods(t *testing.T) {
 	requireContains(t, output, "func (o *OpenEvent) GetTime() uint64")
 }
 
+// TestGenerateTypesGoByteArrayIsBinary: a __u8 array (a file handle) maps to
+// a byte array like a char array does, but it is binary data, so String()
+// renders it whole and as hex instead of as a NUL-terminated string.
+func TestGenerateTypesGoByteArrayIsBinary(t *testing.T) {
+	input := "#define HANDLE_SZ 4\nstruct blob_event {\n    __u32 event_type;\n    __u8 f_handle[HANDLE_SZ];\n};\n"
+	structs, constants, err := ParseCTypesInput(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := AddTypesImports(GenerateTypesGo(structs, constants))
+
+	requireContains(t, output, "FHandle [HANDLE_SZ]byte")
+	requireContains(t, output, "hex.EncodeToString(b.FHandle[:])")
+	requireNotContains(t, output, "StringValue(b.FHandle[:])")
+	requireContains(t, output, `"encoding/hex"`)
+}
+
 func TestGenerateTypesGoSyncPool(t *testing.T) {
 	input := testTypesH + testDefines
 	structs, constants, err := ParseCTypesInput(strings.NewReader(input))
@@ -269,6 +287,34 @@ func TestGenerateTypesGoEventfdCodecPreservesKernelPadding(t *testing.T) {
 	requireContains(t, output, "binary.LittleEndian.PutUint64(raw[32:40], uint64(e.Ret))")
 	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[40:44], uint32(e.Fd))")
 	requireContains(t, output, "copy(raw[44:300], e.Filename[:])")
+}
+
+// TestGenerateTypesGoFdCodecCarriesTheNameTail pins the Go side of
+// fd_name_event (task xz2): FdEvent holds the record's name fields behind
+// the compatibility fields, and Bytes writes an event of that type back as
+// the 104-byte record - fd_event's 32 bytes with the identity, then name_len
+// and the name.
+func TestGenerateTypesGoFdCodecCarriesTheNameTail(t *testing.T) {
+	structs := []CStruct{{
+		Name: "fd_event",
+		Members: []CMember{
+			{TypeName: "__u32", FieldName: "event_type"},
+			{TypeName: "__u32", FieldName: "trace_id"},
+			{TypeName: "__u64", FieldName: "time"},
+			{TypeName: "__u32", FieldName: "pid"},
+			{TypeName: "__u32", FieldName: "tid"},
+			{TypeName: "__s32", FieldName: "fd"},
+			{TypeName: "__u32", FieldName: "file_ident"},
+		},
+	}}
+	output := GenerateTypesGo(structs, nil)
+
+	requireContains(t, output, "SchemaVersion uint32; NameLen uint32; Name [IOR_FD_NAME_LENGTH]byte")
+	requireContains(t, output, "StringValue(f.Name[:])")
+	requireContains(t, output, "if f.EventType == ENTER_FD_NAME_EVENT {")
+	requireContains(t, output, "raw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)")
+	requireContains(t, output, "binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)\n\t\tbinary.LittleEndian.PutUint32(raw[32:36], f.NameLen)")
+	requireContains(t, output, "copy(raw[36:], f.Name[:])")
 }
 
 func TestGenerateTypesGoTwoFdCodecPinsCurrentAndLegacyLayouts(t *testing.T) {
@@ -344,6 +390,45 @@ func TestGenerateTypesGoTraceIdMethods(t *testing.T) {
 	requireContains(t, output, "func (s TraceId) Name() string")
 	requireContains(t, output, "func (s TraceId) Family() SyscallFamily")
 	requireContains(t, output, `return fmt.Sprintf("unknown_trace_id_%d", s)`)
+}
+
+// TestGenerateTypesGoNoReturnSet pins the userspace half of the noreturn rule
+// (task pr2): exactly the sys_enter IDs of isNoreturnSyscall land in
+// noReturnTraceIds, which the event loop reads (TraceId.NoReturn) to emit
+// those enters as rows instead of parking them for an exit that never comes.
+// A returning syscall and the exit side of a noreturn name stay out: the exit
+// constants are not even generated for them, but a defensive SYS_EXIT_ define
+// must not be mistaken for an enter.
+func TestGenerateTypesGoNoReturnSet(t *testing.T) {
+	defines := testDefines + `#define SYS_ENTER_EXIT 150
+#define SYS_ENTER_EXIT_GROUP 148
+#define SYS_EXIT_EXIT_GROUP 147
+#define SYS_ENTER_RT_SIGRETURN 57
+#define SYS_ENTER_EXITX 33
+`
+	structs, constants, err := ParseCTypesInput(strings.NewReader(testTypesH + defines))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := GenerateTypesGo(structs, constants)
+
+	requireContains(t, output, "func (s TraceId) NoReturn() bool")
+	start := strings.Index(output, "var noReturnTraceIds = map[TraceId]bool{\n")
+	if start < 0 {
+		t.Fatalf("noReturnTraceIds not generated:\n%s", output)
+	}
+	end := strings.Index(output[start:], "}\n")
+	block := output[start : start+end]
+	for _, want := range []string{"\t150: true,", "\t148: true,", "\t57: true,"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("noReturnTraceIds lacks %q:\n%s", want, block)
+		}
+	}
+	for _, unwanted := range []string{"147:", "33:", "784:", "783:", "782:", "781:"} {
+		if strings.Contains(block, unwanted) {
+			t.Errorf("noReturnTraceIds must not contain %q:\n%s", unwanted, block)
+		}
+	}
 }
 
 func TestGenerateTypesGoPackageDecl(t *testing.T) {

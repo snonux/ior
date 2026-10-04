@@ -1,15 +1,21 @@
 package flags
 
 import (
+	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"ior/internal/collapse"
+	appconfig "ior/internal/config"
+	"ior/internal/textsafe"
 )
 
 // parseForTest builds a fresh FlagSet and parses the given args, returning
@@ -408,6 +414,46 @@ func TestParseResetTimerNegativeReturnsError(t *testing.T) {
 	}
 }
 
+// The synthetic test modes cannot refill what an auto-reset clears, so they
+// default the timer off; every other mode keeps the 30s default.
+func TestParseResetTimerDefaultsOffInTestModes(t *testing.T) {
+	for _, flagName := range []string{"-testflames", "-testliveflames"} {
+		t.Run(flagName, func(t *testing.T) {
+			cfg, err := parseForTest(t, flagName)
+			if err != nil {
+				t.Fatalf("parse returned error: %v", err)
+			}
+			if cfg.ResetTimer != 0 {
+				t.Fatalf("reset timer with %s = %v, want 0 (disabled)", flagName, cfg.ResetTimer)
+			}
+		})
+	}
+}
+
+func TestParseResetTimerExplicitWinsInTestModes(t *testing.T) {
+	for _, explicit := range []string{"30s", "45s"} {
+		cfg, err := parseForTest(t, "-testflames", "-resetTimer", explicit)
+		if err != nil {
+			t.Fatalf("parse returned error: %v", err)
+		}
+		want, _ := time.ParseDuration(explicit)
+		if cfg.ResetTimer != want {
+			t.Fatalf("reset timer = %v, want explicit %v", cfg.ResetTimer, want)
+		}
+	}
+}
+
+// Negative: the test-mode default must not leak into real tracing modes.
+func TestParseResetTimerTestModeDefaultDoesNotLeak(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.ResetTimer != DefaultResetTimer {
+		t.Fatalf("reset timer = %v, want %v outside test modes", cfg.ResetTimer, DefaultResetTimer)
+	}
+}
+
 func TestParseDurationNegativeReturnsError(t *testing.T) {
 	_, err := parseForTest(t, "-duration", "-1")
 	if err == nil {
@@ -425,6 +471,38 @@ func TestParseDurationZeroReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid duration") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestParseDurationOverflowReturnsError guards against -duration values whose
+// seconds-to-time.Duration conversion overflows int64 into a negative timeout,
+// which used to end the trace immediately with exit 0.
+func TestParseDurationOverflowReturnsError(t *testing.T) {
+	for _, value := range []string{
+		"10000000000", // the reported repro
+		strconv.FormatInt(maxDurationSeconds+1, 10), // first overflowing value
+		strconv.FormatInt(math.MaxInt64, 10),        // extreme
+	} {
+		_, err := parseForTest(t, "-duration", value)
+		if err == nil {
+			t.Fatalf("-duration %s: expected parse error for overflowing duration", value)
+		}
+		if !strings.Contains(err.Error(), "invalid duration") {
+			t.Fatalf("-duration %s: unexpected error: %v", value, err)
+		}
+	}
+}
+
+// TestParseDurationMaxAccepted pins the boundary: the largest duration that
+// still fits in a time.Duration must be accepted and convert to a positive
+// timeout.
+func TestParseDurationMaxAccepted(t *testing.T) {
+	cfg, err := parseForTest(t, "-duration", strconv.FormatInt(maxDurationSeconds, 10))
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if got := time.Duration(cfg.Duration) * time.Second; got <= 0 {
+		t.Fatalf("max duration converted to non-positive timeout %v", got)
 	}
 }
 
@@ -472,6 +550,46 @@ func TestParsePositiveMapSizeAccepted(t *testing.T) {
 	}
 }
 
+func TestParseDefaultMapSizeIsTheSharedDefault(t *testing.T) {
+	cfg, err := parseForTest(t)
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.EventMapSize != appconfig.DefaultEventMapSize {
+		t.Fatalf("EventMapSize = %d, want %d", cfg.EventMapSize, appconfig.DefaultEventMapSize)
+	}
+	// The old 64 KiB default lost events on bursty loads; guard against a
+	// regression to a size that small.
+	if cfg.EventMapSize < 1<<20 {
+		t.Fatalf("default EventMapSize = %d, want at least 1 MiB", cfg.EventMapSize)
+	}
+}
+
+func TestParseMapSizeNotPowerOfTwoAccepted(t *testing.T) {
+	// libbpf rounds ring-buffer sizes up, so a plain byte count is fine.
+	cfg, err := parseForTest(t, "-mapSize", "100000")
+	if err != nil {
+		t.Fatalf("parse returned unexpected error: %v", err)
+	}
+	if cfg.EventMapSize != 100000 {
+		t.Fatalf("EventMapSize = %d, want 100000", cfg.EventMapSize)
+	}
+}
+
+func TestParseMapSizeAboveUint32PowerOfTwoReturnsError(t *testing.T) {
+	// 4 GiB would wrap to 0 in the uint32 cast; 2 GiB is the largest valid.
+	if _, err := parseForTest(t, "-mapSize", "2147483648"); err != nil {
+		t.Fatalf("2 GiB should be accepted: %v", err)
+	}
+	_, err := parseForTest(t, "-mapSize", "4294967296")
+	if err == nil {
+		t.Fatalf("expected parse error for mapSize above 2 GiB")
+	}
+	if !strings.Contains(err.Error(), "invalid mapSize") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseTUIFastRefreshDefault(t *testing.T) {
 	// Default should be 250ms — the high-frequency refresh cadence used by
 	// the flamegraph and stream tabs when no explicit flag is provided.
@@ -505,5 +623,212 @@ func TestParseTUIFastRefreshZeroFallsBackToBuiltinTick(t *testing.T) {
 	}
 	if cfg.TUIFastRefreshInterval != 0 {
 		t.Fatalf("TUIFastRefreshInterval = %v, want 0 (built-in tick fallback)", cfg.TUIFastRefreshInterval)
+	}
+}
+
+// TestParseEscapeMode checks -escape defaults to auto, accepts each mode and
+// rejects an invalid value at parse time instead of silently falling back.
+func TestParseEscapeMode(t *testing.T) {
+	cfg, err := parseForTest(t, "-plain")
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if cfg.EscapeMode != textsafe.EscapeAuto {
+		t.Fatalf("default EscapeMode = %q, want auto", cfg.EscapeMode)
+	}
+	for _, mode := range []textsafe.EscapeMode{textsafe.EscapeAuto, textsafe.EscapeAlways, textsafe.EscapeNever} {
+		cfg, err := parseForTest(t, "-plain", "-escape", string(mode))
+		if err != nil {
+			t.Fatalf("-escape %s returned error: %v", mode, err)
+		}
+		if cfg.EscapeMode != mode {
+			t.Fatalf("-escape %s parsed as %q", mode, cfg.EscapeMode)
+		}
+	}
+	for _, bad := range []string{"", "ALWAYS", "tty"} {
+		if _, err := parseForTest(t, "-plain", "-escape="+bad); err == nil {
+			t.Fatalf("-escape=%q succeeded, want an error", bad)
+		}
+	}
+}
+
+// TestEscapeHelpShowsDefaultAndPlaceholder pins the -escape help line. The
+// flag package hides "(default auto)" when the default's String() equals the
+// zero value's String(), which EscapeMode used to do by reading "" as "auto";
+// the backquoted `mode` in the usage names the placeholder instead of "value".
+func TestEscapeHelpShowsDefaultAndPlaceholder(t *testing.T) {
+	fs := flag.NewFlagSet("ior-test", flag.ContinueOnError)
+	var out strings.Builder
+	fs.SetOutput(&out)
+	cfg := NewFlags()
+	registerFlags(fs, &cfg)
+	fs.PrintDefaults()
+
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(l, "  -escape ") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no -escape entry in help:\n%s", out.String())
+	}
+	if !strings.HasPrefix(line, "  -escape mode") {
+		t.Errorf("-escape help line = %q, want placeholder 'mode'", line)
+	}
+	// The usage text follows on the next line; the default suffix ends it.
+	idx := strings.Index(out.String(), line)
+	rest := out.String()[idx:]
+	if end := strings.Index(rest[len(line)+1:], "\n  -"); end >= 0 {
+		rest = rest[:len(line)+1+end]
+	}
+	if !strings.Contains(rest, "(default auto)") {
+		t.Errorf("-escape help lacks '(default auto)':\n%s", rest)
+	}
+}
+
+// TestUsageDocumentsTheLibbpfDebugVariable: IOR_LIBBPF_DEBUG is not a flag, so
+// without the usage epilogue nobody running `ior -h` could learn that the
+// libbpf DEBUG output is one variable away. The flag defaults must still be
+// printed ahead of it.
+func TestUsageDocumentsTheLibbpfDebugVariable(t *testing.T) {
+	fs := flag.NewFlagSet("ior", flag.ContinueOnError)
+	var out bytes.Buffer
+	fs.SetOutput(&out)
+
+	if _, err := parseFromFlagSet(fs, []string{"-h"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("-h error = %v, want flag.ErrHelp", err)
+	}
+	help := out.String()
+	for _, want := range []string{"-plain", LibbpfDebugEnv + "=1", "Environment:"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("-h output lacks %q:\n%s", want, help)
+		}
+	}
+	if strings.Index(help, "-plain") > strings.Index(help, "Environment:") {
+		t.Errorf("environment section must follow the flag defaults:\n%s", help)
+	}
+}
+
+// TestParseRejectsSelectionThatMatchesNoTracepoint is the regression test for
+// "-tps nonexistent_zzz": the trace used to start, attach zero probes and run
+// its whole -duration empty with exit 0. Every way of emptying the selection
+// (-tps, -tpsExclude, the -trace-* dimensions) must now fail at startup, and
+// selections that still match something must not.
+func TestParseRejectsSelectionThatMatchesNoTracepoint(t *testing.T) {
+	bad := [][]string{
+		{"-tps", "nonexistent_zzz"},
+		{"-tps", "^sys_enter_openat$", "-tpsExclude", "openat"},
+		{"-tpsExclude", "."},
+		{"-trace-families", "Time", "-tps", "^sys_enter_openat$"},
+	}
+	for _, args := range bad {
+		_, err := parseForTest(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") {
+			t.Errorf("args %v: error = %v, want the empty-selection diagnostic", args, err)
+		}
+	}
+	good := [][]string{
+		nil,
+		{"-tps", "^sys_enter_openat$"},
+		{"-tpsExclude", "^sys_enter_openat$"},
+		{"-tps", "nonexistent_zzz,^sys_enter_openat$"},
+	}
+	for _, args := range good {
+		if _, err := parseForTest(t, args...); err != nil {
+			t.Errorf("args %v: unexpected error %v", args, err)
+		}
+	}
+}
+
+// TestParseHintsAtBareSyscallNamePattern pins the message for the likely typo:
+// -tps matches tracepoint names (sys_enter_openat), so "^openat$" selects
+// nothing although the syscall exists. The error must point at the pattern
+// with the anchors stripped, and only when following that advice would
+// really work: the hint is judged by the real selector, so an allowlist or an
+// exclude that would still empty the retry must not get it.
+func TestParseHintsAtBareSyscallNamePattern(t *testing.T) {
+	const hint = "so try -tps "
+	hinted := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-tps", "^openat$"}, hint + "openat (without"},
+		// The hint names the user's own pattern, not always openat.
+		{[]string{"-tps", "^getpid$"}, hint + "getpid (without"},
+		{[]string{"-tps", "^read$,^getpid$"}, hint + "read,getpid (without"},
+		// An allowlist that admits the syscall does not block the retry.
+		{[]string{"-tps", "^openat$", "-trace-syscalls", "openat"}, hint + "openat (without"},
+		// Regex metacharacters are single-quoted so the suggestion can be
+		// pasted into a shell; simple names above stay plain.
+		{[]string{"-tps", "^(read|write)$"}, hint + "'(read|write)' (without"},
+		{[]string{"-tps", "^open.*$"}, hint + "'open.*' (without"},
+	}
+	for _, tc := range hinted {
+		_, err := parseForTest(t, tc.args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
+			!strings.Contains(err.Error(), "sys_enter_openat") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("args %v: error = %v, want the empty-selection diagnostic containing %q", tc.args, err, tc.want)
+		}
+	}
+	noHint := [][]string{
+		// Matches neither the full nor the bare name.
+		{"-tps", "nonexistent_zzz"},
+		// The retry "-tps openat" is excluded again by "openat".
+		{"-tps", "^openat$", "-tpsExclude", "openat"},
+		// The allowlist still rejects read, so "-tps read" would fail again.
+		{"-tps", "read", "-trace-syscalls", "openat"},
+		{"-tps", "^read$", "-trace-syscalls", "openat"},
+		// Nothing to strip: the user already typed -tps openat, and the
+		// exclude of the full names is what empties the selection.
+		{"-tps", "openat", "-tpsExclude", "sys_enter_openat,sys_exit_openat"},
+		// Stripping gives "openat", which "_openat" excludes again.
+		{"-tps", "^openat$", "-tpsExclude", "_openat"},
+		// Stripping gives the empty regex: "try -tps " would be nonsense.
+		{"-tps", "^$"},
+		{"-tps", "^read$,^$"},
+	}
+	for _, args := range noHint {
+		_, err := parseForTest(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "selection matches none of the") ||
+			strings.Contains(err.Error(), "bare syscall") {
+			t.Errorf("args %v: error = %v, want the diagnostic without the anchor hint", args, err)
+		}
+	}
+}
+
+// TestStripAnchors pins the anchor removal: one leading ^ and one trailing
+// unescaped $, nothing else, so a literal "\$" survives.
+func TestStripAnchors(t *testing.T) {
+	for in, want := range map[string]string{
+		"^openat$": "openat",
+		"openat":   "openat",
+		"^a|b$":    "a|b",
+		`a\$`:      `a\$`,
+		`a\\$`:     `a\\`,
+		"^":        "",
+	} {
+		if got := stripAnchors(in); got != want {
+			t.Errorf("stripAnchors(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestShellQuote pins the quoting of the suggested -tps value: plain for
+// simple names, single-quoted (with ' escaped) for anything a shell would
+// interpret.
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"openat":       "openat",
+		"read,getpid":  "read,getpid",
+		"(read|write)": "'(read|write)'",
+		"open.*":       "'open.*'",
+		"a b":          "'a b'",
+		"it's":         `'it'\''s'`,
+		"$HOME":        "'$HOME'",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

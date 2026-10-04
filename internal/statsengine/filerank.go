@@ -64,12 +64,12 @@ func newFileRankerWithLimits(topN int, maxSeen int) *fileRanker {
 }
 
 func (r *fileRanker) Add(pair *event.Pair) {
-	if r == nil || pair == nil || pair.File == nil {
+	if r == nil || pair == nil {
 		return
 	}
 
-	path := pair.File.Name()
-	if path == "" || path == "N:file" {
+	path, ok := rankablePath(pair)
+	if !ok {
 		return
 	}
 
@@ -139,21 +139,49 @@ func buildFileSnapshots(inputs []fileSnapshotInput) ([]FileSnapshot, error) {
 }
 
 func (r *fileRanker) addBytes(stats *fileRankStats, pair *event.Pair) {
+	read, written := pairFileBytes(pair)
+	stats.bytesRead += read
+	stats.bytesWritten += written
+}
+
+// rankablePath returns the file path a pair is ranked under in the Files
+// views (per file and per directory), and false when it has none. A pair
+// without a file (File == nil) or with a nameless file (a name that was never
+// resolved) has no path the Files tab could filter on, so it is not ranked.
+//
+// The decision deliberately does not compare the name with event.NoFileName:
+// that placeholder is only what Pair.FileName renders for File == nil, never
+// a name a File object carries, so a File named "N:file" is a real file. It
+// is ranked, and the row's Enter filter (^N:file$) matches it because the
+// global filter reads such a pair's file by its real name (Pair.FileValue).
+func rankablePath(pair *event.Pair) (string, bool) {
+	if pair.File == nil {
+		return "", false
+	}
+	path := pair.File.Name()
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// pairFileBytes classifies the bytes a pair moved from a file-centric view:
+// (read, written). Transfer syscalls move bytes in both directions.
+func pairFileBytes(pair *event.Pair) (read, written uint64) {
 	retEv, ok := pair.ExitEv.(*types.RetEvent)
 	if !ok {
-		return
+		return 0, 0
 	}
 
 	switch retEv.RetType {
 	case types.READ_CLASSIFIED:
-		stats.bytesRead += pair.Bytes
+		return pair.Bytes, 0
 	case types.WRITE_CLASSIFIED:
-		stats.bytesWritten += pair.Bytes
+		return 0, pair.Bytes
 	case types.TRANSFER_CLASSIFIED:
-		// Transfer syscalls move bytes in both directions from a file-centric view.
-		stats.bytesRead += pair.Bytes
-		stats.bytesWritten += pair.Bytes
+		return pair.Bytes, pair.Bytes
 	}
+	return 0, 0
 }
 
 func (r *fileRanker) updateHeap(stats *fileRankStats) {

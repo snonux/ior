@@ -98,6 +98,49 @@ func TestNewPopulatesFieldsFromPair(t *testing.T) {
 	}
 }
 
+// TestNewCarriesTheRestartCount covers task 203: the row carries the pair's
+// count of folded kernel restarts, and a pair that was never folded gives 0 -
+// also one whose return is still a restart code (the fold was refused), so the
+// count is taken from the pair and never guessed from the return value.
+func TestNewCarriesTheRestartCount(t *testing.T) {
+	for _, tt := range []struct {
+		ret      int64
+		restarts uint8
+	}{
+		{0, 0}, {0, 1}, {0, 2}, {7, 255}, {-516, 0}, {-512, 0}, {-516, 1},
+	} {
+		enter := &types.OpenEvent{TraceId: types.SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2, Ret: tt.ret, Pid: 1, Tid: 1}
+		pair.Restarts = tt.restarts
+		got := New(1, pair)
+		if got.Restarts != tt.restarts || got.RetVal != tt.ret {
+			t.Errorf("ret %d restarts %d: row RetVal/Restarts = %d/%d", tt.ret, tt.restarts, got.RetVal, got.Restarts)
+		}
+	}
+}
+
+// TestNewDoesNotFlagRestartCodesAsErrors covers task aq2: the raw kernel
+// restart codes stay visible in RetVal but the row is not an error.
+func TestNewDoesNotFlagRestartCodesAsErrors(t *testing.T) {
+	for _, tt := range []struct {
+		ret     int64
+		isError bool
+	}{
+		{-512, false}, {-513, false}, {-514, false}, {-516, false},
+		{-4, true}, {-515, true}, {0, false},
+	} {
+		enter := &types.OpenEvent{TraceId: types.SYS_ENTER_READ, Time: 1, Pid: 1, Tid: 1}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2, Ret: tt.ret, Pid: 1, Tid: 1}
+		pair.File = file.NewFd(3, "/tmp/x", 0)
+		got := New(1, pair)
+		if got.RetVal != tt.ret || got.IsError != tt.isError {
+			t.Errorf("ret %d: RetVal/IsError = %d/%v, want %d/%v", tt.ret, got.RetVal, got.IsError, tt.ret, tt.isError)
+		}
+	}
+}
+
 func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	got := NewWarning(7, "Dropped malformed event")
 	if got.Seq != 7 || got.TimeNs == 0 {
@@ -111,6 +154,19 @@ func TestNewWarningPopulatesSyntheticWarningFields(t *testing.T) {
 	}
 	if got.RetVal != -1 || !got.IsError {
 		t.Fatalf("RetVal/IsError = %d/%v, want -1/true", got.RetVal, got.IsError)
+	}
+	if !got.IsWarning {
+		t.Fatalf("IsWarning = false, want true so data outputs can skip the row")
+	}
+}
+
+// TestNewNeverMarksASyscallRowAsWarning is the negative half: only NewWarning
+// sets IsWarning, so a traced syscall is never dropped from an export.
+func TestNewNeverMarksASyscallRowAsWarning(t *testing.T) {
+	pair := event.NewPair(&types.RetEvent{TraceId: types.SYS_ENTER_READ, Time: 1})
+	pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_READ, Time: 2}
+	if New(1, pair).IsWarning {
+		t.Fatalf("a syscall row must not be flagged IsWarning")
 	}
 }
 

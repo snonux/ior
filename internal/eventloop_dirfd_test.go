@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/binary"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -14,6 +15,43 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// cutPathname returns a pathname of exactly the BPF capture limit whose last
+// byte is the lead byte 0xc3 of a two-byte rune, i.e. what a byte-wise cut of
+// a non-ASCII name looks like. The returned trimmed form is the same name
+// without the half rune.
+func cutPathname() (cut, trimmed string) {
+	trimmed = strings.Repeat("a", types.MAX_FILENAME_LENGTH-2)
+	return trimmed + "\xc3", trimmed
+}
+
+// completeRuneNames returns 255-byte pathnames (the BPF capture limit) that
+// end in a COMPLETE 2-, 3- and 4-byte rune. They are exactly as long as a
+// byte-cut name, so only a real UTF-8 check keeps them apart from one: they
+// must never be trimmed.
+func completeRuneNames() map[string]string {
+	pad := func(tail string) string {
+		return strings.Repeat("a", maxCapturedPathname-len(tail)) + tail
+	}
+	return map[string]string{
+		"2-byte": pad("ä"),
+		"3-byte": pad("日"),
+		"4-byte": pad("😀"),
+	}
+}
+
+func TestTrimCutPathnameKeepsCompleteRunes(t *testing.T) {
+	for name, pathname := range completeRuneNames() {
+		t.Run(name, func(t *testing.T) {
+			if len(pathname) != maxCapturedPathname {
+				t.Fatalf("test setup: len = %d, want %d", len(pathname), maxCapturedPathname)
+			}
+			if got := trimCutPathname(pathname); got != pathname {
+				t.Fatalf("complete trailing rune was trimmed: got %q", got[len(got)-4:])
+			}
+		})
+	}
+}
+
 func TestResolveDirfdPath(t *testing.T) {
 	const (
 		pid   = uint32(2100)
@@ -23,6 +61,11 @@ func TestResolveDirfdPath(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
 
+	cut, trimmed := cutPathname()
+	full := completeRuneNames()
+	// One byte shorter than the limit nothing was cut, so a trailing lone
+	// lead byte is the file's real name and is left alone.
+	notCut := trimmed[1:] + "\xc3"
 	tests := []struct {
 		name     string
 		dirfd    int32
@@ -30,6 +73,16 @@ func TestResolveDirfdPath(t *testing.T) {
 		wantName string
 		wantFD   int32
 	}{
+		// A 255-byte name whose last rune is complete is not a cut name.
+		{name: "255 bytes ending in complete 2-byte rune is kept", dirfd: dirfd, pathname: full["2-byte"], wantName: filepath.Join(dir, full["2-byte"]), wantFD: dirfd},
+		{name: "255 bytes ending in complete 3-byte rune is kept", dirfd: dirfd, pathname: full["3-byte"], wantName: filepath.Join(dir, full["3-byte"]), wantFD: dirfd},
+		{name: "255 bytes ending in complete 4-byte rune is kept", dirfd: dirfd, pathname: full["4-byte"], wantName: filepath.Join(dir, full["4-byte"]), wantFD: dirfd},
+		// The kernel-side cut rune is dropped before the join, so it never
+		// ends up as residue at the end of a path longer than the limit.
+		{name: "cut relative name is trimmed before the join", dirfd: dirfd, pathname: cut, wantName: filepath.Join(dir, trimmed), wantFD: dirfd},
+		{name: "cut absolute name is trimmed", dirfd: dirfd, pathname: "/" + cut[1:], wantName: "/" + trimmed[1:], wantFD: -1},
+		{name: "cut AT_FDCWD name is trimmed", dirfd: unix.AT_FDCWD, pathname: cut, wantName: trimmed, wantFD: -1},
+		{name: "short name ending in a lead byte is kept", dirfd: dirfd, pathname: notCut, wantName: filepath.Join(dir, notCut), wantFD: dirfd},
 		{name: "relative", dirfd: dirfd, pathname: "child/file", wantName: filepath.Join(dir, "child/file"), wantFD: dirfd},
 		{name: "empty", dirfd: dirfd, pathname: "", wantName: dir, wantFD: dirfd},
 		{name: "absolute", dirfd: dirfd, pathname: "/already/absolute", wantName: "/already/absolute", wantFD: -1},
@@ -625,9 +678,15 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 			t.Fatal("mkdirat empty path must never defer to descriptor resolution")
 		}
 		pathEv.TraceId = types.SYS_ENTER_STATX
+		// A failed non-NULL read defers, but for the faulted-path recovery, not
+		// as AT_EMPTY_PATH: its fixup may still arrive at sys_exit, so the path
+		// dimension is judged at the exit checkpoint. That the deferral is not an
+		// empty-path claim is pinned where it matters, at the exit:
+		// TestHandlePathExitDistinguishesEmptyNullAndFailedPathReads and
+		// TestPathFixupNeverGraftsTheWrongName.
 		pathEv.PathnameStatus = types.PATH_READ_FAILED
-		if matchRawPathEvent(filter, pathEv) {
-			t.Fatal("failed non-NULL pathname read must not defer as AT_EMPTY_PATH")
+		if !matchRawPathEvent(filter, pathEv) {
+			t.Fatal("failed non-NULL pathname read must defer to the exit checkpoint, where its fixup may have landed")
 		}
 
 		pathEv.TraceId = types.SYS_ENTER_UTIMENSAT
@@ -667,8 +726,8 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 			t.Fatal("futimesat empty string must not defer to descriptor resolution")
 		}
 		pathEv.PathnameStatus = types.PATH_READ_FAILED
-		if matchRawPathEvent(filter, pathEv) {
-			t.Fatal("futimesat failed non-NULL pathname read must not defer")
+		if !matchRawPathEvent(filter, pathEv) {
+			t.Fatal("futimesat failed non-NULL pathname read must defer for fixup recovery")
 		}
 		pathEv.PathnameStatus = 99
 		if matchRawPathEvent(filter, pathEv) {
@@ -695,11 +754,17 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 					t.Fatalf("%s status %d without AT_EMPTY_PATH deferred", traceID.Name(), status)
 				}
 			}
-			for _, status := range []uint32{types.PATH_READ_FAILED, 99} {
-				ev := &types.PathEvent{TraceId: traceID, Dirfd: 7, PathnameStatus: status, Flags: unix.AT_EMPTY_PATH}
-				if matchRawPathEvent(filter, ev) {
-					t.Fatalf("%s untrusted status %d deferred", traceID.Name(), status)
-				}
+			// An unknown status is untrusted and never defers. A failed read does
+			// defer - not as an empty path but because the faulted-path fixup may
+			// still name it by sys_exit - whatever the flags say.
+			ev := &types.PathEvent{TraceId: traceID, Dirfd: 7, PathnameStatus: 99, Flags: unix.AT_EMPTY_PATH}
+			if matchRawPathEvent(filter, ev) {
+				t.Fatalf("%s untrusted status 99 deferred", traceID.Name())
+			}
+			ev.PathnameStatus = types.PATH_READ_FAILED
+			ev.Flags = 0
+			if !matchRawPathEvent(filter, ev) {
+				t.Fatalf("%s failed read did not defer for fixup recovery", traceID.Name())
 			}
 		}
 	})
@@ -730,4 +795,315 @@ func TestRawPathFiltersDeferOnlyPathsThatNeedDirfdResolution(t *testing.T) {
 			t.Fatal("linkat empty destination must never defer to its descriptor")
 		}
 	})
+}
+
+// newExecPair builds an exec enter/exit pair as BPF reports it: plain execve
+// carries dirfd -1 and no flags, execveat its real dirfd and flags word. The
+// filename counts as read successfully (PATH_READ_OK, which is also the zero
+// value test tables leave in their status column); callers override
+// FilenameStatus for the NULL and failed-read cases.
+func newExecPair(traceID types.TraceId, pid uint32, dirfd, flags int32, name string, ret int64) (*types.ExecEvent, *types.RetEvent) {
+	enter := &types.ExecEvent{
+		EventType:      types.ENTER_EXEC_EVENT,
+		TraceId:        traceID,
+		Time:           1,
+		Pid:            pid,
+		Tid:            pid,
+		Dirfd:          dirfd,
+		Flags:          flags,
+		FilenameStatus: types.PATH_READ_OK,
+		SchemaVersion:  types.EXEC_EVENT_SCHEMA_VERSION,
+	}
+	copy(enter.Filename[:], name)
+	copy(enter.Comm[:], "launcher")
+	exit := &types.RetEvent{
+		EventType: types.EXIT_RET_EVENT,
+		TraceId:   traceID - 1,
+		Time:      2,
+		Pid:       pid,
+		Tid:       pid,
+		Ret:       ret,
+	}
+	return enter, exit
+}
+
+// execExitCase is one handleExecExit scenario: the exec pair BPF reported and
+// the file the pair must end up with.
+type execExitCase struct {
+	name     string
+	traceID  types.TraceId
+	dirfd    int32
+	flags    int32
+	filename string
+	status   uint32
+	ret      int64
+	wantName string
+	wantFD   int32
+}
+
+// execExitCases lists the dirfd/AT_EMPTY_PATH scenarios: dir is the directory
+// tracked as dirfd, prog the file tracked as progfd.
+func execExitCases(dir, prog string, dirfd, progfd int32) []execExitCase {
+	failed := int64(-int64(syscall.ENOENT))
+	return []execExitCase{
+		{name: "execveat relative to dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
+		{name: "failed execveat keeps resolved path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "ls", ret: failed, wantName: filepath.Join(dir, "ls"), wantFD: dirfd},
+		{name: "fexecve AT_EMPTY_PATH names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
+		{name: "failed fexecve reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, ret: failed, wantName: "", wantFD: -1},
+		// Task 9p2: an empty name only means "the descriptor itself" when BPF
+		// actually observed "" or NULL. An unreadable name leaves the same
+		// empty buffer but is missing data, so it must not borrow the fd's
+		// identity. A successful NULL AT_EMPTY_PATH execveat can only have
+		// run the descriptor; a failed one reports no path.
+		{name: "AT_EMPTY_PATH with unreadable name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_FAILED, wantName: "", wantFD: -1},
+		{name: "AT_EMPTY_PATH with NULL name names the descriptor", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: prog, wantFD: progfd},
+		{name: "failed AT_EMPTY_PATH with NULL name reports no path", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, ret: failed, wantName: "", wantFD: -1},
+		{name: "execve NULL name reports no path", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, flags: unix.AT_EMPTY_PATH, status: types.PATH_READ_NULL, wantName: "", wantFD: -1},
+		{name: "unknown filename status fails closed", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, flags: unix.AT_EMPTY_PATH, status: 99, wantName: "", wantFD: -1},
+		{name: "empty name without AT_EMPTY_PATH", traceID: types.SYS_ENTER_EXECVEAT, dirfd: progfd, wantName: "", wantFD: -1},
+		{name: "absolute name ignores dirfd", traceID: types.SYS_ENTER_EXECVEAT, dirfd: dirfd, filename: "/usr/bin/true", wantName: "/usr/bin/true", wantFD: -1},
+		{name: "execveat AT_FDCWD stays relative", traceID: types.SYS_ENTER_EXECVEAT, dirfd: unix.AT_FDCWD, filename: "ls", wantName: "ls", wantFD: -1},
+		{name: "execve dirfd -1 means AT_FDCWD", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, filename: "./prog", wantName: "./prog", wantFD: -1},
+		{name: "execve ignores AT_EMPTY_PATH bits", traceID: types.SYS_ENTER_EXECVE, dirfd: -1, flags: unix.AT_EMPTY_PATH, wantName: "", wantFD: -1},
+		{name: "invalid dirfd keeps name and attribution", traceID: types.SYS_ENTER_EXECVEAT, dirfd: -9, filename: "ls", ret: -int64(syscall.EBADF), wantName: "ls", wantFD: -9},
+	}
+}
+
+func TestHandleExecExitResolvesDirfdAndEmptyPath(t *testing.T) {
+	const (
+		pid    = uint32(2700)
+		dirfd  = int32(30)
+		progfd = int32(31)
+	)
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "prog")
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(dirfd, pid, file.NewFd(dirfd, dir, syscall.O_RDONLY|syscall.O_DIRECTORY))
+	el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+
+	for _, tc := range execExitCases(dir, prog, dirfd, progfd) {
+		t.Run(tc.name, func(t *testing.T) {
+			enter, exit := newExecPair(tc.traceID, pid, tc.dirfd, tc.flags, tc.filename, tc.ret)
+			enter.FilenameStatus = tc.status
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+			if ok := el.handleExecExit(ep, enter); !ok {
+				t.Fatal("handleExecExit returned false")
+			}
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+			}
+		})
+	}
+}
+
+// TestFexecveResolvesCloexecDescriptorBeforeExecRecord drives the real ring
+// buffer order of a successful fexecve: enter, then the sched_process_exec
+// control record (which evicts the O_CLOEXEC descriptor from the fd table),
+// then the exit. The row must still name the program the descriptor held.
+func TestFexecveResolvesCloexecDescriptorBeforeExecRecord(t *testing.T) {
+	// Beyond any pid_max, so no procfs fallback can supply a name by accident.
+	const (
+		pid    = uint32(0x7ffffff0)
+		progfd = int32(5)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	for _, tc := range []struct {
+		name     string
+		filename string
+		flags    int32
+		want     string
+	}{
+		{name: "fexecve AT_EMPTY_PATH", flags: unix.AT_EMPTY_PATH, want: prog},
+		{name: "execveat relative to cloexec dirfd", filename: "ls", want: filepath.Join(prog, "ls")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY|syscall.O_CLOEXEC))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, tc.flags, tc.filename, 0)
+			enterRaw, err := enter.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec enter: %v", err)
+			}
+			exitRaw, err := exit.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec exit: %v", err)
+			}
+			out := make(chan *event.Pair, 1)
+			el.processRawEvent(enterRaw, out)
+			el.processRawEvent(makeProcessExecEvent(t, 2, pid, pid, "prog"), out)
+			if _, ok := el.fdState().get(progfd, pid); ok {
+				t.Fatal("exec record did not drop the O_CLOEXEC descriptor; ordering not exercised")
+			}
+			el.processRawEvent(exitRaw, out)
+
+			select {
+			case ep := <-out:
+				defer ep.Recycle()
+				if ep.File.Name() != tc.want || ep.File.FD() != progfd {
+					t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.want, progfd)
+				}
+			default:
+				t.Fatal("exec pair was not emitted")
+			}
+		})
+	}
+}
+
+// runRawExec feeds an exec pair through processRawEvent in ring-buffer order,
+// running between after the enter record, and returns the emitted pair (nil
+// when none was emitted).
+func runRawExec(t *testing.T, el *eventLoop, enter *types.ExecEvent, exit *types.RetEvent, between func()) *event.Pair {
+	t.Helper()
+	enterRaw, err := enter.Bytes()
+	if err != nil {
+		t.Fatalf("encode exec enter: %v", err)
+	}
+	return runRawExecRecords(t, el, enterRaw, exit, between)
+}
+
+// runRawExecRecords is runRawExec for an already encoded (possibly truncated)
+// enter record.
+func runRawExecRecords(t *testing.T, el *eventLoop, enterRaw []byte, exit *types.RetEvent, between func()) *event.Pair {
+	t.Helper()
+	exitRaw, err := exit.Bytes()
+	if err != nil {
+		t.Fatalf("encode exec exit: %v", err)
+	}
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(enterRaw, out)
+	if between != nil {
+		between()
+	}
+	el.processRawEvent(exitRaw, out)
+	select {
+	case ep := <-out:
+		return ep
+	default:
+		return nil
+	}
+}
+
+// rawExecEnterCase is one runRawExec scenario: the exec pair, an optional
+// mutation of the fd table between the enter and its exit, and the file the
+// emitted pair must carry.
+type rawExecEnterCase struct {
+	name     string
+	filename string
+	atFlags  int32
+	status   uint32
+	ret      int64
+	between  func(el *eventLoop)
+	wantName string
+	wantFD   int32
+}
+
+// rawExecEnterCases lists the outcome and isolation scenarios of the
+// enter-time file snapshot; prog is the file tracked as progfd of pid.
+func rawExecEnterCases(t *testing.T, prog string, pid uint32, progfd int32) []rawExecEnterCase {
+	return []rawExecEnterCase{
+		{name: "successful fexecve", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd},
+		{name: "failed fexecve reports no path", atFlags: unix.AT_EMPTY_PATH, ret: -int64(syscall.EACCES), wantName: "", wantFD: -1},
+		// The enter-time snapshot must not attribute an unreadable name to the
+		// descriptor either, even though the exec itself succeeded.
+		{name: "unreadable name with AT_EMPTY_PATH reports no path", atFlags: unix.AT_EMPTY_PATH, status: types.PATH_READ_FAILED, wantName: "", wantFD: -1},
+		{name: "failed execveat keeps relative resolution", filename: "ls", ret: -int64(syscall.ENOENT), wantName: filepath.Join(prog, "ls"), wantFD: progfd},
+		{name: "fd replaced after enter", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd,
+			between: func(el *eventLoop) {
+				el.fdState().set(progfd, pid, file.NewFd(progfd, "/replaced", syscall.O_WRONLY))
+			}},
+		{name: "tracked fd mutated in place after enter", atFlags: unix.AT_EMPTY_PATH, wantName: prog, wantFD: progfd,
+			between: func(el *eventLoop) {
+				tracked, ok := el.fdState().get(progfd, pid)
+				if !ok {
+					t.Fatal("descriptor not tracked")
+				}
+				tracked.(*file.FdFile).SetFlags(syscall.O_WRONLY)
+			}},
+	}
+}
+
+// TestRawExecEnterSnapshotRespectsOutcomeAndIsolation drives the enter-time
+// snapshot path (storeEnter) end to end, where ep.File is already set when
+// handleExecExit runs: a failed fexecve must still withdraw the descriptor
+// attribution, and fd-table changes after the enter must not leak into the
+// row.
+func TestRawExecEnterSnapshotRespectsOutcomeAndIsolation(t *testing.T) {
+	const (
+		pid    = uint32(0x7ffffff1)
+		progfd = int32(6)
+		flags  = int32(syscall.O_RDONLY)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	for _, tc := range rawExecEnterCases(t, prog, pid, progfd) {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, flags))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, tc.atFlags, tc.filename, tc.ret)
+			enter.FilenameStatus = tc.status
+			var between func()
+			if tc.between != nil {
+				between = func() { tc.between(el) }
+			}
+			ep := runRawExec(t, el, enter, exit, between)
+			if ep == nil {
+				t.Fatal("exec pair was not emitted")
+			}
+			defer ep.Recycle()
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+			}
+			if tc.wantFD == progfd && int32(ep.File.Flags()) != flags {
+				t.Fatalf("flags = %#x, want enter-time %#x", int32(ep.File.Flags()), flags)
+			}
+		})
+	}
+}
+
+// TestRawExecRecordLayoutsCarryFilenameStatus feeds exec enter records of both
+// released wire layouts through processRawEvent (task 9p2). A 312-byte v1
+// record whose AT_EMPTY_PATH name BPF could not read must not name the
+// descriptor, while a legacy 304-byte record from an older BPF object has no
+// status and keeps the pre-9p2 behaviour: its "" names the descriptor.
+func TestRawExecRecordLayoutsCarryFilenameStatus(t *testing.T) {
+	const (
+		pid    = uint32(0x7ffffff2)
+		progfd = int32(7)
+	)
+	prog := filepath.Join(t.TempDir(), "prog")
+	tests := []struct {
+		name     string
+		status   uint32
+		size     int
+		wantName string
+		wantFD   int32
+	}{
+		{name: "v1 read failed", status: types.PATH_READ_FAILED, size: 312, wantName: "", wantFD: -1},
+		{name: "v1 read ok", status: types.PATH_READ_OK, size: 312, wantName: prog, wantFD: progfd},
+		{name: "legacy layout", status: types.PATH_READ_FAILED, size: 304, wantName: prog, wantFD: progfd},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(progfd, pid, file.NewFd(progfd, prog, syscall.O_RDONLY))
+			enter, exit := newExecPair(types.SYS_ENTER_EXECVEAT, pid, progfd, unix.AT_EMPTY_PATH, "", 0)
+			enter.FilenameStatus = tc.status
+			enterRaw, err := enter.Bytes()
+			if err != nil {
+				t.Fatalf("encode exec enter: %v", err)
+			}
+			if len(enterRaw) != 312 {
+				t.Fatalf("exec_event v1 encodes to %d bytes, want 312", len(enterRaw))
+			}
+			// The legacy layout is the v1 prefix: dropping the status and
+			// schema words also drops the FAILED status set above.
+			ep := runRawExecRecords(t, el, enterRaw[:tc.size], exit, nil)
+			if ep == nil {
+				t.Fatal("exec pair was not emitted")
+			}
+			defer ep.Recycle()
+			if ep.File.Name() != tc.wantName || ep.File.FD() != tc.wantFD {
+				t.Fatalf("file = %q fd %d, want %q fd %d", ep.File.Name(), ep.File.FD(), tc.wantName, tc.wantFD)
+			}
+		})
+	}
 }

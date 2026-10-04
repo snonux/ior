@@ -784,6 +784,37 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 
 	// The fixture is its own module so the linter does not try to load the
 	// real one, which needs the libbpfgo cgo environment to typecheck.
+	dir := writeLintFixtureModule(t)
+
+	argv := gatecmd.LintRun()
+	cmd := exec.Command(bin, append(argv[1:], "--output.text.path", "stdout")...)
+	cmd.Dir = dir
+	cmd.Env = privateLintLockEnv(t, os.Environ())
+	out, runErr := cmd.CombinedOutput()
+	report := string(out)
+
+	if runErr == nil {
+		t.Errorf("the lint gate accepted a package with an unchecked error and two dead stores; it reports nothing and would pass any tree.\n%s", report)
+	}
+	// Two different SA checks, because pinning one lets `checks: [SA4006]`
+	// disable the rest of the family while this test still passes.
+	for _, want := range []struct{ what, marker string }{
+		{"errcheck", "fixture.go"},
+		{"errcheck in a _test.go file", "fixture_test.go"},
+		{"staticcheck SA4006", "SA4006"},
+		{"staticcheck SA1006", "SA1006"},
+	} {
+		if !strings.Contains(report, want.marker) {
+			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.what, want.marker, report)
+		}
+	}
+}
+
+// writeLintFixtureModule writes the lint fixture module (lintFixture,
+// lintFixtureTest and the repository's own .golangci.yml) into a temporary
+// directory and returns it.
+func writeLintFixtureModule(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	write := func(name, content string) {
 		t.Helper()
@@ -806,28 +837,7 @@ func TestLintArgvRejectsAKnownDefect(t *testing.T) {
 		t.Fatalf("read .golangci.yml: %v", err)
 	}
 	write(".golangci.yml", string(cfg))
-
-	argv := gatecmd.LintRun()
-	cmd := exec.Command(bin, append(argv[1:], "--output.text.path", "stdout")...)
-	cmd.Dir = dir
-	out, runErr := cmd.CombinedOutput()
-	report := string(out)
-
-	if runErr == nil {
-		t.Errorf("the lint gate accepted a package with an unchecked error and two dead stores; it reports nothing and would pass any tree.\n%s", report)
-	}
-	// Two different SA checks, because pinning one lets `checks: [SA4006]`
-	// disable the rest of the family while this test still passes.
-	for _, want := range []struct{ what, marker string }{
-		{"errcheck", "fixture.go"},
-		{"errcheck in a _test.go file", "fixture_test.go"},
-		{"staticcheck SA4006", "SA4006"},
-		{"staticcheck SA1006", "SA1006"},
-	} {
-		if !strings.Contains(report, want.marker) {
-			t.Errorf("%s reported nothing for the fixture (looked for %q); it is enabled in name only.\n%s", want.what, want.marker, report)
-		}
-	}
+	return dir
 }
 
 // TestMageLintFailsOnAPlantedDefect runs `mage lint` itself, in a copy of the
@@ -904,7 +914,7 @@ func plantedDefect() {
 
 	cmd := exec.Command("mage", "lint")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LIBBPFGO="+mustAbs(t, libbpfgo))
+	cmd.Env = privateLintLockEnv(t, append(os.Environ(), "LIBBPFGO="+mustAbs(t, libbpfgo)))
 	out, runErr := cmd.CombinedOutput()
 	if runErr == nil {
 		t.Errorf("`mage lint` succeeded on a tree containing an unchecked error; the target does not fail on findings, whatever its argv says.\n%s", out)
@@ -912,6 +922,32 @@ func plantedDefect() {
 	if !strings.Contains(string(out), "planted_defect.go") {
 		t.Errorf("`mage lint` failed, but not because of the planted defect - it never reported planted_defect.go, so something else broke and this test proves nothing.\n%s", out)
 	}
+}
+
+// privateLintLockEnv returns env with TMPDIR pointed at a directory private
+// to this test, so the golangci-lint it runs takes its own instance lock.
+//
+// golangci-lint serializes itself on $TMPDIR/golangci-lint.lock and, by
+// default, gives up after five seconds with "parallel golangci-lint is
+// running". Any concurrent `mage lint` - another shell, another agent, a
+// parallel test binary - then made the two tests that run the real gate fail
+// for a reason unrelated to the gate: the marker checks saw only that one line.
+//
+// Moving the lock is chosen over the alternatives because it leaves the
+// command line alone. --allow-parallel-runners or --allow-serial-runners would
+// have to be appended to the argv these tests exist to prove, and
+// TestMageLintFailsOnAPlantedDefect runs `mage lint` itself, whose argv is
+// pinned to gatecmd.LintRun(); a retry loop keyed on the error text would
+// still lose to a long enough concurrent run. The lint results cache
+// (~/.cache/golangci-lint) is still shared: it is built on Go's build cache,
+// which is safe for concurrent processes - the lock guards against running
+// twice, not against the cache.
+//
+// os/exec keeps the last value of a duplicated variable, so appending is
+// enough to override an inherited TMPDIR.
+func privateLintLockEnv(t *testing.T, env []string) []string {
+	t.Helper()
+	return append(env, "TMPDIR="+t.TempDir())
 }
 
 // mustAbs resolves p to an absolute path, since the command runs elsewhere.

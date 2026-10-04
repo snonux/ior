@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	"ior/internal/probemanager"
@@ -14,14 +15,31 @@ import (
 // but through the same Attacher/Program/Link seam, so its non-fatal failure
 // paths and its detach path are reachable without a live BPF module.
 
+// fakeProbeLink counts Destroy calls. Destroy is goroutine-safe because the
+// probemanager destroys a syscall's enter and exit links concurrently (see
+// probemanager.destroyLinkPair) and detaches entries in parallel on Close, and
+// these tests hand the same link to both sides of a pair; an unguarded counter
+// is a data race under -race. Read the count through destroyCount. err is set
+// before the link is shared and never written afterwards.
 type fakeProbeLink struct {
+	mu       sync.Mutex
 	destroys int
 	err      error
 }
 
 func (l *fakeProbeLink) Destroy() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.destroys++
 	return l.err
+}
+
+// destroyCount returns how many times Destroy was called, synchronised with
+// concurrent Destroy calls.
+func (l *fakeProbeLink) destroyCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.destroys
 }
 
 type fakeProbeProgram struct {
@@ -33,6 +51,23 @@ type fakeProbeProgram struct {
 
 func (p *fakeProbeProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
 	p.category, p.name = category, name
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.link, nil
+}
+
+// rawProbeProgram is a fakeProbeProgram that can also attach as a raw
+// tracepoint, recording the tracepoint name it was asked for. The embedded
+// program still records a classic attach, so a test can assert the rename
+// probe never goes through that path.
+type rawProbeProgram struct {
+	fakeProbeProgram
+	rawName string
+}
+
+func (p *rawProbeProgram) AttachRawTracepoint(name string) (probemanager.Link, error) {
+	p.rawName = name
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -124,8 +159,8 @@ func TestAttachProcessExecProbeAttachesTheSchedTracepoint(t *testing.T) {
 
 	release()
 	release()
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 }
 
@@ -196,8 +231,8 @@ func TestAttachProcessExecProbeReportsDetachErrors(t *testing.T) {
 	})
 	requireNoConsoleOutput(t, stdout, stderr)
 
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 	// Teardown errors stay visible in every mode, so they must use the
 	// always-on teardown sink, never the status sink that TUI mode silences.
@@ -237,8 +272,8 @@ func TestAttachProcessExitProbeAttachesTheSchedTracepoint(t *testing.T) {
 
 	release()
 	release()
-	if link.destroys != 1 {
-		t.Fatalf("link destroyed %d times, want exactly 1", link.destroys)
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
 	}
 }
 
@@ -290,5 +325,286 @@ func TestAttachProcessExitProbeFailuresAreNonFatal(t *testing.T) {
 				t.Fatalf("warn log = %q, want it to contain %q", logged, tc.wantLog)
 			}
 		})
+	}
+}
+
+// TestAttachTaskNewtaskProbeAttachesTheTaskTracepoint pins the newtask probe's
+// program and its *task* (not sched) subsystem: attaching it under the wrong
+// category would fail on every kernel and silently return to the racy procfs
+// comm lookup it replaces. The release closure stays idempotent.
+func TestAttachTaskNewtaskProbeAttachesTheTaskTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &fakeProbeProgram{link: link}
+	attacher := &fakeProbeAttacher{prog: prog}
+
+	release := attachTaskNewtaskProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t)})
+
+	if attacher.requested != taskNewtaskProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, taskNewtaskProgName)
+	}
+	if prog.category != "task" || prog.name != "task_newtask" {
+		t.Fatalf("attached %s:%s, want task:task_newtask", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
+	}
+}
+
+// TestAttachTaskNewtaskProbeFailuresAreNonFatal: a missing program or
+// tracepoint degrades to the asynchronous procfs comm lookup, is reported on
+// the warn sink (visible in every mode) and leaves a usable no-op release.
+func TestAttachTaskNewtaskProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + taskNewtaskProgName,
+		},
+		{
+			name: "tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &fakeProbeProgram{err: errors.New("no such tracepoint")},
+			},
+			wantLog: "no such tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec setupLogRecorders
+			release := attachTaskNewtaskProbe(tc.attacher, rec.log())
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			release()
+			release()
+			if !strings.Contains(logged, "skipping task_newtask probe") || !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("warn log = %q, want the skipped probe and %q", logged, tc.wantLog)
+			}
+		})
+	}
+}
+
+// TestAttachTaskRenameProbeAttachesTheRawTracepoint pins the rename probe's
+// program and that it goes through the raw-tracepoint attach (the classic one
+// is never used: the program's section is raw_tracepoint, and a classic attach
+// of it fails on every kernel, silently returning to the stale-name behaviour).
+// The release closure stays idempotent, and the attach is announced on the
+// attached sink exactly once (trace setup trusts rename records from it, task
+// xr2).
+func TestAttachTaskRenameProbeAttachesTheRawTracepoint(t *testing.T) {
+	link := &fakeProbeLink{}
+	prog := &rawProbeProgram{fakeProbeProgram: fakeProbeProgram{link: link}}
+	attacher := &fakeProbeAttacher{prog: prog}
+	var announced []string
+
+	release := attachTaskRenameProbe(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+		attached: func(name string) { announced = append(announced, name) }})
+
+	if len(announced) != 1 || announced[0] != taskRenameProbeName {
+		t.Fatalf("attached announcements = %q, want exactly [%q]", announced, taskRenameProbeName)
+	}
+	if attacher.requested != taskRenameProgName {
+		t.Fatalf("requested program %q, want %q", attacher.requested, taskRenameProgName)
+	}
+	if prog.rawName != "task_rename" {
+		t.Fatalf("raw-attached %q, want task_rename", prog.rawName)
+	}
+	if prog.category != "" || prog.name != "" {
+		t.Fatalf("classic attach used for %s:%s, want raw only", prog.category, prog.name)
+	}
+
+	release()
+	release()
+	if link.destroyCount() != 1 {
+		t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
+	}
+}
+
+// TestAttachTaskRenameProbeFailuresAreNonFatal: a missing program, a failing
+// raw attach and a program that cannot attach as a raw tracepoint at all each
+// degrade to serving the old cached name, are reported on the warn sink,
+// leave a usable no-op release and are never announced as attached (which
+// would make trace setup skip the corrective comm reads, task xr2).
+func TestAttachTaskRenameProbeFailuresAreNonFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attacher *fakeProbeAttacher
+		wantLog  string
+	}{
+		{
+			name:     "program missing from the object",
+			attacher: &fakeProbeAttacher{err: errors.New("no such program")},
+			wantLog:  "get program " + taskRenameProgName,
+		},
+		{
+			name: "raw tracepoint missing on this kernel",
+			attacher: &fakeProbeAttacher{
+				prog: &rawProbeProgram{fakeProbeProgram: fakeProbeProgram{err: errors.New("no such tracepoint")}},
+			},
+			wantLog: "no such tracepoint",
+		},
+		{
+			name:     "program without raw attach support",
+			attacher: &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}},
+			wantLog:  "cannot attach as a raw tracepoint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rec setupLogRecorders
+			log := rec.log()
+			log.attached = func(name string) { t.Errorf("failed attach announced as attached: %q", name) }
+			release := attachTaskRenameProbe(tc.attacher, log)
+			rec.requireOnlySink(t, &rec.warn)
+			logged := rec.warn.joined()
+			if release == nil {
+				t.Fatal("expected a non-nil release closure even on failure")
+			}
+			release()
+			release()
+			if !strings.Contains(logged, "skipping task_rename probe") || !strings.Contains(logged, tc.wantLog) {
+				t.Fatalf("warn log = %q, want the skipped probe and %q", logged, tc.wantLog)
+			}
+		})
+	}
+}
+
+// TestAttachRestartFoldProbesAttachTheirTracepoints pins the two probes of
+// the restart fold (task 103): each asks for its own program, attaches it as
+// a classic tracepoint to the right event - the rt_sigreturn one to the
+// syscall's enter tracepoint, under a probe name of its own - announces the
+// attach exactly once under that name (trace setup turns the fold on from the
+// signal_deliver announcement) and has an idempotent release.
+func TestAttachRestartFoldProbesAttachTheirTracepoints(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		attach                            func(probemanager.Attacher, bpfSetupLog) func()
+		progName, probeName, category, tp string
+	}{
+		{"signal_deliver", attachSignalDeliverProbe, signalDeliverProgName, signalDeliverProbeName,
+			"signal", "signal_deliver"},
+		{"rt_sigreturn", attachRestartSigreturnProbe, restartSigreturnProgName, restartSigreturnProbeName,
+			"syscalls", "sys_enter_rt_sigreturn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := &fakeProbeLink{}
+			prog := &fakeProbeProgram{link: link}
+			attacher := &fakeProbeAttacher{prog: prog}
+			var announced []string
+
+			release := tc.attach(attacher, bpfSetupLog{status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+				attached: func(name string) { announced = append(announced, name) }})
+
+			if len(announced) != 1 || announced[0] != tc.probeName {
+				t.Fatalf("attached announcements = %q, want exactly [%q]", announced, tc.probeName)
+			}
+			if attacher.requested != tc.progName {
+				t.Fatalf("requested program %q, want %q", attacher.requested, tc.progName)
+			}
+			if prog.category != tc.category || prog.name != tc.tp {
+				t.Fatalf("attached to %s:%s, want %s:%s", prog.category, prog.name, tc.category, tc.tp)
+			}
+			release()
+			release()
+			if link.destroyCount() != 1 {
+				t.Fatalf("link destroyed %d times, want exactly 1", link.destroyCount())
+			}
+		})
+	}
+}
+
+// TestAttachRestartSigreturnProbeFollowsTheDispatcherModes: fentry has no
+// raw dispatcher, so the classic handle_restart_sigreturn probe must stay
+// attached (task g23); a raw-dispatcher mode replaces it and must skip the
+// classic attach. UsesRawDispatchers alone is not enough — the call site
+// used to gate on mode != off, which would skip fentry too.
+func TestAttachRestartSigreturnProbeFollowsTheDispatcherModes(t *testing.T) {
+	orig := rawSyscallModeFromEnv
+	t.Cleanup(func() { rawSyscallModeFromEnv = orig })
+
+	t.Run("fentry keeps the classic probe", func(t *testing.T) {
+		rawSyscallModeFromEnv = func() (rawSyscallMode, error) {
+			return rawSyscallMode{dispatch: rawDispatchFentry}, nil
+		}
+		link := &fakeProbeLink{}
+		prog := &fakeProbeProgram{link: link}
+		attacher := &fakeProbeAttacher{prog: prog}
+		var announced []string
+		release := attachRestartSigreturnProbe(attacher, bpfSetupLog{
+			status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+			attached: func(name string) { announced = append(announced, name) },
+		})
+		if len(announced) != 1 || announced[0] != restartSigreturnProbeName {
+			t.Fatalf("announcements = %q, want [%q]", announced, restartSigreturnProbeName)
+		}
+		release()
+		if link.destroyCount() != 1 {
+			t.Fatalf("destroyed %d times, want 1", link.destroyCount())
+		}
+	})
+	for _, dispatch := range []string{rawDispatchTailCall, rawDispatchSwitch} {
+		t.Run(dispatch+" skips the classic probe", func(t *testing.T) {
+			rawSyscallModeFromEnv = func() (rawSyscallMode, error) {
+				return rawSyscallMode{dispatch: dispatch}, nil
+			}
+			attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+			var announced []string
+			release := attachRestartSigreturnProbe(attacher, bpfSetupLog{
+				attached: func(name string) { announced = append(announced, name) },
+				warn:     failOnLog(t),
+			})
+			release()
+			if len(announced) != 0 || attacher.requested != "" {
+				t.Fatalf("%s still attached: announced %q requested %q", dispatch, announced, attacher.requested)
+			}
+		})
+	}
+}
+
+// TestAttachRestartFoldProbeFailuresAreNonFatal: a missing program (an older
+// IOR_BPF_OBJECT) or a failing attach (a kernel without the tracepoint)
+// leaves kernel-restarted calls unfolded, is reported on the warn sink,
+// leaves a usable no-op release and is never announced as attached - an
+// announcement of the signal probe would turn the fold on without its proof.
+func TestAttachRestartFoldProbeFailuresAreNonFatal(t *testing.T) {
+	attachers := map[string]func() (*fakeProbeAttacher, string){
+		"program missing from the object": func() (*fakeProbeAttacher, string) {
+			return &fakeProbeAttacher{err: errors.New("no such program")}, "get program "
+		},
+		"tracepoint missing on this kernel": func() (*fakeProbeAttacher, string) {
+			return &fakeProbeAttacher{prog: &fakeProbeProgram{err: errors.New("no such tracepoint")}}, "no such tracepoint"
+		},
+	}
+	probes := map[string]func(probemanager.Attacher, bpfSetupLog) func(){
+		signalDeliverProbeName:    attachSignalDeliverProbe,
+		restartSigreturnProbeName: attachRestartSigreturnProbe,
+	}
+	for probeName, attach := range probes {
+		for name, build := range attachers {
+			t.Run(probeName+"/"+name, func(t *testing.T) {
+				attacher, wantLog := build()
+				var rec setupLogRecorders
+				log := rec.log()
+				log.attached = func(name string) { t.Errorf("failed attach announced as attached: %q", name) }
+				release := attach(attacher, log)
+				rec.requireOnlySink(t, &rec.warn)
+				logged := rec.warn.joined()
+				if release == nil {
+					t.Fatal("expected a non-nil release closure even on failure")
+				}
+				release()
+				release()
+				if !strings.Contains(logged, "skipping "+probeName+" probe") || !strings.Contains(logged, wantLog) {
+					t.Fatalf("warn log = %q, want the skipped probe and %q", logged, wantLog)
+				}
+			})
+		}
 	}
 }

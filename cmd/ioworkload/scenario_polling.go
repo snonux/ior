@@ -13,6 +13,10 @@ import (
 
 const pollingExerciseDuration = 500 * time.Millisecond
 
+// pollingEpoll repeatedly exercises every readiness-wait syscall against a
+// pipe for pollingExerciseDuration. Each round runs the epoll family first
+// (epoll_wait, epoll_pwait, epoll_pwait2 while supported) and then the
+// poll/ppoll/select family, always in the same order.
 func pollingEpoll() error {
 	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
@@ -35,39 +39,10 @@ func pollingEpoll() error {
 	pwait2Supported := true
 	deadline := time.Now().Add(pollingExerciseDuration)
 	for {
-		if err := waitAndDrain(epfd, pipefd, callEpollWait); err != nil {
+		if pwait2Supported, err = epollWaitRound(epfd, pipefd, pwait2Supported); err != nil {
 			return err
 		}
-		if err := waitAndDrain(epfd, pipefd, callEpollPwait); err != nil {
-			return err
-		}
-		if pwait2Supported {
-			if err := waitAndDrain(epfd, pipefd, callEpollPwait2); err != nil {
-				if !isUnsupportedEpollPwait2Err(err) {
-					return err
-				}
-				if drainErr := drainWakeByte(pipefd[0]); drainErr != nil {
-					return drainErr
-				}
-				pwait2Supported = false
-			}
-		}
-		if err := waitAndDrainReadiness(pipefd, callPoll); err != nil {
-			return err
-		}
-		if err := waitAndDrainReadiness(pipefd, callPpoll); err != nil {
-			return err
-		}
-		if err := triggerPpollUnreadableTimeout(pipefd); err != nil {
-			return err
-		}
-		if err := triggerPpollInvalidTimeout(pipefd); err != nil {
-			return err
-		}
-		if err := waitAndDrainReadiness(pipefd, callSelect); err != nil {
-			return err
-		}
-		if err := waitAndDrainReadiness(pipefd, callPselect6); err != nil {
+		if err := readinessWaitRound(pipefd); err != nil {
 			return err
 		}
 		if !time.Now().Before(deadline) {
@@ -77,6 +52,61 @@ func pollingEpoll() error {
 	}
 
 	return nil
+}
+
+// epollWaitRound runs one wake/wait/drain cycle for each epoll wait variant.
+// epoll_pwait2 is skipped once the kernel reported it unsupported; the
+// returned flag carries that state into the next round. On an unsupported
+// epoll_pwait2 the wake byte it left behind is drained so the next wait
+// starts from an empty pipe.
+func epollWaitRound(epfd int, pipefd [2]int, pwait2Supported bool) (bool, error) {
+	if err := waitAndDrain(epfd, pipefd, callEpollWait); err != nil {
+		return pwait2Supported, err
+	}
+	if err := waitAndDrain(epfd, pipefd, callEpollPwait); err != nil {
+		return pwait2Supported, err
+	}
+	if !pwait2Supported {
+		return false, nil
+	}
+	if err := waitAndDrain(epfd, pipefd, callEpollPwait2); err != nil {
+		if !isUnsupportedEpollPwait2Err(err) {
+			return true, err
+		}
+		if drainErr := drainWakeByte(pipefd[0]); drainErr != nil {
+			return true, drainErr
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+// readinessWaitRound runs poll, ppoll (including its unreadable- and
+// invalid-timeout error cases), select (including a tv_usec >= 1e6 timeout the
+// kernel normalises and a negative tv_usec it rejects) and pselect6 once each.
+func readinessWaitRound(pipefd [2]int) error {
+	if err := waitAndDrainReadiness(pipefd, callPoll); err != nil {
+		return err
+	}
+	if err := waitAndDrainReadiness(pipefd, callPpoll); err != nil {
+		return err
+	}
+	if err := triggerPpollUnreadableTimeout(pipefd); err != nil {
+		return err
+	}
+	if err := triggerPpollInvalidTimeout(pipefd); err != nil {
+		return err
+	}
+	if err := waitAndDrainReadiness(pipefd, callSelect); err != nil {
+		return err
+	}
+	if err := waitAndDrainReadiness(pipefd, callSelectDenormalisedTimeout); err != nil {
+		return err
+	}
+	if err := triggerSelectInvalidTimeout(pipefd); err != nil {
+		return err
+	}
+	return waitAndDrainReadiness(pipefd, callPselect6)
 }
 
 type readinessWaitFn func(pipefd [2]int) (int, error)
@@ -277,11 +307,38 @@ func (s *fdSet) set(fd int) error {
 }
 
 func callSelect(pipefd [2]int) (int, error) {
+	return selectWithTimeout(pipefd, syscall.Timeval{Sec: 0, Usec: 100000})
+}
+
+// selectDenormalisedTimeout is a struct timeval whose tv_usec exceeds one
+// second. kern_select() normalises it (to 1.5 s) instead of failing, so the
+// call is valid and, with the pipe already readable, returns at once.
+var selectDenormalisedTimeout = syscall.Timeval{Sec: 0, Usec: 1_500_000}
+
+func callSelectDenormalisedTimeout(pipefd [2]int) (int, error) {
+	return selectWithTimeout(pipefd, selectDenormalisedTimeout)
+}
+
+// triggerSelectInvalidTimeout runs select with a negative tv_usec, which stays
+// negative after normalisation and so fails with EINVAL.
+func triggerSelectInvalidTimeout(pipefd [2]int) error {
+	if _, err := syscall.Write(pipefd[1], []byte{1}); err != nil {
+		return fmt.Errorf("write select EINVAL wake byte: %w", err)
+	}
+	if _, err := selectWithTimeout(pipefd, syscall.Timeval{Sec: 0, Usec: -1}); !errors.Is(err, syscall.EINVAL) {
+		return fmt.Errorf("select invalid timeout: got %v, want EINVAL", err)
+	}
+	return drainWakeByte(pipefd[0])
+}
+
+// selectWithTimeout waits for pipefd[0] to become readable with the given
+// timeval, issued as a raw select(2) so the timeout reaches the kernel
+// unmodified.
+func selectWithTimeout(pipefd [2]int, timeout syscall.Timeval) (int, error) {
 	var readSet fdSet
 	if err := readSet.set(pipefd[0]); err != nil {
 		return 0, fmt.Errorf("select: %w", err)
 	}
-	timeout := syscall.Timeval{Sec: 0, Usec: 100000}
 	r1, _, errno := syscall.RawSyscall6(
 		syscall.SYS_SELECT,
 		uintptr(pipefd[0]+1),

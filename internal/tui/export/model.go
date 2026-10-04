@@ -50,7 +50,18 @@ type Model struct {
 	selected  int
 	exporting bool
 	status    string
+	// livePaused is set when the modal was opened while the stream tab is
+	// paused. The export always snapshots the live ring, so the table the user
+	// is looking at (the frozen rows) differs from what gets written; the
+	// modal says so and points at the stream tab's x/X, which write the frozen
+	// rows (task 2r2).
+	livePaused bool
 }
+
+// PausedNote is shown in the modal while the stream is paused. It names the
+// Stream tab because the modal opens from any dashboard tab, but x/X only write
+// the paused rows while the Stream tab itself is showing them.
+const PausedNote = "Live ring, not the paused view - use x on the Stream tab for the paused rows"
 
 // NewModel creates a closed export modal.
 func NewModel() Model {
@@ -60,8 +71,17 @@ func NewModel() Model {
 // Visible reports whether the export modal is shown.
 func (m Model) Visible() bool { return m.visible }
 
-// Open shows the export modal with the CSV option preselected.
+// Open shows the export modal with the CSV option preselected, for a live
+// (not paused) stream.
 func (m Model) Open() Model {
+	return m.OpenFor(false)
+}
+
+// OpenFor is Open for a stream tab that is paused (streamPaused true) or live.
+// While paused the modal adds PausedNote: the export writes the live ring's
+// current rows, which are not the frozen rows on screen.
+func (m Model) OpenFor(streamPaused bool) Model {
+	m.livePaused = streamPaused
 	m.visible = true
 	m.selected = 0
 	m.exporting = false
@@ -137,7 +157,10 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders a centered modal overlay.
+// View renders the modal box (Box) centred in a width x height view and
+// clipped to its height. Zero or negative sizes fall back to 80x24. The
+// dashboard does not use it: it draws Box over the screen instead of above
+// it (task ns2); View is the stand-alone rendering of the modal.
 func (m Model) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -148,35 +171,7 @@ func (m Model) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-
-	modalWidth := 48
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 30 {
-			modalWidth = 30
-		}
-	}
-
-	lines := []string{"Export Stream CSV"}
-	for i, label := range optionLabels {
-		prefix := "  "
-		if i == m.selected && !m.exporting {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+label)
-	}
-	if m.status != "" {
-		lines = append(lines, "", m.status)
-	}
-	if !m.exporting {
-		lines = append(lines, "", "Enter confirm • Esc cancel")
-	}
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.Box(width, height))
+	lines := strings.Split(placed, "\n")
+	return strings.Join(lines[:min(len(lines), height)], "\n")
 }

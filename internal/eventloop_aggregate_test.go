@@ -45,6 +45,47 @@ func (s *aggregateSinkStub) IngestSyscallAggregates(rows []statsengine.SyscallAg
 	s.rows = append(s.rows, rows...)
 }
 
+// periodAwareSinkStub is an aggregate sink that also records the drain
+// period the event loop reports to it.
+type periodAwareSinkStub struct {
+	aggregateSinkStub
+	periods []time.Duration
+}
+
+func (s *periodAwareSinkStub) SetAggregateDrainPeriod(period time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.periods = append(s.periods, period)
+}
+
+// The drain loop must report its configured period to a sink that wants it
+// (statsengine.Engine bounds its latency-series spread with it), once and
+// before any batch; a plain sink without the setter keeps working.
+func TestStartAggregateDrainLoopReportsDrainPeriod(t *testing.T) {
+	sink := &periodAwareSinkStub{}
+	el := &eventLoop{
+		cfg:           eventLoopConfig{aggregateDrainEvery: 3 * time.Second},
+		aggregateSrc:  &aggregateSourceStub{},
+		aggregateSink: sink,
+	}
+	el.SetFilter(globalfilter.Filter{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := el.startAggregateDrainLoop(ctx)
+	cancel()
+	stop()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.periods) != 1 || sink.periods[0] != 3*time.Second {
+		t.Fatalf("reported periods = %v, want [3s]", sink.periods)
+	}
+}
+
+// statsengine.Engine must keep satisfying the optional setter, or the wiring
+// above silently stops reaching it.
+var _ aggregateDrainPeriodSetter = (*statsengine.Engine)(nil)
+
 func TestAggregateDrainerTickFiltersAggregateIngestTraceIDs(t *testing.T) {
 	drainer := newAggregateDrainer(
 		&aggregateSourceStub{
@@ -56,6 +97,7 @@ func TestAggregateDrainerTickFiltersAggregateIngestTraceIDs(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 
@@ -81,6 +123,7 @@ func TestAggregateDrainerTickGatesWhenUnsupportedFilterActive(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter {
 			return globalfilter.Filter{
 				Comm: &globalfilter.StringFilter{Pattern: "ioworkload"},
@@ -105,6 +148,7 @@ func TestAggregateDrainerTickRejectsRowsWithoutAggregateIngestTraceIDs(t *testin
 			}},
 		},
 		nil,
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 
@@ -137,6 +181,7 @@ func TestAggregateDrainerTickRejectsPIDAndTIDFilters(t *testing.T) {
 				map[types.TraceId]struct{}{
 					types.SYS_ENTER_FUTEX: {},
 				},
+				kernelProcessScope{},
 				func() globalfilter.Filter { return tt.filter },
 			)
 
@@ -157,6 +202,7 @@ func TestAggregateDrainerTickReturnsDrainWarning(t *testing.T) {
 		map[types.TraceId]struct{}{
 			types.SYS_ENTER_FUTEX: {},
 		},
+		kernelProcessScope{},
 		func() globalfilter.Filter { return globalfilter.Filter{} },
 	)
 

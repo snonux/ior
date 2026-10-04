@@ -153,7 +153,7 @@ func makeCommPropagationTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected no comm name for different thread but got '%s'", ep.Comm)
 		}
 		// Verify comm map doesn't have entry for this tid
-		if _, ok := el.cachedComm(differentTid); ok {
+		if _, ok := el.commState().cached(differentTid); ok {
 			t.Errorf("Expected no comm entry for tid %d but one was found", differentTid)
 		}
 	})
@@ -436,7 +436,7 @@ func makeFdEventFilterTestData(t *testing.T, commFilter, pathFilter string) (td 
 	_, readExitBytes2 := makeExitFdEvent(t, defaulTime+500, defaultPid+1, defaultTid+100, fd, types.SYS_EXIT_READ)
 	td.rawTracepoints = append(td.rawTracepoints, readExitBytes2)
 
-	// Should NOT receive this event (no comm name established for this tid)
+	// Should NOT receive this event (no comm name is cached for this tid, so the exit-side comm check drops it)
 	td.validates = append(td.validates, func(t *testing.T, el *eventLoop, ep *event.Pair) {
 		if ep != nil {
 			t.Error("Expected fd event to be filtered out but it passed")

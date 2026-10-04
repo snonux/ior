@@ -122,6 +122,20 @@ func assertTracepointPathPrefix(t *testing.T, result TestResult, tracepoint, wan
 	}
 }
 
+// assertTracepointEmptyPath requires at least one record of the tracepoint with
+// an empty path. A syscall without a file or descriptor (keyctl, ptrace, ...)
+// persists "" in the .ior.zst record (task pq2); the "N:file" placeholder is
+// display text only, and `ior collapsed -fields path` shows "" as [unknown].
+func assertTracepointEmptyPath(t *testing.T, result TestResult, tracepoint string) {
+	t.Helper()
+	for _, rec := range result.Records {
+		if strings.Contains(rec.TraceID.String(), tracepoint) && rec.Path == "" {
+			return
+		}
+	}
+	t.Fatalf("expected at least one %s record with an empty path", tracepoint)
+}
+
 func countTracepointPathPrefix(result TestResult, tracepoint, wantPrefix string) int {
 	var count int
 	for _, rec := range result.Records {

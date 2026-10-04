@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
@@ -12,9 +11,16 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// renderOverview renders the Overview tab: a row of summary boxes, the trend
+// line, and three full-width panels (sparklines, top-N lists, histogram
+// summaries). The blocks are listed in priority order and fitted to height
+// (fitBlocks): on a short terminal the histogram summaries go first, then the
+// top-N lists, so the frame never outgrows the terminal and pushes the status
+// line off the bottom. height <= 0 means unbounded.
+// The theme is loaded once and passed to the helpers so the whole tab is
+// rendered from one consistent palette snapshot.
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	theme := common.Current()
-	_ = height
 	if snap == nil {
 		return theme.PanelStyle.Render("Overview: waiting for stats...")
 	}
@@ -22,46 +28,76 @@ func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 		width = 80
 	}
 
-	boxWidth := summaryBoxWidth(width)
-	box1 := renderSyscallBox(snap, boxWidth)
-	box2 := renderBytesBox(snap, boxWidth)
-	box3 := renderErrorBox(snap, boxWidth)
+	panel := theme.PanelStyle.Width(panelWidth(width))
+	blocks := append(summaryBoxBlocks(snap, width),
+		// The trend line does not wrap, so it is cut to the terminal width.
+		theme.HighlightStyle.MaxWidth(width).Render(overviewTrendsLine(snap)),
+		panel.Render(overviewSparklineLines(snap, panelInnerWidth(width))),
+		panel.Render(overviewTopLines(snap)),
+		panel.Render(overviewHistogramLines(snap)),
+	)
+	return fitBlocks(blocks, height)
+}
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, box1, box2, box3)
-	trends := fmt.Sprintf(
+// summaryBoxBlocks renders the three summary boxes (syscalls, bytes, errors).
+// Side by side they need three minimum-width boxes; on a terminal narrower than
+// that the row would be wider than the screen and a real terminal would
+// soft-wrap it, breaking the height guarantee, so the boxes are stacked as
+// three full-width blocks instead (fitBlocks then sheds whole boxes by
+// priority when the height is short too).
+func summaryBoxBlocks(snap *statsengine.Snapshot, width int) []string {
+	if width < 3*minSummaryBoxWidth {
+		boxWidth := panelWidth(width)
+		return []string{
+			renderSyscallBox(snap, boxWidth),
+			renderBytesBox(snap, boxWidth),
+			renderErrorBox(snap, boxWidth),
+		}
+	}
+	boxWidth := summaryBoxWidth(width)
+	return []string{lipgloss.JoinHorizontal(lipgloss.Top,
+		renderSyscallBox(snap, boxWidth),
+		renderBytesBox(snap, boxWidth),
+		renderErrorBox(snap, boxWidth),
+	)}
+}
+
+// overviewTrendsLine summarises the latency/gap/throughput trend arrows.
+func overviewTrendsLine(snap *statsengine.Snapshot) string {
+	return fmt.Sprintf(
 		"Trends: latency %s  gap %s  throughput %s",
 		trendWithArrow(snap.LatencyTrend),
 		trendWithArrow(snap.GapTrend),
 		trendWithArrow(snap.ThroughputTrend),
 	)
+}
 
-	panelW := panelWidth(width)
-	panelInner := panelInnerWidth(width)
+// overviewSparklineLines renders the three sparklines with their labels padded
+// to a common width so the graphs start in the same column.
+func overviewSparklineLines(snap *statsengine.Snapshot, panelInner int) string {
 	labelWidth := maxLabelWidth("Latency:", "Gap:", "Throughput:")
-	latencySpark := renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth)
-	gapSpark := renderOverviewSparklineAligned("Gap:", snap.GapSeriesNs(), panelInner, labelWidth)
-	throughputSpark := renderOverviewSparklineAligned("Throughput:", snap.ThroughputSeriesB(), panelInner, labelWidth)
-	topSyscalls := "Top syscalls: " + summarizeTopSyscalls(snap)
-	topFiles := "Top files: " + summarizeTopFiles(snap)
-	topProcesses := "Top processes: " + summarizeTopProcesses(snap)
-	latencyHist := "Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram)
-	gapHist := "Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram)
+	return strings.Join([]string{
+		renderOverviewSparklineAligned("Latency:", snap.LatencySeriesNs(), panelInner, labelWidth),
+		renderOverviewSparklineAligned("Gap:", snap.GapSeriesNs(), panelInner, labelWidth),
+		renderOverviewSparklineAligned("Throughput:", snap.ThroughputSeriesB(), panelInner, labelWidth),
+	}, "\n")
+}
 
-	panel := theme.PanelStyle.Width(panelW)
-	sparkPanel := panel.Render(strings.Join([]string{latencySpark, gapSpark, throughputSpark}, "\n"))
-	topPanel := panel.Render(strings.Join([]string{topSyscalls, topFiles, topProcesses}, "\n"))
-	histPanel := panel.Render(strings.Join([]string{latencyHist, gapHist}, "\n"))
+// overviewTopLines lists the top syscalls, files and processes.
+func overviewTopLines(snap *statsengine.Snapshot) string {
+	return strings.Join([]string{
+		"Top syscalls: " + summarizeTopSyscalls(snap),
+		"Top files: " + summarizeTopFiles(snap),
+		"Top processes: " + summarizeTopProcesses(snap),
+	}, "\n")
+}
 
-	return strings.Join(
-		[]string{
-			row,
-			theme.HighlightStyle.Render(trends),
-			sparkPanel,
-			topPanel,
-			histPanel,
-		},
-		"\n",
-	)
+// overviewHistogramLines gives the brief latency and gap bucket summaries.
+func overviewHistogramLines(snap *statsengine.Snapshot) string {
+	return strings.Join([]string{
+		"Latency buckets: " + summarizeHistogramBrief(snap.LatencyHistogram),
+		"Gap buckets: " + summarizeHistogramBrief(snap.GapHistogram),
+	}, "\n")
 }
 
 func renderSyscallBox(snap *statsengine.Snapshot, width int) string {
@@ -94,8 +130,12 @@ func renderErrorBox(snap *statsengine.Snapshot, width int) string {
 	if snap.TotalSyscalls > 0 {
 		errPercent = float64(snap.TotalErrors) / float64(snap.TotalSyscalls) * 100
 	}
+	// The gap mean is between consecutive traced calls on a thread; under
+	// sampling or for aggregate-only syscalls it spans untraced calls, so
+	// the label says "traced" rather than suggesting a per-call gap. It is kept
+	// short so it fits the box at 80 columns without wrapping.
 	content := fmt.Sprintf(
-		"Errors: %d\nError rate: %.2f%%\nError/s: %.2f\nLatency mean: %.0fns\nGap mean: %.0fns",
+		"Errors: %d\nError rate: %.2f%%\nError/s: %.2f\nLatency mean: %.0fns\nTraced gap: %.0fns",
 		snap.TotalErrors,
 		errPercent,
 		snap.ErrorRatePerSec,
@@ -147,7 +187,7 @@ func summarizeTopProcesses(snap *statsengine.Snapshot) string {
 	}
 	parts := make([]string, 0, len(processes))
 	for _, p := range processes {
-		parts = append(parts, fmt.Sprintf("%s/%d(%d)", p.Comm, p.PID, p.Syscalls))
+		parts = append(parts, fmt.Sprintf("%s/%s(%d)", common.Sanitize(p.Comm), p.ID(), p.Syscalls))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -174,14 +214,12 @@ func summarizeHistogramBrief(hist statsengine.HistogramSnapshot) string {
 	return strings.Join(parts, ", ")
 }
 
+// trimPathTail sanitises the traced path (common.Sanitize) and shortens it to
+// at most max display cells, keeping its end (the file name) behind a "..."
+// prefix. It delegates to common.TruncateLeft,
+// which cuts on grapheme boundaries so multi-byte paths stay valid UTF-8.
 func trimPathTail(path string, max int) string {
-	if len(path) <= max {
-		return path
-	}
-	if max <= 3 {
-		return path[len(path)-max:]
-	}
-	return "..." + path[len(path)-max+3:]
+	return common.TruncateLeft(common.Sanitize(path), max, common.ASCIIEllipsis)
 }
 
 func formatElapsed(elapsed time.Duration) string {
@@ -204,19 +242,19 @@ func formatBytes(value float64) string {
 	return fmt.Sprintf("%.1f%s", value, units[unit])
 }
 
+// minSummaryBoxWidth is the narrowest a summary box may get before its longest
+// line ("Latency mean: ...ns") would wrap.
+const minSummaryBoxWidth = 18
+
 func summaryBoxWidth(width int) int {
 	if width <= 0 {
 		return 24
 	}
-	w := width / 3
-	if w < 18 {
-		return 18
-	}
-	return w
+	return max(width/3, minSummaryBoxWidth)
 }
 
 func renderOverviewSparkline(label string, data []float64, panelInner int) string {
-	w := panelInner - utf8.RuneCountInString(label) - 1 - sparklineSafetyMargin
+	w := panelInner - common.DisplayWidth(label) - 1 - sparklineSafetyMargin
 	if w < 8 {
 		w = 8
 	}
@@ -232,10 +270,12 @@ func renderOverviewSparklineAligned(label string, data []float64, panelInner int
 	return renderLabeledSparkline(paddedLabel, data, w)
 }
 
+// maxLabelWidth returns the widest label in terminal display cells (not
+// runes), so a wide CJK/emoji label still lines the sparklines up.
 func maxLabelWidth(labels ...string) int {
 	max := 0
 	for _, label := range labels {
-		w := utf8.RuneCountInString(label)
+		w := common.DisplayWidth(label)
 		if w > max {
 			max = w
 		}
@@ -243,12 +283,10 @@ func maxLabelWidth(labels ...string) int {
 	return max
 }
 
+// padLabelRight right-pads label with spaces to width display cells; a label
+// already that wide is returned unchanged.
 func padLabelRight(label string, width int) string {
-	pad := width - utf8.RuneCountInString(label)
-	if pad <= 0 {
-		return label
-	}
-	return label + strings.Repeat(" ", pad)
+	return common.PadRight(label, width)
 }
 
 func panelWidth(width int) int {

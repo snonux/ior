@@ -1,27 +1,40 @@
 package probes
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"ior/internal/probemanager"
+	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
 )
 
 type fakeManager struct {
-	states  []probemanager.ProbeState
-	toggles []string
+	// mu guards states: family batches mutate them from their own goroutine.
+	mu         sync.Mutex
+	states     []probemanager.ProbeState
+	toggles    []string
+	changes    []string
+	failAttach map[string]bool
 }
 
 func (f *fakeManager) States() []probemanager.ProbeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]probemanager.ProbeState, len(f.states))
 	copy(out, f.states)
 	return out
 }
 
 func (f *fakeManager) Toggle(syscall string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.toggles = append(f.toggles, syscall)
 	for i := range f.states {
 		if f.states[i].Syscall == syscall {
@@ -31,7 +44,65 @@ func (f *fakeManager) Toggle(syscall string) error {
 	return nil
 }
 
+// Attach and Detach set the named probe's state and record the call in
+// changes as "+name" / "-name".
+func (f *fakeManager) Attach(syscall string) error { return f.set(syscall, true) }
+func (f *fakeManager) Detach(syscall string) error { return f.set(syscall, false) }
+
+func (f *fakeManager) set(syscall string, active bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sign := "-"
+	if active {
+		sign = "+"
+	}
+	f.changes = append(f.changes, sign+syscall)
+	for i := range f.states {
+		if f.states[i].Syscall == syscall {
+			f.states[i].Active = active
+		}
+	}
+	return nil
+}
+
+// AttachFamily activates the family's inactive probes one by one, reporting
+// progress after each like the real manager. failAttach names probes whose
+// attach fails.
+func (f *fakeManager) AttachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, true, progress), nil
+}
+
+// DetachFamily deactivates the family's active probes.
+func (f *fakeManager) DetachFamily(_ context.Context, family types.SyscallFamily, progress func(int, int)) (probemanager.BatchResult, error) {
+	return f.setFamily(family, false, progress), nil
+}
+
+func (f *fakeManager) setFamily(family types.SyscallFamily, active bool, progress func(int, int)) probemanager.BatchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var idx []int
+	for i := range f.states {
+		if f.states[i].Active != active && probemanager.SyscallFamily(f.states[i].Syscall) == family {
+			idx = append(idx, i)
+		}
+	}
+	result := probemanager.BatchResult{Total: len(idx)}
+	progress(0, result.Total)
+	for n, i := range idx {
+		if active && f.failAttach[f.states[i].Syscall] {
+			result.Errors = append(result.Errors, probemanager.SyscallError{Syscall: f.states[i].Syscall, Err: errors.New("no tracepoint")})
+		} else {
+			f.states[i].Active = active
+			result.Changed++
+		}
+		progress(n+1, result.Total)
+	}
+	return result
+}
+
 func (f *fakeManager) ActiveCount() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	active := 0
 	for _, s := range f.states {
 		if s.Active {
@@ -81,6 +152,26 @@ func TestToggleEmitsProbeToggledMsg(t *testing.T) {
 	_ = next
 }
 
+// pressBulk presses a bulk key (a/n) in m and runs what the TUI does with the
+// modal's request: the walk over every probe of fm, as SetAllCmd runs it. It
+// returns the walk's result.
+func pressBulk(t *testing.T, m Model, fm *fakeManager, key rune) ProbeToggledMsg {
+	t.Helper()
+	_, cmd := m.Update(tea.KeyPressMsg{Code: key, Text: string(key)})
+	if cmd == nil {
+		t.Fatalf("key %q returned no command", key)
+	}
+	request, ok := cmd().(SetAllRequestMsg)
+	if !ok || request.Active != (key == 'a') {
+		t.Fatalf("key %q yielded %#v, want a SetAllRequestMsg{Active: %v}", key, request, key == 'a')
+	}
+	toggled, ok := SetAllCmd(context.Background(), fm, request.Active, 7)().(ProbeToggledMsg)
+	if !ok {
+		t.Fatal("SetAllCmd did not yield a ProbeToggledMsg")
+	}
+	return toggled
+}
+
 func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	fm := &fakeManager{
 		states: []probemanager.ProbeState{
@@ -92,33 +183,57 @@ func TestBulkKeysApplyGloballyNotOnlyFiltered(t *testing.T) {
 	m := NewModel(fm).Open()
 	m.search = "read"
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'n'}[0], Text: string([]rune{'n'})})
-	if cmd == nil {
-		t.Fatalf("expected bulk off command")
+	if toggled := pressBulk(t, m, fm, 'n'); toggled.Err != nil || toggled.Session != 7 || toggled.Intent != nil {
+		t.Fatalf("unexpected bulk off msg: %#v", toggled)
 	}
-	msg := cmd()
-	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
-		t.Fatalf("unexpected bulk off msg: %#v", msg)
-	}
-	if len(fm.toggles) != 3 {
-		t.Fatalf("expected all probes toggled off despite filter, got toggles=%+v", fm.toggles)
+	if want := []string{"-read", "-write", "-openat"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want all probes detached despite the filter %v", fm.changes, want)
 	}
 
-	// Re-open with all inactive and filtered search still present; "a" should
-	// toggle all probes back on.
-	m = NewModel(fm).Open()
-	m.search = "read"
-	fm.toggles = nil
-	_, cmd = m.Update(tea.KeyPressMsg{Code: []rune{'a'}[0], Text: string([]rune{'a'})})
-	if cmd == nil {
-		t.Fatalf("expected bulk on command")
+	fm.changes = nil
+	pressBulk(t, NewModel(fm).Open(), fm, 'a')
+	if want := []string{"+read", "+write", "+openat"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want %v", fm.changes, want)
 	}
-	msg = cmd()
-	if toggled, ok := msg.(ProbeToggledMsg); !ok || toggled.Err != nil {
-		t.Fatalf("unexpected bulk on msg: %#v", msg)
+}
+
+// TestBulkKeysAreIdempotent: a/n set a definite state from a fresh read of
+// the manager, so they only change probes not yet in that state - even when
+// the list the modal shows is stale - and repeating them changes nothing.
+// With Toggle they used to flip probes that had changed since the modal
+// loaded its list.
+func TestBulkKeysAreIdempotent(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{
+		{Syscall: "read", Active: true}, {Syscall: "write"},
+	}}
+	m := NewModel(fm).Open()   // the modal's list: read on, write off
+	fm.states[1].Active = true // write attached meanwhile (stale list)
+	pressBulk(t, m, fm, 'a')
+	if len(fm.changes) != 0 {
+		t.Fatalf("a with everything attached changed %v, want nothing", fm.changes)
 	}
-	if len(fm.toggles) != 3 {
-		t.Fatalf("expected all probes toggled on despite filter, got toggles=%+v", fm.toggles)
+	for range 2 {
+		pressBulk(t, m, fm, 'n')
+	}
+	if want := []string{"-read", "-write"}; !slices.Equal(fm.changes, want) {
+		t.Fatalf("changes = %v, want each probe detached once %v", fm.changes, want)
+	}
+}
+
+// TestSetAllCmdStopsWhenItsSessionEnds: the walk runs on the trace session's
+// context, so a restart stops it before the next probe instead of attaching
+// the rest to a manager that is about to close. The result still arrives,
+// tagged with the session and carrying the cancellation.
+func TestSetAllCmdStopsWhenItsSessionEnds(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	toggled, ok := SetAllCmd(ctx, fm, true, 3)().(ProbeToggledMsg)
+	if !ok || !errors.Is(toggled.Err, context.Canceled) || toggled.Session != 3 {
+		t.Fatalf("result = %#v, want the cancellation tagged with session 3", toggled)
+	}
+	if len(fm.changes) != 0 {
+		t.Fatalf("a cancelled walk still changed %v", fm.changes)
 	}
 }
 
@@ -127,7 +242,7 @@ func TestNavigationKeepsCursorInsideScrolledWindow(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		states = append(states, probemanager.ProbeState{Syscall: fmt.Sprintf("sys_%02d", i), Active: true})
 	}
-	m := NewModel(&fakeManager{states: states}).SetHeight(24).Open()
+	m := NewModel(&fakeManager{states: states}).SetSize(100, 24).Open()
 	for i := 0; i < 30; i++ {
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	}
@@ -146,5 +261,122 @@ func TestNavigationKeepsCursorInsideScrolledWindow(t *testing.T) {
 	}
 	if m.cursor != 0 || m.offset != 0 {
 		t.Fatalf("expected cursor and offset back at 0, got cursor=%d offset=%d", m.cursor, m.offset)
+	}
+}
+
+// Task 4r2: a terminal paste is one tea.PasteMsg; the search line must take it
+// and narrow the list the way typed text does.
+func TestSearchLineAcceptsBracketedPaste(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	m := NewModel(fm).Open()
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !m.TextInputFocused() {
+		t.Fatalf("expected / to open the search line")
+	}
+	m, _ = m.Update(tea.PasteMsg{Content: "wri"})
+	if m.search != "wri" || len(m.filtered()) != 1 || m.filtered()[0].Syscall != "write" {
+		t.Fatalf("expected the pasted text to filter to write, search=%q rows=%v", m.search, m.filtered())
+	}
+}
+
+// commitSearch opens the search line, pastes text and presses Enter, leaving
+// the committed filter shown in the header.
+func commitSearch(t *testing.T, text string) Model {
+	t.Helper()
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}, {Syscall: "write"}}}
+	m := NewModel(fm).SetSize(100, 40).Open()
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m, _ = m.Update(tea.PasteMsg{Content: text})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.TextInputFocused() {
+		t.Fatalf("Enter did not close the search line")
+	}
+	return m
+}
+
+// A committed filter is rendered through common.Sanitize: a pasted NBSP,
+// Braille blank or bidi override (which textinput lets through) shows as the
+// visible '?' in the header, while the stored filter stays raw for matching.
+func TestCommittedFilterHeaderIsSanitised(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"no-break space", "re\u00a0ad", "Filter: re?ad"},
+		{"Braille blank", "re\u2800ad", "Filter: re?ad"},
+		{"bidi override", "re\u202ead", "Filter: re?ad"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := commitSearch(t, tc.in)
+			view := m.View(100, 40)
+			if !strings.Contains(view, tc.want) {
+				t.Errorf("header lacks %q:\n%s", tc.want, view)
+			}
+			for _, r := range "\u00a0\u2800\u202e" {
+				if strings.ContainsRune(view, r) {
+					t.Errorf("view still contains %U:\n%q", r, view)
+				}
+			}
+			if m.search != tc.in {
+				t.Errorf("stored filter = %q, want the raw %q", m.search, tc.in)
+			}
+		})
+	}
+}
+
+// Negative: ordinary filter text, with an ASCII space and non-ASCII letters,
+// is shown unchanged.
+func TestCommittedFilterHeaderKeepsOrdinaryText(t *testing.T) {
+	m := commitSearch(t, "re ad \u65e5\u672c")
+	if view := m.View(100, 40); !strings.Contains(view, "Filter: re ad \u65e5\u672c") {
+		t.Errorf("ordinary filter text was altered:\n%s", view)
+	}
+}
+
+// With the search line closed the list keys are commands (a all-on, n all-off,
+// q close), so a paste must not run them nor open the search line.
+func TestBracketedPasteWithoutSearchLineIsIgnored(t *testing.T) {
+	fm := &fakeManager{states: []probemanager.ProbeState{{Syscall: "read"}}}
+	m := NewModel(fm).Open()
+	m, cmd := m.Update(tea.PasteMsg{Content: "an/q"})
+	if cmd != nil || m.TextInputFocused() || m.search != "" || !m.Visible() || len(fm.toggles)+len(fm.changes) != 0 {
+		t.Fatalf("paste acted as keys: cmd=%v focused=%v search=%q visible=%v toggles=%v changes=%v",
+			cmd != nil, m.TextInputFocused(), m.search, m.Visible(), fm.toggles, fm.changes)
+	}
+}
+
+// A session change rebinds an open modal; an error or refusal shown for the
+// old session (a failed toggle, BulkBusyNotice) must not linger against the new
+// one, while the cursor and the info line survive.
+func TestRebindClearsStaleErrorKeepsInfoAndCursor(t *testing.T) {
+	old := &fakeManager{states: []probemanager.ProbeState{{Syscall: "a"}, {Syscall: "b"}, {Syscall: "c"}}}
+	m := NewModel(old).WithSession(1).SetSize(100, 40).Open()
+	m, _ = m.Update(keyMsg("j"))
+	m.lastInfo = "FS: attached 2 of 2 probes (trace restarted)"
+	m = m.SetError(BulkBusyNotice)
+	if !strings.Contains(m.View(100, 40), "Error:") {
+		t.Fatal("setup: the modal does not show the error")
+	}
+
+	fresh := &fakeManager{states: []probemanager.ProbeState{{Syscall: "a"}, {Syscall: "b"}, {Syscall: "c"}}}
+	m = m.Rebind(fresh, 2)
+	view := m.View(100, 40)
+	if m.lastErr != "" || strings.Contains(view, "Error:") {
+		t.Fatalf("stale error survived the rebind: lastErr=%q", m.lastErr)
+	}
+	if !strings.Contains(view, "trace restarted") {
+		t.Fatalf("the info line was dropped by the rebind:\n%s", view)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 kept", m.cursor)
+	}
+}
+
+// A family batch that finishes after the first rebind reports its outcome in
+// lastInfo; a second rebind (the new manager being published) must keep it.
+func TestRebindKeepsFamilyBatchOutcomeAcrossSecondRebind(t *testing.T) {
+	m := NewModel(familyTestManager()).WithSession(1).SetSize(100, 40).Open()
+	m = m.Rebind(nil, 2)
+	m = m.FinishBatch(FamilyToggledMsg{Family: types.FamilyFS, Attach: true}, "(trace restarted)")
+	m = m.Rebind(familyTestManager(), 2)
+	if !strings.Contains(m.lastInfo, "(trace restarted)") || !strings.Contains(m.View(100, 40), "trace restarted") {
+		t.Fatalf("the family-batch outcome was lost on the second rebind: %q", m.lastInfo)
 	}
 }

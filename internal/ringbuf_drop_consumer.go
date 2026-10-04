@@ -26,6 +26,17 @@ type ringbufDropValueMap interface {
 }
 
 // ringbufDropCounter reads the kernel-side ring-buffer drop counter.
+//
+// It counts what a program that RAN, and whose filter passed, could not
+// reserve: records ior wanted. A program the kernel did not run counts
+// nothing here, although its record is just as lost; those runs are counted
+// by the kernel, per program and for every task on the host, and read beside
+// this counter where they can be (skippedRunCounter, recordLossSource,
+// withSkippedRuns; task 723). Reading this map is itself a bpf(2) map
+// lookup, which raises bpf_prog_active on ior's CPU for its few
+// instructions: preempted right there, ior would be the cause of such skips
+// on that CPU until it runs again. The window is some hundred nanoseconds
+// per read and is not closed; the skips it causes are counted like any.
 type ringbufDropCounter struct {
 	dropMap ringbufDropValueMap
 }

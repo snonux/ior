@@ -29,6 +29,39 @@ type animTickMsg struct {
 // flameViewCacheKey captures the View() inputs that determine the rendered
 // output. When two consecutive calls produce the same key, the cached content
 // string is reused instead of re-running RenderTerminalView.
+//
+// searchQuery is only the committed filter; searchInput and searchCursor track
+// the live text input that the search footer renders while the prompt is open.
+// Without them every keystroke after '/' hit the cache and the typed text stayed
+// invisible until Enter.
+//
+// generation is Model.refreshGeneration. SetLiveTrie restarts the snapshot
+// version at 0, so a new session's trie can reach the same version, frame count
+// and status message as the previous session's cached render while showing
+// different frame names; without the generation that render would be served
+// stale whenever no View ran between the swap and the first refresh (the
+// dashboard attaches a trie and loads it inside one Update). Every state change
+// that invalidates in-flight refreshes (SetLiveTrie, baseline/order/metric
+// resets) advances it.
+//
+// fieldIndex selects the toolbar's o:order(...) label. The index alone is
+// ambiguous across sessions: SetLiveTrie may prepend an unknown field order to
+// fieldPresets and keep the index at 0. The generation is what disambiguates
+// that case. fieldIndex itself is belt-and-braces: every path that changes it
+// (cycleFieldOrder via clearSnapshotState, SetLiveTrie) also advances the
+// generation, so no scenario changes the order label through the index alone
+// today; it stays in the key so a future path that moves the index without
+// clearing the snapshot cannot serve a stale toolbar (only a test that moves
+// the index directly, TestViewCacheKeyTracksFieldOrder, pins it). Keying on the index
+// instead of the joined label keeps the cache-hit path free of a
+// strings.Join per View.
+//
+// searchInput and searchCursor are only read while the search prompt is open
+// (see currentViewCacheKey): the footer renders them only then.
+//
+// hasSnapshot decides whether an empty frame list renders the "snapshot has no
+// visible frames" panel; clearSnapshotState drops the snapshot without touching
+// lastVersion, so neither is implied by the other key fields.
 type flameViewCacheKey struct {
 	version       uint64
 	selectedIdx   int
@@ -38,10 +71,15 @@ type flameViewCacheKey struct {
 	matchCount    int
 	visibleCount  int
 	searchQuery   string
+	searchInput   string
+	searchCursor  int
 	statusMessage string
 	zoomPath      string
 	countField    string
 	heightField   string
+	fieldIndex    int
+	generation    uint64
+	hasSnapshot   bool
 	searchActive  bool
 	showHelp      bool
 	paused        bool
@@ -185,6 +223,12 @@ type Model struct {
 }
 
 // tuiFrame stores one terminal flamegraph frame cell.
+//
+// Name is the display label and is sanitised (common.Sanitize) where frames
+// are built, because frame names are traced comm/syscall/path values that an
+// unprivileged user controls. Path is the raw pathSeparator-joined node path:
+// it is a lookup key (zoom, selection, filters) and must be sanitised by
+// whoever renders it (compactFramePath).
 type tuiFrame struct {
 	Name        string
 	Col         int
@@ -276,6 +320,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSearchInput(msg)
 		}
 		return m.handleKeyNavigation(msg)
+	case tea.PasteMsg:
+		// A bracketed paste is text for the search input and nothing else:
+		// outside search mode the navigation keys are commands, which pasted
+		// text must not trigger, so it is dropped.
+		if m.search.isActive() {
+			m.lastKeyAt = time.Now()
+			m.search.handlePaste(msg)
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -452,6 +505,12 @@ func (m *Model) userDriving() bool {
 	return driveWindowActive(m.lastKeyAt)
 }
 
+// SearchActive reports whether the flamegraph's search input is open and
+// receiving typed text.
+func (m *Model) SearchActive() bool {
+	return m.search.isActive()
+}
+
 // ConsumesKey reports whether the flamegraph should handle a key press before
 // dashboard- or app-level shortcuts.
 func (m *Model) ConsumesKey(msg tea.KeyPressMsg) bool {
@@ -551,8 +610,22 @@ func (m *Model) renderViewContent() string {
 
 // currentViewCacheKey snapshots every Model field that influences View()
 // output. If any of these differ between successive View() invocations, the
-// cache misses and the content is rebuilt.
+// cache misses and the content is rebuilt. Any rendered input left out of the
+// key is served stale from the cache, which is why the live search input value
+// and cursor are included alongside the committed query, and why the refresh
+// generation separates one live-trie session from the next.
 func (m *Model) currentViewCacheKey() flameViewCacheKey {
+	// The input value and cursor only reach the screen through the search
+	// footer, so they are read only while the prompt is open. Closing the
+	// prompt always flips searchActive, which changes the key (Esc also clears
+	// the input via SearchController.clear; Enter commits and keeps the input
+	// text, so there the searchActive flip alone invalidates the cache).
+	// Reading textinput.Value() on every idle View allocated for nothing.
+	var searchInput string
+	var searchCursor int
+	if m.search.isActive() {
+		searchInput, searchCursor = m.search.inputValue(), m.search.inputCursor()
+	}
 	return flameViewCacheKey{
 		version:       m.lastVersion,
 		selectedIdx:   m.sel.selected(),
@@ -562,10 +635,15 @@ func (m *Model) currentViewCacheKey() flameViewCacheKey {
 		matchCount:    len(m.search.matches()),
 		visibleCount:  len(m.search.visibleSet()),
 		searchQuery:   m.search.query(),
+		searchInput:   searchInput,
+		searchCursor:  searchCursor,
 		statusMessage: m.statusMessage,
 		zoomPath:      m.zoom.path(),
 		countField:    m.countField,
 		heightField:   m.heightField,
+		fieldIndex:    m.fieldIndex,
+		generation:    m.refreshGeneration,
+		hasSnapshot:   m.snapshot != nil,
 		searchActive:  m.search.isActive(),
 		showHelp:      m.showHelp,
 		paused:        m.paused,
@@ -848,6 +926,7 @@ func (m *Model) jumpToMatch(direction int) {
 // first match in direction jumpDir, or, when jumpDir is 0 (no matches or the
 // filter was cleared), onto the nearest navigable frame.
 func (m *Model) followSearchResult(jumpDir int) {
+	m.sel.cancelWish() // applying a query is a user decision about the selection
 	if jumpDir != 0 {
 		m.jumpToMatch(jumpDir)
 		return
@@ -855,7 +934,11 @@ func (m *Model) followSearchResult(jumpDir int) {
 	m.ensureSelectionNavigable()
 }
 
+// zoomIn, zoomUndo, zoomReset and a zoom click re-root the layout on the
+// user's say-so, so each cancels the selection wish first: a frame remembered
+// from before the zoom is no longer the one the user is looking at.
 func (m *Model) zoomIn() {
+	m.sel.cancelWish()
 	frames := m.anim.currentFrames()
 	if len(frames) == 0 || m.snapshot == nil {
 		m.statusMessage = "Zoom unavailable: no frame selected"
@@ -876,6 +959,7 @@ func (m *Model) zoomIn() {
 }
 
 func (m *Model) zoomUndo() {
+	m.sel.cancelWish()
 	if !m.zoom.undo(m.snapshot) {
 		m.statusMessage = "Zoom undo unavailable"
 		return
@@ -891,6 +975,7 @@ func (m *Model) zoomUndo() {
 // zoomReset resets the zoom to the full tree. Delegates the "already at root"
 // check to ZoomNavigator.alreadyAtRoot, and the state clear to ZoomNavigator.reset.
 func (m *Model) zoomReset() {
+	m.sel.cancelWish()
 	if m.zoom.alreadyAtRoot() {
 		m.statusMessage = "Zoom already at root"
 		return
@@ -976,6 +1061,7 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 	if idx < 0 {
 		return false
 	}
+	m.sel.cancelWish() // a click is a user move whether or not it zooms
 	clickedPath := m.anim.currentFrames()[idx].Path
 	currentRoot := m.currentRootPath()
 	if clickedPath == currentRoot {
@@ -1003,8 +1089,15 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) bool {
 }
 
 // frameIndexAt delegates to the renderer package-level helper to convert
-// terminal coordinates (x, y) to a frame index, accounting for UI chrome.
+// terminal coordinates (x, y) to a frame index, accounting for UI chrome. It
+// returns -1 while the view shows the "no frames match filter" placeholder
+// (an applied filter with an empty visible set): the frames still exist in
+// the model but none is drawn, so none may be clicked. The geometry-driven
+// placeholders ("terminal too narrow", ...) are handled inside frameIndexAt.
 func (m *Model) frameIndexAt(x, y int) int {
+	if filterActive(m.search.query()) && filterHidesAllFrames(m.search.visibleSet()) {
+		return -1
+	}
 	return frameIndexAt(m.anim.currentFrames(), x, y, m.width, m.height, m.showHelp, m.heightMetricActive())
 }
 
@@ -1024,6 +1117,8 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 		return frames
 	}
 
+	// Shift the zoomed layout down below the lineage rows; the zoom root
+	// itself is dropped because the lineage re-adds it as its last row.
 	rowShift := len(parts) - 1
 	out := make([]tuiFrame, 0, len(frames)+len(parts))
 	for _, frame := range frames {
@@ -1038,30 +1133,38 @@ func applyZoomLineage(frames []tuiFrame, snapshot *snapshotNode, zoomPath string
 	rootTotal := snapshotTotal(snapshot)
 	for depth := range parts {
 		path := strings.Join(parts[:depth+1], pathSeparator)
-		node := findNodeByPath(snapshot, path)
-		total := uint64(0)
-		heightTotal := uint64(0)
-		if node != nil {
-			total = snapshotTotal(node)
-			heightTotal = snapshotHeightTotal(node)
-		}
-		percent := 0.0
-		if rootTotal > 0 {
-			percent = 100 * float64(total) / float64(rootTotal)
-		}
-		name := parts[depth]
-		out = append(out, tuiFrame{
-			Name:        name,
-			Col:         0,
-			Row:         depth,
-			Width:       width,
-			Total:       total,
-			HeightTotal: heightTotal,
-			Percent:     percent,
-			Fill:        terminalFrameColor(name),
-			Depth:       depth,
-			Path:        path,
-		})
+		out = append(out, lineageFrame(snapshot, parts[depth], path, depth, width, rootTotal))
 	}
 	return out
+}
+
+// lineageFrame builds the full-width frame of one zoom-path ancestor at row
+// depth. An ancestor no longer present in snapshot gets zero totals.
+func lineageFrame(snapshot *snapshotNode, name, path string, depth, width int, rootTotal uint64) tuiFrame {
+	node := findNodeByPath(snapshot, path)
+	total := uint64(0)
+	heightTotal := uint64(0)
+	if node != nil {
+		total = snapshotTotal(node)
+		heightTotal = snapshotHeightTotal(node)
+	}
+	percent := 0.0
+	if rootTotal > 0 {
+		percent = 100 * float64(total) / float64(rootTotal)
+	}
+	return tuiFrame{
+		// Name is display-only and sanitised (traced comm/path frame names
+		// are attacker-controlled); Path stays raw because it is the
+		// lookup key for zoom, selection and filters.
+		Name:        common.Sanitize(name),
+		Col:         0,
+		Row:         depth,
+		Width:       width,
+		Total:       total,
+		HeightTotal: heightTotal,
+		Percent:     percent,
+		Fill:        terminalFrameColor(name),
+		Depth:       depth,
+		Path:        path,
+	}
 }

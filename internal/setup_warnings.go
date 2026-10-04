@@ -3,6 +3,26 @@ package internal
 import (
 	"fmt"
 	"strings"
+	"sync"
+
+	"ior/internal/textsafe"
+)
+
+const (
+	// maxFailureWarnings caps how many collected warnings one setup failure
+	// appends to its error. The libbpf route already limits a TUI setup to 16
+	// rows plus a summary; the error screen is much smaller than the stream
+	// tab, so fewer lines are kept and the rest only counted.
+	maxFailureWarnings = 8
+	// maxFailureWarningBytes bounds each appended line before escaping -
+	// "(N more lines)" marker and "..." ellipses included - so a long line
+	// cannot fill the error screen on its own. It equals the route's row
+	// bound on purpose: a routed verifier row is already within that bound
+	// and holds the reason the user is after, and because shortenWarning is
+	// idempotent at a given bound, re-shortening such a row here leaves it
+	// byte for byte unchanged instead of cutting the reason a second time.
+	// Escaping can still lengthen the line (one control byte becomes four).
+	maxFailureWarningBytes = maxRoutedWarningBytes
 )
 
 // setupWarnings collects non-fatal degradations found while a trace is being
@@ -18,9 +38,13 @@ import (
 // warnings once its output is wired: warning rows in the TUI, stderr in the
 // headless modes (see notifyWarningOrLog).
 //
-// Setup is single-threaded, so the collector needs no locking; the event loop
-// takes ownership of the messages before run starts.
+// The collector is locked because setup is not strictly single-threaded: a TUI
+// restart cancels the old session without waiting for it, so its libbpf
+// warnings (routed here by libbpfLogger from whichever goroutine is inside
+// libbpf) can arrive while the new session's own setup code adds to the same
+// collector. The event loop takes ownership of the messages before run starts.
 type setupWarnings struct {
+	mu       sync.Mutex
 	messages []string
 }
 
@@ -31,12 +55,16 @@ func (w *setupWarnings) add(args ...any) {
 	if message == "" {
 		return
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.messages = append(w.messages, message)
 }
 
 // drain hands over the collected warnings and empties the collector, so a
 // warning is replayed at most once.
 func (w *setupWarnings) drain() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	messages := w.messages
 	w.messages = nil
 	return messages
@@ -50,4 +78,61 @@ func (w *setupWarnings) drain() []string {
 func wireEventLoopLogging(el *eventLoop, logln func(...any), warnings *setupWarnings) {
 	el.SetStatusCallback(logln)
 	el.deferWarnings(warnings.drain())
+}
+
+// setupFailure is a setup error together with the warnings that were collected
+// but not yet delivered when it happened. Unwrap keeps errors.Is/As working on
+// the original cause.
+type setupFailure struct {
+	err   error
+	lines []string
+}
+
+func (e *setupFailure) Error() string {
+	var b strings.Builder
+	b.WriteString(e.err.Error())
+	b.WriteString("\nWarnings logged during setup:")
+	for _, line := range e.lines {
+		b.WriteString("\n  - ")
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+func (e *setupFailure) Unwrap() error { return e.err }
+
+// explainFailure returns err with the collected, still undelivered warnings
+// appended. Without warnings it returns err itself, so a failure that has
+// nothing to add is unchanged.
+//
+// This is how the libbpf WARN lines of a failed load or attach reach the user
+// in the TUI: the collector is replayed as warning rows only when the event
+// loop starts, which a failed setup never gets to, and the dashboard is not
+// there yet - the error screen is the only thing shown. The text is also what
+// a headless run prints, which is why it is made safe here and not only by
+// the TUI's own SanitizeLines: each warning goes through shortenWarning (a
+// failed program load becomes its program name plus the verifier log's last
+// lines, any other multi-line warning its first line; a "(N more lines)"
+// marker the libbpf route added is kept, only the content is cut) bounded by
+// maxFailureWarningBytes (a row the route already shaped to the same bound
+// passes unchanged), is escaped with textsafe.Escape so kernel or traced
+// text cannot carry terminal escapes, and at most maxFailureWarnings are
+// listed with the rest counted. The route shortens its own rows already, but
+// other collector users make no such promise.
+func (w *setupWarnings) explainFailure(err error) error {
+	if err == nil {
+		return nil // success: the warnings stay queued for the event loop
+	}
+	messages := w.drain()
+	if len(messages) == 0 {
+		return err
+	}
+	lines := make([]string, 0, min(len(messages), maxFailureWarnings)+1)
+	for _, message := range messages[:min(len(messages), maxFailureWarnings)] {
+		lines = append(lines, textsafe.Escape(shortenWarning(message, maxFailureWarningBytes)))
+	}
+	if extra := len(messages) - maxFailureWarnings; extra > 0 {
+		lines = append(lines, fmt.Sprintf("... and %d more warning(s)", extra))
+	}
+	return &setupFailure{err: err, lines: lines}
 }

@@ -11,6 +11,7 @@ import (
 	"ior/internal/flags"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
+	"ior/internal/sampling"
 	"ior/internal/streamrow"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -46,10 +47,36 @@ func (s *headlessParquetSink) configure(el *eventLoop) {
 	})
 }
 
+// headlessRecorderConfig is the recorder setup of a headless run: backpressure
+// with a large bounded queue. Nobody watches a headless run, so a file that
+// silently misses rows the event loop had already processed (the old 4096-row
+// shed-mode queue lost ~2% at 870k rows/s while a row-group flush held the
+// writer) is worse than a slower loop: the print callback waits for the
+// writer, the event loop falls behind, and whatever the kernel then cannot
+// deliver is lost in the ring buffer, where it is counted ("ring buffer
+// drops") and taken into account by the sampling totals. The TUI keeps the
+// non-blocking shed mode, because its event loop also feeds the live views.
+func headlessRecorderConfig() parquet.RecorderConfig {
+	return parquet.RecorderConfig{
+		QueueCapacity: parquet.HeadlessQueueCapacity,
+		BlockWhenFull: true,
+	}
+}
+
+// newHeadlessRecorder builds the recorder of a headless run from the given
+// configuration; parquet.NewRecorder in production. It is a variable only so a
+// test can capture the configuration runHeadlessParquetWith really passes and
+// pin that the call site applies headlessRecorderConfig (a call site that
+// silently fell back to the zero config would shed rows again, and no
+// recorder-level test could notice).
+var newHeadlessRecorder = parquet.NewRecorder
+
 // isFatalRecorderError reports whether a recorder error must abort the
 // headless run. Queue overflow sheds the single row while the session stays
 // active, so it is surfaced via Status().RowsDropped after the run instead
-// of cancelling the trace and losing every already-captured event.
+// of cancelling the trace and losing every already-captured event. The
+// headless recorder blocks rather than sheds (headlessRecorderConfig), so this
+// only matters for a recorder configured otherwise.
 func isFatalRecorderError(err error) bool {
 	return err != nil && !errors.Is(err, parquet.ErrRecorderQueueFull)
 }
@@ -114,22 +141,39 @@ func runHeadlessParquet(cfg flags.Config) error {
 // runHeadlessParquetWith runs one headless Parquet recording on the
 // infrastructure that setup builds. The shared trace setup owns every BPF and
 // runtime resource (and releases what it built when it fails part-way); this
-// function adds only the Parquet-specific lifecycle on top: the recorder is
-// started once the trace can run, so a failed setup leaves no file behind, and
-// it is stopped - flushing and finalising the file - after the event loop has
-// drained and before the infrastructure is released.
+// function adds only the Parquet-specific lifecycle on top: the output path is
+// probed first (parquet.CheckOutputPath) so an unusable one fails before the
+// costly setup; the recorder is started once the trace can run, so a failed
+// setup leaves no file behind; and it is stopped - flushing and finalising the
+// file - after the event loop has drained and before the infrastructure is
+// released.
 func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) error {
 	cfg = headlessParquetTraceConfig(cfg)
 	logln := newLogger(true)
+
+	// Cheap output check before the expensive BPF load/attach: a bad directory
+	// used to cost seconds of setup (and a "Probing" line) before the error.
+	if err := parquet.CheckOutputPath(cfg.ParquetPath); err != nil {
+		return fmt.Errorf("start parquet recording: %w", err)
+	}
+
+	// Before the probes attach, like runTraceWithContext: see targetWatch.
+	watch := openHeadlessTargetWatch(cfg, true)
+	defer watch.Close()
 
 	infra, err := setup(cfg, logln)
 	if err != nil {
 		return err
 	}
 	defer infra.Close()
+	watch.attachTo(infra)
 
-	recorder := parquet.NewRecorder(parquet.RecorderConfig{})
-	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: parquet.NewFileMetadata("headless")}); err != nil {
+	// A run that samples says so in the file footer from the start; the exact
+	// totals follow when the recording stops (finishHeadlessParquetRecording).
+	meta := parquet.NewFileMetadata("headless")
+	meta.Sampling = infra.el.samplingPlan()
+	recorder := newHeadlessRecorder(headlessRecorderConfig())
+	if err := recorder.Start(cfg.ParquetPath, parquet.StartOptions{Metadata: meta}); err != nil {
 		return fmt.Errorf("start parquet recording: %w", err)
 	}
 
@@ -137,7 +181,7 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 	// sink.configure wires the event loop's print callback to record each pair
 	// to Parquet; runTraceLoop wraps it to skip inactive probes.
 	totalDuration := runTraceLoop(infra, true, sink.configure, logln)
-	if err := finishHeadlessParquetRecording(recorder, sink, logln); err != nil {
+	if err := finishHeadlessParquetRecording(recorder, sink, infra.el.samplingResult(), logln); err != nil {
 		return err
 	}
 	logTraceStopped(totalDuration, logln)
@@ -149,8 +193,15 @@ func runHeadlessParquetWith(cfg flags.Config, setup headlessParquetInfraSetup) e
 // during the run is the primary error - it is what cancelled the trace - with
 // a distinct Stop error joined to it; otherwise Stop's own error is returned.
 // Rows shed by queue overflow are not an error, but the recording is then
-// partial, so that is logged.
-func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessParquetSink, logln func(...any)) error {
+// partial, so that is logged; the headless recorder applies backpressure
+// instead of shedding, so in practice this stays silent.
+//
+// samples is the run's sampling outcome. Its exact totals go into the file
+// footer before the recorder stops (a recording that sampled nothing gets no
+// sampling key); failing to record them fails the run, because a sampled file
+// without its totals would pass for a complete one.
+func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessParquetSink, samples sampling.Summary, logln func(...any)) error {
+	totalsErr := recorder.SetSamplingTotals(samples)
 	stopErr := recorder.Stop()
 	if err := sink.err(); err != nil {
 		if stopErr != nil && !errors.Is(stopErr, err) {
@@ -161,10 +212,28 @@ func finishHeadlessParquetRecording(recorder *parquet.Recorder, sink *headlessPa
 	if stopErr != nil {
 		return stopErr
 	}
-	if dropped := recorder.Status().RowsDropped; dropped > 0 {
+	if totalsErr != nil {
+		return fmt.Errorf("record the sampling totals in the parquet footer: %w", totalsErr)
+	}
+	status := recorder.Status()
+	logln(parquetPublishedNotice(status))
+	if dropped := status.RowsDropped; dropped > 0 {
 		logln("Warning:", dropped, "events were dropped (parquet recorder queue overflow) - the recording is partial")
 	}
 	return nil
+}
+
+// parquetPublishedNotice names the file a finished recording was really
+// written to. The path given with -parquet is replaced in place, so normally
+// the notice just confirms it; if the recorder ever had to publish under
+// another name (a "-N" suffix because the requested name was protected) the
+// notice says so explicitly, since the user would otherwise look for the
+// recording at the requested path and find something else.
+func parquetPublishedNotice(status parquet.Status) string {
+	if status.RequestedPath != "" && status.Path != status.RequestedPath {
+		return fmt.Sprintf("Parquet recording written to %s (%s was already taken)", status.Path, status.RequestedPath)
+	}
+	return "Parquet recording written to " + status.Path
 }
 
 // setupHeadlessParquetInfra selects the headless event-loop variant while
@@ -175,8 +244,12 @@ func setupHeadlessParquetInfra(cfg flags.Config, logln func(...any)) (*traceInfr
 	)
 }
 
-// newHeadlessParquetEventLoop leaves the syscall aggregate source unwired:
-// headless Parquet records event rows and has no aggregate sink to consume it.
+// newHeadlessParquetEventLoop builds the headless Parquet event loop. Headless
+// Parquet records event rows and has no TUI aggregate sink, so the kernel
+// aggregate source stays unwired - except when the run samples (an explicit
+// -syscall-sampling-* rate): then the loop carries a samplingTally as its
+// aggregate sink, and the source is wired so the invocations that produced no
+// row are still counted and end up in the file footer.
 func newHeadlessParquetEventLoop(
 	cfg flags.Config,
 	bpfModule *bpf.Module,
@@ -186,6 +259,14 @@ func newHeadlessParquetEventLoop(
 	if err != nil {
 		return nil, err
 	}
+	if el.samplingTally != nil {
+		aggregateSrc, err := openAggregateSource(bpfModule)
+		if err != nil {
+			return nil, fmt.Errorf("count the unsampled invocations of a sampled recording: %w", err)
+		}
+		el.aggregateSrc = aggregateSrc
+	}
 	attachRingbufDropCounter(el, bpfModule, warnSetup)
+	attachRingbufUnreadReader(el, bpfModule, warnSetup)
 	return el, nil
 }

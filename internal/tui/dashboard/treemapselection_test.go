@@ -88,7 +88,7 @@ func assertProcessesTableSelection(t *testing.T, m *Model, wantAt int, wantPID u
 
 func assertProcessSelection(t *testing.T, m *Model, name string, sel keyedSelection, mode tabVizMode, wantAt int, wantPID uint32) {
 	t.Helper()
-	if got := sel.selectedKey(); *sel.offset != wantAt || got != processKey(wantPID) {
+	if got := sel.selectedKey(); *sel.offset != wantAt || got != processKey(wantPID, 0) {
 		t.Fatalf("%s: selected PID %q at %d, want %d at %d", name, got, *sel.offset, wantPID, wantAt)
 	}
 	if m.processesTab.mode != mode {
@@ -148,16 +148,17 @@ func TestSyscallsTreemapSelectionFallsBackWhenSyscallDisappears(t *testing.T) {
 	assertRenderedSelection(t, m, "sel:2/2 write")
 }
 
-func TestSyscallsTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
+func TestSyscallsTreemapSelectionSurvivesEmptySnapshot(t *testing.T) {
 	m := newVizModel(t, TabSyscalls, tabVizModeTreemap, sysRanking(9, 5, 1))
 	m = pressJ(t, m, 2)
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: syscallsSnapshot()})
-	assertSyscallsTreemapSelection(t, m, 0, "")
+	assertSyscallsTreemapSelection(t, m, 2, "")
 	assertRenderedSelection(t, m, "treemap: no data")
 
+	// The syscall selected before the reset is selected again when it returns.
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: sysRanking(9, 5, 1)})
-	assertSyscallsTreemapSelection(t, m, 0, "read")
+	assertSyscallsTreemapSelection(t, m, 2, "close")
 }
 
 func TestSyscallsTreemapSelectionSurvivesMetricToggle(t *testing.T) {
@@ -219,21 +220,22 @@ func TestProcessesTreemapSelectionFallsBackWhenPIDDisappears(t *testing.T) {
 	assertRenderedSelection(t, m, "sel:2/2 200:beta")
 }
 
-func TestProcessesTreemapSelectionResetsOnEmptySnapshot(t *testing.T) {
+func TestProcessesTreemapSelectionSurvivesEmptySnapshot(t *testing.T) {
 	m := newVizModel(t, TabProcesses, tabVizModeTreemap, procRanking(9, 5, 1))
 	m = pressJ(t, m, 2)
 
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: processesSnapshot()})
-	if key := m.processesTreemapSelection().selectedKey(); m.processesTreemapOffset != 0 || key != "" {
-		t.Fatalf("expected no selection at 0, got %q at %d", key, m.processesTreemapOffset)
+	if key := m.processesTreemapSelection().selectedKey(); key != "" {
+		t.Fatalf("expected no selection on an empty list, got %q", key)
 	}
 	if _, ok := m.selectedProcessSnapshot(); ok {
 		t.Fatalf("expected no Enter target on an empty snapshot")
 	}
 	assertRenderedSelection(t, m, "treemap: no data")
 
+	// PID 300 was selected before the reset and is selected again after it.
 	m = tickStats(t, m, messages.StatsTickMsg{Snap: procRanking(9, 5, 1)})
-	assertProcessesTreemapSelection(t, m, 0, 100)
+	assertProcessesTreemapSelection(t, m, 2, 300)
 }
 
 func TestProcessesTreemapSelectionKeptOnFailedStatsTick(t *testing.T) {
@@ -606,10 +608,94 @@ func TestKeyedSelection(t *testing.T) {
 		t.Fatalf("keep with vanished key: offset %d, want 0", offset)
 	}
 	sel.keep(func() { keys = nil })
-	if offset != 0 || sel.selectedKey() != "" {
-		t.Fatalf("keep with empty list: offset %d, key %q", offset, sel.selectedKey())
+	if sel.selectedKey() != "" {
+		t.Fatalf("keep with empty list: key %q", sel.selectedKey())
 	}
-	if got := processKey(4294967295); got != "4294967295" {
+	if got := processKey(4294967295, 0); got != "4294967295" {
 		t.Fatalf("processKey = %q", got)
+	}
+}
+
+// TestProcessKeyTellsRecycledPIDLifetimesApart checks that the rows of two
+// processes that shared a PID (task ro2) get distinct selection keys, so the
+// sort re-anchor and the treemap selection stay on the chosen lifetime, while
+// the first lifetime keeps the bare-PID key.
+func TestProcessKeyTellsRecycledPIDLifetimesApart(t *testing.T) {
+	old := statsengine.ProcessSnapshot{PID: 2000, Lifetime: 0, Comm: "a", Syscalls: 1}
+	successor := statsengine.ProcessSnapshot{PID: 2000, Lifetime: 1, Comm: "b", Syscalls: 9}
+	if got := processRowKey(old); got != "2000" {
+		t.Fatalf("first lifetime key = %q, want %q", got, "2000")
+	}
+	if got := processRowKey(successor); got != "2000#1" {
+		t.Fatalf("second lifetime key = %q, want %q", got, "2000#1")
+	}
+	rows := []statsengine.ProcessSnapshot{successor, old}
+	if idx, ok := findProcessOffset(rows, processRowKey(old)); !ok || idx != 1 {
+		t.Fatalf("findProcessOffset(old) = %d, %v; want 1, true", idx, ok)
+	}
+	if _, ok := findProcessOffset(rows, processKey(2000, 2)); ok {
+		t.Fatalf("findProcessOffset matched a lifetime that has no row")
+	}
+}
+
+// TestRecycledPIDLifetimesAreDistinctOnScreen checks that two lifetimes of
+// one PID with the same comm (task ro2 review) are told apart everywhere the
+// dashboard shows or selects processes: the table PID cell, the treemap and
+// bubble labels and keys, and the overview's top-process summary.
+func TestRecycledPIDLifetimesAreDistinctOnScreen(t *testing.T) {
+	procs := []statsengine.ProcessSnapshot{
+		{PID: 2000, Lifetime: 1, Comm: "sh", Syscalls: 9},
+		{PID: 2000, Lifetime: 0, Comm: "sh", Syscalls: 5},
+	}
+	snap := statsengine.NewSnapshot(nil, nil, nil, nil, nil, procs,
+		statsengine.NewHistogramSnapshot(0, nil), statsengine.NewHistogramSnapshot(0, nil))
+
+	rows := processRows(procs)
+	if rows[0][0] != "2000#1" || rows[1][0] != "2000" {
+		t.Fatalf("table PID cells = %q, %q; want 2000#1, 2000", rows[0][0], rows[1][0])
+	}
+	items := buildProcessesTreemapItems(&snap, bubbleMetricCount)
+	if len(items) != 2 || items[0].Key == items[1].Key || items[0].Name == items[1].Name {
+		t.Fatalf("treemap items must differ in key and label: %+v", items)
+	}
+	bubbles := processBubbleData(&snap, bubbleMetricCount)
+	if len(bubbles) != 2 || bubbles[0].ID != "2000#1" || bubbles[1].ID != "2000" {
+		t.Fatalf("bubble IDs = %+v, want 2000#1 and 2000", bubbles)
+	}
+	if bubbles[0].Label != "2000#1:sh" || bubbles[1].Label != "2000:sh" {
+		t.Fatalf("bubble labels = %q, %q", bubbles[0].Label, bubbles[1].Label)
+	}
+	if got := summarizeTopProcesses(&snap); got != "sh/2000#1(9), sh/2000(5)" {
+		t.Fatalf("overview top processes = %q", got)
+	}
+}
+
+// TestBubbleSelectionStaysOnRecycledPIDLifetime checks that the bubble chart
+// keeps the selected lifetime of a recycled PID across a refresh that
+// reorders the bubbles, even when both lifetimes share their comm (the old
+// "pid/comm" bubble ID made them collide).
+func TestBubbleSelectionStaysOnRecycledPIDLifetime(t *testing.T) {
+	snapWith := func(oldCount, newCount uint64) statsengine.Snapshot {
+		return statsengine.NewSnapshot(nil, nil, nil, nil, nil,
+			[]statsengine.ProcessSnapshot{
+				{PID: 2000, Lifetime: 0, Comm: "sh", Syscalls: oldCount},
+				{PID: 2000, Lifetime: 1, Comm: "sh", Syscalls: newCount},
+			},
+			statsengine.NewHistogramSnapshot(0, nil), statsengine.NewHistogramSnapshot(0, nil))
+	}
+	chart := newBubbleChart()
+	chart.SetViewport(80, 24)
+	first := snapWith(9, 5)
+	chart.SetData(processBubbleData(&first, bubbleMetricCount))
+	idx := chart.selectIndexByID("2000#1")
+	if chart.nodes[idx].ID != "2000#1" {
+		t.Fatalf("lifetime 1 bubble missing: %+v", chart.nodes)
+	}
+	chart.selected = idx
+
+	second := snapWith(5, 9) // lifetime 1 now outranks lifetime 0
+	chart.SetData(processBubbleData(&second, bubbleMetricCount))
+	if got := chart.nodes[chart.selected].ID; got != "2000#1" {
+		t.Fatalf("selection moved to %q after refresh, want 2000#1", got)
 	}
 }

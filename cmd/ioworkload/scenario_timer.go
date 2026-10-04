@@ -79,23 +79,46 @@ func intervalTimerNoop() error {
 // return value as an fd (contrast with timerfd_create, which is an fd-returning
 // eventfd-family syscall). See man 2 timer_create.
 func posixTimerLifecycle() error {
-	// timer_t (__kernel_timer_t) is an int in the Linux UAPI, not an fd.
-	var timerID int32
+	timerID, err := createPosixTimer()
+	if err != nil {
+		return err
+	}
+	if err := armAndInspectPosixTimer(timerID); err != nil {
+		return err
+	}
+	if _, _, errno := syscall.RawSyscall(
+		unix.SYS_TIMER_DELETE,
+		uintptr(timerID),
+		0, 0,
+	); errno != 0 {
+		return fmt.Errorf("timer_delete: %w", errno)
+	}
+	return nil
+}
 
-	// timer_create(CLOCK_MONOTONIC, NULL, &timerID): a NULL sigevent requests
-	// the default notification (SIGALRM via signal), and timerID is the output
-	// timer_t — not an fd.
+// createPosixTimer calls timer_create(CLOCK_MONOTONIC, NULL, &timerID): a NULL
+// sigevent requests the default notification (SIGALRM via signal), and
+// timerID is the output timer_t — not an fd. timer_t (__kernel_timer_t) is an
+// int in the Linux UAPI.
+func createPosixTimer() (int32, error) {
+	var timerID int32
 	if _, _, errno := syscall.RawSyscall(
 		unix.SYS_TIMER_CREATE,
 		uintptr(unix.CLOCK_MONOTONIC),
 		0, // sevp == NULL
 		uintptr(unsafe.Pointer(&timerID)),
 	); errno != 0 {
-		return fmt.Errorf("timer_create: %w", errno)
+		return 0, fmt.Errorf("timer_create: %w", errno)
 	}
+	return timerID, nil
+}
 
-	// Arm the timer with a far-future one-shot expiry so it never actually
-	// fires during the test; we only care about the syscalls being traced.
+// armAndInspectPosixTimer runs timer_settime, timer_gettime and
+// timer_getoverrun on timerID. The timer is armed with a far-future one-shot
+// expiry so it never actually fires during the test; only the traced
+// syscalls matter. On error the timer is left for process exit to reap, as
+// before the split.
+func armAndInspectPosixTimer(timerID int32) error {
 	newValue := itimerspec{
 		Value: unix.Timespec{Sec: 3600, Nsec: 0},
 	}
@@ -127,14 +150,5 @@ func posixTimerLifecycle() error {
 	); errno != 0 {
 		return fmt.Errorf("timer_getoverrun: %w", errno)
 	}
-
-	if _, _, errno := syscall.RawSyscall(
-		unix.SYS_TIMER_DELETE,
-		uintptr(timerID),
-		0, 0,
-	); errno != 0 {
-		return fmt.Errorf("timer_delete: %w", errno)
-	}
-
 	return nil
 }

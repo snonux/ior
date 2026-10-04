@@ -42,8 +42,8 @@ func TestTreemapRootPathTextDirectoryOnly(t *testing.T) {
 	}
 
 	fileItems := buildFilesTreemapItems(&snap, bubbleMetricCount)
-	if len(fileItems) == 0 || fileItems[0].Name != "root/var/log" {
-		t.Fatalf("expected files treemap label root path, got %#v", fileItems)
+	if len(fileItems) == 0 || fileItems[0].Name != "/var/log" {
+		t.Fatalf("expected files treemap label to be the literal dir, got %#v", fileItems)
 	}
 
 	procItems := buildProcessesTreemapItems(&snap, bubbleMetricCount)
@@ -64,17 +64,17 @@ func TestBubbleRootPathTextDirectoryOnly(t *testing.T) {
 		statsengine.HistogramSnapshot{},
 	)
 
-	sys := syscallBubbleData(snap.Syscalls())
+	sys := syscallBubbleData(snap.Syscalls(), bubbleMetricCount)
 	if len(sys) == 0 || sys[0].Label != "write" {
 		t.Fatalf("expected syscall bubble label to stay native, got %#v", sys)
 	}
 
-	files := filesDirBubbleData(&snap)
-	if len(files) == 0 || files[0].Label != "root/home/paul/.config" {
-		t.Fatalf("expected files bubble label full root path, got %#v", files)
+	files := filesDirBubbleData(&snap, bubbleMetricCount)
+	if len(files) == 0 || files[0].Label != "/home/paul/.config" {
+		t.Fatalf("expected files bubble label to be the literal dir, got %#v", files)
 	}
 
-	procs := processBubbleData(&snap)
+	procs := processBubbleData(&snap, bubbleMetricCount)
 	if len(procs) == 0 || procs[0].Label != "7:worker" {
 		t.Fatalf("expected process bubble label to stay native, got %#v", procs)
 	}

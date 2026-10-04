@@ -16,11 +16,11 @@ func TestSecurityKeysPtracePerf(t *testing.T) {
 		{Tracepoint: "enter_perf_event_open", Comm: "ioworkload", MinCount: 1},
 	}, securityTraceArgs)
 
-	// Key and ptrace operations are not fd/path based and should stay untracked.
-	assertTracepointPathPrefix(t, result, "enter_keyctl", "N:file")
-	assertTracepointPathPrefix(t, result, "enter_add_key", "N:file")
-	assertTracepointPathPrefix(t, result, "enter_request_key", "N:file")
-	assertTracepointPathPrefix(t, result, "enter_ptrace", "N:file")
+	// Key and ptrace operations are not fd/path based and should stay untracked: they persist an empty path.
+	assertTracepointEmptyPath(t, result, "enter_keyctl")
+	assertTracepointEmptyPath(t, result, "enter_add_key")
+	assertTracepointEmptyPath(t, result, "enter_request_key")
+	assertTracepointEmptyPath(t, result, "enter_ptrace")
 
 	for _, tracepoint := range []string{
 		"enter_keyctl",

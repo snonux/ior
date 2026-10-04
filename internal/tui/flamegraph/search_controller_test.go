@@ -190,3 +190,54 @@ func TestSearchControllerDiscardResults(t *testing.T) {
 		t.Fatalf("discardResults(true): query=%q matches=%v", sc.query(), sc.matches())
 	}
 }
+
+// Task 4r2: a terminal paste is one tea.PasteMsg; the search input must take it
+// while search mode is open and the query is applied on Enter like typed text.
+func TestSearchAcceptsBracketedPaste(t *testing.T) {
+	m := NewModel(nil)
+	m.anim.frames = jumpMatchFrames()
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	next, _ := m.Update(tea.PasteMsg{Content: "b\nc"}) // newline is flattened
+	m = next.(*Model)
+	if got := m.search.searchInput.Value(); got != "b c" {
+		t.Fatalf("pasted search text = %q, want %q", got, "b c")
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.search.isActive() || m.search.query() != "b c" {
+		t.Fatalf("after Enter: active=%t query=%q", m.search.isActive(), m.search.query())
+	}
+}
+
+// Outside search mode the keys are commands ('/' opens search, 'v' toggles the
+// height, ...), so a paste must not run them nor open the search.
+func TestPasteOutsideSearchIsIgnored(t *testing.T) {
+	m := NewModel(nil)
+	m.anim.frames = jumpMatchFrames()
+	next, cmd := m.Update(tea.PasteMsg{Content: "/vnN"})
+	m = next.(*Model)
+	if cmd != nil || m.search.isActive() || m.search.searchInput.Value() != "" {
+		t.Fatalf("paste outside search had an effect: active=%t value=%q cmd=%v",
+			m.search.isActive(), m.search.searchInput.Value(), cmd != nil)
+	}
+}
+
+// After Enter the search is committed (isActive false) but the input itself
+// stays focused, so the paste gate must be isActive(), not the input's focus:
+// a paste after commit would otherwise silently edit the committed query text
+// (and the next '/' would show it). The query and the input value must not move.
+func TestPasteAfterCommittedSearchIsIgnored(t *testing.T) {
+	m := NewModel(nil)
+	m.anim.frames = jumpMatchFrames()
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.search.isActive() || m.search.query() != "b" {
+		t.Fatalf("precondition: committed search, active=%t query=%q", m.search.isActive(), m.search.query())
+	}
+	next, cmd := m.Update(tea.PasteMsg{Content: "xyz"})
+	m = next.(*Model)
+	if cmd != nil || m.search.searchInput.Value() != "b" || m.search.query() != "b" {
+		t.Fatalf("paste after commit changed the search: value=%q query=%q cmd=%v",
+			m.search.searchInput.Value(), m.search.query(), cmd != nil)
+	}
+}

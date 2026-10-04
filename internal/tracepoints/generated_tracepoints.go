@@ -1232,7 +1232,7 @@ var syscallKinds = map[string]string{
 	"io_uring_enter":          "fd",
 	"io_uring_register":       "fd",
 	"io_uring_setup":          "null",
-	"ioctl":                   "fd",
+	"ioctl":                   "fcntl",
 	"ioperm":                  "null",
 	"iopl":                    "null",
 	"ioprio_get":              "null",

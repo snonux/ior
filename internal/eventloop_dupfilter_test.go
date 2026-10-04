@@ -186,12 +186,13 @@ func feedFcntlPair(t *testing.T, el *eventLoop, cmd uint32, arg uint64, ret int6
 	return feedRawPair(t, el, enterRaw, exitRaw)
 }
 
-// TestDroppedFcntlSetflStillUpdatesTheFdTable covers the fourth mutation that
-// used to sit behind handleFcntlExit's filter: F_SETFL promotes a
-// procfs-resolved descriptor into the fd table with its new flags. While that
-// ran after the checkpoint, a dropped F_SETFL row left the descriptor known
-// only to the (evictable) procfs cache and its flag change unrecorded.
-func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
+// TestDroppedFcntlSetflStillUpdatesTheCachedAnswer covers the fourth
+// mutation that used to sit behind handleFcntlExit's filter: F_SETFL changes
+// the flags of a procfs-resolved descriptor. While that ran after the
+// checkpoint, a dropped F_SETFL row left the flag change unrecorded. Since
+// task a23 the answer is not promoted into the fd table (storeFcntlFdFile):
+// the change is kept by the cache entry the answer is.
+func TestDroppedFcntlSetflStillUpdatesTheCachedAnswer(t *testing.T) {
 	const cachedName = "/tmp/setfl.txt"
 	el := newFilteredEventLoop(t, dropsEveryPairOfLatency())
 	// Seed O_RDWR|O_APPEND and pass arg = O_RDWR|O_NONBLOCK, which is the shape
@@ -215,29 +216,18 @@ func TestDroppedFcntlSetflStillUpdatesTheFdTable(t *testing.T) {
 		t.Fatalf("fcntl row survived a -latency filter it cannot satisfy: %v", ep)
 	}
 
-	resolved, ok := el.fdState().get(dupSourceFd, execCommPid)
-	if !ok || resolved == nil {
-		t.Fatalf("fd %d was not registered because the F_SETFL row was filtered out", dupSourceFd)
-	}
-	if resolved.Name() != cachedName {
-		t.Fatalf("fd %d resolved to %q, want %q", dupSourceFd, resolved.Name(), cachedName)
-	}
-	fdFile, ok := resolved.(*file.FdFile)
-	if !ok {
-		t.Fatalf("fd %d resolved to %T, want *file.FdFile", dupSourceFd, resolved)
-	}
 	// Both halves matter, and the access mode is the sharper one: F_SETFL
 	// changes the settable status flags only (fcntl(2)), so the O_RDWR the
 	// descriptor was opened with has to survive the call. Replacing the flag
 	// word with arg&settable instead of merging into it dropped the access
-	// mode, and because the fd table entry is what every later read/write/close
-	// on this descriptor resolves through, the whole rest of its life reported
+	// mode, and because the entry is what every later read/write/close on
+	// this descriptor resolves through, the whole rest of its life reported
 	// O_RDONLY. Under a replace the arg's own O_RDWR is masked away with
 	// everything else outside the settable set, so the defect shows up here as
 	// exactly that missing O_RDWR.
-	want := file.Flags(syscall.O_RDWR | syscall.O_NONBLOCK)
-	if fdFile.Flags() != want {
-		t.Fatalf("fd %d flags = %v, want %v", dupSourceFd, fdFile.Flags(), want)
+	assertCachedFdFlags(t, el, dupSourceFd, syscall.O_RDWR|syscall.O_NONBLOCK)
+	if cached, _ := el.fdState().cachedProcFdFile(dupSourceFd, execCommPid); cached.Name() != cachedName {
+		t.Fatalf("fd %d resolved to %q, want %q", dupSourceFd, cached.Name(), cachedName)
 	}
 }
 
@@ -296,10 +286,7 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 		if ep.File == nil || ep.File.Name() != path {
 			t.Fatalf("pidfd_getfd row reported file %v, want %q", ep.File, path)
 		}
-		resolved, ok := el.fdState().get(transferredFd, selfPid)
-		if !ok || resolved == nil || resolved.Name() != path {
-			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
-		}
+		assertPidfdGetfdResolvesLazily(t, el, transferredFd, selfPid, path)
 	})
 
 	t.Run("dropped by -path on the source pidfd", func(t *testing.T) {
@@ -312,13 +299,24 @@ func TestPidfdGetfdIsFilteredOnTheFileItReports(t *testing.T) {
 				"the filtered value and the printed value must be the same",
 				pidfdName, ep.File)
 		}
-		// Dropped or not, the transferred descriptor is global state and must
-		// still be registered for the rows the run does want.
-		resolved, ok := el.fdState().get(transferredFd, selfPid)
-		if !ok || resolved == nil || resolved.Name() != path {
-			t.Fatalf("transferred fd %d was not registered as %q", transferredFd, path)
-		}
+		// Dropped or not, the transferred descriptor must resolve for the
+		// rows the run does want.
+		assertPidfdGetfdResolvesLazily(t, el, transferredFd, selfPid, path)
 	})
+}
+
+// assertPidfdGetfdResolvesLazily pins the storage rule for pidfd_getfd: the
+// transferred descriptor is not entered into the fd table (its name is a
+// procfs read taken after the syscall, so it may already be stale - task er2),
+// yet a later row on that number still resolves to the file it names.
+func assertPidfdGetfdResolvesLazily(t *testing.T, el *eventLoop, fd int32, pid uint32, want string) {
+	t.Helper()
+	if _, ok := el.fdState().get(fd, pid); ok {
+		t.Fatalf("transferred fd %d was stored in the fd table from a lagging procfs read", fd)
+	}
+	if resolved := el.fdState().resolve(fd, pid); resolved == nil || resolved.Name() != want {
+		t.Fatalf("transferred fd %d resolves to %v, want %q", fd, resolved, want)
+	}
 }
 
 // TestDroppedCloseStillEvictsTheFd is the eviction half of the rule the dup

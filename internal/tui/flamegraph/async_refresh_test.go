@@ -1,10 +1,15 @@
 package flamegraph
 
 import (
+	"errors"
+	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	coreflamegraph "ior/internal/flamegraph"
+	common "ior/internal/tui/common"
 	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
@@ -244,25 +249,9 @@ func TestSnapshotReadyHandlerSnapsToTargetWhileDriving(t *testing.T) {
 }
 
 func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
-	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	ingestTwoEventsForAsync(t, trie)
-	m := NewModel(trie)
-	m.width = 120
-	m.height = 30
-	if !m.RefreshFromLiveTrie() {
-		t.Fatalf("expected initial refresh to populate snapshot")
-	}
-
-	// Drain any pending animation so the cache path is exercised.
-	for m.anim.animating {
-		nextModel, _ := m.Update(currentAnimTick(m))
-		m = nextModel.(*Model)
-	}
+	m := newSettledCachedModel(t)
 
 	first := m.View().Content
-	if !m.viewCache.valid {
-		t.Fatalf("expected viewCache to be marked valid after first View() call")
-	}
 	cachedAddr := &m.viewCache.content
 
 	second := m.View().Content
@@ -271,6 +260,214 @@ func TestViewCacheReusesContentWhenStateUnchanged(t *testing.T) {
 	}
 	if cachedAddr != &m.viewCache.content {
 		t.Fatalf("expected cache content pointer to remain stable on a hit")
+	}
+}
+
+// newSettledCachedModel returns a model with a populated snapshot, no pending
+// animation and a primed view cache, so the next View() goes through the
+// cache path rather than the always-render animation path.
+func newSettledCachedModel(t *testing.T) *Model {
+	t.Helper()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m := NewModel(trie)
+	m.width = 120
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatalf("expected initial refresh to populate snapshot")
+	}
+	for m.anim.animating {
+		nextModel, _ := m.Update(currentAnimTick(m))
+		m = nextModel.(*Model)
+	}
+	_ = m.View()
+	if !m.viewCache.valid {
+		t.Fatalf("precondition: expected primed view cache")
+	}
+	return m
+}
+
+// visibleText strips ANSI SGR sequences so assertions see the text a user
+// would read; the text input styles the prompt, value and cursor separately.
+func visibleText(s string) string {
+	return ansiSGR.ReplaceAllString(s, "")
+}
+
+var ansiSGR = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// TestViewShowsLiveSearchInputWhileTyping is the regression test for the
+// search prompt staying blank while typing: the view cache key only held the
+// committed query, so every keystroke after '/' was served the stale frame.
+func TestViewShowsLiveSearchInputWhileTyping(t *testing.T) {
+	m := newSettledCachedModel(t)
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	typed := ""
+	for _, r := range "xyz" {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+		typed += string(r)
+		if got := visibleText(m.View().Content); !strings.Contains(got, "/"+typed) {
+			t.Fatalf("after typing %q the view does not show the input:\n%s", typed, got)
+		}
+	}
+
+	// Backspace must shrink the visible input, not keep serving "/xyz".
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	got := visibleText(m.View().Content)
+	if !strings.Contains(got, "/xy") || strings.Contains(got, "/xyz") {
+		t.Fatalf("after backspace expected \"/xy\" without \"/xyz\":\n%s", got)
+	}
+
+	// Esc cancels: the typed text must disappear from the view again.
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got := visibleText(m.View().Content); strings.Contains(got, "/xy") {
+		t.Fatalf("after esc the search input is still rendered:\n%s", got)
+	}
+}
+
+// TestViewCacheKeyTracksSearchCursor checks that moving the cursor without
+// changing the value still invalidates the cache, since the rendered footer
+// places the cursor differently.
+func TestViewCacheKeyTracksSearchCursor(t *testing.T) {
+	m := newSettledCachedModel(t)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "ab" {
+		m = pressFlameKey(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	before := m.currentViewCacheKey()
+	beforeView := m.View().Content
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	after := m.currentViewCacheKey()
+	if before == after {
+		t.Fatalf("cursor move left the cache key unchanged: %+v", after)
+	}
+	if after.searchInput != "ab" || after.searchCursor != 1 {
+		t.Fatalf("expected key input %q cursor 1, got %q cursor %d", "ab", after.searchInput, after.searchCursor)
+	}
+	// The key changing is not enough on its own: the rendered view must
+	// actually move the cursor instead of serving the cached frame.
+	if afterView := m.View().Content; afterView == beforeView {
+		t.Fatalf("cursor move did not change the rendered view")
+	}
+}
+
+// TestViewCacheKeyTracksFieldOrder checks that the field-order preset, shown
+// as o:order(...) in the toolbar, invalidates the cache on its own.
+func TestViewCacheKeyTracksFieldOrder(t *testing.T) {
+	m := newSettledCachedModel(t)
+	m.width = 240
+	if len(m.fieldPresets) < 2 {
+		t.Fatalf("precondition: need at least two field presets, got %d", len(m.fieldPresets))
+	}
+	beforeLabel := m.currentFieldPresetLabel()
+	beforeView := visibleText(m.View().Content)
+	m.fieldIndex = (m.fieldIndex + 1) % len(m.fieldPresets)
+	afterLabel := m.currentFieldPresetLabel()
+	if beforeLabel == afterLabel {
+		t.Fatalf("precondition: presets share label %q", afterLabel)
+	}
+	afterView := visibleText(m.View().Content)
+	if !strings.Contains(beforeView, "o:order("+beforeLabel+")") {
+		t.Fatalf("precondition: toolbar lacks order %q:\n%s", beforeLabel, beforeView)
+	}
+	if !strings.Contains(afterView, "o:order("+afterLabel+")") {
+		t.Fatalf("field order change served a stale toolbar, want order %q:\n%s", afterLabel, afterView)
+	}
+}
+
+// TestViewTracksFieldOrderAfterSetLiveTrie guards the custom-preset case of a
+// session swap: switching to a trie with an unknown field order prepends that
+// order to fieldPresets and keeps fieldIndex at 0, and with lastVersion 0 and
+// no snapshot on both sides the only key component that moves is the refresh
+// generation (SetLiveTrie calls invalidateRefresh). The test therefore pins
+// the generation, not fieldIndex; fieldIndex in the key is pinned only by
+// TestViewCacheKeyTracksFieldOrder.
+func TestViewTracksFieldOrderAfterSetLiveTrie(t *testing.T) {
+	m := NewModel(coreflamegraph.NewLiveTrie([]string{"comm", "tracepoint", "path"}, "count", "count"))
+	m.width = 240
+	m.height = 30
+	if m.fieldIndex != 0 {
+		t.Fatalf("precondition: expected fieldIndex 0, got %d", m.fieldIndex)
+	}
+	if got := visibleText(m.View().Content); !strings.Contains(got, "o:order(comm/tracepoint/path)") {
+		t.Fatalf("precondition: toolbar lacks initial order:\n%s", got)
+	}
+
+	m.SetLiveTrie(coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count"))
+	if m.fieldIndex != 0 || m.snapshot != nil || m.lastVersion != 0 {
+		t.Fatalf("precondition: expected index 0, no snapshot, version 0; got %d, %v, %d",
+			m.fieldIndex, m.snapshot != nil, m.lastVersion)
+	}
+	got := visibleText(m.View().Content)
+	if !strings.Contains(got, "o:order(comm/path)") {
+		t.Fatalf("toolbar kept the previous trie's field order:\n%s", got)
+	}
+}
+
+// TestViewDropsEmptySnapshotPanelAfterReset is the regression test for the
+// stale "no visible frames" panel: reset drops the snapshot without changing
+// lastVersion, and with an unchanged status message the key used to match.
+func TestViewDropsEmptySnapshotPanelAfterReset(t *testing.T) {
+	m := NewModel(nil)
+	m.width = 120
+	m.height = 30
+	m.snapshot = &snapshotNode{}
+	m.statusMessage = "Baseline reset" // as after an earlier 'r' press
+	const panel = "has no visible frames"
+	if got := m.View().Content; !strings.Contains(got, panel) {
+		t.Fatalf("precondition: expected empty-snapshot panel, got:\n%s", got)
+	}
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if m.snapshot != nil {
+		t.Fatalf("precondition: reset should drop the snapshot")
+	}
+	if got := m.View().Content; strings.Contains(got, panel) {
+		t.Fatalf("stale empty-snapshot panel served after reset:\n%s", got)
+	}
+}
+
+// rejectingTrie is a real LiveTrie whose Reconfigure always fails, to drive
+// the field-order error path.
+type rejectingTrie struct {
+	*coreflamegraph.LiveTrie
+}
+
+var _ coreflamegraph.LiveTrieSource = (*rejectingTrie)(nil)
+
+func (rejectingTrie) Reconfigure([]string) error {
+	return errors.New("reconfigure rejected")
+}
+
+// TestCycleFieldOrderKeepsPresetWhenReconfigureFails pins that a rejected
+// Reconfigure leaves fieldIndex (and so the toolbar label) on the preset the
+// trie is still using, and does not discard the current snapshot.
+func TestCycleFieldOrderKeepsPresetWhenReconfigureFails(t *testing.T) {
+	trie := &rejectingTrie{coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")}
+	ingestTwoEventsForAsync(t, trie.LiveTrie)
+	m := NewModel(trie)
+	m.width = 240
+	m.height = 30
+	if !m.RefreshFromLiveTrie() {
+		t.Fatalf("expected initial refresh to populate snapshot")
+	}
+	beforeIndex := m.fieldIndex
+	beforeLabel := m.currentFieldPresetLabel()
+
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if m.fieldIndex != beforeIndex {
+		t.Fatalf("fieldIndex advanced to %d despite Reconfigure failing, want %d", m.fieldIndex, beforeIndex)
+	}
+	if !strings.HasPrefix(m.statusMessage, "Field order error:") {
+		t.Fatalf("expected field order error status, got %q", m.statusMessage)
+	}
+	if m.snapshot == nil {
+		t.Fatalf("failed reconfigure must not discard the current snapshot")
+	}
+	if got := visibleText(m.View().Content); !strings.Contains(got, "o:order("+beforeLabel+")") {
+		t.Fatalf("toolbar should keep order %q after failure:\n%s", beforeLabel, got)
+	}
+	if got := trie.Fields(); !reflect.DeepEqual(got, []string{"comm", "path"}) {
+		t.Fatalf("trie fields changed despite rejection: %v", got)
 	}
 }
 
@@ -300,5 +497,125 @@ func BenchmarkRecomputeFilterState(b *testing.B) {
 				benchIntSink = len(model.search.matchIndices)
 			}
 		})
+	}
+}
+
+// TestSelectionSurvivesLiveTrieReset drives the auto-reset the way the
+// dashboard does: the live trie is reset under a running flame model (whose
+// own state is left alone), the model refreshes to the empty trie and then to
+// the refilled one. The selected frame must be selected again, not root.
+func TestSelectionSurvivesLiveTrieReset(t *testing.T) {
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m := NewModel(trie)
+	m.width, m.height = 120, 30
+
+	refresh := func() {
+		t.Helper()
+		cmd := m.RefreshFromLiveTrieCmd()
+		if cmd == nil {
+			t.Fatalf("expected a refresh command")
+		}
+		m.handleSnapshotReady(cmd().(flameSnapshotReadyMsg))
+		// Settle the animation so currentFrames are the target frames.
+		for i := 0; i < 200 && m.anim.isAnimating(); i++ {
+			m.tickAnimation()
+		}
+	}
+	refresh()
+
+	frames := m.anim.currentFrames()
+	deepest := 0
+	for idx, frame := range frames {
+		if frame.Depth > frames[deepest].Depth {
+			deepest = idx
+		}
+	}
+	if frames[deepest].Depth < 2 {
+		t.Fatalf("precondition: want a frame below the top level, got depth %d", frames[deepest].Depth)
+	}
+	m.sel.selectFrame(frames, m.anim.currentAncestry(), deepest)
+	want := frames[deepest].Path
+
+	trie.Reset()
+	refresh()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got == want {
+		t.Fatalf("precondition: %q still exists after the reset", want)
+	}
+	// An idle refresh or two of the empty trie must not forget the wish.
+	m.rebuildFrames(false)
+
+	ingestTwoEventsForAsync(t, trie)
+	refresh()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != want {
+		t.Fatalf("selected %q after the refill, want %q", got, want)
+	}
+}
+
+// resetScenario builds a live flame model whose deepest frame is selected,
+// then resets the trie and refreshes to the empty layout, so the model holds
+// a wish for that frame. refill puts the data back and refreshes.
+func resetScenario(t *testing.T) (m *Model, wanted string, refill func()) {
+	t.Helper()
+	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	ingestTwoEventsForAsync(t, trie)
+	m = NewModel(trie)
+	m.width, m.height = 120, 30
+	refresh := func() {
+		t.Helper()
+		cmd := m.RefreshFromLiveTrieCmd()
+		if cmd == nil {
+			t.Fatalf("expected a refresh command")
+		}
+		m.handleSnapshotReady(cmd().(flameSnapshotReadyMsg))
+		for i := 0; i < 200 && m.anim.isAnimating(); i++ {
+			m.tickAnimation()
+		}
+	}
+	refresh()
+	frames := m.anim.currentFrames()
+	deepest := 0
+	for idx, frame := range frames {
+		if frame.Depth > frames[deepest].Depth {
+			deepest = idx
+		}
+	}
+	m.sel.selectFrame(frames, m.anim.currentAncestry(), deepest)
+	wanted = frames[deepest].Path
+
+	trie.Reset()
+	refresh()
+	if m.sel.wantedPath != wanted {
+		t.Fatalf("precondition: wish %q, want %q", m.sel.wantedPath, wanted)
+	}
+	return m, wanted, func() { ingestTwoEventsForAsync(t, trie); refresh() }
+}
+
+// TestUserKeyDuringResetCancelsTheFlameWish: a key press on the root-only
+// layout of a reset is the user's decision, even though it changes nothing
+// visible, so the refill does not pull the selection away from root.
+func TestUserKeyDuringResetCancelsTheFlameWish(t *testing.T) {
+	fakeWishClock(t)
+	m, _, refill := resetScenario(t)
+	m = pressFlameKey(t, m, tea.KeyPressMsg{Code: 'k', Text: "k"})
+	if m.sel.wantedPath != "" {
+		t.Fatalf("the key press left the wish %q", m.sel.wantedPath)
+	}
+	m.lastKeyAt = time.Time{} // end the drive window so the refill refreshes
+	refill()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != "root" {
+		t.Fatalf("selected %q after the user pressed a key on root, want root", got)
+	}
+}
+
+// TestFlameWishExpiresAfterTheGraceAcrossRefreshes: the wish is bounded like
+// the dashboard tables' one, through the real refresh path.
+func TestFlameWishExpiresAfterTheGraceAcrossRefreshes(t *testing.T) {
+	now := fakeWishClock(t)
+	m, _, refill := resetScenario(t)
+	*now = now.Add(common.SelectionWishGrace + time.Second)
+	refill()
+	if got := m.sel.selectedPath(m.anim.currentFrames()); got != "root" {
+		t.Fatalf("selected %q after the wish expired, want root", got)
 	}
 }

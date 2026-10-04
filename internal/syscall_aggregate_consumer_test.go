@@ -12,6 +12,15 @@ import (
 	"ior/internal/types"
 )
 
+// aggregateDrainStep is one Drain of TestSyscallAggregateConsumerDrainEmitsDeltas:
+// the per-CPU cumulative values to load first (nil keeps the map unchanged)
+// and the delta row Drain must emit (nil means no row at all).
+type aggregateDrainStep struct {
+	name   string
+	perCPU []rawSyscallAggregate
+	want   *statsengine.SyscallAggregate
+}
+
 func TestBuildSyscallSamplingRatesFamilyAndSyscallOverride(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.SyscallFamilySamplingRates[types.FamilyTime] = 100
@@ -76,6 +85,88 @@ func TestBuildSyscallSamplingRatesKeepsFamilyZerosInTUIMode(t *testing.T) {
 	}
 	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 0 {
 		t.Fatalf("clock_gettime rate = %d, want 0 (aggregate-only in TUI mode)", got)
+	}
+}
+
+// samplingRatesFromCLI resolves the per-trace-ID sampling rates for a config
+// produced by the real CLI path (flags.ParseArgs), which — unlike
+// flags.NewFlags() — carries the built-in futex*/clock_gettime defaults. The
+// hand-built configs above missed that defaults used to override explicit
+// family rates.
+func samplingRatesFromCLI(t *testing.T, args ...string) map[types.TraceId]uint32 {
+	t.Helper()
+	cfg, err := flags.ParseArgs(args)
+	if err != nil {
+		t.Fatalf("ParseArgs(%v): %v", args, err)
+	}
+	return buildSyscallSamplingRates(cfg)
+}
+
+// TestBuildSyscallSamplingRatesFamilyRateBeatsBuiltInDefaults locks task jq2:
+// an explicit -syscall-sampling-families rate must reach the syscalls that
+// carry a built-in aggregate-only default (clock_gettime in Time, futex* in
+// IPC), in TUI and raw modes alike.
+func TestBuildSyscallSamplingRatesFamilyRateBeatsBuiltInDefaults(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		id   types.TraceId
+		want uint32
+	}{
+		{"Time=100 reaches clock_gettime (help example)", []string{"-syscall-sampling-families", "Time=100"}, types.SYS_ENTER_CLOCK_GETTIME, 100},
+		{"Time=100 raw mode", []string{"-plain", "-syscall-sampling-families", "Time=100"}, types.SYS_ENTER_CLOCK_GETTIME, 100},
+		{"IPC=1 reaches futex in TUI mode", []string{"-syscall-sampling-families", "IPC=1"}, types.SYS_ENTER_FUTEX, 1},
+		{"IPC=7 reaches futex", []string{"-syscall-sampling-families", "IPC=7"}, types.SYS_ENTER_FUTEX, 7},
+		{"IPC=0 keeps futex aggregate-only in TUI mode", []string{"-syscall-sampling-families", "IPC=0"}, types.SYS_ENTER_FUTEX, 0},
+		{"IPC=0 is promoted to 1 in raw mode", []string{"-flamegraph", "-syscall-sampling-families", "IPC=0"}, types.SYS_ENTER_FUTEX, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rates := samplingRatesFromCLI(t, tc.args...)
+			if got, ok := rates[tc.id]; !ok || got != tc.want {
+				t.Fatalf("%s rate = %d (present %v), want %d", tc.id.String(), got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildSyscallSamplingRatesExplicitSyscallBeatsFamilyAndDefault checks the
+// top of the precedence chain through the CLI: an explicit syscall rate wins
+// over both the family rate and the built-in default, and its family siblings
+// still follow the family rate.
+func TestBuildSyscallSamplingRatesExplicitSyscallBeatsFamilyAndDefault(t *testing.T) {
+	rates := samplingRatesFromCLI(t,
+		"-syscall-sampling-families", "Time=100",
+		"-syscall-sampling-syscalls", "clock_gettime=3")
+	if got := rates[types.SYS_ENTER_CLOCK_GETTIME]; got != 3 {
+		t.Fatalf("clock_gettime rate = %d, want 3 (explicit syscall rate)", got)
+	}
+	if got := rates[types.SYS_ENTER_NANOSLEEP]; got != 100 {
+		t.Fatalf("nanosleep rate = %d, want 100 (family rate)", got)
+	}
+}
+
+// TestBuildSyscallSamplingRatesBuiltInDefaultsWithoutFamilyRate is the negative
+// case: with no family or syscall rate for their family, the built-in defaults
+// still apply (aggregate-only in TUI mode, promoted to 1 in raw modes), and an
+// unrelated family rate does not disturb them.
+func TestBuildSyscallSamplingRatesBuiltInDefaultsWithoutFamilyRate(t *testing.T) {
+	rates := samplingRatesFromCLI(t, "-syscall-sampling-families", "FS=5")
+	for _, id := range []types.TraceId{types.SYS_ENTER_FUTEX, types.SYS_ENTER_CLOCK_GETTIME} {
+		if got, ok := rates[id]; !ok || got != 0 {
+			t.Fatalf("%s TUI rate = %d (present %v), want built-in 0", id.String(), got, ok)
+		}
+	}
+	rates = samplingRatesFromCLI(t, "-plain", "-syscall-sampling-families", "FS=5")
+	for _, id := range []types.TraceId{types.SYS_ENTER_FUTEX, types.SYS_ENTER_CLOCK_GETTIME} {
+		if got := rates[id]; got != 1 {
+			t.Fatalf("%s raw-mode rate = %d, want promoted 1", id.String(), got)
+		}
+	}
+	// An explicit zero on a defaulted syscall stays zero in raw mode.
+	rates = samplingRatesFromCLI(t, "-plain", "-syscall-sampling-syscalls", "futex=0")
+	if got := rates[types.SYS_ENTER_FUTEX]; got != 0 {
+		t.Fatalf("explicit futex=0 in raw mode = %d, want 0", got)
 	}
 }
 
@@ -194,117 +285,76 @@ func TestDecodeRawSyscallAggregatePerCPURejectsEmptyValue(t *testing.T) {
 
 func TestSyscallAggregateConsumerDrainEmitsDeltas(t *testing.T) {
 	const traceID = uint32(types.SYS_ENTER_FUTEX)
-	fakeMap := newFakeSyscallAggregateMap(traceID, encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         2,
-			Errors:        1,
-			TotalDuration: 30,
-			MinDuration:   10,
-			MaxDuration:   20,
-			Histogram:     [8]uint64{1, 0, 1},
-		},
-		rawSyscallAggregate{
-			Count:         3,
-			TotalDuration: 90,
-			MinDuration:   5,
-			MaxDuration:   50,
-			Histogram:     [8]uint64{0, 2, 1},
-		},
-	))
+	steps := syscallAggregateDrainSteps(types.TraceId(traceID))
+	fakeMap := newFakeSyscallAggregateMap(traceID, encodeRawAggregates(t, steps[0].perCPU...))
 	consumer := &syscallAggregateConsumer{
 		aggregateMap: fakeMap,
 		last:         make(map[types.TraceId]rawSyscallAggregate),
 	}
 
-	rows, err := consumer.Drain()
-	if err != nil {
-		t.Fatalf("first Drain error: %v", err)
+	for i, step := range steps {
+		if i > 0 && step.perCPU != nil {
+			fakeMap.values[traceID] = encodeRawAggregates(t, step.perCPU...)
+		}
+		rows, err := consumer.Drain()
+		if err != nil {
+			t.Fatalf("%s Drain error: %v", step.name, err)
+		}
+		if step.want == nil {
+			if len(rows) != 0 {
+				t.Fatalf("%s Drain rows = %+v, want none for zero delta", step.name, rows)
+			}
+			continue
+		}
+		assertAggregateRows(t, rows, *step.want)
 	}
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          5,
-		Errors:         1,
-		TotalLatencyNs: 120,
-		MinLatencyNs:   5,
-		MaxLatencyNs:   50,
-		LatencyHistogramNs: [8]uint64{
-			1, 2, 2,
-		},
-	})
+}
 
-	fakeMap.values[traceID] = encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         4,
-			Errors:        2,
-			TotalDuration: 80,
-			MinDuration:   4,
-			MaxDuration:   40,
-			Histogram:     [8]uint64{2, 1, 1},
+// syscallAggregateDrainSteps is the per-CPU cumulative map content before each
+// Drain of TestSyscallAggregateConsumerDrainEmitsDeltas and the delta row that
+// Drain must emit for traceID.
+func syscallAggregateDrainSteps(traceID types.TraceId) []aggregateDrainStep {
+	return []aggregateDrainStep{
+		{
+			name: "first",
+			perCPU: []rawSyscallAggregate{
+				{Count: 2, Errors: 1, TotalDuration: 30, MinDuration: 10, MaxDuration: 20, Histogram: [8]uint64{1, 0, 1}},
+				{Count: 3, TotalDuration: 90, MinDuration: 5, MaxDuration: 50, Histogram: [8]uint64{0, 2, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 5, Errors: 1, TotalLatencyNs: 120, MinLatencyNs: 5, MaxLatencyNs: 50,
+				LatencyHistogramNs: [8]uint64{1, 2, 2},
+			},
 		},
-		rawSyscallAggregate{
-			Count:         3,
-			TotalDuration: 110,
-			MinDuration:   5,
-			MaxDuration:   70,
-			Histogram:     [8]uint64{0, 2, 1, 1},
+		{
+			// The second CPU's slot gained one timed invocation (histogram 3 -> 4),
+			// so it gained one count as well: a slot's count is never below its
+			// histogram total.
+			name: "second",
+			perCPU: []rawSyscallAggregate{
+				{Count: 4, Errors: 2, TotalDuration: 80, MinDuration: 4, MaxDuration: 40, Histogram: [8]uint64{2, 1, 1}},
+				{Count: 4, TotalDuration: 110, MinDuration: 5, MaxDuration: 70, Histogram: [8]uint64{0, 2, 1, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 3, Errors: 1, TotalLatencyNs: 70, MinLatencyNs: 4, MaxLatencyNs: 70,
+				LatencyHistogramNs: [8]uint64{1, 1, 0, 1},
+			},
 		},
-	)
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("second Drain error: %v", err)
-	}
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          2,
-		Errors:         1,
-		TotalLatencyNs: 70,
-		MinLatencyNs:   4,
-		MaxLatencyNs:   70,
-		LatencyHistogramNs: [8]uint64{
-			1, 1, 0, 1,
+		{
+			// Unchanged cumulative extrema fall back to the delta's bucket bounds
+			// (bucket 0: 0..999), clamped to the merged cumulative range 4..70.
+			name: "third",
+			perCPU: []rawSyscallAggregate{
+				{Count: 5, Errors: 2, TotalDuration: 100, MinDuration: 4, MaxDuration: 40, Histogram: [8]uint64{3, 1, 1}},
+				{Count: 4, TotalDuration: 110, MinDuration: 5, MaxDuration: 70, Histogram: [8]uint64{0, 2, 1, 1}},
+			},
+			want: &statsengine.SyscallAggregate{
+				TraceID: traceID, Count: 1, Errors: 0, TotalLatencyNs: 20, MinLatencyNs: 4, MaxLatencyNs: 70,
+				LatencyHistogramNs: [8]uint64{1},
+			},
 		},
-	})
-
-	fakeMap.values[traceID] = encodeRawAggregates(t,
-		rawSyscallAggregate{
-			Count:         5,
-			Errors:        2,
-			TotalDuration: 100,
-			MinDuration:   4,
-			MaxDuration:   40,
-			Histogram:     [8]uint64{3, 1, 1},
-		},
-		rawSyscallAggregate{
-			Count:         3,
-			TotalDuration: 110,
-			MinDuration:   5,
-			MaxDuration:   70,
-			Histogram:     [8]uint64{0, 2, 1, 1},
-		},
-	)
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("third Drain error: %v", err)
-	}
-	// Unchanged cumulative extrema use delta bucket sentinels: min 0 means no new lower min, max 999 caps bucket 0.
-	assertAggregateRows(t, rows, statsengine.SyscallAggregate{
-		TraceID:        types.TraceId(traceID),
-		Count:          1,
-		Errors:         0,
-		TotalLatencyNs: 20,
-		MinLatencyNs:   0,
-		MaxLatencyNs:   999,
-		LatencyHistogramNs: [8]uint64{
-			1,
-		},
-	})
-
-	rows, err = consumer.Drain()
-	if err != nil {
-		t.Fatalf("fourth Drain error: %v", err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("fourth Drain rows = %+v, want none for zero delta", rows)
+		// An unchanged map yields a zero delta and therefore no row.
+		{name: "fourth"},
 	}
 }
 

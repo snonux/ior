@@ -4,11 +4,15 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"ior/internal/atomicfile"
+	"ior/internal/textsafe"
 )
 
 // shellSplit tokenizes s using POSIX-like shell quoting rules so that paths
@@ -109,8 +113,26 @@ func consumeBackslash(s string, i int, out *strings.Builder) int {
 	return i + 1
 }
 
+// defaultStreamExportLayout is the time.Format layout of the generated export
+// name; isDefaultStreamExportName matches against the same layout so the two
+// cannot drift apart.
+const defaultStreamExportLayout = "ior-stream-20060102-150405.csv"
+
 func defaultStreamExportFilename() string {
-	return fmt.Sprintf("ior-stream-%s.csv", time.Now().Format("20060102-150405"))
+	return time.Now().Format(defaultStreamExportLayout)
+}
+
+// isDefaultStreamExportName reports whether name, exactly as the user gave it
+// (before resolveExportPath appends ".csv"), is a generated default export
+// name rather than one the user typed. Generated names are only accurate to
+// the second and are never replaced; a typed name is the user's to overwrite.
+// The match is strict (atomicfile.IsGeneratedName: exact zero-padded layout,
+// including the extension, judged on the file name only, so a generated name
+// typed with a directory part still counts). It is judged on the raw input,
+// so a name that only becomes ".csv" after resolveExportPath counts as
+// user-chosen, the same rule the Parquet recording name follows.
+func isDefaultStreamExportName(name string) bool {
+	return atomicfile.IsGeneratedName(name, defaultStreamExportLayout)
 }
 
 func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename string) (string, error) {
@@ -122,132 +144,229 @@ func exportSnapshotToCSV(source Source, filter Filter, exportDir, filename strin
 	rows := make([]StreamEvent, 0)
 	if source != nil {
 		snapshot := source.Snapshot()
-		rows = make([]StreamEvent, 0, len(snapshot))
-		for i := range snapshot {
-			ev := snapshot[i]
-			// Plain Matches, as in Model.applyFilter: the either-name rule is
-			// inside it now, so the export must contain exactly the rows the
-			// Stream tab is showing.
-			if filter.Matches(&ev) {
-				rows = append(rows, ev)
-			}
-		}
+		// Same row selection as Model.applyFilter, so the export holds the
+		// filtered real rows the Stream tab is showing; the synthetic warning
+		// rows filterRows lets through for the tab are excluded here by
+		// writeStreamCSV, so they never reach the file.
+		rows = filterRows(make([]StreamEvent, 0, len(snapshot)), snapshot, filter)
 	}
 
 	return exportRowsToCSV(rows, exportDir, name)
 }
 
-// exportRowsToCSV writes rows to a CSV file under exportDir with the given
-// filename (which is validated and sanitised by ensureCSVFilename).
+// exportRowsToCSV writes rows to a CSV file named filename and returns its
+// absolute path. The name is resolved by resolveExportPath: a bare name lands
+// in exportDir, a name with a directory part is honoured as typed (relative
+// to exportDir, or absolute), exactly like the R recording prompt and
+// -parquet; the Stream tab shows the returned path, so the user always sees
+// where the file went.
+//
+// The rows go to a uniquely named temp file first, so a reader never sees a
+// partial CSV and a symlink planted at a predictable name is never written
+// through. What happens when the target exists depends on who chose the name:
+// a generated default name (only accurate to the second) is never replaced -
+// a taken name yields a "-N" suffix, and the returned path says so - while a
+// name the user typed is atomically replaced, as it always was. Before
+// anything is written the target is probed (probeExportPath), so a missing or
+// unwritable directory, a directory in place of the file and a name the
+// filesystem refuses come back as one readable error naming the directory.
 func exportRowsToCSV(rows []StreamEvent, exportDir, filename string) (string, error) {
-	name, err := ensureCSVFilename(filename)
+	path, err := resolveExportPath(exportDir, filename)
 	if err != nil {
 		return "", err
 	}
-	path := name
-	if exportDir != "" {
-		path = filepath.Join(exportDir, name)
+	generated := isDefaultStreamExportName(filename)
+	if err := probeExportPath(path, generated); err != nil {
+		return "", err
 	}
 
-	f, err := os.Create(path)
+	write := func(w io.Writer) error { return writeStreamCSV(csv.NewWriter(w), rows) }
+	var published string
+	if generated {
+		published, err = atomicfile.WriteFile(path, ".csv", write)
+	} else {
+		published, err = atomicfile.ReplaceFile(path, write)
+	}
 	if err != nil {
 		return "", err
 	}
-	// closeFile is idempotent; fail wraps any write error with a best-effort close.
-	closed := false
-	closeFile := func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return f.Close()
-	}
-	fail := func(baseErr error) (string, error) {
-		if closeErr := closeFile(); closeErr != nil {
-			return "", errors.Join(baseErr, closeErr)
-		}
-		return "", baseErr
-	}
-
-	if err := writeStreamCSV(csv.NewWriter(f), rows, fail); err != nil {
-		return "", err
-	}
-	if err := closeFile(); err != nil {
-		return "", err
-	}
-	absPath, err := filepath.Abs(path)
+	absPath, err := filepath.Abs(published)
 	if err != nil {
-		return path, nil
+		return published, nil
 	}
 	return absPath, nil
 }
 
-// writeStreamCSV writes the CSV header and all event rows to w, calling fail
-// on the first write error to close the underlying file before returning.
-func writeStreamCSV(w *csv.Writer, rows []StreamEvent, fail func(error) (string, error)) error {
-	header := []string{"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall", "fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns", "nfds", "timeout_ns"}
-	if err := w.Write(header); err != nil {
-		_, err = fail(err)
+// probeExportPath checks, before the CSV is rendered, that a file can be
+// published at path. It is the same early check the Parquet recording runs
+// (atomicfile.ProbeReplace: missing or unwritable directory, an existing
+// directory at the name, characters the filesystem refuses), so the message is
+// the readable "cannot create files in <dir>: no such file or directory"
+// instead of the writer's error about an internal ior-<hex>.tmp name. A
+// generated name is never replaced, so the replace-only checks (the name is
+// an existing directory) are left to the publish for it: atomicfile.Probe.
+func probeExportPath(path string, generated bool) error {
+	if generated {
+		return atomicfile.Probe(path)
+	}
+	return atomicfile.ProbeReplace(path)
+}
+
+// streamCSVHeader is the stream CSV export's column order. The first 17
+// columns are the original layout and must never move: later columns are only
+// ever appended, so a script indexing by position keeps working. The next five
+// (address_space_bytes, old_file, epoll_op, epoll_target_fd, epoll_events)
+// complete the export to the per-event schema of the Parquet recording, under
+// the same names (docs/parquet-querying.md); only `error` (Parquet: is_error)
+// keeps its historical name, and the Parquet-internal filter_epoch is not
+// exported. `restarts` (task 203: the kernel restarts folded into the row)
+// was appended after them, together with the Parquet column.
+// TestStreamCSVHeaderMatchesParquetSchema ties this list to the
+// parquet.Record tags, so a column added on one side fails the test of the
+// other. streamCSVRecord must emit the cells in exactly this order.
+var streamCSVHeader = []string{
+	"seq", "time_ns", "gap_ns", "latency_ns", "comm", "pid", "tid", "syscall",
+	"fd", "ret", "bytes", "file", "error", "family", "requested_sleep_ns",
+	"nfds", "timeout_ns",
+	"address_space_bytes", "old_file", "epoll_op", "epoll_target_fd", "epoll_events",
+	"restarts",
+}
+
+// writeStreamCSV writes the CSV header and the syscall rows to w and flushes
+// it. Synthetic warning rows (streamrow.Row.IsWarning) are skipped: they are
+// UI notes whose time_ns is wall-clock and whose pid/ret are placeholders, so
+// writing them would put a fake "warning" syscall with a time from another
+// clock into the data, unlike the Parquet recording, which never sees them.
+func writeStreamCSV(w *csv.Writer, rows []StreamEvent) error {
+	if err := w.Write(streamCSVHeader); err != nil {
 		return err
 	}
 	for i := range rows {
-		ev := rows[i]
-		record := []string{
-			fmt.Sprintf("%d", ev.Seq),
-			fmt.Sprintf("%d", ev.TimeNs),
-			fmt.Sprintf("%d", ev.GapNs),
-			fmt.Sprintf("%d", ev.DurationNs),
-			ev.Comm,
-			fmt.Sprintf("%d", ev.PID),
-			fmt.Sprintf("%d", ev.TID),
-			ev.Syscall,
-			fmt.Sprintf("%d", ev.FD),
-			fmt.Sprintf("%d", ev.RetVal),
-			fmt.Sprintf("%d", ev.Bytes),
-			ev.FileName,
-			fmt.Sprintf("%t", ev.IsError),
-			ev.Family,
-			fmt.Sprintf("%d", ev.RequestedSleepNs),
-			fmt.Sprintf("%d", ev.Nfds),
-			fmt.Sprintf("%d", ev.TimeoutNs),
+		if rows[i].IsWarning {
+			continue
 		}
-		if err := w.Write(record); err != nil {
-			_, err = fail(err)
+		if err := w.Write(streamCSVRecord(&rows[i])); err != nil {
 			return err
 		}
 	}
 	w.Flush()
-	if err := w.Error(); err != nil {
-		_, err = fail(err)
-		return err
-	}
-	return nil
+	return w.Error()
 }
 
-// ensureCSVFilename validates and normalises a user-supplied export filename.
-// It strips any directory components (preventing path traversal outside
-// exportDir) and rejects names that resolve to "." or "..".  A ".csv"
-// extension is appended when the caller omits it.
-func ensureCSVFilename(name string) (string, error) {
-	clean := strings.TrimSpace(name)
-	if clean == "" {
+// streamCSVRecord renders one row in streamCSVHeader order.
+//
+// comm, file and old_file are the free-form text columns. They go through
+// textsafe.SanitizeComm/SanitizePath, the same UTF-8 repair
+// parquet.RecordFromStream applies to the recording (a rune cut at the
+// comm/path capture limit is dropped, any other invalid byte becomes a \xHH
+// escape), so a strict reader such as DuckDB's read_csv accepts the file and
+// the CSV and the Parquet recording hold identical text for the same row.
+// TestWriteStreamCSVRepairsInvalidUTF8LikeParquet pins that equality for
+// invalid and capture-limit-cut input; TestStreamCSVCellsMatchParquetRecord
+// only uses valid ASCII (distinctRow) and pins the column-to-field mapping.
+// Calling textsafe directly instead of RecordFromStream keeps the Parquet
+// library out of this package's dependencies (task 4z2). Valid text is
+// unchanged.
+func streamCSVRecord(ev *StreamEvent) []string {
+	return []string{
+		fmt.Sprintf("%d", ev.Seq),
+		fmt.Sprintf("%d", ev.TimeNs),
+		fmt.Sprintf("%d", ev.GapNs),
+		fmt.Sprintf("%d", ev.DurationNs),
+		textsafe.SanitizeComm(ev.Comm),
+		fmt.Sprintf("%d", ev.PID),
+		fmt.Sprintf("%d", ev.TID),
+		ev.Syscall,
+		fmt.Sprintf("%d", ev.FD),
+		fmt.Sprintf("%d", ev.RetVal),
+		fmt.Sprintf("%d", ev.Bytes),
+		// FileValue, not FileName: the export is a
+		// data file, so a fileless row gets an empty file cell like the
+		// Parquet column instead of the "N:file" display placeholder (task
+		// pq2). The fd column keeps -1 (streamrow.UnknownFD) for "no
+		// descriptor".
+		textsafe.SanitizePath(ev.FileValue()),
+		fmt.Sprintf("%t", ev.IsError),
+		ev.Family,
+		fmt.Sprintf("%d", ev.RequestedSleepNs),
+		fmt.Sprintf("%d", ev.Nfds),
+		fmt.Sprintf("%d", ev.TimeoutNs),
+		fmt.Sprintf("%d", ev.AddressSpaceBytes),
+		// Rename/link source path; empty for every other syscall. The
+		// file column holds the destination.
+		textsafe.SanitizePath(ev.OldName),
+		// Empty/zero for everything but epoll_ctl.
+		ev.EpollOp,
+		fmt.Sprintf("%d", ev.EpollTargetFD),
+		fmt.Sprintf("%d", ev.EpollEvents),
+		// Kernel restarts folded into the row; 0 for an uninterrupted call.
+		fmt.Sprintf("%d", ev.Restarts),
+	}
+}
+
+// resolveExportPath turns the filename typed into the export modal into the
+// path to write. The name is honoured as typed, never rewritten:
+//
+//   - a bare name ("trace") lands in exportDir;
+//   - a relative name with a directory part ("out/trace", "../trace") is
+//     resolved against exportDir, an absolute one ("/tmp/trace.csv") is used
+//     as is. Nothing confines it to exportDir: the name is typed by the user
+//     in their own TUI, no privilege boundary is crossed, and the R recording
+//     prompt and -parquet take any path too. (The old behaviour kept only the
+//     base name, so "/tmp/x.csv" was silently written to ./x.csv.) Missing
+//     parent directories are not created - the probe reports them;
+//   - ".csv" is appended to the last element when it lacks it
+//     (case-insensitively).
+//
+// The path is cleaned lexically (filepath.Clean), not the way the kernel
+// resolves it: "lnk/../x" becomes "x" even when lnk is a symlink to another
+// directory, where the kernel would go to that directory's parent. The
+// returned path is what the Stream tab shows, so the user sees where the file
+// went either way.
+//
+// It rejects, with a message the modal shows, an empty name, a NUL byte (no
+// path can hold one), a name that denotes a directory rather than a file
+// (see namesDirectory) and a file name longer than the filesystem's NAME_MAX
+// (checked here, like parquet's Recorder.Prepare, because the probe only
+// creates a short temp name and would let it through to fail at the publish).
+func resolveExportPath(exportDir, name string) (string, error) {
+	typed := strings.TrimSpace(name)
+	switch {
+	case typed == "":
 		return "", errors.New("filename cannot be empty")
+	case strings.ContainsRune(typed, 0):
+		return "", errors.New("filename must not contain a NUL byte")
+	case namesDirectory(typed):
+		return "", fmt.Errorf("%q is a directory, not a file name", typed)
 	}
 
-	// Strip all directory components so that inputs such as
-	// "../../etc/passwd" or "/absolute/path.csv" cannot escape exportDir.
-	base := filepath.Base(clean)
-
-	// filepath.Base returns "." for empty/dot inputs and ".." for a raw ".."
-	// component — both are unusable as a plain filename.
-	if base == "." || base == ".." {
-		return "", errors.New("filename must not be a directory reference")
+	path := filepath.Clean(typed)
+	if !strings.HasSuffix(strings.ToLower(path), ".csv") {
+		path += ".csv"
 	}
-
-	if strings.HasSuffix(strings.ToLower(base), ".csv") {
-		return base, nil
+	if n := len(filepath.Base(path)); n > atomicfile.NameMax {
+		return "", fmt.Errorf("file name is too long: %d bytes (with .csv), the filesystem allows %d", n, atomicfile.NameMax)
 	}
-	return base + ".csv", nil
+	if !filepath.IsAbs(path) && exportDir != "" {
+		path = filepath.Join(exportDir, path)
+	}
+	return path, nil
+}
+
+// namesDirectory reports whether the typed name denotes a directory rather
+// than a file: it is "." or "..", or it ends in a path separator or in a "."
+// or ".." element ("out/", "out/.", "out/..", "a/..", "/"). It looks at the
+// raw text, not the cleaned path: Clean("out/.") is "out", which would pass
+// as a file name and silently write out.csv although the user typed a
+// directory reference.
+func namesDirectory(typed string) bool {
+	sep := string(filepath.Separator)
+	if typed == "." || typed == ".." {
+		return true
+	}
+	return strings.HasSuffix(typed, sep) ||
+		strings.HasSuffix(typed, sep+".") ||
+		strings.HasSuffix(typed, sep+"..")
 }
 
 // ExportSourceSnapshotToCSV is the export path for callers that must not
@@ -269,6 +388,14 @@ func ExportSourceSnapshotToCSV(source Source, filter Filter, exportDir, filename
 // Update path and hand them to the command closure instead of a Model
 // pointer: command closures run on their own goroutine while Update/View
 // keep mutating this Model (see ExportSourceSnapshotToCSV).
+//
+// The Source is deliberately the LIVE one even while the stream is paused: the
+// dashboard-wide 'e' export is a fresh snapshot of the ring that works outside
+// paused mode too (task 364), whereas the Stream tab's x/X export writes the
+// frozen paused rows (exportFilteredToCSV). The two differ on purpose, which
+// README.md and AGENTS.md state, and the 'e' modal warns about it while the
+// stream is paused (export.Model.OpenFor). TestExportInputsStayLiveWhilePaused
+// pins it.
 func (m *Model) ExportInputs() (Source, Filter, string) {
 	return m.source, m.filter, m.exportDir
 }

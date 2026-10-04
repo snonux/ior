@@ -4,17 +4,18 @@ import (
 	"testing"
 
 	"ior/internal/globalfilter"
+	"ior/internal/runtime"
 )
 
 func TestSlowTraceTeardownKeepsNextSessionLiveFilterSetter(t *testing.T) {
 	bindings := newRuntimeBindings()
 	var firstCalls int
-	finishFirstSession := bindings.SetLiveFilterSetter(func(globalfilter.Filter) {
+	finishFirstSession := bindings.setLiveFilterSetter(func(globalfilter.Filter) {
 		firstCalls++
 	})
 
 	var secondCalls int
-	finishSecondSession := bindings.SetLiveFilterSetter(func(globalfilter.Filter) {
+	finishSecondSession := bindings.setLiveFilterSetter(func(globalfilter.Filter) {
 		secondCalls++
 	})
 
@@ -35,4 +36,40 @@ func TestSlowTraceTeardownKeepsNextSessionLiveFilterSetter(t *testing.T) {
 	if applied := bindings.applyLiveFilter(globalfilter.Filter{}); applied {
 		t.Fatal("current session teardown left its live filter setter registered")
 	}
+}
+
+// The helpers below publish straight into the runtime bindings, outside any
+// trace session, for tests that exercise the TUI side of one wired session.
+// Production code has no such ungated setters: trace sessions publish only
+// through their traceSessionBindings view.
+
+func (r *runtimeBindings) setDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snapshotSource = source
+}
+
+func (r *runtimeBindings) setEventStreamSource(source runtime.StreamSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.streamSource = source
+}
+
+func (r *runtimeBindings) setLiveTrie(liveTrie runtime.LiveTrieSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.liveTrieSource = liveTrie
+}
+
+func (r *runtimeBindings) setProbeManager(manager runtime.ProbeManager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.probeManager = manager
+}
+
+func (r *runtimeBindings) setLiveFilterSetter(setter func(globalfilter.Filter)) func() {
+	r.mu.Lock()
+	registration := r.installLiveFilterSetterLocked(setter)
+	r.mu.Unlock()
+	return r.liveFilterUnregisterer(registration)
 }

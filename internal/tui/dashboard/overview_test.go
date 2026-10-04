@@ -48,6 +48,22 @@ func TestRenderOverviewIncludesCoreMetrics(t *testing.T) {
 	}
 }
 
+// The error box labels the gap mean as one between traced calls: under
+// sampling or for aggregate-only syscalls it spans untraced calls. The line
+// must also fit the box at the default 80 columns without wrapping.
+func TestRenderErrorBoxLabelsTracedGapMean(t *testing.T) {
+	snap := &statsengine.Snapshot{GapMeanNs: 1_234_567}
+	for _, width := range []int{80, 120} {
+		out := renderErrorBox(snap, summaryBoxWidth(width))
+		if !strings.Contains(out, "Traced gap: 1234567ns") {
+			t.Fatalf("width %d: error box = %q, want the traced gap line unwrapped", width, out)
+		}
+		if strings.Contains(out, "Gap mean") {
+			t.Fatalf("width %d: error box still says %q", width, "Gap mean")
+		}
+	}
+}
+
 func TestSummarizeTopSyscalls(t *testing.T) {
 	snap := statsengine.NewSnapshot(
 		nil, nil, nil,

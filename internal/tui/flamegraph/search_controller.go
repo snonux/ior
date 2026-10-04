@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	common "ior/internal/tui/common"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
@@ -42,6 +44,20 @@ func (sc *SearchController) isActive() bool {
 // no filter is applied.
 func (sc *SearchController) query() string {
 	return sc.searchQuery
+}
+
+// inputValue returns the text currently typed into the search input. It
+// differs from query() while the input is open: query() is only updated on
+// commit, whereas the input value changes on every keystroke.
+func (sc *SearchController) inputValue() string {
+	return sc.searchInput.Value()
+}
+
+// inputCursor returns the cursor position inside the search input. Cursor
+// moves (left/right/home/end) change the rendered footer without changing the
+// value, so the view cache must see them too.
+func (sc *SearchController) inputCursor() int {
+	return sc.searchInput.Position()
 }
 
 // matches returns the set of frame indices whose name matches the query. The
@@ -126,10 +142,26 @@ func (sc *SearchController) handleInput(msg tea.KeyPressMsg) (committed bool, qu
 	case "enter":
 		return true, sc.searchInput.Value(), false
 	}
-	var cmd tea.Cmd
-	sc.searchInput, cmd = sc.searchInput.Update(msg)
-	_ = cmd
+	sc.typeIntoInput(msg)
 	return false, "", false
+}
+
+// handlePaste inserts bracketed-paste text into the search input. Terminals
+// deliver a paste as one tea.PasteMsg rather than as key presses, so handleInput
+// never sees it. The text input flattens newlines and tabs to spaces. Only call
+// it while search mode is active; the query is applied on Enter like typed text.
+func (sc *SearchController) handlePaste(msg tea.PasteMsg) {
+	sc.typeIntoInput(msg)
+}
+
+// typeIntoInput feeds a key press or paste to the text input and drops the
+// command it returns (see handleInput for why). It goes through
+// common.UpdateTextInput, which keeps Alt+D on the last rune from panicking
+// bubbles (task kz2).
+func (sc *SearchController) typeIntoInput(msg tea.Msg) {
+	var cmd tea.Cmd
+	sc.searchInput, cmd = common.UpdateTextInput(sc.searchInput, msg)
+	_ = cmd
 }
 
 // recomputeFilterState rebuilds matchIndices and filterVisible from the current

@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -27,7 +31,28 @@ func testFilename(value string) [MAX_FILENAME_LENGTH]byte {
 	return filename
 }
 
+// TestFastDecodersMatchGeneratedDecoders decodes one record of every kind
+// with both decoders and requires the same event from each. The subtests
+// are registered by one helper per group of kinds, only to keep each
+// function short; their names are the event types, as before.
 func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
+	fastMatchesOpenAndExec(t)
+	fastMatchesNullFdAndRet(t)
+	fastMatchesNamePathAndFcntl(t)
+	fastMatchesDup3HandleAndSocket(t)
+	fastMatchesSocketpairAcceptAndPipe(t)
+	fastMatchesEventfdAndEpollCtl(t)
+	fastMatchesTwoFdAndPoll(t)
+	fastMatchesMemAndMmap(t)
+	fastMatchesSleepKeyctlAndPtrace(t)
+	fastMatchesPerfOpen(t)
+	fastMatchesProcessRecords(t)
+	fastMatchesTaskAndRestartRecords(t)
+}
+
+// fastMatchesOpenAndExec registers the subtests of the open, open-name fixup
+// and exec records.
+func fastMatchesOpenAndExec(t *testing.T) {
 	t.Run("OpenEvent", func(t *testing.T) {
 		ev := &OpenEvent{EventType: ENTER_OPEN_EVENT, TraceId: SYS_ENTER_OPENAT, Time: 1, Pid: 2, Tid: 3, Dirfd: 5, Flags: 4, SchemaVersion: OPEN_EVENT_SCHEMA_VERSION}
 		copy(ev.Filename[:], "a")
@@ -58,7 +83,8 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("ExecEvent", func(t *testing.T) {
-		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4}
+		ev := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3, Dirfd: -100, Flags: 4,
+			FilenameStatus: PATH_READ_FAILED, SchemaVersion: EXEC_EVENT_SCHEMA_VERSION}
 		copy(ev.Filename[:], "a")
 		copy(ev.Comm[:], "b")
 		raw := rawBytes(t, ev)
@@ -67,11 +93,15 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 		fast := NewExecEventFast(raw)
 		defer slow.Recycle()
 		defer fast.Recycle()
-		if !slow.Equals(fast) {
-			t.Fatalf("exec decode mismatch")
+		if !slow.Equals(fast) || !ev.Equals(fast) {
+			t.Fatalf("exec decode mismatch: %v", fast)
 		}
 	})
+}
 
+// fastMatchesNullFdAndRet registers the subtests of the argument-less, fd
+// and ret records.
+func fastMatchesNullFdAndRet(t *testing.T) {
 	t.Run("NullEvent", func(t *testing.T) {
 		ev := &NullEvent{EventType: ENTER_NULL_EVENT, TraceId: SYS_ENTER_SYNC, Time: 1, Pid: 2, Tid: 3}
 		raw := rawBytes(t, ev)
@@ -110,7 +140,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("ret decode mismatch")
 		}
 	})
+}
 
+// fastMatchesNamePathAndFcntl registers the subtests of the two-name, path
+// and fcntl records.
+func fastMatchesNamePathAndFcntl(t *testing.T) {
 	t.Run("NameEvent", func(t *testing.T) {
 		ev := &NameEvent{EventType: ENTER_NAME_EVENT, TraceId: SYS_ENTER_RENAME, Time: 1, Pid: 2, Tid: 3, Olddirfd: 4, Newdirfd: 5, SchemaVersion: NAME_EVENT_SCHEMA_VERSION}
 		copy(ev.Oldname[:], "old")
@@ -152,9 +186,13 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("fcntl decode mismatch")
 		}
 	})
+}
 
+// fastMatchesDup3HandleAndSocket registers the subtests of the dup3,
+// open_by_handle_at and socket records.
+func fastMatchesDup3HandleAndSocket(t *testing.T) {
 	t.Run("Dup3Event", func(t *testing.T) {
-		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5}
+		ev := &Dup3Event{EventType: ENTER_DUP3_EVENT, TraceId: SYS_ENTER_DUP3, Time: 1, Pid: 2, Tid: 3, Fd: 4, Flags: 5, FileIdent: 6}
 		raw := rawBytes(t, ev)
 
 		slow := NewDup3Event(raw)
@@ -167,7 +205,8 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	})
 
 	t.Run("OpenByHandleAtEvent", func(t *testing.T) {
-		ev := &OpenByHandleAtEvent{EventType: ENTER_OPEN_BY_HANDLE_AT_EVENT, TraceId: SYS_ENTER_OPEN_BY_HANDLE_AT, Time: 1, Pid: 2, Tid: 3, Flags: 4}
+		ev := &OpenByHandleAtEvent{EventType: ENTER_OPEN_BY_HANDLE_AT_EVENT, TraceId: SYS_ENTER_OPEN_BY_HANDLE_AT, Time: 1, Pid: 2, Tid: 3, Flags: 4,
+			HandleStatus: FILE_HANDLE_OK, HandleBytes: 3, HandleType: -5, FHandle: [IOR_MAX_HANDLE_SZ]byte{7, 8, 9}}
 		raw := rawBytes(t, ev)
 
 		slow := NewOpenByHandleAtEvent(raw)
@@ -191,7 +230,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("socket decode mismatch")
 		}
 	})
+}
 
+// fastMatchesSocketpairAcceptAndPipe registers the subtests of the
+// socketpair, accept and pipe records.
+func fastMatchesSocketpairAcceptAndPipe(t *testing.T) {
 	t.Run("SocketpairEvent", func(t *testing.T) {
 		ev := &SocketpairEvent{EventType: ENTER_SOCKETPAIR_EVENT, TraceId: SYS_ENTER_SOCKETPAIR, Time: 1, Pid: 2, Tid: 3, Family: 1, Type: 2, Protocol: 0, Sv0: 10, Sv1: 11, Ret: -1}
 		raw := rawBytes(t, ev)
@@ -230,7 +273,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("pipe decode mismatch")
 		}
 	})
+}
 
+// fastMatchesEventfdAndEpollCtl registers the subtests of the eventfd and
+// epoll_ctl records.
+func fastMatchesEventfdAndEpollCtl(t *testing.T) {
 	t.Run("EventfdEvent", func(t *testing.T) {
 		ev := &EventfdEvent{
 			EventType:      ENTER_EVENTFD_EVENT,
@@ -268,7 +315,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("epoll_ctl decode mismatch")
 		}
 	})
+}
 
+// fastMatchesTwoFdAndPoll registers the subtests of the two-fd and poll
+// records.
+func fastMatchesTwoFdAndPoll(t *testing.T) {
 	t.Run("TwoFdEvent", func(t *testing.T) {
 		ev := &TwoFdEvent{
 			EventType:     ENTER_TWO_FD_EVENT,
@@ -308,7 +359,10 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("poll decode mismatch")
 		}
 	})
+}
 
+// fastMatchesMemAndMmap registers the subtests of the memory and mmap records.
+func fastMatchesMemAndMmap(t *testing.T) {
 	t.Run("MemEvent", func(t *testing.T) {
 		ev := &MemEvent{
 			EventType: ENTER_MEM_EVENT,
@@ -355,7 +409,11 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("mmap decode mismatch")
 		}
 	})
+}
 
+// fastMatchesSleepKeyctlAndPtrace registers the subtests of the sleep,
+// keyctl and ptrace records.
+func fastMatchesSleepKeyctlAndPtrace(t *testing.T) {
 	t.Run("SleepEvent", func(t *testing.T) {
 		ev := &SleepEvent{
 			EventType:   ENTER_SLEEP_EVENT,
@@ -401,7 +459,10 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("ptrace decode mismatch")
 		}
 	})
+}
 
+// fastMatchesPerfOpen registers the subtests of the perf_event_open record.
+func fastMatchesPerfOpen(t *testing.T) {
 	t.Run("PerfOpenEvent", func(t *testing.T) {
 		ev := &PerfOpenEvent{
 			EventType: ENTER_PERF_OPEN_EVENT,
@@ -427,14 +488,18 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("perf_open decode mismatch")
 		}
 	})
+}
 
+// fastMatchesProcessRecords registers the subtests of the process exec and
+// exit control records.
+func fastMatchesProcessRecords(t *testing.T) {
 	// ProcessExecEvent is not a syscall event: it is the sched_process_exec
 	// control record that keeps the pid->comm cache correct across execve. It
 	// belongs in this table for the same reason as the others - its fast path
 	// only triggers on the exact kernel payload size, so a struct-layout drift
 	// must show up as a decode mismatch here.
 	t.Run("ProcessExecEvent", func(t *testing.T) {
-		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 3}
+		ev := &ProcessExecEvent{EventType: PROCESS_EXEC_EVENT, Time: 1, Pid: 2, Tid: 2, OldTid: 3, ExitUntraced: 1}
 		copy(ev.Comm[:], "cat")
 		raw := rawBytes(t, ev)
 
@@ -451,7 +516,7 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 	// that evicts a dead process's fdTracker entries. Same table membership
 	// rationale as ProcessExecEvent above.
 	t.Run("ProcessExitEvent", func(t *testing.T) {
-		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3}
+		ev := &ProcessExitEvent{EventType: PROCESS_EXIT_EVENT, Time: 1, Pid: 2, Tid: 3, GroupDead: 1}
 		raw := rawBytes(t, ev)
 
 		slow := NewProcessExitEvent(raw)
@@ -462,6 +527,492 @@ func TestFastDecodersMatchGeneratedDecoders(t *testing.T) {
 			t.Fatalf("process_exit decode mismatch")
 		}
 	})
+}
+
+// fastMatchesTaskAndRestartRecords registers the subtests of the task and
+// restart control records.
+func fastMatchesTaskAndRestartRecords(t *testing.T) {
+	// TaskNewtaskEvent is the control record of task:task_newtask that seeds
+	// a new task's comm; same table membership rationale as above.
+	t.Run("TaskNewtaskEvent", func(t *testing.T) {
+		ev := &TaskNewtaskEvent{EventType: TASK_NEWTASK_EVENT, Time: 1, Pid: 2, Tid: 3, CloneFlags: 0x10f00, CreatorPid: 9}
+		copy(ev.Comm[:], "worker")
+		raw := rawBytes(t, ev)
+
+		slow := NewTaskNewtaskEvent(raw)
+		fast := NewTaskNewtaskEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("task_newtask decode mismatch")
+		}
+	})
+
+	// TaskRenameEvent is the control record of task:task_rename that renames a
+	// tid in the comm cache; same table membership rationale as above.
+	t.Run("TaskRenameEvent", func(t *testing.T) {
+		ev := &TaskRenameEvent{EventType: TASK_RENAME_EVENT, Time: 1, Pid: 2, Tid: 3}
+		copy(ev.Comm[:], "renamed")
+		raw := rawBytes(t, ev)
+
+		slow := NewTaskRenameEvent(raw)
+		fast := NewTaskRenameEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("task_rename decode mismatch")
+		}
+	})
+
+	// SyscallRestartEvent is the control record of the restart-fold probes
+	// (internal/c/restart.c); same table membership rationale as above.
+	t.Run("SyscallRestartEvent", func(t *testing.T) {
+		ev := &SyscallRestartEvent{EventType: SYSCALL_RESTART_EVENT, Time: 1, Pid: 2, Tid: 3,
+			Phase: RESTART_PHASE_HANDLER, SaRestart: 1}
+		raw := rawBytes(t, ev)
+
+		slow := NewSyscallRestartEvent(raw)
+		fast := NewSyscallRestartEventFast(raw)
+		defer slow.Recycle()
+		defer fast.Recycle()
+		if !slow.Equals(fast) {
+			t.Fatalf("syscall_restart decode mismatch")
+		}
+	})
+}
+
+// TestNewSyscallRestartEventFastKernelLayout pins the byte offsets of struct
+// syscall_restart_event as the BPF handlers write them (pid at 16, tid at 20,
+// phase at 24, sa_restart at 28) and the wire size against what
+// encoding/binary makes of the generated Go struct. The phase is what licenses
+// a fold, so a record shorter than the layout must fail closed rather than
+// decode a phase from the wrong bytes; a longer one decodes by its prefix. A
+// pooled event must not leak the previous record's phase or flag.
+func TestNewSyscallRestartEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(SyscallRestartEvent{}); got != syscallRestartEventSize {
+		t.Fatalf("binary.Size(SyscallRestartEvent) = %d, want %d", got, syscallRestartEventSize)
+	}
+	record := func(phase, saRestart uint32) []byte {
+		raw := make([]byte, syscallRestartEventSize)
+		binary.LittleEndian.PutUint32(raw[0:4], SYSCALL_RESTART_EVENT)
+		binary.LittleEndian.PutUint64(raw[8:16], 7)
+		binary.LittleEndian.PutUint32(raw[16:20], 100)
+		binary.LittleEndian.PutUint32(raw[20:24], 101)
+		binary.LittleEndian.PutUint32(raw[24:28], phase)
+		binary.LittleEndian.PutUint32(raw[28:32], saRestart)
+		return raw
+	}
+	NewSyscallRestartEventFast(record(RESTART_PHASE_HANDLER, 1)).Recycle()
+
+	raw := record(RESTART_PHASE_RESUME, 0)
+	ev := NewSyscallRestartEventFast(append(raw, 0xff, 0xff))
+	if ev == nil {
+		t.Fatal("kernel layout payload (with a longer tail) rejected")
+	}
+	defer ev.Recycle()
+	want := SyscallRestartEvent{EventType: SYSCALL_RESTART_EVENT, Time: 7, Pid: 100, Tid: 101,
+		Phase: RESTART_PHASE_RESUME}
+	if *ev != want {
+		t.Fatalf("decoded %#v, want %#v", *ev, want)
+	}
+	for _, n := range []int{0, 1, syscallRestartEventSize - 1} {
+		if short := NewSyscallRestartEventFast(raw[:n]); short != nil {
+			t.Fatalf("%d-byte record decoded as %#v, want nil", n, short)
+		}
+	}
+}
+
+// TestNewTaskRenameEventFastKernelLayout pins the byte offsets of struct
+// task_rename_event as the BPF handler writes them (pid at 16, tid at 20, comm
+// at 24..40) and the wire size against what encoding/binary makes of the
+// generated Go struct, so a padding change on either side is caught here
+// rather than as a silently misattributed rename. Records shorter than the
+// layout fail closed; a longer one decodes by its prefix.
+func TestNewTaskRenameEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(TaskRenameEvent{}); got != taskRenameEventSize {
+		t.Fatalf("binary.Size(TaskRenameEvent) = %d, want %d", got, taskRenameEventSize)
+	}
+	raw := make([]byte, taskRenameEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], TASK_RENAME_EVENT)
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 101)
+	copy(raw[24:40], "wk-renamed")
+
+	ev := NewTaskRenameEventFast(append(raw, 0xff, 0xff))
+	if ev == nil {
+		t.Fatal("kernel layout payload (with a longer tail) rejected")
+	}
+	defer ev.Recycle()
+	if ev.EventType != TASK_RENAME_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected task_rename decode: %#v", ev)
+	}
+	if got := StringValue(ev.Comm[:]); got != "wk-renamed" {
+		t.Fatalf("comm = %q, want wk-renamed", got)
+	}
+	for _, n := range []int{0, 1, taskRenameEventSize - 1} {
+		if short := NewTaskRenameEventFast(raw[:n]); short != nil {
+			t.Fatalf("%d-byte record decoded as %#v, want nil", n, short)
+		}
+	}
+}
+
+// TestNewTaskNewtaskEventFastKernelLayout pins the byte offsets of struct
+// task_newtask_event as the BPF handler writes them: comm at 24..40 and
+// clone_flags at 40..48, creator_pid at 48..52. The wire size must equal what encoding/binary makes of
+// the generated Go struct, so a padding change on either side is caught here
+// rather than as a silently misread thread flag.
+func TestNewTaskNewtaskEventFastKernelLayout(t *testing.T) {
+	if got := binary.Size(TaskNewtaskEvent{}); got != taskNewtaskEventSize {
+		t.Fatalf("binary.Size(TaskNewtaskEvent) = %d, want %d", got, taskNewtaskEventSize)
+	}
+	raw := taskNewtaskRaw(taskNewtaskEventSize)
+	ev := NewTaskNewtaskEventFast(raw)
+	if ev == nil {
+		t.Fatal("kernel layout payload rejected")
+	}
+	defer ev.Recycle()
+	if ev.EventType != TASK_NEWTASK_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected task_newtask decode: %#v", ev)
+	}
+	if StringValue(ev.Comm[:]) != "child" || ev.CloneFlags != 0x0000000100011111 {
+		t.Fatalf("comm=%q flags=%#x, want child / 0x100011111", StringValue(ev.Comm[:]), ev.CloneFlags)
+	}
+	if ev.CreatorPid != 99 {
+		t.Fatalf("CreatorPid = %d, want 99 (offset 48)", ev.CreatorPid)
+	}
+}
+
+// TestNewTaskNewtaskEventFastLegacyRecord pins the compatibility path: the
+// 48-byte record of a pre-creator_pid IOR_BPF_OBJECT decodes with CreatorPid 0
+// (unknown), even when the pooled event last held a record with a creator, so
+// no stale creator can leak into a legacy record.
+func TestNewTaskNewtaskEventFastLegacyRecord(t *testing.T) {
+	full := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventSize))
+	if full == nil || full.CreatorPid != 99 {
+		t.Fatalf("full record decode = %#v, want CreatorPid 99", full)
+	}
+	full.Recycle()
+	ev := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventLegacySize))
+	if ev == nil {
+		t.Fatal("legacy 48-byte record rejected")
+	}
+	defer ev.Recycle()
+	if ev.Tid != 101 || ev.CloneFlags != 0x0000000100011111 || ev.CreatorPid != 0 {
+		t.Fatalf("legacy decode = %#v, want tid 101, flags kept, CreatorPid 0", ev)
+	}
+}
+
+// TestNewTaskNewtaskEventFastScopeFlags pins scope_flags at 52..56 and its one
+// defined bit: a record that says its child is out of scope reports it, a plain
+// record does not, and - the negative path - a legacy 48-byte record decoded
+// right after a flagged one (the pooled struct held the flag) reads "in scope",
+// not the previous record's bit, and an unrelated bit does not count.
+func TestNewTaskNewtaskEventFastScopeFlags(t *testing.T) {
+	flagged := taskNewtaskRaw(taskNewtaskEventSize)
+	binary.LittleEndian.PutUint32(flagged[52:56], TaskNewtaskChildOutOfScope)
+	ev := NewTaskNewtaskEventFast(flagged)
+	if ev == nil || !ev.ChildOutOfScope() {
+		t.Fatalf("flagged record decode = %#v, want ChildOutOfScope", ev)
+	}
+	ev.Recycle()
+
+	legacy := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventLegacySize))
+	if legacy == nil {
+		t.Fatal("legacy record rejected")
+	}
+	if legacy.ChildOutOfScope() || legacy.ScopeFlags != 0 {
+		t.Fatalf("legacy record ScopeFlags = %#x, want 0 (no bit leaked from the pooled event)", legacy.ScopeFlags)
+	}
+	legacy.Recycle()
+
+	other := taskNewtaskRaw(taskNewtaskEventSize)
+	binary.LittleEndian.PutUint32(other[52:56], 0x2)
+	ev = NewTaskNewtaskEventFast(other)
+	if ev == nil || ev.ChildOutOfScope() {
+		t.Fatalf("record with only an unrelated flag bit = %#v, want in scope", ev)
+	}
+	ev.Recycle()
+}
+
+// TestNewTaskNewtaskEventFastRejectsShortRecords is the negative path: anything
+// that is neither the 56-byte layout nor the legacy 48-byte one fails closed, and an oversized record still decodes
+// its prefix (forward compatibility with an object that appends fields).
+func TestNewTaskNewtaskEventFastRejectsShortRecords(t *testing.T) {
+	for _, n := range []int{0, 24, 40, taskNewtaskEventLegacySize - 1, taskNewtaskEventLegacySize + 1, taskNewtaskEventSize - 1} {
+		if ev := NewTaskNewtaskEventFast(taskNewtaskRaw(n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewTaskNewtaskEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
+	ev := NewTaskNewtaskEventFast(taskNewtaskRaw(taskNewtaskEventSize + 8))
+	if ev == nil {
+		t.Fatal("oversized record rejected, want prefix decoded")
+	}
+	defer ev.Recycle()
+	if ev.Tid != 101 || ev.CloneFlags != 0x0000000100011111 {
+		t.Fatalf("unexpected oversized decode: %#v", ev)
+	}
+}
+
+// taskNewtaskRaw builds an n-byte task_newtask record for child tgid 100 / tid
+// 101, comm "child", whose fields are written only as far as n reaches; bytes
+// past the current layout are 0xff so an oversized decode cannot read them.
+func taskNewtaskRaw(n int) []byte {
+	raw := make([]byte, n)
+	if n >= 24 {
+		binary.LittleEndian.PutUint32(raw[0:4], uint32(TASK_NEWTASK_EVENT))
+		binary.LittleEndian.PutUint64(raw[8:16], 7)
+		binary.LittleEndian.PutUint32(raw[16:20], 100)
+		binary.LittleEndian.PutUint32(raw[20:24], 101)
+	}
+	if n >= taskNewtaskEventLegacySize {
+		copy(raw[24:40], "child")
+		binary.LittleEndian.PutUint64(raw[40:48], 0x0000000100011111)
+	}
+	if n >= taskNewtaskEventSize {
+		binary.LittleEndian.PutUint32(raw[48:52], 99)
+		for i := taskNewtaskEventSize; i < n; i++ {
+			raw[i] = 0xff
+		}
+	}
+	return raw
+}
+
+// TestNewProcessExecEventFastKernelLayout pins the kernel byte offsets of
+// struct process_exec_event, in particular old_tid at 40..44 behind the comm
+// and exit_untraced at 44..48: the event loop re-keys a non-leader's parked
+// execve enter from OldTid to Tid, and completes it from the record itself
+// when ExitUntraced is set, so a misplaced field would pair nothing, move the
+// wrong enter or complete an execve whose exit is still coming.
+func TestNewProcessExecEventFastKernelLayout(t *testing.T) {
+	raw := make([]byte, processExecEventSize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXEC_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 100)
+	copy(raw[24:40], "newprog")
+	binary.LittleEndian.PutUint32(raw[40:44], 102)
+	binary.LittleEndian.PutUint32(raw[44:48], 1)
+
+	ev := NewProcessExecEventFast(raw)
+	if ev == nil {
+		t.Fatal("expected decoded process exec event for kernel layout payload")
+	}
+	defer ev.Recycle()
+	if ev.EventType != PROCESS_EXEC_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 100 ||
+		ev.OldTid != 102 || ev.ExitUntraced != 1 || StringValue(ev.Comm[:]) != "newprog" {
+		t.Fatalf("unexpected process exec decode: %#v", ev)
+	}
+}
+
+// TestNewProcessExecEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
+// compatibility path: the 40-byte record of an object built before old_tid
+// must decode with OldTid 0 ("tid kept") and ExitUntraced 0 ("exit still
+// coming") rather than be dropped as malformed, which lost the post-exec comm
+// refresh and FD_CLOEXEC eviction of every exec. The pooled event is dirtied
+// first so the defaults cannot come from a zeroed allocation.
+func TestNewProcessExecEventFastDecodesLegacyRecord(t *testing.T) {
+	dirty := NewProcessExecEventFast(func() []byte {
+		raw := make([]byte, processExecEventSize)
+		binary.LittleEndian.PutUint32(raw[40:44], 99)
+		binary.LittleEndian.PutUint32(raw[44:48], 1)
+		return raw
+	}())
+	dirty.Recycle()
+
+	raw := make([]byte, processExecEventLegacySize)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXEC_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 100)
+	copy(raw[24:40], "newprog")
+
+	ev := NewProcessExecEventFast(raw)
+	if ev == nil {
+		t.Fatal("legacy 40-byte process exec record rejected, want decoded")
+	}
+	defer ev.Recycle()
+	if ev.EventType != PROCESS_EXEC_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 100 ||
+		StringValue(ev.Comm[:]) != "newprog" {
+		t.Fatalf("unexpected legacy process exec decode: %#v", ev)
+	}
+	if ev.OldTid != 0 || ev.ExitUntraced != 0 {
+		t.Fatalf("legacy record OldTid=%d ExitUntraced=%d, want 0 and 0", ev.OldTid, ev.ExitUntraced)
+	}
+}
+
+// TestNewProcessExecEventFastRejectsOtherSizes pins the negative path: below
+// the current 48-byte layout only the exact legacy 40-byte record decodes. A
+// truncated or in-between payload fails closed instead of being read at the
+// wrong offsets (e.g. as an exec that kept its tid).
+func TestNewProcessExecEventFastRejectsOtherSizes(t *testing.T) {
+	for _, n := range []int{0, 24, processExecEventLegacySize - 1, processExecEventLegacySize + 1,
+		processExecEventLegacySize + 4, processExecEventSize - 1} {
+		if ev := NewProcessExecEventFast(make([]byte, n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewProcessExecEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
+}
+
+// TestNewProcessExecEventFastDecodesOversizedPrefix pins forward
+// compatibility: a newer object that appends fields to the record must still
+// have the current layout's prefix decoded, not be dropped as malformed.
+func TestNewProcessExecEventFastDecodesOversizedPrefix(t *testing.T) {
+	for _, extra := range []int{1, 8} {
+		raw := make([]byte, processExecEventSize+extra)
+		binary.LittleEndian.PutUint32(raw[20:24], 100)
+		copy(raw[24:40], "newprog")
+		binary.LittleEndian.PutUint32(raw[40:44], 102)
+		binary.LittleEndian.PutUint32(raw[44:48], 1)
+		for i := processExecEventSize; i < len(raw); i++ {
+			raw[i] = 0xff
+		}
+		ev := NewProcessExecEventFast(raw)
+		if ev == nil {
+			t.Fatalf("NewProcessExecEventFast(%d bytes) rejected, want prefix decoded", len(raw))
+		}
+		if ev.Tid != 100 || ev.OldTid != 102 || ev.ExitUntraced != 1 || StringValue(ev.Comm[:]) != "newprog" {
+			t.Fatalf("unexpected oversized process exec decode: %#v", ev)
+		}
+		ev.Recycle()
+	}
+}
+
+// TestNewProcessExitEventFastKernelLayout pins the kernel byte offsets of
+// struct process_exit_event, in particular group_dead at 24..28: the event
+// loop evicts a process's fd table only when it is set, so a misplaced field
+// would either keep dead processes' descriptors or evict living ones.
+func TestNewProcessExitEventFastKernelLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		groupDead uint32
+		want      bool
+	}{
+		{name: "thread exit", groupDead: 0, want: false},
+		{name: "group dead", groupDead: 1, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := make([]byte, processExitEventSize)
+			binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
+			binary.LittleEndian.PutUint64(raw[8:16], 7)
+			binary.LittleEndian.PutUint32(raw[16:20], 100)
+			binary.LittleEndian.PutUint32(raw[20:24], 101)
+			binary.LittleEndian.PutUint32(raw[24:28], tc.groupDead)
+
+			ev := NewProcessExitEventFast(raw)
+			if ev == nil {
+				t.Fatal("expected decoded process exit event for kernel layout payload")
+			}
+			defer ev.Recycle()
+			if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+				t.Fatalf("unexpected process exit decode: %#v", ev)
+			}
+			if ev.IsGroupDead() != tc.want {
+				t.Fatalf("IsGroupDead() = %v, want %v", ev.IsGroupDead(), tc.want)
+			}
+		})
+	}
+}
+
+// TestNewProcessExitEventFastDecodesLegacyRecord pins the IOR_BPF_OBJECT
+// compatibility path: the 24-byte record of an object built before group_dead
+// cannot tell a thread exit from a process exit, so it must decode as
+// "group-dead unknown" (ExitFlags 0) rather than be dropped as malformed or
+// read as either a thread exit or a confirmed process exit. The pooled event
+// is dirtied with a confirmed group-dead record first, so neither the flag nor
+// the unknown marker can come from a zeroed allocation.
+func TestNewProcessExitEventFastDecodesLegacyRecord(t *testing.T) {
+	NewProcessExitEventFast(processExitRaw(processExitEventSize, 1, 5)).Recycle()
+
+	ev := NewProcessExitEventFast(processExitRaw(processExitEventLegacySize, 0, 0))
+	if ev == nil {
+		t.Fatal("legacy 24-byte process exit record rejected, want decoded")
+	}
+	if ev.EventType != PROCESS_EXIT_EVENT || ev.Time != 7 || ev.Pid != 100 || ev.Tid != 101 {
+		t.Fatalf("unexpected legacy process exit decode: %#v", ev)
+	}
+	if ev.IsGroupDeadKnown() || ev.IsGroupDead() || ev.ExitFlags != 0 || ev.TidInherited() {
+		t.Fatalf("legacy record known=%v dead=%v ExitFlags=%d, want false, false, 0",
+			ev.IsGroupDeadKnown(), ev.IsGroupDead(), ev.ExitFlags)
+	}
+	ev.Recycle()
+
+	// The marker must not leak into the next pooled decode either.
+	ev = NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, 0))
+	defer ev.Recycle()
+	if !ev.IsGroupDeadKnown() || ev.IsGroupDead() {
+		t.Fatalf("thread exit after a legacy record known=%v dead=%v, want true, false",
+			ev.IsGroupDeadKnown(), ev.IsGroupDead())
+	}
+}
+
+// processExitRaw builds an n-byte exit record for pid 100 / tid 101 whose
+// group_dead and exit_flags words are set when n reaches them; bytes past the
+// current layout are 0xff so an oversized decode cannot read them unnoticed.
+func processExitRaw(n int, groupDead, exitFlags uint32) []byte {
+	raw := make([]byte, n)
+	binary.LittleEndian.PutUint32(raw[0:4], uint32(PROCESS_EXIT_EVENT))
+	binary.LittleEndian.PutUint64(raw[8:16], 7)
+	binary.LittleEndian.PutUint32(raw[16:20], 100)
+	binary.LittleEndian.PutUint32(raw[20:24], 101)
+	if n >= processExitEventSize {
+		binary.LittleEndian.PutUint32(raw[24:28], groupDead)
+		binary.LittleEndian.PutUint32(raw[28:32], exitFlags)
+		for i := processExitEventSize; i < n; i++ {
+			raw[i] = 0xff
+		}
+	}
+	return raw
+}
+
+// TestNewProcessExitEventFastDecodesTidInherited pins the exit_flags word (task
+// os2): a leader killed by another thread's execve carries
+// IOR_EXIT_TID_INHERITED, which TidInherited reports, and an unflagged record
+// following it from the pool does not inherit the flag.
+func TestNewProcessExitEventFastDecodesTidInherited(t *testing.T) {
+	ev := NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, ProcessExitTidInherited))
+	if ev == nil || !ev.TidInherited() || ev.IsGroupDead() || !ev.IsGroupDeadKnown() {
+		t.Fatalf("flagged leader exit decoded as %#v, want TidInherited and a known thread exit", ev)
+	}
+	ev.Recycle()
+
+	ev = NewProcessExitEventFast(processExitRaw(processExitEventSize, 0, 0))
+	defer ev.Recycle()
+	if ev.TidInherited() {
+		t.Fatalf("unflagged record after a flagged one reports TidInherited: %#v", ev)
+	}
+}
+
+// TestNewProcessExitEventFastRejectsOtherSizes pins the negative path: below
+// the current 32-byte layout only the exact legacy 24-byte record decodes. A
+// truncated or in-between payload fails closed instead of being read at the
+// wrong offsets (e.g. as a thread exit or, worse, a group-dead one).
+func TestNewProcessExitEventFastRejectsOtherSizes(t *testing.T) {
+	for _, n := range []int{0, processExitEventLegacySize - 1, processExitEventLegacySize + 1,
+		processExitEventLegacySize + 4, processExitEventSize - 1} {
+		if ev := NewProcessExitEventFast(make([]byte, n)); ev != nil {
+			ev.Recycle()
+			t.Fatalf("NewProcessExitEventFast(%d bytes) decoded, want nil", n)
+		}
+	}
+}
+
+// TestNewProcessExitEventFastDecodesOversizedPrefix pins forward
+// compatibility: a newer object that appends fields must still have the
+// current layout's prefix decoded, including a known group_dead flag.
+func TestNewProcessExitEventFastDecodesOversizedPrefix(t *testing.T) {
+	for _, extra := range []int{1, 8} {
+		ev := NewProcessExitEventFast(processExitRaw(processExitEventSize+extra, 1, 0))
+		if ev == nil {
+			t.Fatalf("NewProcessExitEventFast(%d bytes) rejected, want prefix decoded", processExitEventSize+extra)
+		}
+		if ev.Tid != 101 || !ev.IsGroupDeadKnown() || !ev.IsGroupDead() || ev.ExitFlags != 0 {
+			t.Fatalf("unexpected oversized process exit decode: %#v", ev)
+		}
+		ev.Recycle()
+	}
 }
 
 func TestNewSocketpairEventFastKernelLayout(t *testing.T) {
@@ -1207,24 +1758,70 @@ func TestNewOpenNameFixupEventFastCompactKernelLayout(t *testing.T) {
 	if got := unsafe.Sizeof(OpenEvent{}); got != openEventSize {
 		t.Fatalf("sizeof(OpenEvent) = %d, want %d", got, openEventSize)
 	}
-	if got := openEventSize - openNameFixupEventSize; got != 52 {
-		t.Fatalf("compact fixup saves %d bytes over an open event, want 52", got)
+	if got := openEventSize - openNameFixupEventSize; got != 48 {
+		t.Fatalf("compact fixup saves %d bytes over an open event, want 48", got)
+	}
+	// The slot trails the string, so the pre-slot record is an exact prefix.
+	if got := openNameFixupEventSize - openNameFixupEventLegacySize; got != 4 {
+		t.Fatalf("slot widens the fixup by %d bytes, want 4", got)
 	}
 
-	raw := make([]byte, openNameFixupEventSize)
+	for _, slot := range []uint32{OPEN_NAME_FIXUP_SLOT_FIRST, OPEN_NAME_FIXUP_SLOT_SECOND} {
+		raw := make([]byte, openNameFixupEventSize)
+		binary.LittleEndian.PutUint32(raw[0:4], uint32(OPEN_NAME_FIXUP_EVENT))
+		binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_RENAMEAT2))
+		binary.LittleEndian.PutUint32(raw[8:12], 33)
+		copy(raw[12:268], "recovered")
+		binary.LittleEndian.PutUint32(raw[268:272], slot)
+
+		fast := NewOpenNameFixupEventFast(raw)
+		if fast == nil {
+			t.Fatalf("slot %d: expected decoded open-name fixup event for compact kernel payload", slot)
+		}
+		if fast.EventType != OPEN_NAME_FIXUP_EVENT || fast.TraceId != SYS_ENTER_RENAMEAT2 ||
+			fast.Tid != 33 || StringValue(fast.Filename[:]) != "recovered" || fast.Slot != slot {
+			t.Fatalf("slot %d: unexpected open-name fixup decode: %#v", slot, fast)
+		}
+		// Whatever the generated codec writes must decode to the same record.
+		written, err := fast.Bytes()
+		if err != nil || len(written) != openNameFixupEventSize {
+			t.Fatalf("slot %d: Bytes() = %d bytes, %v; want %d", slot, len(written), err, openNameFixupEventSize)
+		}
+		again := NewOpenNameFixupEventFast(written)
+		if again == nil || !again.Equals(fast) {
+			t.Fatalf("slot %d: round trip lost the record: %#v vs %#v", slot, again, fast)
+		}
+		again.Recycle()
+		fast.Recycle()
+	}
+}
+
+// A BPF object from before the slot existed emits 268-byte records, which only
+// ever carried the first (only) path; they must keep decoding as that, and must
+// not inherit a slot left over in a recycled pooled event.
+func TestNewOpenNameFixupEventFastPreSlotLayoutReadsAsFirstSlot(t *testing.T) {
+	stale := NewOpenNameFixupEventFast(func() []byte {
+		raw := make([]byte, openNameFixupEventSize)
+		binary.LittleEndian.PutUint32(raw[268:272], OPEN_NAME_FIXUP_SLOT_SECOND)
+		return raw
+	}())
+	if stale == nil || stale.Slot != OPEN_NAME_FIXUP_SLOT_SECOND {
+		t.Fatalf("setup: current-layout decode = %#v", stale)
+	}
+	stale.Recycle()
+
+	raw := make([]byte, openNameFixupEventLegacySize)
 	binary.LittleEndian.PutUint32(raw[0:4], uint32(OPEN_NAME_FIXUP_EVENT))
 	binary.LittleEndian.PutUint32(raw[4:8], uint32(SYS_ENTER_OPENAT))
 	binary.LittleEndian.PutUint32(raw[8:12], 33)
-	copy(raw[12:268], "recovered")
-
+	copy(raw[12:268], "pre-slot")
 	fast := NewOpenNameFixupEventFast(raw)
 	if fast == nil {
-		t.Fatal("expected decoded open-name fixup event for compact kernel payload")
+		t.Fatal("expected the pre-slot 268-byte record to decode")
 	}
 	defer fast.Recycle()
-	if fast.EventType != OPEN_NAME_FIXUP_EVENT || fast.TraceId != SYS_ENTER_OPENAT ||
-		fast.Tid != 33 || StringValue(fast.Filename[:]) != "recovered" {
-		t.Fatalf("unexpected open-name fixup decode: %#v", fast)
+	if fast.Tid != 33 || StringValue(fast.Filename[:]) != "pre-slot" || fast.Slot != OPEN_NAME_FIXUP_SLOT_FIRST {
+		t.Fatalf("unexpected pre-slot decode: %#v", fast)
 	}
 }
 
@@ -1248,60 +1845,136 @@ func TestNewOpenNameFixupEventFastLegacyOpenEventLayout(t *testing.T) {
 }
 
 func TestNewOpenNameFixupEventFastRejectsUnknownLayout(t *testing.T) {
-	if got := NewOpenNameFixupEventFast(make([]byte, openNameFixupEventSize+1)); got != nil {
-		got.Recycle()
-		t.Fatal("unexpected fixup layout decoded instead of being rejected")
+	for _, size := range []int{openNameFixupEventSize + 1, openNameFixupEventLegacySize + 1, openNameFixupEventLegacySize - 1, 0} {
+		if got := NewOpenNameFixupEventFast(make([]byte, size)); got != nil {
+			got.Recycle()
+			t.Fatalf("a %d-byte fixup layout decoded instead of being rejected", size)
+		}
 	}
 }
 
+// fdLayoutCase is one wire layout of the fd record: its size and, for the
+// wide layouts, where the requested size sits and what it holds.
+type fdLayoutCase struct {
+	name          string
+	payloadSize   int
+	sizeOffset    int
+	requestedSize uint64
+	sizeValid     uint32
+}
+
 func TestNewFdEventFastLegacyAndCurrentLayouts(t *testing.T) {
+	// The Go struct holds the fields of every wire layout: the wide layout's
+	// 48 bytes plus the identity word only the lean record carries (task
+	// 603), rounded up to the struct's 8-byte alignment, and behind them the
+	// name tail of fd_name_event (task xz2: name_len and the name), which
+	// ends on that alignment. 128 bytes is also the allocator's size class,
+	// and the hot records touch only the first cache line of it (NameLen is
+	// the last word of that line).
 	fdLayout := FdEvent{}
-	if got := unsafe.Sizeof(fdLayout); got != fdEventLegacyKernelSize {
-		t.Fatalf("sizeof(FdEvent) = %d, want %d", got, fdEventLegacyKernelSize)
+	if got, want := unsafe.Sizeof(fdLayout), uintptr(fdEventLegacyKernelSize+8+4+IOR_FD_NAME_LENGTH); got != want || got != 128 {
+		t.Fatalf("sizeof(FdEvent) = %d, want %d = 128", got, want)
+	}
+	if at := unsafe.Offsetof(fdLayout.NameLen); at != 56 {
+		t.Fatalf("FdEvent.NameLen is at offset %d, want 56 (inside the first cache line)", at)
 	}
 	if got := len(rawBytes(t, &fdLayout)); got != fdEventSize {
 		t.Fatalf("FdEvent.Bytes size = %d, want %d", got, fdEventSize)
 	}
 
-	tests := []struct {
-		name          string
-		payloadSize   int
-		sizeOffset    int
-		requestedSize uint64
-		sizeValid     uint32
-	}{
+	tests := []fdLayoutCase{
 		{name: "lean compact", payloadSize: fdEventCompactSize},
 		{name: "lean kernel", payloadSize: fdEventSize},
 		{name: "wide compact", payloadSize: fdEventLegacyCompactSize, sizeOffset: 28, requestedSize: 4096, sizeValid: 1},
 		{name: "wide kernel", payloadSize: fdEventLegacyKernelSize, sizeOffset: 32, requestedSize: 8192, sizeValid: 1},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			raw := make([]byte, tc.payloadSize)
-			fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
-			binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
-			if tc.sizeOffset != 0 {
-				binary.LittleEndian.PutUint64(raw[tc.sizeOffset:tc.sizeOffset+8], tc.requestedSize)
-				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+8:tc.sizeOffset+12], tc.sizeValid)
-				binary.LittleEndian.PutUint32(raw[tc.sizeOffset+12:tc.sizeOffset+16], FD_EVENT_SCHEMA_VERSION)
-			}
-
-			fast := NewFdEventFast(raw)
-			if fast == nil {
-				t.Fatal("expected fd payload to decode")
-			}
-			defer fast.Recycle()
-			regular := NewFdEvent(raw)
-			if regular == nil || !fast.Equals(regular) {
-				t.Fatalf("regular constructor disagrees with fast decoder: %#v / %#v", regular, fast)
-			}
-			defer regular.Recycle()
-			if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
-				fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
-				t.Fatalf("unexpected fd decode: %#v", fast)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { requireFdLayoutDecodes(t, tc) })
 	}
+}
+
+// requireFdLayoutDecodes builds a read record in tc's layout and fails unless
+// the fast decoder and the regular constructor both decode it to the same
+// event with the header, the descriptor and tc's requested size.
+func requireFdLayoutDecodes(t *testing.T, tc fdLayoutCase) {
+	t.Helper()
+	raw := make([]byte, tc.payloadSize)
+	fillCommonHeader(raw, ENTER_FD_EVENT, SYS_ENTER_READ)
+	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(9)))
+	if tc.sizeOffset != 0 {
+		binary.LittleEndian.PutUint64(raw[tc.sizeOffset:tc.sizeOffset+8], tc.requestedSize)
+		binary.LittleEndian.PutUint32(raw[tc.sizeOffset+8:tc.sizeOffset+12], tc.sizeValid)
+		binary.LittleEndian.PutUint32(raw[tc.sizeOffset+12:tc.sizeOffset+16], FD_EVENT_SCHEMA_VERSION)
+	}
+
+	fast := NewFdEventFast(raw)
+	if fast == nil {
+		t.Fatal("expected fd payload to decode")
+	}
+	defer fast.Recycle()
+	regular := NewFdEvent(raw)
+	if regular == nil || !fast.Equals(regular) {
+		t.Fatalf("regular constructor disagrees with fast decoder: %#v / %#v", regular, fast)
+	}
+	defer regular.Recycle()
+	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Fd != 9 ||
+		fast.Size != tc.requestedSize || fast.SizeValid != tc.sizeValid {
+		t.Fatalf("unexpected fd decode: %#v", fast)
+	}
+}
+
+// TestFdSizeEventCarriesRecvFlagsInThePaddingWord pins where recvfrom/recvmsg
+// flags travel: the four bytes after fd, which were alignment padding, so the
+// record stays 48 bytes. It also pins that no other decoder reads that word as
+// flags - the compact 44-byte form has no room for it, and the wide legacy
+// fd_event of an older BPF object has padding there that may hold anything.
+func TestFdSizeEventCarriesRecvFlagsInThePaddingWord(t *testing.T) {
+	const flags = 0x22 // MSG_PEEK|MSG_TRUNC
+	raw := make([]byte, fdSizeEventSize)
+	fillCommonHeader(raw, ENTER_FD_SIZE_EVENT, SYS_ENTER_RECVMSG)
+	binary.LittleEndian.PutUint32(raw[24:28], 7)
+	binary.LittleEndian.PutUint32(raw[28:32], flags)
+	binary.LittleEndian.PutUint64(raw[32:40], 0)
+	binary.LittleEndian.PutUint32(raw[40:44], 1)
+	binary.LittleEndian.PutUint32(raw[44:48], FD_SIZE_EVENT_SCHEMA_VERSION)
+
+	ev := NewFdSizeEventFast(raw)
+	if ev == nil || ev.Flags != flags || ev.Fd != 7 || ev.Size != 0 || ev.SizeValid != 1 {
+		t.Fatalf("fd size decode = %#v, want flags %#x", ev, flags)
+	}
+	encoded, err := ev.Bytes()
+	ev.Recycle()
+	if err != nil || !bytes.Equal(encoded, raw) {
+		t.Fatalf("fd size round trip = %x, %v; want %x", encoded, err, raw)
+	}
+
+	t.Run("compact form has no flags", func(t *testing.T) {
+		compact := make([]byte, fdSizeEventCompactSize)
+		copy(compact, raw[:28])
+		binary.LittleEndian.PutUint64(compact[28:36], 64)
+		binary.LittleEndian.PutUint32(compact[36:40], 1)
+		binary.LittleEndian.PutUint32(compact[40:44], FD_SIZE_EVENT_SCHEMA_VERSION)
+		ev := NewFdSizeEventFast(compact)
+		if ev == nil || ev.Flags != 0 || ev.Size != 64 {
+			t.Fatalf("compact decode = %#v, want flags 0 size 64", ev)
+		}
+		ev.Recycle()
+	})
+
+	t.Run("legacy wide fd_event padding is not flags", func(t *testing.T) {
+		legacy := make([]byte, fdEventLegacyKernelSize)
+		fillCommonHeader(legacy, ENTER_FD_EVENT, SYS_ENTER_RECVFROM)
+		binary.LittleEndian.PutUint32(legacy[24:28], 7)
+		binary.LittleEndian.PutUint32(legacy[28:32], 0xdeadbeef) // kernel padding
+		binary.LittleEndian.PutUint64(legacy[32:40], 4096)
+		binary.LittleEndian.PutUint32(legacy[40:44], 1)
+		binary.LittleEndian.PutUint32(legacy[44:48], FD_EVENT_SCHEMA_VERSION)
+		ev := NewFdEventFast(legacy)
+		if ev == nil || ev.Flags != 0 || ev.Size != 4096 {
+			t.Fatalf("legacy wide decode = %#v, want flags 0 size 4096", ev)
+		}
+		ev.Recycle()
+	})
 }
 
 func TestSplitPayloadFastDecoders(t *testing.T) {
@@ -1470,18 +2143,186 @@ func TestNewSocketEventFastKernelLayout(t *testing.T) {
 	}
 }
 
-func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
-	raw := make([]byte, openByHandleAtEventSize) // 32: sizeof(struct open_by_handle_at_event)
-	fillCommonHeader(raw, ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+// handleRecordBytes builds a 168-byte record with the shared handle fields:
+// a full-size handle of type -7 whose bytes count up from 1, so every byte of
+// the field is distinguishable from a zeroed or shifted one.
+func handleRecordBytes(eventType EventType, traceID TraceId) []byte {
+	raw := make([]byte, openByHandleAtEventSize)
+	fillCommonHeader(raw, eventType, traceID)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(int32(3)))
-
-	fast := NewOpenByHandleAtEventFast(raw)
-	if fast == nil {
-		t.Fatalf("expected decoded open_by_handle_at event for padded kernel payload")
+	binary.LittleEndian.PutUint32(raw[28:32], FILE_HANDLE_OK)
+	binary.LittleEndian.PutUint32(raw[32:36], IOR_MAX_HANDLE_SZ)
+	binary.LittleEndian.PutUint32(raw[36:40], uint32(0xfffffff9))
+	for i := 0; i < IOR_MAX_HANDLE_SZ; i++ {
+		raw[40+i] = byte(i + 1)
 	}
+	return raw
+}
+
+func assertHandleFields(t *testing.T, status, handleBytes uint32, handleType int32, fHandle [IOR_MAX_HANDLE_SZ]byte) {
+	t.Helper()
+	if status != FILE_HANDLE_OK || handleBytes != IOR_MAX_HANDLE_SZ || handleType != -7 {
+		t.Fatalf("handle fields = status %d, bytes %d, type %d", status, handleBytes, handleType)
+	}
+	for i, b := range fHandle {
+		if b != byte(i+1) {
+			t.Fatalf("f_handle[%d] = %#x, want %#x", i, b, byte(i+1))
+		}
+	}
+}
+
+// TestNewOpenByHandleAtEventFastKernelLayout pins the current 168-byte
+// record at the offsets BPF writes: flags at 24, then status, byte count,
+// type and the handle bytes from 40. A longer payload decodes the same prefix.
+func TestNewOpenByHandleAtEventFastKernelLayout(t *testing.T) {
+	raw := handleRecordBytes(ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+	for _, payload := range [][]byte{raw, append(append([]byte{}, raw...), 0xaa, 0xbb, 0xcc, 0xdd)} {
+		fast := NewOpenByHandleAtEventFast(payload)
+		if fast == nil {
+			t.Fatalf("a %d-byte open_by_handle_at record did not decode", len(payload))
+		}
+		if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != 3 {
+			t.Fatalf("unexpected open_by_handle_at decode: %#v", fast)
+		}
+		assertHandleFields(t, fast.HandleStatus, fast.HandleBytes, fast.HandleType, fast.FHandle)
+		fast.Recycle()
+	}
+}
+
+// TestNewOpenByHandleAtEventFastLegacyLayouts: the flags-only record of an
+// object that predates the handle decodes with FILE_HANDLE_NONE and no
+// handle, whatever its padding bytes hold and whatever the pooled event
+// decoded before. Sizes between the legacy and the current layout are
+// rejected rather than read at the wrong offsets.
+func TestNewOpenByHandleAtEventFastLegacyLayouts(t *testing.T) {
+	current := handleRecordBytes(ENTER_OPEN_BY_HANDLE_AT_EVENT, SYS_ENTER_OPEN_BY_HANDLE_AT)
+	for _, size := range []int{openByHandleAtEventLegacy, openByHandleAtEventSizeV1} {
+		// Warm the pool with an event that carries a handle.
+		NewOpenByHandleAtEventFast(current).Recycle()
+		// current[28:32] is FILE_HANDLE_OK: in the 32-byte record those bytes
+		// are unwritten padding and must not be read as a status.
+		fast := NewOpenByHandleAtEventFast(current[:size])
+		if fast == nil {
+			t.Fatalf("a %d-byte legacy open_by_handle_at record did not decode", size)
+		}
+		if fast.Time != 111 || fast.Tid != 33 || fast.Flags != 3 {
+			t.Fatalf("unexpected legacy decode: %#v", fast)
+		}
+		if fast.HandleStatus != FILE_HANDLE_NONE || fast.HandleBytes != 0 || fast.HandleType != 0 ||
+			fast.FHandle != [IOR_MAX_HANDLE_SZ]byte{} {
+			t.Fatalf("a %d-byte legacy record decoded with a handle: %#v", size, fast)
+		}
+		fast.Recycle()
+	}
+	for _, size := range []int{27, 29, 36, 40, openByHandleAtEventSize - 1} {
+		if ev := NewOpenByHandleAtEventFast(current[:size]); ev != nil {
+			t.Fatalf("a %d-byte open_by_handle_at record decoded: %#v", size, ev)
+		}
+	}
+}
+
+// TestNewFileHandleEventFastKernelLayout pins the control record, which
+// shares the handle offsets with open_by_handle_at_event and carries the
+// time of its call's enter behind them (offset 168). A record without that
+// time is refused, not decoded with a zero.
+func TestNewFileHandleEventFastKernelLayout(t *testing.T) {
+	raw := handleRecordBytes(FILE_HANDLE_EVENT, SYS_ENTER_NAME_TO_HANDLE_AT)
+	raw = binary.LittleEndian.AppendUint64(raw, 99)
+	slow := NewFileHandleEvent(raw)
+	fast := NewFileHandleEventFast(raw)
+	if slow == nil || fast == nil {
+		t.Fatalf("file handle record did not decode: slow=%v fast=%v", slow, fast)
+	}
+	defer slow.Recycle()
 	defer fast.Recycle()
-	if fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Flags != 3 {
-		t.Fatalf("unexpected open_by_handle_at decode: %#v", fast)
+	if !slow.Equals(fast) {
+		t.Fatalf("file handle decode mismatch: slow=%v fast=%v", slow, fast)
+	}
+	if fast.EventType != FILE_HANDLE_EVENT || fast.TraceId != SYS_ENTER_NAME_TO_HANDLE_AT ||
+		fast.Time != 111 || fast.Pid != 22 || fast.Tid != 33 || fast.Reserved != 3 || fast.EnterTime != 99 {
+		t.Fatalf("unexpected file handle decode: %#v", fast)
+	}
+	assertHandleFields(t, fast.HandleStatus, fast.HandleBytes, fast.HandleType, fast.FHandle)
+	for _, size := range []int{fileHandleEventSize - 1, fileHandleEnterTimeOffset} {
+		if ev := NewFileHandleEventFast(raw[:size]); ev != nil {
+			t.Fatalf("a %d-byte file handle record decoded: %#v", size, ev)
+		}
+	}
+}
+
+// ringFdsRecordBytes builds a ring_fds_event the way the kernel lays it out,
+// field by field, so the test does not depend on the decoder's own offsets:
+// two array elements, (index 3, fd 7) and (index 0, fd 0x100000009).
+func ringFdsRecordBytes() []byte {
+	raw := binary.LittleEndian.AppendUint32(nil, uint32(RING_FDS_EVENT))
+	raw = binary.LittleEndian.AppendUint32(raw, uint32(SYS_ENTER_IO_URING_REGISTER))
+	raw = binary.LittleEndian.AppendUint64(raw, 111)
+	for _, word := range []uint32{22, 33, IOR_REGISTER_RING_FDS, RING_FDS_OK, 2, 0} {
+		raw = binary.LittleEndian.AppendUint32(raw, word)
+	}
+	for _, update := range []struct {
+		index, resv uint32
+		data        uint64
+	}{{3, 0xdead, 7}, {0, 0, 0x100000009}} {
+		raw = binary.LittleEndian.AppendUint32(raw, update.index)
+		raw = binary.LittleEndian.AppendUint32(raw, update.resv)
+		raw = binary.LittleEndian.AppendUint64(raw, update.data)
+	}
+	return append(raw, make([]byte, 14*IOR_RING_FD_UPDATE_SIZE)...)
+}
+
+// TestNewRingFdsEventFastKernelLayout pins the registered-ring control
+// record (task js2): 296 bytes, the array at offset 40, and a shorter record
+// refused rather than decoded with a partial array.
+func TestNewRingFdsEventFastKernelLayout(t *testing.T) {
+	raw := ringFdsRecordBytes()
+	if len(raw) != ringFdsEventSize {
+		t.Fatalf("test record is %d bytes, want %d", len(raw), ringFdsEventSize)
+	}
+	slow := NewRingFdsEvent(raw)
+	fast := NewRingFdsEventFast(raw)
+	if slow == nil || fast == nil {
+		t.Fatalf("ring fds record did not decode: slow=%v fast=%v", slow, fast)
+	}
+	defer slow.Recycle()
+	defer fast.Recycle()
+	if !slow.Equals(fast) {
+		t.Fatalf("ring fds decode mismatch: slow=%v fast=%v", slow, fast)
+	}
+	if fast.EventType != RING_FDS_EVENT || fast.TraceId != SYS_ENTER_IO_URING_REGISTER || fast.Time != 111 ||
+		fast.Pid != 22 || fast.Tid != 33 || fast.Opcode != 20 || fast.Status != 1 || fast.Count != 2 {
+		t.Fatalf("unexpected ring fds decode: %#v", fast)
+	}
+	for _, size := range []int{ringFdsEventSize - 1, ringFdsUpdatesOffset} {
+		if ev := NewRingFdsEventFast(raw[:size]); ev != nil {
+			t.Fatalf("a %d-byte ring fds record decoded: %#v", size, ev)
+		}
+	}
+}
+
+// TestRingFdsEventUpdate pins how the array elements are read: index and
+// descriptor from the element's first and last word (resv is skipped), and
+// nothing at or past the record's count, however large that claims to be.
+func TestRingFdsEventUpdate(t *testing.T) {
+	ev := NewRingFdsEventFast(ringFdsRecordBytes())
+	defer ev.Recycle()
+	want := []RingFdUpdate{{Index: 3, Fd: 7}, {Index: 0, Fd: 0x100000009}}
+	for i, w := range want {
+		if got, ok := ev.Update(i); !ok || got != w {
+			t.Errorf("Update(%d) = %+v, %v; want %+v", i, got, ok, w)
+		}
+	}
+	for _, i := range []int{-1, 2, IOR_RING_FDS_MAX} {
+		if got, ok := ev.Update(i); ok {
+			t.Errorf("Update(%d) = %+v past the count", i, got)
+		}
+	}
+	ev.Count = 1 << 20
+	if _, ok := ev.Update(IOR_RING_FDS_MAX - 1); !ok {
+		t.Error("the last element of a full array was refused")
+	}
+	if got, ok := ev.Update(IOR_RING_FDS_MAX); ok {
+		t.Errorf("Update read element %d of a %d-element array: %+v", IOR_RING_FDS_MAX, IOR_RING_FDS_MAX, got)
 	}
 }
 
@@ -1514,6 +2355,59 @@ func TestNewMmapEventFastKernelLayout(t *testing.T) {
 	}
 }
 
+// TestExecEventFastSchemaCompatibility pins the exec_event v1 layout (task
+// 9p2): the filename read status and schema word follow comm, the released
+// 304-byte layout still decodes as a successful read, and every other size
+// or schema version fails closed instead of misreading the status.
+func TestExecEventFastSchemaCompatibility(t *testing.T) {
+	current := &ExecEvent{EventType: ENTER_EXEC_EVENT, TraceId: SYS_ENTER_EXECVEAT, Time: 1, Pid: 2, Tid: 3,
+		Dirfd: 7, Flags: 0x1000, FilenameStatus: PATH_READ_NULL, SchemaVersion: EXEC_EVENT_SCHEMA_VERSION}
+	copy(current.Filename[:], "prog")
+	copy(current.Comm[:], "sh")
+	raw := rawBytes(t, current)
+	if len(raw) != execEventSize {
+		t.Fatalf("exec_event v1 encodes to %d bytes, want %d", len(raw), execEventSize)
+	}
+
+	t.Run("current", func(t *testing.T) {
+		fast := NewExecEventFast(raw)
+		if fast == nil || !current.Equals(fast) {
+			t.Fatalf("decoded %v, want %v", fast, current)
+		}
+		fast.Recycle()
+	})
+	t.Run("legacy 304-byte layout reads as PATH_READ_OK", func(t *testing.T) {
+		fast := NewExecEventFast(raw[:execEventLegacySize])
+		if fast == nil {
+			t.Fatal("legacy exec_event rejected")
+		}
+		defer fast.Recycle()
+		want := *current
+		want.FilenameStatus, want.SchemaVersion = PATH_READ_OK, 0
+		if !want.Equals(fast) {
+			t.Fatalf("decoded %v, want %v", fast, want)
+		}
+	})
+	for _, version := range []uint32{0, EXEC_EVENT_SCHEMA_VERSION + 1} {
+		// Version 0 is what a 312-byte record with an unwritten schema word
+		// would carry; only the legacy 304-byte layout implies it.
+		t.Run(fmt.Sprintf("schema version %d fails closed", version), func(t *testing.T) {
+			bad := append([]byte(nil), raw...)
+			binary.LittleEndian.PutUint32(bad[308:312], version)
+			if fast := NewExecEventFast(bad); fast != nil {
+				t.Fatalf("decoded unknown schema: %v", fast)
+			}
+		})
+	}
+	for _, size := range []int{execEventLegacySize + 4, execEventSize + 4, execEventSize + 8} {
+		t.Run(fmt.Sprintf("size %d fails closed", size), func(t *testing.T) {
+			if fast := NewExecEventFast(append(raw, make([]byte, 8)...)[:size]); fast != nil {
+				t.Fatalf("decoded %d-byte payload: %v", size, fast)
+			}
+		})
+	}
+}
+
 func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1530,6 +2424,8 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 		{name: "FcntlEvent", decode: func(raw []byte) bool { return NewFcntlEventFast(raw) == nil }},
 		{name: "Dup3Event", decode: func(raw []byte) bool { return NewDup3EventFast(raw) == nil }},
 		{name: "OpenByHandleAtEvent", decode: func(raw []byte) bool { return NewOpenByHandleAtEventFast(raw) == nil }},
+		{name: "FileHandleEvent", decode: func(raw []byte) bool { return NewFileHandleEventFast(raw) == nil }},
+		{name: "RingFdsEvent", decode: func(raw []byte) bool { return NewRingFdsEventFast(raw) == nil }},
 		{name: "SocketEvent", decode: func(raw []byte) bool { return NewSocketEventFast(raw) == nil }},
 		{name: "SocketpairEvent", decode: func(raw []byte) bool { return NewSocketpairEventFast(raw) == nil }},
 		{name: "AcceptEvent", decode: func(raw []byte) bool { return NewAcceptEventFast(raw) == nil }},
@@ -1554,5 +2450,50 @@ func TestFastDecodersReturnNilOnShortPayload(t *testing.T) {
 				t.Fatalf("expected nil for short payload")
 			}
 		})
+	}
+}
+
+// TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine ties the Go constant to the
+// BPF define it copies. The two are hand-kept: the generator emits neither, and
+// the bit is written by the kernel-side handler and read by userspace across the
+// ring buffer, so a drift would silently make every flagged record read as "in
+// scope" (or the reverse) with no compile error on either side.
+func TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine(t *testing.T) {
+	src, err := os.ReadFile("../c/exec.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^#define\s+IOR_NEWTASK_CHILD_OUT_OF_SCOPE\s+(\S+)`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("IOR_NEWTASK_CHILD_OUT_OF_SCOPE is no longer #defined in internal/c/exec.c; update this test and the Go constant together")
+	}
+	want, err := strconv.ParseUint(strings.TrimRight(string(m[1]), "uUlL"), 0, 32)
+	if err != nil {
+		t.Fatalf("cannot parse the define's value %q: %v", m[1], err)
+	}
+	if uint64(TaskNewtaskChildOutOfScope) != want {
+		t.Errorf("TaskNewtaskChildOutOfScope = %#x, BPF IOR_NEWTASK_CHILD_OUT_OF_SCOPE = %#x", TaskNewtaskChildOutOfScope, want)
+	}
+}
+
+// TestProcessExitTidInheritedMatchesTheBPFDefine ties ProcessExitTidInherited
+// to IOR_EXIT_TID_INHERITED in internal/c/exec.c, for the same reason as the
+// task_newtask scope flag above: a drift would make every inherited-tid exit
+// read as the traced thread's end (or the reverse) without a compile error.
+func TestProcessExitTidInheritedMatchesTheBPFDefine(t *testing.T) {
+	src, err := os.ReadFile("../c/exec.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^#define\s+IOR_EXIT_TID_INHERITED\s+(\S+)`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("IOR_EXIT_TID_INHERITED is no longer #defined in internal/c/exec.c; update this test and the Go constant together")
+	}
+	want, err := strconv.ParseUint(strings.TrimRight(string(m[1]), "uUlL"), 0, 32)
+	if err != nil {
+		t.Fatalf("cannot parse the define's value %q: %v", m[1], err)
+	}
+	if uint64(ProcessExitTidInherited) != want {
+		t.Errorf("ProcessExitTidInherited = %#x, BPF IOR_EXIT_TID_INHERITED = %#x", ProcessExitTidInherited, want)
 	}
 }

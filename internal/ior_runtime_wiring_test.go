@@ -11,6 +11,8 @@ import (
 	"ior/internal/runtime"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
+	"ior/internal/tracepoints"
+	"ior/internal/types"
 )
 
 // The runtime contract is interface-typed (audit task a2) so the core's
@@ -43,6 +45,8 @@ func (f *fakeRowRecorder) Record(row streamrow.Row, filterEpoch uint64) error {
 	f.epoch = filterEpoch
 	return nil
 }
+
+func (f *fakeRowRecorder) TakeFailure() error { return nil }
 
 func (f *fakeRowRecorder) Start(path string, _ parquet.StartOptions) error {
 	f.active = strings.HasPrefix(path, "/")
@@ -143,7 +147,7 @@ func TestWireRuntimeBindingsAcceptsFakes(t *testing.T) {
 		t.Fatal("the wired sequencer must be the bindings' Sequencer")
 	}
 	// The recorder the core records rows through is the fake controller,
-	// narrowed to the one-method RowRecorder seam.
+	// narrowed to the RowRecorder seam.
 	if rt.recorder != runtime.RowRecorder(bindings.rec) {
 		t.Fatal("the wired recorder must be the bindings' RecordingController, narrowed to RowRecorder")
 	}
@@ -306,16 +310,16 @@ func TestTraceConfigForRequestDistinguishesAbsentFromEmptyFilter(t *testing.T) {
 	base.PidFilter = 11
 	base.TidFilter = 12
 
-	if got := traceConfigForRequest(base, nil); got.PidFilter != 11 || got.TidFilter != 12 {
+	if got := traceConfigForRequest(base, runtime.TraceRequest{}); got.PidFilter != 11 || got.TidFilter != 12 {
 		t.Fatalf("nil filter scope = pid %d tid %d, want 11/12 kept", got.PidFilter, got.TidFilter)
 	}
 	empty := globalfilter.Filter{}
-	if got := traceConfigForRequest(base, &empty); got.PidFilter != -1 || got.TidFilter != -1 {
+	if got := traceConfigForRequest(base, runtime.TraceRequest{Filter: &empty}); got.PidFilter != -1 || got.TidFilter != -1 {
 		t.Fatalf("empty filter scope = pid %d tid %d, want -1/-1", got.PidFilter, got.TidFilter)
 	}
 
 	filter := globalfilter.Filter{PID: &globalfilter.NumericFilter{Op: globalfilter.OpEq, Value: 42}}
-	got := traceConfigForRequest(base, &filter)
+	got := traceConfigForRequest(base, runtime.TraceRequest{Filter: &filter})
 	filter.PID.Value = 7
 	if got.PidFilter != 42 || got.TidFilter != -1 {
 		t.Fatalf("pid filter scope = pid %d tid %d, want 42/-1", got.PidFilter, got.TidFilter)
@@ -323,4 +327,70 @@ func TestTraceConfigForRequestDistinguishesAbsentFromEmptyFilter(t *testing.T) {
 	if got.GlobalFilter.PID == nil || got.GlobalFilter.PID.Value != 42 {
 		t.Fatalf("global filter PID = %+v, want a clone unaffected by the caller's edit", got.GlobalFilter.PID)
 	}
+}
+
+// TestTraceConfigForRequestAppliesProbeSelection pins the restart persistence
+// of runtime probe changes: a request carrying AttachSyscalls attaches exactly
+// that set instead of the startup selection (default: FS only), an empty set
+// attaches nothing, and a nil one keeps the startup selection.
+func TestTraceConfigForRequestAppliesProbeSelection(t *testing.T) {
+	base := defaultSelectionConfig(t)
+	if !base.TracepointSelector.ShouldAttach("sys_enter_openat") || base.TracepointSelector.ShouldAttach("sys_enter_socket") {
+		t.Fatal("precondition: default selection should be FS only")
+	}
+
+	kept := traceConfigForRequest(base, runtime.TraceRequest{})
+	if !kept.TracepointSelector.ShouldAttach("sys_enter_openat") || kept.TracepointSelector.ShouldAttach("sys_enter_socket") {
+		t.Fatal("nil AttachSyscalls must keep the startup selection")
+	}
+
+	got := traceConfigForRequest(base, runtime.TraceRequest{AttachSyscalls: []string{"socket"}})
+	if !got.TracepointSelector.ShouldAttach("sys_exit_socket") || got.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("AttachSyscalls [socket] must attach socket and nothing else")
+	}
+	if !base.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("applying a selection must not mutate the base config")
+	}
+
+	none := traceConfigForRequest(base, runtime.TraceRequest{AttachSyscalls: []string{}})
+	if none.TracepointSelector.ShouldAttach("sys_enter_openat") {
+		t.Fatal("an empty AttachSyscalls must attach nothing")
+	}
+}
+
+// TestSamplingRatesCoverSyscallsOutsideTheAttachSelection pins that sampling
+// and aggregate-only rates do not depend on which syscalls are attached at
+// startup: the Time family is not attached by default, yet its configured
+// rate is in the map written at load time, so a Time syscall attached later
+// from the TUI probes modal is sampled exactly as if -trace-families had
+// selected it (and its aggregate rows are ingested).
+func TestSamplingRatesCoverSyscallsOutsideTheAttachSelection(t *testing.T) {
+	cfg := defaultSelectionConfig(t)
+	cfg.SyscallFamilySamplingRates = map[types.SyscallFamily]uint32{types.FamilyTime: 0}
+	if cfg.TracepointSelector.ShouldAttach("sys_enter_nanosleep") {
+		t.Fatal("precondition: nanosleep (Time) should not be attached at startup")
+	}
+	id, ok := types.EnterTraceIDByName("nanosleep")
+	if !ok {
+		t.Fatal("nanosleep trace ID not found")
+	}
+	if rate, ok := buildSyscallSamplingRates(cfg)[id]; !ok || rate != 0 {
+		t.Fatalf("nanosleep rate = %d (present %v), want 0", rate, ok)
+	}
+	if _, ok := buildAggregateIngestTraceIDs(cfg)[id]; !ok {
+		t.Fatal("nanosleep must be in the aggregate ingest set")
+	}
+}
+
+// defaultSelectionConfig returns a default config with the tracepoint
+// selector the flags package builds when no -trace-* / -tps flag is given.
+func defaultSelectionConfig(t *testing.T) flags.Config {
+	t.Helper()
+	cfg := flags.NewFlags()
+	sel, err := tracepoints.ParseSelectorWithDimensions("", "", tracepoints.DimensionSelectorConfig{})
+	if err != nil {
+		t.Fatalf("ParseSelectorWithDimensions: %v", err)
+	}
+	cfg.TracepointSelector = sel
+	return cfg
 }

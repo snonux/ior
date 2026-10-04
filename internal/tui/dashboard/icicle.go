@@ -9,15 +9,20 @@ import (
 	"strings"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 )
 
 type icicleNode struct {
 	name     string
 	fullPath string
-	accesses uint64
-	bytes    uint64
-	duration uint64
-	children map[string]*icicleNode
+	// remainder marks the leaf standing for the directories outside the
+	// engine's top-N: it has no path, so fullPath holds remainderDirKey (its
+	// selection identity) and name its label.
+	remainder bool
+	accesses  uint64
+	bytes     uint64
+	duration  uint64
+	children  map[string]*icicleNode
 }
 
 type icicleTile struct {
@@ -31,7 +36,7 @@ type icicleTile struct {
 // renderFilesIcicle renders the icicle chart for directory-based file stats.
 func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Files icicle: waiting for stats..."
+		return fitTableLine("Files icicle: waiting for stats...", width)
 	}
 	if width <= 0 {
 		width = 80
@@ -43,10 +48,10 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 
 	tiles, ok := buildIcicleTiles(snap, width, height, metric)
 	if !ok {
-		return header + "\nFiles icicle: no directory data\nsel: none"
+		return fitPlaceholderLines(width, header, "Files icicle: no directory data", "sel: none")
 	}
 	if len(tiles) == 0 {
-		return header + "\nFiles icicle: no visible tiles\nsel: none"
+		return fitPlaceholderLines(width, header, "Files icicle: no visible tiles", "sel: none")
 	}
 	return renderIcicleGrid(header, tiles, width, height, metric, selected, isDark)
 }
@@ -54,7 +59,7 @@ func renderFilesIcicle(snap *statsengine.Snapshot, width, height int, metric bub
 // buildIcicleTiles constructs the icicle tile layout from the snapshot's file data.
 // Returns (nil, false) when there is no data to display.
 func buildIcicleTiles(snap *statsengine.Snapshot, width, height int, metric bubbleMetric) ([]icicleTile, bool) {
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	if len(dirs) == 0 {
 		return nil, false
 	}
@@ -79,20 +84,12 @@ func renderIcicleGrid(header string, tiles []icicleTile, width, height int, metr
 		chartHeight = 4
 	}
 	selected = clampOffset(selected, len(tiles))
-	grid := make([][]treemapCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]treemapCell, width)
-		for col := range grid[row] {
-			grid[row][col] = treemapCell{char: ' ', colorSlot: -1}
-		}
-	}
+	grid := newGridRows(width, chartHeight)
 	fillIcicleGrid(grid, tiles, selected)
 	palette := treemapPalette(isDark)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	for _, row := range grid {
-		lines = append(lines, renderTreemapRow(row, palette))
-	}
+	lines = append(lines, renderGridRows(grid, palette)...)
 	lines = append(lines, padOrTrim(icicleStatusLine(tiles, selected, metric), width))
 	return strings.Join(lines, "\n")
 }
@@ -126,9 +123,13 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 		children: make(map[string]*icicleNode),
 	}
 	for _, dir := range dirs {
+		metricBytes := dir.BytesRead + dir.BytesWritten
+		if dir.IsRemainder() {
+			addIcicleRemainder(root, dir, metricBytes)
+			continue
+		}
 		segments := splitIcicleSegments(dir.Dir)
 		current := root
-		metricBytes := dir.BytesRead + dir.BytesWritten
 		current.accesses += dir.Accesses
 		current.bytes += metricBytes
 		current.duration += dir.TotalLatencyNs
@@ -158,6 +159,33 @@ func buildIcicleTree(dirs []DirSnapshot) *icicleNode {
 		}
 	}
 	return root
+}
+
+// addIcicleRemainder adds the remainder row as a root-level leaf next to the
+// real top-level directories, so the chart accounts for the traffic of the
+// directories outside the engine's top-N instead of silently omitting it.
+func addIcicleRemainder(root *icicleNode, dir DirSnapshot, metricBytes uint64) {
+	root.accesses += dir.Accesses
+	root.bytes += metricBytes
+	root.duration += dir.TotalLatencyNs
+	root.children[remainderDirKey] = &icicleNode{
+		name:      dirDisplayLabel(dir),
+		fullPath:  remainderDirKey,
+		remainder: true,
+		accesses:  dir.Accesses,
+		bytes:     metricBytes,
+		duration:  dir.TotalLatencyNs,
+		children:  map[string]*icicleNode{},
+	}
+}
+
+// label is the tile text of the node: "root/..." for a directory, the
+// "(other: N dirs)" name for the remainder leaf.
+func (n *icicleNode) label() string {
+	if n.remainder {
+		return common.Sanitize(n.name)
+	}
+	return rootPathLabelFromFSPath(n.fullPath)
 }
 
 func splitIcicleSegments(dir string) []string {
@@ -254,7 +282,7 @@ func icicleTileWidth(idx, total int, value uint64, remainingWidth int, remaining
 	return tileWidth
 }
 
-func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
+func fillIcicleGrid(grid [][]gridCell, tiles []icicleTile, selected int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -272,7 +300,7 @@ func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
 			if col < 0 {
 				continue
 			}
-			grid[tile.depth][col] = treemapCell{
+			grid[tile.depth][col] = gridCell{
 				char:      '█',
 				colorSlot: tile.colorSlot,
 				bold:      isSelected,
@@ -282,30 +310,18 @@ func fillIcicleGrid(grid [][]treemapCell, tiles []icicleTile, selected int) {
 	}
 }
 
-func drawIcicleLabel(grid [][]treemapCell, tile icicleTile, selected bool) {
+// drawIcicleLabel writes the node's "root/..." label at the left of its
+// tile, fitted into tile.w-1 display cells (one cell of fill stays visible
+// as the tile separator) and placed grapheme by grapheme (writeGridLabel) so
+// wide CJK/emoji path segments cannot spill into the neighbouring tile.
+func drawIcicleLabel(grid [][]gridCell, tile icicleTile, selected bool) {
 	height := len(grid)
 	if height == 0 || tile.depth < 0 || tile.depth >= height || tile.w <= 1 {
 		return
 	}
-	width := len(grid[0])
 	maxLabel := tile.w - 1
-	label := abbreviateTreemapLabel(rootPathLabelFromFSPath(tile.node.fullPath), maxLabel)
-	col := tile.x
-	for _, r := range label {
-		if col < 0 {
-			col++
-			continue
-		}
-		if col >= width {
-			break
-		}
-		grid[tile.depth][col] = treemapCell{
-			char:      r,
-			colorSlot: tile.colorSlot,
-			bold:      selected,
-		}
-		col++
-	}
+	label := abbreviateLabel(tile.node.label(), maxLabel)
+	writeGridLabel(grid[tile.depth], tile.x, label, tile.colorSlot, selected)
 }
 
 func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) string {
@@ -328,7 +344,7 @@ func icicleStatusLine(tiles []icicleTile, selected int, metric bubbleMetric) str
 		"sel:%d/%d %s | %s=%s | accesses=%d | bytes=%s",
 		selected+1,
 		len(tiles),
-		rootPathLabelFromFSPath(tile.node.fullPath),
+		tile.node.label(),
 		treemapMetricLabel(metric),
 		metricText,
 		tile.node.accesses,

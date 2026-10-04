@@ -3,7 +3,6 @@ package dashboard
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	common "ior/internal/tui/common"
 
@@ -101,10 +100,12 @@ func renderTabBar(active Tab, width int) string {
 }
 
 func renderHelpBar(keys common.KeyMap, width int) string {
-	return renderHelpBarWithStatus(keys, width, "")
+	return renderHelpBarWithStatus(keys, width, statusTail{})
 }
 
-func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) string {
+// renderHelpBarWithStatus renders the expanded help bar with the live status
+// (badge and summary, fitStatusRow) on its last row.
+func renderHelpBarWithStatus(keys common.KeyMap, width int, status statusTail) string {
 	sections := keys.DashboardStatusHelpSections()
 	lines := make([]string, 0, len(sections))
 	for _, section := range sections {
@@ -119,51 +120,28 @@ func renderHelpBarWithStatus(keys common.KeyMap, width int, status string) strin
 		}
 		lines = append(lines, line)
 	}
-	if status != "" && len(lines) > 0 {
-		lines[len(lines)-1] = appendStatusText(lines[len(lines)-1], status, width)
+	styled := width <= 0 || width >= 90
+	if len(lines) > 0 {
+		last := len(lines) - 1
+		lines[last] = fitStatusRow(lines[last], status, width).render(styled)
 	}
 	text := strings.Join(lines, "\n")
-	if width > 0 && width < 90 {
+	if !styled {
 		return text
 	}
 	return common.Current().HelpBarStyle.Width(width).Render(text)
 }
 
-func renderHelpHintWithStatus(width int, status string) string {
-	hint := "press H for help"
-	if status != "" {
-		hint = appendStatusText(hint, status, width)
-	}
-	if width > 0 && width < 90 {
+// renderHelpHintWithStatus renders the one-line help hint with the live
+// status (badge and summary, fitStatusRow) behind it. Below 90 columns the
+// row is plain text apart from the warning badge's colour.
+func renderHelpHintWithStatus(width int, status statusTail) string {
+	styled := width <= 0 || width >= 90
+	hint := fitStatusRow("press H for help", status, width).render(styled)
+	if !styled {
 		return hint
 	}
 	return common.Current().HelpBarStyle.Width(width).Render(hint)
-}
-
-// appendStatusText joins the chrome's static help text and its live status
-// half into one row of at most width cells.
-//
-// When both do not fit, the HELP half is the one that gives way. The status
-// half is where the dashboard reports state the user cannot get anywhere else
-// - the active filter, a filter that was refused, the recording status - while
-// the help half is reference text that the help overlay repeats in full.
-// Truncating the joined line from the right (as this did) dropped precisely
-// the half worth reading, which is how a refused filter could go unnoticed on
-// a narrow terminal.
-func appendStatusText(base, status string, width int) string {
-	if status == "" {
-		return base
-	}
-	const separator = " | "
-	if width <= 0 {
-		return base + separator + status
-	}
-	statusText := truncatePlain(status, width)
-	room := width - utf8.RuneCountInString(statusText) - utf8.RuneCountInString(separator)
-	if room < 1 {
-		return statusText
-	}
-	return truncatePlain(base, room) + separator + statusText
 }
 
 // tabLabel returns the display label for tab. When short is true the
@@ -175,18 +153,14 @@ func tabLabel(tab Tab, short bool) string {
 	return lookupTab(tab).ShortName
 }
 
+// truncatePlain shortens s to at most width display cells, ending in "…" when
+// cut. It measures terminal cells rather than runes (common.TruncateRight), so
+// wide CJK/emoji text in filter or status strings cannot overflow the row.
+// Per the shared marker rule, "…" is added only when it leaves room for
+// content: a width of 1 hard-cuts to the first cell ("abc" -> "a"), falling
+// back to "…" only when that cell would be half of a wide rune ("日本" -> "…").
 func truncatePlain(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	r := []rune(s)
-	return string(r[:width-1]) + "…"
+	return common.TruncateRight(s, width, common.Ellipsis)
 }
 
 // renderTabBarPlain renders a plain-text tab bar suitable for narrow terminals.
@@ -204,16 +178,7 @@ func renderTabBarPlain(active Tab, width int) string {
 	}
 	text := strings.Join(parts, " ")
 	if width > 0 {
-		text = truncatePlain(text, width)
-		padding := width - utf8.RuneCountInString(text)
-		if padding > 0 {
-			// Use a Builder to avoid a redundant allocation when right-padding to width.
-			var b strings.Builder
-			b.Grow(len(text) + padding)
-			b.WriteString(text)
-			b.WriteString(strings.Repeat(" ", padding))
-			return b.String()
-		}
+		return common.FitRight(text, width, common.Ellipsis)
 	}
 	return text
 }

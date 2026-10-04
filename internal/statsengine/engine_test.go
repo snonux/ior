@@ -230,3 +230,30 @@ func TestEngineCountsOnlyTheErrnoReturnWindowAsErrors(t *testing.T) {
 		t.Fatalf("syscall rows = %+v, want one mmap row with one error", rows)
 	}
 }
+
+// TestEngineDoesNotCountRestartCodesAsErrors covers task aq2: the kernel
+// restart codes a signal-interrupted call leaves at sys_exit are neither
+// counted in the global error total nor in the per-syscall Errors column, while
+// real errnos next to them (-511, -515, -4 EINTR) still are.
+func TestEngineDoesNotCountRestartCodesAsErrors(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	engine := newEngineWithClock(4, clock.Now)
+	for _, ret := range []int64{-512, -513, -514, -516, -511, -515, -4} {
+		engine.Ingest(newEnginePair(types.SYS_ENTER_READ, ret, types.UNCLASSIFIED,
+			"reader", 1, "", 0, 0, 10, 0))
+		clock.Advance(10 * time.Millisecond)
+	}
+
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.TotalErrors != 3 {
+		t.Fatalf("TotalErrors = %d, want 3 (-511, -515, -4 only)", snap.TotalErrors)
+	}
+	for _, row := range snap.Syscalls() {
+		if row.TraceID == types.SYS_ENTER_READ && (row.Errors != 3 || row.Count != 7) {
+			t.Fatalf("read Errors/Count = %d/%d, want 3/7", row.Errors, row.Count)
+		}
+	}
+}

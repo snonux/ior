@@ -1,6 +1,7 @@
 package streamrow
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -100,5 +101,130 @@ func TestRingBufferReset(t *testing.T) {
 	snap := rb.Snapshot()
 	if len(snap) != 0 {
 		t.Fatalf("expected empty snapshot after reset, got len=%d", len(snap))
+	}
+}
+
+// TestRingBufferAppendSnapshotWrapped verifies AppendSnapshot on a wrapped
+// ring: every row arrives in insertion order across the wrap point, after
+// the caller's existing prefix, and the result does not alias the ring.
+func TestRingBufferAppendSnapshotWrapped(t *testing.T) {
+	rb := NewRingBuffer()
+	const extra = 7
+	for i := range RingBufferCapacity + extra {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+
+	dst := []Row{{Seq: 999999}}
+	got := rb.AppendSnapshot(dst)
+	if len(got) != RingBufferCapacity+1 {
+		t.Fatalf("len = %d, want %d", len(got), RingBufferCapacity+1)
+	}
+	if got[0].Seq != 999999 {
+		t.Fatalf("prefix clobbered: got seq %d", got[0].Seq)
+	}
+	for i, row := range got[1:] {
+		if want := uint64(extra + 1 + i); row.Seq != want {
+			t.Fatalf("row %d seq = %d, want %d", i, row.Seq, want)
+		}
+	}
+
+	// Mutating the result must not reach back into the ring.
+	got[1].Seq = 0
+	if snap := rb.Snapshot(); snap[0].Seq != extra+1 {
+		t.Fatalf("AppendSnapshot result aliases the ring: first seq now %d", snap[0].Seq)
+	}
+}
+
+// TestRingBufferAppendSnapshotPartialAndEmpty covers the unwrapped partial
+// ring (a single contiguous segment) and the empty ring, which must leave
+// dst unchanged.
+func TestRingBufferAppendSnapshotPartialAndEmpty(t *testing.T) {
+	rb := NewRingBuffer()
+	if got := rb.AppendSnapshot(nil); len(got) != 0 {
+		t.Fatalf("empty ring appended %d rows", len(got))
+	}
+	for i := range 3 {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+	got := rb.AppendSnapshot(make([]Row, 0, 1))
+	if len(got) != 3 || got[0].Seq != 1 || got[2].Seq != 3 {
+		t.Fatalf("partial snapshot = %+v", got)
+	}
+}
+
+// TestRingBufferAppendSnapshotReusesBuffer pins the zero-allocation contract
+// periodic readers rely on: re-snapshotting a full ring into a buffer that
+// already has the capacity allocates nothing.
+func TestRingBufferAppendSnapshotReusesBuffer(t *testing.T) {
+	rb := NewRingBuffer()
+	for i := range RingBufferCapacity {
+		rb.Push(Row{Seq: uint64(i + 1)})
+	}
+	buf := rb.AppendSnapshot(nil)
+	allocs := testing.AllocsPerRun(10, func() {
+		buf = rb.AppendSnapshot(buf[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("AppendSnapshot into a reused buffer allocated %.0f times, want 0", allocs)
+	}
+}
+
+// TestRingBufferConcurrentPushAndSnapshot runs a writer pushing increasing
+// Seq values against a reader snapshotting (alternately via Snapshot and
+// AppendSnapshot into a reused buffer). Under -race it checks the locking;
+// in any mode each snapshot must be a consistent window: at most capacity
+// rows with strictly consecutive Seq values, never a torn mix of old and new.
+func TestRingBufferConcurrentPushAndSnapshot(t *testing.T) {
+	rb := NewRingBuffer()
+	const pushes = 3 * RingBufferCapacity
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(done)
+		for i := range pushes {
+			rb.Push(Row{Seq: uint64(i + 1)})
+		}
+	}()
+
+	var buf []Row
+	for round := 0; ; round++ {
+		finished := false
+		select {
+		case <-done:
+			finished = true
+		default:
+		}
+		var snap []Row
+		if round%2 == 0 {
+			buf = rb.AppendSnapshot(buf[:0])
+			snap = buf
+		} else {
+			snap = rb.Snapshot()
+		}
+		checkConsecutiveSnapshot(t, snap)
+		if finished {
+			break
+		}
+	}
+	wg.Wait()
+
+	final := rb.AppendSnapshot(buf[:0])
+	if len(final) != RingBufferCapacity || final[len(final)-1].Seq != pushes {
+		t.Fatalf("final snapshot len=%d last seq=%d, want %d and %d", len(final), final[len(final)-1].Seq, RingBufferCapacity, pushes)
+	}
+}
+
+func checkConsecutiveSnapshot(t *testing.T, snap []Row) {
+	t.Helper()
+	if len(snap) > RingBufferCapacity {
+		t.Fatalf("snapshot len %d exceeds capacity %d", len(snap), RingBufferCapacity)
+	}
+	for i := 1; i < len(snap); i++ {
+		if snap[i].Seq != snap[i-1].Seq+1 {
+			t.Fatalf("torn snapshot at %d: seq %d follows %d", i, snap[i].Seq, snap[i-1].Seq)
+		}
 	}
 }

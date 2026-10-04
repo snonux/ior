@@ -56,9 +56,12 @@ func callClockNanosleepAbs(aheadNs int64) error {
 }
 
 // invokeClockNanosleep is the shared raw clock_nanosleep syscall wrapper used by
-// both the relative and absolute callers.
+// both the relative and absolute callers. It uses Syscall6 rather than
+// RawSyscall6 so the runtime releases the P while the thread sleeps; other
+// goroutines (the signal-restart scenario's signal sender) can then run even
+// with GOMAXPROCS=1 instead of hanging behind a P-holding sleep.
 func invokeClockNanosleep(flags uintptr, req *unix.Timespec) error {
-	_, _, errno := syscall.RawSyscall6(
+	_, _, errno := syscall.Syscall6(
 		unix.SYS_CLOCK_NANOSLEEP,
 		uintptr(unix.CLOCK_MONOTONIC),
 		flags,

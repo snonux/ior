@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"iter"
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	common "ior/internal/tui/common"
 
@@ -44,6 +44,8 @@ func buildTerminalLayoutWithPath(snapshot *snapshotNode, width, height int, root
 	return frames
 }
 
+// collectTerminalLayout appends the frame for node and, recursively, for its
+// descendants, laid out in the column band [col, col+span) at row depth.
 func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64, height, depth, col int, path string, span int, normalizeRootChildren bool) {
 	if node == nil || depth >= height {
 		return
@@ -53,39 +55,12 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		return
 	}
 
-	name := frameName(node.Name, depth)
-	*out = append(*out, tuiFrame{
-		Name:        name,
-		Col:         col,
-		Row:         depth,
-		Width:       span,
-		Total:       total,
-		HeightTotal: snapshotHeightTotal(node),
-		Percent:     100 * float64(total) / float64(rootTotal),
-		Fill:        terminalFrameColor(name),
-		Depth:       depth,
-		Path:        path,
-	})
-
+	*out = append(*out, newTerminalFrame(node, total, rootTotal, depth, col, span, path))
 	if len(node.Children) == 0 {
 		return
 	}
 
-	childrenTotal := childSnapshotTotal(node.Children)
-	layoutTotal := total
-	layoutSpan := span
-	if normalizeRootChildren && depth == 0 {
-		if childrenTotal > 0 {
-			layoutTotal = childrenTotal
-		}
-	} else if representedTotal := node.Value + childrenTotal; representedTotal > 0 && representedTotal < total {
-		// Snapshot totals retain the contribution of pruned descendants. Size
-		// the remaining children against their represented total so pruning
-		// does not leave a hole in the original child band. A node's own value
-		// determines that band's span and therefore keeps its proportional gap.
-		layoutTotal = childrenTotal
-		layoutSpan = proportionalChildSpan(span, total-node.Value, total)
-	}
+	layoutTotal, layoutSpan := childLayoutBounds(node, total, span, normalizeRootChildren && depth == 0)
 	childWidths := allocateChildWidths(node.Children, layoutTotal, layoutSpan)
 	cursor := col
 	for idx, child := range node.Children {
@@ -98,6 +73,47 @@ func collectTerminalLayout(out *[]tuiFrame, node *snapshotNode, rootTotal uint64
 		collectTerminalLayout(out, child, rootTotal, height, depth+1, cursor, childPath, childWidth, false)
 		cursor += childWidth
 	}
+}
+
+// newTerminalFrame builds the display frame of one snapshot node.
+func newTerminalFrame(node *snapshotNode, total, rootTotal uint64, depth, col, span int, path string) tuiFrame {
+	name := frameName(node.Name, depth)
+	return tuiFrame{
+		// Sanitised display label (traced names are attacker-controlled, and
+		// an unterminated ESC[ would swallow padOrTrim's padding); Path keeps
+		// the raw names because it is the lookup key.
+		Name:        common.Sanitize(name),
+		Col:         col,
+		Row:         depth,
+		Width:       span,
+		Total:       total,
+		HeightTotal: snapshotHeightTotal(node),
+		Percent:     100 * float64(total) / float64(rootTotal),
+		Fill:        terminalFrameColor(name),
+		Depth:       depth,
+		Path:        path,
+	}
+}
+
+// childLayoutBounds returns the total and column span that node's children
+// are sized against. normalizeRoot is set for the root of a zoomed view,
+// whose children fill the whole width.
+func childLayoutBounds(node *snapshotNode, total uint64, span int, normalizeRoot bool) (layoutTotal uint64, layoutSpan int) {
+	childrenTotal := childSnapshotTotal(node.Children)
+	if normalizeRoot {
+		if childrenTotal > 0 {
+			return childrenTotal, span
+		}
+		return total, span
+	}
+	if representedTotal := node.Value + childrenTotal; representedTotal > 0 && representedTotal < total {
+		// Snapshot totals retain the contribution of pruned descendants. Size
+		// the remaining children against their represented total so pruning
+		// does not leave a hole in the original child band. A node's own value
+		// determines that band's span and therefore keeps its proportional gap.
+		return childrenTotal, proportionalChildSpan(span, total-node.Value, total)
+	}
+	return total, span
 }
 
 func proportionalChildSpan(span int, childTotal, parentTotal uint64) int {
@@ -419,6 +435,15 @@ func computeRenderParamsForAvailableRows(frames []tuiFrame, availableRows int, h
 // frameIndexAt returns the index of the frame rendered at terminal coordinates
 // (x, y), or -1 if no frame occupies that cell. showHelp adds one extra line
 // to the UI chrome so the frame area row calculations account for it.
+//
+// When RenderTerminalView draws a placeholder message instead of frames
+// ("terminal too narrow", "viewport too short", "waiting for data"), nothing
+// is hittable, so the same width/height/frame-count test it uses
+// (layoutPlaceholder) makes this return -1 too; without it the frames laid
+// out for a width the screen no longer shows would still resolve and a click
+// on blank space would zoom into an undrawn frame. The "no frames match
+// filter" placeholder depends on the search state, not on geometry, so the
+// caller checks it with filterHidesAllFrames before calling this.
 func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMetricActive bool) int {
 	if len(frames) == 0 || width <= 0 || height <= 0 {
 		return -1
@@ -434,69 +459,99 @@ func frameIndexAt(frames []tuiFrame, x, y, width, height int, showHelp, heightMe
 	if renderHeight < 3 {
 		renderHeight = 3
 	}
+	if _, placeholder := layoutPlaceholder(width, renderHeight, len(frames)); placeholder {
+		return -1
+	}
 	params := computeRenderParamsForAvailableRows(frames, renderHeight-2, heightMetricActive)
 	if y < 1 || y > params.availableRows {
 		return -1
 	}
-	targetRow := frameCoordToTargetRow(y-1, params)
-	if targetRow < 0 {
+	line, ok := frameCoordToLine(y-1, params)
+	if !ok {
 		return -1
 	}
-	return findFrameAtRow(frames, targetRow, x, width)
+	return findFrameAtLine(frames, line, x, width)
 }
 
-// frameCoordToTargetRow converts a data-area row offset (0-based, after
-// stripping the toolbar row) into the logical frame row index. Returns -1 when
-// the coordinate falls in the top padding above the first visible row.
-func frameCoordToTargetRow(dataRow int, params renderViewParams) int {
+// frameLine identifies one rendered terminal line of the frame area: the
+// logical frame row it belongs to and, for the height-metric leaf row, which
+// of its bands it is. band is -1 for every other row, whose repeated lines
+// all draw the same frames; for the leaf row it counts up from 0 (the bottom
+// band) exactly like the band argument of renderLeafRowBand, and
+// leafBarHeight is the band count needed to rescale leafFrameHeights.
+type frameLine struct {
+	row           int
+	band          int
+	leafBarHeight int
+}
+
+// frameCoordToLine converts a data-area row offset (0-based, after stripping
+// the toolbar row) into the frameLine drawn there, mirroring buildRenderRows'
+// top-to-bottom emission order (deepest row first, leaf bands from the top
+// band down). ok is false when the coordinate falls in the top padding above
+// the first visible row or outside the data area.
+func frameCoordToLine(dataRow int, params renderViewParams) (line frameLine, ok bool) {
 	if params.visibleFrames == 0 || params.availableRows < 1 || dataRow < 0 || dataRow >= params.availableRows {
-		return -1
+		return frameLine{}, false
 	}
 	renderedRows := (params.maxRow - params.rowOffset + 1) * params.barHeight
 	if params.heightMetric {
 		renderedRows = params.leafBarHeight + max(0, params.maxRow-params.rowOffset)*params.barHeight
 	}
-	padTop := 0
-	if renderedRows < params.availableRows {
-		padTop = params.availableRows - renderedRows
-	}
+	padTop := max(0, params.availableRows-renderedRows)
 	if dataRow < padTop {
-		return -1
+		return frameLine{}, false
 	}
 	rowInRender := dataRow - padTop
 	for row := params.maxRow; row >= params.rowOffset; row-- {
-		rowHeight := params.barHeight
 		if params.heightMetric && row == params.maxRow {
-			rowHeight = params.leafBarHeight
+			if rowInRender < params.leafBarHeight {
+				// buildRenderRows emits band leafBarHeight-1 first.
+				band := params.leafBarHeight - 1 - rowInRender
+				return frameLine{row: row, band: band, leafBarHeight: params.leafBarHeight}, true
+			}
+			rowInRender -= params.leafBarHeight
+			continue
 		}
-		if rowInRender < rowHeight {
-			return row
+		if rowInRender < params.barHeight {
+			return frameLine{row: row, band: -1}, true
 		}
-		rowInRender -= rowHeight
+		rowInRender -= params.barHeight
 	}
-	return -1
+	return frameLine{}, false
 }
 
-// findFrameAtRow scans frames for the narrowest one that occupies logical row
-// targetRow and contains pixel column x within [0, width). Returning the
-// narrowest frame resolves overlap between wide parent and narrow child bars.
-func findFrameAtRow(frames []tuiFrame, targetRow, x, width int) int {
-	best := -1
-	bestWidth := int(^uint(0) >> 1)
+// findFrameAtLine returns the index of the frame drawn at column x of line,
+// or -1 when that cell is blank. It selects the same frames the renderer
+// draws on that line (framesOnLine, which applies the leaf-band filter of
+// renderLeafRowBand) and resolves the cell with frameAtCell, which replays
+// renderRow's clipped column walk. Hit testing therefore agrees with the
+// screen cell by cell, including upper leaf bands above shorter frames and
+// mid-animation overlaps where a later frame is drawn only from the end of
+// an earlier one.
+func findFrameAtLine(frames []tuiFrame, line frameLine, x, width int) int {
+	if x < 0 || x >= width {
+		return -1
+	}
+	return frameAtCell(framesOnLine(frames, line), x, width)
+}
+
+// framesOnLine collects the frames of line.row in renderRow order and, for a
+// leaf band, keeps only those tall enough to reach it. It recomputes
+// leafFrameHeights over the same row set buildRenderRows uses, so both sides
+// derive identical band heights.
+func framesOnLine(frames []tuiFrame, line frameLine) []indexedFrame {
+	var framesAtRow []indexedFrame
 	for idx, frame := range frames {
-		if frame.Row != targetRow || frame.Col >= width {
-			continue
-		}
-		right := min(width, frame.Col+frame.Width)
-		if x < frame.Col || x >= right {
-			continue
-		}
-		if frame.Width < bestWidth {
-			best = idx
-			bestWidth = frame.Width
+		if frame.Row == line.row {
+			framesAtRow = append(framesAtRow, indexedFrame{idx: idx, frame: frame})
 		}
 	}
-	return best
+	sortFramesByCol(framesAtRow)
+	if line.band < 0 {
+		return framesAtRow
+	}
+	return leafBandFrames(framesAtRow, leafFrameHeights(framesAtRow, line.leafBarHeight), line.band)
 }
 
 // buildToolbar assembles the top-of-view toolbar string and pads/trims it to
@@ -515,7 +570,8 @@ func buildToolbar(frames []tuiFrame, width int, params renderViewParams) string 
 
 // buildFilteredStatus builds the per-selection status line when a search filter
 // is active. The searchQuery is embedded in the status so the user can see
-// which pattern is applied.
+// which pattern is applied; it is typed or pasted text, so it is sanitised
+// first (%q alone prints U+2800 and U+FFFC raw; task ms2).
 func buildFilteredStatus(frames []tuiFrame, selected tuiFrame, selectedIdx int, matchSet map[int]bool, metricLabel, searchQuery string, globalTotal uint64, visibleFrames int) string {
 	filterCoveredTotal, filterBaseTotal := filterCoverageTotals(frames, matchSet, globalTotal)
 	filterSystemShare := percentOfTotal(filterCoveredTotal, filterBaseTotal)
@@ -536,7 +592,7 @@ func buildFilteredStatus(frames []tuiFrame, selected tuiFrame, selectedIdx int, 
 		frameCoverage = 100 * float64(visibleFrames) / float64(len(frames))
 	}
 	return fmt.Sprintf("Filter %q: %.1f%% %s (%d/%d matches, %.1f%% frames shown) | Selected: %s total(%s)=%d depth=%d %.2f%% filtered %s",
-		searchQuery, filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
+		common.Sanitize(searchQuery), filterSystemShare, metricLabel, pos, len(matches), frameCoverage,
 		selected.Name, metricLabel, selected.Total, selected.Depth, selectedFilterShare, metricLabel)
 }
 
@@ -551,65 +607,94 @@ func buildNormalStatus(selected tuiFrame, metricLabel string, globalTotal uint64
 }
 
 // RenderTerminalView renders a terminal flamegraph viewport from laid out frames.
-// The function is split into helpers (computeRenderParams, buildToolbar,
-// buildFilteredStatus, buildNormalStatus) to keep each piece under 50 lines.
+// The work is split into helpers so each piece stays short: renderPlaceholder
+// handles the degenerate-viewport/no-data messages, resolveRenderFilterSet
+// decides which frames the active search filter keeps visible, and
+// renderSelectedView lays out toolbar, rows and status line for the chosen
+// selection.
 func RenderTerminalView(ctx RenderContext) string {
-	theme := common.Current()
-	frames := ctx.Frames
-	width := ctx.Width
-	height := ctx.Height
-	selectedIdx := ctx.SelectedIdx
-	subtreeSet := ctx.SubtreeSet
-	matchSet := ctx.MatchSet
-	filterSet := ctx.FilterSet
-	globalTotal := ctx.GlobalTotal
-	metricLabel := ctx.MetricLabel
-	heightMetricActive := ctx.HeightMetricActive
-	isDark := ctx.IsDark
-	searchQuery := ctx.SearchQuery
+	if msg, ok := renderPlaceholder(ctx); ok {
+		return common.RenderMessagePanel(msg, ctx.Width)
+	}
+	if strings.TrimSpace(ctx.MetricLabel) == "" {
+		ctx.MetricLabel = "events"
+	}
+	filterSet, filterIsActive := resolveRenderFilterSet(ctx)
+	if filterIsActive && filterHidesAllFrames(filterSet) {
+		return common.RenderMessagePanel(fmt.Sprintf("Flame: no frames match filter %q", common.Sanitize(ctx.SearchQuery)), ctx.Width)
+	}
+	ctx.FilterSet = filterSet
+	return renderSelectedView(ctx, filterIsActive)
+}
 
-	if width < minFlameWidth {
-		return theme.PanelStyle.Render("Flame: terminal too narrow (need >= 60 columns)")
+// renderPlaceholder returns the message shown instead of a flamegraph when the
+// viewport is too small or there are no frames yet. ok is false when a real
+// flamegraph can be rendered.
+func renderPlaceholder(ctx RenderContext) (msg string, ok bool) {
+	return layoutPlaceholder(ctx.Width, ctx.Height, len(ctx.Frames))
+}
+
+// layoutPlaceholder is the geometry-and-data half of the placeholder decision,
+// shared by the renderer (renderPlaceholder) and the mouse hit test
+// (frameIndexAt) so the two cannot disagree about when frames are on screen.
+// height is the render height (terminal height minus the status/help lines).
+func layoutPlaceholder(width, height, frameCount int) (msg string, ok bool) {
+	switch {
+	case width < minFlameWidth:
+		return "Flame: terminal too narrow (need >= 60 columns)", true
+	case height < 3:
+		return "Flame: viewport too short", true
+	case frameCount == 0:
+		return "Flame: waiting for data...", true
 	}
-	if height < 3 {
-		return theme.PanelStyle.Render("Flame: viewport too short")
+	return "", false
+}
+
+// filterHidesAllFrames reports whether an applied search filter keeps no frame
+// visible, in which case RenderTerminalView shows "no frames match filter"
+// instead of the flamegraph. filterSet is the filter-visible set; callers
+// only ask while a filter is active (filterActive(query)).
+func filterHidesAllFrames(filterSet map[int]bool) bool {
+	return len(filterSet) == 0
+}
+
+// resolveRenderFilterSet returns the set of frames kept visible by the search
+// filter and whether a filter is active at all. Without a search query the set
+// is nil so every frame is drawn. Callers without a SearchController-maintained
+// set get the same visibility rule as the live search path (matches,
+// descendants and ancestors).
+func resolveRenderFilterSet(ctx RenderContext) (map[int]bool, bool) {
+	if strings.TrimSpace(ctx.SearchQuery) == "" {
+		return nil, false
 	}
-	if len(frames) == 0 {
-		return theme.PanelStyle.Render("Flame: waiting for data...")
+	if ctx.FilterSet != nil {
+		return ctx.FilterSet, true
 	}
-	if strings.TrimSpace(metricLabel) == "" {
-		metricLabel = "events"
-	}
-	filterIsActive := strings.TrimSpace(searchQuery) != ""
-	if filterIsActive {
-		if filterSet == nil {
-			// Callers without a SearchController-maintained set get the same
-			// visibility rule as the live search path (matches, descendants
-			// and ancestors).
-			filterSet = filterVisibleSetUsingAncestry(frames, matchSet, buildFrameAncestry(frames), nil)
-		}
-		if len(filterSet) == 0 {
-			return theme.PanelStyle.Render(fmt.Sprintf("Flame: no frames match filter %q", searchQuery))
-		}
-	} else {
-		filterSet = nil
-	}
-	selectedIdx = normalizeSelectedIndex(frames, selectedIdx, filterSet)
+	return filterVisibleSetUsingAncestry(ctx.Frames, ctx.MatchSet, buildFrameAncestry(ctx.Frames), nil), true
+}
+
+// renderSelectedView renders toolbar, flame rows and status line once the
+// viewport is known to be drawable and ctx.FilterSet/ctx.MetricLabel have been
+// resolved. The selection is normalised into the visible (filtered) frames.
+func renderSelectedView(ctx RenderContext, filterIsActive bool) string {
+	frames := ctx.Frames
+	selectedIdx := normalizeSelectedIndex(frames, ctx.SelectedIdx, ctx.FilterSet)
 	selected := frames[selectedIdx]
+	subtreeSet := ctx.SubtreeSet
 	if subtreeSet == nil {
 		subtreeSet = computeSubtreeSet(frames, selectedIdx)
 	}
-	params := computeRenderParams(frames, height, heightMetricActive)
-	toolbar := buildToolbar(frames, width, params)
+	params := computeRenderParams(frames, ctx.Height, ctx.HeightMetricActive)
+	toolbar := buildToolbar(frames, ctx.Width, params)
 	var status string
 	if filterIsActive {
-		status = buildFilteredStatus(frames, selected, selectedIdx, matchSet, metricLabel, searchQuery, globalTotal, params.visibleFrames)
+		status = buildFilteredStatus(frames, selected, selectedIdx, ctx.MatchSet, ctx.MetricLabel, ctx.SearchQuery, ctx.GlobalTotal, params.visibleFrames)
 	} else {
-		status = buildNormalStatus(selected, metricLabel, globalTotal)
+		status = buildNormalStatus(selected, ctx.MetricLabel, ctx.GlobalTotal)
 	}
 	rows := buildRenderRows(renderRowsContext{
 		frames:             frames,
-		width:              width,
+		width:              ctx.Width,
 		rowOffset:          params.rowOffset,
 		maxRow:             params.maxRow,
 		barHeight:          params.barHeight,
@@ -617,12 +702,12 @@ func RenderTerminalView(ctx RenderContext) string {
 		availableRows:      params.availableRows,
 		selectedPath:       selected.Path,
 		subtreeSet:         subtreeSet,
-		matchSet:           matchSet,
+		matchSet:           ctx.MatchSet,
 		selectedIdx:        selectedIdx,
-		heightMetricActive: heightMetricActive,
-		isDark:             isDark,
+		heightMetricActive: ctx.HeightMetricActive,
+		isDark:             ctx.IsDark,
 	})
-	return renderViewRows(toolbar, status, rows, width)
+	return renderViewRows(toolbar, status, rows, ctx.Width)
 }
 
 func renderViewRows(toolbar, status string, rows []string, width int) string {
@@ -644,21 +729,34 @@ type indexedFrame struct {
 	frame tuiFrame
 }
 
+// buildRenderRows draws the visible flame rows top (deepest row, maxRow) to
+// bottom (rowOffset). Each row repeats barHeight lines; with the height metric
+// active the deepest row is drawn as leafBarHeight bands instead. The result
+// is fitted to availableRows by fitRowsToViewport.
 func buildRenderRows(ctx renderRowsContext) []string {
-	frames := ctx.frames
-	width := ctx.width
-	rowOffset := ctx.rowOffset
-	maxRow := ctx.maxRow
-	barHeight := ctx.barHeight
-	leafBarHeight := ctx.leafBarHeight
-	availableRows := ctx.availableRows
-	selectedPath := ctx.selectedPath
-	subtreeSet := ctx.subtreeSet
-	matchSet := ctx.matchSet
-	selectedIdx := ctx.selectedIdx
-	heightMetricActive := ctx.heightMetricActive
-	isDark := ctx.isDark
+	rowsByDepth := groupFramesByRow(ctx.frames, ctx.rowOffset, ctx.maxRow)
+	if ctx.barHeight < 1 {
+		ctx.barHeight = 1
+	}
+	rows := make([]string, 0, (ctx.maxRow-ctx.rowOffset+1)*ctx.barHeight)
+	for row := ctx.maxRow; row >= ctx.rowOffset; row-- {
+		framesAtRow := rowsByDepth[row]
+		sortFramesByCol(framesAtRow)
+		if ctx.heightMetricActive && row == ctx.maxRow {
+			rows = appendLeafRowBands(rows, framesAtRow, ctx)
+			continue
+		}
+		for repeat := 0; repeat < ctx.barHeight; repeat++ {
+			showLabels := repeat == ctx.barHeight/2
+			rows = append(rows, renderRow(framesAtRow, ctx.width, ctx.selectedPath, ctx.subtreeSet, ctx.matchSet, ctx.selectedIdx, ctx.isDark, showLabels))
+		}
+	}
+	return fitRowsToViewport(rows, ctx.availableRows, ctx.width)
+}
 
+// groupFramesByRow buckets the frames whose Row lies in [rowOffset, maxRow],
+// remembering each frame's original index for selection/match lookups.
+func groupFramesByRow(frames []tuiFrame, rowOffset, maxRow int) map[int][]indexedFrame {
 	rowsByDepth := make(map[int][]indexedFrame)
 	for idx, frame := range frames {
 		if frame.Row < rowOffset || frame.Row > maxRow {
@@ -666,48 +764,45 @@ func buildRenderRows(ctx renderRowsContext) []string {
 		}
 		rowsByDepth[frame.Row] = append(rowsByDepth[frame.Row], indexedFrame{idx: idx, frame: frame})
 	}
+	return rowsByDepth
+}
 
-	if barHeight < 1 {
-		barHeight = 1
-	}
-
-	rows := make([]string, 0, (maxRow-rowOffset+1)*barHeight)
-	for row := maxRow; row >= rowOffset; row-- {
-		framesAtRow := rowsByDepth[row]
-		slices.SortFunc(framesAtRow, func(a, b indexedFrame) int {
-			return cmp.Compare(a.frame.Col, b.frame.Col)
-		})
-		if heightMetricActive && row == maxRow {
-			frameHeights := leafFrameHeights(framesAtRow, leafBarHeight)
-			for h := leafBarHeight - 1; h >= 0; h-- {
-				showLabels := h == 0
-				rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
-			}
-			continue
-		}
-		for repeat := 0; repeat < barHeight; repeat++ {
-			showLabels := repeat == barHeight/2
-			rows = append(rows, renderRow(framesAtRow, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels))
-		}
-	}
-
-	if availableRows > 0 {
-		if len(rows) > availableRows {
-			rows = rows[:availableRows]
-		}
-		if len(rows) < availableRows {
-			blank := strings.Repeat(" ", width)
-			pad := make([]string, 0, availableRows)
-			for i := 0; i < availableRows-len(rows); i++ {
-				pad = append(pad, blank)
-			}
-			pad = append(pad, rows...)
-			rows = pad
-		}
+// appendLeafRowBands appends the leafBarHeight bands of the height-metric leaf
+// row, highest band first; labels are only drawn on the bottom band (h == 0).
+func appendLeafRowBands(rows []string, framesAtRow []indexedFrame, ctx renderRowsContext) []string {
+	frameHeights := leafFrameHeights(framesAtRow, ctx.leafBarHeight)
+	for h := ctx.leafBarHeight - 1; h >= 0; h-- {
+		showLabels := h == 0
+		rows = append(rows, renderLeafRowBand(framesAtRow, frameHeights, h, ctx.width, ctx.selectedPath, ctx.subtreeSet, ctx.matchSet, ctx.selectedIdx, ctx.isDark, showLabels))
 	}
 	return rows
 }
 
+// fitRowsToViewport trims rows to availableRows, or top-pads them with blank
+// lines so the flamegraph stays anchored to the bottom of the viewport. A
+// non-positive availableRows leaves rows unchanged.
+func fitRowsToViewport(rows []string, availableRows, width int) []string {
+	if availableRows <= 0 {
+		return rows
+	}
+	if len(rows) > availableRows {
+		return rows[:availableRows]
+	}
+	if len(rows) < availableRows {
+		blank := strings.Repeat(" ", width)
+		pad := make([]string, 0, availableRows)
+		for i := 0; i < availableRows-len(rows); i++ {
+			pad = append(pad, blank)
+		}
+		return append(pad, rows...)
+	}
+	return rows
+}
+
+// leafFrameHeights scales each leaf-row frame's HeightTotal to a band count in
+// [1, leafBarHeight], relative to the tallest frame of the row. It is keyed by
+// frame index and consumed by leafBandFrames on both the drawing path
+// (buildRenderRows) and the hit-testing path (framesOnLine).
 func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	heights := make(map[int]int, len(frames))
 	if leafBarHeight < 1 {
@@ -732,16 +827,96 @@ func leafFrameHeights(frames []indexedFrame, leafBarHeight int) map[int]int {
 	return heights
 }
 
+// renderLeafRowBand draws one band of the height-metric leaf row: only the
+// frames whose scaled height reaches band (see leafBandFrames).
 func renderLeafRowBand(frames []indexedFrame, frameHeights map[int]int, band, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
+	return renderRow(leafBandFrames(frames, frameHeights, band), width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
+}
+
+// leafBandFrames returns the frames drawn on leaf band band (0 = bottom):
+// those whose leafFrameHeights entry is taller than band, so shorter frames
+// leave the upper bands blank. Order is preserved. renderLeafRowBand and the
+// mouse hit test (framesOnLine) share it so they agree on band contents.
+func leafBandFrames(frames []indexedFrame, frameHeights map[int]int, band int) []indexedFrame {
 	visible := make([]indexedFrame, 0, len(frames))
 	for _, item := range frames {
 		if frameHeights[item.idx] > band {
 			visible = append(visible, item)
 		}
 	}
-	return renderRow(visible, width, selectedPath, subtreeSet, matchSet, selectedIdx, isDark, showLabels)
+	return visible
 }
 
+// sortFramesByCol orders one row's frames left to right. The sort is stable
+// so frames sharing a Col (possible mid-animation) keep their layout order;
+// renderRow and the mouse hit test both walk this exact order (via
+// drawnSpans) to agree on which frame owns an overlapping cell.
+func sortFramesByCol(frames []indexedFrame) {
+	slices.SortStableFunc(frames, func(a, b indexedFrame) int {
+		return cmp.Compare(a.frame.Col, b.frame.Col)
+	})
+}
+
+// drawnCellSpan returns the half-open column range [start, end) that frame
+// occupies when drawn after earlier frames of the same row have filled the
+// columns up to cursor. Settled layouts never overlap, but the spring
+// animation moves every frame independently, so a frame can start left of
+// cursor (inside its still-sliding neighbour). Drawing it at full width from
+// cursor would push the row past width and shift everything after it, so the
+// frame is clipped to the columns the earlier frame did not claim and to the
+// viewport. ok is false when nothing of the frame remains visible.
+func drawnCellSpan(frame tuiFrame, cursor, width int) (start, end int, ok bool) {
+	start = max(frame.Col, cursor)
+	end = min(frame.Col+frame.Width, width)
+	if start >= end {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// cellSpan is the half-open column range [start, end) a frame is drawn on.
+type cellSpan struct {
+	start, end int
+}
+
+// drawnSpans yields every visible frame of a line (sorted by sortFramesByCol)
+// with the cells it is drawn on, advancing the cursor through drawnCellSpan
+// and skipping fully hidden frames. It is the single column walk shared by
+// renderRow (drawing) and frameAtCell (hit testing).
+func drawnSpans(frames []indexedFrame, width int) iter.Seq2[indexedFrame, cellSpan] {
+	return func(yield func(indexedFrame, cellSpan) bool) {
+		cursor := 0
+		for _, item := range frames {
+			start, end, ok := drawnCellSpan(item.frame, cursor, width)
+			if !ok {
+				continue
+			}
+			if !yield(item, cellSpan{start: start, end: end}) {
+				return
+			}
+			cursor = end
+		}
+	}
+}
+
+// frameAtCell returns the index of the frame renderRow draws at column x of
+// the given line frames, or -1 when that cell is blank.
+func frameAtCell(frames []indexedFrame, x, width int) int {
+	for item, span := range drawnSpans(frames, width) {
+		if x < span.start {
+			return -1 // spans are ascending: x lies in a gap
+		}
+		if x < span.end {
+			return item.idx
+		}
+	}
+	return -1
+}
+
+// renderRow draws one terminal line of frames, which must already be sorted
+// by sortFramesByCol. The cells come from drawnSpans, which keeps the line
+// exactly width cells wide even mid-animation; frameAtCell walks the same
+// spans so mouse hits match what is on screen.
 func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet, matchSet map[int]bool, selectedIdx int, isDark, showLabels bool) string {
 	if len(frames) == 0 {
 		return strings.Repeat(" ", width)
@@ -749,32 +924,18 @@ func renderRow(frames []indexedFrame, width int, selectedPath string, subtreeSet
 	var b strings.Builder
 	b.Grow(width + 8)
 	cursor := 0
-	for _, item := range frames {
-		frame := item.frame
-		if frame.Col >= width {
-			continue
+	for item, span := range drawnSpans(frames, width) {
+		if span.start > cursor {
+			b.WriteString(strings.Repeat(" ", span.start-cursor))
 		}
-		if frame.Col > cursor {
-			gap := frame.Col - cursor
-			b.WriteString(strings.Repeat(" ", gap))
-			cursor += gap
-		}
-
-		cellWidth := frame.Width
-		if frame.Col+cellWidth > width {
-			cellWidth = width - frame.Col
-		}
-		if cellWidth <= 0 {
-			continue
-		}
+		cellWidth := span.end - span.start
 		label := strings.Repeat(" ", cellWidth)
 		if showLabels {
-			label = frameLabel(frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
+			label = frameLabel(item.frame.Name, cellWidth, item.idx == selectedIdx, matchSet != nil && matchSet[item.idx])
 		}
-		style := styleForFrame(item.idx, frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
-		cell := style.Render(label)
-		b.WriteString(cell)
-		cursor = frame.Col + cellWidth
+		style := styleForFrame(item.idx, item.frame, selectedPath, subtreeSet, matchSet, selectedIdx, isDark)
+		b.WriteString(style.Render(label))
+		cursor = span.end
 	}
 	if cursor < width {
 		b.WriteString(strings.Repeat(" ", width-cursor))
@@ -859,6 +1020,9 @@ func styleForFrame(idx int, frame tuiFrame, selectedPath string, subtreeSet, mat
 	return base.Background(theme.Panel).Foreground(theme.Muted).Faint(true)
 }
 
+// frameLabel renders name into exactly width cells via padOrTrim, adding the
+// ">…<" selection or "*" match marker. Like padOrTrim it expects name to be
+// free of control characters (sanitised upstream, task io2).
 func frameLabel(name string, width int, isSelected, isMatch bool) string {
 	if width <= 0 {
 		return ""
@@ -878,15 +1042,18 @@ func frameLabel(name string, width int, isSelected, isMatch bool) string {
 	return padOrTrim(name, width)
 }
 
+// compactFramePath renders a raw frame Path for the toolbar and status line:
+// at most the first and last component joined by "/...". Path holds raw
+// traced names (it is a lookup key), so the display text is sanitised here.
 func compactFramePath(path string) string {
 	if path == "" {
 		return "root"
 	}
 	parts := strings.Split(path, pathSeparator)
 	if len(parts) <= 3 {
-		return strings.Join(parts, "/")
+		return common.Sanitize(strings.Join(parts, "/"))
 	}
-	return strings.Join([]string{parts[0], "...", parts[len(parts)-1]}, "/")
+	return common.Sanitize(strings.Join([]string{parts[0], "...", parts[len(parts)-1]}, "/"))
 }
 
 type relation int
@@ -1044,16 +1211,20 @@ func percentOfTotal(value, total uint64) float64 {
 	return 100 * float64(value) / float64(total)
 }
 
+// padOrTrim fits s into exactly width terminal cells via the shared
+// common.FitRight. It measures and cuts by display width, not rune count: a
+// CJK or emoji rune takes two cells, so counting runes let a wide-character
+// frame name overflow its cell and push the whole row past the viewport. When
+// s is too wide it is cut and ends in "…" (a 1-cell width hard-cuts to the
+// first cell, or shows "…" when that cell would be half of a wide rune); a
+// wide rune is never split, so the cut can be one cell short and is then
+// space-padded to width.
+//
+// The exact-width guarantee holds only for control-character-free input:
+// tabs, C1 bytes or an unterminated escape sequence are measured as zero
+// width but move the cursor (tab) or swallow the following bytes, including
+// padding (unterminated escape). padOrTrim does not sanitise; frame names and
+// paths are sanitised upstream (task io2).
 func padOrTrim(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(s) <= width {
-		return s + strings.Repeat(" ", width-utf8.RuneCountInString(s))
-	}
-	if width == 1 {
-		return "…"
-	}
-	r := []rune(s)
-	return string(r[:width-1]) + "…"
+	return common.FitRight(s, width, common.Ellipsis)
 }

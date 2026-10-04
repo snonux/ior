@@ -29,20 +29,23 @@ const (
 // renderSyscallsWithSort renders the Syscalls table from the already
 // filter-scoped row set rowsData (see Model.visibleSyscallRows). snap is passed
 // only to distinguish the "waiting for stats" state (nil snapshot) from the
-// "no data" state (non-nil snapshot but empty rows after filtering).
+// "no data" state (non-nil snapshot but empty rows after filtering). Every
+// line is at most width cells wide: the placeholders are cut, the table is
+// fitted by renderSelectableTable (syscallTableSpec).
 func renderSyscallsWithSort(snap *statsengine.Snapshot, rowsData []statsengine.SyscallSnapshot, width, height, offset, selectedCol int, sortState tableSortState[syscallSortKey]) string {
 	if snap == nil {
-		return "Syscalls: waiting for stats..."
+		return fitTableLine("Syscalls: waiting for stats...", width)
 	}
 
 	rowsData = sortedSyscallSnapshots(rowsData, sortState)
-	columns, rows := syscallTableData(rowsData, width)
+	spec, rows := syscallTableData(rowsData, width)
 	if len(rows) == 0 {
-		return "Syscalls: no data"
+		return fitTableLine("Syscalls: no data", width)
 	}
 	return renderSelectableTable(
-		columns,
+		spec,
 		rows,
+		width,
 		height,
 		offset,
 		selectedCol,
@@ -54,14 +57,37 @@ func renderSyscallsWithSort(snap *statsengine.Snapshot, rowsData []statsengine.S
 	)
 }
 
-func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) ([]common.TableColumn, [][]string) {
-	columns := syscallColumns(width)
+func syscallTableData(syscalls []statsengine.SyscallSnapshot, width int) (tableSpec, [][]string) {
+	spec := syscallTableSpec(width)
 	if width < 140 {
-		return columns, syscallRowsCompact(syscalls)
+		return spec, syscallRowsCompact(syscalls)
 	}
-	return columns, syscallRowsFull(syscalls)
+	return spec, syscallRowsFull(syscalls)
 }
 
+// syscallTableSpec is the Syscalls table with its narrow-terminal policy
+// (fitTableColumns): the percentiles go first, then the family, bytes,
+// errors, rate and finally the mean latency; the name (shrinking to 8 cells)
+// and the count are required. Below 140 columns the compact column set
+// applies, whose natural row is 82 cells wide, so from 81 columns down the
+// policy takes over; the full set (125 cells) always fits from 140 on.
+func syscallTableSpec(width int) tableSpec {
+	spec := tableSpec{title: "Syscalls", columns: syscallColumns(width), flex: 0, flexMin: 8}
+	if width < 140 {
+		// Compact: 0 Syscall, 1 Family, 2 Count, 3 Rate/s, 4 Avg, 5 p95,
+		// 6 p99, 7 Bytes, 8 Errors.
+		spec.dropOrder = []int{6, 5, 1, 7, 8, 3, 4}
+		return spec
+	}
+	// Full: 0 Syscall, 1 Family, 2 Count, 3 Rate/s, 4 Avg, 5 Min, 6 Max,
+	// 7 p50, 8 p95, 9 p99, 10 Bytes, 11 Errors.
+	spec.dropOrder = []int{7, 5, 9, 8, 6, 1, 10, 11, 3, 4}
+	return spec
+}
+
+// syscallColumns returns the logical Syscalls columns at their natural widths:
+// the compact set below 140 columns, the full set from 140 on. Their indexes
+// are what the column selection and syscallSortKeyForColumn refer to.
 func syscallColumns(width int) []common.TableColumn {
 	if width < 140 {
 		return []common.TableColumn{
@@ -256,12 +282,12 @@ func syscallRowsFull(syscalls []statsengine.SyscallSnapshot) [][]string {
 			string(s.TraceID.Family()),
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
-			formatDurationNs(s.LatencyMeanNs),
-			formatDurationUintNs(s.LatencyMinNs),
-			formatDurationUintNs(s.LatencyMaxNs),
-			formatDurationUintNs(s.LatencyP50Ns),
-			formatDurationUintNs(s.LatencyP95Ns),
-			formatDurationUintNs(s.LatencyP99Ns),
+			latencyCell(s.NoLatency, s.LatencyMeanNs),
+			latencyCellUint(s.NoLatency, s.LatencyMinNs),
+			latencyCellUint(s.NoLatency, s.LatencyMaxNs),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP50Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP95Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
@@ -277,14 +303,36 @@ func syscallRowsCompact(syscalls []statsengine.SyscallSnapshot) [][]string {
 			string(s.TraceID.Family()),
 			strconv.FormatUint(s.Count, 10),
 			fmt.Sprintf("%.1f", s.RatePerSec),
-			formatDurationNs(s.LatencyMeanNs),
-			formatDurationUintNs(s.LatencyP95Ns),
-			formatDurationUintNs(s.LatencyP99Ns),
+			latencyCell(s.NoLatency, s.LatencyMeanNs),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP95Ns),
+			latencyCellUint(s.NoPercentileData(), s.LatencyP99Ns),
 			formatBytes(float64(s.Bytes)),
 			strconv.FormatUint(s.Errors, 10),
 		})
 	}
 	return rows
+}
+
+// noLatencyCell is what a latency cell shows for a row without a single
+// timed sample (statsengine SyscallSnapshot/ProcessSnapshot NoLatency), e.g.
+// exit_group, exit and rt_sigreturn, which never reach sys_exit: their 0s are
+// placeholders, not a measured 0ns. It is the Stream tab's "-" for the same
+// rows' latency cell.
+const noLatencyCell = "-"
+
+// latencyCell formats a latency figure of a dashboard row, or noLatencyCell
+// when the row has no timed sample (noLatency).
+func latencyCell(noLatency bool, v float64) string {
+	if noLatency {
+		return noLatencyCell
+	}
+	return formatDurationNs(v)
+}
+
+// latencyCellUint is latencyCell for the uint64 figures (min, max,
+// percentiles).
+func latencyCellUint(noLatency bool, v uint64) string {
+	return latencyCell(noLatency, float64(v))
 }
 
 func formatDurationUintNs(v uint64) string {
@@ -307,15 +355,26 @@ func formatDurationNs(v float64) string {
 	return (time.Duration(s * float64(time.Second))).String()
 }
 
-func syscallTableHeight(height int) int {
+// tableChromeRows is what a selectable table spends besides its data rows:
+// the column header line and the "[Row x/N ...]" hint line.
+const tableChromeRows = 2
+
+// defaultTableRows is the data-row count of a table rendered without a height
+// budget (height <= 0).
+const defaultTableRows = 10
+
+// tableRowBudget returns how many data rows a selectable table shows when its
+// body gets height rows: whatever is left once the header and hint lines are
+// paid for, at least one. The result is also the paging step's basis, so the
+// rows the user sees are exactly the rows PageUp/PageDown move over. A body
+// shorter than tableChromeRows+1 (never rendered; see minBodyRows) clips the
+// hint line instead of keeping a minimum row count that would outgrow the
+// terminal. height <= 0 means "no budget" and gives defaultTableRows.
+func tableRowBudget(height int) int {
 	if height <= 0 {
-		return 10
+		return defaultTableRows
 	}
-	h := height - 6
-	if h < 5 {
-		return 5
-	}
-	return h
+	return max(height-tableChromeRows, 1)
 }
 
 func clampOffset(offset, size int) int {

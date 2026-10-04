@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
+func TestFrameCoordToLineKeepsUniformBarMapping(t *testing.T) {
 	frames := []tuiFrame{
 		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
 		{Name: "a", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "a"},
@@ -16,38 +16,48 @@ func TestFrameCoordToTargetRowKeepsUniformBarMapping(t *testing.T) {
 	params := computeRenderParamsForAvailableRows(frames, availableRows, false)
 	want := []int{3, 3, 2, 2, 1, 1, 0, 0}
 	for dataRow, expected := range want {
-		if got := frameCoordToTargetRow(dataRow, params); got != expected {
-			t.Fatalf("dataRow=%d: got row=%d want=%d", dataRow, got, expected)
+		line, ok := frameCoordToLine(dataRow, params)
+		if !ok || line.row != expected || line.band != -1 {
+			t.Fatalf("dataRow=%d: got %+v ok=%v want row=%d band=-1", dataRow, line, ok, expected)
 		}
 	}
 }
 
-func TestFrameCoordToTargetRowHeightMetricMapsExpandedLeafBand(t *testing.T) {
+func TestFrameCoordToLineHeightMetricMapsExpandedLeafBand(t *testing.T) {
 	frames := []tuiFrame{
 		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
 		{Name: "leaf", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
 	}
 	availableRows := 6
 	params := computeRenderParamsForAvailableRows(frames, availableRows, true)
-	want := []int{1, 1, 1, 1, 1, 0}
+	// The leaf row fills dataRows 0..4 as bands 4..0 (top band first, as
+	// buildRenderRows emits them); the root row is a plain line (band -1).
+	want := []frameLine{
+		{row: 1, band: 4, leafBarHeight: 5}, {row: 1, band: 3, leafBarHeight: 5},
+		{row: 1, band: 2, leafBarHeight: 5}, {row: 1, band: 1, leafBarHeight: 5},
+		{row: 1, band: 0, leafBarHeight: 5}, {row: 0, band: -1},
+	}
 	for dataRow, expected := range want {
-		if got := frameCoordToTargetRow(dataRow, params); got != expected {
-			t.Fatalf("dataRow=%d: got row=%d want=%d", dataRow, got, expected)
+		if got, ok := frameCoordToLine(dataRow, params); !ok || got != expected {
+			t.Fatalf("dataRow=%d: got %+v ok=%v want %+v", dataRow, got, ok, expected)
 		}
 	}
 }
 
 func TestFrameIndexAtHeightMetricMapsClicksInExpandedLeafBand(t *testing.T) {
+	// The viewport must be at least minFlameWidth wide: narrower ones draw the
+	// "terminal too narrow" placeholder, under which nothing is hittable.
+	const width = minFlameWidth
 	frames := []tuiFrame{
-		{Name: "root", Row: 0, Col: 0, Width: 20, Path: "root"},
-		{Name: "leaf", Row: 1, Col: 0, Width: 20, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
+		{Name: "root", Row: 0, Col: 0, Width: width, Path: "root"},
+		{Name: "leaf", Row: 1, Col: 0, Width: width, Path: "root" + pathSeparator + "leaf", HeightTotal: 100},
 	}
 	for y := 1; y <= 5; y++ {
-		if got := frameIndexAt(frames, 10, y, 20, 9, false, true); got != 1 {
+		if got := frameIndexAt(frames, 10, y, width, 9, false, true); got != 1 {
 			t.Fatalf("y=%d: expected leaf frame index 1, got %d", y, got)
 		}
 	}
-	if got := frameIndexAt(frames, 10, 6, 20, 9, false, true); got != 0 {
+	if got := frameIndexAt(frames, 10, 6, width, 9, false, true); got != 0 {
 		t.Fatalf("y=6: expected root frame index 0, got %d", got)
 	}
 }

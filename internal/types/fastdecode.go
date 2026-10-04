@@ -20,30 +20,53 @@ const (
 	openEventCompactSize         = 316
 	openEventLegacyKernelSize    = 304
 	openEventLegacyCompactSize   = 300
-	openNameFixupEventSize       = 268
-	execEventSize                = 304
+	openNameFixupEventSize       = 272
+	openNameFixupEventLegacySize = 268
+	execEventSize                = 312
+	execEventLegacySize          = 304
 	nullEventSize                = 24
 	fdEventSize                  = 32
 	fdEventCompactSize           = 28
 	fdEventLegacyKernelSize      = 48
 	fdEventLegacyCompactSize     = 44
-	fdSizeEventSize              = 48
-	fdSizeEventCompactSize       = 44
-	retEventSize                 = 40
-	retEventSizeV1               = 36
-	nameEventSize                = 560
-	nameEventLegacySize          = 536
-	pathEventSize                = 312
-	pathEventCompactSize         = 312
-	pathEventV3KernelSize        = 304
-	pathEventV3CompactSize       = 300
-	pathEventLegacySize          = 280
-	fdPathEventSize              = 304
-	fdPathEventCompactSize       = 300
-	fcntlEventSize               = 40
-	dup3EventSize                = 32
-	openByHandleAtEventSize      = 32
-	openByHandleAtEventSizeV1    = 28
+	// fd_name_event is fd_event plus name_len and the name (task xz2); no
+	// padding, so the kernel and binary.Write agree on its size.
+	fdNameEventSize        = 36 + IOR_FD_NAME_LENGTH
+	fdNameEventNameOffset  = 36
+	fdSizeEventSize        = 48
+	fdSizeEventCompactSize = 44
+	retEventSize           = 40
+	retEventSizeV1         = 36
+	nameEventSize          = 560
+	nameEventLegacySize    = 536
+	pathEventSize          = 312
+	pathEventCompactSize   = 312
+	pathEventV3KernelSize  = 304
+	pathEventV3CompactSize = 300
+	pathEventLegacySize    = 280
+	fdPathEventSize        = 304
+	fdPathEventCompactSize = 300
+	fcntlEventSize         = 40
+	// dup3_event carries the old descriptor's file identity since task d23:
+	// 36 bytes of fields, 40 as the kernel reserves it (tail padding), 36 as
+	// binary.Write writes it. The legacy record is the 32-byte one without
+	// the word, which kernel and binary.Write shared.
+	dup3EventSize        = 40
+	dup3EventCompactSize = 36
+	dup3EventLegacySize  = 32
+	// open_by_handle_at_event carries the file handle since task k03. The
+	// legacy record is the flags-only layout: 32 bytes as the kernel wrote it
+	// (4 bytes of tail padding) and 28 as binary.Write did.
+	openByHandleAtEventSize   = 168
+	openByHandleAtEventLegacy = 32
+	openByHandleAtEventSizeV1 = 28
+	fileHandleEventSize       = 176
+	fileHandleEnterTimeOffset = 168
+	fileHandleFieldsOffset    = 28
+	// ring_fds_event (task js2): six header words, then the caller's
+	// io_uring_rsrc_update array, IOR_RING_FDS_BYTES bytes at offset 40.
+	ringFdsEventSize             = 296
+	ringFdsUpdatesOffset         = 40
 	socketEventSize              = 40
 	socketEventSizeV1            = 36
 	socketpairEventSize          = 56
@@ -79,12 +102,36 @@ const (
 	ptraceEventSize            = 48
 	perfOpenEventSize          = 56
 	// process_exec_event is not a syscall event; it is the control record
-	// emitted by sched:sched_process_exec. 4+4+8+4+4+16 = 40 bytes with no
-	// trailing padding, so kernel and binary.Write payloads share one size.
-	processExecEventSize = 40
+	// emitted by sched:sched_process_exec. 4+4+8+4+4+16+4(old_tid)+
+	// 4(exit_untraced) = 48 bytes; exit_untraced fills what used to be an
+	// explicit tail pad, so there is no trailing padding and kernel and
+	// binary.Write payloads share one size. The legacy 40-byte record
+	// (4+4+8+4+4+16) predates old_tid and exit_untraced.
+	processExecEventSize       = 48
+	processExecEventLegacySize = 40
 	// process_exit_event is the sibling control record emitted by
-	// sched:sched_process_exit. 4+4+8+4+4 = 24 bytes, no trailing padding.
-	processExitEventSize = 24
+	// sched:sched_process_exit. 4+4+8+4+4+4(group_dead)+4(reserved) = 32
+	// bytes; the explicit reserved word leaves no trailing padding, so kernel
+	// and binary.Write payloads share one size. The legacy 24-byte record
+	// (4+4+8+4+4) predates group_dead.
+	processExitEventSize       = 32
+	processExitEventLegacySize = 24
+	// task_newtask_event is the control record emitted by task:task_newtask.
+	// 4+4+8+4+4+16(comm)+8(clone_flags)+4(creator_pid)+4(reserved) = 56 bytes;
+	// clone_flags is naturally aligned at offset 40 and the explicit reserved
+	// word leaves no trailing padding, so kernel and binary.Write payloads share
+	// one size. The legacy 48-byte record (task fr2) predates creator_pid.
+	taskNewtaskEventSize       = 56
+	taskNewtaskEventLegacySize = 48
+	// task_rename_event is the control record emitted by task:task_rename.
+	// 4+4+8+4+4+16(comm) = 40 bytes with no padding, so kernel and
+	// binary.Write payloads share one size. It has no legacy layout: it is new.
+	taskRenameEventSize = 40
+	// syscall_restart_event is the control record of the restart-fold probes
+	// (internal/c/restart.c). 4+4+8+4+4+4(phase)+4(sa_restart) = 32 bytes
+	// with no padding, so kernel and binary.Write payloads share one size.
+	// It has no legacy layout: it is new.
+	syscallRestartEventSize = 32
 )
 
 const legacyPathDirfd = int32(-100) // AT_FDCWD
@@ -128,18 +175,32 @@ func NewOpenEventFast(raw []byte) *OpenEvent {
 }
 
 // NewOpenNameFixupEventFast decodes the compact control record that carries a
-// filename recovered at sys_exit. It also accepts the former open_event layout
-// so a pre-change IOR_BPF_OBJECT remains compatible. Unknown layouts return
-// nil rather than risk interpreting an unrelated offset as the tid or name.
+// path recovered at sys_exit. Three layouts are accepted, each from a BPF
+// object of a different age, and all read as a fixup for the FIRST path slot
+// except the current one:
+//
+//   - 272 bytes: the current record, with the path slot appended after the
+//     string (needed by the rename/link family's second name).
+//   - 268 bytes: the record before the slot existed. Its prefix is the current
+//     one, and it only ever carried the first (only) path.
+//   - the former open_event layouts: OPEN_NAME_FIXUP_EVENT originally reused
+//     struct open_event.
+//
+// Unknown layouts return nil rather than risk interpreting an unrelated offset
+// as the tid or name.
 func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
 	var tidOffset, filenameOffset int
+	slot := uint32(OPEN_NAME_FIXUP_SLOT_FIRST)
 	switch len(raw) {
 	case openNameFixupEventSize:
 		tidOffset = 8
 		filenameOffset = 12
+		slot = binary.LittleEndian.Uint32(raw[12+MAX_FILENAME_LENGTH:])
+	case openNameFixupEventLegacySize:
+		tidOffset = 8
+		filenameOffset = 12
 	case openEventLegacyKernelSize, openEventLegacyCompactSize:
-		// OPEN_NAME_FIXUP_EVENT originally reused struct open_event. Accept
-		// both its kernel sizeof and historical binary.Write layouts.
+		// Accept both its kernel sizeof and historical binary.Write layouts.
 		tidOffset = 20
 		filenameOffset = 28
 	default:
@@ -149,20 +210,21 @@ func NewOpenNameFixupEventFast(raw []byte) *OpenNameFixupEvent {
 	o.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
 	o.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
 	o.Tid = binary.LittleEndian.Uint32(raw[tidOffset : tidOffset+4])
+	o.Slot = slot
 	copy(o.Filename[:], raw[filenameOffset:filenameOffset+MAX_FILENAME_LENGTH])
 	return o
 }
 
-// NewExecEventFast decodes one exec ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant above. Returns nil for a
-// short payload.
+// NewExecEventFast decodes one exec ring-buffer payload in a single pass.
+// exec_event v1 (312 bytes, no padding, so kernel and binary.Write sizes
+// agree) carries the filename read status; the released legacy 304-byte
+// layout predates it and is decoded with PATH_READ_OK and schema version 0,
+// the only status the old userspace could assume. Any other size, and a v1
+// record with an unexpected schema version, fails closed with nil.
 func NewExecEventFast(raw []byte) *ExecEvent {
-	if len(raw) < execEventSize {
+	legacy := len(raw) == execEventLegacySize
+	if !legacy && len(raw) != execEventSize {
 		return nil
-	}
-	if len(raw) != execEventSize {
-		return NewExecEvent(raw)
 	}
 	e := poolOfExecEvents.Get().(*ExecEvent)
 	e.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -174,6 +236,16 @@ func NewExecEventFast(raw []byte) *ExecEvent {
 	e.Flags = int32(binary.LittleEndian.Uint32(raw[28:32]))
 	copy(e.Filename[:], raw[32:288])
 	copy(e.Comm[:], raw[288:304])
+	e.FilenameStatus = PATH_READ_OK
+	e.SchemaVersion = 0
+	if !legacy {
+		e.FilenameStatus = binary.LittleEndian.Uint32(raw[304:308])
+		e.SchemaVersion = binary.LittleEndian.Uint32(raw[308:312])
+		if e.SchemaVersion != EXEC_EVENT_SCHEMA_VERSION {
+			e.Recycle()
+			return nil
+		}
+	}
 	return e
 }
 
@@ -217,9 +289,23 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	// Bytes 28..32 of the 32-byte record are the file identity word (task
+	// 603). An object built before it left stale padding there, which only
+	// the event loop can know (it reads the word only in a run that switched
+	// the capture on, eventloop_fileident.go); the 28-byte compact form has no
+	// such bytes.
+	f.FileIdent = 0
+	if len(raw) == fdEventSize {
+		f.FileIdent = binary.LittleEndian.Uint32(raw[28:32])
+	}
+	// The wide legacy layout's bytes 28..32 are alignment padding of an older
+	// BPF object, not flags; only fd_size_event (NewFdSizeEventFast) carries
+	// them.
+	f.Flags = 0
 	f.Size = 0
 	f.SizeValid = 0
 	f.SchemaVersion = 0
+	f.clearName()
 	if current {
 		sizeOffset := 28
 		if len(raw) == fdEventLegacyKernelSize {
@@ -236,7 +322,10 @@ func NewFdEventFast(raw []byte) *FdEvent {
 	return f
 }
 
-// NewFdSizeEventFast decodes the requested-size variant used by fd xattrs.
+// NewFdSizeEventFast decodes the requested-size variant used by the fd xattr
+// reads and by recvfrom/recvmsg. The 48-byte kernel layout carries the recv
+// flags in the four bytes after fd; the 44-byte compact form has no room for
+// them and decodes with Flags 0.
 func NewFdSizeEventFast(raw []byte) *FdSizeEvent {
 	if len(raw) != fdSizeEventSize && len(raw) != fdSizeEventCompactSize {
 		return nil
@@ -249,8 +338,10 @@ func NewFdSizeEventFast(raw []byte) *FdSizeEvent {
 	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	offset := 28
+	f.Flags = 0
 	if len(raw) == fdSizeEventSize {
 		offset = 32
+		f.Flags = binary.LittleEndian.Uint32(raw[28:32])
 	}
 	f.Size = binary.LittleEndian.Uint64(raw[offset : offset+8])
 	f.SizeValid = binary.LittleEndian.Uint32(raw[offset+8 : offset+12])
@@ -281,6 +372,13 @@ func NewRetEventFast(raw []byte) *RetEvent {
 	r.Pid = binary.LittleEndian.Uint32(raw[24:28])
 	r.Tid = binary.LittleEndian.Uint32(raw[28:32])
 	r.RetType = binary.LittleEndian.Uint32(raw[32:36])
+	// The 40-byte record ends in the file identity word (task 603), which
+	// was tail padding before; see NewFdEventFast for who may trust it. The
+	// 36-byte form predates the word.
+	r.FileIdent = 0
+	if len(raw) == retEventSize {
+		r.FileIdent = binary.LittleEndian.Uint32(raw[36:40])
+	}
 	return r
 }
 
@@ -426,16 +524,21 @@ func NewFcntlEventFast(raw []byte) *FcntlEvent {
 	return f
 }
 
-// NewDup3EventFast decodes one dup3 ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// NewDup3EventFast decodes one dup3 ring-buffer payload in a single pass.
+// Three layouts are accepted: the current record (40 bytes as the kernel
+// wrote it, 36 as binary.Write did) and the 32-byte record of an object
+// built before task d23, which has no identity word and decodes with
+// FileIdent 0 ("unknown", which contradicts nothing). A longer payload falls
+// back to the slow binary.Read decoder, which reads the known prefix; a
+// shorter one, or one between the layouts, is rejected (nil).
 func NewDup3EventFast(raw []byte) *Dup3Event {
-	if len(raw) < dup3EventSize {
+	switch len(raw) {
+	case dup3EventSize, dup3EventCompactSize, dup3EventLegacySize:
+	default:
+		if len(raw) > dup3EventSize {
+			return NewDup3Event(raw)
+		}
 		return nil
-	}
-	if len(raw) != dup3EventSize {
-		return NewDup3Event(raw)
 	}
 	d := poolOfDup3Events.Get().(*Dup3Event)
 	d.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -445,19 +548,35 @@ func NewDup3EventFast(raw []byte) *Dup3Event {
 	d.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	d.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
 	d.Flags = int32(binary.LittleEndian.Uint32(raw[28:32]))
+	d.FileIdent = 0
+	if len(raw) != dup3EventLegacySize {
+		d.FileIdent = binary.LittleEndian.Uint32(raw[32:36])
+	}
 	return d
 }
 
-// NewOpenByHandleAtEventFast decodes one open_by_handle_at ring-buffer payload in a
-// single pass, falling back to the slow binary.Read decoder when the
-// payload size does not match the size constant(s) above. Returns nil
-// for a short payload.
+// NewOpenByHandleAtEventFast decodes one open_by_handle_at ring-buffer payload
+// in a single pass. Three layouts are accepted:
+//
+//   - 168 bytes or more: the current record, whose prefix is decoded (forward
+//     compatible with appended fields). It carries the file handle the call
+//     opens and the status of reading it.
+//   - 32 and 28 bytes: the record of an object that predates the handle (the
+//     kernel's sizeof and the binary.Write form). It decodes with
+//     FILE_HANDLE_NONE and no handle - by its length, never by the bytes at
+//     the status offset, which in the 32-byte record are unwritten padding.
+//     Decoding it keeps such an IOR_BPF_OBJECT override working, but not as
+//     it worked before: the event loop names a handle-less open from procfs
+//     alone, where before task k03 it used the thread's last
+//     name_to_handle_at (that stash is gone; see "What is still wrong" in
+//     internal/eventloop_handle.go).
+//
+// Every other size returns nil rather than being decoded at the wrong
+// offsets. The events are pooled, so every field is written on every path.
 func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
-	if len(raw) < openByHandleAtEventSizeV1 {
+	legacy := len(raw) == openByHandleAtEventLegacy || len(raw) == openByHandleAtEventSizeV1
+	if !legacy && len(raw) < openByHandleAtEventSize {
 		return nil
-	}
-	if len(raw) != openByHandleAtEventSize && len(raw) != openByHandleAtEventSizeV1 {
-		return NewOpenByHandleAtEvent(raw)
 	}
 	o := poolOfOpenByHandleAtEvents.Get().(*OpenByHandleAtEvent)
 	o.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -466,7 +585,166 @@ func NewOpenByHandleAtEventFast(raw []byte) *OpenByHandleAtEvent {
 	o.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	o.Tid = binary.LittleEndian.Uint32(raw[20:24])
 	o.Flags = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	if legacy {
+		o.HandleStatus, o.HandleBytes, o.HandleType = FILE_HANDLE_NONE, 0, 0
+		o.FHandle = [IOR_MAX_HANDLE_SZ]byte{}
+		return o
+	}
+	o.HandleStatus, o.HandleBytes, o.HandleType = decodeFileHandleFields(raw, &o.FHandle)
 	return o
+}
+
+// decodeFileHandleFields reads the handle fields open_by_handle_at_event and
+// file_handle_event share at the same offsets: status, byte count, type and
+// the IOR_MAX_HANDLE_SZ handle bytes. raw must hold a full record.
+func decodeFileHandleFields(raw []byte, fHandle *[IOR_MAX_HANDLE_SZ]byte) (status, handleBytes uint32, handleType int32) {
+	at := fileHandleFieldsOffset
+	status = binary.LittleEndian.Uint32(raw[at : at+4])
+	handleBytes = binary.LittleEndian.Uint32(raw[at+4 : at+8])
+	handleType = int32(binary.LittleEndian.Uint32(raw[at+8 : at+12]))
+	copy(fHandle[:], raw[at+12:at+12+IOR_MAX_HANDLE_SZ])
+	return status, handleBytes, handleType
+}
+
+// NewFileHandleEventFast decodes the control record that carries the handle a
+// successful name_to_handle_at returned. There is one layout, 176 bytes: the
+// handle fields at the offsets open_by_handle_at_event has them, then the
+// time of the call's enter. A longer payload decodes its prefix and a shorter
+// one returns nil - no released object ever emitted this record without the
+// enter time, and without it the record cannot be tied to its enter.
+func NewFileHandleEventFast(raw []byte) *FileHandleEvent {
+	if len(raw) < fileHandleEventSize {
+		return nil
+	}
+	f := poolOfFileHandleEvents.Get().(*FileHandleEvent)
+	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	f.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	f.Time = binary.LittleEndian.Uint64(raw[8:16])
+	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	f.Reserved = binary.LittleEndian.Uint32(raw[24:28])
+	f.HandleStatus, f.HandleBytes, f.HandleType = decodeFileHandleFields(raw, &f.FHandle)
+	at := fileHandleEnterTimeOffset
+	f.EnterTime = binary.LittleEndian.Uint64(raw[at : at+8])
+	return f
+}
+
+// NewRingFdsEventFast decodes the control record that carries the
+// registered-ring table entries an io_uring_register set or released. There
+// is one layout, 296 bytes. A longer payload decodes its prefix and a shorter
+// one returns nil: a record without its whole array says nothing about the
+// table that userspace could apply.
+func NewRingFdsEventFast(raw []byte) *RingFdsEvent {
+	if len(raw) < ringFdsEventSize {
+		return nil
+	}
+	r := poolOfRingFdsEvents.Get().(*RingFdsEvent)
+	r.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	r.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	r.Time = binary.LittleEndian.Uint64(raw[8:16])
+	r.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	r.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	r.Opcode = binary.LittleEndian.Uint32(raw[24:28])
+	r.Status = binary.LittleEndian.Uint32(raw[28:32])
+	r.Count = binary.LittleEndian.Uint32(raw[32:36])
+	r.Reserved = binary.LittleEndian.Uint32(raw[36:40])
+	copy(r.Updates[:], raw[ringFdsUpdatesOffset:ringFdsEventSize])
+	return r
+}
+
+// RingFdUpdate is one element of a RingFdsEvent: the registered-ring index
+// and, for a registration, the ring descriptor (struct io_uring_rsrc_update:
+// offset, resv, data).
+type RingFdUpdate struct {
+	Index uint32
+	Fd    uint64
+}
+
+// Update returns element i of the record's array. It reports false for an
+// index at or past Count, or past the array: a record whose count exceeds
+// what it can hold is malformed, and its surplus is not read.
+func (r *RingFdsEvent) Update(i int) (RingFdUpdate, bool) {
+	if i < 0 || uint32(i) >= r.Count || i >= IOR_RING_FDS_MAX {
+		return RingFdUpdate{}, false
+	}
+	at := i * IOR_RING_FD_UPDATE_SIZE
+	return RingFdUpdate{
+		Index: binary.LittleEndian.Uint32(r.Updates[at : at+4]),
+		Fd:    binary.LittleEndian.Uint64(r.Updates[at+8 : at+16]),
+	}, true
+}
+
+// clearName takes the name of an fd_name_event off a pooled FdEvent that
+// last carried one. Almost none did, so the hot records pay one comparison
+// (of the last word of the struct's first cache line), not a 68-byte clear.
+func (f *FdEvent) clearName() {
+	if f.NameLen != 0 {
+		f.NameLen = 0
+		f.Name = [IOR_FD_NAME_LENGTH]byte{}
+	}
+}
+
+// NewFdNameEventFast decodes an fd_name_event, the record close sends in
+// place of its fd_event when the file it releases has a last path component
+// (internal/c/fdname.c, task xz2), into an FdEvent: the first 32 bytes are
+// fd_event's, and the pair is a close like any other. NameLen and Name are
+// the record's; FdEvent.LeafName reads them. There is one layout, 104 bytes;
+// any other size returns nil.
+func NewFdNameEventFast(raw []byte) *FdEvent {
+	if len(raw) != fdNameEventSize {
+		return nil
+	}
+	f := poolOfFdEvents.Get().(*FdEvent)
+	f.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	f.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	f.Time = binary.LittleEndian.Uint64(raw[8:16])
+	f.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	f.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	f.Fd = int32(binary.LittleEndian.Uint32(raw[24:28]))
+	f.FileIdent = binary.LittleEndian.Uint32(raw[28:32])
+	f.Flags, f.Size, f.SizeValid, f.SchemaVersion = 0, 0, 0, 0
+	f.NameLen = binary.LittleEndian.Uint32(raw[32:36])
+	copy(f.Name[:], raw[fdNameEventNameOffset:])
+	return f
+}
+
+// LeafName returns the last path component an fd_name_event carried for the
+// file behind the descriptor, and whether the kernel program had to cut it.
+// "" when the event carries none: every record but fd_name_event, and one
+// whose name could not be read (NameLen 0). The text stops at the first NUL,
+// which can come earlier than NameLen says (a close that raced a rename,
+// internal/c/fdname.c); the bytes behind it are stale ring-buffer memory.
+//
+// A name was cut when NameLen, the component's real length, is more than
+// the field holds and the text fills the field up to its terminator. The
+// length alone does not say so: in the rename race the length can be the
+// long name's while the bytes are the short name's, which end at their own
+// NUL, and a short name is not to be shown as the beginning of a longer one.
+func (f *FdEvent) LeafName() (name string, cut bool) {
+	if f.NameLen == 0 {
+		return "", false
+	}
+	name = StringValue(f.Name[:])
+	return name, f.NameLen >= IOR_FD_NAME_LENGTH && len(name) == IOR_FD_NAME_LENGTH-1
+}
+
+// AsFdEvent returns the FdEvent the event loop handles an fd_size_event as:
+// the record's fields, no file identity (the record has no such word) and no
+// name. The FdEvent comes from the pool its Recycle returns it to, like
+// every other decoded fd record. It used to be allocated per record, which
+// went unnoticed while the struct fitted the 64-byte size class; with the
+// name of fd_name_event (task xz2) it is 128 bytes, and every recvfrom,
+// recvmsg, fgetxattr and flistxattr row would have paid for a field only a
+// close fills.
+func (f *FdSizeEvent) AsFdEvent() *FdEvent {
+	out := poolOfFdEvents.Get().(*FdEvent)
+	out.EventType, out.TraceId, out.Time = f.EventType, f.TraceId, f.Time
+	out.Pid, out.Tid, out.Fd = f.Pid, f.Tid, f.Fd
+	out.FileIdent = 0
+	out.Flags, out.Size = f.Flags, f.Size
+	out.SizeValid, out.SchemaVersion = f.SizeValid, f.SchemaVersion
+	out.clearName()
+	return out
 }
 
 // NewSocketEventFast decodes one socket ring-buffer payload in a
@@ -895,15 +1173,100 @@ func NewPerfOpenEventFast(raw []byte) *PerfOpenEvent {
 }
 
 // NewProcessExecEventFast decodes the sched:sched_process_exec control record
-// carrying the post-exec task comm.
+// carrying the post-exec task comm, the caller's pre-exec tid (OldTid) and
+// whether the execve's exit is untraced (ExitUntraced, -tid <non-leader>).
+//
+// Accepted sizes: the current 48-byte layout, and anything longer (its
+// prefix is decoded, so a newer object that appends fields stays readable);
+// and exactly the legacy 40-byte record of a pre-old_tid IOR_BPF_OBJECT
+// override. That one is decoded with OldTid 0 and ExitUntraced 0, i.e. "tid
+// kept, exit still coming": rekeyExecCaller skips OldTid 0, and an old object
+// neither re-keyed a non-leader exec's enter nor suppressed an execve exit,
+// so this is exactly what that userspace assumed. Every other size fails
+// closed with nil rather than decoding fields at wrong offsets.
 func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
-	if len(raw) < processExecEventSize {
+	legacy := len(raw) == processExecEventLegacySize
+	if !legacy && len(raw) < processExecEventSize {
 		return nil
 	}
-	if len(raw) != processExecEventSize {
-		return NewProcessExecEvent(raw)
-	}
 	p := poolOfProcessExecEvents.Get().(*ProcessExecEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	copy(p.Comm[:], raw[24:40])
+	p.OldTid = 0
+	p.ExitUntraced = 0
+	if !legacy {
+		p.OldTid = binary.LittleEndian.Uint32(raw[40:44])
+		p.ExitUntraced = binary.LittleEndian.Uint32(raw[44:48])
+	}
+	return p
+}
+
+// TaskNewtaskChildOutOfScope is the ScopeFlags bit of a task_newtask record
+// whose child the PID/TID filter excludes (IOR_NEWTASK_CHILD_OUT_OF_SCOPE in
+// internal/c/exec.c): a CLONE_FILES process child of an in-scope creator. The
+// value is a hand-kept copy of the define; TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine
+// fails when the two drift apart.
+const TaskNewtaskChildOutOfScope = 0x1
+
+// ChildOutOfScope reports whether the record describes a child the trace does
+// not follow: none of its syscalls is ever reported, so the record exists only
+// to say that the creator's descriptor table is now also written by a task
+// ior cannot see. A record of an older object carries 0 here: "in scope".
+func (t *TaskNewtaskEvent) ChildOutOfScope() bool {
+	return t.ScopeFlags&TaskNewtaskChildOutOfScope != 0
+}
+
+// NewTaskNewtaskEventFast decodes the task:task_newtask control record: the
+// child's tgid (Pid) and tid, the comm it inherited, the raw clone flags, the
+// creator's tgid (CreatorPid) and the scope flags.
+//
+// Accepted sizes: the current 56-byte layout, anything longer (its prefix is
+// decoded, so a newer object that appends fields stays readable) and exactly
+// the legacy 48-byte record of a pre-creator_pid IOR_BPF_OBJECT override,
+// which decodes with CreatorPid 0: "creator unknown", so the fd-table
+// inheritance it feeds is skipped (a tgid is never 0 for a userspace task).
+// Every other size fails closed with nil rather than decoding fields at wrong
+// offsets.
+func NewTaskNewtaskEventFast(raw []byte) *TaskNewtaskEvent {
+	legacy := len(raw) == taskNewtaskEventLegacySize
+	if !legacy && len(raw) < taskNewtaskEventSize {
+		return nil
+	}
+	p := poolOfTaskNewtaskEvents.Get().(*TaskNewtaskEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	copy(p.Comm[:], raw[24:40])
+	p.CloneFlags = binary.LittleEndian.Uint64(raw[40:48])
+	// Every pooled decode assigns both fields, so a recycled event never leaks
+	// the previous record's creator or scope flags into a legacy one.
+	p.CreatorPid = 0
+	p.ScopeFlags = 0
+	if !legacy {
+		p.CreatorPid = binary.LittleEndian.Uint32(raw[48:52])
+		p.ScopeFlags = binary.LittleEndian.Uint32(raw[52:56])
+	}
+	return p
+}
+
+// NewTaskRenameEventFast decodes the task:task_rename control record: the
+// renamed task's tgid (Pid) and tid and the name it now has.
+//
+// Accepted sizes: the current 40-byte layout and anything longer (its prefix is
+// decoded, so a newer object that appends fields stays readable). Every
+// shorter size fails closed with nil rather than decoding fields at wrong
+// offsets.
+func NewTaskRenameEventFast(raw []byte) *TaskRenameEvent {
+	if len(raw) < taskRenameEventSize {
+		return nil
+	}
+	p := poolOfTaskRenameEvents.Get().(*TaskRenameEvent)
 	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
 	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
 	p.Time = binary.LittleEndian.Uint64(raw[8:16])
@@ -913,14 +1276,55 @@ func NewProcessExecEventFast(raw []byte) *ProcessExecEvent {
 	return p
 }
 
-// NewProcessExitEventFast decodes the sched:sched_process_exit control record
-// identifying the tgid whose fd-table entries userspace must evict.
-func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
-	if len(raw) < processExitEventSize {
+// NewSyscallRestartEventFast decodes the restart-fold control record: the
+// interrupted task's tgid (Pid) and tid, the phase (RESTART_PHASE_HANDLER or
+// RESTART_PHASE_RESUME) and, for a handler record, whether the handler was
+// installed with SA_RESTART.
+//
+// Accepted sizes: the current 32-byte layout and anything longer (its prefix
+// is decoded, so a newer object that appends fields stays readable). Every
+// shorter size fails closed with nil rather than decoding fields at wrong
+// offsets: a misread phase could license a fold the kernel never proved.
+func NewSyscallRestartEventFast(raw []byte) *SyscallRestartEvent {
+	if len(raw) < syscallRestartEventSize {
 		return nil
 	}
-	if len(raw) != processExitEventSize {
-		return NewProcessExitEvent(raw)
+	p := poolOfSyscallRestartEvents.Get().(*SyscallRestartEvent)
+	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
+	p.TraceId = TraceId(binary.LittleEndian.Uint32(raw[4:8]))
+	p.Time = binary.LittleEndian.Uint64(raw[8:16])
+	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
+	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.Phase = binary.LittleEndian.Uint32(raw[24:28])
+	p.SaRestart = binary.LittleEndian.Uint32(raw[28:32])
+	return p
+}
+
+// processExitGroupDeadUnknown is the GroupDead value NewProcessExitEventFast
+// stores for a legacy record that carries no group_dead word. The kernel only
+// ever writes 0 or 1 (ior_exit_group_dead), so the all-ones value cannot be
+// confused with a real flag. It lives in the wire field rather than in a
+// Go-only one because ProcessExitEvent is generated from types.h and read and
+// written with encoding/binary, which would serialise any extra field; every
+// pooled decode assigns GroupDead, so the marker can never leak from a
+// recycled event into the next record.
+const processExitGroupDeadUnknown = ^uint32(0)
+
+// NewProcessExitEventFast decodes the sched:sched_process_exit control record
+// identifying the exited task and, via GroupDead, whether its whole process
+// (tgid) died so userspace may evict the process's fd-table entries.
+//
+// Accepted sizes: the current 32-byte layout, and anything longer (its
+// prefix is decoded, so a newer object that appends fields stays readable);
+// and exactly the legacy 24-byte record of a pre-group_dead IOR_BPF_OBJECT
+// override. That record cannot tell a thread exit from a process exit, so it
+// is decoded as "group-dead unknown" (IsGroupDeadKnown false, ExitFlags 0);
+// see handleProcessExitEvent for how that is consumed. Every other size fails
+// closed with nil rather than decoding fields at wrong offsets.
+func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
+	legacy := len(raw) == processExitEventLegacySize
+	if !legacy && len(raw) < processExitEventSize {
+		return nil
 	}
 	p := poolOfProcessExitEvents.Get().(*ProcessExitEvent)
 	p.EventType = EventType(binary.LittleEndian.Uint32(raw[0:4]))
@@ -928,5 +1332,48 @@ func NewProcessExitEventFast(raw []byte) *ProcessExitEvent {
 	p.Time = binary.LittleEndian.Uint64(raw[8:16])
 	p.Pid = binary.LittleEndian.Uint32(raw[16:20])
 	p.Tid = binary.LittleEndian.Uint32(raw[20:24])
+	p.GroupDead = processExitGroupDeadUnknown
+	p.ExitFlags = 0
+	if !legacy {
+		p.GroupDead = binary.LittleEndian.Uint32(raw[24:28])
+		p.ExitFlags = binary.LittleEndian.Uint32(raw[28:32])
+	}
 	return p
+}
+
+// ProcessExitTidInherited is the ExitFlags bit of a sched_process_exit record
+// whose task is a thread-group leader killed by another thread's execve
+// (IOR_EXIT_TID_INHERITED in internal/c/exec.c): the exec'ing thread takes
+// over the leader's tid, so the tid lives on in the new program. The value is
+// a hand-kept copy of the define; TestProcessExitTidInheritedMatchesTheBPFDefine
+// fails when the two drift apart.
+const ProcessExitTidInherited = 0x1
+
+// TidInherited reports whether the exited task's tid lives on in the thread
+// that exec'd (see ProcessExitTidInherited): this record ends the old
+// leader's task, not the tid. A record of an older object (or the legacy
+// layout) carries 0 here: "the tid is gone with the task".
+func (p *ProcessExitEvent) TidInherited() bool {
+	return p.ExitFlags&ProcessExitTidInherited != 0
+}
+
+// IsGroupDead reports whether the record says the exited task was the last
+// live thread of its thread group, i.e. that process Pid as a whole is gone.
+// Per-thread exits report false: their tgid still owns its descriptors. A
+// legacy record whose flag is unknown also reports false, so callers that
+// must act on a possible process death check IsGroupDeadKnown as well. Kept
+// as a method so consumers read the flag without depending on its wire
+// encoding. The event loop uses it to forward group-dead exits to
+// statsengine.Engine.RetireProcess (see retireStatsProcess in
+// internal/eventloop_processexit.go), so a recycled PID starts a fresh stats
+// row.
+func (p *ProcessExitEvent) IsGroupDead() bool {
+	return p.GroupDead != 0 && p.IsGroupDeadKnown()
+}
+
+// IsGroupDeadKnown reports whether the record carried a group_dead flag at
+// all. It is false only for the legacy 24-byte record of a pre-group_dead
+// IOR_BPF_OBJECT override, where any exit may have ended the process.
+func (p *ProcessExitEvent) IsGroupDeadKnown() bool {
+	return p.GroupDead != processExitGroupDeadUnknown
 }

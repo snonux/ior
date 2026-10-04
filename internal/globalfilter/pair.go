@@ -113,5 +113,12 @@ func (p pairCandidate) ReturnValue() int64 {
 }
 
 func (p pairCandidate) ErrorValue() bool {
-	return event.IsErrnoRet(p.ReturnValue())
+	return event.IsErrorRet(p.ReturnValue())
+}
+
+// NoReturnValue reports a noreturn pair (event.Pair.NoReturn): its Duration
+// and the absent ret of its synthetic exit are not an outcome, so the outcome
+// predicates reject it (Filter.matchesOutcome).
+func (p pairCandidate) NoReturnValue() bool {
+	return p.pair != nil && p.pair.NoReturn
 }

@@ -1,0 +1,106 @@
+package file
+
+// Open file descriptions (task nr2).
+//
+// Linux separates a descriptor from the open file description it refers to.
+// dup(2), dup2, dup3, fcntl(F_DUPFD*) and fork all create a second descriptor
+// for the *same* description, so the file offset and the status flags (the
+// access mode, O_APPEND, O_NONBLOCK, ...) are one object seen through both
+// numbers: fcntl(dup, F_SETFL, O_APPEND) turns O_APPEND on for the original
+// too. FD_CLOEXEC is the exception, it is stored with the descriptor. A second
+// open(2) of the same path makes a new description that shares nothing.
+//
+// FdFile used to carry its whole flag word by value and Dup copied it, so a
+// F_SETFL on one descriptor updated one table entry and left every duplicate
+// reporting the old word (live evidence: a write on the original showed
+// O_WRONLY|O_CREAT|O_TRUNC, the word open() was called with, while the kernel's
+// F_GETFL returned 0106001, and a later dup of the original inherited the stale
+// word even after F_GETFL had refreshed it).
+// openFileDesc is the shared object; Dup is the one operation that shares it.
+
+// openFileDesc is the part of a descriptor's state that all duplicates of one
+// open file description share: the status word as open(2) reported it and
+// F_SETFL has updated it since. That is the access mode, the status flags and,
+// until an F_GETFL refreshes the word, the open-only flags that were part of
+// open()'s arguments (O_CREAT, O_TRUNC, O_EXCL, O_NOCTTY). The kernel itself
+// drops those four from the description's f_flags, so its F_GETFL answer
+// (e.g. 0106001 after a F_SETFL on an O_WRONLY|O_CREAT|O_TRUNC open) lacks
+// them; the model cannot see the kernel's word before the first F_GETFL, keeps
+// what open() was called with, and replaces the whole word with the kernel's
+// the moment an F_GETFL (SetStatusFlags) reports it, for every duplicate. The
+// word never carries O_CLOEXEC, which belongs to the descriptor
+// (FdFile.closeOnExec). status is unknownFlag until procfs, an open() event or
+// F_GETFL supplies it.
+//
+// Only the single event-loop goroutine mutates it; a row that leaves that
+// goroutine gets a Detach()ed copy, which owns a private openFileDesc.
+type openFileDesc struct {
+	status Flags
+}
+
+// newFdFile allocates an FdFile that owns a new open file description with an
+// unknown status word; the caller sets the word. The description is the
+// FdFile's own field (FdFile.own), so creating a descriptor (one per traced
+// open and one per emitted row, through Detach) costs one allocation, not two.
+func newFdFile(fd int32, name string) *FdFile {
+	f := &FdFile{fd: fd, name: name, own: openFileDesc{status: unknownFlag}}
+	f.desc = &f.own
+	return f
+}
+
+// description returns the open file description f refers to. A zero FdFile
+// (never built by a constructor) gets a fresh one holding O_RDONLY, which is
+// what its zero flag word has always meant.
+func (f *FdFile) description() *openFileDesc {
+	if f.desc == nil {
+		f.desc = &openFileDesc{}
+	}
+	return f.desc
+}
+
+// status is the shared status word, without FD_CLOEXEC.
+func (f *FdFile) status() Flags {
+	if f.desc == nil {
+		return 0
+	}
+	return f.desc.status
+}
+
+// Dup models a descriptor created by dup, dup2, dup3, fcntl(F_DUPFD*) or fork:
+// a new FdFile on descriptor number fd that refers to the same open file
+// description as f. The status word is shared, so a later F_SETFL/F_GETFL
+// through either descriptor is seen through both; the name is copied, and with
+// it the mark that says the name was read from procfs rather than given by a
+// traced call (fromProcFS): a copy of a lagging answer is that lagging answer
+// under another number, and a handle taken through the duplicate, or through
+// a forked child's copy, must be refused a name like one taken through the
+// source (takenHandleName in internal/eventloop_handle.go). FD_CLOEXEC is
+// copied as a starting value only and is the caller's to set on the new
+// descriptor (dup/dup2/F_DUPFD clear it, dup3(O_CLOEXEC) and F_DUPFD_CLOEXEC
+// set it, a fork keeps it): the two descriptors never share it.
+func (f *FdFile) Dup(fd int32) *FdFile {
+	dup := *f
+	dup.fd = fd
+	dup.desc = f.description()
+	// A new binding of the number: when it was made is the caller's to say
+	// (fdfile_ident.go, BoundAt).
+	dup.boundNs = 0
+	return &dup
+}
+
+// Detach returns an independent snapshot of f on the same descriptor number: it
+// shares nothing with f, so what f's description or descriptor goes through
+// later (a F_SETFL through a duplicate, a close-on-exec change) cannot reach
+// it. A pair that is emitted (printed, aggregated, kept for the TUI) must
+// report the descriptor as it was when its syscall returned, which is why the
+// event loop detaches the file of every pair it freezes (and of a pending exec
+// target). Everything else is copied as it is, the procfs mark of the name
+// (fromProcFS) included: the snapshot has the same name, so where that name
+// came from is as true of it. No caller asks a snapshot for the mark today.
+// Use Dup, not Detach, to model a second descriptor.
+func (f *FdFile) Detach() *FdFile {
+	snapshot := *f
+	snapshot.own = openFileDesc{status: f.status()}
+	snapshot.desc = &snapshot.own
+	return &snapshot
+}

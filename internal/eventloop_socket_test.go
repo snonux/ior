@@ -290,6 +290,71 @@ func TestHandleAcceptExitTracksAcceptedFd(t *testing.T) {
 	verifySocketDescriptorFlags(t, el, 91, 77, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC)
 }
 
+// A listener named by procfs ("socket:[inode]") must not lend that identity
+// to the connections it accepts: each connection is a different socket, and
+// the copied inode made all their traffic look like the listener's.
+func TestHandleAcceptExitDoesNotCopyListenerProcfsIdentity(t *testing.T) {
+	for name, listenerName := range map[string]string{
+		"procfs inode":    "socket:[75019555]",
+		"empty name":      "",
+		"non socket name": "/tmp/not-a-socket",
+		"bare prefix":     "socket:",
+	} {
+		t.Run(name, func(t *testing.T) {
+			el := mustNewEventLoop(t, eventLoopConfig{})
+			el.fdState().set(11, 91, file.NewFd(11, listenerName, -1))
+			enter := &types.AcceptEvent{
+				EventType: types.ENTER_ACCEPT_EVENT, TraceId: types.SYS_ENTER_ACCEPT,
+				Pid: 91, Tid: 92, Fd: 11,
+			}
+			exit := &types.AcceptEvent{EventType: types.EXIT_ACCEPT_EVENT, TraceId: types.SYS_EXIT_ACCEPT, Ret: 77}
+			ep := &event.Pair{EnterEv: enter, ExitEv: exit}
+
+			if ok := el.handleAcceptExit(ep, enter); !ok {
+				t.Fatal("handleAcceptExit returned false")
+			}
+			verifyFileDescriptor(t, el, 91, 77, "socket:accepted")
+			if got := ep.File.Name(); got != "socket:accepted" {
+				t.Fatalf("accept row file = %q, want socket:accepted", got)
+			}
+		})
+	}
+}
+
+// Two connections accepted from one procfs-named listener stay unnamed after
+// it, and the listener keeps its own identity.
+func TestHandleAcceptExitKeepsListenerIdentityApart(t *testing.T) {
+	el := mustNewEventLoop(t, eventLoopConfig{})
+	el.fdState().set(11, 91, file.NewFd(11, "socket:[75019555]", -1))
+	for _, conn := range []int64{77, 78} {
+		enter := &types.AcceptEvent{EventType: types.ENTER_ACCEPT_EVENT, TraceId: types.SYS_ENTER_ACCEPT, Pid: 91, Tid: 92, Fd: 11}
+		exit := &types.AcceptEvent{EventType: types.EXIT_ACCEPT_EVENT, TraceId: types.SYS_EXIT_ACCEPT, Ret: conn}
+		if ok := el.handleAcceptExit(&event.Pair{EnterEv: enter, ExitEv: exit}, enter); !ok {
+			t.Fatal("handleAcceptExit returned false")
+		}
+		verifyFileDescriptor(t, el, 91, int32(conn), "socket:accepted")
+	}
+	verifyFileDescriptor(t, el, 91, 11, "socket:[75019555]")
+}
+
+func TestIsSyntheticSocketName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"socket:1:1:0":      true,
+		"socket:10:2:17":    true,
+		"socket:accepted":   true,
+		"socket:[75019555]": false,
+		"socket:[":          false,
+		"socket:":           false,
+		"":                  false,
+		"pipe:[5]":          false,
+		"/etc/passwd":       false,
+	} {
+		if got := isSyntheticSocketName(name); got != want {
+			t.Errorf("isSyntheticSocketName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestHandleAcceptExitDoesNotInheritListeningFlags(t *testing.T) {
 	el := mustNewEventLoop(t, eventLoopConfig{})
 	el.fdState().set(11, 91, file.NewFd(11, "socket:1:1:0", syscall.O_NONBLOCK|syscall.O_CLOEXEC))

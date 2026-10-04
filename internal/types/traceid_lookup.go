@@ -44,3 +44,27 @@ func initEnterTraceIDs() {
 		}
 	}
 }
+
+// traceIdByString is the inverse of traceId2String ("enter_openat" -> ID). It
+// is built at package initialisation (Go orders it after traceId2String), so
+// no locking is needed. The tracepoint string, unlike the numeric ID, is stable
+// across ior releases and kernels: the IDs are the generation host's kernel
+// event IDs and change whenever the tracepoint set does, which is why
+// persisted data must carry the string and resolve it back with this lookup.
+var traceIdByString = invertTraceIdStrings()
+
+func invertTraceIdStrings() map[string]TraceId {
+	m := make(map[string]TraceId, len(traceId2String))
+	for id, name := range traceId2String {
+		m[name] = id
+	}
+	return m
+}
+
+// TraceIDByString resolves a full tracepoint string as returned by
+// TraceId.String (for example "enter_openat" or "exit_openat") to the trace ID
+// this build uses for it.
+func TraceIDByString(name string) (TraceId, bool) {
+	id, ok := traceIdByString[name]
+	return id, ok
+}

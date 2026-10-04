@@ -8,9 +8,9 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
+	common "ior/internal/tui/common"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/harmonica"
@@ -30,6 +30,25 @@ const (
 	bubbleDamping         = 1.0
 	bubbleSpringEpsilon   = 0.01
 	bubbleMaxItems        = 28
+
+	// bubbleDriftSeconds is how long the ambient drift wobble keeps running
+	// after the chart last moved for a real reason (new data, a resize). The
+	// wobble is cosmetic; running it forever kept the 30fps tick chain, and
+	// with it a full re-render, alive on a chart that had nothing to show
+	// (34-78% CPU idle). It now fades out over bubbleDriftFadeSeconds, the
+	// springs settle, and the chain ends until the next data change.
+	// Every real change resets it to the full duration, so data that
+	// reshuffles the bubbles on each stats tick keeps the chain running:
+	// only quiet workloads settle (the cost per frame is what got cheaper).
+	bubbleDriftSeconds     = 6.0
+	bubbleDriftFadeSeconds = 2.0
+
+	// bubbleRetargetEpsilon is the smallest change of a bubble's anchor or
+	// target radius that counts as new data. Smaller changes keep the old
+	// anchor (see inheritPrevNodeState), so a stream of sub-cell wiggles from
+	// live counters neither restarts the animation nor is lost: it
+	// accumulates against the kept anchor until it crosses the threshold.
+	bubbleRetargetEpsilon = 0.02
 )
 
 type bubbleDatum struct {
@@ -39,6 +58,10 @@ type bubbleDatum struct {
 	Bytes    uint64
 	Duration uint64
 	Detail   string
+	// row is the index of the source row the datum was built from, so the
+	// builders can format Detail for the datums that survive the cut only
+	// (rankBubbleData).
+	row int
 }
 
 type bubbleNode struct {
@@ -74,12 +97,6 @@ type bubbleNode struct {
 	driftAmpY  float64
 }
 
-type bubbleCell struct {
-	char      rune
-	colorSlot int
-	bold      bool
-}
-
 type bubbleChart struct {
 	nodes      []bubbleNode
 	selected   int
@@ -90,6 +107,13 @@ type bubbleChart struct {
 	statusHint string
 	isDark     bool
 	driftTime  float64
+	// driftRemaining is the seconds of drift wobble left (see
+	// bubbleDriftSeconds). While it is positive the chart keeps animating;
+	// driftTime only advances during that time, so a resumed wobble
+	// continues where it stopped instead of jumping.
+	driftRemaining float64
+	// frame caches the last rendered view (see bubbleFrameCache).
+	frame bubbleFrameCache
 }
 
 func newBubbleChart() bubbleChart {
@@ -158,28 +182,34 @@ func (c *bubbleChart) SetDarkMode(isDark bool) {
 
 // SetData recomputes bubble targets from data and merges them with existing
 // animation state so that live updates animate smoothly. Returns true when
-// at least one node has motion and a Tick should be scheduled.
+// the chart is animating and a Tick should be scheduled: either the springs
+// have not settled or the drift wobble is still running. A data update that
+// moves no bubble (the common idle case) returns false once settled, so the
+// tick chain stays stopped.
 func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 	targets := buildBubbleTargets(data, c.Metric(), c.width, c.height)
 
-	selectedID := ""
-	if c.selected >= 0 && c.selected < len(c.nodes) {
-		selectedID = c.nodes[c.selected].ID
-	}
+	selectedID := c.selectedID()
 
 	existing := make(map[string]bubbleNode, len(c.nodes))
 	for _, node := range c.nodes {
 		existing[node.ID] = node
 	}
 
-	c.nodes = c.mergeTargetNodes(targets, existing)
+	var retargeted bool
+	c.nodes, retargeted = c.mergeTargetNodes(targets, existing)
 	if len(c.nodes) == 0 {
 		c.selected = 0
 		c.animating = false
+		c.driftRemaining = 0
 		return false
 	}
+	// A vanished bubble is a change too, though no remaining node shows it.
+	if retargeted || len(existing) != len(c.nodes) {
+		c.driftRemaining = bubbleDriftSeconds
+	}
 	c.selected = c.selectIndexByID(selectedID)
-	c.animating = c.hasMotion()
+	c.animating = c.driftRemaining > 0 || c.hasMotion()
 	if c.animating {
 		c.Tick(0)
 	}
@@ -187,8 +217,11 @@ func (c *bubbleChart) SetData(data []bubbleDatum) bool {
 }
 
 // mergeTargetNodes converts target positions into live nodes, carrying over
-// spring velocities and drift state from existing nodes where available.
-func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string]bubbleNode) []bubbleNode {
+// spring velocities and drift state from existing nodes where available. It
+// also reports whether any bubble is new or was moved or resized by more than
+// bubbleRetargetEpsilon, i.e. whether the animation needs to (re)start.
+func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string]bubbleNode) ([]bubbleNode, bool) {
+	retargeted := false
 	next := make([]bubbleNode, 0, len(targets))
 	for _, target := range targets {
 		node := bubbleNode{
@@ -208,22 +241,35 @@ func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string
 			ySpring:      harmonica.NewSpring(harmonica.FPS(bubbleFPS), bubbleAngularVelocity, bubbleDamping),
 		}
 		if prev, ok := existing[target.ID]; ok {
-			c.inheritPrevNodeState(&node, prev, target)
+			if c.inheritPrevNodeState(&node, prev, target) {
+				retargeted = true
+			}
 		} else {
 			node.radius = target.targetRadius
 			node.x = target.targetX
 			node.y = target.targetY
 			c.initNodeDrift(&node)
+			retargeted = true
 		}
-		node.applyDrift(c.driftTime, c.width, c.height)
+		node.applyDrift(c.driftTime, c.driftEnvelope(), c.width, c.height)
 		next = append(next, node)
 	}
-	return next
+	return next, retargeted
 }
 
 // inheritPrevNodeState copies physics and drift state from a previous node
-// into node so that the transition animates rather than snapping.
-func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, target bubbleNode) {
+// into node so that the transition animates rather than snapping. When the
+// new target differs from the previous anchor and radius by no more than
+// bubbleRetargetEpsilon the previous anchor and radius are kept (hysteresis)
+// and false is returned; otherwise the new ones apply and it returns true.
+func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, target bubbleNode) bool {
+	retargeted := math.Abs(target.targetX-prev.anchorX) > bubbleRetargetEpsilon ||
+		math.Abs(target.targetY-prev.anchorY) > bubbleRetargetEpsilon ||
+		math.Abs(target.targetRadius-prev.targetRadius) > bubbleRetargetEpsilon
+	if !retargeted {
+		node.anchorX, node.anchorY = prev.anchorX, prev.anchorY
+		node.targetRadius = prev.targetRadius
+	}
 	node.radius = prev.radius
 	node.x = prev.x
 	node.y = prev.y
@@ -243,6 +289,18 @@ func (c *bubbleChart) inheritPrevNodeState(node *bubbleNode, prev bubbleNode, ta
 	} else {
 		c.updateNodeDriftAmplitude(node)
 	}
+	return retargeted
+}
+
+// selectedID returns the ID (selection key) of the highlighted bubble, or ""
+// when the chart has no such bubble. Consumers that act on the selection
+// (Enter's filter) resolve it by this key against their own rows instead of
+// re-deriving the chart's order, which only the chart itself can reproduce.
+func (c *bubbleChart) selectedID() string {
+	if c.selected >= 0 && c.selected < len(c.nodes) {
+		return c.nodes[c.selected].ID
+	}
+	return ""
 }
 
 func (c *bubbleChart) selectIndexByID(id string) int {
@@ -257,26 +315,28 @@ func (c *bubbleChart) selectIndexByID(id string) int {
 	return 0
 }
 
+// hasMotion reports whether any bubble is still away from its target or
+// still moving.
 func (c *bubbleChart) hasMotion() bool {
 	for _, node := range c.nodes {
-		if math.Abs(node.radius-node.targetRadius) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.x-node.targetX) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.y-node.targetY) > bubbleSpringEpsilon {
-			return true
-		}
-		if math.Abs(node.velocityRadius) > bubbleSpringEpsilon ||
-			math.Abs(node.velocityX) > bubbleSpringEpsilon ||
-			math.Abs(node.velocityY) > bubbleSpringEpsilon {
+		if c.nodeAnimating(node) {
 			return true
 		}
 	}
 	return false
 }
 
+// driftEnvelope scales the drift amplitude: full while the wobble has more
+// than bubbleDriftFadeSeconds left, fading linearly to zero so the bubbles
+// glide back to their anchors instead of stopping mid-wobble.
+func (c *bubbleChart) driftEnvelope() float64 {
+	return clampFloat(c.driftRemaining/bubbleDriftFadeSeconds, 0, 1)
+}
+
+// Tick advances the animation by one frame (delta seconds, 0 for one frame at
+// bubbleFPS) and reports whether it is still animating. A false result means
+// the springs settled and the drift wobble ended: the caller should stop the
+// tick chain, because further ticks would change nothing.
 func (c *bubbleChart) Tick(delta float64) bool {
 	if len(c.nodes) == 0 {
 		c.animating = false
@@ -286,12 +346,18 @@ func (c *bubbleChart) Tick(delta float64) bool {
 	if delta <= 0 {
 		delta = baseDelta
 	}
-	c.driftTime += delta
+	// The wobble clock only runs while drift is left, so a chart at rest is
+	// bit-for-bit stable across the (skipped) ticks.
+	if c.driftRemaining > 0 {
+		c.driftTime += delta
+		c.driftRemaining = math.Max(0, c.driftRemaining-delta)
+	}
+	envelope := c.driftEnvelope()
 
-	active := false
+	active := c.driftRemaining > 0
 	for idx := range c.nodes {
 		node := &c.nodes[idx]
-		node.applyDrift(c.driftTime, c.width, c.height)
+		node.applyDrift(c.driftTime, envelope, c.width, c.height)
 		if delta != baseDelta {
 			node.radiusSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
 			node.xSpring = harmonica.NewSpring(delta, bubbleAngularVelocity, bubbleDamping)
@@ -304,8 +370,25 @@ func (c *bubbleChart) Tick(delta float64) bool {
 			active = true
 		}
 	}
+	if !active {
+		c.snapToTargets()
+	}
 	c.animating = active
 	return active
+}
+
+// snapToTargets puts every bubble exactly on its target with zero velocity.
+// Tick calls it when the chart settles: the springs stop within
+// bubbleSpringEpsilon of the target, and the chain is about to end, so the
+// resting picture would otherwise keep that sub-epsilon residue (and any
+// later Tick would still nudge it). Snapping makes the settled state exact
+// and stable; the jump is under a hundredth of a cell.
+func (c *bubbleChart) snapToTargets() {
+	for i := range c.nodes {
+		n := &c.nodes[i]
+		n.radius, n.x, n.y = n.targetRadius, n.targetX, n.targetY
+		n.velocityRadius, n.velocityX, n.velocityY = 0, 0, 0
+	}
 }
 
 func (c *bubbleChart) nodeAnimating(node bubbleNode) bool {
@@ -346,13 +429,15 @@ func (c *bubbleChart) updateNodeDriftAmplitude(node *bubbleNode) {
 	node.driftAmpY = baseAmp * 0.75 * (0.85 + float64((h>>24)%31)/100.0)
 }
 
-func (n *bubbleNode) applyDrift(t float64, width, height int) {
+// applyDrift moves the node's spring target around its anchor by the drift
+// wobble at time t, scaled by envelope (0 puts the target on the anchor).
+func (n *bubbleNode) applyDrift(t, envelope float64, width, height int) {
 	if n == nil {
 		return
 	}
 	phase := n.driftPhase + t*n.driftSpeed
-	n.targetX = n.anchorX + math.Sin(phase)*n.driftAmpX
-	n.targetY = n.anchorY + math.Cos(phase*0.91+0.37)*n.driftAmpY
+	n.targetX = n.anchorX + math.Sin(phase)*n.driftAmpX*envelope
+	n.targetY = n.anchorY + math.Cos(phase*0.91+0.37)*n.driftAmpY*envelope
 
 	if width <= 0 {
 		width = 80
@@ -396,6 +481,10 @@ func (c *bubbleChart) HasNodes() bool {
 	return len(c.nodes) > 0
 }
 
+// Render draws the chart as a width x height block. The painted view is
+// cached (bubbleFrameCache): every key press, focus event or unrelated
+// message makes Bubble Tea call View, and re-painting an unchanged chart
+// each time was a full frame of work for identical output.
 func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 	if width <= 0 {
 		width = c.width
@@ -415,35 +504,33 @@ func (c *bubbleChart) Render(tabLabel string, width, height int) string {
 		if c.statusHint != "" {
 			body = c.statusHint
 		}
-		return header + "\n" + body + "\n" + "sel: none"
+		// Each line is cut to the width (task cz2): a narrow terminal shows
+		// this empty state right at startup, and the header alone is ~65
+		// cells.
+		return fitPlaceholderLines(width, header, body, "sel: none")
 	}
 
 	chartHeight := height - 2
 	if chartHeight < 4 {
 		chartHeight = 4
 	}
-	grid := make([][]bubbleCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]bubbleCell, width)
-		for col := range grid[row] {
-			grid[row][col] = bubbleCell{
-				char:      ' ',
-				colorSlot: -1,
-			}
-		}
+	// statusLine clamps c.selected, so it runs before the cache key is read.
+	status := padOrTrim(c.statusLine(width), width)
+	if view, ok := c.frame.lookup(c, header, status, width, chartHeight); ok {
+		return view
 	}
+	grid := newGridRows(width, chartHeight)
 	c.renderBubblesToGrid(grid, width, chartHeight)
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	palette := c.palette()
-	for _, row := range grid {
-		lines = append(lines, renderBubbleRow(row, palette))
-	}
-	lines = append(lines, padOrTrim(c.statusLine(width), width))
-	return strings.Join(lines, "\n")
+	lines = append(lines, renderGridRows(grid, c.palette())...)
+	lines = append(lines, status)
+	view := strings.Join(lines, "\n")
+	c.frame.store(view)
+	return view
 }
 
-func (c *bubbleChart) renderBubblesToGrid(grid [][]bubbleCell, width, height int) {
+func (c *bubbleChart) renderBubblesToGrid(grid [][]gridCell, width, height int) {
 	order := make([]int, 0, len(c.nodes))
 	for idx := range c.nodes {
 		order = append(order, idx)
@@ -471,7 +558,7 @@ func (c *bubbleChart) renderBubblesToGrid(grid [][]bubbleCell, width, height int
 	}
 }
 
-func drawBubble(grid [][]bubbleCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
+func drawBubble(grid [][]gridCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
 	if len(grid) == 0 || width == 0 || height == 0 {
 		return
 	}
@@ -494,55 +581,35 @@ func drawBubble(grid [][]bubbleCell, width, height int, node bubbleNode, selecte
 			dist := math.Sqrt(dx*dx + dy*dy)
 			switch {
 			case dist <= radius-0.65:
-				grid[y][x] = bubbleCell{char: fill, colorSlot: colorSlot, bold: selected}
+				grid[y][x] = gridCell{char: fill, colorSlot: colorSlot, bold: selected}
 			case dist <= radius:
-				grid[y][x] = bubbleCell{char: innerFill, colorSlot: colorSlot, bold: selected}
+				grid[y][x] = gridCell{char: innerFill, colorSlot: colorSlot, bold: selected}
 			}
 		}
 	}
 }
 
-func drawBubbleLabel(grid [][]bubbleCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
+// drawBubbleLabel centres the node's label on the bubble's middle row. The
+// label budget and the centring offset are measured in terminal cells, not
+// runes, and the label is placed grapheme by grapheme (writeGridLabel), so
+// wide CJK/emoji labels stay inside the bubble and the row keeps its width.
+// The selected bubble's label is bracketed within the same budget.
+func drawBubbleLabel(grid [][]gridCell, width, height int, node bubbleNode, selected bool, colorSlot int) {
 	if len(grid) == 0 || width == 0 || height == 0 {
 		return
 	}
-	maxLabelRunes := maxInt(2, int(math.Round(node.radius*1.6)))
-	label := abbreviateLabel(node.Label, maxLabelRunes)
+	maxLabelCells := maxInt(2, int(math.Round(node.radius*1.6)))
+	label := abbreviateLabel(node.Label, maxLabelCells)
 	if selected {
-		label = "[" + abbreviateLabel(node.Label, maxInt(1, maxLabelRunes-2)) + "]"
+		label = "[" + abbreviateLabel(node.Label, maxInt(1, maxLabelCells-2)) + "]"
 	}
 	cx := int(math.Round(node.x))
 	cy := int(math.Round(node.y))
 	if cy < 0 || cy >= height {
 		return
 	}
-	labelRunes := []rune(label)
-	start := cx - len(labelRunes)/2
-	for idx, r := range labelRunes {
-		x := start + idx
-		if x < 0 || x >= width {
-			continue
-		}
-		grid[cy][x] = bubbleCell{char: r, colorSlot: colorSlot, bold: selected}
-	}
-}
-
-func abbreviateLabel(label string, maxRunes int) string {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		return "?"
-	}
-	if maxRunes <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(label) <= maxRunes {
-		return label
-	}
-	if maxRunes == 1 {
-		return "…"
-	}
-	r := []rune(label)
-	return string(r[:maxRunes-1]) + "…"
+	start := cx - common.DisplayWidth(label)/2
+	writeGridLabel(grid[cy], start, label, colorSlot, selected)
 }
 
 func (c *bubbleChart) statusLine(width int) string {
@@ -617,43 +684,6 @@ func (c *bubbleChart) palette() []color.Color {
 		lipgloss.Color("161"),
 		lipgloss.Color("25"),
 	}
-}
-
-func renderBubbleRow(cells []bubbleCell, palette []color.Color) string {
-	if len(cells) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	styleCache := make(map[string]lipgloss.Style, 8)
-	selectedColor := lipgloss.Color("129")
-	for _, cell := range cells {
-		if cell.colorSlot < 0 {
-			if cell.bold {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Render(string(cell.char)))
-			} else {
-				b.WriteRune(cell.char)
-			}
-			continue
-		}
-		slot := cell.colorSlot
-		if len(palette) > 0 {
-			slot = slot % len(palette)
-		}
-		key := fmt.Sprintf("%d/%t", slot, cell.bold)
-		style, ok := styleCache[key]
-		if !ok {
-			style = lipgloss.NewStyle().Foreground(palette[slot])
-			if cell.bold {
-				style = style.Foreground(selectedColor)
-			}
-			if cell.bold {
-				style = style.Bold(true)
-			}
-			styleCache[key] = style
-		}
-		b.WriteString(style.Render(string(cell.char)))
-	}
-	return b.String()
 }
 
 // buildBubbleTargets computes initial target positions and radii for each
@@ -832,80 +862,98 @@ func bubbleValue(d bubbleDatum, metric bubbleMetric) uint64 {
 	}
 }
 
+// rankBubbleData is the shared tail of the bubble data builders: it ranks
+// data by metric and keeps the bubbleMaxItems largest (the same cut SetData
+// would make, so nothing visible changes), then formats Detail for those
+// survivors only via describe, the Detail text of one source row. Formatting
+// every row up front cost milliseconds per stats tick on a snapshot with
+// thousands of processes, to show at most bubbleMaxItems of them.
+func rankBubbleData(data []bubbleDatum, metric bubbleMetric, describe func(row int) string) []bubbleDatum {
+	data = filterAndSortBubbleData(data, metric)
+	for i := range data {
+		data[i].Detail = describe(data[i].row)
+	}
+	return data
+}
+
 // syscallBubbleData builds bubble-chart data from the already filter-scoped
 // syscall rows (see Model.visibleSyscallRows) so the bubble view matches the
 // table view under an active family/syscall filter.
-func syscallBubbleData(rows []statsengine.SyscallSnapshot) []bubbleDatum {
+func syscallBubbleData(rows []statsengine.SyscallSnapshot, metric bubbleMetric) []bubbleDatum {
 	data := make([]bubbleDatum, 0, len(rows))
-	for _, syscall := range rows {
-		detail := fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, formatDurationUintNs(syscall.LatencyP95Ns))
+	for i, syscall := range rows {
 		data = append(data, bubbleDatum{
 			ID:       syscall.Name,
 			Label:    syscall.Name,
 			Count:    syscall.Count,
 			Bytes:    syscall.Bytes,
 			Duration: syscall.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		syscall := rows[row]
+		return fmt.Sprintf("rate %.1f/s, errors %d, p95 %s", syscall.RatePerSec, syscall.Errors, latencyCellUint(syscall.NoPercentileData(), syscall.LatencyP95Ns))
+	})
 }
 
-func filesDirBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
+func filesDirBubbleData(snap *statsengine.Snapshot, metric bubbleMetric) []bubbleDatum {
 	if snap == nil {
 		return nil
 	}
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	data := make([]bubbleDatum, 0, len(dirs))
-	for _, dir := range dirs {
-		totalBytes := dir.BytesRead + dir.BytesWritten
-		detail := fmt.Sprintf("dir %s, files %d, read %s, write %s", dir.Dir, dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+	for i, dir := range dirs {
 		data = append(data, bubbleDatum{
-			ID:       dir.Dir,
-			Label:    rootPathLabelFromFSPath(dir.Dir),
+			ID:       dirKey(dir),
+			Label:    dirDisplayLabel(dir),
 			Count:    dir.Accesses,
-			Bytes:    totalBytes,
+			Bytes:    dir.BytesRead + dir.BytesWritten,
 			Duration: dir.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		dir := dirs[row]
+		return fmt.Sprintf("dir %s, files %d, read %s, write %s", dirDisplayLabel(dir), dir.FileCount, formatBytes(float64(dir.BytesRead)), formatBytes(float64(dir.BytesWritten)))
+	})
 }
 
-func processBubbleData(snap *statsengine.Snapshot) []bubbleDatum {
+// processBubbleData builds the Processes bubble data. It runs for every
+// stats tick over every process row (thousands on a busy host), so the
+// per-row work excludes fmt: see rankBubbleData.
+func processBubbleData(snap *statsengine.Snapshot, metric bubbleMetric) []bubbleDatum {
 	if snap == nil {
 		return nil
 	}
 	rows := snap.Processes()
 	data := make([]bubbleDatum, 0, len(rows))
-	for _, proc := range rows {
-		label := fmt.Sprintf("%d", proc.PID)
-		if comm := strings.TrimSpace(proc.Comm); comm != "" {
-			label = fmt.Sprintf("%d:%s", proc.PID, comm)
-		}
-		detail := fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, formatDurationNs(proc.AvgLatencyNs))
+	for i, proc := range rows {
 		data = append(data, bubbleDatum{
-			ID:       fmt.Sprintf("%d/%s", proc.PID, proc.Comm),
-			Label:    label,
+			ID:       processRowKey(proc),
+			Label:    processLabel(proc),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
-			Detail:   detail,
+			row:      i,
 		})
 	}
-	return data
+	return rankBubbleData(data, metric, func(row int) string {
+		proc := rows[row]
+		return fmt.Sprintf("pid %d, rate %.1f/s, avg %s", proc.PID, proc.RatePerSec, latencyCell(proc.NoLatency, proc.AvgLatencyNs))
+	})
 }
 
+// padOrTrim fits value into exactly width display cells for the bubble,
+// treemap and icicle header/status lines: cut with "…" when too wide, then
+// space-padded (common.FitRight). Both steps measure terminal cells, so wide
+// CJK/emoji text cannot overflow the line. A width of zero or less means
+// "unconstrained" and returns value unchanged.
 func padOrTrim(value string, width int) string {
 	if width <= 0 {
 		return value
 	}
-	value = truncatePlain(value, width)
-	padding := width - utf8.RuneCountInString(value)
-	if padding <= 0 {
-		return value
-	}
-	return value + strings.Repeat(" ", padding)
+	return common.FitRight(value, width, common.Ellipsis)
 }
 
 func maxInt(a, b int) int {

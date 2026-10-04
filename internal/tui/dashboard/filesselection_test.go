@@ -154,24 +154,31 @@ func TestFilesIcicleSelectionFallsBackWhenSelectedTileDisappears(t *testing.T) {
 	}
 }
 
-func TestFilesVizSelectionResetsOnEmptySnapshot(t *testing.T) {
+// TestFilesVizSelectionSurvivesEmptySnapshot: the auto-reset empties the
+// snapshot for a tick; the selected tile is remembered, not reset to the
+// first one, and is selected again when the data returns.
+func TestFilesVizSelectionSurvivesEmptySnapshot(t *testing.T) {
 	for _, mode := range []tabVizMode{tabVizModeTreemap, tabVizModeIcicle} {
 		m := newFilesVizModel(t, mode, icicleSnapshot(9, 7))
 		m = pressJ(t, m, 1)
+		want := m.filesDirSelection().selectedKey()
+		if want == "" {
+			t.Fatalf("mode %d: no tile selected before the reset", mode)
+		}
 
 		m = tickStats(t, m, messages.StatsTickMsg{Snap: filesSnapshot()})
-		if m.filesDirTab.offset != 0 {
-			t.Fatalf("mode %d: expected offset 0 on empty snapshot, got %d", mode, m.filesDirTab.offset)
-		}
 		if got := m.filesDirSelection().selectedKey(); got != "" {
 			t.Fatalf("mode %d: expected no selection on empty snapshot, got %q", mode, got)
 		}
 		_ = m.View() // must render the empty state without indexing tiles
 
+		// A second empty tick must not lose the memory either.
+		m = tickStats(t, m, messages.StatsTickMsg{Snap: filesSnapshot()})
+
 		m = tickStats(t, m, messages.StatsTickMsg{Snap: icicleSnapshot(9, 7)})
-		if m.filesDirTab.offset != 0 || m.filesDirSelection().selectedKey() == "" {
-			t.Fatalf("mode %d: expected first item selected after data returns, got %q at %d",
-				mode, m.filesDirSelection().selectedKey(), m.filesDirTab.offset)
+		if got := m.filesDirSelection().selectedKey(); got != want || m.filesDirTab.offset != 1 {
+			t.Fatalf("mode %d: expected %q at 1 after data returns, got %q at %d",
+				mode, want, got, m.filesDirTab.offset)
 		}
 	}
 }

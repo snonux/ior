@@ -228,6 +228,43 @@ func TestResolveCommFromProcWithErrorIgnoresMissingProcess(t *testing.T) {
 	}
 }
 
+// TestResolveCommOfAGoneTaskSkipsTheExeFallback pins task xr2's early return:
+// a comm read failing with ENOENT means the task is gone, so the exe readlink
+// is not tried. The fake /proc/<tid> keeps an exe link next to the missing
+// comm, so a fallback that ran would return the link's basename. A comm read
+// failing for another reason (here EISDIR) still falls back to it.
+func TestResolveCommOfAGoneTaskSkipsTheExeFallback(t *testing.T) {
+	const tid = 4242
+	for _, tc := range []struct {
+		name     string
+		makeComm func(t *testing.T, path string)
+		want     string
+	}{
+		{"comm missing (ENOENT)", func(*testing.T, string) {}, ""},
+		{"comm unreadable (EISDIR)", func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}, "fallback-exe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			taskDir := procTidPathIn(root, tid)
+			if err := os.Mkdir(taskDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("/usr/bin/fallback-exe", taskDir+"/exe"); err != nil {
+				t.Fatal(err)
+			}
+			tc.makeComm(t, taskDir+"/comm")
+			comm, _ := resolveCommFromProcRoot(root, tid)
+			if comm != tc.want {
+				t.Fatalf("comm = %q, want %q", comm, tc.want)
+			}
+		})
+	}
+}
+
 // TestCommResolverLookupWorkerRespectsTimeout verifies that a resolveFn that
 // blocks longer than resolveCommTimeout is interrupted and the pending entry
 // is cleared so shutdown is not stalled.

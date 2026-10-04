@@ -66,3 +66,29 @@ func TestFilterNoticeClearsWhenUnset(t *testing.T) {
 		t.Fatalf("expected the notice to disappear once cleared, got:\n%s", view)
 	}
 }
+
+// TestFamilyHintIsASeparateSlot pins that the family hint and the filter
+// notice are independent (kp2): setting or clearing one leaves the other, and
+// the refusal is rendered ahead of the hint so a narrow row trims the hint
+// first.
+func TestFamilyHintIsASeparateSlot(t *testing.T) {
+	const hint = "Network not traced: press O, tab, space to attach"
+	m := noticeModel(t, 200, 40, false)
+	m.SetFamilyHint(hint)
+	summary := m.filterSummary()
+	refusal, hinted := strings.Index(summary, "FILTER REFUSED"), strings.Index(summary, hint)
+	if refusal < 0 || hinted < 0 || refusal > hinted {
+		t.Fatalf("expected the refusal, then the hint, got %q", summary)
+	}
+
+	m.SetFamilyHint("")
+	if summary := m.filterSummary(); !strings.Contains(summary, "FILTER REFUSED") || strings.Contains(summary, "not traced") {
+		t.Fatalf("clearing the hint must keep the refusal, got %q", summary)
+	}
+
+	m.SetFamilyHint(hint)
+	m.SetFilterNotice("")
+	if summary := m.filterSummary(); strings.Contains(summary, "FILTER REFUSED") || !strings.HasPrefix(summary, hint+" | filter: ") {
+		t.Fatalf("clearing the notice must keep the hint, got %q", summary)
+	}
+}

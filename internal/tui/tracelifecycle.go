@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"time"
 
+	"ior/internal/atomicfile"
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
+	common "ior/internal/tui/common"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -18,15 +21,42 @@ import (
 // trace so the Model can stop tracing without understanding the context
 // machinery.
 type traceLifecycle struct {
-	startTrace       TraceStarter
+	startTrace TraceStarter
+	// traceCtx is the running session's context and traceStop cancels it;
+	// both are nil while no session runs. Work bound to the session, such as
+	// a family batch on its probe manager, shares traceCtx (sessionContext).
+	traceCtx         context.Context
 	traceStop        context.CancelFunc
 	shutdownReporter *runtime.TraceShutdownReporter
+	// session numbers the sessions begun by this lifecycle; the running one
+	// (if any) is session. It tags each session's start result so a result
+	// of a session that has since been stopped or replaced can be ignored.
+	session uint64
+	// endSession retires the running session's bindings view (nil without
+	// bindings or when no session runs), see traceSessionBindings.
+	endSession func()
+	// attachSyscalls is the probe set every following session attaches (see
+	// runtime.TraceRequest.AttachSyscalls): nil until the user changes the
+	// attached probes at runtime, so the startup -trace-* selection applies
+	// until then. It outlives sessions, which is what carries a runtime
+	// probe change across a restart.
+	attachSyscalls []string
 }
 
 // tracingShutdownProgressMsg carries one progress update from the active
 // trace session back onto Bubble Tea's Update goroutine.
 type tracingShutdownProgressMsg struct {
 	progress runtime.TraceShutdownProgress
+}
+
+// traceSessionResultMsg is the start result (TracingStartedMsg or
+// TracingErrorMsg) of one session, tagged with that session's number. The
+// model applies result only while traceLifecycle.isCurrent(session): a restart
+// does not wait for the old session, whose result can still arrive after the
+// new session has begun.
+type traceSessionResultMsg struct {
+	session uint64
+	result  tea.Msg
 }
 
 // newTraceLifecycle creates a traceLifecycle bound to the given starter.
@@ -42,34 +72,87 @@ func newTraceLifecycle(starter TraceStarter) traceLifecycle {
 // beginCmd creates a tea.Cmd that runs the trace starter in a goroutine and
 // returns a TracingStartedMsg or TracingErrorMsg. It cancels any previously
 // running trace before storing the new cancel function, so at most one trace
-// session (BPF module plus eventloop) is ever live per lifecycle: overwriting
-// traceStop without cancelling it would orphan the old session, leaving its
-// probes attached and feeding the same stream buffer as the new one. Callers
-// that already called stop() pay nothing extra, because stop() is idempotent.
+// session (BPF module plus eventloop) is current per lifecycle - the cancelled
+// one is not waited for and may still be tearing down (see below):
+// overwriting traceStop without cancelling it would orphan the old session,
+// leaving its probes attached and feeding the same stream buffer as the new
+// one. Callers that already called stop() pay nothing extra, because stop() is idempotent.
 //
-// The session's bindings, filter and shutdown reporter reach the starter
-// explicitly in a TraceRequest; the context only carries cancellation.
+// The session's bindings, filter, shutdown reporter and runtime probe
+// selection (setAttachSyscalls) reach the starter explicitly in a
+// TraceRequest; the context only carries cancellation.
+//
+// The cancelled session is not waited for, so it may still be loading,
+// attaching or detaching while the new one starts. That is why each session
+// gets its own bindings view (runtimeBindings.beginSession), retired again by
+// stop: the view drops whatever the stopped session publishes, clears or emits
+// from then on, so its late setup, events or teardown cannot replace or erase
+// the new session's probe manager, live-filter setter, dashboard sources or
+// stream. For the same reason its start result is tagged with the session
+// number (traceSessionResultMsg) and ignored once the session is not current.
 func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter.Filter) tea.Cmd {
 	t.stop()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.traceStop = cancel
+	t.traceCtx, t.traceStop = ctx, cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
-	return startTraceCmd(ctx, t.startTrace, newTraceRequest(bindings, filter, t.shutdownReporter))
+	t.session++
+	var sessionBindings runtime.TraceRuntimeBindings
+	if bindings != nil {
+		view := bindings.beginSession()
+		t.endSession = view.end
+		sessionBindings = view
+	}
+	req := newTraceRequest(sessionBindings, filter, t.shutdownReporter)
+	req.AttachSyscalls = t.attachSyscalls
+	return tagSessionResult(t.session, startTraceCmd(ctx, t.startTrace, req))
+}
+
+// setAttachSyscalls records the probe set the next sessions attach. The slice
+// is owned by the lifecycle from here on; callers pass a fresh one.
+func (t *traceLifecycle) setAttachSyscalls(syscalls []string) {
+	t.attachSyscalls = syscalls
 }
 
 // newTraceRequest assembles the explicit inputs of one trace session. The
 // filter is cloned so the starter never aliases the model's filter state,
-// which the user keeps editing while the session runs. A nil bindings pointer
-// becomes a nil interface rather than a typed nil, so a starter's "no TUI
-// attached" check (Bindings == nil) sees it as absent instead of calling
-// methods on a nil *runtimeBindings.
-func newTraceRequest(bindings *runtimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
+// which the user keeps editing while the session runs. A nil bindings stays a
+// nil interface, which a starter's "no TUI attached" check (Bindings == nil)
+// sees as absent.
+func newTraceRequest(bindings runtime.TraceRuntimeBindings, filter globalfilter.Filter, reporter *runtime.TraceShutdownReporter) TraceRequest {
 	cloned := filter.Clone()
-	req := TraceRequest{Filter: &cloned, ShutdownReporter: reporter}
-	if bindings != nil {
-		req.Bindings = bindings
+	return TraceRequest{Bindings: bindings, Filter: &cloned, ShutdownReporter: reporter}
+}
+
+// tagSessionResult wraps cmd so that its non-nil result arrives as a
+// traceSessionResultMsg of session.
+func tagSessionResult(session uint64, cmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		result := cmd()
+		if result == nil {
+			return nil
+		}
+		return traceSessionResultMsg{session: session, result: result}
 	}
-	return req
+}
+
+// isCurrent reports whether session is the running session, i.e. the newest
+// one begun and not stopped since.
+func (t *traceLifecycle) isCurrent(session uint64) bool {
+	return t.running() && session == t.session
+}
+
+// sessionContext returns the running session's context, which stop cancels.
+// Without a running session it returns an already cancelled context: work
+// started then has no session to belong to (and no probe manager is
+// published without one, see runtimeBindings.endSessionLocked), so it must
+// not run at all.
+func (t *traceLifecycle) sessionContext() context.Context {
+	if t.traceCtx != nil {
+		return t.traceCtx
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }
 
 // running reports whether a trace session is live, i.e. started and not yet
@@ -83,7 +166,15 @@ func (t *traceLifecycle) running() bool {
 func (t *traceLifecycle) stop() {
 	if t.traceStop != nil {
 		t.traceStop()
-		t.traceStop = nil
+		t.traceCtx, t.traceStop = nil, nil
+	}
+	// Retire the session's bindings view synchronously, here on the Update
+	// goroutine: once stop returns, none of the stopped session's rows can
+	// still reach the stream or the recorder, which is what lets callers reset
+	// the stream (selectProcess) or advance the filter epoch right after.
+	if t.endSession != nil {
+		t.endSession()
+		t.endSession = nil
 	}
 }
 
@@ -143,14 +234,23 @@ func startTraceCmdWithTimeout(ctx context.Context, starter TraceStarter, req Tra
 		}()
 		select {
 		case res := <-ch:
+			// A stopped session reports nothing, whatever the starter
+			// returned: a success that raced the stop is not a running
+			// trace, and its failure is not the user's concern any more.
+			if ctx.Err() != nil || errors.Is(res.err, context.Canceled) {
+				return nil
+			}
 			if res.err != nil {
-				if errors.Is(res.err, context.Canceled) {
-					return nil
-				}
 				return TracingErrorMsg{Err: res.err}
 			}
 			return TracingStartedMsg{}
 		case <-time.After(timeout):
+			// A session stopped while its starter hung (for example stuck
+			// in BPFLoadObject) must not report a fatal timeout against
+			// whatever runs now.
+			if ctx.Err() != nil {
+				return nil
+			}
 			// BPF probe attachment did not complete in time. The stuck
 			// goroutine will be cleaned up when the caller cancels ctx
 			// (e.g. on the next traceLifecycle.stop call).
@@ -169,11 +269,29 @@ func defaultTraceStarter(context.Context, TraceRequest) error {
 // recorderStart opens the parquet recorder at the given path.
 // It calls syncFn (typically syncDashboardFilterState) after the attempt
 // (success or failure) so the status bar stays in sync.
-func recorderStart(recorder runtime.RecordingController, path string, syncFn func()) error {
+//
+// sampler (nil for none) marks the recording as sampled: its rates go into the
+// footer now (ior.sampling) and its tally collects the recording's exact
+// totals, written at Stop (ior.sampling.totals); see recordingsampling.go.
+// beginRecordingSampling flushes the kernel counters first, so counts from
+// before the start belong to no recording.
+func recorderStart(recorder runtime.RecordingController, path string, sampler recordingSampler, syncFn func()) error {
 	if recorder == nil {
 		return errors.New("recording runtime is unavailable")
 	}
-	err := recorder.Start(path, parquet.StartOptions{Metadata: tuiParquetMetadata()})
+	meta := tuiParquetMetadata()
+	var tally *sampling.Tally
+	if sampler != nil {
+		tally = sampler.beginRecordingSampling()
+		meta.Sampling = tally.Plan()
+	}
+	err := recorder.Start(path, parquet.StartOptions{
+		Metadata: meta,
+		// The R modal offers a generated default; only that name is ior's to
+		// protect. Anything the user typed is theirs and is replaced.
+		AutoNamed:     isDefaultParquetRecordingName(path),
+		SamplingTally: tally,
+	})
 	syncFn()
 	return err
 }
@@ -181,7 +299,9 @@ func recorderStart(recorder runtime.RecordingController, path string, syncFn fun
 // recorderStop closes the active parquet recorder.
 // Returns nil without error when no recording is active.
 // Calls syncFn after the attempt so the status bar stays in sync.
-func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
+// sampler (nil for none) drains the kernel counters into the recording first,
+// so its sampling totals include the last partial drain interval.
+func recorderStop(recorder runtime.RecordingController, sampler recordingSampler, syncFn func()) error {
 	if recorder == nil {
 		return nil
 	}
@@ -189,7 +309,42 @@ func recorderStop(recorder runtime.RecordingController, syncFn func()) error {
 		syncFn()
 		return nil
 	}
+	flushRecordingSampling(sampler)
 	err := recorder.Stop()
+	syncFn()
+	return err
+}
+
+// recorderFinalise is the quit-time counterpart of recorderStop: it leaves no
+// recording failure unreported. An active recording is stopped and Stop's
+// failure returned. An inactive recorder may still hold a failure nobody has
+// reported: a recording that aborted on its own (disk full) on a target that
+// then went idle emits no further event, so no warning row was pushed, and
+// the user who never reopened the record modal never saw it either. The
+// quit is the last chance to show it, so claim it with TakeFailure, which is
+// exclusive: a failure already delivered through a warning row, the modal, or
+// an earlier Stop is marked taken and is not returned again, and a healthy or
+// never-used recorder yields nil. Safe to call from any goroutine (the
+// recorder and the sampler's flush are), so the signal watcher uses it too.
+// Like recorderStop it flushes the kernel counters into an active recording
+// before stopping it (sampler may be nil).
+func recorderFinalise(recorder runtime.RecordingController, sampler recordingSampler) error {
+	if recorder == nil {
+		return nil
+	}
+	if recorder.Status().Active {
+		flushRecordingSampling(sampler)
+		return recorder.Stop()
+	}
+	return recorder.TakeFailure()
+}
+
+// recorderStopAtQuit is recorderFinalise followed by syncFn, for the quit
+// paths that run on the event-loop goroutine. The in-session stops (record
+// shortcut, re-select) keep using recorderStop: a dead recording's failure
+// belongs on the stream or the record modal there, not on a stop error.
+func recorderStopAtQuit(recorder runtime.RecordingController, sampler recordingSampler, syncFn func()) error {
+	err := recorderFinalise(recorder, sampler)
 	syncFn()
 	return err
 }
@@ -225,11 +380,32 @@ func formatRecorderStatus(status parquet.Status) string {
 	if status.LastError != nil {
 		return "rec err: " + status.LastError.Error()
 	}
+	if status.Path != "" && status.RequestedPath != "" && status.Path != status.RequestedPath {
+		// An auto-named recording found its name taken and was published
+		// under a "-N" name; say so, since the modal showed the other one.
+		return "rec: saved as " + shortenRecordingPath(status.Path) + dropped
+	}
 	return "rec: off" + dropped
 }
 
+// defaultParquetRecordingLayout is the time.Format layout of the generated
+// recording name; isDefaultParquetRecordingName matches against the same
+// layout, so the two cannot drift apart.
+const defaultParquetRecordingLayout = "ior-recording-20060102-150405.parquet"
+
 func defaultParquetRecordingFilename() string {
-	return fmt.Sprintf("ior-recording-%s.parquet", time.Now().Format("20060102-150405"))
+	return time.Now().Format(defaultParquetRecordingLayout)
+}
+
+// isDefaultParquetRecordingName reports whether path's file name is a
+// generated default recording name (as opposed to one the user typed). Such a
+// name is only accurate to the second, so it is published without replacing an
+// existing file. The match is strict (atomicfile.IsGeneratedName: exact
+// zero-padded layout including ".parquet") and is judged on the name as typed,
+// before the writer appends a missing ".parquet" - the same rule the stream
+// CSV export follows.
+func isDefaultParquetRecordingName(path string) bool {
+	return atomicfile.IsGeneratedName(path, defaultParquetRecordingLayout)
 }
 
 // tuiParquetMetadata delegates to the canonical parquet.NewFileMetadata.
@@ -237,12 +413,12 @@ func tuiParquetMetadata() parquet.FileMetadata {
 	return parquet.NewFileMetadata("tui")
 }
 
+// shortenRecordingPath keeps the status-line recording path within 36 display
+// cells, preserving its end (the file name) behind a "..." prefix. The cut is
+// grapheme-aware (common.TruncateLeft) so non-ASCII paths stay valid UTF-8.
 func shortenRecordingPath(path string) string {
-	const maxLen = 36
-	if len(path) <= maxLen {
-		return path
-	}
-	return "..." + path[len(path)-maxLen+3:]
+	const maxWidth = 36
+	return common.TruncateLeft(path, maxWidth, common.ASCIIEllipsis)
 }
 
 // autoResetCycle is the ordered set of cadences exposed via the `I` hotkey.

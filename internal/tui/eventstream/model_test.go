@@ -3,11 +3,17 @@ package eventstream
 import (
 	"encoding/csv"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"ior/internal/event"
+	"ior/internal/file"
+	"ior/internal/globalfilter"
 	"ior/internal/globalfilter/presenter"
 	"ior/internal/tui/messages"
+	"ior/internal/types"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -440,13 +446,13 @@ func TestPausedEnterEmitsGlobalFilterRequestFromSelectedCell(t *testing.T) {
 	if m.filter.Comm != nil {
 		t.Fatalf("expected local stream filter state to remain unchanged until parent applies it")
 	}
-	if req.Action != "comm~a" {
-		t.Fatalf("expected action label comm~a, got %q", req.Action)
+	if req.Action != "comm~^a$" {
+		t.Fatalf("expected action label comm~^a$, got %q", req.Action)
 	}
 	if req.Filter.PID == nil || req.Filter.PID.Op != OpEq || req.Filter.PID.Value != 1 {
 		t.Fatalf("expected existing pid filter preserved, got %+v", req.Filter.PID)
 	}
-	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "a" {
+	if req.Filter.Comm == nil || req.Filter.Comm.Pattern != "^a$" {
 		t.Fatalf("expected selected comm folded into global filter, got %+v", req.Filter.Comm)
 	}
 	if pressLocal(t, &m, "esc") {
@@ -519,14 +525,14 @@ func TestPausedEnterActionLabelPerColumn(t *testing.T) {
 	}{
 		{streamColGap, presenter.DimGap, "gap>=40ns"},
 		{streamColLatency, presenter.DimLatency, "latency>=1.5µs"},
-		{streamColComm, presenter.DimComm, "comm~cc"},
+		{streamColComm, presenter.DimComm, "comm~^cc$"},
 		{streamColPID, presenter.DimPID, "pid=11"},
 		{streamColTID, presenter.DimTID, "tid=12"},
-		{streamColSyscall, presenter.DimSyscall, "syscall~openat"},
+		{streamColSyscall, presenter.DimSyscall, "syscall~^openat$"},
 		{streamColFD, presenter.DimFD, "fd=3"},
 		{streamColRet, presenter.DimRet, "ret=-2"},
 		{streamColBytes, presenter.DimBytes, "bytes=64"},
-		{streamColFile, presenter.DimFile, "file~/etc/x"},
+		{streamColFile, presenter.DimFile, "file~^/etc/x$"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -568,10 +574,10 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 		{"zero pid", StreamEvent{Seq: 1, PID: 0}, streamColPID, presenter.DimPID, "pid=0"},
 		{"negative fd", StreamEvent{Seq: 1, FD: -1}, streamColFD, presenter.DimFD, "fd=-1"},
 		{"zero bytes", StreamEvent{Seq: 1, Bytes: 0}, streamColBytes, presenter.DimBytes, "bytes=0"},
-		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~kworker/0:1 ~x=y"},
-		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~sh"},
-		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^/tmp/a b$"},
-		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~écrire"},
+		{"comm with space and symbols", StreamEvent{Seq: 1, Comm: "kworker/0:1 ~x=y"}, streamColComm, presenter.DimComm, "comm~^kworker/0:1 ~x=y$"},
+		{"comm with padding", StreamEvent{Seq: 1, Comm: "  sh  "}, streamColComm, presenter.DimComm, "comm~^  sh  $"},
+		{"anchored file", StreamEvent{Seq: 1, FileName: "^/tmp/a b$"}, streamColFile, presenter.DimFile, "file~^^/tmp/a b$$"},
+		{"unicode syscall", StreamEvent{Seq: 1, Syscall: "écrire"}, streamColSyscall, presenter.DimSyscall, "syscall~^écrire$"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -593,6 +599,60 @@ func TestPausedEnterActionLabelEdgeValues(t *testing.T) {
 	}
 }
 
+// TestPausedEnterStringCellFilterIsExact checks what the pushed Comm, Syscall
+// and File filters select, not just their labels: exactly the cell's value,
+// case included (^value$ is case-sensitive), never a superstring of it, with
+// edge blanks and a literal edge ^/$ kept literal. A bare substring pattern
+// (the old behaviour) admitted readv for "read" and /tmp/ab for "/tmp/a",
+// trimmed "/tmp/a " to "/tmp/a", and read "x$" as "ends with x".
+func TestPausedEnterStringCellFilterIsExact(t *testing.T) {
+	tests := []struct {
+		name   string
+		col    int
+		with   func(string) StreamEvent
+		value  string
+		match  []string
+		reject []string
+	}{
+		{"syscall", streamColSyscall, func(v string) StreamEvent { return StreamEvent{Seq: 1, Syscall: v} },
+			"read", []string{"read"}, []string{"READ", "readv", "pread64", "rea", ""}},
+		{"file", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"/tmp/a", []string{"/tmp/a"}, []string{"/TMP/A", "/tmp/ab", "/var/tmp/a", "/tmp/a ", "/tmp"}},
+		{"file with edge blank", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"/tmp/a ", []string{"/tmp/a "}, []string{"/tmp/a", "/tmp/ab", "/tmp/a  "}},
+		{"file with literal anchors", streamColFile, func(v string) StreamEvent { return StreamEvent{Seq: 1, FileName: v} },
+			"^/tmp/x$", []string{"^/tmp/x$"}, []string{"/tmp/x", "^/tmp/x", "/tmp/x$", "^/tmp/x$y"}},
+		{"comm", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"sh", []string{"sh"}, []string{"SH", "bash", "sshd", "sh "}},
+		{"comm with edge blanks", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"  sh  ", []string{"  sh  "}, []string{"sh", " sh ", "  sh  x"}},
+		{"comm with literal dollar", streamColComm, func(v string) StreamEvent { return StreamEvent{Seq: 1, Comm: v} },
+			"x$", []string{"x$"}, []string{"x", "ax", "x$y"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, cmd := pressEnterOnCell(t, tt.with(tt.value), tt.col)
+			if !handled || cmd == nil {
+				t.Fatalf("expected enter to emit a request")
+			}
+			req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+			if !ok {
+				t.Fatalf("expected GlobalFilterRequestedMsg")
+			}
+			for _, v := range tt.match {
+				if ev := tt.with(v); !req.Filter.Matches(&ev) {
+					t.Errorf("filter for %q (%s) should match %q", tt.value, req.Action, v)
+				}
+			}
+			for _, v := range tt.reject {
+				if ev := tt.with(v); req.Filter.Matches(&ev) {
+					t.Errorf("filter for %q (%s) should not match %q", tt.value, req.Action, v)
+				}
+			}
+		})
+	}
+}
+
 // TestPausedEnterOnBlankStringCellIsNotHandled: a blank pattern constrains
 // nothing (and has no presenter token), so enter on an empty comm, syscall or
 // file cell must not push an empty undo layer.
@@ -606,6 +666,7 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 		{"blank comm", StreamEvent{Seq: 1, PID: 5, Comm: "   "}, streamColComm},
 		{"empty syscall", StreamEvent{Seq: 1, PID: 5}, streamColSyscall},
 		{"empty file", StreamEvent{Seq: 1, PID: 5}, streamColFile},
+		{"no-file placeholder", StreamEvent{Seq: 1, PID: 5, FileName: event.NoFileName, NoFile: true}, streamColFile},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			handled, cmd := pressEnterOnCell(t, tt.ev, tt.col)
@@ -613,6 +674,148 @@ func TestPausedEnterOnBlankStringCellIsNotHandled(t *testing.T) {
 				t.Fatalf("expected blank cell enter to be ignored, got handled=%v cmd=%v", handled, cmd != nil)
 			}
 		})
+	}
+}
+
+// TestPausedEnterOnNoReturnPlaceholderCellIsNotHandled (task pr2): the
+// Latency and Ret cells of a noreturn row (exit, exit_group, rt_sigreturn)
+// render "-" over placeholder 0s, so Enter there must push no filter, like the
+// File cell of a fileless row: latency >= 0 would match every row and ret == 0
+// every successful one. The other cells of the same row still filter, and the
+// same cells of a normal row with the same 0 values still push the filter, so
+// the refusal is keyed on the flag, not on the values.
+func TestPausedEnterOnNoReturnPlaceholderCellIsNotHandled(t *testing.T) {
+	noReturn := StreamEvent{Seq: 1, PID: 7, TID: 7, Comm: "sh", Syscall: "exit_group", FD: -1, GapNs: 30, NoReturn: true}
+	for _, col := range []int{streamColLatency, streamColRet} {
+		if handled, cmd := pressEnterOnCell(t, noReturn, col); handled || cmd != nil {
+			t.Errorf("column %d of a noreturn row: expected enter to be ignored, got handled=%v cmd=%v", col, handled, cmd != nil)
+		}
+	}
+	for _, col := range []int{streamColGap, streamColPID, streamColSyscall} {
+		if handled, cmd := pressEnterOnCell(t, noReturn, col); !handled || cmd == nil {
+			t.Errorf("column %d of a noreturn row: expected a filter request, got handled=%v", col, handled)
+		}
+	}
+
+	normal := noReturn
+	normal.NoReturn = false
+	normal.Syscall = "read"
+	for _, tt := range []struct {
+		col  int
+		want string
+	}{{streamColLatency, "latency>=0s"}, {streamColRet, "ret=0"}} {
+		handled, cmd := pressEnterOnCell(t, normal, tt.col)
+		if !handled || cmd == nil {
+			t.Fatalf("column %d of a normal row: expected a filter request", tt.col)
+		}
+		req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+		if !ok || req.Action != tt.want {
+			t.Fatalf("column %d of a normal row: got %+v, want action %q", tt.col, req, tt.want)
+		}
+	}
+}
+
+// TestPausedEnterOnFilelessPairRowPushesNoFilter is the task hp2 regression:
+// a pair without a file renders its File cell as event.NoFileName, but the
+// global filter reads that pair's file as "". Enter on the cell used to push
+// ^N:file$, which kept the buffered placeholder rows yet rejected every new
+// event, so the stream went silent. The placeholder must be treated like a
+// blank cell. The MatchPair check pins the mismatch that made the old filter
+// harmful; the last check shows a real file cell still yields a filter.
+func TestPausedEnterOnFilelessPairRowPushesNoFilter(t *testing.T) {
+	enter := &types.FdEvent{TraceId: types.SYS_ENTER_CLOSE, Time: 10, Pid: 5, Tid: 5, Fd: 3}
+	pair := event.NewPair(enter)
+	pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_CLOSE, Time: 20, Pid: 5, Tid: 5}
+	row := NewStreamEvent(1, pair)
+	if row.FileName != event.NoFileName {
+		t.Fatalf("fileless row FileName = %q, want %q", row.FileName, event.NoFileName)
+	}
+
+	handled, cmd := pressEnterOnCell(t, row, streamColFile)
+	if handled || cmd != nil {
+		t.Fatalf("enter on the no-file placeholder must push nothing, got handled=%v cmd=%v", handled, cmd != nil)
+	}
+
+	placeholderFilter := Filter{File: &StringFilter{Pattern: globalfilter.ExactPattern(event.NoFileName)}}
+	if placeholderFilter.MatchPair(pair) {
+		t.Fatalf("expected ^N:file$ to reject the live fileless pair (root cause changed?)")
+	}
+
+	withFile := row
+	withFile.FileName = "/tmp/a"
+	withFile.NoFile = false
+	if handled, cmd := pressEnterOnCell(t, withFile, streamColFile); !handled || cmd == nil {
+		t.Fatalf("enter on a real file cell must still push a filter")
+	}
+}
+
+// TestRealFileNamedPlaceholderSurvivesFilterAndExport is the task zp2
+// regression at the stream level: a row for a file really named "N:file"
+// shows the same cell text as a fileless row, but filters on that name must
+// keep it on the Stream refresh (as they keep the live pair) and in the CSV
+// export, Enter on its cell must push the exact filter, and ^$ must not
+// select it. The fileless row beside it is the control for the other side.
+func TestRealFileNamedPlaceholderSurvivesFilterAndExport(t *testing.T) {
+	closePair := func(f *file.FdFile) *event.Pair {
+		enter := &types.FdEvent{TraceId: types.SYS_ENTER_CLOSE, Time: 10, Pid: 5, Tid: 5, Fd: 3}
+		pair := event.NewPair(enter)
+		pair.ExitEv = &types.RetEvent{TraceId: types.SYS_EXIT_CLOSE, Time: 20, Pid: 5, Tid: 5}
+		if f != nil {
+			pair.File = f
+		}
+		return pair
+	}
+	realPair := closePair(file.NewFd(3, event.NoFileName, 0))
+	filelessPair := closePair(nil)
+	realRow, filelessRow := NewStreamEvent(1, realPair), NewStreamEvent(2, filelessPair)
+
+	rb := NewRingBuffer()
+	rb.Push(realRow)
+	rb.Push(filelessRow)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+
+	for pattern, wantReal := range map[string]bool{"N:file": true, "file": true, globalfilter.ExactPattern(event.NoFileName): true, "^$": false} {
+		f := Filter{File: &StringFilter{Pattern: pattern}}
+		m.SetFilter(f)
+		var gotReal bool
+		for _, ev := range m.filtered {
+			gotReal = gotReal || ev.Seq == realRow.Seq
+		}
+		if gotReal != wantReal || f.MatchPair(realPair) != wantReal {
+			t.Errorf("pattern %q: buffered keeps real row=%v, live pair=%v, want both %v", pattern, gotReal, f.MatchPair(realPair), wantReal)
+		}
+	}
+
+	// The CSV export applies the same filter to the same buffered rows.
+	path, err := exportSnapshotToCSV(rb, Filter{File: &StringFilter{Pattern: "^N:file$"}}, t.TempDir(), "zp2")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 2 {
+		t.Fatalf("export must hold the header plus the one real-file row, got %q", data)
+	}
+
+	// Enter on the real file's cell constrains on its name; the fileless
+	// row's cell (same text) pushes nothing.
+	handled, cmd := pressEnterOnCell(t, realRow, streamColFile)
+	if !handled || cmd == nil {
+		t.Fatalf("enter on a real file named %q must push a filter, handled=%v", event.NoFileName, handled)
+	}
+	req, ok := cmd().(messages.GlobalFilterRequestedMsg)
+	if !ok || req.Filter.File == nil || req.Filter.File.Pattern != globalfilter.ExactPattern(event.NoFileName) {
+		t.Fatalf("expected ^N:file$ file filter, got %+v ok=%v", req.Filter.File, ok)
+	}
+	if !req.Filter.MatchPair(realPair) || req.Filter.MatchPair(filelessPair) {
+		t.Fatalf("pushed filter must select the real file's pair and not the fileless one")
+	}
+	if handled, cmd := pressEnterOnCell(t, filelessRow, streamColFile); handled || cmd != nil {
+		t.Fatalf("enter on the fileless row's identical-looking cell must push nothing")
 	}
 }
 
@@ -691,8 +894,8 @@ func TestHandleTeaKeyEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !handled || cmd == nil {
 		t.Fatalf("expected enter to be handled with a command, got handled=%v cmd=%v", handled, cmd != nil)
 	}
-	if req, ok := cmd().(messages.GlobalFilterRequestedMsg); !ok || req.Action != "comm~a" {
-		t.Fatalf("expected comm~a GlobalFilterRequestedMsg, got %#v", cmd())
+	if req, ok := cmd().(messages.GlobalFilterRequestedMsg); !ok || req.Action != "comm~^a$" {
+		t.Fatalf("expected comm~^a$ GlobalFilterRequestedMsg, got %#v", cmd())
 	}
 }
 
@@ -846,6 +1049,143 @@ func TestPausedExportAsModalSavesWithProvidedFilename(t *testing.T) {
 	}
 }
 
+// pressTea sends one real key message through HandleTeaKey, the path the
+// dashboard uses, so the export modal's text input sees the same messages as
+// in the running TUI: the key press itself, modifiers included (ctrl+left
+// moves by word rather than arriving as a bare left), and never the name of
+// a key the input does not bind typed in as text.
+func pressTea(t *testing.T, m *Model, msg tea.KeyPressMsg) {
+	t.Helper()
+	if handled, cmd := m.HandleTeaKey(msg); !handled || cmd != nil {
+		t.Fatalf("key %v: want consumed without a command, got handled=%v cmd=%v", msg, handled, cmd != nil)
+	}
+}
+
+// typeText types text rune by rune into the focused modal input.
+func typeText(t *testing.T, m *Model, text string) {
+	t.Helper()
+	for _, r := range text {
+		pressTea(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+}
+
+// repeatKey presses the same special key n times.
+func repeatKey(t *testing.T, m *Model, code rune, n int) {
+	t.Helper()
+	for range n {
+		pressTea(t, m, tea.KeyPressMsg{Code: code})
+	}
+}
+
+// openExportModalWithText pauses the stream, opens the export modal with 'X'
+// and replaces the pre-filled default name with text, all through keys.
+func openExportModalWithText(t *testing.T, m *Model, text string) {
+	t.Helper()
+	_ = pressLocal(t, m, "space")
+	_ = pressLocal(t, m, "X")
+	if !m.exportModal.Visible() {
+		t.Fatal("X should open the export modal")
+	}
+	repeatKey(t, m, tea.KeyBackspace, len(m.exportModal.textInput.Value()))
+	typeText(t, m, text)
+	if got := m.exportModal.textInput.Value(); got != text {
+		t.Fatalf("typed %q, input holds %q", text, got)
+	}
+}
+
+func newPausedModelForExport(t *testing.T) (Model, string) {
+	t.Helper()
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
+	exportDir := t.TempDir()
+	m := NewModel(rb)
+	m.height = 20
+	m.setExportDirForTest(exportDir)
+	m.Refresh()
+	return m, exportDir
+}
+
+// TestPausedExportModalKeepsTheNameWhenTheExportIsRefused is the UI half of
+// task 9s2, driven by key messages only: a name the export refuses (here a
+// folder that does not exist) must not close the modal and discard the typing;
+// it stays open with the name, the cursor where it was and the reason, and no
+// file or lastExportPath appears. Cursor movement keeps the reason; the first
+// edit clears it, and the corrected text, edited in place with keys, saves.
+func TestPausedExportModalKeepsTheNameWhenTheExportIsRefused(t *testing.T) {
+	m, exportDir := newPausedModelForExport(t)
+	openExportModalWithText(t, &m, "missing-dir/out.csv")
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.exportModal.Visible() {
+		t.Fatalf("a refused export must keep the modal open")
+	}
+	if got := m.exportModal.textInput.Value(); got != "missing-dir/out.csv" {
+		t.Fatalf("typed name lost, input is %q", got)
+	}
+	if !strings.Contains(m.exportModal.err, "no such file or directory") {
+		t.Fatalf("modal error should say why, got %q", m.exportModal.err)
+	}
+	if view := m.exportModal.View(100, 30); !strings.Contains(view, "Error: ") {
+		t.Fatalf("modal view should show the error:\n%s", view)
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("no export happened, lastExportPath = %q", m.lastExportPath)
+	}
+
+	// Move the cursor in front of "out.csv": the error still describes the
+	// rejected name, so it stays; then delete "missing-dir/" with backspace,
+	// the first of which is an edit and clears the error.
+	repeatKey(t, &m, tea.KeyLeft, len("out.csv"))
+	if m.exportModal.err == "" {
+		t.Fatal("moving the cursor must not clear the error")
+	}
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if m.exportModal.err != "" {
+		t.Fatalf("an edit should clear the stale error, still %q", m.exportModal.err)
+	}
+	repeatKey(t, &m, tea.KeyBackspace, len("missing-dir/")-1)
+	if got := m.exportModal.textInput.Value(); got != "out.csv" {
+		t.Fatalf("edited name = %q, want out.csv", got)
+	}
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.exportModal.Visible() || m.lastExportPath != filepath.Join(exportDir, "out.csv") {
+		t.Fatalf("corrected name should save: visible=%v path=%q", m.exportModal.Visible(), m.lastExportPath)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "out.csv")); err != nil {
+		t.Fatalf("export file missing: %v", err)
+	}
+}
+
+// TestPausedExportModalEscAfterRefusalClosesWithoutSaving: after a refused
+// export the user may give up; Esc closes the modal, clears the error, writes
+// nothing and leaves lastExportPath alone. The next X starts clean.
+func TestPausedExportModalEscAfterRefusalClosesWithoutSaving(t *testing.T) {
+	m, exportDir := newPausedModelForExport(t)
+	openExportModalWithText(t, &m, "missing-dir/out.csv")
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.exportModal.Visible() || m.exportModal.err == "" {
+		t.Fatalf("setup: export should have been refused (visible=%v err=%q)", m.exportModal.Visible(), m.exportModal.err)
+	}
+
+	pressTea(t, &m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.exportModal.Visible() || m.exportModal.err != "" {
+		t.Fatalf("Esc should close and clear the error: visible=%v err=%q", m.exportModal.Visible(), m.exportModal.err)
+	}
+	if m.lastExportPath != "" {
+		t.Fatalf("Esc must not export, lastExportPath = %q", m.lastExportPath)
+	}
+	if entries, _ := os.ReadDir(exportDir); len(entries) != 0 {
+		t.Fatalf("Esc must not write files, exportDir holds %v", entries)
+	}
+
+	_ = pressLocal(t, &m, "X")
+	if !m.exportModal.Visible() || m.exportModal.err != "" || !strings.HasPrefix(m.exportModal.textInput.Value(), "ior-stream-") {
+		t.Fatalf("reopening should start clean: visible=%v err=%q input=%q",
+			m.exportModal.Visible(), m.exportModal.err, m.exportModal.textInput.Value())
+	}
+}
+
 func TestPausedOpenLastExportEmitsEditorRequest(t *testing.T) {
 	rb := NewRingBuffer()
 	rb.Push(StreamEvent{Seq: 1, Comm: "proc", PID: 1, TID: 1, Syscall: "read"})
@@ -949,6 +1289,63 @@ func TestRegexSearchForwardBackwardAndRepeat(t *testing.T) {
 	}
 }
 
+// TestSearchMatchesAWarningRowByItsVisibleTextOnly: a warning row is drawn
+// as "warning: <message>" and nothing else, so a search must not stop on it
+// for the placeholders behind it (comm "ior", pid 0, ret -1, 0 bytes, its
+// sequence number, the error flag), and must find what the line shows, with
+// control characters as the placeholders they are drawn as.
+func TestSearchMatchesAWarningRowByItsVisibleTextOnly(t *testing.T) {
+	warning := NewWarningEvent(2, "Trace stopped:\tboom\x1b[31m")
+	if got, want := warningLine(warning), "warning: Trace stopped: boom?[31m"; got != want {
+		t.Fatalf("warningLine = %q, want %q", got, want)
+	}
+	for _, tt := range []struct {
+		pattern string
+		want    bool
+	}{
+		{`^-1$`, false}, {`^ior$`, false}, {`^0$`, false}, {`^2$`, false},
+		{`^error$`, false}, {`^warning$`, false}, {`\t`, false}, {`\x1b`, false},
+		{`^warning: Trace`, true}, {`stopped: boom\?\[31m$`, true}, {`boom`, true},
+	} {
+		if got := streamEventMatchesRegex(warning, regexp.MustCompile(tt.pattern)); got != tt.want {
+			t.Errorf("/%s on a warning row: matched = %v, want %v", tt.pattern, got, tt.want)
+		}
+	}
+}
+
+// TestPausedSearchSkipsAWarningRowsHiddenValues drives the paused search in
+// both directions over a syscall row (no zero, no "ior", no -1 in it) and a
+// warning row: the hidden placeholders leave the selection where it was with
+// "No match", the visible text moves it to the warning row.
+func TestPausedSearchSkipsAWarningRowsHiddenValues(t *testing.T) {
+	rb := NewRingBuffer()
+	rb.Push(StreamEvent{
+		Seq: 1, TimeNs: 5, GapNs: 9, DurationNs: 9, Comm: "alpha", PID: 10, TID: 100,
+		Syscall: "read", FD: 3, RetVal: 7, Bytes: 7, FileName: "/tmp/a",
+	})
+	rb.Push(NewWarningEvent(2, "Trace stopped: boom"))
+	for _, direction := range []SearchDirection{SearchForward, SearchBackward} {
+		m := NewModel(rb)
+		m.height = 20
+		m.Refresh()
+		_ = pressLocal(t, &m, "space")
+		for _, hidden := range []string{`^-1$`, `^ior$`, `^0$`, `^error$`} {
+			m.moveSelectionTo(0)
+			m.submitSearch(hidden, direction)
+			if m.selectedIdx != 0 || !strings.HasPrefix(m.statusMessage, "No match") {
+				t.Fatalf("/%s (direction %d) selected row %d, status %q", hidden, direction, m.selectedIdx, m.statusMessage)
+			}
+		}
+		for _, visible := range []string{`^warning: Trace`, `boom`} {
+			m.moveSelectionTo(0)
+			m.submitSearch(visible, direction)
+			if m.selectedIdx != 1 {
+				t.Fatalf("/%s (direction %d) selected row %d, want the warning row", visible, direction, m.selectedIdx)
+			}
+		}
+	}
+}
+
 func readCSVRecords(t *testing.T, path string) [][]string {
 	t.Helper()
 	f, err := os.Open(path)
@@ -1038,4 +1435,98 @@ func pressRequest[T tea.Msg](t *testing.T, m *Model, keyStr string) T {
 		t.Fatalf("key %q: expected %T, got %#v", keyStr, *new(T), cmd())
 	}
 	return msg
+}
+
+// Task 4r2: HandleKey takes key names and cannot carry a bracketed paste, so
+// HandlePaste is the stream's entry point for one.
+func TestHandlePasteFillsTheSearchModalAndSubmitsIt(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 10)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	if !pressLocal(t, &m, "/") || !m.SearchModalVisible() {
+		t.Fatalf("expected / to open the search modal")
+	}
+	if !m.HandlePaste(tea.PasteMsg{Content: "rea[d]"}) {
+		t.Fatalf("expected the paste to be consumed by the search modal")
+	}
+	if !pressLocal(t, &m, "enter") {
+		t.Fatalf("expected enter to submit the pasted pattern")
+	}
+	if m.searchPattern != "rea[d]" || m.searchRegex == nil {
+		t.Fatalf("expected the pasted pattern to be searched, got %q", m.searchPattern)
+	}
+}
+
+func TestHandlePasteFillsTheExportModal(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 3)
+	m := NewModel(rb)
+	m.height = 20
+	m.Refresh()
+	pressLocal(t, &m, "space")
+	if !pressLocal(t, &m, "X") || !m.ExportModalVisible() {
+		t.Fatalf("expected X to open the export modal while paused")
+	}
+	m.exportModal = m.exportModal.Open("") // drop the default filename so the assertion is exact
+	if !m.HandlePaste(tea.PasteMsg{Content: "out.csv"}) {
+		t.Fatalf("expected the paste to be consumed by the export modal")
+	}
+	if got := m.exportModal.textInput.Value(); got != "out.csv" {
+		t.Fatalf("export filename = %q, want out.csv", got)
+	}
+}
+
+// With no modal open every key is a stream command (space pauses, / opens
+// search, ...), so a paste is refused and must change nothing.
+func TestHandlePasteWithoutModalIsRefused(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 3)
+	m := NewModel(rb)
+	m.Refresh()
+	if m.HandlePaste(tea.PasteMsg{Content: " /X"}) {
+		t.Fatalf("a paste with no modal open must not be consumed")
+	}
+	if m.Paused() || m.SearchModalVisible() || m.ExportModalVisible() {
+		t.Fatalf("a paste ran stream commands: paused=%v search=%v export=%v",
+			m.Paused(), m.SearchModalVisible(), m.ExportModalVisible())
+	}
+}
+
+// Task 3r2: the FD-trace overlay owns the keyboard like the two stream modals.
+// A key it has no meaning for used to report "not handled", so the dashboard
+// then ran its own tab/view/reset shortcuts on the screen hidden behind it.
+func TestFDTraceOverlayConsumesEveryKey(t *testing.T) {
+	rb := NewRingBuffer()
+	pushEvents(rb, 5)
+	for i := 0; i < 5; i++ {
+		rb.Push(StreamEvent{Seq: uint64(100 + i), Syscall: "read", Comm: "proc", PID: 100, FD: 7})
+	}
+	m := NewModel(rb)
+	m.Refresh()
+	if !pressLocal(t, &m, "space") || !m.paused {
+		t.Fatalf("expected space to pause the stream")
+	}
+	m.selectedIdx = len(m.filtered) - 1
+	if !pressLocal(t, &m, "T") || !m.FDTraceVisible() {
+		t.Fatalf("expected T to open the FD-trace overlay on an fd row")
+	}
+	for _, k := range []string{"tab", "shift+tab", "1", "7", "v", "b", "r", "R", "f", "/", "x", "X", "E", "F", "q!"} {
+		if !pressLocal(t, &m, k) {
+			t.Fatalf("overlay did not consume %q: it would reach the dashboard behind it", k)
+		}
+		if !m.FDTraceVisible() {
+			t.Fatalf("key %q closed the overlay", k)
+		}
+	}
+	if m.SearchModalVisible() || m.ExportModalVisible() {
+		t.Fatalf("a key opened a modal behind the overlay")
+	}
+	for _, k := range []string{"q", "esc"} {
+		m.fdTraceView.visible = true
+		if !pressLocal(t, &m, k) || m.FDTraceVisible() {
+			t.Fatalf("expected %q to close the overlay", k)
+		}
+	}
 }

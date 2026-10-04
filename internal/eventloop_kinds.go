@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"slices"
+
 	"ior/internal/event"
 	"ior/internal/globalfilter"
 	"ior/internal/types"
@@ -18,8 +20,11 @@ type runtimeEnterFilter func(filter globalfilter.Filter, ev event.Event) bool
 
 // runtimeControlHandler consumes a control event: a ring-buffer record that
 // carries state for the event loop instead of a syscall to report. The handler
-// owns the event and must recycle it.
-type runtimeControlHandler func(e *eventLoop, ev runtimeDecodedEvent)
+// owns the event and must recycle it. ch is the completed-pair channel of the
+// raw record being processed: a control record is never a row itself, but it
+// may complete at most one pending pair (the exec record under -tid, see
+// eventLoop.completeUntracedExec) and send it there like an exit record would.
+type runtimeControlHandler func(e *eventLoop, ev runtimeDecodedEvent, ch chan<- *event.Pair)
 
 type runtimeEventKind struct {
 	enterEventType types.EventType
@@ -64,15 +69,23 @@ func rawDecoder[T any, P decodedEventPtr[T]](decode func([]byte) P) runtimeEvent
 	}
 }
 
+// typedRuntimeControl adapts a control handler that only updates event-loop
+// state and never completes a pair.
 func typedRuntimeControl[T any, P decodedEventPtr[T]](handle func(*eventLoop, P)) runtimeControlHandler {
-	return func(e *eventLoop, ev runtimeDecodedEvent) {
+	return typedRuntimePairControl(func(e *eventLoop, ev P, _ chan<- *event.Pair) { handle(e, ev) })
+}
+
+// typedRuntimePairControl adapts a control handler that may complete a pending
+// pair and send it on ch. A record of the wrong type is reported and recycled.
+func typedRuntimePairControl[T any, P decodedEventPtr[T]](handle func(*eventLoop, P, chan<- *event.Pair)) runtimeControlHandler {
+	return func(e *eventLoop, ev runtimeDecodedEvent, ch chan<- *event.Pair) {
 		typed, ok := ev.(P)
 		if !ok {
 			e.notifyWarning("Dropped malformed control event")
 			ev.Recycle()
 			return
 		}
-		handle(e, typed)
+		handle(e, typed, ch)
 	}
 }
 
@@ -96,6 +109,7 @@ func runtimeEventKinds() []runtimeEventKind {
 		{enterEventType: types.ENTER_FD_PATH_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdPathExit)},
 		{enterEventType: types.ENTER_FD_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_FD_SIZE_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
+		{enterEventType: types.ENTER_FD_NAME_EVENT, exit: typedRuntimeExit((*eventLoop).handleFdExit)},
 		{enterEventType: types.ENTER_DUP3_EVENT, exit: typedRuntimeExit((*eventLoop).handleDup3Exit)},
 		{enterEventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT, exit: typedRuntimeExit((*eventLoop).handleOpenByHandleAtExit)},
 		{enterEventType: types.ENTER_SOCKET_EVENT, exit: typedRuntimeExit((*eventLoop).handleSocketExit)},
@@ -120,12 +134,27 @@ func runtimeEventKinds() []runtimeEventKind {
 	}
 }
 
+// rawRuntimeEvents is the table of every ring-buffer record kind the loop
+// decodes: the syscall enter and exit records, then the control records,
+// which never become rows. It is assembled from three parts only to keep each
+// readable; the order within and between them is the order it always had.
 func rawRuntimeEvents() []rawRuntimeEvent {
+	return slices.Concat(rawSyscallEvents(), rawTaskControlEvents(), rawCallControlEvents())
+}
+
+// rawSyscallEvents lists the syscall records: each enter kind with its raw
+// enter filter (nil: the completed pair is filtered instead) and each exit
+// kind.
+func rawSyscallEvents() []rawRuntimeEvent {
 	return []rawRuntimeEvent{
 		enterRaw(types.ENTER_OPEN_EVENT, rawDecoder[types.OpenEvent](types.NewOpenEventFast), matchRawOpenEvent),
 		exitRaw(types.EXIT_OPEN_EVENT, rawDecoder[types.RetEvent](types.NewRetEventFast)),
 		enterRaw(types.ENTER_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast), nil),
 		enterRaw(types.ENTER_FD_SIZE_EVENT, decodeFdSizeEvent, nil),
+		// close's enter when the file it releases has a last path component:
+		// an fd_event with that name behind it, decoded into the same event
+		// (internal/eventloop_fdname.go).
+		enterRaw(types.ENTER_FD_NAME_EVENT, rawDecoder[types.FdEvent](types.NewFdNameEventFast), nil),
 		exitRaw(types.EXIT_FD_EVENT, rawDecoder[types.FdEvent](types.NewFdEventFast)),
 		enterRaw(types.ENTER_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast), nil),
 		exitRaw(types.EXIT_NULL_EVENT, rawDecoder[types.NullEvent](types.NewNullEventFast)),
@@ -159,33 +188,85 @@ func rawRuntimeEvents() []rawRuntimeEvent {
 		enterRaw(types.ENTER_PTRACE_EVENT, rawDecoder[types.PtraceEvent](types.NewPtraceEventFast), nil),
 		enterRaw(types.ENTER_PERF_OPEN_EVENT, rawDecoder[types.PerfOpenEvent](types.NewPerfOpenEventFast), nil),
 		enterRaw(types.ENTER_BPF_EVENT, rawDecoder[types.BpfEvent](types.NewBpfEvent), nil),
+	}
+}
+
+// rawTaskControlEvents lists the control records about a task's life: its
+// exec, exit, creation and rename.
+func rawTaskControlEvents() []rawRuntimeEvent {
+	return []rawRuntimeEvent{
 		controlRaw(types.PROCESS_EXEC_EVENT, rawDecoder[types.ProcessExecEvent](types.NewProcessExecEventFast),
-			typedRuntimeControl((*eventLoop).handleProcessExecEvent)),
-		// sched:sched_process_exit reports the tgid of an exiting task so the
-		// fdTracker can evict that process's (pid, fd) entries instead of
-		// holding them until LRU eviction (internal/eventloop_processexit.go).
+			typedRuntimePairControl((*eventLoop).handleProcessExecEvent)),
+		// sched:sched_process_exit fires for every exiting task. Every exit
+		// drops that thread's cached comm, pending pairs and parked
+		// name_to_handle_at handle; the fdTracker
+		// evicts the process's (pid, fd) entries only when the record marks
+		// the exit that ends the thread group (group_dead), or when the flag
+		// is unknown because the record uses the legacy pre-group_dead layout
+		// - instead of holding them until LRU eviction
+		// (internal/eventloop_processexit.go).
 		controlRaw(types.PROCESS_EXIT_EVENT, rawDecoder[types.ProcessExitEvent](types.NewProcessExitEventFast),
 			typedRuntimeControl((*eventLoop).handleProcessExitEvent)),
+		// task:task_newtask fires for every created task (process or thread)
+		// and seeds its inherited comm (provisionally: the task may rename
+		// itself) before its first syscall, retiring the state a dead previous
+		// owner of a recycled tid left behind (internal/eventloop_newtask.go).
+		controlRaw(types.TASK_NEWTASK_EVENT, rawDecoder[types.TaskNewtaskEvent](types.NewTaskNewtaskEventFast),
+			typedRuntimeControl((*eventLoop).handleTaskNewtaskEvent)),
+		// task:task_rename fires whenever a task's comm changes (prctl
+		// PR_SET_NAME, pthread_setname_np, the exec's own rename) and applies
+		// the new name to the cache, which no other record reports for a task
+		// that does not exec (internal/eventloop_taskrename.go).
+		controlRaw(types.TASK_RENAME_EVENT, rawDecoder[types.TaskRenameEvent](types.NewTaskRenameEventFast),
+			typedRuntimeControl((*eventLoop).handleTaskRenameEvent)),
+	}
+}
+
+// rawCallControlEvents lists the control records about one syscall of a
+// task: what the kernel does with an interrupted call, and what a call's
+// exit handler adds to its pending enter.
+func rawCallControlEvents() []rawRuntimeEvent {
+	return []rawRuntimeEvent{
+		// The restart-fold probes report what the kernel does with a call a
+		// signal interrupted. routeHeldRestart applies the record to the row
+		// its tid holds before this dispatch; what arrives here only needs
+		// recycling (internal/eventloop_restart.go).
+		controlRaw(types.SYSCALL_RESTART_EVENT, rawDecoder[types.SyscallRestartEvent](types.NewSyscallRestartEventFast),
+			typedRuntimeControl((*eventLoop).handleSyscallRestartEvent)),
 		// The open-name fixup carries only the pending enter's identity and the
 		// filename re-read at sys_exit once the kernel had faulted the page in.
 		// Its dedicated decoder keeps the compact control record separate from
 		// the much larger open syscall payload.
 		controlRaw(types.OPEN_NAME_FIXUP_EVENT, rawDecoder[types.OpenNameFixupEvent](types.NewOpenNameFixupEventFast),
 			typedRuntimeControl((*eventLoop).handleOpenNameFixupEvent)),
+		// The file-handle record carries the handle a successful
+		// name_to_handle_at returned, reserved ahead of that call's exit
+		// record; the pathname of the call is filed under it for
+		// open_by_handle_at to look up (internal/eventloop_handle.go).
+		controlRaw(types.FILE_HANDLE_EVENT, rawDecoder[types.FileHandleEvent](types.NewFileHandleEventFast),
+			typedRuntimeControl((*eventLoop).handleFileHandleEvent)),
+		// The ring-fds record carries the registered-ring table entries an
+		// io_uring_register set or released, reserved ahead of that call's
+		// exit record whether or not the call's own records are sampled; the
+		// rows that pass an index are named from it
+		// (internal/eventloop_ringfds.go).
+		controlRaw(types.RING_FDS_EVENT, rawDecoder[types.RingFdsEvent](types.NewRingFdsEventFast),
+			typedRuntimeControl((*eventLoop).handleRingFdsEvent)),
 	}
 }
 
 // The new wire kinds retain the established userspace event types after
 // decoding, including fields needed by older IOR_BPF_OBJECT payloads. This
 // keeps filtering, descriptor state and output on their existing paths.
+//
+// decodeFdSizeEvent hands out a pooled FdEvent (types.FdSizeEvent.AsFdEvent),
+// which the row's Recycle returns; the two below still allocate theirs.
 func decodeFdSizeEvent(raw []byte) runtimeDecodedEvent {
 	ev := types.NewFdSizeEventFast(raw)
 	if ev == nil {
 		return nil
 	}
-	out := &types.FdEvent{EventType: ev.EventType, TraceId: ev.TraceId, Time: ev.Time,
-		Pid: ev.Pid, Tid: ev.Tid, Fd: ev.Fd, Size: ev.Size,
-		SizeValid: ev.SizeValid, SchemaVersion: ev.SchemaVersion}
+	out := ev.AsFdEvent()
 	ev.Recycle()
 	return out
 }
@@ -280,10 +361,20 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	return filter.MatchOpenEvent(openEv)
 }
 
+// matchRawNameEvent is the enter-side gate for the rename/link kinds. A name
+// whose sys_enter read faulted (PATH_READ_FAILED) arrives empty and is
+// recovered by a fixup record at sys_exit, exactly like a faulted open name
+// (see matchRawOpenEvent), so its path dimension is deferred to the exit
+// checkpoint, where handleNameExit ends in finishPairForTid and every
+// dimension is applied against the recovered names. Judging the empty name now
+// would drop the row before the fixup could ever land.
 func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	nameEv, ok := ev.(*types.NameEvent)
 	if !ok || nameEv == nil {
 		return false
+	}
+	if nameEv.OldnameStatus == types.PATH_READ_FAILED || nameEv.NewnameStatus == types.PATH_READ_FAILED {
+		return true
 	}
 	if capturedPathNeedsDeferredResolution(nameEv.Olddirfd, types.StringValue(nameEv.Oldname[:]),
 		nameEv.OldnameStatus, nameEventAllowsEmptyPath(nameEv, true, true)) ||
@@ -294,10 +385,20 @@ func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	return filter.MatchNameEvent(nameEv)
 }
 
+// matchRawPathEvent is the enter-side gate for the pathname kinds. Like
+// matchRawNameEvent it defers the path dimension of a name whose sys_enter read
+// faulted (PATH_READ_FAILED): the recovered name only arrives as a fixup record
+// at sys_exit, and handlePathExit's finishPairForTid applies the filter then.
+// A name the fixup cannot recover (the read still fails, or the record is lost
+// to backpressure) reaches that checkpoint empty, which no non-empty -path
+// pattern matches, so the row is dropped there instead of here.
 func matchRawPathEvent(filter globalfilter.Filter, ev event.Event) bool {
 	pathEv, ok := ev.(*types.PathEvent)
 	if !ok || pathEv == nil {
 		return false
+	}
+	if pathEv.PathnameStatus == types.PATH_READ_FAILED {
+		return true
 	}
 	if pathEventTargetRequired(pathEv) && capturedPathNeedsDeferredResolution(pathEv.Dirfd, types.StringValue(pathEv.Pathname[:]),
 		pathEv.PathnameStatus, pathEventAllowsEmptyPath(pathEv, true)) {

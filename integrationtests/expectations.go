@@ -65,17 +65,15 @@ type ExpectedRow struct {
 
 // AssertEventsPresent verifies that each expected event is found in the test result.
 // Counts are summed across all matching records before comparing to MinCount.
+//
+// When the records are those of a remembered run (runSources) that lacks
+// events its kernel-side loss can explain, the scenario is run again first
+// and the assertion made on the run that can be judged (rowpresence.go).
 func AssertEventsPresent(t *testing.T, result TestResult, expected []ExpectedEvent) {
 	t.Helper()
+	result.Records = judgedEventRun(t, result.Records, expected).rows
 	for _, exp := range expected {
-		var totalCount uint64
-		var matched bool
-		for _, rec := range result.Records {
-			if matchesExpectation(rec, exp) {
-				matched = true
-				totalCount += rec.Cnt.Count
-			}
-		}
+		matched, totalCount := eventTotals(result.Records, exp)
 		if !matched {
 			t.Errorf("expected event not found: %+v", exp)
 			logRecordSummary(t, result)
@@ -88,27 +86,95 @@ func AssertEventsPresent(t *testing.T, result TestResult, expected []ExpectedEve
 	}
 }
 
+// eventTotals reports whether any record matches exp, and the sum of the
+// counts of those that do.
+func eventTotals(records []flamegraph.IterRecord, exp ExpectedEvent) (matched bool, total uint64) {
+	for _, rec := range records {
+		if matchesExpectation(rec, exp) {
+			matched = true
+			total += rec.Cnt.Count
+		}
+	}
+	return matched, total
+}
+
+// judgedEventRun returns the run AssertEventsPresent is to judge for
+// records and expected (runSources.judged).
+func judgedEventRun(t rowVerdict, records []flamegraph.IterRecord, expected []ExpectedEvent) judgedRun[flamegraph.IterRecord] {
+	t.Helper()
+	return eventRunSources.judged(t, records, func(records []flamegraph.IterRecord) shortfall {
+		return eventShortfall(records, expected)
+	})
+}
+
+// eventShortfall returns what records lack of expected. The call an
+// expectation names is its tracepoint (and comm); the path and the flags are
+// what ior says about the call, so events of that tracepoint in the wanted
+// number that do not match are wrong, not missing.
+func eventShortfall(records []flamegraph.IterRecord, expected []ExpectedEvent) shortfall {
+	var short shortfall
+	for _, exp := range expected {
+		matched, total := eventTotals(records, exp)
+		if matched && total >= exp.MinCount {
+			continue
+		}
+		_, recorded := eventTotals(records, ExpectedEvent{Tracepoint: exp.Tracepoint, Comm: exp.Comm})
+		short.note(max(exp.MinCount, 1), recorded)
+	}
+	return short
+}
+
 // AssertRowsPresent verifies that every requested semantic row appears at
 // least MinCount times. A zero MinCount means one row.
+//
+// When the rows are those of a remembered run (runSources) that lacks rows
+// its kernel-side loss can explain, the scenario is run again first and the
+// assertion made on the run that can be judged (rowpresence.go).
 func AssertRowsPresent(t *testing.T, rows []iorparquet.Record, expected []ExpectedRow) {
 	t.Helper()
+	rows = parquetRunSources.judged(t, rows, func(rows []iorparquet.Record) shortfall {
+		return rowShortfall(rows, expected)
+	}).rows
 	for _, exp := range expected {
-		wantCount := exp.MinCount
-		if wantCount == 0 {
-			wantCount = 1
-		}
-
-		var matched int
-		for _, row := range rows {
-			if matchesRowExpectation(row, exp) {
-				matched++
-			}
-		}
-		if matched < wantCount {
-			t.Errorf("rows matching %+v = %d, want >= %d", exp, matched, wantCount)
+		if matched, want := matchingRows(rows, exp), wantedRows(exp); matched < want {
+			t.Errorf("rows matching %+v = %d, want >= %d", exp, matched, want)
 			logRowSummary(t, rows)
 		}
 	}
+}
+
+// wantedRows is the number of rows exp asks for: MinCount, or one.
+func wantedRows(exp ExpectedRow) int {
+	return max(exp.MinCount, 1)
+}
+
+// matchingRows counts the rows that match exp.
+func matchingRows(rows []iorparquet.Record, exp ExpectedRow) int {
+	var matched int
+	for _, row := range rows {
+		if matchesRowExpectation(row, exp) {
+			matched++
+		}
+	}
+	return matched
+}
+
+// rowShortfall returns what rows lack of expected. The call an expectation
+// names is its syscall (and comm), together with the descriptor when the
+// expectation states one exactly; every other field is what ior says about
+// the call, so rows of that call in the wanted number that do not match are
+// wrong, not missing.
+func rowShortfall(rows []iorparquet.Record, expected []ExpectedRow) shortfall {
+	var short shortfall
+	for _, exp := range expected {
+		want := wantedRows(exp)
+		if matchingRows(rows, exp) >= want {
+			continue
+		}
+		call := ExpectedRow{Syscall: exp.Syscall, Comm: exp.Comm, FD: exp.FD}
+		short.note(uint64(want), uint64(matchingRows(rows, call)))
+	}
+	return short
 }
 
 // LoadParquetRows reads all persisted stream rows from path.

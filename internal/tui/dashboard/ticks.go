@@ -194,11 +194,11 @@ func (m *Model) handleRefreshTick(msg refreshTickMsg) (tea.Model, tea.Cmd) {
 	if !m.focused || !m.ticks.refresh.isCurrent(msg.generation) {
 		return m, nil
 	}
-	tick := m.statsTick()
-	return m, tea.Batch(
-		m.ticks.refreshCmd(),
-		func() tea.Msg { return tick },
-	)
+	// The snapshot is built by a command, not here: Update runs on the UI
+	// goroutine and a build with stale percentile reservoirs takes up to
+	// ~22ms (statstick.go). refreshStatsCmd is nil while the previous build
+	// is still running; tea.Batch drops nil commands.
+	return m, tea.Batch(m.ticks.refreshCmd(), m.refreshStatsCmd())
 }
 
 func (m *Model) handleStreamTick(msg streamTickMsg) (tea.Model, tea.Cmd) {
@@ -227,12 +227,20 @@ func (m *Model) handleFlameTick(msg flameTickMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// handleBubbleTick advances the active bubble chart one frame and re-arms the
+// chain only while the chart is still animating. Once the springs have settled
+// and the drift wobble has faded (bubbleChart.Tick returns false) the chain
+// ends: an idle chart costs nothing, where re-arming for as long as there were
+// nodes kept a 30fps tick + full re-render alive forever. New data restarts
+// the chain (refreshBubbleData -> startBubble), as do tab entry, a resize, the
+// v and b keys and focus regain (AGENTS.md lists the triggers). A workload
+// that changes the bubbles on every stats tick keeps the chain alive, since
+// each real change restarts the drift window.
 func (m *Model) handleBubbleTick(msg bubbleTickMsg) (tea.Model, tea.Cmd) {
 	if !m.focused || !m.bubbleEnabledForTab(m.activeTab) || !m.ticks.bubble.isCurrent(msg.generation) {
 		return m, nil
 	}
-	_ = m.tickActiveBubbleChart()
-	if m.activeBubbleChartHasNodes() {
+	if m.tickActiveBubbleChart() {
 		return m, m.ticks.bubbleCmd()
 	}
 	return m, nil

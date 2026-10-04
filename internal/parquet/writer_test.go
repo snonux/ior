@@ -112,3 +112,155 @@ func readAllRecords(t *testing.T, path string) []Record {
 		t.Fatalf("Read() error = %v", err)
 	}
 }
+
+// TestWritersAimedAtOnePathKeepEveryRecording is the regression for two
+// recordings that resolve to the same name (default names are only accurate to
+// the second): they used to share one ".tmp" and the later rename replaced the
+// earlier file. Now each has its own temp file and the later publish lands
+// under a "-1" name, reported by FinalPath. This is the policy for ior's
+// generated default names (NewAutoNamedWriter).
+func TestAutoNamedWritersAimedAtOnePathKeepEveryRecording(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trace.parquet")
+	rowsA := []Record{{Seq: 1, Comm: "a", Syscall: "read"}}
+	rowsB := []Record{{Seq: 2, Comm: "b", Syscall: "write"}}
+
+	a, err := NewAutoNamedWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewAutoNamedWriter a: %v", err)
+	}
+	b, err := NewAutoNamedWriter(path, WriterConfig{}, FileMetadata{Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewWriter b: %v", err)
+	}
+	if a.TempPath() == b.TempPath() {
+		t.Fatalf("both writers share temp file %q", a.TempPath())
+	}
+	if err := a.WriteRows(rowsA); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteRows(rowsB); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close a: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close b: %v", err)
+	}
+
+	if a.FinalPath() != path {
+		t.Errorf("a.FinalPath() = %q, want %q", a.FinalPath(), path)
+	}
+	wantB := filepath.Join(dir, "trace-1.parquet")
+	if b.FinalPath() != wantB {
+		t.Errorf("b.FinalPath() = %q, want %q", b.FinalPath(), wantB)
+	}
+	if got := readAllRecords(t, a.FinalPath()); !reflect.DeepEqual(got, rowsA) {
+		t.Errorf("a's file = %+v, want %+v", got, rowsA)
+	}
+	if got := readAllRecords(t, b.FinalPath()); !reflect.DeepEqual(got, rowsB) {
+		t.Errorf("b's file = %+v, want %+v", got, rowsB)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("dir holds %v, want exactly the two recordings", entries)
+	}
+}
+
+// TestExplicitPathWriterReplacesExistingFile pins the least-surprise policy
+// for a user-chosen path (-parquet out.parquet): a second recording replaces
+// the first at exactly that path, as it did before no-clobber publishing was
+// introduced for generated names, and FinalPath stays the requested path.
+func TestExplicitPathWriterReplacesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chosen.parquet")
+	first := []Record{{Seq: 1, Comm: "a", Syscall: "read"}}
+	second := []Record{{Seq: 2, Comm: "b", Syscall: "write"}}
+
+	for _, rows := range [][]Record{first, second} {
+		w, err := NewWriter(path, WriterConfig{}, FileMetadata{Mode: "headless"})
+		if err != nil {
+			t.Fatalf("NewWriter: %v", err)
+		}
+		if err := w.WriteRows(rows); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if w.FinalPath() != path {
+			t.Errorf("FinalPath() = %q, want the requested %q", w.FinalPath(), path)
+		}
+	}
+	if got := readAllRecords(t, path); !reflect.DeepEqual(got, second) {
+		t.Errorf("file = %+v, want the second recording %+v", got, second)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only chosen.parquet", entries)
+	}
+}
+
+func TestNewWriterMissingDirectoryFails(t *testing.T) {
+	_, err := NewWriter(filepath.Join(t.TempDir(), "missing", "trace"), WriterConfig{}, FileMetadata{})
+	if err == nil {
+		t.Fatal("NewWriter in a missing directory succeeded, want error")
+	}
+}
+
+func TestNormalizeOutputPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"trace":             "trace.parquet",
+		"trace.parquet":     "trace.parquet",
+		"trace.parquet.tmp": "trace.parquet",
+		"  dir/x.PARQUET  ": "dir/x.PARQUET",
+	} {
+		got, err := normalizeOutputPath(in)
+		if err != nil || got != want {
+			t.Errorf("normalizeOutputPath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "   ", "."} {
+		if _, err := normalizeOutputPath(in); err == nil {
+			t.Errorf("normalizeOutputPath(%q) succeeded, want error", in)
+		}
+	}
+}
+
+// TestCheckOutputPath pins the early -parquet check: a missing directory and
+// a real directory at the final name are rejected, while a symlink to a
+// directory is accepted because publishing renames over the link itself (the
+// pre-check once rejected it although -parquet <link> always worked).
+func TestCheckOutputPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := CheckOutputPath(filepath.Join(dir, "out")); err != nil {
+		t.Errorf("CheckOutputPath(new file) = %v, want nil", err)
+	}
+	if err := CheckOutputPath(filepath.Join(dir, "missing", "out.parquet")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("CheckOutputPath(missing dir) = %v, want ErrNotExist", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "adir.parquet"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOutputPath(filepath.Join(dir, "adir")); err == nil {
+		t.Error("CheckOutputPath accepted a real directory at the final name")
+	}
+
+	link := filepath.Join(dir, "link.parquet")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOutputPath(link); err != nil {
+		t.Fatalf("CheckOutputPath(symlink to dir) = %v, want nil", err)
+	}
+	// The accepted path really works: the writer replaces the link itself.
+	writer, err := NewWriter(link, WriterConfig{}, FileMetadata{Hostname: "h", Mode: "tui"})
+	if err != nil {
+		t.Fatalf("NewWriter over a symlink to a directory: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("Lstat(%s) = %v, %v, want the link replaced by a regular file", link, info, err)
+	}
+}

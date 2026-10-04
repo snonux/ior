@@ -76,6 +76,12 @@ type tabDescriptor struct {
 	// the standard viewport (tab bar plus the help hint or expanded help
 	// bar; see flameViewport).
 	ContentViewport func(width, height int, showHelp bool) (int, int)
+	// MinBodyRows is the fewest body rows at which the tab is drawn: its
+	// smallest complete unit (a table's header, one row and hint; a panel
+	// with its borders and one content row). With fewer rows View shows the
+	// "terminal too small" notice instead of a fragment cut mid-panel. Zero
+	// means the generic minBodyRows.
+	MinBodyRows int
 	// InitCmd starts this tab's own tick chain whenever the tab becomes the
 	// active one: on entry and when Init's tickChainsStartMsg is handled,
 	// alongside the global refresh chain. It runs on the Update path and
@@ -109,8 +115,19 @@ type tabDescriptor struct {
 	// key press for itself (an open modal, a key its sub-model consumes), so
 	// the top-level model must not act on it. Nil means it never blocks.
 	BlocksGlobalShortcut func(m *Model, msg tea.KeyPressMsg) bool
+	// TextInputFocused reports whether the tab, while active, has a text input
+	// open that receives printable keys as text. Unlike BlocksGlobalShortcut,
+	// which only defers a key to the tab, this makes the top-level model skip
+	// its q/H handling entirely, so typing "sql" or "Hypr" is not a quit or a
+	// help toggle. Nil means the tab has no text input.
+	TextInputFocused func(m *Model) bool
+	// HandlePaste inserts bracketed-paste text into the tab's text input while
+	// that input is open (TextInputFocused), and returns any command that
+	// results. Nil means the tab has no text input that accepts a paste.
+	HandlePaste func(m *Model, msg tea.PasteMsg) tea.Cmd
 	// RefreshBubble feeds the tab's bubble chart from the latest snapshot and
-	// reports whether the chart is still animating. Nil means the tab has no
+	// reports whether the chart is still animating. It is called only for a
+	// tab in bubbles mode (see refreshBubbleData). Nil means the tab has no
 	// bubble chart.
 	RefreshBubble func(m *Model) bool
 	// CaptureSelection is called on every stats tick BEFORE the new snapshot
@@ -138,8 +155,14 @@ type tabDescriptor struct {
 //
 // It is populated in init rather than by its declaration because the hooks
 // legitimately reach back into the registry (a Files key toggles grouping,
-// which refreshes every tab's bubble chart through the registry); as a
+// which refreshes the bubble charts through the registry; see
+// Model.refreshBubbleData, which feeds only the tabs in bubbles mode); as a
 // package-level initializer that is a compile-time initialization cycle.
+// A chart whose tab is in table or treemap mode is therefore not fed: it keeps
+// its stale nodes and selected ID until bubbles mode is next entered
+// (cycleVisualizationMode refreshes on entry), then animates from the old
+// positions to the new ones. That is benign: nothing renders or reads it
+// meanwhile.
 // Package-level var initializers run before init, so none of them may read
 // the registry (directly or through orderedTabs, lookupTab,
 // forEachBubbleChart and friends): they would see it empty.
@@ -157,6 +180,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Flm",
 			Position:        10,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     flameMinRows,
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
 			InitCmd:     func(m *Model) tea.Cmd { return m.ticks.startFlame() },
@@ -165,12 +189,15 @@ func registeredTabs() map[Tab]tabDescriptor {
 			BlocksGlobalShortcut: func(m *Model, msg tea.KeyPressMsg) bool {
 				return m.flamegraphModel.ConsumesKey(msg)
 			},
+			TextInputFocused: func(m *Model) bool { return m.flamegraphModel.SearchActive() },
+			HandlePaste:      pasteIntoFlame,
 		},
 		TabOverview: {
 			Name:            "Overview",
 			ShortName:       "Ovr",
 			Position:        20,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     overviewMinRows,
 			Render:          tabRenderOverview,
 			ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Two },
 		},
@@ -185,7 +212,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			HandleEnter:     handleSyscallsEnter,
 			HandleSort:      func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleSyscallsSortKey(reverse) },
 			RefreshBubble: func(m *Model) bool {
-				return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest)))
+				return m.syscallsTab.bubble.SetData(syscallBubbleData(m.visibleSyscallRows(m.latest), m.syscallsTab.bubble.Metric()))
 			},
 			KeepSelection:    (*Model).keepSyscallsSelection,
 			CaptureSelection: captureSyscallsSelection,
@@ -218,17 +245,19 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.Four },
 		},
 		TabProcesses: {
-			Name:             "Processes",
-			ShortName:        "Pro",
-			Position:         50,
-			AllowedVizModes:  []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
-			TableState:       func(m *Model) tableTab { return &m.processesTab },
-			KeepSelection:    (*Model).keepProcessesSelection,
-			Render:           tabRenderProcesses,
-			HandleScroll:     tabScrollProcesses,
-			HandleEnter:      handleProcessesEnter,
-			HandleSort:       func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleProcessesSortKey(reverse) },
-			RefreshBubble:    func(m *Model) bool { return m.processesTab.bubble.SetData(processBubbleData(m.latest)) },
+			Name:            "Processes",
+			ShortName:       "Pro",
+			Position:        50,
+			AllowedVizModes: []tabVizMode{tabVizModeTable, tabVizModeBubbles, tabVizModeTreemap},
+			TableState:      func(m *Model) tableTab { return &m.processesTab },
+			KeepSelection:   (*Model).keepProcessesSelection,
+			Render:          tabRenderProcesses,
+			HandleScroll:    tabScrollProcesses,
+			HandleEnter:     handleProcessesEnter,
+			HandleSort:      func(m *Model, reverse bool) (bool, tea.Cmd) { return m.handleProcessesSortKey(reverse) },
+			RefreshBubble: func(m *Model) bool {
+				return m.processesTab.bubble.SetData(processBubbleData(m.latest, m.processesTab.bubble.Metric()))
+			},
 			CaptureSelection: captureProcessesSelection,
 			ClampColumns: func(m *Model) {
 				m.processesTab.col = common.ClampTableCol(m.processesTab.col, len(processColumns()))
@@ -240,6 +269,7 @@ func registeredTabs() map[Tab]tabDescriptor {
 			ShortName:       "Lat",
 			Position:        60,
 			AllowedVizModes: []tabVizMode{tabVizModeTable},
+			MinBodyRows:     latencyMinRows,
 			Render:          tabRenderLatency,
 			ShortcutKey:     func(k common.KeyMap) key.Binding { return k.Six },
 		},
@@ -251,17 +281,41 @@ func registeredTabs() map[Tab]tabDescriptor {
 			// Use the model's tick scheduler so the configured fast interval
 			// is honoured on the very first tick, not just on subsequent ticks.
 			InitCmd: func(m *Model) tea.Cmd { return m.ticks.startStream() },
-			// The stream draws its own footer, so its viewport ignores the
-			// dashboard help bar.
-			ContentViewport: func(width, height int, _ bool) (int, int) { return streamViewport(width, height) },
-			Render:          tabRenderStream,
-			HandleScroll:    tabScrollStream,
+			// The standard viewport (nil ContentViewport) is exactly the
+			// body View gives the tab, so the stream fits its own footer
+			// lines into it (eventstream.Model.View) instead of the
+			// dashboard reserving rows for them.
+			MinBodyRows:  streamTableMinRows,
+			Render:       tabRenderStream,
+			HandleScroll: tabScrollStream,
+			// The three modals and the FD-trace overlay each own the
+			// keyboard while open: without the overlay or the warning
+			// modal here q quit ior instead of closing it (the top-level
+			// model never re-routed it as esc).
 			BlocksGlobalShortcut: func(m *Model, _ tea.KeyPressMsg) bool {
+				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible() ||
+					m.streamModel.WarningModalVisible() || m.streamModel.FDTraceVisible()
+			},
+			// The search and export modals are a single text input, focused
+			// while open; the warning modal has none.
+			TextInputFocused: func(m *Model) bool {
 				return m.streamModel.ExportModalVisible() || m.streamModel.SearchModalVisible()
+			},
+			HandlePaste: func(m *Model, msg tea.PasteMsg) tea.Cmd {
+				m.streamModel.HandlePaste(msg)
+				return nil
 			},
 			ShortcutKey: func(k common.KeyMap) key.Binding { return k.Seven },
 		},
 	}
+}
+
+// pasteIntoFlame hands a paste to the flamegraph, whose Update inserts it into
+// the search input while search mode is active.
+func pasteIntoFlame(m *Model, msg tea.PasteMsg) tea.Cmd {
+	next, cmd := m.flamegraphModel.Update(msg)
+	m.flamegraphModel = next.(*flamegraphtui.Model)
+	return cmd
 }
 
 // orderedTabs returns all registered tabs sorted by their Position field.
@@ -372,6 +426,21 @@ func (m *Model) contentViewport(tab Tab, width, height int) (int, int) {
 	return flameViewport(width, height, m.showHelp)
 }
 
+// minBodyRowsFor returns the fewest body rows at which tab is drawn in its
+// current state: the descriptor's own minimum (MinBodyRows), or
+// altVizMinRows while an alternative visualization (bubbles, treemap, icicle)
+// is the active view, or else the generic table minimum.
+func (m *Model) minBodyRowsFor(tab Tab) int {
+	d := lookupTab(tab)
+	if rows := d.MinBodyRows; rows > 0 {
+		return rows
+	}
+	if m.altVizReady(tab) && m.tabVizModeFor(tab) != tabVizModeTable {
+		return altVizMinRows
+	}
+	return minBodyRows
+}
+
 // forEachBubbleChart calls fn with the bubble chart of every registered
 // table tab, so chart-wide settings (construction, theme) reach every chart
 // without listing the tabs. It reads the registry, which is populated in
@@ -384,10 +453,12 @@ func (m *Model) forEachBubbleChart(fn func(*bubbleChart)) {
 	}
 }
 
-// renderWaitingForStats is the placeholder a snapshot-driven tab shows
-// before the first stats snapshot arrives.
-func renderWaitingForStats(tab Tab) string {
-	return common.Current().PanelStyle.Render(tab.String() + ": waiting for stats...")
+// renderWaitingForStats is the placeholder a snapshot-driven table tab shows
+// before the first stats snapshot arrives: a PanelStyle box cut to the width
+// (common.RenderMessagePanel; task cz2), since a narrow terminal shows it
+// right at startup and a wider line would be clipped or soft-wrapped.
+func renderWaitingForStats(tab Tab, width int) string {
+	return common.RenderMessagePanel(tab.String()+": waiting for stats...", width)
 }
 
 // tabRenderFlame adapts the flame model's View to the tabRenderFn signature.
@@ -427,7 +498,7 @@ func tabRenderSyscalls(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mode
 		return m.syscallsTab.bubble.Render("Syscalls", width, height)
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabSyscalls)
+		return renderWaitingForStats(TabSyscalls, width)
 	}
 	return renderSyscallsWithSort(snap, m.visibleSyscallRows(snap), width, height, m.syscallsTab.offset, m.syscallsTab.col, m.syscallsTab.sort)
 }
@@ -448,7 +519,7 @@ func tabRenderFiles(m *Model, snap *statsengine.Snapshot, _ *eventstream.Model, 
 		}
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabFiles)
+		return renderWaitingForStats(TabFiles, width)
 	}
 	if m.filesDirGrouped {
 		return renderFilesDirGroupedWithSort(snap, width, height, m.filesDirTab.offset, m.filesDirTab.col, m.filesDirTab.sort)
@@ -466,7 +537,7 @@ func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mod
 		return m.processesTab.bubble.Render("Processes", width, height)
 	}
 	if snap == nil {
-		return renderWaitingForStats(TabProcesses)
+		return renderWaitingForStats(TabProcesses, width)
 	}
 	return renderProcessesWithSort(snap, width, height, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort)
 }
@@ -484,14 +555,18 @@ func captureSyscallsSelection(m *Model) func() {
 	)
 }
 
-// captureFilesSelection is the Files tab's CaptureSelection hook. The
-// dir-grouped selection is anchored even while another tab is shown:
-// skipping it would let the selection drift to a different item by the time
-// the Files tab is shown again.
+// captureFilesSelection is the Files tab's CaptureSelection hook. A pending
+// wish for the plain table (filesTab.wanted) wins over the selected row, as
+// in keyedSelection.capture. The dir-grouped selection is anchored even
+// while another tab is shown: skipping it would let the selection drift to a
+// different item by the time the Files tab is shown again.
 func captureFilesSelection(m *Model) func() {
 	selectedFile := ""
 	if !m.filesDirGrouped && m.filesTab.mode == tabVizModeTable && m.filesTab.sort.active {
-		selectedFile = m.selectedFilePath()
+		selectedFile = m.filesTab.wanted.peek()
+		if selectedFile == "" {
+			selectedFile = m.selectedFilePath()
+		}
 	}
 	reanchorDir := m.filesDirSelection().capture(m.filesDirGrouped && m.filesDirAnchorsByKey())
 	return func() {
@@ -518,7 +593,8 @@ func handleFilesKey(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.DirGroup) {
 		return false, nil
 	}
-	return true, m.toggleFilesDirGrouping()
+	m.toggleFilesDirGrouping()
+	return true, nil
 }
 
 // tabScrollSyscalls handles navigation keys for the syscalls tab. When the
@@ -528,7 +604,11 @@ func tabScrollSyscalls(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	keyStr := msg.String()
 	if m.syscallsTab.mode == tabVizModeTreemap {
 		sel := m.syscallsTreemapSelection()
-		return scrollOffset(keyStr, sel.offset, len(sel.keys())), nil
+		handled := scrollOffset(keyStr, sel.offset, len(sel.keys()))
+		if handled {
+			sel.wanted.forget() // a move, even a clamped no-op one, is the user's choice
+		}
+		return handled, nil
 	}
 	return m.syscallsTab.navigate(keyStr, m.syscallsRowCount(),
 		len(syscallColumns(m.width)), tablePageStep(m.activeTableHeight())), nil
@@ -553,12 +633,12 @@ func tabScrollFiles(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // while h/l still move the table column, which picks Enter's PID or Comm
 // filter (selectedProcessFilter) there too.
 func tabScrollProcesses(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	row, rows := &m.processesTab.offset, m.processesRowCount()
+	row, rows, wanted := &m.processesTab.offset, m.processesRowCount(), &m.processesTab.wanted
 	if m.processesTab.mode == tabVizModeTreemap {
 		sel := m.processesTreemapSelection()
-		row, rows = sel.offset, len(sel.keys())
+		row, rows, wanted = sel.offset, len(sel.keys()), sel.wanted
 	}
-	return m.processesTab.navigateRow(msg.String(), row, rows,
+	return m.processesTab.navigateRow(msg.String(), row, wanted, rows,
 		len(processColumns()), tablePageStep(m.activeTableHeight())), nil
 }
 
@@ -580,7 +660,7 @@ func (m *Model) handleOpenEditorRequested(msg messages.OpenEditorRequestedMsg) (
 		m.streamModel.SetStatusMessage("Open failed: " + err.Error())
 		return m, nil
 	}
-	return m, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+	return m, common.ExecProcess(editorCmd, func(err error) tea.Msg {
 		return streamEditorDoneMsg{err: err}
 	})
 }

@@ -1,19 +1,32 @@
 package integrationtests
 
 import (
+	"os"
 	"syscall"
 	"testing"
 )
 
 const (
-	mmapParquetDuration           = 6
-	mmapWorkloadStartupEnv        = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
-	mmapScenarioAddressSpaceBytes = 8192
-	mmapInitialAddressSpaceBytes  = 4096
-	mmapMinAddressSpaceBytesTotal = mmapInitialAddressSpaceBytes + mmapScenarioAddressSpaceBytes*2
-	mmapBasicLength               = uint64(len("mmap shared page data"))
-	mmapMsyncLength               = uint64(len("msync shared page data"))
+	mmapParquetDuration    = 6
+	mmapWorkloadStartupEnv = "IOR_WORKLOAD_STARTUP_DELAY_MS=1000"
 )
+
+// The address-space metric counts whole pages, as the kernel maps and unmaps
+// them (mmap(len=21) maps one page), so every expectation is the workload's
+// requested length rounded up to the host page size. ior traces the host it
+// runs on, so os.Getpagesize() is the traced page size too.
+var (
+	mmapPage                      = uint64(os.Getpagesize())
+	mmapScenarioAddressSpaceBytes = mmapRoundUp(8192)
+	mmapInitialAddressSpaceBytes  = mmapRoundUp(4096)
+	mmapMinAddressSpaceBytesTotal = mmapInitialAddressSpaceBytes + mmapScenarioAddressSpaceBytes*2
+	mmapBasicLength               = mmapRoundUp(uint64(len("mmap shared page data")))
+	mmapMsyncLength               = mmapRoundUp(uint64(len("msync shared page data")))
+)
+
+func mmapRoundUp(n uint64) uint64 {
+	return (n + mmapPage - 1) / mmapPage * mmapPage
+}
 
 var mmapTraceArgs = []string{"-trace-syscalls", "openat,write,close,mmap,msync,mremap,munmap"}
 
@@ -58,11 +71,13 @@ func TestMmapMsyncSync(t *testing.T) {
 			AddressSpaceBytes: ptrTo(mmapMsyncLength),
 		},
 		{
+			// msync flushes an existing range: it does not change the
+			// address space, so it contributes nothing to the metric.
 			Syscall:           "msync",
 			Comm:              "ioworkload",
 			RetVal:            ptrTo(int64(0)),
 			IsError:           ptrTo(false),
-			AddressSpaceBytes: ptrTo(mmapMsyncLength),
+			AddressSpaceBytes: ptrTo(uint64(0)),
 		},
 	})
 }
@@ -132,14 +147,14 @@ func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 			Comm:              "ioworkload",
 			IsError:           ptrTo(false),
 			Bytes:             &zeroBytes,
-			AddressSpaceBytes: ptrTo(uint64(mmapInitialAddressSpaceBytes)),
+			AddressSpaceBytes: ptrTo(mmapInitialAddressSpaceBytes),
 		},
 		{
 			Syscall:           "mremap",
 			Comm:              "ioworkload",
 			IsError:           ptrTo(false),
 			Bytes:             &zeroBytes,
-			AddressSpaceBytes: ptrTo(uint64(mmapScenarioAddressSpaceBytes)),
+			AddressSpaceBytes: ptrTo(mmapScenarioAddressSpaceBytes),
 		},
 		{
 			Syscall:           "munmap",
@@ -147,7 +162,7 @@ func TestMmapMremapMunmapAddressSpaceBytesInParquet(t *testing.T) {
 			RetVal:            ptrTo(int64(0)),
 			IsError:           ptrTo(false),
 			Bytes:             &zeroBytes,
-			AddressSpaceBytes: ptrTo(uint64(mmapScenarioAddressSpaceBytes)),
+			AddressSpaceBytes: ptrTo(mmapScenarioAddressSpaceBytes),
 		},
 	})
 

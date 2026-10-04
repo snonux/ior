@@ -5,6 +5,18 @@ import (
 	"slices"
 )
 
+// trieNode is one frame of a trie. value/heightValue are the node's own
+// (self) values; total/heightTotal are its subtree sums, kept current by
+// every insert (and recomputed by trie.computeTotals).
+//
+// The remaining fields serve LiveTrie only. topChildren holds the
+// trieTopChildren largest non-empty frame children, largest total first and
+// ties by name, maintained by insertLiveTriePath: its first entry bounds
+// every frame child's total and it is exactly the snapshot fallback set, so
+// a wide fan-out costs a snapshot constant time. bucket is the child that
+// compaction folded the lowest-ranked children into (also listed in
+// children, never in childMap or topChildren). mark is compaction's scratch
+// state and is markNone outside compactLocked.
 type trieNode struct {
 	name        string
 	value       uint64
@@ -12,7 +24,13 @@ type trieNode struct {
 	total       uint64
 	heightTotal uint64
 	children    []*trieNode
+	topChildren []*trieNode
 	childMap    map[string]*trieNode
+	bucket      *trieNode
+	// birthRootTotal is the root total when the node was created; LiveTrie
+	// compaction ranks nodes by their rate since then (see rateClock).
+	birthRootTotal uint64
+	mark           compactMark
 }
 
 type trie struct {
@@ -29,7 +47,7 @@ func newTrie() *trie {
 }
 
 func (t *trie) add(frames []string, value uint64) {
-	insertTriePath(t.root, frames, value, value)
+	_ = insertTriePath(t.root, frames, value, value)
 }
 
 func (t *trie) computeTotals() {

@@ -5,7 +5,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+
+	"ior/internal/tui/common"
 )
 
 // SearchDirection is which way the stream search scans from the current
@@ -24,8 +25,11 @@ const (
 type SearchModal struct {
 	visible   bool
 	textInput textinput.Model
-	err       string
-	direction SearchDirection
+	// inputStart is the rune the input's drawn window starts at, kept so
+	// the window stays put while the cursor is drawn in it (fitModalInput).
+	inputStart int
+	err        string
+	direction  SearchDirection
 }
 
 // NewSearchModal constructs a dark-mode search modal, defaulting to
@@ -34,6 +38,7 @@ func NewSearchModal() SearchModal {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 0
+	// A default until the stream Model sizes it to its view (Resize).
 	input.SetWidth(44)
 	input.SetStyles(textinput.DefaultStyles(true))
 	return SearchModal{textInput: input, direction: SearchForward}
@@ -62,6 +67,8 @@ func (m SearchModal) Open(direction SearchDirection, defaultTerm string) SearchM
 	m.direction = direction
 	m.textInput.SetValue(defaultTerm)
 	m.textInput.CursorEnd()
+	// A new value is drawn from its last screenful, the cursor at its end.
+	m.inputStart = fitModalInput(&m.textInput, len([]rune(m.textInput.Value())), m.textInput.Width())
 	m.textInput.Focus()
 	return m
 }
@@ -76,6 +83,9 @@ func (m SearchModal) Close() SearchModal {
 }
 
 // Update returns updated modal, submitted term, and whether submit occurred.
+// Every other message goes to the text input through common.UpdateTextInput,
+// which turns an Alt+D on the last rune into Delete (bubbles'
+// delete-word-forward panics there).
 func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 	if !m.visible {
 		return m, "", false
@@ -94,12 +104,42 @@ func (m SearchModal) Update(msg tea.Msg) (SearchModal, string, bool) {
 		}
 	}
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textInput, cmd = common.UpdateTextInput(m.textInput, msg)
 	_ = cmd
+	// Keep the window the user saw unless the edit moved the cursor out of
+	// it (fitModalInput), at the width the last Resize stored.
+	m.inputStart = fitModalInput(&m.textInput, m.inputStart, m.textInput.Width())
 	return m, "", false
 }
 
-// View renders the centered modal box within the given viewport.
+// searchModalSize is the search box's preferred and smallest width.
+var searchModalSize = modalSize{preferred: 58, min: 40}
+
+// searchPrefixWidth is the cells of the "/" or "?" direction prefix drawn
+// before the input.
+const searchPrefixWidth = 1
+
+// searchInputWidth is the input width of the search box in a view width
+// cells wide.
+func searchInputWidth(width int) int {
+	return modalInputWidth(modalBoxWidth(searchModalSize, width), searchPrefixWidth)
+}
+
+// Resize fits the input to the box drawn in a view width cells wide, so
+// Update scrolls the typed text with the width View draws it at
+// (fitModalInput). The stream Model calls it on every size change and
+// render.
+func (m SearchModal) Resize(width int) SearchModal {
+	if width > 0 {
+		m.inputStart = fitModalInput(&m.textInput, m.inputStart, searchInputWidth(width))
+	}
+	return m
+}
+
+// View renders the centered modal box within the given viewport, fitted to
+// it (renderModal): the box and its input line shrink with a narrow view and
+// shed their spacing on a short one, so the modal never outgrows the stream
+// body it replaces.
 func (m SearchModal) View(width, height int) string {
 	if !m.visible {
 		return ""
@@ -110,33 +150,20 @@ func (m SearchModal) View(width, height int) string {
 	if height <= 0 {
 		height = 24
 	}
-	modalWidth := 58
-	if width < modalWidth+4 {
-		modalWidth = width - 4
-		if modalWidth < 40 {
-			modalWidth = 40
-		}
-	}
-
 	prefix := "/"
 	if m.direction == SearchBackward {
 		prefix = "?"
 	}
-	lines := []string{
-		"Regex Search",
-		"",
-		"Pattern:",
-		prefix + m.textInput.View(),
+	// m is a copy: the input's window is fitted to this width for this
+	// render only, for a caller that skipped Resize; after Update and Resize
+	// it is already the remembered one, so this keeps it.
+	fitModalInput(&m.textInput, m.inputStart, searchInputWidth(width))
+	form := modalForm{
+		title: "Regex Search",
+		label: "Pattern:",
+		input: prefix + m.textInput.View(),
+		err:   m.err,
+		hint:  "Enter search • Esc cancel",
 	}
-	if m.err != "" {
-		lines = append(lines, "Error: "+m.err)
-	}
-	lines = append(lines, "", "Enter search • Esc cancel")
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Width(modalWidth).
-		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return renderModal(form, searchModalSize, width, height)
 }

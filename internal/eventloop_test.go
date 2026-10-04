@@ -13,10 +13,14 @@ import (
 	"ior/internal/types"
 )
 
+// defaultPid and defaultTid lie above every possible pid (absentPidBase, task
+// zs2): the fixtures resolve untraced descriptors through procfs and expect no
+// such process, while pid 10 and 11 are kernel threads on most hosts and real
+// processes in a container.
 const (
 	defaulTime   = 1234567
-	defaultPid   = 10
-	defaultTid   = 11
+	defaultPid   = absentPidBase + 10
+	defaultTid   = absentPidBase + 11
 	defaultDirfd = -100
 )
 
@@ -234,7 +238,7 @@ func TestApplyFdCloseStateFollowsLinuxCloseSemantics(t *testing.T) {
 				},
 			}
 
-			el.applyFdCloseState(ep, fd, pid)
+			el.applyFdCloseState(ep, fd, pid, 0)
 
 			if tc.wantEvicted {
 				verifyFdNotTracked(t, el, pid, fd)
@@ -1191,8 +1195,10 @@ func makePidfdGetfdEventTestData(t *testing.T) (td testData) {
 		if got, want := ep.File.Name(), path; got != want {
 			t.Errorf("Expected transferred file '%v' but got '%v'", want, got)
 		}
-		if _, ok := el.fdState().files[fdKey(pid, int32(fd))]; !ok {
-			t.Errorf("Expected transferred fd %d to be tracked", fd)
+		// The name came from a procfs read taken after the syscall, so it is
+		// not stored in the fd table (task er2); the number resolves lazily.
+		if _, ok := el.fdState().files[fdKey(pid, int32(fd))]; ok {
+			t.Errorf("Expected transferred fd %d to stay out of the fd table", fd)
 		}
 	})
 
@@ -1390,8 +1396,10 @@ func makeMsyncEventTestData(t *testing.T) (td testData) {
 		if ep.File != nil {
 			t.Errorf("Expected msync event to not carry file metadata, got %v", ep.File)
 		}
-		if ep.AddressSpaceBytes != syncLength {
-			t.Errorf("Expected msync address-space bytes %d but got %d", syncLength, ep.AddressSpaceBytes)
+		// msync only flushes an existing range, so it adds nothing to the
+		// address-space metric (mmap/munmap/mremap/brk do).
+		if ep.AddressSpaceBytes != 0 {
+			t.Errorf("Expected msync address-space bytes 0 but got %d", ep.AddressSpaceBytes)
 		}
 	})
 
@@ -1525,6 +1533,27 @@ func makeEnterFcntlEvent(t *testing.T, time uint64, pid, tid uint32, fd uint32, 
 		Fd:        fd,
 		Cmd:       cmd,
 		Arg:       arg,
+	}
+
+	bytes, err := ev.Bytes()
+	if err != nil {
+		t.Error(err)
+	}
+	return ev, bytes
+}
+
+// makeEnterIoUringEvent builds the fcntl_event record io_uring_enter,
+// io_uring_register and io_uring_setup are captured as: fd, plus the enter
+// flags / register opcode / setup flags word in Cmd.
+func makeEnterIoUringEvent(t *testing.T, time uint64, pid, tid uint32, traceID types.TraceId, fd, cmd uint32) (types.FcntlEvent, []byte) {
+	ev := types.FcntlEvent{
+		EventType: types.ENTER_FCNTL_EVENT,
+		TraceId:   traceID,
+		Time:      time,
+		Pid:       pid,
+		Tid:       tid,
+		Fd:        fd,
+		Cmd:       cmd,
 	}
 
 	bytes, err := ev.Bytes()
@@ -1806,18 +1835,22 @@ func makeSyncEventTestData(t *testing.T) (td testData) {
 	return td
 }
 
+// makeGetcwdEventTestData feeds a getcwd pair the way the kernel emits it:
+// the enter, the path read from the output buffer after the successful return
+// (an OPEN_NAME_FIXUP_EVENT reserved before the exit record), then the exit
+// with ret = the copied byte count including the NUL. The captured path
+// deliberately differs from this process's real cwd: the row must report what
+// the kernel returned, not what /proc/<tid>/cwd says at processing time.
 func makeGetcwdEventTestData(t *testing.T) (td testData) {
 	pid := uint32(os.Getpid())
 	tid := uint32(os.Getpid())
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
+	const cwd = "/ior-getcwd-test/captured"
 
 	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, pid, tid, types.SYS_ENTER_GETCWD)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
+	td.rawTracepoints = append(td.rawTracepoints, makeOpenNameFixupEvent(t, tid, types.SYS_ENTER_GETCWD, cwd))
 
-	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_GETCWD, 1)
+	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, pid, tid, types.SYS_EXIT_GETCWD, int64(len(cwd)+1))
 	td.rawTracepoints = append(td.rawTracepoints, exitEvBytes)
 
 	td.validates = append(td.validates, func(t *testing.T, _ *eventLoop, ep *event.Pair) {
@@ -1827,9 +1860,6 @@ func makeGetcwdEventTestData(t *testing.T) (td testData) {
 		if !exitEv.Equals(ep.ExitEv) {
 			t.Errorf("Expected '%v' but got '%v'", exitEv, ep.ExitEv)
 		}
-		// getcwd args[0] (buf) is an OUTPUT buffer that is only valid at exit,
-		// so the path is never read at enter. Instead it is resolved at exit
-		// from /proc/<tid>/cwd, which must equal the process cwd here.
 		if ep.File == nil {
 			t.Fatalf("Expected getcwd to attach a pathname")
 		}
@@ -1842,9 +1872,9 @@ func makeGetcwdEventTestData(t *testing.T) (td testData) {
 }
 
 // makeGetcwdFailureEventTestData locks in that a failed getcwd (negative
-// errno return) does NOT resolve or attach a cwd path. The exit handler only
-// reads /proc/<tid>/cwd when ret > 0 (success returns the path length); on
-// error there is nothing to attach.
+// errno return) does NOT attach a cwd path. The kernel only captures the
+// output buffer when ret > 0 (success returns the path length), and
+// userspace re-checks ret, so on error there is nothing to attach.
 func makeGetcwdFailureEventTestData(t *testing.T) (td testData) {
 	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_GETCWD)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
@@ -1869,7 +1899,7 @@ func makeGetcwdFailureEventTestData(t *testing.T) (td testData) {
 }
 
 func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
-	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP, 0, 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	// io_uring_setup returns a file descriptor on success
@@ -1897,7 +1927,7 @@ func makeIoUringSetupEventTestData(t *testing.T) (td testData) {
 }
 
 func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
-	enterEv, enterEvBytes := makeEnterNullEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_SETUP, 0, 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	// io_uring_setup returns -1 on failure
@@ -1924,7 +1954,7 @@ func makeIoUringSetupFailureTestData(t *testing.T) (td testData) {
 
 func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 	fd := int32(52)
-	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_ENTER)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_ENTER, uint32(fd), 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_ENTER, 0)
@@ -1950,7 +1980,7 @@ func makeIoUringEnterEventTestData(t *testing.T) (td testData) {
 
 func makeIoUringRegisterEventTestData(t *testing.T) (td testData) {
 	fd := int32(53)
-	enterEv, enterEvBytes := makeEnterFdEvent(t, defaulTime, defaultPid, defaultTid, fd, types.SYS_ENTER_IO_URING_REGISTER)
+	enterEv, enterEvBytes := makeEnterIoUringEvent(t, defaulTime, defaultPid, defaultTid, types.SYS_ENTER_IO_URING_REGISTER, uint32(fd), 0)
 	td.rawTracepoints = append(td.rawTracepoints, enterEvBytes)
 
 	exitEv, exitEvBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_IO_URING_REGISTER, 0)
@@ -2731,33 +2761,20 @@ func makeFcntlInvalidFdTestData(t *testing.T) (td testData) {
 	return td
 }
 
+// makeEnterOpenByHandleAtEvent builds an open_by_handle_at enter for tests
+// whose subject is not the handle: it opens defaultTestHandle, the handle
+// makeNameToHandleAtRecords callers take in these tests.
 func makeEnterOpenByHandleAtEvent(t *testing.T, time uint64, pid, tid uint32, flags int32) (types.OpenByHandleAtEvent, []byte) {
-	ev := types.OpenByHandleAtEvent{
-		EventType: types.ENTER_OPEN_BY_HANDLE_AT_EVENT,
-		TraceId:   types.SYS_ENTER_OPEN_BY_HANDLE_AT,
-		Time:      time,
-		Pid:       pid,
-		Tid:       tid,
-		Flags:     flags,
-	}
-
-	bytes, err := ev.Bytes()
-	if err != nil {
-		t.Error(err)
-	}
-	return ev, bytes
+	return makeEnterOpenByHandleEvent(t, time, pid, tid, flags, defaultTestHandle)
 }
 
 func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/handle_test.txt"
 	fd := int32(70)
 
-	// Step 1: name_to_handle_at syscall
-	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
-	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
-
-	_, exitNameBytes := makeExitRetEvent(t, defaulTime+100, defaultPid, defaultTid, types.SYS_EXIT_NAME_TO_HANDLE_AT, 0)
-	td.rawTracepoints = append(td.rawTracepoints, exitNameBytes)
+	// Step 1: name_to_handle_at syscall, returning defaultTestHandle
+	td.rawTracepoints = append(td.rawTracepoints,
+		makeNameToHandleAtRecords(t, defaulTime, defaultPid, defaultTid, pathname, defaultTestHandle)...)
 
 	// Step 2: open_by_handle_at syscall
 	_, enterOpenBytes := makeEnterOpenByHandleAtEvent(t, defaulTime+200, defaultPid, defaultTid, syscall.O_RDWR)
@@ -2783,9 +2800,13 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 		// Verify that the fd is now tracked
 		verifyFileDescriptor(t, el, defaultPid, fd, pathname)
 
-		// Verify that the pending handle has been consumed
-		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
-			t.Errorf("Expected pending handle for tid %d to be consumed", defaultTid)
+		// The name stays filed under the handle (a handle can be opened
+		// again), and nothing stays parked for the thread.
+		if name, ok := el.handleState().lookup(defaultTestHandle.key(), defaultPid+1); !ok || name != pathname {
+			t.Errorf("Expected the handle to stay named %q, got %q (known=%v)", pathname, name, ok)
+		}
+		if _, ok := el.handleState().taken[defaultTid]; ok {
+			t.Errorf("Expected no handle to stay parked for tid %d", defaultTid)
 		}
 	})
 
@@ -2795,6 +2816,8 @@ func makeNameToHandleAtTestData(t *testing.T) (td testData) {
 func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
 	pathname := "/tmp/handle_failure.txt"
 
+	// A failed name_to_handle_at returns no handle, so BPF emits no handle
+	// record between its enter and exit.
 	_, enterNameBytes := makeEnterPathEvent(t, defaulTime, defaultPid, defaultTid, pathname, types.SYS_ENTER_NAME_TO_HANDLE_AT)
 	td.rawTracepoints = append(td.rawTracepoints, enterNameBytes)
 
@@ -2821,8 +2844,8 @@ func makeNameToHandleAtFailureTestData(t *testing.T) (td testData) {
 			t.Errorf("Expected open_by_handle_at to not use failed name_to_handle_at path")
 		}
 
-		if _, ok := el.pendingHandleState().paths[defaultTid]; ok {
-			t.Errorf("Expected no pending handle for tid %d after failure", defaultTid)
+		if len(el.handleState().names) != 0 || len(el.handleState().taken) != 0 {
+			t.Errorf("Expected no handle name or parked handle after the failure")
 		}
 	})
 

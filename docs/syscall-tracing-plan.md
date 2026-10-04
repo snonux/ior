@@ -26,9 +26,29 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep -no-trace-kinds null
 set. `-no-trace-families`, `-no-trace-kinds` and `-no-trace-syscalls` remove matches. The
 generated registry, not this page, is the authority for each syscall's family and kind.
 
+The flags only choose the startup set. In the TUI, the probes modal (`o`, or `O` on the Flame tab where `o` cycles the frame order) changes it at
+runtime: its Syscalls view toggles single probes, and its Families view (`tab`) lists every
+family with its attached/total probe count and attaches or detaches a whole family with
+`space`/`enter` (detach when any of its probes is attached, attach otherwise). Family
+membership is the same registry `-trace-families` uses. A family batch runs in the
+background with a progress line; a tracepoint the kernel lacks is reported and skipped,
+and the rest of the family still attaches. Only one batch runs at a time, and while it runs
+the Syscalls view refuses probe changes (`space`/`enter`, `a`, `n`); `a` and `n` set every
+probe to attached or detached, so repeating them changes nothing. Once changed, the attached set is carried into
+every later trace session, so a PID/TID reselect or a filter change that restarts the
+trace keeps it instead of reverting to the flags. The carried set is normally read back
+from the probes that are actually attached. A change still running when the trace restarts
+or stops carries its intended set instead (a single-probe change only adds or removes that
+probe); a family batch is also cancelled when its trace session ends, so it stops attaching
+to the old session and the new session can start a family batch right away;
+probes of it that cannot attach are retried at each session start and skipped with a log
+line until the next probe change reads the attached set back. After detaching everything,
+later sessions attach nothing, and only restarting `ior` returns to the startup selection. `[`/`]` only scope the dashboard view to
+a family; when that family has no attached probe, the status line says how to attach it.
+
 The selector kind describes a syscall's role. It is separate from the BPF record type. For
-example, fd xattr calls still select as `fd` even though their requested size now travels in
-a dedicated `fd_size_event`; `memfd_create` still selects as `eventfd`, and `move_mount`
+example, fd xattr calls and `recvfrom`/`recvmsg` still select as `fd` even though their requested
+size (and, for the receives, flags) now travel in a dedicated `fd_size_event`; `memfd_create` still selects as `eventfd`, and `move_mount`
 as `two-fd`. This wire split reduced ordinary ring-buffer records without changing selector
 behavior.
 
@@ -61,8 +81,8 @@ BPF record type (see What attaches).
 - epoll-ctl: `epoll_ctl`
 - eventfd: `epoll_create`, `epoll_create1`, `eventfd`, `eventfd2`, `fanotify_init`, `fsmount`, `fsopen`, `inotify_init`, `inotify_init1`, `landlock_create_ruleset`, `memfd_create`, `memfd_secret`, `signalfd`, `signalfd4`, `timerfd_create`, `userfaultfd`
 - exec: `execve`, `execveat`
-- fcntl: `fcntl`
-- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `ioctl`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
+- fcntl: `fcntl`, `ioctl`
+- fd: `bind`, `cachestat`, `close`, `connect`, `copy_file_range`, `dup`, `dup2`, `fadvise64`, `fallocate`, `fchdir`, `fchmod`, `fchown`, `fdatasync`, `fgetxattr`, `finit_module`, `flistxattr`, `flock`, `fremovexattr`, `fsconfig`, `fsetxattr`, `fstatfs`, `fsync`, `ftruncate`, `getdents`, `getdents64`, `getpeername`, `getsockname`, `getsockopt`, `inotify_rm_watch`, `io_uring_enter`, `io_uring_register`, `kexec_file_load`, `landlock_add_rule`, `landlock_restrict_self`, `listen`, `lseek`, `mq_getsetattr`, `mq_notify`, `mq_timedreceive`, `mq_timedsend`, `newfstat`, `pidfd_getfd`, `pidfd_send_signal`, `pread64`, `preadv`, `preadv2`, `process_madvise`, `process_mrelease`, `pwrite64`, `pwritev`, `pwritev2`, `quotactl_fd`, `read`, `readahead`, `readv`, `recvfrom`, `recvmmsg`, `recvmsg`, `sendfile64`, `sendmmsg`, `sendmsg`, `sendto`, `setns`, `setsockopt`, `shutdown`, `splice`, `sync_file_range`, `syncfs`, `tee`, `timerfd_gettime`, `timerfd_settime`, `vmsplice`, `write`, `writev`
 - fd-pathname: `fanotify_mark`, `inotify_add_watch`
 - futex: `futex`, `futex_requeue`, `futex_wait`, `futex_waitv`, `futex_wake`
 - keyctl: `add_key`, `keyctl`, `request_key`
@@ -97,6 +117,9 @@ BPF record type (see What attaches).
 `-syscall-sampling-families` and `-syscall-sampling-syscalls` accept `name=rate`: `0` keeps
 aggregate counts only, `1` emits every event, and `N` emits about one in N events. Futex
 variants and `clock_gettime` default to aggregate-only in the TUI.
+The rates are written for every syscall when the BPF object loads, whether or not it is
+attached, so a syscall attached later from the probes modal is sampled exactly as if the
+startup flags had selected it.
 
 The kernel aggregates the invocations it does not emit. Aggregate rows plus emitted rows
 therefore give exact TUI counts, errors, latency sums and histograms for sampled syscalls.
@@ -124,6 +147,16 @@ A `getxattr*` or `listxattr*` call with a zero output-buffer size asks for the r
 capacity. Its positive return is kept in the row, but its throughput byte count is zero.
 `syslog` is also non-bytes because the meaning of its return depends on the action.
 
+`recvfrom` and `recvmsg` capture their `flags` and buffer capacity in an `fd_size_event`, because
+two flags change what the return value is worth. `MSG_PEEK` copies without consuming, so a peeking
+call counts zero bytes; the later plain receive of the same data is the one that counts. Netlink
+clients (`ip addr`, libnl, systemd) peek every datagram with `recvmsg(fd, {iov_len=0},
+MSG_PEEK|MSG_TRUNC)` and then read it again, which used to count each reply twice. `MSG_TRUNC`
+makes the return the datagram's real length even when it did not fit, so the count is capped at the
+buffer capacity: `recvfrom`'s `size`, or for `recvmsg` the sum of up to eight iovec lengths.
+When that capacity is unknown (an older BPF object, or a `recvmsg` with more than eight iovecs or an
+unreadable `msghdr`) the raw return is kept. `recvmmsg` is unclassified and unaffected.
+
 For a transfer with two descriptors, the file row names one endpoint: the destination fd
 (`out_fd` for `sendfile64`, `fd_out` for `copy_file_range` and `splice`, `fdout` for `tee`).
 `vmsplice` uses its single pipe fd. The bytes still count toward both totals, even though
@@ -138,9 +171,12 @@ succeeds does it store that word, truncated to the 32-bit `flags` field of the e
 NULL or unreadable pointer therefore stays
 distinguishable from `O_RDONLY` (zero).
 
-Open-family handlers retry a filename read at syscall exit when the enter-side nofault
-`bpf_probe_read_user_str` failed; the `OPEN_NAME_FIXUP_EVENT` control record repairs the
-pending enter event. Other pathname, name and exec handlers do not yet have that retry.
+Every path-capturing handler except exec retries a path read at syscall exit when the
+enter-side nofault `bpf_probe_read_user_str` failed (open, pathname, fd-pathname, name and
+two-fd-names kinds, memfd_create, fsopen); the `OPEN_NAME_FIXUP_EVENT` control record repairs
+the pending enter event, with a slot field telling the two names of rename/link and of
+move_mount (from/to pathname) apart. exec does not retry (a successful exec replaces the
+address space).
 
 Polling records preserve `nfds` (or `maxevents` for epoll waits), timeout and the epoll
 instance descriptor where applicable. `timeout_ns = -1` means an infinite wait; `-2` means

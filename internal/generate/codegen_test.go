@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
@@ -1090,7 +1091,15 @@ func TestGenerateExecHandler(t *testing.T) {
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_execveat")`)
 	requireContains(t, output, "struct exec_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_EXEC_EVENT;")
-	requireContains(t, output, "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[1]) < 0)\n        ev->filename[0] = 0;\n")
+	// Task 9p2: the filename carries the three-state read status, so an
+	// unreadable name is not mistaken for AT_EMPTY_PATH's "".
+	requireContains(t, output, "    if (ctx->args[1] == 0) {\n        ev->filename[0] = 0;\n        ev->filename_status = PATH_READ_NULL;\n    } else {\n"+
+		"        ev->filename_status = PATH_READ_OK;\n"+
+		"        if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void*)ctx->args[1]) < 0) {\n"+
+		"            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n        }\n    }\n")
+	requireContains(t, output, "ev->schema_version = EXEC_EVENT_SCHEMA_VERSION;")
+	// exec does not retry a failed read at sys_exit like the open kinds.
+	requireNotContains(t, output, "ior_stash_pending_filename")
 	requireNotContains(t, output, "__builtin_memset")
 	requireContains(t, output, "ev->dirfd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[4];")
@@ -1365,24 +1374,81 @@ func TestRtSigSiblingsAreNotNoreturn(t *testing.T) {
 	}
 }
 
+// The io_uring handlers reuse fcntl_event: the leading "fd" of enter/register
+// is a registered-ring index when IORING_ENTER_REGISTERED_RING /
+// IORING_REGISTER_USE_REGISTERED_RING is set, so userspace needs the flags word
+// (cmd) next to it. The rows stay in the stable "fd"/"null" selection kinds.
 func TestGenerateIoUringEnterHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringEnter, FormatExitIoUringEnter)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_enter")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "(kind=fd)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FCNTL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_ENTER;")
-	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->fd = ctx->args[0];")
+	// flags is the fourth argument: enter(fd, to_submit, min_complete, flags).
+	requireContains(t, output, "ev->cmd = ctx->args[3];")
+	requireContains(t, output, "ev->arg = 0;")
 }
 
 func TestGenerateIoUringRegisterHandler(t *testing.T) {
 	output := generateFromPair(t, FormatIoUringRegister, FormatExitIoUringRegister)
 
 	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_register")`)
-	requireContains(t, output, "struct fd_event *ev")
-	requireContains(t, output, "ev->event_type = ENTER_FD_EVENT;")
+	requireContains(t, output, "(kind=fd)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->event_type = ENTER_FCNTL_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_REGISTER;")
-	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
+	requireContains(t, output, "ev->fd = ctx->args[0];")
+	// The opcode (second argument) carries IORING_REGISTER_USE_REGISTERED_RING.
+	requireContains(t, output, "ev->cmd = ctx->args[1];")
+}
+
+// TestGenerateIoUringRegisterCapturesRingFds pins the generator output of the
+// registered-ring capture (task js2): io_uring_register's handlers keep their
+// hook's verdict in a local, stash and publish around it, and leave the
+// sampled-out return for afterwards. io_uring_enter and io_uring_setup, which
+// are generated next to it, get none of it: their handlers are the plain
+// hook-and-return every other syscall has.
+func TestGenerateIoUringRegisterCapturesRingFds(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t, strings.Join([]string{FormatIoUringRegister, FormatExitIoUringRegister,
+		FormatIoUringEnter, FormatExitIoUringEnter, FormatIoUringSetup, FormatExitIoUringSetup}, "\n")+"\n"))
+	handlers := splitGeneratedHandlers(t, out)
+	requireContains(t, handlers["sys_enter_io_uring_register"],
+		"    int emits = ior_on_syscall_enter(tid, SYS_ENTER_IO_URING_REGISTER, now);\n\n"+
+			"    ior_stash_ring_fds(tid, SYS_ENTER_IO_URING_REGISTER, now, emits, ctx->args[1], ctx->args[2]);\n"+
+			"    if (!emits)\n        return 0;\n\n    struct fcntl_event *ev = bpf_ringbuf_reserve(")
+	requireContains(t, handlers["sys_exit_io_uring_register"],
+		"    __u64 ring_fds_array;\n    __u64 ring_fds_opcode;\n\n    __u64 now = bpf_ktime_get_boot_ns();\n"+
+			"    int emits = ior_on_syscall_exit_take_filenames(tid, SYS_ENTER_IO_URING_REGISTER, ctx->ret, now, "+
+			"&ring_fds_array, &ring_fds_opcode);\n\n"+
+			"    ior_emit_ring_fds(pid, tid, SYS_ENTER_IO_URING_REGISTER, now, ring_fds_opcode, ring_fds_array, ctx->ret);\n"+
+			"    if (!emits)\n        return 0;\n\n    struct ret_event *ev = bpf_ringbuf_reserve(")
+	for _, name := range []string{"io_uring_enter", "io_uring_setup"} {
+		enterConst := "SYS_ENTER_" + strings.ToUpper(name)
+		enter, exit := handlers["sys_enter_"+name], handlers["sys_exit_"+name]
+		requireContains(t, enter, "    if (!ior_on_syscall_enter(tid, "+enterConst+", now))\n        return 0;\n")
+		requireContains(t, exit, "    if (!ior_on_syscall_exit(tid, "+enterConst+", ctx->ret, now))\n        return 0;\n")
+		for _, body := range []string{enter, exit} {
+			requireNotContains(t, body, "ring_fds")
+			requireNotContains(t, body, "emits")
+		}
+	}
+}
+
+func TestGenerateIoUringSetupHandler(t *testing.T) {
+	output := generateFromPair(t, FormatIoUringSetup, FormatExitIoUringSetup)
+
+	requireContains(t, output, `SEC("tracepoint/syscalls/sys_enter_io_uring_setup")`)
+	requireContains(t, output, "(kind=null)")
+	requireContains(t, output, "struct fcntl_event *ev")
+	requireContains(t, output, "ev->trace_id = SYS_ENTER_IO_URING_SETUP;")
+	// The flags live in the user io_uring_params (args[1]), not in a register.
+	requireContains(t, output, "bpf_probe_read_user(&ior_params, sizeof(ior_params), (void *)ctx->args[1]);")
+	requireContains(t, output, "ev->cmd = ior_params.flags;")
+	// No descriptor exists yet at enter; it is the return value.
+	requireContains(t, output, "ev->fd = -1;")
 }
 
 func TestGenerateMmapHandlerUsesFdArgumentIndex(t *testing.T) {
@@ -1698,6 +1764,9 @@ func TestGenerateDup3Handler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_DUP3_EVENT;")
 	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+	// The old descriptor's file identity (task d23), after ev->fd is set.
+	requireContains(t, output, "ev->fd = (__s32)ctx->args[0];\n    ev->flags = (__s32)ctx->args[2];\n"+
+		"    ev->file_ident = ior_file_ident(ev->fd);\n")
 }
 
 // TestGenerateDup2Handler locks in the generated BPF C for dup2(2):
@@ -1792,6 +1861,12 @@ func TestGenerateOpenByHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "struct open_by_handle_at_event *ev")
 	requireContains(t, output, "ev->event_type = ENTER_OPEN_BY_HANDLE_AT_EVENT;")
 	requireContains(t, output, "ev->flags = (__s32)ctx->args[2];")
+	// The handle the call opens is its input struct file_handle at args[1];
+	// the reader writes all three handle fields and returns the status.
+	requireContains(t, output, "    ev->handle_status = ior_read_file_handle(ctx->args[1], &ev->handle_bytes, &ev->handle_type, ev->f_handle);\n")
+	// A plain input needs no enter state: the stateless hook stays.
+	requireContains(t, output, "ior_on_syscall_enter(tid, SYS_ENTER_OPEN_BY_HANDLE_AT, now)")
+	requireNotContains(t, output, "pending_filename")
 }
 
 func TestGenerateSocketHandler(t *testing.T) {
@@ -2113,7 +2188,7 @@ func TestGeneratePselect6HandlerCapturesTimeoutPointer(t *testing.T) {
 // fd number plus one, i.e. a COUNT, NOT a file descriptor — and args[1..3] are
 // userspace fd_set bitmask pointers (also NOT single fds). The timeout is a
 // timeval pointer at args[4]. The handler must therefore capture nfds from
-// args[0] and the timeout from the args[4] timeval (sec*1e9 + usec*1e3), and
+// args[0] and the timeout from the args[4] timeval (normalised by ior_timeval_timeout_ns), and
 // must NEVER read any argument as an fd: capturing args[0] as an fd would
 // record a garbage fd (it is a count), and capturing the bitmask pointers
 // would record garbage pointers. The exit is an UNCLASSIFIED ret_event because
@@ -2128,7 +2203,7 @@ func TestGenerateSelectHandlerCapturesNfdsAndTimevalTimeout(t *testing.T) {
 	requireContains(t, output, "ev->nfds = (__s32)ctx->args[0];")
 	requireContains(t, output, "if (ctx->args[4] == 0) {")
 	requireContains(t, output, "ev->timeout_ns = POLL_TIMEOUT_UNKNOWN_NS;")
-	requireContains(t, output, "ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;")
+	requireContains(t, output, "ev->timeout_ns = ior_timeval_timeout_ns(&tv);")
 
 	// Negative: nfds is a count and the fd_set args are bitmask pointers, so no
 	// argument may ever be captured as an fd, and the exit carries no bytes/fd
@@ -2188,13 +2263,16 @@ func TestGeneratePointerPollingTimeoutsRejectInvalidAndOverflowingValues(t *test
 			"                ev->timeout_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
 			"            }")
 
+	// The timeval conversion is a C helper, exercised by
+	// TestGeneratedSelectTimevalNormalisation; here the handler must route
+	// the value through it and must not fall back to the old inline check that
+	// rejected tv_usec >= 1000000 although the kernel normalises it.
 	timevalOutput := generateFromPair(t, FormatSelect, FormatExitSelect)
 	requireContains(t, timevalOutput,
-		"            if (tv.tv_sec >= 0 && tv.tv_usec >= 0 && tv.tv_usec < 1000000LL &&\n"+
-			"                (tv.tv_sec < 9223372036LL ||\n"+
-			"                 (tv.tv_sec == 9223372036LL && tv.tv_usec <= 854775LL))) {\n"+
-			"                ev->timeout_ns = tv.tv_sec * 1000000000LL + tv.tv_usec * 1000LL;\n"+
-			"            }")
+		"        if (bpf_probe_read_user(&tv, sizeof(tv), (void *)ctx->args[4]) == 0) {\n"+
+			"            ev->timeout_ns = ior_timeval_timeout_ns(&tv);\n"+
+			"        }")
+	requireNotContains(t, timevalOutput, "tv.tv_usec < 1000000LL")
 }
 
 // TestCommittedPollingHandlersMatchGenerator keeps the targeted artifact
@@ -2271,12 +2349,19 @@ func TestGenerateClockNanosleepHandlerSkipsAbsoluteSleeps(t *testing.T) {
 	// The flags check on args[1] against TIMER_ABSTIME (value 1) must be present,
 	// guarding the relative-duration assignment.
 	requireContains(t, output, "if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {")
-	// The duration is computed inside the guard (relative branch only); the abs
-	// branch leaves the -1 sentinel set above.
+	// The validated duration is computed inside the guard (relative branch
+	// only); the abs branch leaves the -1 sentinel set above.
 	requireContains(t, output,
 		"        if (bpf_probe_read_user(&ts, sizeof(ts), (void *)ctx->args[2]) == 0) {\n"+
 			"            if ((ctx->args[1] & 1 /* TIMER_ABSTIME */) == 0) {\n"+
-			"                ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"                if (ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000LL) {\n"+
+			"                    if (ts.tv_sec > 9223372036LL ||\n"+
+			"                        (ts.tv_sec == 9223372036LL && ts.tv_nsec > 854775807LL)) {\n"+
+			"                        ev->requested_ns = 9223372036854775807LL /* S64_MAX */;\n"+
+			"                    } else {\n"+
+			"                        ev->requested_ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;\n"+
+			"                    }\n"+
+			"                }\n"+
 			"            }\n        }")
 }
 
@@ -2367,6 +2452,39 @@ func TestGenerateNameToHandleAtHandler(t *testing.T) {
 	requireContains(t, output, "ev->event_type = ENTER_PATH_EVENT;")
 	requireContains(t, output, "ev->trace_id = SYS_ENTER_NAME_TO_HANDLE_AT;")
 	requireContains(t, output, "if (bpf_probe_read_user_str(ev->pathname, sizeof(ev->pathname), (void*)ctx->args[1]) < 0)")
+}
+
+// TestGenerateNameToHandleAtCapturesItsOutputHandle pins the generator
+// emission for the handle name_to_handle_at returns (task k03): the handle
+// only exists once the call has returned, so the enter parks the struct
+// file_handle pointer (args[2]) in the second pending slot and the exit reads
+// it back after a successful return, ahead of its own record. The pathname's
+// own faulted-read recovery in the first slot is untouched.
+func TestGenerateNameToHandleAtCapturesItsOutputHandle(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t,
+		FormatNameToHandleAt+"\n"+FormatExitNameToHandleAt+"\n"+FormatMkdir+"\n"+FormatExitMkdir+"\n"))
+	const enterConst = "SYS_ENTER_NAME_TO_HANDLE_AT"
+
+	checkOutputHandleCapture(t, out, "name_to_handle_at", 2)
+	enterBody := handlerBody(t, out, "sys_enter_name_to_handle_at")
+	requireContains(t, enterBody, "            ior_stash_pending_filename(tid, ctx->args[1]);\n")
+
+	exitBody := handlerBody(t, out, "sys_exit_name_to_handle_at")
+	hook, emits := outputHandleHookLine(enterConst), []string{openNameEmitLine(enterConst), outputHandleEmitLines(enterConst)}
+	for _, line := range append([]string{hook}, emits...) {
+		requireContains(t, exitBody, line)
+	}
+	checkRecoveryOrdering(t, "sys_exit_name_to_handle_at", exitBody, hook, emits...)
+	requireNotContains(t, exitBody, "ior_emit_second_name_fixup")
+
+	// Other single-path syscalls must not pay for the capture.
+	for _, name := range []string{"sys_enter_mkdir", "sys_exit_mkdir"} {
+		body := handlerBody(t, out, name)
+		requireNotContains(t, body, "pending_filename2")
+		requireNotContains(t, body, "pending_handle")
+		requireNotContains(t, body, "enter_ns")
+		requireNotContains(t, body, "ior_emit_file_handle")
+	}
 }
 
 func TestGenerateFallbackNullHandler(t *testing.T) {
@@ -2598,7 +2716,7 @@ func TestGenerateOpenTreeHandlersUseOpenTransport(t *testing.T) {
 			requireContains(t, output, "ev->event_type = ENTER_OPEN_EVENT;")
 			requireContains(t, output, "(void *)ctx->args[1]")
 			requireContains(t, output, "ev->flags = ctx->args[2];")
-			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(name)+")")
+			requireContains(t, output, "ior_on_syscall_exit_take_filename(tid, SYS_ENTER_"+strings.ToUpper(name)+", ctx->ret, now, &pending_filename)")
 		})
 	}
 }
@@ -2618,7 +2736,7 @@ func TestGenerateNamedEventfdHandlersCaptureIdentityAndRecoverFaults(t *testing.
 			requireContains(t, output, "ev->event_type = ENTER_EVENTFD_NAME_EVENT;")
 			requireContains(t, output, "bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)ctx->args[0])")
 			requireContains(t, output, "ior_stash_pending_filename(tid, ctx->args[0]);")
-			requireContains(t, output, "ior_take_pending_filename(tid, SYS_ENTER_"+strings.ToUpper(tt.name)+")")
+			requireContains(t, output, "ior_on_syscall_exit_take_filename(tid, SYS_ENTER_"+strings.ToUpper(tt.name)+", ctx->ret, now, &pending_filename)")
 			requireContains(t, output, "ev->flags = flags;")
 		})
 	}
@@ -2637,6 +2755,28 @@ func TestGenerateMoveMountCapturesBothPaths(t *testing.T) {
 	requireContains(t, output, "ev->fd_b = (__s32)ctx->args[2];")
 	requireContains(t, output, "bpf_probe_read_user_str(ev->newname, sizeof(ev->newname), (void*)ctx->args[3])")
 	requireContains(t, output, "ev->extra = (__u64)ctx->args[4];")
+}
+
+// TestGenerateMoveMountRecoversBothFaultedPaths pins move_mount's share of the
+// sys_exit path recovery (task vs2): its from/to pathnames are nofault reads
+// like the rename/link names, so each failed read stashes exactly the pointer
+// it read - from_pathname (args[1]) into the first slot, to_pathname (args[3])
+// into the second - and the exit takes both slots through the one
+// ior_on_syscall_exit_take_filenames lookup and emits them in the window between
+// that hook and its own record.
+func TestGenerateMoveMountRecoversBothFaultedPaths(t *testing.T) {
+	output := generateFromPair(t, FormatMoveMount, FormatExitMoveMount)
+	enterBody := handlerBody(t, output, "sys_enter_move_mount")
+	requireContains(t, enterBody, "            ev->oldname[0] = 0;\n            ior_stash_pending_filename(tid, ctx->args[1]);\n")
+	requireContains(t, enterBody, "            ev->newname[0] = 0;\n            ior_stash_pending_filename2(tid, ctx->args[3]);\n")
+	if got := strings.Count(enterBody, "ior_stash_pending_filename"); got != 2 {
+		t.Errorf("sys_enter_move_mount has %d stash calls, want one per path:\n%s", got, enterBody)
+	}
+
+	exitBody := handlerBody(t, output, "sys_exit_move_mount")
+	const enterConst = "SYS_ENTER_MOVE_MOUNT"
+	checkRecoveryOrdering(t, "sys_exit_move_mount", exitBody, openNameHookLine2(enterConst),
+		openNameEmitLine(enterConst), openNameEmitLine2(enterConst))
 }
 
 func TestGenerateBpfCapturesCommand(t *testing.T) {
@@ -2687,6 +2827,8 @@ func TestGenerateAllEventTypes(t *testing.T) {
 		{KindName, "ENTER_NAME_EVENT", "EXIT_NAME_EVENT"},
 		{KindRet, "ENTER_RET_EVENT", "EXIT_RET_EVENT"},
 		{KindFcntl, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
+		{KindIoUringFd, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
+		{KindIoUringSetup, "ENTER_FCNTL_EVENT", "EXIT_FCNTL_EVENT"},
 		{KindNull, "ENTER_NULL_EVENT", "EXIT_NULL_EVENT"},
 		{KindDup3, "ENTER_DUP3_EVENT", "EXIT_DUP3_EVENT"},
 		{KindOpenByHandleAt, "ENTER_OPEN_BY_HANDLE_AT_EVENT", "EXIT_OPEN_BY_HANDLE_AT_EVENT"},
@@ -2744,6 +2886,8 @@ func TestEventStructNames(t *testing.T) {
 		{KindName, "name_event"},
 		{KindRet, "ret_event"},
 		{KindFcntl, "fcntl_event"},
+		{KindIoUringFd, "fcntl_event"},
+		{KindIoUringSetup, "fcntl_event"},
 		{KindNull, "null_event"},
 		{KindDup3, "dup3_event"},
 		{KindOpenByHandleAt, "open_by_handle_at_event"},
@@ -2792,7 +2936,7 @@ func TestEnterReject(t *testing.T) {
 		t.Error("KindNone should be enter-rejected")
 	}
 
-	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj}
+	accepted := []TracepointKind{KindFd, KindFdSize, KindOpen, KindMqOpen, KindOpenTree, KindExec, KindPathname, KindFdPathname, KindName, KindFcntl, KindNull, KindDup3, KindOpenByHandleAt, KindSocket, KindSocketpair, KindAccept, KindPipe, KindEventfd, KindNamedEventfd, KindPidfd, KindEpollCtl, KindTwoFd, KindTwoFdNames, KindPoll, KindMem, KindMmap, KindSleep, KindKeyctl, KindPtrace, KindPerfOpen, KindSeccomp, KindModule, KindSysVId, KindSysVOp, KindProc, KindBpf, KindFutex, KindPrctl, KindTimerObj, KindIoUringFd, KindIoUringSetup}
 	for _, k := range accepted {
 		if isEnterRejected(k) {
 			t.Errorf("kind %d should NOT be enter-rejected", k)
@@ -3254,8 +3398,8 @@ func TestSyscallAggregateUsesTheKernelErrnoReturnWindow(t *testing.T) {
 			name: "an earlier sign check overrides the helper result",
 			mutate: func(source string) string {
 				return strings.Replace(source,
-					"return ret >= -IOR_MAX_ERRNO && ret < 0;",
-					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0;", 1)
+					"return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);",
+					"if (ret < 0) return 1;\n    return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);", 1)
 			},
 		},
 		{
@@ -3297,7 +3441,7 @@ func syscallAggregateUsesErrnoWindow(source string) bool {
 	}
 
 	helper, ok := cFunctionBody(source, "static __always_inline int ior_is_errno_ret(__s64 ret)")
-	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0;" {
+	if !ok || strings.TrimSpace(helper) != "return ret >= -IOR_MAX_ERRNO && ret < 0 && !ior_is_restart_ret(ret);" {
 		return false
 	}
 
@@ -3375,16 +3519,37 @@ func openNameStashLine(argIdx string) string {
 		"    }\n"
 }
 
-// openNameTakeLine must precede ior_on_syscall_exit, which deletes the per-tid
-// enter-state entry the pointer is stashed in.
-func openNameTakeLine(enterConst string) string {
-	return "    __u64 pending_filename = ior_take_pending_filename(tid, " + enterConst + ");\n"
+// openNameHookLine is the exit hook of a handler that recovers one pending
+// pointer (task 0t2): the take is part of the hook, which copies the stashed
+// pointer into the local from the single enter-state lookup it does anyway,
+// before it deletes the entry, and only when the enter_trace_id matches. The
+// local itself is declared by openNameDeclLine ahead of the clock read.
+func openNameHookLine(enterConst string) string {
+	return "    if (!ior_on_syscall_exit_take_filename(tid, " + enterConst + ", ctx->ret, now, &pending_filename))\n" +
+		"        return 0;\n"
 }
+
+// openNameDeclLine / openNameDeclLine2 declare the locals the hook fills.
+const (
+	openNameDeclLine  = "    __u64 pending_filename;\n"
+	openNameDeclLine2 = "    __u64 pending_filename2;\n"
+)
 
 // openNameEmitLine must precede this handler's own ring-buffer reserve, so the
 // fixup record reaches userspace while the enter event is still pending.
 func openNameEmitLine(enterConst string) string {
 	return "    ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
+}
+
+// openNameHookLine2 / openNameEmitLine2 are the rename/link family (newname) and
+// move_mount (to_pathname): the same hook, taking the second slot too.
+func openNameHookLine2(enterConst string) string {
+	return "    if (!ior_on_syscall_exit_take_filenames(tid, " + enterConst + ", ctx->ret, now, &pending_filename, &pending_filename2))\n" +
+		"        return 0;\n"
+}
+
+func openNameEmitLine2(enterConst string) string {
+	return "    ior_emit_second_name_fixup(tid, " + enterConst + ", pending_filename2);\n"
 }
 
 // TestGenerateOpenHandlersRecoverAFaultedFilename pins the generator emission
@@ -3412,37 +3577,22 @@ func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
 			t.Errorf("%s does not stash the user pointer when the nofault read fails:\n%s", tc.enter, enterBody)
 		}
 		exitBody := handlerBody(t, out, tc.exit)
-		take := openNameTakeLine(tc.enterConst)
 		emit := openNameEmitLine(tc.enterConst)
-		if !strings.Contains(exitBody, take) {
-			t.Errorf("%s does not take the stashed pointer:\n%s", tc.exit, exitBody)
-		}
 		if !strings.Contains(exitBody, emit) {
 			t.Errorf("%s does not emit the fixup record:\n%s", tc.exit, exitBody)
 		}
-		// Ordering is load-bearing in both directions: the take must happen
-		// before ior_on_syscall_exit deletes the enter state, and the fixup
-		// must be reserved before this handler's own exit record so the ring
-		// buffer hands userspace the name while the enter event is still
-		// pending.
-		takeAt := strings.Index(exitBody, take)
-		exitHookAt := strings.Index(exitBody, "ior_on_syscall_exit(")
-		emitAt := strings.Index(exitBody, emit)
-		reserveAt := strings.Index(exitBody, "bpf_ringbuf_reserve(&event_map,")
-		if takeAt < 0 || exitHookAt < 0 || takeAt > exitHookAt {
-			t.Errorf("%s takes the stashed pointer after ior_on_syscall_exit deleted the enter state:\n%s", tc.exit, exitBody)
-		}
-		if emitAt < 0 || reserveAt < 0 || emitAt > reserveAt {
-			t.Errorf("%s emits the fixup after its own exit record:\n%s", tc.exit, exitBody)
-		}
-		if exitHookAt > emitAt {
-			t.Errorf("%s emits the fixup for an event ior_on_syscall_exit suppressed:\n%s", tc.exit, exitBody)
-		}
+		// Ordering is load-bearing: the exit hook itself reads the stashed
+		// pointer (before it deletes the enter state, only for a matching
+		// enter_trace_id), and the fixup must follow it - an event it
+		// suppressed needs none - yet be reserved before this handler's own
+		// exit record so the ring buffer hands userspace the name while the
+		// enter event is still pending.
+		checkRecoveryOrdering(t, tc.exit, exitBody, openNameHookLine(tc.enterConst), emit)
 	}
 
-	// Only the open kinds recover. read's exit is the generic ret handler and
-	// execve's enter reads a user string into a different struct, so neither
-	// may grow the recovery.
+	// read's exit is the generic ret handler and execve's enter deliberately
+	// does not retry (a successful exec replaces the address space the pointer
+	// belonged to), so neither may grow the recovery.
 	for _, name := range []string{"sys_exit_read", "sys_exit_execve", "sys_enter_read", "sys_enter_execve"} {
 		body := handlerBody(t, out, name)
 		if strings.Contains(body, "pending_filename") || strings.Contains(body, "ior_stash_pending_filename") {
@@ -3451,71 +3601,428 @@ func TestGenerateOpenHandlersRecoverAFaultedFilename(t *testing.T) {
 	}
 }
 
+// TestGeneratePathHandlersRecoverAFaultedPath pins the generator emission for
+// the pathname, fd-pathname and name (rename/link) kinds: a stat/access/unlink
+// of a path in never-touched memory lost its name just like an open did, and
+// now stashes the pointer at enter and re-reads it at exit. The rename family
+// has two paths and so two independent slots.
+func TestGeneratePathHandlersRecoverAFaultedPath(t *testing.T) {
+	input := FormatMkdir + "\n" + FormatExitMkdir + "\n" + FormatMkdirat + "\n" + FormatExitMkdirat + "\n" +
+		FormatRename + "\n" + FormatExitRename + "\n" +
+		FormatSymlink + "\n" + FormatExitSymlink + "\n" +
+		FormatRead + "\n" + FormatExitRead + "\n" + FormatExecve + "\n" + FormatExitExecve + "\n"
+	out := GenerateTracepointsC(mustParseAll(t, input)) + GenerateTracepointsC(notificationFormats())
+
+	singles := []struct{ enter, exit, enterConst, argIdx string }{
+		{"sys_enter_mkdir", "sys_exit_mkdir", "SYS_ENTER_MKDIR", "0"},
+		{"sys_enter_mkdirat", "sys_exit_mkdirat", "SYS_ENTER_MKDIRAT", "1"},
+		{"sys_enter_inotify_add_watch", "sys_exit_inotify_add_watch", "SYS_ENTER_INOTIFY_ADD_WATCH", "1"},
+	}
+	for _, tc := range singles {
+		enterBody := handlerBody(t, out, tc.enter)
+		requireContains(t, enterBody, "ior_stash_pending_filename(tid, ctx->args["+tc.argIdx+"]);")
+		requireNotContains(t, enterBody, "ior_stash_pending_filename2")
+		exitBody := handlerBody(t, out, tc.exit)
+		requireContains(t, exitBody, openNameHookLine(tc.enterConst))
+		requireContains(t, exitBody, openNameEmitLine(tc.enterConst))
+		// One path, one slot: the second slot belongs to the rename family.
+		requireNotContains(t, exitBody, "pending_filename2")
+		requireNotContains(t, exitBody, "ior_emit_second_name_fixup")
+		checkRecoveryOrdering(t, tc.exit, exitBody, openNameHookLine(tc.enterConst), openNameEmitLine(tc.enterConst))
+	}
+	// Rename and symlink carry two names with their own slots; the stash lines
+	// follow the terminator inside each failed-read branch.
+	for _, name := range []string{"rename", "symlink"} {
+		enterBody := handlerBody(t, out, "sys_enter_"+name)
+		requireContains(t, enterBody, "            ev->oldname[0] = 0;\n            ior_stash_pending_filename(tid, ctx->args[0]);\n")
+		requireContains(t, enterBody, "            ev->newname[0] = 0;\n            ior_stash_pending_filename2(tid, ctx->args[1]);\n")
+		exitBody := handlerBody(t, out, "sys_exit_"+name)
+		enterConst := "SYS_ENTER_" + strings.ToUpper(name)
+		requireContains(t, exitBody, openNameHookLine2(enterConst))
+		requireContains(t, exitBody, openNameEmitLine(enterConst))
+		requireContains(t, exitBody, openNameEmitLine2(enterConst))
+		checkRecoveryOrdering(t, "sys_exit_"+name, exitBody, openNameHookLine2(enterConst),
+			openNameEmitLine(enterConst), openNameEmitLine2(enterConst))
+		// The first-slot pair is the old name's, the second-slot pair the new
+		// name's: emitting them in the other order would not matter to
+		// userspace, but emitting either from the wrong slot would.
+		if strings.Index(exitBody, openNameEmitLine(enterConst)) > strings.Index(exitBody, openNameEmitLine2(enterConst)) {
+			t.Errorf("sys_exit_%s emits the newname fixup before the oldname fixup:\n%s", name, exitBody)
+		}
+	}
+
+	// Kinds that do not retry must not pay for it.
+	for _, name := range []string{"sys_exit_read", "sys_exit_execve", "sys_enter_read", "sys_enter_execve"} {
+		if body := handlerBody(t, out, name); strings.Contains(body, "pending_filename") {
+			t.Errorf("%s must not participate in the path recovery:\n%s", name, body)
+		}
+	}
+}
+
+// checkRecoveryOrdering asserts the load-bearing shape of an exit handler that
+// recovers stashed pointers (task 0t2). The pointers are read by the exit hook
+// out of the enter-state entry it looked up itself, so: the locals are declared
+// ahead of the hook; the handler calls exactly that hook variant (hook, one of
+// openNameHookLine/openNameHookLine2/outputHandleHookLine) and neither the
+// plain ior_on_syscall_exit (a second lookup would be needed to get the
+// pointers) nor a standalone ior_take_pending_filename*; and each emit
+// follows the hook (an
+// event it suppressed needs no fixup, and the pointers only exist after it)
+// but precedes the handler's own ring-buffer reserve (so userspace sees the
+// name while the enter event is still pending).
+func checkRecoveryOrdering(t *testing.T, exit, body, hook string, emits ...string) {
+	t.Helper()
+	hookAt := strings.Index(body, hook)
+	if hookAt < 0 {
+		t.Errorf("%s does not call the pointer-taking exit hook %q:\n%s", exit, hook, body)
+		return
+	}
+	if strings.Contains(body, "ior_on_syscall_exit(") || strings.Contains(body, "ior_take_pending_filename") {
+		t.Errorf("%s still does a separate lookup for the pending pointers:\n%s", exit, body)
+	}
+	decls := []string{openNameDeclLine}
+	if strings.Contains(hook, "&pending_filename2") {
+		decls = append(decls, openNameDeclLine2)
+	}
+	if strings.Contains(hook, "&pending_handle") {
+		decls = append(decls, outputHandleDeclLines)
+	}
+	for _, decl := range decls {
+		if declAt := strings.Index(body, decl); declAt < 0 || declAt > hookAt {
+			t.Errorf("%s does not declare %q ahead of the exit hook:\n%s", exit, strings.TrimSpace(decl), body)
+		}
+	}
+	reserveAt := strings.Index(body, "bpf_ringbuf_reserve(&event_map,")
+	for _, emit := range emits {
+		emitAt := strings.Index(body, emit)
+		if emitAt < hookAt || emitAt > reserveAt {
+			t.Errorf("%s emits the fixup outside the window between the exit hook and its own record:\n%s", exit, body)
+		}
+	}
+}
+
+// outputPathStashLine is the unconditional enter-side stash of an output-path
+// syscall's buffer pointer (outputPathSyscalls).
+func outputPathStashLine(argIdx int) string {
+	return fmt.Sprintf("    ior_stash_pending_filename(tid, ctx->args[%d]);\n", argIdx)
+}
+
+// outputPathEmitLines publishes the output buffer only after a successful
+// return: on failure the kernel wrote nothing into it.
+func outputPathEmitLines(enterConst string) string {
+	return "    if (ctx->ret > 0)\n        ior_emit_open_name_fixup(tid, " + enterConst + ", pending_filename);\n"
+}
+
+// TestGenerateGetcwdCapturesItsOutputBuffer pins the generator emission for the
+// output-path capture: getcwd's path only exists once the call has returned,
+// so the enter stashes the buffer pointer and the exit reads it back.
+func TestGenerateGetcwdCapturesItsOutputBuffer(t *testing.T) {
+	out := GenerateTracepointsC(mustParseAll(t, FormatGetcwd+"\n"+FormatExitGetcwd+"\n"+FormatSync+"\n"+FormatExitSync+"\n"))
+
+	enterBody := handlerBody(t, out, "sys_enter_getcwd")
+	stash := outputPathStashLine(0)
+	if !strings.Contains(enterBody, stash) {
+		t.Fatalf("sys_enter_getcwd does not stash its output buffer:\n%s", enterBody)
+	}
+	// The stash needs the enter-state entry ior_on_syscall_enter_stateful
+	// creates, and must stay a header-only null_event: the buffer holds nothing
+	// yet.
+	if strings.Index(enterBody, stash) < strings.Index(enterBody, "ior_on_syscall_enter_stateful(") {
+		t.Errorf("sys_enter_getcwd stashes before ior_on_syscall_enter_stateful created the enter state:\n%s", enterBody)
+	}
+	if strings.Contains(enterBody, "bpf_probe_read_user_str") {
+		t.Errorf("sys_enter_getcwd reads the output buffer before the kernel filled it:\n%s", enterBody)
+	}
+
+	exitBody := handlerBody(t, out, "sys_exit_getcwd")
+	hook := openNameHookLine("SYS_ENTER_GETCWD")
+	emit := outputPathEmitLines("SYS_ENTER_GETCWD")
+	if !strings.Contains(exitBody, emit) {
+		t.Fatalf("sys_exit_getcwd does not publish its output buffer after a successful return:\n%s", exitBody)
+	}
+	// The hook copies the pointer out of the entry before deleting it, and the
+	// publish (ret > 0) follows it and precedes the handler's own record.
+	checkRecoveryOrdering(t, "sys_exit_getcwd", exitBody, hook, emit)
+	requireContains(t, exitBody, "ev->ret_type = READ_CLASSIFIED;")
+
+	// Other null-kind syscalls must not pay for the capture.
+	for _, name := range []string{"sys_enter_sync", "sys_exit_sync"} {
+		if body := handlerBody(t, out, name); strings.Contains(body, "pending_filename") {
+			t.Errorf("%s must not participate in the output-path capture:\n%s", name, body)
+		}
+	}
+}
+
 // TestGeneratedArtifactRecoversFaultedOpenFilenames applies the same invariant
 // to the committed internal/c/generated_tracepoints.c. `mage generate` needs
-// root and a newer kernel than this host, so the artifact is spliced by hand;
-// this test is what keeps the splice honest and complete across all open and
-// named-eventfd syscalls that recover identifying strings.
+// root, so a hand-spliced artifact is possible; this test is what keeps the
+// committed one honest and complete across every open, path, name, move_mount
+// and named-eventfd syscall that recovers a string.
 func TestGeneratedArtifactRecoversFaultedOpenFilenames(t *testing.T) {
 	artifact, err := readGeneratedTracepointsC()
 	if err != nil {
 		t.Fatalf("read generated tracepoints C: %v", err)
 	}
+	firstSlot, secondSlot := checkArtifactRecoveringHandlers(t, artifact)
+	checkArtifactRecoveryCallSites(t, artifact, firstSlot, secondSlot)
+}
 
+// checkArtifactRecoveringHandlers runs the per-handler recovery checks over
+// every recovering family of the committed artifact and returns how many
+// handlers use the first fixup slot (all of them) and the second (only the
+// two-path kinds), so checkArtifactRecoveryCallSites can pin the totals.
+func checkArtifactRecoveringHandlers(t *testing.T, artifact string) (firstSlot, secondSlot int) {
+	t.Helper()
 	openEnters := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct open_event \(kind=(?:open|mq-open|open-tree)\)$`).
 		FindAllStringSubmatch(artifact, -1)
 	if len(openEnters) == 0 {
 		t.Fatal("no open-kind enter handlers in the generated artifact")
 	}
 	for _, m := range openEnters {
-		enter := m[1]
-		syscallName := strings.TrimPrefix(enter, "sys_enter_")
-		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-		enterBody := handlerBody(t, artifact, enter)
-		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
-			t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
-		}
-		if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
-			t.Errorf("%s still reads the filename without testing the return value", enter)
-		}
-		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not take the stashed pointer", syscallName)
-		}
-		if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
-		}
+		checkOpenFilenameRecovery(t, artifact, m[1])
 	}
-	recoveryEnters := make([]string, 0, len(openEnters)+2)
-	for _, match := range openEnters {
-		recoveryEnters = append(recoveryEnters, match[1])
+	identifyingEnters := []string{"sys_enter_fsopen", "sys_enter_memfd_create"}
+	for _, enter := range identifyingEnters {
+		checkIdentifyingStringRecovery(t, artifact, enter)
 	}
-	recoveryEnters = append(recoveryEnters, "sys_enter_fsopen", "sys_enter_memfd_create")
-	for _, enter := range recoveryEnters[len(openEnters):] {
-		syscallName := strings.TrimPrefix(enter, "sys_enter_")
-		enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
-		enterBody := handlerBody(t, artifact, enter)
-		if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
-			t.Errorf("%s does not stash its identifying string pointer", enter)
-		}
-		exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
-		if !strings.Contains(exitBody, openNameTakeLine(enterConst)) ||
-			!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
-			t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
-		}
+	// The output-path syscalls (outputPathSyscalls) share the stash/take/fixup
+	// helpers: their enter stashes the output buffer unconditionally and their
+	// exit publishes it after a successful return.
+	for syscallName, argIdx := range outputPathSyscalls {
+		checkOutputPathRecovery(t, artifact, syscallName, argIdx)
 	}
+	singlePath := artifactEnters(t, artifact, `(?:path_event|fd_path_event) \(kind=(?:pathname|fd-pathname)\)`)
+	for _, enter := range singlePath {
+		checkPathFilenameRecovery(t, artifact, enter, false)
+	}
+	namePairs := artifactEnters(t, artifact, `name_event \(kind=name\)`)
+	// move_mount's from/to pathnames use the same two slots as oldname/newname.
+	twoFdNamePairs := artifactEnters(t, artifact, `two_fd_names_event \(kind=two-fd\)`)
+	twoPath := append(namePairs, twoFdNamePairs...)
+	for _, enter := range twoPath {
+		checkPathFilenameRecovery(t, artifact, enter, true)
+	}
+	firstSlot = len(openEnters) + len(identifyingEnters) + len(outputPathSyscalls) + len(singlePath) + len(twoPath)
+	return firstSlot, len(twoPath)
+}
 
-	// Exactly the reviewed recovery pairs, nothing else: an over-broad splice would
-	// make every exit handler pay two extra map operations.
-	if got := strings.Count(artifact, "ior_take_pending_filename("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_take_pending_filename call sites, want %d", got, len(recoveryEnters))
+// checkArtifactRecoveryCallSites pins exactly the reviewed recovery pairs,
+// nothing else: an over-broad splice would make every exit handler pay extra
+// map operations. Every recovering handler uses the first slot; only the
+// two-path kinds (rename/link, move_mount) also use the second for a path,
+// and the output-handle syscalls (name_to_handle_at) use it for their handle
+// pointer. The handle capture is pinned to its two syscalls the same way.
+// The registered-ring capture (ringFdsSyscalls: io_uring_register) takes
+// both slots through the two-slot hook as well, with its own stash and emit.
+func checkArtifactRecoveryCallSites(t *testing.T, artifact string, firstSlot, secondSlot int) {
+	t.Helper()
+	handles := len(outputHandleSyscalls)
+	ringFds := len(ringFdsSyscalls)
+	for helper, want := range map[string]int{
+		// Every recovering exit takes through exactly one hook call: the
+		// single-slot hook for the one-path handlers, the two-slot one for the
+		// rename/link family and move_mount, and the handle hook, which also
+		// returns the enter time, for name_to_handle_at. No standalone take
+		// remains.
+		"ior_on_syscall_exit_take_filename(":  firstSlot - secondSlot - handles,
+		"ior_on_syscall_exit_take_filenames(": secondSlot + ringFds,
+		"ior_stash_ring_fds(":                 ringFds,
+		"ior_emit_ring_fds(":                  ringFds,
+		"ior_on_syscall_exit_take_handle(":    handles,
+		"ior_emit_open_name_fixup(":           firstSlot,
+		"ior_stash_pending_filename(":         firstSlot,
+		"ior_emit_second_name_fixup(":         secondSlot,
+		"ior_stash_pending_filename2(":        secondSlot,
+		"ior_take_pending_filename":           0,
+		"ior_stash_pending_handle(":           handles,
+		"ior_emit_file_handle(":               handles,
+		// open_by_handle_at alone reads an input handle.
+		"ior_read_file_handle(": 1,
+	} {
+		if got := strings.Count(artifact, helper); got != want {
+			t.Errorf("%d %s) call sites, want %d", got, helper, want)
+		}
 	}
-	if got := strings.Count(artifact, "ior_emit_open_name_fixup("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_emit_open_name_fixup call sites, want %d", got, len(recoveryEnters))
+}
+
+// artifactEnters lists the enter handlers of the committed artifact whose
+// struct-and-kind comment matches structKind (a regexp tail after "is a struct ").
+func artifactEnters(t *testing.T, artifact, structKind string) []string {
+	t.Helper()
+	matches := regexp.MustCompile(`(?m)^/// (sys_enter_\S+) is a struct `+structKind+`$`).
+		FindAllStringSubmatch(artifact, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no enter handlers matching %q in the generated artifact", structKind)
 	}
-	if got := strings.Count(artifact, "ior_stash_pending_filename("); got != len(recoveryEnters) {
-		t.Errorf("%d ior_stash_pending_filename call sites, want %d", got, len(recoveryEnters))
+	enters := make([]string, len(matches))
+	for i, m := range matches {
+		enters[i] = m[1]
 	}
+	return enters
+}
+
+// checkPathFilenameRecovery asserts the stash/take/fixup splice of a
+// pathname, fd-pathname, name (rename/link) or two-fd-names (move_mount,
+// whose from/to pathnames are its oldname/newname) syscall: every nofault path read
+// stashes exactly the pointer it read - into the first slot, or for newname
+// into the second - inside its failure branch, and the exit takes and emits
+// each slot ahead of its own record. second says the syscall has a newname.
+//
+// A single-path syscall that returns a file handle (outputHandleSyscalls:
+// name_to_handle_at) uses the second slot too, for its output handle pointer:
+// checkOutputHandleCapture covers that half.
+func checkPathFilenameRecovery(t *testing.T, artifact, enter string, second bool) {
+	t.Helper()
+	syscallName := strings.TrimPrefix(enter, "sys_enter_")
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	checkPathStashes(t, enter, handlerBody(t, artifact, enter), second)
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	hook, emits := openNameHookLine(enterConst), []string{openNameEmitLine(enterConst)}
+	if second {
+		hook, emits = openNameHookLine2(enterConst), append(emits, openNameEmitLine2(enterConst))
+	}
+	handleArg, returnsHandle := outputHandleSyscalls[syscallName]
+	if returnsHandle {
+		hook, emits = outputHandleHookLine(enterConst), append(emits, outputHandleEmitLines(enterConst))
+		checkOutputHandleCapture(t, artifact, syscallName, handleArg)
+	}
+	for _, line := range append([]string{hook}, emits...) {
+		if !strings.Contains(exitBody, line) {
+			t.Errorf("sys_exit_%s lacks %q:\n%s", syscallName, line, exitBody)
+		}
+	}
+	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, hook, emits...)
+	if !second && strings.Contains(exitBody, "pending_filename2") {
+		t.Errorf("sys_exit_%s uses the second slot but captures a single path", syscallName)
+	}
+}
+
+// checkPathStashes is the enter half of checkPathFilenameRecovery: each path
+// field's failed read stashes the pointer that was read, in its own slot.
+func checkPathStashes(t *testing.T, enter, enterBody string, second bool) {
+	t.Helper()
+	fields := map[string]string{"pathname": "ior_stash_pending_filename"}
+	if second {
+		fields = map[string]string{"oldname": "ior_stash_pending_filename", "newname": "ior_stash_pending_filename2"}
+	}
+	for field, stash := range fields {
+		probe := regexp.MustCompile(`bpf_probe_read_user_str\(ev->` + field + `, sizeof\(ev->` + field +
+			`\), \(void\*\)ctx->args\[(\d+)\]\) < 0\) \{\n` +
+			`            ev->` + field + `_status = PATH_READ_FAILED;\n` +
+			`            ev->` + field + `\[0\] = 0;\n` +
+			`            ` + stash + `\(tid, ctx->args\[(\d+)\]\);\n        \}\n`).FindStringSubmatch(enterBody)
+		if probe == nil {
+			t.Errorf("%s: failed %s read does not stash its pointer with %s:\n%s", enter, field, stash, enterBody)
+		} else if probe[1] != probe[2] {
+			t.Errorf("%s: %s is read from args[%s] but args[%s] is stashed", enter, field, probe[1], probe[2])
+		}
+	}
+}
+
+// outputHandleStashLine is the unconditional enter-side stash of the output
+// struct file_handle pointer of name_to_handle_at (outputHandleSyscalls).
+func outputHandleStashLine(argIdx int) string {
+	return fmt.Sprintf("    ior_stash_pending_handle(tid, ctx->args[%d]);\n", argIdx)
+}
+
+// outputHandleEmitLines publishes the returned handle only for ret == 0, the
+// one return that wrote a complete handle, and stamps the record with the
+// handler's own clock read and with the enter time the exit hook took: the
+// exit record carries the first and the enter record the second, which is how
+// userspace knows the three belong to one call.
+func outputHandleEmitLines(enterConst string) string {
+	return "    if (ctx->ret == 0)\n        ior_emit_file_handle(pid, tid, " + enterConst + ", now, enter_ns, pending_handle);\n"
+}
+
+// outputHandleDeclLines are the locals the handle-taking exit hook fills
+// besides pending_filename: the output handle pointer from the second pending
+// slot and the time of the enter that wrote the state.
+const outputHandleDeclLines = "    __u64 pending_handle;\n    __u64 enter_ns;\n"
+
+// outputHandleHookLine is the exit hook of name_to_handle_at: the one lookup
+// that takes the pathname pointer, the handle pointer and the enter time.
+func outputHandleHookLine(enterConst string) string {
+	return "    if (!ior_on_syscall_exit_take_handle(tid, " + enterConst +
+		", ctx->ret, now, &pending_filename, &pending_handle, &enter_ns))\n        return 0;\n"
+}
+
+// checkOutputHandleCapture asserts the enter half of the output-handle
+// capture: the pointer is stashed unconditionally, after
+// ior_on_syscall_enter_stateful created the enter state and before the
+// handler's own reserve, and never through the path helper of the same slot.
+// The exit half (hook, emit, ordering) is checked by the caller.
+func checkOutputHandleCapture(t *testing.T, artifact, syscallName string, argIdx int) {
+	t.Helper()
+	enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
+	stashAt := strings.Index(enterBody, outputHandleStashLine(argIdx))
+	hookAt := strings.Index(enterBody, "ior_on_syscall_enter_stateful(")
+	reserveAt := strings.Index(enterBody, "bpf_ringbuf_reserve(&event_map,")
+	if stashAt < 0 || hookAt < 0 || stashAt < hookAt || stashAt > reserveAt {
+		t.Errorf("sys_enter_%s does not stash its output handle between the stateful enter hook and its reserve:\n%s",
+			syscallName, enterBody)
+	}
+	if strings.Contains(enterBody, "ior_stash_pending_filename2") {
+		t.Errorf("sys_enter_%s puts a path and a handle in the second slot:\n%s", syscallName, enterBody)
+	}
+}
+
+// checkOpenFilenameRecovery asserts that an open-kind enter handler stashes
+// the user pointer when the nofault filename read fails (and no longer reads
+// it unchecked), and that its exit takes the pointer and emits the fixup.
+func checkOpenFilenameRecovery(t *testing.T, artifact, enter string) {
+	t.Helper()
+	syscallName := strings.TrimPrefix(enter, "sys_enter_")
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, enter)
+	if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[") {
+		t.Errorf("%s does not stash the user pointer when the nofault read fails", enter)
+	}
+	if strings.Contains(enterBody, "    bpf_probe_read_user_str(ev->filename") {
+		t.Errorf("%s still reads the filename without testing the return value", enter)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameHookLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not take the stashed pointer through its exit hook", syscallName)
+	}
+	if !strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not emit the fixup record", syscallName)
+	}
+	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, openNameHookLine(enterConst), openNameEmitLine(enterConst))
+}
+
+// checkIdentifyingStringRecovery asserts the stash/take/fixup splice of a
+// non-open syscall (fsopen, memfd_create) whose first argument names it.
+func checkIdentifyingStringRecovery(t *testing.T, artifact, enter string) {
+	t.Helper()
+	syscallName := strings.TrimPrefix(enter, "sys_enter_")
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, enter)
+	if !strings.Contains(enterBody, "ior_stash_pending_filename(tid, ctx->args[0]);") {
+		t.Errorf("%s does not stash its identifying string pointer", enter)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameHookLine(enterConst)) ||
+		!strings.Contains(exitBody, openNameEmitLine(enterConst)) {
+		t.Errorf("sys_exit_%s does not recover its identifying string", syscallName)
+	}
+	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, openNameHookLine(enterConst), openNameEmitLine(enterConst))
+}
+
+// checkOutputPathRecovery asserts that an output-path syscall stashes its
+// output buffer (argument argIdx) at enter and captures it at exit.
+func checkOutputPathRecovery(t *testing.T, artifact, syscallName string, argIdx int) {
+	t.Helper()
+	enterConst := "SYS_ENTER_" + strings.ToUpper(syscallName)
+	enterBody := handlerBody(t, artifact, "sys_enter_"+syscallName)
+	if !strings.Contains(enterBody, outputPathStashLine(argIdx)) {
+		t.Errorf("sys_enter_%s does not stash its output buffer", syscallName)
+	}
+	exitBody := handlerBody(t, artifact, "sys_exit_"+syscallName)
+	if !strings.Contains(exitBody, openNameHookLine(enterConst)) ||
+		!strings.Contains(exitBody, outputPathEmitLines(enterConst)) {
+		t.Errorf("sys_exit_%s does not capture its output buffer after a successful return", syscallName)
+	}
+	checkRecoveryOrdering(t, "sys_exit_"+syscallName, exitBody, openNameHookLine(enterConst), outputPathEmitLines(enterConst))
 }
 
 func TestGeneratedArtifactInitializesExtendedEventfdPayloads(t *testing.T) {
@@ -3599,71 +4106,148 @@ func TestGeneratedArtifactInitializesExtendedTwoFdPayloads(t *testing.T) {
 
 // TestOpenNameFixupHelpersAreDefinedInBPFSource pins the hand-written kernel
 // side the generated handlers call. None of it can be exercised from a unit
-// test, so the contract is asserted over the source.
+// test, so the contract is asserted over the source: the helpers and the exit
+// hook's take in filter.c, the pending slots in maps.h, and the fixup record
+// and its constants in types.h.
 func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
-	filterC, err := readCSource("filter.c")
+	filterC := mustReadCSource(t, "filter.c")
+	checkFilterCDefinesRecoveryHelpers(t, filterC)
+	checkExitHookTakesPendingPointers(t, filterC)
+	checkNameFixupEmit(t, filterC)
+	checkNameFixupWrappersPassTheirSlot(t, filterC)
+	checkEnterStateHasPendingSlots(t, mustReadCSource(t, "maps.h"))
+
+	typesH := mustReadCSource(t, "types.h")
+	checkFixupConstants(t, typesH)
+	checkFixupRecordLayout(t, typesH)
+}
+
+// mustReadCSource returns the hand-written BPF source file name, or fails
+// the test.
+func mustReadCSource(t *testing.T, name string) string {
+	t.Helper()
+	source, err := readCSource(name)
 	if err != nil {
-		t.Fatalf("read filter.c: %v", err)
+		t.Fatalf("read %s: %v", name, err)
 	}
-	for _, helper := range []string{
+	return source
+}
+
+// recoveryHelperSignatures are the filter.c helpers the generated handlers
+// call to stash a pointer at enter and to take it back, with or without a
+// second pointer or the enter time, at exit.
+func recoveryHelperSignatures() []string {
+	return []string{
 		"static __always_inline void ior_stash_pending_filename(__u32 tid, __u64 filename_ptr)",
-		"static __always_inline __u64 ior_take_pending_filename(__u32 tid, __u32 enter_trace_id)",
+		"static __always_inline void ior_stash_pending_filename2(__u32 tid, __u64 filename_ptr)",
+		"static __always_inline int ior_on_syscall_exit_take_filename(",
+		"static __always_inline int ior_on_syscall_exit_take_filenames(",
+		"static __always_inline int ior_on_syscall_exit_take_handle(",
+		"static __always_inline void ior_emit_name_fixup(__u32 tid, __u32 enter_trace_id,",
 		"static __always_inline void ior_emit_open_name_fixup(__u32 tid, __u32 enter_trace_id,",
-	} {
+		"static __always_inline void ior_emit_second_name_fixup(__u32 tid, __u32 enter_trace_id,",
+	}
+}
+
+// checkFilterCDefinesRecoveryHelpers asserts that filter.c defines every
+// helper of recoveryHelperSignatures, and no standalone take.
+func checkFilterCDefinesRecoveryHelpers(t *testing.T, filterC string) {
+	t.Helper()
+	for _, helper := range recoveryHelperSignatures() {
 		if !strings.Contains(filterC, helper) {
 			t.Errorf("filter.c must define %q", helper)
 		}
 	}
-	// A stale enter-state entry belonging to a different syscall must not be
-	// allowed to graft a foreign path onto this pair.
-	if !strings.Contains(filterC, "if (!state || state->enter_trace_id != enter_trace_id)") {
-		t.Error("ior_take_pending_filename must reject an enter state from a different syscall")
+	// There is no standalone take helper any more (task 0t2): its extra map
+	// lookups per slot were the cost this removed.
+	if strings.Contains(filterC, "static __always_inline __u64 ior_take_pending_filename") {
+		t.Error("filter.c still defines a standalone ior_take_pending_filename helper")
 	}
+}
+
+// checkNameFixupEmit pins ior_emit_name_fixup: what it reserves and stamps,
+// what it leaves out, and that it gives up a record it could not fill.
+func checkNameFixupEmit(t *testing.T, filterC string) {
+	t.Helper()
 	// A still-failing re-read carries no information; submitting it would only
 	// cost a ring-buffer record.
 	if !strings.Contains(filterC, "bpf_ringbuf_discard(ev, 0);") {
-		t.Error("ior_emit_open_name_fixup must discard a fixup whose re-read failed")
+		t.Error("ior_emit_name_fixup must discard a fixup whose re-read failed")
 	}
 	if !strings.Contains(filterC, "ev->event_type = OPEN_NAME_FIXUP_EVENT;") {
 		t.Error("the fixup record must carry OPEN_NAME_FIXUP_EVENT")
 	}
-	emitStart := strings.Index(filterC, "static __always_inline void ior_emit_open_name_fixup(")
+	emitStart := strings.Index(filterC, "static __always_inline void ior_emit_name_fixup(")
 	if emitStart < 0 {
-		t.Fatal("could not find ior_emit_open_name_fixup")
+		t.Fatal("could not find ior_emit_name_fixup")
 	}
-	emitEnd := strings.Index(filterC[emitStart:], "\n// filter()")
+	emitEnd := strings.Index(filterC[emitStart:], "\n// ior_emit_open_name_fixup publishes")
 	if emitEnd < 0 {
-		t.Fatal("could not isolate ior_emit_open_name_fixup")
+		t.Fatal("could not isolate ior_emit_name_fixup")
 	}
 	emitBody := filterC[emitStart : emitStart+emitEnd]
 	if !strings.Contains(emitBody, "struct open_name_fixup_event *ev;") ||
 		!strings.Contains(emitBody, "sizeof(struct open_name_fixup_event)") {
-		t.Error("ior_emit_open_name_fixup must reserve the dedicated compact record")
+		t.Error("ior_emit_name_fixup must reserve the dedicated compact record")
+	}
+	// The slot is what lets userspace tell a rename's two names apart; losing
+	// the store would graft the recovered newname onto the oldname.
+	if !strings.Contains(emitBody, "ev->slot = slot;") {
+		t.Error("ior_emit_name_fixup must stamp the path slot on the record")
 	}
 	for _, discarded := range []string{"bpf_get_current_comm", "ev->pid", "ev->time", "ev->flags", "ev->comm"} {
 		if strings.Contains(emitBody, discarded) {
-			t.Errorf("ior_emit_open_name_fixup still populates discarded field/call %q", discarded)
+			t.Errorf("ior_emit_name_fixup still populates discarded field/call %q", discarded)
 		}
 	}
+}
 
-	mapsH, err := readCSource("maps.h")
-	if err != nil {
-		t.Fatalf("read maps.h: %v", err)
+// checkNameFixupWrappersPassTheirSlot asserts that the two public wrappers
+// of ior_emit_name_fixup each pass their own slot constant.
+func checkNameFixupWrappersPassTheirSlot(t *testing.T, filterC string) {
+	t.Helper()
+	for wrapper, slot := range map[string]string{
+		"ior_emit_open_name_fixup":   "OPEN_NAME_FIXUP_SLOT_FIRST",
+		"ior_emit_second_name_fixup": "OPEN_NAME_FIXUP_SLOT_SECOND",
+	} {
+		re := regexp.MustCompile(`(?s)void ` + wrapper + `\(.*?\{\n\s*ior_emit_name_fixup\(tid, enter_trace_id, filename_ptr, ` + slot + `\);\n\}`)
+		if !re.MatchString(filterC) {
+			t.Errorf("%s must delegate to ior_emit_name_fixup with %s", wrapper, slot)
+		}
 	}
+}
+
+// checkEnterStateHasPendingSlots asserts that struct syscall_enter_state
+// carries both stashed pointers.
+func checkEnterStateHasPendingSlots(t *testing.T, mapsH string) {
+	t.Helper()
 	if !strings.Contains(mapsH, "__u64 pending_filename;") {
 		t.Error("struct syscall_enter_state must carry the stashed filename pointer")
 	}
-
-	typesH, err := readCSource("types.h")
-	if err != nil {
-		t.Fatalf("read types.h: %v", err)
+	if !strings.Contains(mapsH, "__u64 pending_filename2;") {
+		t.Error("struct syscall_enter_state must carry the second (newname) stashed pointer")
 	}
+}
+
+// checkFixupConstants asserts the record type and slot constants types.h
+// defines for the fixup record and the process exit record.
+func checkFixupConstants(t *testing.T, typesH string) {
+	t.Helper()
 	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_EVENT 48") {
 		t.Error("types.h must define OPEN_NAME_FIXUP_EVENT (the Go constant is generated from it)")
+	}
+	if !strings.Contains(typesH, "#define OPEN_NAME_FIXUP_SLOT_FIRST 0") ||
+		!strings.Contains(typesH, "#define OPEN_NAME_FIXUP_SLOT_SECOND 1") {
+		t.Error("types.h must define the OPEN_NAME_FIXUP_SLOT_* constants (the Go constants are generated from them)")
 	}
 	if !strings.Contains(typesH, "#define PROCESS_EXIT_EVENT 49") {
 		t.Error("types.h must define PROCESS_EXIT_EVENT (the Go constant is generated from it)")
 	}
+}
+
+// checkFixupRecordLayout pins the members of struct open_name_fixup_event.
+func checkFixupRecordLayout(t *testing.T, typesH string) {
+	t.Helper()
 	structs, _, err := ParseCTypesInput(strings.NewReader(typesH))
 	if err != nil {
 		t.Fatalf("parse types.h: %v", err)
@@ -3678,13 +4262,69 @@ func TestOpenNameFixupHelpersAreDefinedInBPFSource(t *testing.T) {
 	if fixup == nil {
 		t.Fatal("types.h must define struct open_name_fixup_event")
 	}
+	// slot trails the string on purpose: the 268-byte prefix older readers
+	// decode (tid at 8, filename at 12) must not move.
 	wantMembers := []CMember{
 		{TypeName: "__u32", FieldName: "event_type"},
 		{TypeName: "__u32", FieldName: "trace_id"},
 		{TypeName: "__u32", FieldName: "tid"},
 		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
+		{TypeName: "__u32", FieldName: "slot"},
 	}
 	if !reflect.DeepEqual(fixup.Members, wantMembers) {
 		t.Errorf("open_name_fixup_event members = %#v, want only %#v", fixup.Members, wantMembers)
+	}
+}
+
+// checkExitHookTakesPendingPointers pins the take inside ior_on_syscall_exit_impl
+// (task 0t2). It does the one enter-state lookup, and the contract that the
+// former standalone take helpers had must hold inside it: a stale enter-state
+// entry belonging to a different syscall must not graft a foreign path onto
+// this pair, so the pointers are copied only after the enter_trace_id guard
+// (the mismatch branch leaves both outputs at their zero initialisation); they
+// are copied BEFORE the final bpf_map_delete_elem that removes the entry; and
+// the whole hook still does exactly one lookup. The zeroing is measured
+// against that lookup call, not against the guard: the missing-entry return
+// (`if (!state) return ...`) sits between the two, so zeroing placed after it
+// would still precede the guard while leaving a stateless exit's outputs
+// uninitialised.
+func checkExitHookTakesPendingPointers(t *testing.T, filterC string) {
+	t.Helper()
+	start := strings.Index(filterC, "static __always_inline int ior_on_syscall_exit_impl(")
+	if start < 0 {
+		t.Fatal("filter.c must define ior_on_syscall_exit_impl")
+	}
+	end := strings.Index(filterC[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("could not isolate ior_on_syscall_exit_impl")
+	}
+	body := filterC[start : start+end]
+
+	if got := strings.Count(body, "bpf_map_lookup_elem(&syscall_enter_state_map"); got != 1 {
+		t.Errorf("ior_on_syscall_exit_impl does %d enter-state lookups, want exactly 1", got)
+	}
+	lookupAt := strings.Index(body, "bpf_map_lookup_elem(")
+	guardAt := strings.Index(body, "if (state->enter_trace_id != enter_trace_id) {")
+	zeroAt := strings.Index(body, "*pending_filename = 0;")
+	zero2At := strings.Index(body, "*pending_filename2 = 0;")
+	takeAt := strings.Index(body, "*pending_filename = state->pending_filename;")
+	take2At := strings.Index(body, "*pending_filename2 = state->pending_filename2;")
+	zeroNsAt := strings.Index(body, "*enter_ns = 0;")
+	takeNsAt := strings.Index(body, "*enter_ns = state->start_ns;")
+	deleteAt := strings.LastIndex(body, "bpf_map_delete_elem(&syscall_enter_state_map, &tid);")
+	if lookupAt < 0 || guardAt < 0 || zeroAt < 0 || zero2At < 0 || takeAt < 0 || take2At < 0 || deleteAt < 0 ||
+		zeroNsAt < 0 || takeNsAt < 0 {
+		t.Fatalf("ior_on_syscall_exit_impl lacks the lookup, the guard, the zeroing, the takes or the delete:\n%s", body)
+	}
+	if zeroAt > lookupAt || zero2At > lookupAt || zeroNsAt > lookupAt {
+		t.Error("the pending outputs must be zeroed before the lookup so a stateless exit yields 0")
+	}
+	for _, at := range []int{takeAt, take2At, takeNsAt} {
+		if at < guardAt {
+			t.Error("a pending pointer is taken before the enter_trace_id guard: a foreign entry could leak a path")
+		}
+		if at > deleteAt {
+			t.Error("a pending pointer is taken after the enter-state entry was deleted")
+		}
 	}
 }

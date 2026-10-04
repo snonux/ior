@@ -752,3 +752,25 @@ func findSnapshotChild(node *SnapshotNode, name string) *SnapshotNode {
 	}
 	return nil
 }
+
+// TestLiveTrieFilelessPairAddsNoPathFrame pins task pq2 for the live trie: a
+// pair without a file has an empty path, so it adds no "N:file" frame (like
+// any empty name it only counts toward the parents and the root total), while
+// a real file literally named "N:file" still gets its own frame.
+func TestLiveTrieFilelessPairAddsNoPathFrame(t *testing.T) {
+	lt := NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	fileless := newTestPair("sync", 1, 1, "", 1, 2, 3)
+	fileless.File = nil
+	lt.Ingest(fileless)
+	lt.Ingest(newTestPair("api", 2, 2, event.NoFileName, 1, 2, 3))
+
+	snap := liveSnapshot(t, lt)
+	if snap.Total != 2 {
+		t.Fatalf("root total = %d, want 2 (fileless pair still counted)", snap.Total)
+	}
+	syncNode := findSnapshotPath(t, &snap, "sync")
+	if syncNode.Total != 1 || len(syncNode.Children) != 0 {
+		t.Fatalf("sync node total=%d children=%d, want 1 and no path frame", syncNode.Total, len(syncNode.Children))
+	}
+	findSnapshotPath(t, &snap, "api", event.NoFileName)
+}

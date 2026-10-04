@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"ior/internal/statsengine"
 
@@ -30,6 +29,11 @@ type syscallTreemapItem struct {
 	P95Ns    uint64
 	Detail   string
 	Value    uint64
+	// row is the index of the source row (syscall, directory or process)
+	// the item was built from. The builders rank every row but only format
+	// Detail for the items that survive the cut (see rankTreemapItems), so
+	// the survivors need a way back to their row.
+	row int
 }
 
 type syscallTreemapTile struct {
@@ -41,18 +45,12 @@ type syscallTreemapTile struct {
 	h     int
 }
 
-type treemapCell struct {
-	char      rune
-	colorSlot int
-	bold      bool
-}
-
 // renderSyscallsTreemap renders the Syscalls treemap from the already
 // filter-scoped syscall rows (see Model.visibleSyscallRows). snap is passed only
 // to distinguish the "waiting for stats" (nil) state from the "no data" state.
 func renderSyscallsTreemap(snap *statsengine.Snapshot, rows []statsengine.SyscallSnapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Syscalls treemap: waiting for stats..."
+		return fitTableLine("Syscalls treemap: waiting for stats...", width)
 	}
 	items := buildSyscallTreemapItems(rows, metric)
 	return renderTreemapPanel("Syscalls treemap", "Syscalls treemap: no data", items, width, height, metric, selected, isDark)
@@ -60,7 +58,7 @@ func renderSyscallsTreemap(snap *statsengine.Snapshot, rows []statsengine.Syscal
 
 func renderFilesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Files treemap: waiting for stats..."
+		return fitTableLine("Files treemap: waiting for stats...", width)
 	}
 	items := buildFilesTreemapItems(snap, metric)
 	return renderTreemapPanel("Files treemap", "Files treemap: no directory data", items, width, height, metric, selected, isDark)
@@ -68,7 +66,7 @@ func renderFilesTreemap(snap *statsengine.Snapshot, width, height int, metric bu
 
 func renderProcessesTreemap(snap *statsengine.Snapshot, width, height int, metric bubbleMetric, selected int, isDark bool) string {
 	if snap == nil {
-		return "Processes treemap: waiting for stats..."
+		return fitTableLine("Processes treemap: waiting for stats...", width)
 	}
 	items := buildProcessesTreemapItems(snap, metric)
 	return renderTreemapPanel("Processes treemap", "Processes treemap: no data", items, width, height, metric, selected, isDark)
@@ -83,7 +81,8 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	}
 	header := fmt.Sprintf("%s | metric:%s | v mode | b metric | j/k select", title, treemapMetricLabel(metric))
 	if len(items) == 0 {
-		return header + "\n" + emptyText + "\nsel: none"
+		// Cut to the width like the waiting line above (task cz2).
+		return fitPlaceholderLines(width, header, emptyText, "sel: none")
 	}
 
 	selected = clampOffset(selected, len(items))
@@ -93,28 +92,23 @@ func renderTreemapPanel(title, emptyText string, items []syscallTreemapItem, wid
 	}
 
 	tiles := layoutSyscallTreemap(items, 0, 0, width, chartHeight)
-	grid := make([][]treemapCell, chartHeight)
-	for row := 0; row < chartHeight; row++ {
-		grid[row] = make([]treemapCell, width)
-		for col := 0; col < width; col++ {
-			grid[row][col] = treemapCell{char: ' ', colorSlot: -1}
-		}
-	}
+	grid := newGridRows(width, chartHeight)
 	fillTreemapGrid(grid, tiles, selected)
 	palette := treemapPalette(isDark)
 
 	lines := make([]string, 0, chartHeight+2)
 	lines = append(lines, padOrTrim(header, width))
-	for _, row := range grid {
-		lines = append(lines, renderTreemapRow(row, palette))
-	}
+	lines = append(lines, renderGridRows(grid, palette)...)
 	lines = append(lines, padOrTrim(treemapStatusLine(items, selected, metric), width))
 	return strings.Join(lines, "\n")
 }
 
+// buildSyscallTreemapItems ranks the syscall rows into treemap items. The
+// Detail text is formatted only for the items that survive the cut
+// (rankTreemapItems), not for every row.
 func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bubbleMetric) []syscallTreemapItem {
 	items := make([]syscallTreemapItem, 0, len(syscalls))
-	for _, syscall := range syscalls {
+	for i, syscall := range syscalls {
 		item := syscallTreemapItem{
 			Name:     syscall.Name,
 			Key:      syscall.Name,
@@ -123,84 +117,98 @@ func buildSyscallTreemapItems(syscalls []statsengine.SyscallSnapshot, metric bub
 			Duration: syscall.TotalLatencyNs,
 			Errors:   syscall.Errors,
 			P95Ns:    syscall.LatencyP95Ns,
-			Detail: fmt.Sprintf(
-				"rate %.1f/s, errors %d, p95 %s",
-				syscall.RatePerSec,
-				syscall.Errors,
-				formatDurationUintNs(syscall.LatencyP95Ns),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		syscall := syscalls[row]
+		return fmt.Sprintf(
+			"rate %.1f/s, errors %d, p95 %s",
+			syscall.RatePerSec,
+			syscall.Errors,
+			latencyCellUint(syscall.NoPercentileData(), syscall.LatencyP95Ns),
+		)
+	})
 }
 
+// buildFilesTreemapItems ranks the directory rows into treemap items; see
+// buildSyscallTreemapItems for when Detail is formatted.
 func buildFilesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
 	if snap == nil {
 		return nil
 	}
-	dirs := aggregateFilesByDir(snap.Files())
+	dirs := snapshotDirRows(snap)
 	items := make([]syscallTreemapItem, 0, len(dirs))
-	for _, dir := range dirs {
-		pathLabel := rootPathLabelFromFSPath(dir.Dir)
+	for i, dir := range dirs {
 		totalBytes := dir.BytesRead + dir.BytesWritten
 		item := syscallTreemapItem{
-			Name:     pathLabel,
-			Key:      dir.Dir,
+			Name:     dirDisplayLabel(dir),
+			Key:      dirKey(dir),
 			Count:    dir.Accesses,
 			Bytes:    totalBytes,
 			Duration: dir.TotalLatencyNs,
-			Detail: fmt.Sprintf(
-				"dir %s, files %d, read %s, write %s, max %s",
-				dir.Dir,
-				dir.FileCount,
-				formatBytes(float64(dir.BytesRead)),
-				formatBytes(float64(dir.BytesWritten)),
-				formatDurationUintNs(dir.MaxLatencyNs),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		dir := dirs[row]
+		return fmt.Sprintf(
+			"dir %s, files %d, read %s, write %s, max %s",
+			dirDisplayLabel(dir),
+			dir.FileCount,
+			formatBytes(float64(dir.BytesRead)),
+			formatBytes(float64(dir.BytesWritten)),
+			formatDurationUintNs(dir.MaxLatencyNs),
+		)
+	})
 }
 
+// buildProcessesTreemapItems ranks the process rows into treemap items. It
+// is also how the selection learns the tile order (processesTreemapSelection),
+// on every stats tick for a snapshot that may hold thousands of rows, so the
+// per-row work stays free of fmt: Detail is formatted for the surviving
+// items only.
 func buildProcessesTreemapItems(snap *statsengine.Snapshot, metric bubbleMetric) []syscallTreemapItem {
 	if snap == nil {
 		return nil
 	}
 	processes := snap.Processes()
 	items := make([]syscallTreemapItem, 0, len(processes))
-	for _, proc := range processes {
-		label := fmt.Sprintf("%d", proc.PID)
-		if comm := strings.TrimSpace(proc.Comm); comm != "" {
-			label = fmt.Sprintf("%d:%s", proc.PID, comm)
-		}
+	for i, proc := range processes {
 		item := syscallTreemapItem{
-			Name:     label,
-			Key:      processKey(proc.PID),
+			Name:     processLabel(proc),
+			Key:      processRowKey(proc),
 			Count:    proc.Syscalls,
 			Bytes:    proc.Bytes,
 			Duration: proc.TotalLatencyNs,
-			Detail: fmt.Sprintf(
-				"pid %d, rate %.1f/s, avg %s",
-				proc.PID,
-				proc.RatePerSec,
-				formatDurationNs(proc.AvgLatencyNs),
-			),
+			row:      i,
 		}
 		item.Value = treemapValue(item, metric)
 		items = append(items, item)
 	}
-	return rankTreemapItems(items)
+	return rankTreemapItems(items, func(row int) string {
+		proc := processes[row]
+		return fmt.Sprintf(
+			"pid %d, rate %.1f/s, avg %s",
+			proc.PID,
+			proc.RatePerSec,
+			latencyCell(proc.NoLatency, proc.AvgLatencyNs),
+		)
+	})
 }
 
 // rankTreemapItems is the shared tail of the treemap item builders: it drops
 // the items without a value for the metric, orders the rest by value
 // (largest first, ties by label) and keeps the maxSyscallTreemapItems
 // largest. The order is the layout order, so it is also the selection order.
-func rankTreemapItems(items []syscallTreemapItem) []syscallTreemapItem {
+// describe formats the Detail text of one source row; it runs only for the
+// kept items (at most maxSyscallTreemapItems), never for the rows that are
+// dropped, which is what keeps a tick over thousands of rows cheap.
+func rankTreemapItems(items []syscallTreemapItem, describe func(row int) string) []syscallTreemapItem {
 	items = slices.DeleteFunc(items, func(item syscallTreemapItem) bool { return item.Value == 0 })
 	if len(items) == 0 {
 		return nil
@@ -213,6 +221,9 @@ func rankTreemapItems(items []syscallTreemapItem) []syscallTreemapItem {
 	})
 	if len(items) > maxSyscallTreemapItems {
 		items = items[:maxSyscallTreemapItems]
+	}
+	for i := range items {
+		items[i].Detail = describe(items[i].row)
 	}
 	return items
 }
@@ -331,7 +342,7 @@ func findTreemapSplitIndex(items []syscallTreemapItem, total uint64) int {
 	return len(items) / 2
 }
 
-func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected int) {
+func fillTreemapGrid(grid [][]gridCell, tiles []syscallTreemapTile, selected int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -344,7 +355,7 @@ func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected 
 		isSelected := tile.index == selected
 		for row := tile.y; row < minInt(height, tile.y+tile.h); row++ {
 			for col := tile.x; col < minInt(width, tile.x+tile.w); col++ {
-				grid[row][col] = treemapCell{
+				grid[row][col] = gridCell{
 					char:      '█',
 					colorSlot: idx,
 					bold:      isSelected,
@@ -355,7 +366,11 @@ func fillTreemapGrid(grid [][]treemapCell, tiles []syscallTreemapTile, selected 
 	}
 }
 
-func drawTreemapLabel(grid [][]treemapCell, tile syscallTreemapTile, selected bool, colorSlot int) {
+// drawTreemapLabel writes the item's label on the tile's top row, fitted into
+// tile.w-1 display cells (one cell of fill stays visible as the tile
+// separator) and placed grapheme by grapheme (writeGridLabel) so wide
+// CJK/emoji labels cannot spill into the neighbouring tile.
+func drawTreemapLabel(grid [][]gridCell, tile syscallTreemapTile, selected bool, colorSlot int) {
 	height := len(grid)
 	if height == 0 {
 		return
@@ -372,39 +387,8 @@ func drawTreemapLabel(grid [][]treemapCell, tile syscallTreemapTile, selected bo
 	if maxLabel < 1 {
 		return
 	}
-	label := abbreviateTreemapLabel(tile.item.Name, maxLabel)
-	col := tile.x
-	for _, r := range label {
-		if col >= width {
-			break
-		}
-		if col >= 0 {
-			grid[row][col] = treemapCell{
-				char:      r,
-				colorSlot: colorSlot,
-				bold:      selected,
-			}
-		}
-		col++
-	}
-}
-
-func abbreviateTreemapLabel(label string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = "?"
-	}
-	if utf8.RuneCountInString(label) <= maxRunes {
-		return label
-	}
-	if maxRunes == 1 {
-		return "…"
-	}
-	r := []rune(label)
-	return string(r[:maxRunes-1]) + "…"
+	label := abbreviateLabel(tile.item.Name, maxLabel)
+	writeGridLabel(grid[row], tile.x, label, colorSlot, selected)
 }
 
 func treemapStatusLine(items []syscallTreemapItem, selected int, metric bubbleMetric) string {
@@ -475,41 +459,4 @@ func treemapPalette(isDark bool) []color.Color {
 		lipgloss.Color("161"),
 		lipgloss.Color("25"),
 	}
-}
-
-func renderTreemapRow(cells []treemapCell, palette []color.Color) string {
-	if len(cells) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	styleCache := make(map[string]lipgloss.Style, 8)
-	selectedColor := lipgloss.Color("129")
-	for _, cell := range cells {
-		if cell.colorSlot < 0 {
-			if cell.bold {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Render(string(cell.char)))
-			} else {
-				b.WriteRune(cell.char)
-			}
-			continue
-		}
-		slot := cell.colorSlot
-		if len(palette) > 0 {
-			slot = slot % len(palette)
-		}
-		key := fmt.Sprintf("%d/%t", slot, cell.bold)
-		style, ok := styleCache[key]
-		if !ok {
-			style = lipgloss.NewStyle().Foreground(palette[slot])
-			if cell.bold {
-				style = style.Foreground(selectedColor)
-			}
-			if cell.bold {
-				style = style.Bold(true)
-			}
-			styleCache[key] = style
-		}
-		b.WriteString(style.Render(string(cell.char)))
-	}
-	return b.String()
 }

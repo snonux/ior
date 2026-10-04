@@ -21,9 +21,9 @@ type GeneratedTracepoint struct {
 	// EnterKind is the classification of the *enter* side of the same syscall.
 	// It is only meaningful on an exit tracepoint, where the handler otherwise
 	// has no idea what the enter side captured: a sys_exit_* format is always
-	// just "long ret", so every exit classifies as KindRet. The filename
+	// just "long ret", so every exit classifies as KindRet. The faulted-path
 	// recovery in renderHandler needs exactly that missing context - it must
-	// run on the exit of an open, not on the exit of a read.
+	// run on the exit of an open or a stat, not on the exit of a read.
 	EnterKind TracepointKind
 }
 
@@ -98,29 +98,12 @@ func groupBySyscall(formats []Format) []Syscall {
 	return result
 }
 
+// classifySyscall classifies both halves of a syscall and returns the
+// tracepoints to generate for it, or a human-readable skip reason when the
+// syscall is incomplete, unclassifiable or enter-rejected.
 func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
-	var enterClass, exitClass ClassificationResult
-	allCanGenerate := true
-
-	if sc.Enter != nil {
-		enterClass = classifyEnterForGeneration(sc.Enter)
-		if enterClass.Kind == KindNone {
-			allCanGenerate = false
-		}
-	} else {
-		allCanGenerate = false
-	}
-
-	if sc.Exit != nil {
-		exitClass = ClassifyFormat(sc.Exit)
-		if exitClass.Kind == KindNone {
-			allCanGenerate = false
-		}
-	} else {
-		allCanGenerate = false
-	}
-
-	if !allCanGenerate {
+	enterClass, exitClass, ok := classifySyscallHalves(sc)
+	if !ok {
 		names := syscallFormatNames(sc)
 		return nil, fmt.Sprintf("Skipping %s as incomplete or unclassifiable", strings.Join(names, " "))
 	}
@@ -130,6 +113,37 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 		return nil, fmt.Sprintf("Ignoring %s as enter-rejected", strings.Join(names, " "))
 	}
 
+	return generatedTracepointsFor(sc, enterClass, exitClass), ""
+}
+
+// classifySyscallHalves classifies the enter and exit formats. ok is false
+// when either half is missing or classifies as KindNone; the exit half is
+// still classified in that case so behaviour matches the pre-split code.
+func classifySyscallHalves(sc Syscall) (enterClass, exitClass ClassificationResult, ok bool) {
+	ok = true
+	if sc.Enter != nil {
+		enterClass = classifyEnterForGeneration(sc.Enter)
+		if enterClass.Kind == KindNone {
+			ok = false
+		}
+	} else {
+		ok = false
+	}
+
+	if sc.Exit != nil {
+		exitClass = ClassifyFormat(sc.Exit)
+		if exitClass.Kind == KindNone {
+			ok = false
+		}
+	} else {
+		ok = false
+	}
+	return enterClass, exitClass, ok
+}
+
+// generatedTracepointsFor builds the enter and exit tracepoints of an accepted
+// syscall.
+func generatedTracepointsFor(sc Syscall, enterClass, exitClass ClassificationResult) []GeneratedTracepoint {
 	var result []GeneratedTracepoint
 	if sc.Enter != nil {
 		result = append(result, GeneratedTracepoint{Format: sc.Enter, Classification: enterClass})
@@ -146,7 +160,7 @@ func classifySyscall(sc Syscall) ([]GeneratedTracepoint, string) {
 			EnterKind:      enterClass.Kind,
 		})
 	}
-	return result, ""
+	return result
 }
 
 func classifyEnterForGeneration(f *Format) ClassificationResult {
@@ -166,9 +180,14 @@ func isEnterRejected(kind TracepointKind) bool {
 
 // noreturnSyscalls lists syscalls that never return to the syscall site.
 // Their sys_exit tracepoint can never fire, so the generator suppresses the
-// matching exit handler (see classifySyscall) to avoid dead code in the
-// generated BPF program, and the enter handler uses the noreturn enter hook
-// that skips the (otherwise un-reclaimable) syscall_enter_state_map write.
+// matching exit handler (see generatedTracepointsFor) to avoid dead code in
+// the generated BPF program, and the enter handler uses the noreturn enter
+// hook (ior_on_noreturn_syscall_enter) that skips the (otherwise
+// un-reclaimable) syscall_enter_state_map write and counts a sampled-out
+// enter in the kernel aggregate itself. The same set is emitted into
+// internal/types as TraceId.NoReturn (writeTraceIdNoReturnSet), which the
+// event loop uses to turn such an enter into a complete row at once instead
+// of parking it for an exit that never arrives (task pr2).
 //
 //   - exit / exit_group terminate the thread/process; control never returns.
 //   - rt_sigreturn restores the pre-signal execution context off the signal
@@ -186,7 +205,7 @@ var noreturnSyscalls = map[string]bool{
 }
 
 // isNoreturnSyscall reports whether the named syscall never returns and thus
-// must not have an exit handler emitted.
+// must not have an exit handler emitted (and is emitted as a row at enter).
 func isNoreturnSyscall(name string) bool {
 	return noreturnSyscalls[name]
 }

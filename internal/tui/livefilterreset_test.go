@@ -62,7 +62,7 @@ func newLiveSwapFixture(t *testing.T) *liveSwapFixture {
 	// Re-register the setter so it can see whether a reset ran before the
 	// swap: resetting first would let old-filter events into the new
 	// baseline in the window between the reset and the swap.
-	m.runtime.SetLiveFilterSetter(func(filter globalfilter.Filter) {
+	m.runtime.setLiveFilterSetter(func(filter globalfilter.Filter) {
 		// Each earlier swap reset once; any more means this swap's
 		// reset already ran.
 		swaps := len(f.applied)
@@ -71,8 +71,8 @@ func newLiveSwapFixture(t *testing.T) *liveSwapFixture {
 		}
 		f.applied = append(f.applied, filter)
 	})
-	m.runtime.SetDashboardSnapshotSource(f.src)
-	m.runtime.SetLiveTrie(f.trie)
+	m.runtime.setDashboardSnapshotSource(f.src)
+	m.runtime.setLiveTrie(f.trie)
 	m.dashboard.SetLiveTrie(f.trie)
 
 	next, _ := m.Update(messages.StatsTickMsg{Snap: f.preSwap})
@@ -210,7 +210,7 @@ func TestFilterChangeWithoutLiveSetterRestartsInsteadOfResetting(t *testing.T) {
 	f := newLiveSwapFixture(t)
 	// Register and immediately release a setter: the release clears the
 	// fixture's setter too, exactly as a finished trace session leaves it.
-	f.m.runtime.SetLiveFilterSetter(func(globalfilter.Filter) {})()
+	f.m.runtime.setLiveFilterSetter(func(globalfilter.Filter) {})()
 
 	f.apply(t, commFilter("foo"))
 

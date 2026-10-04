@@ -44,11 +44,26 @@ func familyForRank(rank int) string {
 	return string(families[rank])
 }
 
+// scopedFamily returns the family the filter scopes the dashboard to, or ""
+// when it is unscoped.
+func scopedFamily(filter globalfilter.Filter) string {
+	if filter.Family == nil {
+		return ""
+	}
+	return filter.Family.Pattern
+}
+
 // cycleFamilyScope re-scopes the whole dashboard to the next/prev syscall
 // family. It derives the current position statelessly from the active filter,
 // clones it so every other filter component is preserved, sets or clears the
 // Family component, and applies the result as a REPLACEMENT (no undo-stack
 // push) so the stack label does not grow as the user cycles.
+//
+// The view filter only scopes what is shown; it attaches nothing. So when the
+// new family has no attached probe, the status line says so and how to attach
+// it (refreshFamilyHint, run by replaceGlobalFilter's syncDashboardFilterState)
+// instead of leaving an unexplained empty view. A refused re-scope leaves the
+// scope - and so the hint - as it was, next to the refusal notice.
 func (m *Model) cycleFamilyScope(delta int) (tea.Model, tea.Cmd) {
 	scoped := m.filters.current().Clone()
 	nextRank := stepFamilyRank(currentFamilyRank(scoped), delta)

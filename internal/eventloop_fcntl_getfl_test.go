@@ -37,12 +37,13 @@ func TestFGetflMakesUnknownFlagsConcreteAndPropagatesThem(t *testing.T) {
 	}
 	assertPairFdFlags(t, fcntlPair, fGetflFd, wantFlags)
 	fcntlPair.Recycle()
-	assertTrackedFdFlags(t, el, fGetflFd, wantFlags)
+	// The answer stays a cache entry (task a23: not promoted), with the word.
+	assertCachedFdFlags(t, el, fGetflFd, wantFlags)
 	if _, ok := el.fdState().get(wantFlags, execCommPid); ok {
 		t.Fatalf("F_GETFL return %d was incorrectly registered as a new fd", wantFlags)
 	}
-	if got := len(el.fdState().files); got != 1 {
-		t.Fatalf("F_GETFL left %d tracked fds, want only fd %d", got, fGetflFd)
+	if got := len(el.fdState().files); got != 0 {
+		t.Fatalf("F_GETFL left %d tracked fds, want none", got)
 	}
 
 	readPair := feedFdPair(t, el, types.SYS_ENTER_READ, types.SYS_EXIT_READ,

@@ -4,6 +4,7 @@ package types
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 )
@@ -41,6 +42,12 @@ var traceId2Family = map[TraceId]SyscallFamily{
 	1899: FamilyNetwork, 1898: FamilyNetwork, 1897: FamilyNetwork, 1896: FamilyNetwork, 1895: FamilyNetwork, 1894: FamilyNetwork, 1893: FamilyNetwork, 1892: FamilyNetwork, 1891: FamilyNetwork, 1890: FamilyNetwork, 1889: FamilyNetwork, 1888: FamilyNetwork, 1887: FamilyNetwork, 1886: FamilyNetwork, 1885: FamilyNetwork, 1884: FamilyNetwork, 1883: FamilyNetwork, 1882: FamilyNetwork, 1881: FamilyNetwork, 1880: FamilyNetwork, 1879: FamilyNetwork, 1878: FamilyNetwork, 1877: FamilyNetwork, 1876: FamilyNetwork, 1875: FamilyNetwork, 1874: FamilyNetwork, 1873: FamilyNetwork, 1872: FamilyNetwork, 1871: FamilyNetwork, 1870: FamilyNetwork, 1869: FamilyNetwork, 1868: FamilyNetwork, 1867: FamilyNetwork, 1866: FamilyNetwork, 1865: FamilyNetwork, 1864: FamilyNetwork, 1626: FamilySecurity, 1625: FamilySecurity, 1578: FamilyAIO, 1577: FamilyAIO, 1559: FamilyAIO, 1558: FamilyAIO, 1557: FamilyAIO, 1556: FamilyAIO, 1541: FamilyProcess, 1540: FamilyProcess, 1539: FamilyProcess, 1538: FamilyProcess, 1512: FamilySecurity, 1511: FamilySecurity, 1510: FamilySecurity, 1509: FamilySecurity, 1508: FamilySecurity, 1507: FamilySecurity, 1505: FamilySecurity, 1504: FamilySecurity, 1503: FamilySecurity, 1502: FamilySecurity, 1501: FamilySecurity, 1500: FamilySecurity, 1498: FamilySecurity, 1497: FamilySecurity, 1496: FamilySecurity, 1495: FamilySecurity, 1494: FamilySecurity, 1493: FamilySecurity, 1492: FamilyIPC, 1491: FamilyIPC, 1490: FamilyIPC, 1489: FamilyIPC, 1488: FamilyIPC, 1487: FamilyIPC, 1486: FamilyIPC, 1485: FamilyIPC, 1484: FamilyIPC, 1483: FamilyIPC, 1482: FamilyIPC, 1481: FamilyIPC, 1480: FamilyIPC, 1479: FamilyIPC, 1478: FamilyIPC, 1477: FamilyIPC, 1476: FamilyIPC, 1475: FamilyIPC, 1474: FamilyIPC, 1473: FamilyIPC, 1472: FamilyIPC, 1471: FamilyIPC, 1470: FamilyIPC, 1469: FamilyIPC, 1468: FamilyIPC, 1467: FamilyIPC, 1466: FamilyIPC, 1465: FamilyIPC, 1464: FamilyIPC, 1463: FamilyIPC, 1462: FamilyIPC, 1461: FamilyIPC, 1460: FamilyIPC, 1459: FamilyIPC, 1458: FamilyIPC, 1457: FamilyIPC, 1183: FamilyFS, 1182: FamilyFS, 1181: FamilyFS, 1180: FamilyFS, 1165: FamilyFS, 1164: FamilyFS, 1163: FamilyFS, 1162: FamilyFS, 1147: FamilyFS, 1146: FamilyFS, 1128: FamilyAIO, 1127: FamilyAIO, 1126: FamilyAIO, 1125: FamilyAIO, 1124: FamilyAIO, 1123: FamilyAIO, 1122: FamilyAIO, 1121: FamilyAIO, 1120: FamilyAIO, 1119: FamilyAIO, 1118: FamilyAIO, 1117: FamilyAIO, 1116: FamilyIPC, 1115: FamilyIPC, 1114: FamilyIPC, 1113: FamilyIPC, 1112: FamilyIPC, 1111: FamilyIPC, 1110: FamilyIPC, 1109: FamilyIPC, 1108: FamilyIPC, 1107: FamilyIPC, 1106: FamilyIPC, 1105: FamilyIPC, 1104: FamilyIPC, 1103: FamilyIPC, 1102: FamilyPolling, 1101: FamilyPolling, 1100: FamilyPolling, 1099: FamilyPolling, 1098: FamilyPolling, 1097: FamilyPolling, 1096: FamilyPolling, 1095: FamilyPolling, 1094: FamilyPolling, 1093: FamilyPolling, 1092: FamilyPolling, 1091: FamilyPolling, 1090: FamilyIPC, 1089: FamilyIPC, 1088: FamilyIPC, 1087: FamilyIPC, 1086: FamilyIPC, 1085: FamilyIPC, 1084: FamilyIPC, 1083: FamilyIPC, 1082: FamilyIPC, 1081: FamilyIPC, 1080: FamilyIPC, 1079: FamilyIPC, 1077: FamilyFS, 1076: FamilyFS, 1075: FamilyFS, 1074: FamilyFS, 1073: FamilyFS, 1072: FamilyFS, 1071: FamilyFS, 1070: FamilyFS, 1069: FamilyFS, 1068: FamilyFS, 1067: FamilyFS, 1066: FamilyFS, 1065: FamilyFS, 1064: FamilyFS, 1063: FamilyFS, 1062: FamilyFS, 1061: FamilyFS, 1060: FamilyFS, 1059: FamilyFS, 1058: FamilyFS, 1057: FamilyFS, 1056: FamilyFS, 1055: FamilyFS, 1054: FamilyFS, 1053: FamilyFS, 1052: FamilyFS, 1051: FamilyFS, 1050: FamilyFS, 1049: FamilyFS, 1048: FamilyFS, 1047: FamilyFS, 1046: FamilyFS, 1045: FamilyFS, 1044: FamilyFS, 1043: FamilyFS, 1042: FamilyFS, 1041: FamilyNetwork, 1040: FamilyNetwork, 1039: FamilyNetwork, 1038: FamilyNetwork, 1037: FamilyNetwork, 1036: FamilyNetwork, 1003: FamilyFS, 1002: FamilyFS, 1001: FamilyFS, 1000: FamilyFS, 999: FamilyFS, 998: FamilyFS, 997: FamilyFS, 996: FamilyFS, 995: FamilyFS, 994: FamilyFS, 993: FamilyFS, 992: FamilyFS, 991: FamilyFS, 990: FamilyFS, 989: FamilyFS, 988: FamilyFS, 987: FamilyFS, 986: FamilyFS, 985: FamilyFS, 984: FamilyFS, 983: FamilyFS, 982: FamilyFS, 981: FamilyFS, 980: FamilyFS, 979: FamilyFS, 978: FamilyFS, 977: FamilyFS, 976: FamilyFS, 975: FamilyFS, 974: FamilyFS, 973: FamilyFS, 972: FamilyFS, 971: FamilyFS, 970: FamilyFS, 969: FamilyFS, 968: FamilyFS, 967: FamilyFS, 966: FamilyFS, 965: FamilyFS, 964: FamilyFS, 963: FamilyFS, 962: FamilyFS, 961: FamilyProcess, 960: FamilyProcess, 959: FamilyFS, 958: FamilyFS, 957: FamilyFS, 956: FamilyFS, 955: FamilyFS, 954: FamilyFS, 953: FamilyFS, 952: FamilyFS, 951: FamilyMisc, 950: FamilyMisc, 949: FamilyFS, 948: FamilyFS, 947: FamilyFS, 946: FamilyFS, 945: FamilyFS, 944: FamilyFS, 943: FamilyFS, 942: FamilyFS, 937: FamilyPolling, 936: FamilyPolling, 935: FamilyPolling, 934: FamilyPolling, 933: FamilyPolling, 932: FamilyPolling, 931: FamilyPolling, 930: FamilyPolling, 929: FamilyFS, 928: FamilyFS, 927: FamilyFS, 926: FamilyFS, 925: FamilyFS, 924: FamilyFS, 923: FamilyFS, 922: FamilyFS, 921: FamilyFS, 920: FamilyFS, 919: FamilyFS, 918: FamilyFS, 917: FamilyFS, 916: FamilyFS, 915: FamilyFS, 914: FamilyFS, 913: FamilyFS, 912: FamilyFS, 911: FamilyFS, 910: FamilyFS, 909: FamilyFS, 908: FamilyFS, 907: FamilyFS, 906: FamilyFS, 905: FamilyFS, 904: FamilyFS, 903: FamilyFS, 902: FamilyFS, 901: FamilyFS, 900: FamilyFS, 899: FamilyFS, 898: FamilyFS, 897: FamilyFS, 896: FamilyFS, 895: FamilyFS, 894: FamilyFS, 893: FamilyIPC, 892: FamilyIPC, 891: FamilyIPC, 890: FamilyIPC, 889: FamilyProcess, 888: FamilyProcess, 887: FamilyProcess, 886: FamilyProcess, 885: FamilyFS, 884: FamilyFS, 883: FamilyFS, 882: FamilyFS, 881: FamilyFS, 880: FamilyFS, 879: FamilyFS, 878: FamilyFS, 877: FamilyFS, 876: FamilyFS, 875: FamilyFS, 874: FamilyFS, 873: FamilyFS, 872: FamilyFS, 871: FamilyFS, 870: FamilyFS, 869: FamilyFS, 868: FamilyFS, 867: FamilyFS, 866: FamilyFS, 865: FamilyFS, 864: FamilyFS, 863: FamilyFS, 862: FamilyFS, 861: FamilyFS, 860: FamilyFS, 859: FamilyFS, 858: FamilyFS, 857: FamilyFS, 856: FamilyFS, 855: FamilyFS, 854: FamilyFS, 853: FamilyFS, 852: FamilyFS, 851: FamilyFS, 850: FamilyFS, 849: FamilyNetwork, 848: FamilyNetwork, 847: FamilyFS, 846: FamilyFS, 845: FamilyFS, 844: FamilyFS, 843: FamilyFS, 842: FamilyFS, 841: FamilyFS, 840: FamilyFS, 839: FamilyFS, 838: FamilyFS, 837: FamilyFS, 836: FamilyFS, 835: FamilyFS, 834: FamilyFS, 833: FamilyFS, 832: FamilyFS, 831: FamilyFS, 830: FamilyFS, 829: FamilyFS, 828: FamilyFS, 827: FamilyFS, 826: FamilyFS, 825: FamilyFS, 824: FamilyFS, 823: FamilyFS, 822: FamilyFS, 821: FamilyFS, 820: FamilyFS, 819: FamilyFS, 818: FamilyFS, 817: FamilyFS, 816: FamilyFS, 815: FamilyFS, 814: FamilyFS, 813: FamilyFS, 812: FamilyFS, 811: FamilyFS, 810: FamilyFS, 809: FamilyFS, 808: FamilyFS, 807: FamilyFS, 806: FamilyFS, 805: FamilyFS, 804: FamilyFS, 803: FamilyFS, 802: FamilyFS, 801: FamilyProcess, 800: FamilyProcess, 799: FamilyIPC, 798: FamilyIPC, 791: FamilyIPC, 790: FamilyIPC, 789: FamilyIPC, 788: FamilyIPC, 768: FamilyMemory, 767: FamilyMemory, 757: FamilyMemory, 756: FamilyMemory, 755: FamilyMemory, 754: FamilyMemory, 753: FamilyMemory, 752: FamilyMemory, 751: FamilyMemory, 750: FamilyMemory, 749: FamilyMemory, 748: FamilyMemory, 747: FamilyFS, 746: FamilyFS, 745: FamilyFS, 744: FamilyFS, 743: FamilyMemory, 742: FamilyMemory, 741: FamilyMemory, 740: FamilyMemory, 739: FamilyMemory, 738: FamilyMemory, 737: FamilyMemory, 736: FamilyMemory, 735: FamilyMemory, 734: FamilyMemory, 726: FamilyFS, 725: FamilyFS, 724: FamilyMemory, 723: FamilyMemory, 722: FamilyMemory, 721: FamilyMemory, 720: FamilyMemory, 719: FamilyMemory, 718: FamilyMemory, 717: FamilyMemory, 716: FamilyMemory, 715: FamilyMemory, 712: FamilyMemory, 711: FamilyMemory, 710: FamilyMemory, 709: FamilyMemory, 708: FamilyMemory, 707: FamilyMemory, 706: FamilyMemory, 705: FamilyMemory, 704: FamilyMemory, 703: FamilyMemory, 702: FamilyMemory, 701: FamilyMemory, 700: FamilyMemory, 699: FamilyMemory, 698: FamilyMemory, 697: FamilyMemory, 696: FamilyMemory, 695: FamilyMemory, 628: FamilyFS, 627: FamilyFS, 626: FamilyFS, 625: FamilyFS, 616: FamilyMemory, 615: FamilyMemory, 607: FamilyFS, 606: FamilyFS, 603: FamilyMisc, 602: FamilyMisc, 599: FamilySecurity, 598: FamilySecurity, 597: FamilySecurity, 596: FamilySecurity, 529: FamilySecurity, 528: FamilySecurity, 511: FamilySecurity, 510: FamilySecurity, 509: FamilySecurity, 508: FamilySecurity, 507: FamilyMisc, 506: FamilyMisc, 502: FamilyMisc, 501: FamilyMisc, 500: FamilyMisc, 499: FamilyMisc, 498: FamilyIPC, 497: FamilyIPC, 496: FamilyIPC, 495: FamilyIPC, 494: FamilyIPC, 493: FamilyIPC, 492: FamilyIPC, 491: FamilyIPC, 490: FamilyIPC, 489: FamilyIPC, 474: FamilyTime, 473: FamilyTime, 472: FamilyTime, 471: FamilyTime, 470: FamilyTime, 469: FamilyTime, 468: FamilyTime, 467: FamilyTime, 466: FamilyTime, 465: FamilyTime, 464: FamilyTime, 463: FamilyTime, 462: FamilyTime, 461: FamilyTime, 460: FamilyTime, 459: FamilyTime, 458: FamilyTime, 457: FamilyTime, 456: FamilyTime, 455: FamilyTime, 454: FamilyTime, 453: FamilyTime, 452: FamilyTime, 451: FamilyTime, 450: FamilyTime, 449: FamilyTime, 444: FamilyTime, 443: FamilyTime, 426: FamilyTime, 425: FamilyTime, 424: FamilyTime, 423: FamilyTime, 422: FamilyTime, 421: FamilyTime, 420: FamilyTime, 419: FamilyTime, 418: FamilyProcess, 417: FamilyProcess, 411: FamilySecurity, 410: FamilySecurity, 409: FamilySecurity, 408: FamilySecurity, 407: FamilySecurity, 406: FamilySecurity, 351: FamilyMisc, 350: FamilyMisc, 346: FamilyMemory, 345: FamilyMemory, 341: FamilySched, 340: FamilySched, 339: FamilySched, 338: FamilySched, 337: FamilySched, 336: FamilySched, 335: FamilySched, 334: FamilySched, 333: FamilySched, 332: FamilySched, 331: FamilySched, 330: FamilySched, 329: FamilySched, 328: FamilySched, 327: FamilySched, 326: FamilySched, 325: FamilySched, 324: FamilySched, 323: FamilySched, 322: FamilySched, 321: FamilySched, 320: FamilySched, 319: FamilySched, 318: FamilySched, 286: FamilyProcess, 285: FamilyProcess, 284: FamilyProcess, 283: FamilyProcess, 282: FamilyProcess, 281: FamilyProcess, 277: FamilyFS, 276: FamilyFS, 275: FamilyProcess, 274: FamilyProcess, 273: FamilyIPC, 272: FamilyIPC, 271: FamilyIPC, 270: FamilyIPC, 265: FamilyProcess, 264: FamilyProcess, 263: FamilyProcess, 262: FamilyProcess, 261: FamilyProcess, 260: FamilyProcess, 259: FamilyProcess, 258: FamilyProcess, 257: FamilyProcess, 256: FamilyProcess, 255: FamilyProcess, 254: FamilyProcess, 253: FamilyProcess, 252: FamilyProcess, 251: FamilyProcess, 250: FamilyProcess, 249: FamilyProcess, 248: FamilyProcess, 247: FamilyProcess, 246: FamilyProcess, 245: FamilyProcess, 244: FamilyProcess, 243: FamilyProcess, 242: FamilyProcess, 241: FamilyProcess, 240: FamilyProcess, 239: FamilyProcess, 238: FamilyProcess, 237: FamilyProcess, 236: FamilyProcess, 235: FamilyProcess, 234: FamilyProcess, 233: FamilyProcess, 232: FamilyProcess, 231: FamilyProcess, 230: FamilyProcess, 229: FamilyProcess, 228: FamilyProcess, 227: FamilyTime, 226: FamilyTime, 225: FamilyProcess, 224: FamilyProcess, 223: FamilyProcess, 222: FamilyProcess, 221: FamilyProcess, 220: FamilyProcess, 219: FamilyProcess, 218: FamilyProcess, 217: FamilyProcess, 216: FamilyProcess, 215: FamilyMisc, 214: FamilyMisc, 213: FamilyMisc, 212: FamilyMisc, 211: FamilyMisc, 210: FamilyMisc, 209: FamilyProcess, 208: FamilyProcess, 207: FamilyProcess, 206: FamilyProcess, 205: FamilyProcess, 204: FamilyProcess, 203: FamilyProcess, 202: FamilyProcess, 201: FamilyProcess, 200: FamilyProcess, 199: FamilyProcess, 198: FamilyProcess, 197: FamilyMisc, 196: FamilyMisc, 195: FamilyMisc, 194: FamilyMisc, 191: FamilyProcess, 190: FamilyProcess, 189: FamilySignals, 188: FamilySignals, 187: FamilySignals, 186: FamilySignals, 185: FamilySignals, 184: FamilySignals, 183: FamilySignals, 182: FamilySignals, 181: FamilyIPC, 180: FamilyIPC, 179: FamilySignals, 178: FamilySignals, 177: FamilySignals, 176: FamilySignals, 175: FamilySignals, 174: FamilySignals, 173: FamilySignals, 172: FamilySignals, 171: FamilySignals, 170: FamilySignals, 169: FamilySignals, 168: FamilySignals, 167: FamilySignals, 166: FamilySignals, 165: FamilySignals, 164: FamilySignals, 163: FamilySecurity, 162: FamilySecurity, 161: FamilySecurity, 160: FamilySecurity, 159: FamilySecurity, 158: FamilySecurity, 150: FamilyProcess, 148: FamilyProcess, 146: FamilyProcess, 145: FamilyProcess, 144: FamilyProcess, 143: FamilyProcess, 139: FamilyProcess, 138: FamilyProcess, 134: FamilyProcess, 133: FamilyProcess, 132: FamilyProcess, 131: FamilyProcess, 130: FamilyProcess, 129: FamilyProcess, 128: FamilyProcess, 127: FamilyProcess, 126: FamilyProcess, 125: FamilyProcess, 124: FamilyProcess, 123: FamilyProcess, 119: FamilyMemory, 118: FamilyMemory, 117: FamilyMisc, 116: FamilyMisc, 115: FamilyMisc, 114: FamilyMisc, 102: FamilyProcess, 101: FamilyProcess, 100: FamilyMemory, 99: FamilyMemory, 98: FamilyMisc, 97: FamilyMisc, 95: FamilyMisc, 94: FamilyMisc, 93: FamilyMisc, 92: FamilyMisc, 57: FamilySignals,
 }
 
+var noReturnTraceIds = map[TraceId]bool{
+	150: true,
+	148: true,
+	57:  true,
+}
+
 func (s TraceId) String() string {
 	str, ok := traceId2String[s]
 	if !ok {
@@ -64,6 +71,13 @@ func (s TraceId) Family() SyscallFamily {
 		return FamilyMisc
 	}
 	return family
+}
+
+// NoReturn reports whether this is the sys_enter tracepoint of a syscall
+// that never returns to its caller (exit, exit_group, rt_sigreturn), whose
+// sys_exit tracepoint therefore never fires.
+func (s TraceId) NoReturn() bool {
+	return noReturnTraceIds[s]
 }
 
 const MAX_FILENAME_LENGTH = 256
@@ -129,6 +143,12 @@ const ENTER_TWO_FD_NAMES_EVENT = 58
 const EXIT_TWO_FD_NAMES_EVENT = 59
 const ENTER_EVENTFD_NAME_EVENT = 60
 const EXIT_EVENTFD_NAME_EVENT = 61
+const TASK_NEWTASK_EVENT = 62
+const TASK_RENAME_EVENT = 63
+const SYSCALL_RESTART_EVENT = 64
+const FILE_HANDLE_EVENT = 65
+const ENTER_FD_NAME_EVENT = 66
+const RING_FDS_EVENT = 67
 const UNCLASSIFIED = 0
 const READ_CLASSIFIED = 1
 const WRITE_CLASSIFIED = 2
@@ -152,8 +172,28 @@ const TWO_FD_EVENT_PRE_KCMP_OWNER_SCHEMA_VERSION = 2
 const TWO_FD_EVENT_SCHEMA_VERSION = 3
 const FD_PATH_EVENT_SCHEMA_VERSION = 1
 const POLL_EVENT_SCHEMA_VERSION = 1
+const EXEC_EVENT_SCHEMA_VERSION = 1
 const POLL_TIMEOUT_INFINITE_NS = -1
 const POLL_TIMEOUT_UNKNOWN_NS = -2
+const OPEN_NAME_FIXUP_SLOT_FIRST = 0
+const OPEN_NAME_FIXUP_SLOT_SECOND = 1
+const IOR_MAX_HANDLE_SZ = 128
+const FILE_HANDLE_NONE = 0
+const FILE_HANDLE_OK = 1
+const FILE_HANDLE_NULL = 2
+const FILE_HANDLE_READ_FAILED = 3
+const FILE_HANDLE_TOO_LARGE = 4
+const IOR_REGISTER_RING_FDS = 20
+const IOR_UNREGISTER_RING_FDS = 21
+const IOR_RING_FDS_MAX = 16
+const IOR_RING_FD_UPDATE_SIZE = 16
+const IOR_RING_FDS_BYTES = 256
+const RING_FDS_OK = 1
+const RING_FDS_READ_FAILED = 2
+const RING_FDS_TOO_MANY = 3
+const IOR_FD_NAME_LENGTH = 68
+const RESTART_PHASE_HANDLER = 1
+const RESTART_PHASE_RESUME = 2
 const SYS_ENTER_SOCKET TraceId = 1899
 const SYS_EXIT_SOCKET TraceId = 1898
 const SYS_ENTER_SOCKETPAIR TraceId = 1897
@@ -965,10 +1005,11 @@ type OpenNameFixupEvent struct {
 	TraceId   TraceId
 	Tid       uint32
 	Filename  [MAX_FILENAME_LENGTH]byte
+	Slot      uint32
 }
 
 func (o OpenNameFixupEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v", o.EventType, o.TraceId, o.Tid, StringValue(o.Filename[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Tid:%v Filename:%v Slot:%v", o.EventType, o.TraceId, o.Tid, StringValue(o.Filename[:]), o.Slot)
 }
 
 func (o OpenNameFixupEvent) Equals(other any) bool {
@@ -976,7 +1017,7 @@ func (o OpenNameFixupEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Tid == otherConcrete.Tid && o.Filename == otherConcrete.Filename
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Tid == otherConcrete.Tid && o.Filename == otherConcrete.Filename && o.Slot == otherConcrete.Slot
 }
 
 func (o *OpenNameFixupEvent) GetEventType() EventType {
@@ -1019,19 +1060,21 @@ func (o *OpenNameFixupEvent) Recycle() {
 }
 
 type ExecEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Dirfd     int32
-	Flags     int32
-	Filename  [MAX_FILENAME_LENGTH]byte
-	Comm      [MAX_PROGNAME_LENGTH]byte
+	EventType      EventType
+	TraceId        TraceId
+	Time           uint64
+	Pid            uint32
+	Tid            uint32
+	Dirfd          int32
+	Flags          int32
+	Filename       [MAX_FILENAME_LENGTH]byte
+	Comm           [MAX_PROGNAME_LENGTH]byte
+	FilenameStatus uint32
+	SchemaVersion  uint32
 }
 
 func (e ExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, StringValue(e.Filename[:]), StringValue(e.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Dirfd:%v Flags:%v Filename:%v Comm:%v FilenameStatus:%v SchemaVersion:%v", e.EventType, e.TraceId, e.Time, e.Pid, e.Tid, e.Dirfd, e.Flags, StringValue(e.Filename[:]), StringValue(e.Comm[:]), e.FilenameStatus, e.SchemaVersion)
 }
 
 func (e ExecEvent) Equals(other any) bool {
@@ -1039,7 +1082,7 @@ func (e ExecEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Dirfd == otherConcrete.Dirfd && e.Flags == otherConcrete.Flags && e.Filename == otherConcrete.Filename && e.Comm == otherConcrete.Comm
+	return e.EventType == otherConcrete.EventType && e.TraceId == otherConcrete.TraceId && e.Time == otherConcrete.Time && e.Pid == otherConcrete.Pid && e.Tid == otherConcrete.Tid && e.Dirfd == otherConcrete.Dirfd && e.Flags == otherConcrete.Flags && e.Filename == otherConcrete.Filename && e.Comm == otherConcrete.Comm && e.FilenameStatus == otherConcrete.FilenameStatus && e.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (e *ExecEvent) GetEventType() EventType {
@@ -1163,13 +1206,17 @@ type FdEvent struct {
 	Pid           uint32
 	Tid           uint32
 	Fd            int32
+	FileIdent     uint32
+	Flags         uint32
 	Size          uint64
 	SizeValid     uint32
 	SchemaVersion uint32
+	NameLen       uint32
+	Name          [IOR_FD_NAME_LENGTH]byte
 }
 
 func (f FdEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Size, f.SizeValid, f.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v NameLen:%v Name:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.Flags, f.Size, f.SizeValid, f.SchemaVersion, f.NameLen, StringValue(f.Name[:]))
 }
 
 func (f FdEvent) Equals(other any) bool {
@@ -1177,7 +1224,7 @@ func (f FdEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion && f.NameLen == otherConcrete.NameLen && f.Name == otherConcrete.Name
 }
 
 func (f *FdEvent) GetEventType() EventType {
@@ -1218,10 +1265,18 @@ func (f *FdEvent) Bytes() ([]byte, error) {
 	binary.LittleEndian.PutUint32(raw[16:20], f.Pid)
 	binary.LittleEndian.PutUint32(raw[20:24], f.Tid)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(f.Fd))
+	binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)
 	if size == 48 {
+		binary.LittleEndian.PutUint32(raw[28:32], f.Flags)
 		binary.LittleEndian.PutUint64(raw[32:40], f.Size)
 		binary.LittleEndian.PutUint32(raw[40:44], f.SizeValid)
 		binary.LittleEndian.PutUint32(raw[44:48], f.SchemaVersion)
+	}
+	if f.EventType == ENTER_FD_NAME_EVENT {
+		raw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)
+		binary.LittleEndian.PutUint32(raw[28:32], f.FileIdent)
+		binary.LittleEndian.PutUint32(raw[32:36], f.NameLen)
+		copy(raw[36:], f.Name[:])
 	}
 	return raw, nil
 }
@@ -1237,13 +1292,14 @@ type FdSizeEvent struct {
 	Pid           uint32
 	Tid           uint32
 	Fd            int32
+	Flags         uint32
 	Size          uint64
 	SizeValid     uint32
 	SchemaVersion uint32
 }
 
 func (f FdSizeEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Size, f.SizeValid, f.SchemaVersion)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v Size:%v SizeValid:%v SchemaVersion:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.Flags, f.Size, f.SizeValid, f.SchemaVersion)
 }
 
 func (f FdSizeEvent) Equals(other any) bool {
@@ -1251,7 +1307,7 @@ func (f FdSizeEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.Flags == otherConcrete.Flags && f.Size == otherConcrete.Size && f.SizeValid == otherConcrete.SizeValid && f.SchemaVersion == otherConcrete.SchemaVersion
 }
 
 func (f *FdSizeEvent) GetEventType() EventType {
@@ -1288,6 +1344,7 @@ func (f *FdSizeEvent) Bytes() ([]byte, error) {
 	binary.LittleEndian.PutUint32(raw[16:20], f.Pid)
 	binary.LittleEndian.PutUint32(raw[20:24], f.Tid)
 	binary.LittleEndian.PutUint32(raw[24:28], uint32(f.Fd))
+	binary.LittleEndian.PutUint32(raw[28:32], f.Flags)
 	binary.LittleEndian.PutUint64(raw[32:40], f.Size)
 	binary.LittleEndian.PutUint32(raw[40:44], f.SizeValid)
 	binary.LittleEndian.PutUint32(raw[44:48], f.SchemaVersion)
@@ -1306,10 +1363,11 @@ type RetEvent struct {
 	Pid       uint32
 	Tid       uint32
 	RetType   uint32
+	FileIdent uint32
 }
 
 func (r RetEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v RetType:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid, r.RetType)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Ret:%v Pid:%v Tid:%v RetType:%v FileIdent:%v", r.EventType, r.TraceId, r.Time, r.Ret, r.Pid, r.Tid, r.RetType, r.FileIdent)
 }
 
 func (r RetEvent) Equals(other any) bool {
@@ -1317,7 +1375,7 @@ func (r RetEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Ret == otherConcrete.Ret && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.RetType == otherConcrete.RetType
+	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Ret == otherConcrete.Ret && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.RetType == otherConcrete.RetType && r.FileIdent == otherConcrete.FileIdent
 }
 
 func (r *RetEvent) GetEventType() EventType {
@@ -1679,10 +1737,11 @@ type Dup3Event struct {
 	Tid       uint32
 	Fd        int32
 	Flags     int32
+	FileIdent uint32
 }
 
 func (d Dup3Event) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v", d.EventType, d.TraceId, d.Time, d.Pid, d.Tid, d.Fd, d.Flags)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v Flags:%v FileIdent:%v", d.EventType, d.TraceId, d.Time, d.Pid, d.Tid, d.Fd, d.Flags, d.FileIdent)
 }
 
 func (d Dup3Event) Equals(other any) bool {
@@ -1690,7 +1749,7 @@ func (d Dup3Event) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return d.EventType == otherConcrete.EventType && d.TraceId == otherConcrete.TraceId && d.Time == otherConcrete.Time && d.Pid == otherConcrete.Pid && d.Tid == otherConcrete.Tid && d.Fd == otherConcrete.Fd && d.Flags == otherConcrete.Flags
+	return d.EventType == otherConcrete.EventType && d.TraceId == otherConcrete.TraceId && d.Time == otherConcrete.Time && d.Pid == otherConcrete.Pid && d.Tid == otherConcrete.Tid && d.Fd == otherConcrete.Fd && d.Flags == otherConcrete.Flags && d.FileIdent == otherConcrete.FileIdent
 }
 
 func (d *Dup3Event) GetEventType() EventType {
@@ -1741,16 +1800,20 @@ func (d *Dup3Event) Recycle() {
 }
 
 type OpenByHandleAtEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Flags     int32
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Flags        int32
+	HandleStatus uint32
+	HandleBytes  uint32
+	HandleType   int32
+	FHandle      [IOR_MAX_HANDLE_SZ]byte
 }
 
 func (o OpenByHandleAtEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Flags:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v", o.EventType, o.TraceId, o.Time, o.Pid, o.Tid, o.Flags, o.HandleStatus, o.HandleBytes, o.HandleType, hex.EncodeToString(o.FHandle[:]))
 }
 
 func (o OpenByHandleAtEvent) Equals(other any) bool {
@@ -1758,7 +1821,7 @@ func (o OpenByHandleAtEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags
+	return o.EventType == otherConcrete.EventType && o.TraceId == otherConcrete.TraceId && o.Time == otherConcrete.Time && o.Pid == otherConcrete.Pid && o.Tid == otherConcrete.Tid && o.Flags == otherConcrete.Flags && o.HandleStatus == otherConcrete.HandleStatus && o.HandleBytes == otherConcrete.HandleBytes && o.HandleType == otherConcrete.HandleType && o.FHandle == otherConcrete.FHandle
 }
 
 func (o *OpenByHandleAtEvent) GetEventType() EventType {
@@ -1806,6 +1869,222 @@ func (o *OpenByHandleAtEvent) Bytes() ([]byte, error) {
 
 func (o *OpenByHandleAtEvent) Recycle() {
 	poolOfOpenByHandleAtEvents.Put(o)
+}
+
+type FileHandleEvent struct {
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Reserved     uint32
+	HandleStatus uint32
+	HandleBytes  uint32
+	HandleType   int32
+	FHandle      [IOR_MAX_HANDLE_SZ]byte
+	EnterTime    uint64
+}
+
+func (f FileHandleEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Reserved:%v HandleStatus:%v HandleBytes:%v HandleType:%v FHandle:%v EnterTime:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Reserved, f.HandleStatus, f.HandleBytes, f.HandleType, hex.EncodeToString(f.FHandle[:]), f.EnterTime)
+}
+
+func (f FileHandleEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FileHandleEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Reserved == otherConcrete.Reserved && f.HandleStatus == otherConcrete.HandleStatus && f.HandleBytes == otherConcrete.HandleBytes && f.HandleType == otherConcrete.HandleType && f.FHandle == otherConcrete.FHandle && f.EnterTime == otherConcrete.EnterTime
+}
+
+func (f *FileHandleEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FileHandleEvent) GetTraceId() TraceId {
+	return f.TraceId
+}
+
+func (f *FileHandleEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FileHandleEvent) GetTid() uint32 {
+	return f.Tid
+}
+
+func (f *FileHandleEvent) GetTime() uint64 {
+	return f.Time
+}
+
+var poolOfFileHandleEvents = sync.Pool{
+	New: func() any { return &FileHandleEvent{} },
+}
+
+func NewFileHandleEvent(raw []byte) *FileHandleEvent {
+	f := poolOfFileHandleEvents.Get().(*FileHandleEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		*f = FileHandleEvent{}
+		poolOfFileHandleEvents.Put(f)
+		return nil
+	}
+	return f
+}
+
+func (f *FileHandleEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *FileHandleEvent) Recycle() {
+	poolOfFileHandleEvents.Put(f)
+}
+
+type RingFdsEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Opcode    uint32
+	Status    uint32
+	Count     uint32
+	Reserved  uint32
+	Updates   [IOR_RING_FDS_BYTES]byte
+}
+
+func (r RingFdsEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Opcode:%v Status:%v Count:%v Reserved:%v Updates:%v", r.EventType, r.TraceId, r.Time, r.Pid, r.Tid, r.Opcode, r.Status, r.Count, r.Reserved, hex.EncodeToString(r.Updates[:]))
+}
+
+func (r RingFdsEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*RingFdsEvent)
+	if !ok {
+		return false
+	}
+	return r.EventType == otherConcrete.EventType && r.TraceId == otherConcrete.TraceId && r.Time == otherConcrete.Time && r.Pid == otherConcrete.Pid && r.Tid == otherConcrete.Tid && r.Opcode == otherConcrete.Opcode && r.Status == otherConcrete.Status && r.Count == otherConcrete.Count && r.Reserved == otherConcrete.Reserved && r.Updates == otherConcrete.Updates
+}
+
+func (r *RingFdsEvent) GetEventType() EventType {
+	return r.EventType
+}
+
+func (r *RingFdsEvent) GetTraceId() TraceId {
+	return r.TraceId
+}
+
+func (r *RingFdsEvent) GetPid() uint32 {
+	return r.Pid
+}
+
+func (r *RingFdsEvent) GetTid() uint32 {
+	return r.Tid
+}
+
+func (r *RingFdsEvent) GetTime() uint64 {
+	return r.Time
+}
+
+var poolOfRingFdsEvents = sync.Pool{
+	New: func() any { return &RingFdsEvent{} },
+}
+
+func NewRingFdsEvent(raw []byte) *RingFdsEvent {
+	r := poolOfRingFdsEvents.Get().(*RingFdsEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, r); err != nil {
+		*r = RingFdsEvent{}
+		poolOfRingFdsEvents.Put(r)
+		return nil
+	}
+	return r
+}
+
+func (r *RingFdsEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, r)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (r *RingFdsEvent) Recycle() {
+	poolOfRingFdsEvents.Put(r)
+}
+
+type FdNameEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Fd        int32
+	FileIdent uint32
+	NameLen   uint32
+	Name      [IOR_FD_NAME_LENGTH]byte
+}
+
+func (f FdNameEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Fd:%v FileIdent:%v NameLen:%v Name:%v", f.EventType, f.TraceId, f.Time, f.Pid, f.Tid, f.Fd, f.FileIdent, f.NameLen, StringValue(f.Name[:]))
+}
+
+func (f FdNameEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*FdNameEvent)
+	if !ok {
+		return false
+	}
+	return f.EventType == otherConcrete.EventType && f.TraceId == otherConcrete.TraceId && f.Time == otherConcrete.Time && f.Pid == otherConcrete.Pid && f.Tid == otherConcrete.Tid && f.Fd == otherConcrete.Fd && f.FileIdent == otherConcrete.FileIdent && f.NameLen == otherConcrete.NameLen && f.Name == otherConcrete.Name
+}
+
+func (f *FdNameEvent) GetEventType() EventType {
+	return f.EventType
+}
+
+func (f *FdNameEvent) GetTraceId() TraceId {
+	return f.TraceId
+}
+
+func (f *FdNameEvent) GetPid() uint32 {
+	return f.Pid
+}
+
+func (f *FdNameEvent) GetTid() uint32 {
+	return f.Tid
+}
+
+func (f *FdNameEvent) GetTime() uint64 {
+	return f.Time
+}
+
+var poolOfFdNameEvents = sync.Pool{
+	New: func() any { return &FdNameEvent{} },
+}
+
+func NewFdNameEvent(raw []byte) *FdNameEvent {
+	f := poolOfFdNameEvents.Get().(*FdNameEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, f); err != nil {
+		*f = FdNameEvent{}
+		poolOfFdNameEvents.Put(f)
+		return nil
+	}
+	return f
+}
+
+func (f *FdNameEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, f)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (f *FdNameEvent) Recycle() {
+	poolOfFdNameEvents.Put(f)
 }
 
 type SocketEvent struct {
@@ -3176,16 +3455,18 @@ func (p *PerfOpenEvent) Recycle() {
 }
 
 type ProcessExecEvent struct {
-	EventType EventType
-	TraceId   TraceId
-	Time      uint64
-	Pid       uint32
-	Tid       uint32
-	Comm      [MAX_PROGNAME_LENGTH]byte
+	EventType    EventType
+	TraceId      TraceId
+	Time         uint64
+	Pid          uint32
+	Tid          uint32
+	Comm         [MAX_PROGNAME_LENGTH]byte
+	OldTid       uint32
+	ExitUntraced uint32
 }
 
 func (p ProcessExecEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Comm[:]))
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v OldTid:%v ExitUntraced:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, StringValue(p.Comm[:]), p.OldTid, p.ExitUntraced)
 }
 
 func (p ProcessExecEvent) Equals(other any) bool {
@@ -3193,7 +3474,7 @@ func (p ProcessExecEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Comm == otherConcrete.Comm
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.Comm == otherConcrete.Comm && p.OldTid == otherConcrete.OldTid && p.ExitUntraced == otherConcrete.ExitUntraced
 }
 
 func (p *ProcessExecEvent) GetEventType() EventType {
@@ -3249,10 +3530,12 @@ type ProcessExitEvent struct {
 	Time      uint64
 	Pid       uint32
 	Tid       uint32
+	GroupDead uint32
+	ExitFlags uint32
 }
 
 func (p ProcessExitEvent) String() string {
-	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid)
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v GroupDead:%v ExitFlags:%v", p.EventType, p.TraceId, p.Time, p.Pid, p.Tid, p.GroupDead, p.ExitFlags)
 }
 
 func (p ProcessExitEvent) Equals(other any) bool {
@@ -3260,7 +3543,7 @@ func (p ProcessExitEvent) Equals(other any) bool {
 	if !ok {
 		return false
 	}
-	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid
+	return p.EventType == otherConcrete.EventType && p.TraceId == otherConcrete.TraceId && p.Time == otherConcrete.Time && p.Pid == otherConcrete.Pid && p.Tid == otherConcrete.Tid && p.GroupDead == otherConcrete.GroupDead && p.ExitFlags == otherConcrete.ExitFlags
 }
 
 func (p *ProcessExitEvent) GetEventType() EventType {
@@ -3308,4 +3591,212 @@ func (p *ProcessExitEvent) Bytes() ([]byte, error) {
 
 func (p *ProcessExitEvent) Recycle() {
 	poolOfProcessExitEvents.Put(p)
+}
+
+type TaskNewtaskEvent struct {
+	EventType  EventType
+	TraceId    TraceId
+	Time       uint64
+	Pid        uint32
+	Tid        uint32
+	Comm       [MAX_PROGNAME_LENGTH]byte
+	CloneFlags uint64
+	CreatorPid uint32
+	ScopeFlags uint32
+}
+
+func (t TaskNewtaskEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v CloneFlags:%v CreatorPid:%v ScopeFlags:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]), t.CloneFlags, t.CreatorPid, t.ScopeFlags)
+}
+
+func (t TaskNewtaskEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*TaskNewtaskEvent)
+	if !ok {
+		return false
+	}
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm && t.CloneFlags == otherConcrete.CloneFlags && t.CreatorPid == otherConcrete.CreatorPid && t.ScopeFlags == otherConcrete.ScopeFlags
+}
+
+func (t *TaskNewtaskEvent) GetEventType() EventType {
+	return t.EventType
+}
+
+func (t *TaskNewtaskEvent) GetTraceId() TraceId {
+	return t.TraceId
+}
+
+func (t *TaskNewtaskEvent) GetPid() uint32 {
+	return t.Pid
+}
+
+func (t *TaskNewtaskEvent) GetTid() uint32 {
+	return t.Tid
+}
+
+func (t *TaskNewtaskEvent) GetTime() uint64 {
+	return t.Time
+}
+
+var poolOfTaskNewtaskEvents = sync.Pool{
+	New: func() any { return &TaskNewtaskEvent{} },
+}
+
+func NewTaskNewtaskEvent(raw []byte) *TaskNewtaskEvent {
+	t := poolOfTaskNewtaskEvents.Get().(*TaskNewtaskEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, t); err != nil {
+		*t = TaskNewtaskEvent{}
+		poolOfTaskNewtaskEvents.Put(t)
+		return nil
+	}
+	return t
+}
+
+func (t *TaskNewtaskEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, t)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (t *TaskNewtaskEvent) Recycle() {
+	poolOfTaskNewtaskEvents.Put(t)
+}
+
+type TaskRenameEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Comm      [MAX_PROGNAME_LENGTH]byte
+}
+
+func (t TaskRenameEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Comm:%v", t.EventType, t.TraceId, t.Time, t.Pid, t.Tid, StringValue(t.Comm[:]))
+}
+
+func (t TaskRenameEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*TaskRenameEvent)
+	if !ok {
+		return false
+	}
+	return t.EventType == otherConcrete.EventType && t.TraceId == otherConcrete.TraceId && t.Time == otherConcrete.Time && t.Pid == otherConcrete.Pid && t.Tid == otherConcrete.Tid && t.Comm == otherConcrete.Comm
+}
+
+func (t *TaskRenameEvent) GetEventType() EventType {
+	return t.EventType
+}
+
+func (t *TaskRenameEvent) GetTraceId() TraceId {
+	return t.TraceId
+}
+
+func (t *TaskRenameEvent) GetPid() uint32 {
+	return t.Pid
+}
+
+func (t *TaskRenameEvent) GetTid() uint32 {
+	return t.Tid
+}
+
+func (t *TaskRenameEvent) GetTime() uint64 {
+	return t.Time
+}
+
+var poolOfTaskRenameEvents = sync.Pool{
+	New: func() any { return &TaskRenameEvent{} },
+}
+
+func NewTaskRenameEvent(raw []byte) *TaskRenameEvent {
+	t := poolOfTaskRenameEvents.Get().(*TaskRenameEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, t); err != nil {
+		*t = TaskRenameEvent{}
+		poolOfTaskRenameEvents.Put(t)
+		return nil
+	}
+	return t
+}
+
+func (t *TaskRenameEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, t)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (t *TaskRenameEvent) Recycle() {
+	poolOfTaskRenameEvents.Put(t)
+}
+
+type SyscallRestartEvent struct {
+	EventType EventType
+	TraceId   TraceId
+	Time      uint64
+	Pid       uint32
+	Tid       uint32
+	Phase     uint32
+	SaRestart uint32
+}
+
+func (s SyscallRestartEvent) String() string {
+	return fmt.Sprintf("EventType:%v TraceId:%v Time:%v Pid:%v Tid:%v Phase:%v SaRestart:%v", s.EventType, s.TraceId, s.Time, s.Pid, s.Tid, s.Phase, s.SaRestart)
+}
+
+func (s SyscallRestartEvent) Equals(other any) bool {
+	otherConcrete, ok := other.(*SyscallRestartEvent)
+	if !ok {
+		return false
+	}
+	return s.EventType == otherConcrete.EventType && s.TraceId == otherConcrete.TraceId && s.Time == otherConcrete.Time && s.Pid == otherConcrete.Pid && s.Tid == otherConcrete.Tid && s.Phase == otherConcrete.Phase && s.SaRestart == otherConcrete.SaRestart
+}
+
+func (s *SyscallRestartEvent) GetEventType() EventType {
+	return s.EventType
+}
+
+func (s *SyscallRestartEvent) GetTraceId() TraceId {
+	return s.TraceId
+}
+
+func (s *SyscallRestartEvent) GetPid() uint32 {
+	return s.Pid
+}
+
+func (s *SyscallRestartEvent) GetTid() uint32 {
+	return s.Tid
+}
+
+func (s *SyscallRestartEvent) GetTime() uint64 {
+	return s.Time
+}
+
+var poolOfSyscallRestartEvents = sync.Pool{
+	New: func() any { return &SyscallRestartEvent{} },
+}
+
+func NewSyscallRestartEvent(raw []byte) *SyscallRestartEvent {
+	s := poolOfSyscallRestartEvents.Get().(*SyscallRestartEvent)
+	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, s); err != nil {
+		*s = SyscallRestartEvent{}
+		poolOfSyscallRestartEvents.Put(s)
+		return nil
+	}
+	return s
+}
+
+func (s *SyscallRestartEvent) Bytes() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, s)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (s *SyscallRestartEvent) Recycle() {
+	poolOfSyscallRestartEvents.Put(s)
 }

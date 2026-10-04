@@ -202,11 +202,14 @@ func TestTraceInfraSetupsRejectAnUnusableFilterBeforeAnyBPFSetup(t *testing.T) {
 // ordering deterministic even when the tests run as root. Both mode setup
 // paths are required below to delegate to this shared function.
 func TestSharedTraceInfraSetupValidatesFilterBeforeBPFSetup(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	guardIndex, validationCall := exactValidationGuard(t, decl)
-	bpfSetupPos := firstCallPosition(decl, "setupBPFModule")
+	// setupTraceInfraBPF is where setupBPFModule runs (pinned by
+	// TestTraceSetupPassesSessionHooksExplicitly), so its call site is the
+	// point the kernel is first touched.
+	bpfSetupPos := firstCallPosition(decl, "setupTraceInfraBPF")
 	if !bpfSetupPos.IsValid() {
-		t.Fatal("shared trace setup no longer calls setupBPFModule")
+		t.Fatal("shared trace setup no longer calls setupTraceInfraBPF")
 	}
 	guardPos := decl.Body.List[guardIndex].Pos()
 	if guardPos >= bpfSetupPos {
@@ -225,7 +228,7 @@ func TestSharedTraceInfraSetupValidatesFilterBeforeBPFSetup(t *testing.T) {
 // the factory seam that preserves the intentional regular/headless difference.
 // The selected factory must finish successfully before the TUI sees startup.
 func TestSharedTraceInfraSetupBuildsSelectedEventLoopBeforeSignallingStart(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	sequenceIndex, buildCall := exactEventLoopBuildSequence(t, decl)
 	buildCalls := callsNamed(decl, "buildEventLoop")
 	if len(buildCalls) != 1 || buildCalls[0] != buildCall {
@@ -274,8 +277,9 @@ func TestTraceInfraEntryPointsUseSharedSetup(t *testing.T) {
 // collaborators go once the starter has handed them to the trace run: the
 // run passes its hooks to setup, setup gives the probe publisher to BPF setup
 // (which registers the probe manager with it) and the shutdown reporter to
-// the infra's progress wiring. setupBPFModule cannot run unprivileged, so the
-// wiring is checked structurally; the behaviour on either side is pinned by
+// the infra's progress wiring (both inside its BPF half, setupTraceInfraBPF).
+// setupBPFModule cannot run unprivileged, so the wiring is checked
+// structurally; the behaviour on either side is pinned by
 // TestTuiTraceStarterHandsRequestBindingsDownToSetup and
 // TestNewTraceInfraReportsShutdownProgress.
 func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
@@ -283,9 +287,18 @@ func TestTraceSetupPassesSessionHooksExplicitly(t *testing.T) {
 	assertCallArguments(t, singleBareCall(t, run, "setupTraceInfra"),
 		[]string{"parentCtx", "cfg", "started", "hooks", "logln"})
 
-	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	shared, _ := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	assertCallArguments(t, singleBareCall(t, shared, "setupTraceInfraBPF"),
+		[]string{"parentCtx", "cfg", "hooks", "logln", "warnSetup"})
+
+	setup, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
 	bpfSetup := singleBareCall(t, setup, "setupBPFModule")
-	if got := renderedArgument(t, bpfSetup, 1); got != "hooks.probes" {
+	// The session context goes to BPF setup too, so a restart that cancels
+	// this session stops its load/attach instead of letting it publish late.
+	if got := renderedArgument(t, bpfSetup, 0); got != "parentCtx" {
+		t.Fatalf("setupBPFModule context argument = %q, want parentCtx", got)
+	}
+	if got := renderedArgument(t, bpfSetup, 2); got != "hooks.probes" {
 		t.Fatalf("setupBPFModule probe publisher argument = %q, want hooks.probes", got)
 	}
 	assertCallArguments(t, singleBareCall(t, setup, "newTraceInfra"),
@@ -376,7 +389,7 @@ func TestNewTraceEventLoopRejectsAnUnusableFilter(t *testing.T) {
 // off the last result of every return statement below the signal. The signature
 // check keeps that reading honest if the results are ever rearranged.
 func TestSetupTraceInfraSignalsStartAfterEveryFallibleStep(t *testing.T) {
-	decl, fset := parseInternalFunction(t, "ior.go", "setupTraceInfraWithEventLoop")
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
 	results := decl.Type.Results
 	if results == nil || len(results.List) == 0 {
 		t.Fatal("shared trace setup returns nothing; it must still hand its setup failures back")

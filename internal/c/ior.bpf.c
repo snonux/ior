@@ -15,10 +15,40 @@
  */
 #include "filter.c"
 
+// Receive-side capture helpers used by the generated recvmsg handler.
+#include "recv.c"
+
+// select timeout normalisation used by the generated select handler.
+#include "poll.c"
+
+// File-handle capture used by the generated name_to_handle_at and
+// open_by_handle_at handlers.
+#include "handle.c"
+
+// Registered-ring capture used by the generated io_uring_register handlers.
+#include "iouring.c"
+
+// File identity of a descriptor (the inode behind an fd number), used by the
+// generated single-descriptor enter handlers and the exits of the open kinds.
+#include "fileident.c"
+
+// Name of the file a close releases, read through the same walk, used by the
+// generated close handler.
+#include "fdname.c"
+
+// Restart fold: the pending-restart state behind filter.c's enter/exit hooks
+// and its two probes (signal:signal_deliver, a second sys_enter_rt_sigreturn).
+#include "restart.c"
+
 // Hand-written non-syscall tracepoints (sched:sched_process_exec, sched:sched_process_exit).
 #include "exec.c"
 
 // Auto-generated tracepoints.
 #include "generated_tracepoints.c"
+
+// Raw tracepoint syscall dispatch prototype (task 703): read and write only,
+// loaded only when IOR_RAW_SYSCALLS asks for it. Included last because it
+// uses the generated trace ID constants.
+#include "rawsyscall.c"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

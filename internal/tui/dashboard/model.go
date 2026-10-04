@@ -1,9 +1,8 @@
 package dashboard
 
 import (
-	"fmt"
-	"slices"
 	"strings"
+	"sync/atomic"
 
 	coreflamegraph "ior/internal/flamegraph"
 	"ior/internal/globalfilter"
@@ -16,9 +15,9 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
-const streamChromeRows = 4
 const dashboardHelpHintRows = 1
 const dashboardExpandedHelpRows = 2
 const dashboardTabBarRows = 1
@@ -31,6 +30,16 @@ const dashboardTabBarRows = 1
 // and in-place filter swaps), so it is part of the contract rather than an
 // optional capability. It mirrors
 // runtime.ResettableSnapshotSource.
+//
+// Concurrency contract: implementations must be goroutine-safe. Snapshot is
+// called from Bubble Tea command goroutines (statstick.go), not from the UI
+// goroutine, so it can run while Reset is called on the UI goroutine (a reset
+// key press, auto-reset or ResetStats during an in-flight build), and two
+// Snapshot calls can overlap (a SnapshotCmd or reset command alongside a
+// periodic refresh; only the refresh path is single-flighted). The real
+// engine qualifies: it hands its scratch buffers out exclusively per call and
+// a Reset during an in-flight Snapshot is documented as harmless (the
+// dashboard's generation check drops such a snapshot anyway).
 type SnapshotSource interface {
 	Snapshot() (*statsengine.Snapshot, error)
 	Reset()
@@ -65,9 +74,16 @@ type Model struct {
 	latest   *statsengine.Snapshot
 	liveTrie coreflamegraph.LiveTrieSource
 	// statsGen is the current stats generation. It starts at 1 so every tick
-	// built by statsTick is versioned, and advances on every stats reset so
-	// handleStatsTick can drop ticks built before the reset.
+	// is versioned (statsTick, statsTickCmd and refreshStatsCmd all build
+	// through buildStatsTick and stamp the generation captured when the
+	// request was made), and advances on every stats reset so handleStatsTick
+	// can drop ticks built before the reset.
 	statsGen uint64
+	// refreshBuilding is set while a periodic refresh command is building a
+	// snapshot off the UI goroutine (refreshStatsCmd). It is a pointer so the
+	// command can clear it after the build ends, and created lazily so a
+	// zero-value Model works.
+	refreshBuilding *atomic.Bool
 
 	width  int
 	height int
@@ -85,7 +101,14 @@ type Model struct {
 	// applied. It is empty whenever the displayed globalFilter is the one
 	// the user last asked for, and is rendered ahead of the filter summary
 	// in the chrome so a refusal is read before the filter that survived it.
-	filterNotice    string
+	filterNotice string
+	// familyHint says the dashboard is scoped to a syscall family with no
+	// attached probe. It is kept apart from filterNotice because the two are
+	// independent kinds of notice with independent lifetimes: the hint
+	// follows the family scope and the attach state, the notice follows
+	// filter requests. Sharing one field let a hint refresh (after any probe
+	// change) overwrite a refusal the user had not read yet.
+	familyHint      string
 	recordingStatus string
 	pidFilter       int
 	// The three table tabs' state (selected offset/col, live sort, viz mode,
@@ -99,11 +122,13 @@ type Model struct {
 	// tabletab.go for what the component is for.
 	syscallsTab            tableTabState[syscallSortKey]
 	syscallsTreemapOffset  int
+	syscallsTreemapWanted  stickyKey
 	filesTab               tableTabState[fileSortKey]
 	filesDirGrouped        bool
 	filesDirTab            tableTabState[fileDirSortKey]
 	processesTab           tableTabState[processSortKey]
 	processesTreemapOffset int
+	processesTreemapWanted stickyKey
 	streamModel            eventstream.Model
 	flamegraphModel        *flamegraphtui.Model
 	showHelp               bool
@@ -189,6 +214,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStatsTick(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
 	case messages.OpenEditorRequestedMsg:
 		return m.handleOpenEditorRequested(msg)
 	case streamEditorDoneMsg:
@@ -241,7 +268,12 @@ func (m *Model) handleStatsTick(msg messages.StatsTickMsg) (tea.Model, tea.Cmd) 
 		reanchor()
 	}
 	m.clampTableColumns()
-	m.streamModel.Refresh()
+	// The stream re-snapshots and re-filters the whole ring buffer, so only
+	// do it while the Stream tab is visible; a hidden stream is brought up
+	// to date when it is entered again (see onTabEntered).
+	if m.activeTab == TabStream {
+		m.streamModel.Refresh()
+	}
 	if m.refreshBubbleData() {
 		return m, m.ticks.startBubble()
 	}
@@ -262,9 +294,23 @@ func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame {
 		return m, nil
 	}
-	next, cmd := m.flamegraphModel.Update(translateFlamegraphMsg(msg))
+	translated, ok := translateFlamegraphMsg(msg, m.activeBodyDrawn())
+	if !ok {
+		return m, nil
+	}
+	next, cmd := m.flamegraphModel.Update(translated)
 	m.flamegraphModel = next.(*flamegraphtui.Model)
 	return m, cmd
+}
+
+// activeBodyDrawn reports whether View draws the active tab's body at the
+// current terminal size, i.e. the body has at least the tab's minimum rows
+// (renderBody). Otherwise the body is the "terminal too small" notice or
+// nothing, and input aimed at the tab's screen positions must not reach it.
+func (m *Model) activeBodyDrawn() bool {
+	width, height := common.EffectiveViewport(m.width, m.height)
+	rows := splitFrameRows(height, lipgloss.Height(m.renderStatusBlock(width)))
+	return rows.body >= m.minBodyRowsFor(m.activeTab)
 }
 
 // HandleFlameRefreshCompletion offers a background flamegraph result to its
@@ -273,6 +319,19 @@ func (m *Model) handleActiveTabMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 // release their in-flight slot without starting an invisible animation.
 func (m *Model) HandleFlameRefreshCompletion(msg tea.Msg, apply bool) (bool, tea.Cmd) {
 	return m.flamegraphModel.HandleRefreshCompletion(msg, apply && m.activeTab == TabFlame)
+}
+
+// handlePaste routes a bracketed paste to the active tab's text input. A paste
+// is a single message, not a run of key presses, so it never passes through
+// handleKey; without this route it would fall to handleActiveTabMsg and be
+// dropped. With no text input open it is ignored: the dashboard's keys are
+// commands, and pasted text must not trigger them.
+func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	d := lookupTab(m.activeTab)
+	if d.HandlePaste == nil || !m.TextInputFocused() {
+		return m, nil
+	}
+	return m, d.HandlePaste(m, msg)
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -304,8 +363,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !handled {
 		return m.handleUnhandledKey(msg)
 	}
-	if prevActiveTab != m.activeTab && m.activeTab == TabFlame {
-		cmd = batchCmds(cmd, m.enterFlameTab())
+	if prevActiveTab != m.activeTab {
+		cmd = batchCmds(cmd, m.onTabEntered(m.activeTab))
 	}
 	return m, m.postKeyTransitionCmd(prevActiveTab, cmd)
 }
@@ -326,19 +385,42 @@ func (m *Model) handleEnterKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // reanchorFilesOffset keeps the plain Files table selection stable across a
 // snapshot refresh (handleStatsTick): it finds the previously selected path
 // in the freshly ordered rows and falls back to clamping the current offset.
+// Like every keyed selection it survives an empty snapshot (the auto-reset):
+// the path is remembered in filesTab.wanted and found again when rows return
+// (see stickyKey for how long and until when).
 func (m *Model) reanchorFilesOffset(selectedPath string) {
-	m.filesTab.offset = reanchorOffset(m.filesTab.offset, m.sortedFileRows(), selectedPath, findFileOffset)
+	m.filesTab.offset = reanchorSticky(m.filesTab.offset, &m.filesTab.wanted, m.sortedFileRows(), selectedPath, findFileOffset)
 }
 
 // selectedSyscallSnapshot returns the row Enter and the stats-tick
 // re-anchor operate on, via the generic tableTabState selection.
 func (m *Model) selectedSyscallSnapshot() (statsengine.SyscallSnapshot, bool) {
 	rows := m.sortedSyscallRows()
+	// The treemap and the bubble chart keep their own selections, keyed by
+	// syscall name, like the Processes tab (selectedProcessSnapshot): Enter
+	// must act on the tile or bubble that is highlighted, not on whatever the
+	// table offset points at (task cr2).
+	switch m.syscallsTab.mode {
+	case tabVizModeTreemap:
+		return syscallByName(rows, m.syscallsTreemapSelection().selectedKey())
+	case tabVizModeBubbles:
+		return syscallByName(rows, m.syscallsTab.bubble.selectedID())
+	}
 	index, ok := m.syscallsTab.selected(len(rows))
 	if !ok {
 		return statsengine.SyscallSnapshot{}, false
 	}
 	return rows[index], true
+}
+
+// syscallByName returns the row named name; an empty name matches no row.
+func syscallByName(rows []statsengine.SyscallSnapshot, name string) (statsengine.SyscallSnapshot, bool) {
+	for _, row := range rows {
+		if name != "" && row.Name == name {
+			return row, true
+		}
+	}
+	return statsengine.SyscallSnapshot{}, false
 }
 
 func (m *Model) sortedSyscallRows() []statsengine.SyscallSnapshot {
@@ -444,18 +526,20 @@ func (m *Model) handleFilesSortKey(reverse bool) (bool, tea.Cmd) {
 }
 
 // handleProcessesSortKey is the Processes tab's HandleSort hook; the anchor
-// row is the selected PID, so the selection survives the re-order.
+// row is the selected process row (processKey: PID and lifetime, since a
+// recycled PID has one row per lifetime), so the selection survives the
+// re-order.
 func (m *Model) handleProcessesSortKey(reverse bool) (bool, tea.Cmd) {
 	rows := m.sortedProcessTableRows()
 	idx := m.processesTab.selectedIndex(len(rows))
-	var selectedPID uint32
+	var selectedKey string
 	if idx < len(rows) {
-		selectedPID = rows[idx].PID
+		selectedKey = processRowKey(rows[idx])
 	}
 	handled := m.processesTab.applySort(reverse, m.processesTab.col,
 		processSortKeyForColumn,
 		func(current int) int {
-			return reanchorOffset(current, m.sortedProcessTableRows(), selectedPID, findProcessOffset)
+			return reanchorOffset(current, m.sortedProcessTableRows(), selectedKey, findProcessOffset)
 		})
 	return handled, nil
 }
@@ -496,6 +580,21 @@ func (m *Model) selectedFilePath() string {
 
 func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	rows := m.sortedDirRows()
+	// Like the Syscalls and Processes tabs, the bubble chart and the treemap
+	// are selected by their own identity (the directory key), not by the table
+	// row the shared offset points at (task cr2). The icicle's tile keys are
+	// full paths that match a directory row only when the tile is one, so a
+	// tile without a row (a synthetic ancestor) selects nothing.
+	switch m.filesTab.mode {
+	case tabVizModeBubbles:
+		return dirByKey(rows, m.filesTab.bubble.selectedID())
+	case tabVizModeTreemap, tabVizModeIcicle:
+		keys := m.filesDirSelectionKeys()
+		if index, ok := m.filesDirTab.selected(len(keys)); ok {
+			return dirByKey(rows, keys[index])
+		}
+		return DirSnapshot{}, false
+	}
 	index, ok := m.filesDirTab.selected(len(rows))
 	if !ok {
 		return DirSnapshot{}, false
@@ -503,8 +602,20 @@ func (m *Model) selectedDirSnapshot() (DirSnapshot, bool) {
 	return rows[index], true
 }
 
+// dirByKey returns the directory row whose dirKey is key; an empty key matches
+// no row.
+func dirByKey(rows []DirSnapshot, key string) (DirSnapshot, bool) {
+	for _, row := range rows {
+		if key != "" && dirKey(row) == key {
+			return row, true
+		}
+	}
+	return DirSnapshot{}, false
+}
+
 func (m *Model) sortedDirRows() []DirSnapshot {
-	return sortedDirSnapshots(aggregateFilesByDir(m.snapshotOrZero().Files()), m.filesDirTab.sort)
+	snap := m.snapshotOrZero()
+	return sortedDirSnapshots(snapshotDirRows(&snap), m.filesDirTab.sort)
 }
 
 func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -521,16 +632,29 @@ func (m *Model) handleHelpToggleKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.C
 	m.keepAllSelections(func() { m.showHelp = !m.showHelp })
 	// Keep sub-model state in sync so View() stays a pure render pass.
 	// The flamegraph viewport shrinks/grows when the help bar expands/collapses;
-	// the live stream footer row follows the help bar, while the paused
-	// selection/column/search footer always renders (see eventstream.Model.View).
+	// the live stream's Row footer follows the help bar, while the paused
+	// selection/column footer and a status message always render (see
+	// eventstream.Model.appendStreamFooter).
 	flameCmd := m.syncFlameViewport()
 	m.streamModel.SetFooterVisible(m.showHelp)
 	return true, m, flameCmd
 }
 
+// handleFlameConsumedKey routes the keys the flamegraph claims (ConsumesKey)
+// to it while the Flame tab is active. The baseline-reset key is the
+// exception: the baseline is shared by every tab, so it goes through
+// resetBaselineCmd (live trie, stats engine and stats generation) and the
+// flame only drops its own view state afterwards (ClearBaseline). Sending it
+// to the flame model alone reset just the flamegraph and left the stats tabs
+// on their pre-reset totals.
 func (m *Model) handleFlameConsumedKey(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.activeTab != TabFlame || !m.flamegraphModel.ConsumesKey(msg) {
 		return false, m, nil
+	}
+	if m.flamegraphModel.WantsBaselineReset(msg) {
+		cmd := m.resetBaselineCmd()
+		m.flamegraphModel.ClearBaseline()
+		return true, m, cmd
 	}
 	next, cmd := m.flamegraphModel.Update(msg)
 	m.flamegraphModel = next.(*flamegraphtui.Model)
@@ -571,15 +695,17 @@ func (m *Model) handleShortcutKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-func (m *Model) toggleFilesDirGrouping() tea.Cmd {
+// toggleFilesDirGrouping flips the Files tab's directory grouping. It needs no
+// bubble tick chain: the alternative views (bubbles, treemap, icicle) exist
+// only while grouped, and leaving grouped mode resets the tab to the table, so
+// a toggle never lands on a visible bubble chart. The chart is fed by the next
+// stats tick and by entering bubbles mode (cycleVisualizationMode), both of
+// which start the chain. (Test: TestDirGroupingToggleNeverNeedsABubbleChain.)
+func (m *Model) toggleFilesDirGrouping() {
 	m.filesDirGrouped = !m.filesDirGrouped
 	if !m.filesDirGrouped && m.filesTab.mode != tabVizModeTable {
 		m.filesTab.mode = tabVizModeTable
 	}
-	if m.bubbleEnabledForTab(m.activeTab) && m.refreshBubbleData() {
-		return m.ticks.startBubble()
-	}
-	return nil
 }
 
 func (m *Model) handleUnhandledKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -602,7 +728,12 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 		// The same item the treemap highlights (processesTreemapSelection).
 		return processByKey(rows, m.processesTreemapSelection().selectedKey())
 	case m.processesTab.mode == tabVizModeBubbles:
-		return indexedProcessSnapshot(sortedProcessSnapshots(rows, m.processesTab.bubble.Metric(), bubbleMaxItems), m.processesTab.bubble.selected)
+		// The highlighted bubble's ID is its processKey (processBubbleData),
+		// so resolve it by key like the treemap. Re-sorting the rows here to
+		// find the same index broke on metric ties: the chart breaks them by
+		// the display label ("20#1:x") and a second sort by any other string
+		// disagrees whenever a recycled PID is present.
+		return processByKey(rows, m.processesTab.bubble.selectedID())
 	default:
 		return indexedProcessSnapshot(m.sortedProcessTableRows(), m.processesTab.offset)
 	}
@@ -616,7 +747,7 @@ func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
 // empty key matches no row.
 func processByKey(rows []statsengine.ProcessSnapshot, key string) (statsengine.ProcessSnapshot, bool) {
 	for _, row := range rows {
-		if processKey(row.PID) == key {
+		if processRowKey(row) == key {
 			return row, true
 		}
 	}
@@ -632,56 +763,6 @@ func indexedProcessSnapshot(rows []statsengine.ProcessSnapshot, index int) (stat
 		return statsengine.ProcessSnapshot{}, false
 	}
 	return rows[index], true
-}
-
-func sortedProcessSnapshots(rows []statsengine.ProcessSnapshot, metric bubbleMetric, limit int) []statsengine.ProcessSnapshot {
-	if len(rows) == 0 {
-		return nil
-	}
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(left, right statsengine.ProcessSnapshot) int {
-		lv := processMetricValue(left, metric)
-		rv := processMetricValue(right, metric)
-		switch {
-		case lv > rv:
-			return -1
-		case lv < rv:
-			return 1
-		}
-		llabel := processSelectionLabel(left)
-		rlabel := processSelectionLabel(right)
-		switch {
-		case llabel < rlabel:
-			return -1
-		case llabel > rlabel:
-			return 1
-		default:
-			return 0
-		}
-	})
-	if limit > 0 && len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-	return sorted
-}
-
-func processMetricValue(proc statsengine.ProcessSnapshot, metric bubbleMetric) uint64 {
-	switch metric {
-	case bubbleMetricBytes:
-		return proc.Bytes
-	case bubbleMetricDuration:
-		return proc.TotalLatencyNs
-	default:
-		return proc.Syscalls
-	}
-}
-
-func processSelectionLabel(proc statsengine.ProcessSnapshot) string {
-	label := fmt.Sprintf("%d", proc.PID)
-	if comm := strings.TrimSpace(proc.Comm); comm != "" {
-		label = fmt.Sprintf("%d:%s", proc.PID, comm)
-	}
-	return label
 }
 
 // postKeyTransitionCmd assembles the commands needed when the active tab
@@ -784,7 +865,8 @@ func (m *Model) filesPlainRowCount() int {
 }
 
 func (m *Model) filesDirRowCount() int {
-	return len(aggregateFilesByDir(m.snapshotOrZero().Files()))
+	snap := m.snapshotOrZero()
+	return len(snapshotDirRows(&snap))
 }
 
 // filesDirRowCountForMode is the navigation bound of the dir-grouped view:
@@ -808,7 +890,7 @@ func (m *Model) filesDirSelectionKeys() []string {
 		width, height := m.contentViewport(TabFiles, m.width, m.height)
 		return filesIcicleTileKeys(m.latest, width, height, metric)
 	default:
-		return keysOf(m.sortedDirRows(), func(row DirSnapshot) string { return row.Dir })
+		return keysOf(m.sortedDirRows(), dirKey)
 	}
 }
 
@@ -841,13 +923,13 @@ func (m *Model) keepFilesDirSelection(change func()) {
 // filesDirSelection is the dir-grouped selection over the items of the
 // active viz mode (filesDirSelectionKeys).
 func (m *Model) filesDirSelection() keyedSelection {
-	return keyedSelection{offset: &m.filesDirTab.offset, keys: m.filesDirSelectionKeys}
+	return keyedSelection{offset: &m.filesDirTab.offset, keys: m.filesDirSelectionKeys, wanted: &m.filesDirTab.wanted}
 }
 
 // syscallsTableSelection is the Syscalls table selection over the visible,
 // sorted rows, keyed by syscall name.
 func (m *Model) syscallsTableSelection() keyedSelection {
-	return keyedSelection{offset: &m.syscallsTab.offset, keys: func() []string {
+	return keyedSelection{offset: &m.syscallsTab.offset, wanted: &m.syscallsTab.wanted, keys: func() []string {
 		return keysOf(m.sortedSyscallRows(), func(row statsengine.SyscallSnapshot) string { return row.Name })
 	}}
 }
@@ -857,7 +939,7 @@ func (m *Model) syscallsTableSelection() keyedSelection {
 // value on every refresh and on every metric change, so a positional
 // selection would land on whatever syscall moved into its slot.
 func (m *Model) syscallsTreemapSelection() keyedSelection {
-	return keyedSelection{offset: &m.syscallsTreemapOffset, keys: m.syscallsTreemapKeys}
+	return keyedSelection{offset: &m.syscallsTreemapOffset, keys: m.syscallsTreemapKeys, wanted: &m.syscallsTreemapWanted}
 }
 
 // syscallsTreemapKeys returns the syscall names of the treemap items in
@@ -880,8 +962,8 @@ func (m *Model) keepSyscallsSelection(change func()) {
 // table rows, keyed by PID (processKey). Bubbles mode shares it: the bubble
 // chart keeps its own selection, the offset still indexes the table rows.
 func (m *Model) processesTableSelection() keyedSelection {
-	return keyedSelection{offset: &m.processesTab.offset, keys: func() []string {
-		return keysOf(m.sortedProcessTableRows(), func(row statsengine.ProcessSnapshot) string { return processKey(row.PID) })
+	return keyedSelection{offset: &m.processesTab.offset, wanted: &m.processesTab.wanted, keys: func() []string {
+		return keysOf(m.sortedProcessTableRows(), processRowKey)
 	}}
 }
 
@@ -890,7 +972,7 @@ func (m *Model) processesTableSelection() keyedSelection {
 // keys are built the way renderProcessesTreemap builds its items, so offset
 // i here is tile i on screen.
 func (m *Model) processesTreemapSelection() keyedSelection {
-	return keyedSelection{offset: &m.processesTreemapOffset, keys: func() []string {
+	return keyedSelection{offset: &m.processesTreemapOffset, wanted: &m.processesTreemapWanted, keys: func() []string {
 		return treemapItemKeys(buildProcessesTreemapItems(m.latest, m.processesTab.bubble.Metric()))
 	}}
 }
@@ -908,10 +990,12 @@ func (m *Model) keepProcessesSelection(change func()) {
 // from the stats snapshot. Without a snapshot (before the first tick, or
 // after PrepareForTraceRestart until the new session's first tick) the key
 // lists are empty for lack of data, not because the items are gone, so
-// re-anchoring would reset every offset to 0. The change is then applied
+// re-anchoring would find nothing to follow. The change is then applied
 // as is and the offsets are left for the first tick to clamp, as a
 // positional selection is. A snapshot with no rows is data and still
-// re-anchors (resetting to 0).
+// re-anchors, but an empty list never resets an offset to 0: the selected
+// key is remembered (stickyKey) and looked for again in the following
+// snapshots, until the user moves the selection or the grace passes.
 func (m *Model) keepSnapshotSelections(change func(), sels ...keyedSelection) {
 	if m.latest == nil {
 		change()
@@ -922,20 +1006,6 @@ func (m *Model) keepSnapshotSelections(change func(), sels ...keyedSelection) {
 
 func (m *Model) processesRowCount() int {
 	return m.snapshotOrZero().ProcessesCount()
-}
-
-// statsTick fetches the latest engine snapshot as a StatsTickMsg. Without an
-// engine it carries a nil snapshot and no error; a failed Snapshot is reported
-// through Err so handleStatsTick keeps the last successful snapshot.
-func (m *Model) statsTick() messages.StatsTickMsg {
-	if m.engine == nil {
-		return messages.StatsTickMsg{Generation: m.statsGen}
-	}
-	snap, err := m.engine.Snapshot()
-	if err != nil {
-		return messages.StatsTickMsg{Err: err, Generation: m.statsGen}
-	}
-	return messages.StatsTickMsg{Snap: snap, Generation: m.statsGen}
 }
 
 func (m *Model) snapshotOrZero() statsengine.Snapshot {
@@ -952,24 +1022,34 @@ func (m *Model) snapshotOrZero() statsengine.Snapshot {
 // (both the `r` key and auto-reset ticks) and are only cleared when a new
 // PID/TID selection starts a fresh trace (runtime.resetStreamBuffer).
 // This retention is locked by TestTUIIntegration_Global_ResetKeepsStreamRows.
+// The engine is cleared and the generation bumped here on the UI goroutine
+// (so every older in-flight tick is dropped on arrival), while the post-reset
+// snapshot is built by the returned command like any other refresh.
 func (m *Model) resetBaselineCmd() tea.Cmd {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()
 	}
-	tick := m.resetStats()
-	return func() tea.Msg { return tick }
+	m.beginStatsGeneration()
+	return m.statsTickCmd()
 }
 
-// resetStats resets the stats engine, starts a new stats generation so every
-// tick built before the reset is dropped on arrival, and returns the
-// post-reset snapshot as a tick of the new generation. A Snapshot failure
-// travels as StatsTickMsg.Err, so the dashboard keeps displaying the last
-// successful snapshot.
-func (m *Model) resetStats() messages.StatsTickMsg {
+// beginStatsGeneration resets the stats engine and starts a new stats
+// generation, so every tick built before the reset is dropped on arrival.
+func (m *Model) beginStatsGeneration() {
 	m.statsGen++
 	if m.engine != nil {
 		m.engine.Reset()
 	}
+}
+
+// resetStats resets the stats engine (beginStatsGeneration) and returns the
+// post-reset snapshot as a tick of the new generation, built synchronously:
+// the engine was just cleared, so there are no percentile reservoirs to
+// select from and the build is cheap. A Snapshot failure travels as
+// StatsTickMsg.Err, so the dashboard keeps displaying the last successful
+// snapshot.
+func (m *Model) resetStats() messages.StatsTickMsg {
+	m.beginStatsGeneration()
 	return m.statsTick()
 }
 
@@ -1005,11 +1085,28 @@ func (m *Model) ExportStreamCSVInputs() (eventstream.Source, eventstream.Filter,
 	return m.streamModel.ExportInputs()
 }
 
+// StreamPaused reports whether the stream tab is frozen on a paused view. The
+// dashboard-wide e export ignores the pause (it snapshots the live ring), so
+// the export modal needs this to warn that the rows written are not the frozen
+// rows on screen.
+func (m *Model) StreamPaused() bool {
+	return m.streamModel.Paused()
+}
+
 // BlocksGlobalShortcuts reports whether the active tab should suppress a
 // top-level shortcut for the given key press.
 func (m *Model) BlocksGlobalShortcuts(msg tea.KeyPressMsg) bool {
 	d := lookupTab(m.activeTab)
 	return d.BlocksGlobalShortcut != nil && d.BlocksGlobalShortcut(m, msg)
+}
+
+// TextInputFocused reports whether the active tab has a text input open (the
+// flamegraph search, the stream search or export-filename modal). While one is
+// open, printable keys are text and the top-level model must not treat them as
+// shortcuts (q quits, H opens help).
+func (m *Model) TextInputFocused() bool {
+	d := lookupTab(m.activeTab)
+	return d.TextInputFocused != nil && d.TextInputFocused(m)
 }
 
 // SetStreamSource updates the live stream source used by the stream tab.
@@ -1042,6 +1139,14 @@ func (m *Model) SetFilterStack(stack []string) {
 // pick, neither of which goes through the refusal check.
 func (m *Model) SetFilterNotice(notice string) {
 	m.filterNotice = notice
+}
+
+// SetFamilyHint sets (or, with an empty string, clears) the "family not
+// traced" hint. It never touches the filter notice, so a pending refusal
+// stays visible however often the hint is refreshed; both are rendered, the
+// notice first (see filterSummary).
+func (m *Model) SetFamilyHint(hint string) {
+	m.familyHint = hint
 }
 
 // SetRecordingStatus updates the visible recording state summary rendered in the dashboard chrome.
@@ -1081,10 +1186,11 @@ func (m *Model) SetDarkMode(isDark bool) {
 	m.forEachBubbleChart(func(chart *bubbleChart) { chart.SetDarkMode(isDark) })
 }
 
-// SnapshotCmd returns a command that fetches and emits a fresh dashboard snapshot.
+// SnapshotCmd returns a command that fetches and emits a fresh dashboard
+// snapshot. The snapshot is built when the command runs (off the UI
+// goroutine), not when SnapshotCmd is called.
 func (m *Model) SnapshotCmd() tea.Cmd {
-	tick := m.statsTick()
-	return func() tea.Msg { return tick }
+	return m.statsTickCmd()
 }
 
 // SetPidFilter updates the active PID filter used by tab render hints.
@@ -1097,21 +1203,56 @@ func (m *Model) SetPidFilter(pid int) {
 // Sub-model state (stream footer visibility, flamegraph viewport dimensions)
 // is kept in sync by the Update() handlers that trigger each state change,
 // so no fixup is needed here.
+//
+// The frame is never taller than the terminal: splitFrameRows budgets the
+// rows (status first, then tab bar, then body) and the body is clipped to its
+// share, so a short terminal loses body rows instead of scrolling the status
+// line off the bottom.
 func (m *Model) View() tea.View {
 	width, height := common.EffectiveViewport(m.width, m.height)
-	_, activeHeight := m.contentViewport(m.activeTab, width, height)
+	status := m.renderStatusBlock(width)
+	rows := splitFrameRows(height, lipgloss.Height(status))
 
-	var b strings.Builder
-	b.WriteString(renderTabBar(m.activeTab, width))
-	b.WriteString("\n")
-	b.WriteString(m.renderActiveContent(width, activeHeight, &m.streamModel, m.flamegraphModel))
-	b.WriteString("\n")
-	if m.showHelp {
-		b.WriteString(renderHelpBarWithStatus(m.keys, width, m.filterSummary()))
-	} else {
-		b.WriteString(renderHelpHintWithStatus(width, m.filterSummary()))
+	parts := make([]string, 0, 3)
+	if rows.tabBar > 0 {
+		parts = append(parts, renderTabBar(m.activeTab, width))
 	}
-	return tea.NewView(common.Current().ScreenStyle.Render(b.String()))
+	if rows.body > 0 {
+		parts = append(parts, m.renderBody(width, height, rows.body))
+	}
+	parts = append(parts, clipTailLines(status, rows.status))
+	return tea.NewView(common.Current().ScreenStyle.Render(strings.Join(parts, "\n")))
+}
+
+// renderStatusBlock renders the bottom of the frame: the one-line help hint,
+// or the expanded help bar, with the live status on its last row - the
+// Stream tab's warning badge (on the other tabs, Model.statusTail) and the
+// filter/recording summary.
+func (m *Model) renderStatusBlock(width int) string {
+	if m.showHelp {
+		return renderHelpBarWithStatus(m.keys, width, m.statusTail())
+	}
+	return renderHelpHintWithStatus(width, m.statusTail())
+}
+
+// renderBody renders the active tab into at most bodyRows rows. With fewer
+// than the tab's minimum (Model.minBodyRowsFor) it shows the "terminal too
+// small" notice instead of a mangled fragment. Otherwise the tab is sized by
+// its own content viewport (which also sizes its sub-model), capped at
+// bodyRows, and the result is clipped to bodyRows as a last line of defence:
+// a tab that keeps a minimum size of its own can then at worst lose its
+// bottom rows, never push the frame past the terminal. Below narrowBodyWidth
+// columns the width gets the same last line of defence (cutBodyToWidth): the
+// panels keep a minimum width of their own (a bordered box is 5 cells wide, the
+// overview panels 16-20), and a line wider than the terminal soft-wraps and
+// breaks the height budget (task qz2).
+func (m *Model) renderBody(width, height, bodyRows int) string {
+	if bodyRows < m.minBodyRowsFor(m.activeTab) {
+		return clipLines(tooSmallNotice(width), bodyRows)
+	}
+	_, activeHeight := m.contentViewport(m.activeTab, width, height)
+	body := m.renderActiveContent(width, min(activeHeight, bodyRows), &m.streamModel, m.flamegraphModel)
+	return clipLines(cutBodyToWidth(body, width), bodyRows)
 }
 
 func (m *Model) filterSummary() string {
@@ -1119,10 +1260,15 @@ func (m *Model) filterSummary() string {
 	// (filter stack, recording status, auto-reset label) on every render tick.
 	var b strings.Builder
 	// The refusal goes first: it is the newest thing that happened to the
-	// filter, and appendStatusText trims this summary from the right.
-	if m.filterNotice != "" {
-		b.WriteString(m.filterNotice)
-		b.WriteString(" | ")
+	// filter, and fitStatusRow trims this summary from the right. The
+	// family hint follows it, so on a narrow row the hint - whose attach state
+	// the probes modal's Families view also shows - is trimmed before the
+	// refusal, which they cannot get back anywhere else.
+	for _, notice := range []string{m.filterNotice, m.familyHint} {
+		if notice != "" {
+			b.WriteString(notice)
+			b.WriteString(" | ")
+		}
 	}
 	b.WriteString("filter: ")
 	b.WriteString(presenter.FilterSummary(m.globalFilter))
@@ -1136,7 +1282,10 @@ func (m *Model) filterSummary() string {
 	}
 	b.WriteString(" | ")
 	b.WriteString(m.autoResetStatus())
-	return b.String()
+	// Filter patterns are often copied from traced comm/file values (push
+	// filter from a selected row) and the notice/recording status can echo
+	// paths, so the plain-text summary is sanitised before it is rendered.
+	return common.Sanitize(b.String())
 }
 
 // renderActiveContent renders the active tab's body through its registered
@@ -1153,6 +1302,10 @@ func (m *Model) renderActiveContent(width, activeHeight int, streamModel *events
 // table page step.
 func (m *Model) activeTableHeight() int {
 	_, activeHeight := m.contentViewport(m.activeTab, m.width, m.height)
+	if m.activeTab == TabProcesses && m.processesTab.mode == tabVizModeTable {
+		// The PID-filter note takes a row under the table (task 503).
+		activeHeight -= processFilterNoteRows(m.pidFilter, activeHeight)
+	}
 	return activeHeight
 }
 
@@ -1165,6 +1318,21 @@ func (m *Model) activeTableHeight() int {
 func (m *Model) syncFlameViewport() tea.Cmd {
 	width, height := m.contentViewport(TabFlame, m.width, m.height)
 	return m.flamegraphModel.SetViewport(width, height, m.activeTab == TabFlame)
+}
+
+// onTabEntered brings a tab whose content is only refreshed while it is
+// visible up to date the moment it becomes active, so it never shows a
+// stale frame while waiting for its first tick: the flame tab resumes its
+// animation and resizes, and the stream (skipped by hidden stats ticks and
+// stream ticks) takes a fresh snapshot of the ring buffer right away.
+func (m *Model) onTabEntered(tab Tab) tea.Cmd {
+	switch tab {
+	case TabFlame:
+		return m.enterFlameTab()
+	case TabStream:
+		m.streamModel.Refresh()
+	}
+	return nil
 }
 
 // enterFlameTab brings the flamegraph up to date when the Flame tab becomes
@@ -1195,19 +1363,29 @@ func (m *Model) setBubbleViewports() {
 	}
 }
 
-// refreshBubbleData pushes the latest snapshot data into EVERY registered
-// bubble chart (through the registry RefreshBubble hooks) and returns
-// whether the ACTIVE tab's chart is still animating, which drives the
-// bubble tick loop. Feeding is deliberately not limited to the active tab:
-// a tab left in bubbles mode renders the moment the user switches back to
-// it, and the nil-snapshot feed is what clears the charts of non-active
-// tabs after a trace restart (PrepareForTraceRestart resets only the
-// active one) - lazily feeding only the active tab left both of those
-// windows showing stale or previous-session data (review finding).
+// refreshBubbleData pushes the latest snapshot data into every registered
+// bubble chart whose tab is in bubbles mode (through the registry
+// RefreshBubble hooks) and returns whether the ACTIVE tab's chart is still
+// animating, which drives the bubble tick loop. Feeding is deliberately not
+// limited to the active tab: a tab left in bubbles mode renders the moment
+// the user switches back to it, and the nil-snapshot feed is what clears
+// the charts of non-active tabs after a trace restart
+// (PrepareForTraceRestart resets only the active one) - lazily feeding only
+// the active tab left both of those windows showing stale or previous-session
+// data (review finding).
+//
+// A tab in table or treemap mode is not fed at all: ranking and laying out
+// its bubbles every tick is wasted work, since nothing renders or reads
+// them (selectedProcessSnapshot reads the chart only in bubbles mode). The
+// only way into bubbles mode, cycleVisualizationMode, refreshes the charts
+// right after the switch, so the first bubbles frame is never stale.
 func (m *Model) refreshBubbleData() bool {
 	m.setBubbleViewports()
 	animating := false
 	for _, tab := range orderedTabs() {
+		if m.tabVizModeFor(tab) != tabVizModeBubbles {
+			continue
+		}
 		if d := tabDescriptors[tab]; d.RefreshBubble != nil && d.RefreshBubble(m) && tab == m.activeTab {
 			animating = true
 		}
@@ -1223,7 +1401,7 @@ func (m *Model) refreshBubbleData() bool {
 func (m *Model) refreshFilesBubbleData() bool {
 	if m.filesDirGrouped {
 		m.filesTab.bubble.SetStatusHint("")
-		return m.filesTab.bubble.SetData(filesDirBubbleData(m.latest))
+		return m.filesTab.bubble.SetData(filesDirBubbleData(m.latest, m.filesTab.bubble.Metric()))
 	}
 	m.filesTab.bubble.SetStatusHint("Files bubble view requires directory mode (press d).")
 	m.filesTab.bubble.SetData(nil)
@@ -1264,7 +1442,9 @@ func (m *Model) bubbleEnabledForTab(tab Tab) bool {
 }
 
 // tickActiveBubbleChart advances the animation frame for the active tab's
-// bubble chart. Returns false when bubbles are not active for the current tab.
+// bubble chart. Returns true while the chart is still animating; false when
+// it has settled or bubbles are not active for the current tab, which is the
+// signal for handleBubbleTick to let the tick chain die.
 func (m *Model) tickActiveBubbleChart() bool {
 	if !m.bubbleEnabledForTab(m.activeTab) {
 		return false
@@ -1372,10 +1552,6 @@ func renderActiveTabContent(m *Model, tab Tab, snap *statsengine.Snapshot, strea
 	return d.Render(m, snap, streamModel, flameModel, width, height)
 }
 
-func streamViewport(width, height int) (int, int) {
-	return dashboardViewport(width, height, streamChromeRows)
-}
-
 func flameViewport(width, height int, showHelp bool) (int, int) {
 	chromeRows := dashboardTabBarRows + dashboardHelpHintRows
 	if showHelp {
@@ -1384,6 +1560,11 @@ func flameViewport(width, height int, showHelp bool) (int, int) {
 	return dashboardViewport(width, height, chromeRows)
 }
 
+// dashboardViewport returns the content viewport left after chromeRows rows of
+// frame. It is never below one row, because the sub-models sized from it
+// (flame, stream, bubble charts) need a positive size; the real row budget of
+// a short terminal is View's (splitFrameRows), which shows a notice instead of
+// the body when the viewport would not be worth drawing.
 func dashboardViewport(width, height, chromeRows int) (int, int) {
 	width, height = common.EffectiveViewport(width, height)
 	height -= chromeRows
@@ -1393,25 +1574,32 @@ func dashboardViewport(width, height, chromeRows int) (int, int) {
 	return width, height
 }
 
-func translateFlamegraphMsg(msg tea.Msg) tea.Msg {
+// translateFlamegraphMsg maps a message for the Flame tab into the
+// flamegraph's coordinates: mouse rows are shifted up by the tab bar above
+// the body, every other message passes unchanged. bodyDrawn is whether View
+// draws the flamegraph at all (Model.activeBodyDrawn); when it does not, the
+// screen shows the "terminal too small" notice where the frames would be, so
+// a mouse message is dropped (ok false) instead of selecting or scrolling a
+// frame the user cannot see.
+func translateFlamegraphMsg(msg tea.Msg, bodyDrawn bool) (tea.Msg, bool) {
 	switch mouse := msg.(type) {
 	case tea.MouseClickMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseClickMsg(m)
+		return tea.MouseClickMsg(m), bodyDrawn
 	case tea.MouseReleaseMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseReleaseMsg(m)
+		return tea.MouseReleaseMsg(m), bodyDrawn
 	case tea.MouseMotionMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseMotionMsg(m)
+		return tea.MouseMotionMsg(m), bodyDrawn
 	case tea.MouseWheelMsg:
 		m := mouse.Mouse()
 		m.Y -= dashboardTabBarRows
-		return tea.MouseWheelMsg(m)
+		return tea.MouseWheelMsg(m), bodyDrawn
 	default:
-		return msg
+		return msg, true
 	}
 }

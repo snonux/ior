@@ -47,13 +47,26 @@ type helpSection struct {
 }
 
 func (m *Model) helpSections() []helpSection {
-	line1 := "f filter  p pid picker  t tid picker  o probes  R parquet rec"
+	// The Global section is capped at three lines: at 80x24 the overlay keeps
+	// only height-4 = 20 lines, and a fourth Global line pushed the last
+	// Dashboard Tabs line (the "stream: x/X export  E open" hint) out of
+	// view. Every line must also stay within 70 cells, the help box content
+	// width at 80 columns, or it is cut with an ellipsis.
+	//
+	// The export key rides on the first line. "R parquet rec" is not repeated
+	// here: the Dashboard Tabs section already lists it. Attaching a whole
+	// family at runtime is the probes modal's Families view (tab), which its
+	// own not-traced hint spells out, so the note only has to say which key
+	// opens the modal: O works on every tab, o is shadowed by the Flame tab's
+	// frame-order key.
+	line0 := "H help  esc/? close help  q quit"
 	if m.keys.ExportEnabled() {
-		line1 += "  e stream export"
+		line0 += "  e stream export"
 	}
 	globalLines := []string{
-		"H help  esc/? close help  q quit",
-		line1,
+		line0,
+		"f filter  p pid picker  t tid picker  o/O probes  [ ] scope family",
+		"O opens probes on every tab (on Flame, o cycles the frame order)",
 	}
 
 	return []helpSection{
@@ -68,7 +81,8 @@ func (m *Model) helpSections() []helpSection {
 		{
 			title: "PID/TID Picker",
 			lines: []string{
-				"enter select  r refresh  esc/q back",
+				"enter select  esc back  ctrl+r refresh  (typing filters the list)",
+				"with the filter unfocused (up/down): r refresh  q back  H help",
 			},
 		},
 	}
@@ -77,7 +91,8 @@ func (m *Model) helpSections() []helpSection {
 // dashboardTabHelpLines builds the Dashboard Tabs section of the global help
 // overlay. The stream export shortcuts (x/X/E) line is included only when
 // export is enabled, so -tuiExport=false hides both the hints and the
-// shortcuts themselves.
+// shortcuts themselves. The last line explains the status line's warning
+// badge.
 func dashboardTabHelpLines(exportEnabled bool) []string {
 	lines := []string{
 		"tab/shift+tab tabs  1..7 jump tab  r reset baseline  R parquet rec",
@@ -89,12 +104,20 @@ func dashboardTabHelpLines(exportEnabled bool) []string {
 		"files: d dirs toggle  v bubbles (dirs only)  b metric",
 		"flame: arrows/hjkl nav  enter/click zoom  click ancestor undo  u/bs/esc undo  o order",
 		"flame: / filter  n/N match next/prev  space pause  b metric",
-		"stream: space pause  enter push filter  esc/F undo  /? n/N search",
+		// "enter filter/warning": a filter from the selected cell, or, on
+		// a warning row, its whole message. Spelled out it is over the 70
+		// cells an 80-column overlay shows (see helpSections); the paused
+		// footer says which of the two the selected row gets.
+		"stream: space pause  enter filter/warning  esc/F undo  /? n/N search",
 	}
 	if exportEnabled {
 		lines = append(lines, "stream: x/X export  E open")
 	}
-	return lines
+	// The status-line warning badge is drawn only off the Stream tab, so the
+	// overlay says what it points at (task ys2). It goes last: an 80x24
+	// overlay cuts the section from the bottom, and the key hints above it
+	// outrank an explanation of a badge the user can follow without it.
+	return append(lines, `status "warnings: N (7:Stream)": warning rows on the Stream tab`)
 }
 
 func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
@@ -141,19 +164,9 @@ func renderGlobalHelpOverlay(width, height int, sections []helpSection) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// truncateHelpLine shortens s to at most width display cells, ending in "…"
+// when cut. Measuring and cutting by display width (common.TruncateRight)
+// keeps wide runes from overflowing the help box.
 func truncateHelpLine(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	r := []rune(s)
-	if len(r) >= width {
-		return string(r[:width-1]) + "…"
-	}
-	return s
+	return common.TruncateRight(s, width, common.Ellipsis)
 }

@@ -1,6 +1,10 @@
 package generate
 
-import "strings"
+import (
+	"maps"
+	"slices"
+	"strings"
+)
 
 // TracepointKind is the payload shape a syscall tracepoint was classified
 // into: it decides which C event struct the generated handler stores the
@@ -114,100 +118,97 @@ const (
 	// is not captured.
 	KindTimerObj
 	// KindFdSize is KindFd plus the requested output-buffer size, for the
-	// fd-based xattr reads whose zero-size call is a size probe. It has its
-	// own fd_size_event so that every other fd syscall - read and write above
-	// all - keeps the lean fd_event. Its metadata name stays "fd".
+	// fd-based xattr reads whose zero-size call is a size probe, and plus the
+	// recv flags and buffer capacity of recvfrom/recvmsg, whose MSG_PEEK and
+	// MSG_TRUNC change what the return value means. It has its own
+	// fd_size_event so that every other fd syscall - read and write above all -
+	// keeps the lean fd_event. Its metadata name stays "fd".
 	KindFdSize
 	// KindTwoFdNames is KindTwoFd plus the two pathnames move_mount passes
 	// alongside its descriptors. It has its own two_fd_names_event so that
 	// close_range and kcmp do not carry 512 unused name bytes. Its metadata
 	// name stays "two-fd".
 	KindTwoFdNames
+	// KindIoUringFd is the io_uring_enter/io_uring_register payload. The
+	// leading "fd" of those calls is either a real descriptor or, when the
+	// caller sets IORING_ENTER_REGISTERED_RING / IORING_REGISTER_USE_REGISTERED_RING,
+	// an index into the task's registered-ring table, so a bare fd_event cannot
+	// say which it is. The record therefore reuses fcntl_event (fd, plus the
+	// enter flags or register opcode in cmd) and userspace decides how to read
+	// the fd. Its metadata name stays "fd" so -trace-kinds selection is
+	// unchanged.
+	KindIoUringFd
+	// KindIoUringSetup is the io_uring_setup payload: fcntl_event with the
+	// io_uring_params flags in cmd (userspace needs IORING_SETUP_REGISTERED_FD_ONLY,
+	// which makes the return value a registered-ring index rather than a new
+	// descriptor). It carries no descriptor (fd is -1). Its metadata name stays
+	// "null" so -trace-kinds selection is unchanged.
+	KindIoUringSetup
+
+	// kindCount is a sentinel, not a kind: it must stay last so tests can
+	// iterate every real kind (KindNone+1 .. kindCount-1). It is unexported and
+	// absent from every kind table, so it never reaches generated output.
+	kindCount
 )
+
+// kindMetadataNames maps each kind to its stable metadata name. It is a data
+// table rather than a switch so adding a kind is a one-line change. Several
+// kinds deliberately share a name: the size/names variants (KindFdSize,
+// KindTwoFdNames) keep their base kind's name, and KindNamedEventfd shares
+// "eventfd", so downstream metadata consumers see one stable label.
+var kindMetadataNames = map[TracepointKind]string{
+	KindFd:             "fd",
+	KindFdSize:         "fd",
+	KindOpen:           "open",
+	KindMqOpen:         "mq-open",
+	KindOpenTree:       "open-tree",
+	KindExec:           "exec",
+	KindPathname:       "pathname",
+	KindFdPathname:     "fd-pathname",
+	KindName:           "name",
+	KindRet:            "ret",
+	KindFcntl:          "fcntl",
+	KindNull:           "null",
+	KindDup3:           "dup3",
+	KindOpenByHandleAt: "open-by-handle-at",
+	KindSocket:         "socket",
+	KindSocketpair:     "socketpair",
+	KindAccept:         "accept",
+	KindPipe:           "pipe",
+	KindEventfd:        "eventfd",
+	KindNamedEventfd:   "eventfd",
+	KindPidfd:          "pidfd",
+	KindEpollCtl:       "epoll-ctl",
+	KindTwoFd:          "two-fd",
+	KindTwoFdNames:     "two-fd",
+	KindPoll:           "poll",
+	KindMem:            "mem",
+	KindMmap:           "mmap",
+	KindSleep:          "sleep",
+	KindKeyctl:         "keyctl",
+	KindPtrace:         "ptrace",
+	KindPerfOpen:       "perf-open",
+	KindSeccomp:        "seccomp",
+	KindModule:         "module",
+	KindSysVId:         "sysv-id",
+	KindSysVOp:         "sysv-op",
+	KindProc:           "proc",
+	KindBpf:            "bpf",
+	KindFutex:          "futex",
+	KindPrctl:          "prctl",
+	KindTimerObj:       "timer-obj",
+	KindIoUringFd:      "fd",
+	KindIoUringSetup:   "null",
+}
 
 // MetadataName returns the kind's stable name as written into
 // generated_tracepoints.c metadata comments and the Go tracepoint list.
+// KindNone and any kind missing from kindMetadataNames report "none".
 func (k TracepointKind) MetadataName() string {
-	switch k {
-	case KindFd, KindFdSize:
-		return "fd"
-	case KindOpen:
-		return "open"
-	case KindMqOpen:
-		return "mq-open"
-	case KindOpenTree:
-		return "open-tree"
-	case KindExec:
-		return "exec"
-	case KindPathname:
-		return "pathname"
-	case KindFdPathname:
-		return "fd-pathname"
-	case KindName:
-		return "name"
-	case KindRet:
-		return "ret"
-	case KindFcntl:
-		return "fcntl"
-	case KindNull:
-		return "null"
-	case KindDup3:
-		return "dup3"
-	case KindOpenByHandleAt:
-		return "open-by-handle-at"
-	case KindSocket:
-		return "socket"
-	case KindSocketpair:
-		return "socketpair"
-	case KindAccept:
-		return "accept"
-	case KindPipe:
-		return "pipe"
-	case KindEventfd:
-		return "eventfd"
-	case KindNamedEventfd:
-		return "eventfd"
-	case KindPidfd:
-		return "pidfd"
-	case KindEpollCtl:
-		return "epoll-ctl"
-	case KindTwoFd, KindTwoFdNames:
-		return "two-fd"
-	case KindPoll:
-		return "poll"
-	case KindMem:
-		return "mem"
-	case KindMmap:
-		return "mmap"
-	case KindSleep:
-		return "sleep"
-	case KindKeyctl:
-		return "keyctl"
-	case KindPtrace:
-		return "ptrace"
-	case KindPerfOpen:
-		return "perf-open"
-	case KindSeccomp:
-		return "seccomp"
-	case KindModule:
-		return "module"
-	case KindSysVId:
-		return "sysv-id"
-	case KindSysVOp:
-		return "sysv-op"
-	case KindProc:
-		return "proc"
-	case KindBpf:
-		return "bpf"
-	case KindFutex:
-		return "futex"
-	case KindPrctl:
-		return "prctl"
-	case KindTimerObj:
-		return "timer-obj"
-	default:
-		return "none"
+	if name, ok := kindMetadataNames[k]; ok {
+		return name
 	}
+	return "none"
 }
 
 // RetClassification labels what a KindRet syscall's return value counts, so
@@ -273,13 +274,18 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	"sys_enter_open_by_handle_at": KindOpenByHandleAt,
 	"sys_enter_open_tree":         KindOpenTree,
 	"sys_enter_open_tree_attr":    KindOpenTree,
-	"sys_enter_io_uring_enter":    KindFd,
-	"sys_enter_io_uring_register": KindFd,
+	"sys_enter_io_uring_enter":    KindIoUringFd,
+	"sys_enter_io_uring_register": KindIoUringFd,
+	"sys_enter_io_uring_setup":    KindIoUringSetup,
 	"sys_enter_fcntl":             KindFcntl,
-	"sys_enter_syslog":            KindNull,
-	"sys_enter_sync":              KindNull,
-	"sys_enter_msync":             KindMem,
-	"sys_enter_getcwd":            KindNull,
+	// ioctl(fd, cmd, arg) shares fcntl's argument layout. Capturing cmd lets
+	// userspace apply FIOCLEX/FIONCLEX, which set/clear close-on-exec exactly
+	// like fcntl F_SETFD; userspace routes it by trace ID, not by fcntl cmd.
+	"sys_enter_ioctl":  KindFcntl,
+	"sys_enter_syslog": KindNull,
+	"sys_enter_sync":   KindNull,
+	"sys_enter_msync":  KindMem,
+	"sys_enter_getcwd": KindNull,
 
 	"sys_enter_socket":     KindSocket,
 	"sys_enter_socketpair": KindSocketpair,
@@ -324,6 +330,12 @@ var nameOnlyKindsTable = map[string]TracepointKind{
 	// positive return is not a byte count.
 	"sys_enter_fgetxattr":  KindFdSize,
 	"sys_enter_flistxattr": KindFdSize,
+	// recvfrom/recvmsg capture their receive flags and buffer capacity (see
+	// receiveFlagsArgument): MSG_PEEK copies without consuming and MSG_TRUNC
+	// makes the return the datagram's real length rather than the bytes copied,
+	// so the bare return value is not a byte count for either.
+	"sys_enter_recvfrom": KindFdSize,
+	"sys_enter_recvmsg":  KindFdSize,
 
 	"sys_enter_epoll_create":  KindEventfd,
 	"sys_exit_epoll_create":   KindEventfd,
@@ -602,66 +614,55 @@ func classifyNameOnly(name string) (ClassificationResult, bool) {
 	return ClassificationResult{}, false
 }
 
+// nameFieldRule classifies one specific syscall-enter tracepoint when it
+// carries the expected field: the field must be named fieldName and its C type
+// must satisfy typeOK.
+type nameFieldRule struct {
+	fieldName string
+	typeOK    func(string) bool
+	result    ClassificationResult
+}
+
+// isUnsignedIntType matches the exact "unsigned int" type the dup family uses
+// for its descriptor argument (stricter than isFdType on purpose).
+func isUnsignedIntType(t string) bool { return t == "unsigned int" }
+
+// pathnameRule builds a rule that captures the given C-string field as the
+// tracepoint's pathname.
+func pathnameRule(field string) nameFieldRule {
+	return nameFieldRule{
+		fieldName: field,
+		typeOK:    isCStringPtrType,
+		result:    ClassificationResult{Kind: KindPathname, PathnameField: field},
+	}
+}
+
+// nameFieldRules holds the tracepoints that need both their name and a
+// specific field to classify. A tracepoint whose field does not match its rule
+// is not rejected: it falls through to the generic open-filename check below.
+var nameFieldRules = map[string]nameFieldRule{
+	"sys_enter_dup":               {fieldName: "fildes", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_dup2":              {fieldName: "oldfd", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_dup3":              {fieldName: "oldfd", typeOK: isUnsignedIntType, result: ClassificationResult{Kind: KindDup3}},
+	"sys_enter_name_to_handle_at": pathnameRule("name"),
+	"sys_enter_copy_file_range":   {fieldName: "fd_in", typeOK: isFdType, result: ClassificationResult{Kind: KindFd}},
+	"sys_enter_mount":             pathnameRule("dir_name"),
+	"sys_enter_umount":            pathnameRule("name"),
+	"sys_enter_acct":              pathnameRule("name"),
+	"sys_enter_pivot_root":        pathnameRule("new_root"),
+	"sys_enter_quotactl":          pathnameRule("special"),
+	"sys_enter_swapon":            pathnameRule("specialfile"),
+	"sys_enter_swapoff":           pathnameRule("specialfile"),
+	"sys_enter_mq_open":           {fieldName: "u_name", typeOK: isCStringPtrType, result: ClassificationResult{Kind: KindMqOpen}},
+	"sys_enter_mq_unlink":         pathnameRule("u_name"),
+}
+
 // classifyNameAndField handles tracepoints that need both the name and
-// a specific field to classify.
+// a specific field to classify: first the per-name rules in nameFieldRules,
+// then the generic "any sys_enter_*open* with a filename string" rule.
 func classifyNameAndField(name, fieldType, fieldName string) (ClassificationResult, bool) {
-	switch name {
-	case "sys_enter_dup":
-		if fieldType == "unsigned int" && fieldName == "fildes" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_dup2":
-		if fieldType == "unsigned int" && fieldName == "oldfd" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_dup3":
-		if fieldType == "unsigned int" && fieldName == "oldfd" {
-			return ClassificationResult{Kind: KindDup3}, true
-		}
-	case "sys_enter_name_to_handle_at":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_copy_file_range":
-		if isFdType(fieldType) && fieldName == "fd_in" {
-			return ClassificationResult{Kind: KindFd}, true
-		}
-	case "sys_enter_mount":
-		if isCStringPtrType(fieldType) && fieldName == "dir_name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true
-		}
-	case "sys_enter_umount":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_acct":
-		if isCStringPtrType(fieldType) && fieldName == "name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "name"}, true
-		}
-	case "sys_enter_pivot_root":
-		if isCStringPtrType(fieldType) && fieldName == "new_root" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "new_root"}, true
-		}
-	case "sys_enter_quotactl":
-		if isCStringPtrType(fieldType) && fieldName == "special" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "special"}, true
-		}
-	case "sys_enter_swapon":
-		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
-		}
-	case "sys_enter_swapoff":
-		if isCStringPtrType(fieldType) && fieldName == "specialfile" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "specialfile"}, true
-		}
-	case "sys_enter_mq_open":
-		if isCStringPtrType(fieldType) && fieldName == "u_name" {
-			return ClassificationResult{Kind: KindMqOpen}, true
-		}
-	case "sys_enter_mq_unlink":
-		if isCStringPtrType(fieldType) && fieldName == "u_name" {
-			return ClassificationResult{Kind: KindPathname, PathnameField: "u_name"}, true
-		}
+	if rule, ok := nameFieldRules[name]; ok && rule.fieldName == fieldName && rule.typeOK(fieldType) {
+		return rule.result, true
 	}
 
 	if strings.HasPrefix(name, "sys_enter") &&
@@ -706,6 +707,120 @@ func ClassifyRet(name string) RetClassification {
 		return c
 	}
 	return Unclassified
+}
+
+// openedFileSyscalls lists the syscalls outside the open kinds whose
+// successful return value is a new descriptor of the file the call itself
+// opened, so that their exit handler captures that file's identity like an
+// open's does (returnsOpenedFile, internal/c/fileident.c, task 603). creat is
+// a pathname-kind call - it has no flags argument to make it an open_event -
+// but userspace registers its descriptor under the pathname all the same
+// (handlePathExit in internal/eventloop_exit.go).
+var openedFileSyscalls = map[string]struct{}{
+	"creat": {},
+}
+
+// outputPathSyscalls maps each syscall whose identifying path is an OUTPUT
+// buffer - one the kernel fills in and that only holds the path once the call
+// has returned - to that buffer's argument index. The enter side has nothing
+// to read yet (it stays a header-only null_event), so the generated enter
+// handler stashes the buffer pointer on the tid's enter state and the exit
+// handler reads the string back after a successful return, publishing it as
+// the same OPEN_NAME_FIXUP_EVENT control record the faulted-filename recovery
+// uses (see renderHandlerPrologue and internal/c/filter.c).
+//
+// getcwd is the reason this exists: userspace used to readlink
+// /proc/<tid>/cwd while processing the pair, which reported the directory at
+// processing time (wrong once the tracee had moved on, empty once it had
+// exited) and cost a syscall on the event loop per getcwd. Its raw return is
+// the copied byte count including the NUL (see retClassifications), which is
+// what lets userspace detect a path longer than the captured field.
+var outputPathSyscalls = map[string]int{
+	"getcwd": 0,
+}
+
+// OutputPathSyscalls returns the names of the syscalls whose output path
+// buffer the generated exit handlers capture (outputPathSyscalls), sorted.
+// Userspace must handle exactly this set (capturedOutputPathEnters in
+// internal/eventloop_getcwd.go); a test there pins the two together.
+func OutputPathSyscalls() []string {
+	return slices.Sorted(maps.Keys(outputPathSyscalls))
+}
+
+// outputPathArgIndex returns the argument index of syscall's output path
+// buffer, or false when the syscall has none (see outputPathSyscalls).
+func outputPathArgIndex(syscall string) (int, bool) {
+	idx, ok := outputPathSyscalls[syscall]
+	return idx, ok
+}
+
+// outputHandleSyscalls maps each syscall that returns a file handle through
+// an OUTPUT struct file_handle to that buffer's argument index. Like an output
+// path, the handle only exists once the call has returned, so the generated
+// enter handler parks the buffer pointer on the tid's enter state
+// (ior_stash_pending_handle) and the exit handler, after a successful return,
+// reads the handle back and publishes it as a FILE_HANDLE_EVENT control record
+// ahead of its exit record (ior_emit_file_handle; see renderHandlerPrologue
+// and internal/c/handle.c).
+//
+// name_to_handle_at is the only such syscall. Userspace files the pathname of
+// the call under the handle, which is what lets an open_by_handle_at - whose
+// enter record carries the handle it opens - be named after the right file
+// (internal/eventloop_handle.go, task k03). The pointer travels in the second
+// pending slot, so a syscall listed here must be a single-path kind.
+var outputHandleSyscalls = map[string]int{
+	"name_to_handle_at": 2,
+}
+
+// outputHandleArgIndex returns the argument index of syscall's output file
+// handle, or false when the syscall has none (see outputHandleSyscalls).
+func outputHandleArgIndex(syscall string) (int, bool) {
+	idx, ok := outputHandleSyscalls[syscall]
+	return idx, ok
+}
+
+// ringFdsArgs names the two io_uring_register arguments the registered-ring
+// capture needs: the opcode and the pointer to the io_uring_rsrc_update array.
+type ringFdsArgs struct {
+	opcode int
+	array  int
+}
+
+// ringFdsSyscalls maps the syscall that changes a thread's registered-ring
+// table to those argument slots: io_uring_register(fd, opcode, arg, nr_args)
+// with opcode IORING_REGISTER_RING_FDS or IORING_UNREGISTER_RING_FDS. Its
+// generated handlers park opcode and pointer at enter and publish the entries
+// the call processed as a RING_FDS_EVENT control record at exit
+// (renderRingFdsHook, internal/c/iouring.c, task js2); the opcode decides in
+// BPF, so every other io_uring_register passes through untouched.
+//
+// The capture uses both pending slots, so a syscall listed here must capture
+// no pathname.
+var ringFdsSyscalls = map[string]ringFdsArgs{
+	"io_uring_register": {opcode: 1, array: 2},
+}
+
+// fdNameSyscalls lists the fd_event syscalls whose enter handler reports the
+// name of the file behind their descriptor: when that file has a last path
+// component the handler sends an fd_name_event - fd_event plus the name -
+// instead of its fd_event (ior_emit_fd_name_enter, internal/c/fdname.c; task
+// xz2).
+//
+// close is the only one: its descriptor is gone before userspace gets to the
+// row, so a close of a descriptor ior never saw opened cannot be named from
+// procfs (internal/eventloop_procfs_close.go). Every other descriptor call
+// leaves the descriptor open and is named there. The name costs a string
+// read and a record three times the size, which is why the hot calls (read,
+// write) are not here; close_range is a two_fd_event and releases a range,
+// not a file.
+var fdNameSyscalls = map[string]bool{
+	"close": true,
+}
+
+// emitsFdName reports whether the enter handler of syscall reports the name
+// of its descriptor's file (see fdNameSyscalls).
+func emitsFdName(syscall string) bool {
+	return fdNameSyscalls[syscall]
 }
 
 var retClassifications = map[string]RetClassification{

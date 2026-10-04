@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,7 +29,8 @@ func openBasic() error {
 }
 
 // openDirfdPaths exercises forms that require userspace dirfd attribution: a
-// relative openat pathname plus AT_EMPTY_PATH statx and utimensat calls.
+// relative openat pathname plus AT_EMPTY_PATH statx and utimensat calls, in
+// that order, all against the same directory descriptor.
 func openDirfdPaths() error {
 	dir, cleanup, err := makeTempDir("open-dirfd-paths")
 	if err != nil {
@@ -36,13 +38,9 @@ func openDirfdPaths() error {
 	}
 	defer cleanup()
 
-	base := filepath.Join(dir, "dirfd-base")
-	if err := os.Mkdir(base, 0o755); err != nil {
-		return fmt.Errorf("mkdir dirfd base: %w", err)
-	}
-	dirFD, err := syscall.Open(base, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	dirFD, err := openDirfdBase(filepath.Join(dir, "dirfd-base"))
 	if err != nil {
-		return fmt.Errorf("open dirfd base: %w", err)
+		return err
 	}
 	defer syscall.Close(dirFD)
 
@@ -54,6 +52,28 @@ func openDirfdPaths() error {
 		return fmt.Errorf("close relative openat file: %w", err)
 	}
 
+	if err := statxEmptyPath(dirFD); err != nil {
+		return err
+	}
+	return utimensatEmptyPath(dirFD)
+}
+
+// openDirfdBase creates the base directory and opens it as an O_DIRECTORY
+// descriptor for the dirfd-relative calls.
+func openDirfdBase(base string) (int, error) {
+	if err := os.Mkdir(base, 0o755); err != nil {
+		return -1, fmt.Errorf("mkdir dirfd base: %w", err)
+	}
+	dirFD, err := syscall.Open(base, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open dirfd base: %w", err)
+	}
+	return dirFD, nil
+}
+
+// statxEmptyPath calls statx(dirFD, "", AT_EMPTY_PATH) so the stat target is
+// the descriptor itself and ior must attribute the path from the dirfd.
+func statxEmptyPath(dirFD int) error {
 	empty := []byte{0}
 	var statx [256]byte
 	_, _, errno := syscall.Syscall6(
@@ -70,12 +90,18 @@ func openDirfdPaths() error {
 	if errno != 0 {
 		return fmt.Errorf("statx AT_EMPTY_PATH: %w", errno)
 	}
+	return nil
+}
 
+// utimensatEmptyPath calls utimensat(dirFD, "", times, AT_EMPTY_PATH), the
+// descriptor-targeted form of utimensat.
+func utimensatEmptyPath(dirFD int) error {
+	empty := []byte{0}
 	times := [2]syscall.Timespec{
 		{Sec: 1_000_000_000},
 		{Sec: 1_000_000_000},
 	}
-	_, _, errno = syscall.Syscall6(
+	_, _, errno := syscall.Syscall6(
 		syscall.SYS_UTIMENSAT,
 		uintptr(dirFD),
 		uintptr(unsafe.Pointer(&empty[0])),
@@ -254,8 +280,15 @@ const _AT_FDCWD int = -100
 
 // openByHandleAt creates a file, resolves its handle via name_to_handle_at,
 // then opens it via open_by_handle_at. Requires root (CAP_DAC_READ_SEARCH).
-// LockOSThread prevents goroutine migration between the two syscalls so that
-// ior sees the same TID for both and can correlate the path.
+//
+// ior names the open_by_handle_at row after the pathname of the
+// name_to_handle_at that returned the same handle bytes (task k03), so nothing
+// here is load-bearing for TestOpenByHandleAt any more: not the thread the two
+// calls run on, and not the descriptor numbers this function frees, which the
+// deferred cleanup (os.RemoveAll) reopens before ior gets to the exit record.
+// The thread is locked only to keep the scenario's syscalls on one tid in the
+// trace. The scenarios in scenario_handle.go pin the cases that used to depend
+// on those accidents.
 func openByHandleAt() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -286,6 +319,86 @@ func openByHandleAt() error {
 		return fmt.Errorf("open_by_handle_at: %w", err)
 	}
 	return syscall.Close(fd2)
+}
+
+// openByHandleAtFailures makes open_by_handle_at fail in three ways, five
+// times each so a single dropped event cannot fail the test: EBADF (a valid
+// handle with mount_fd -1, which the kernel rejects before its permission
+// check), ESTALE (the handle of a file unlinked before it is opened), and
+// EBADF again for a handle that is not the thread's latest
+// (openByHandleAtEbadfOlderHandle). ior names each failed row after the
+// pathname its handle was taken of. Requires root (CAP_DAC_READ_SEARCH) for
+// the name_to_handle_at/open_by_handle_at pair to get as far as ESTALE.
+func openByHandleAtFailures() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	dir, cleanup, err := makeTempDir("open-by-handle-at-fail")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	for i := 0; i < 5; i++ {
+		if err := openByHandleAtEbadf(dir); err != nil {
+			return err
+		}
+		if err := openByHandleAtEstale(dir, i); err != nil {
+			return err
+		}
+		if err := openByHandleAtEbadfOlderHandle(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// openByHandleAtEbadf takes the handle of handle-ebadf.txt and opens it with
+// mount_fd -1, which must fail with EBADF.
+func openByHandleAtEbadf(dir string) error {
+	if err := createEmptyFile(filepath.Join(dir, "handle-ebadf.txt")); err != nil {
+		return err
+	}
+	handle, mountFD, err := nameToHandleAt(dir, "handle-ebadf.txt")
+	if err != nil {
+		return fmt.Errorf("name_to_handle_at: %w", err)
+	}
+	defer syscall.Close(mountFD)
+	return expectOpenByHandleAtErrno(-1, handle, syscall.EBADF)
+}
+
+// openByHandleAtEstale takes the handle of a fresh file, unlinks the file and
+// opens the handle, which must fail with ESTALE. Every round uses a new name
+// so the handle never refers to a file that exists again.
+func openByHandleAtEstale(dir string, round int) error {
+	name := fmt.Sprintf("handle-estale-%d.txt", round)
+	path := filepath.Join(dir, name)
+	if err := createEmptyFile(path); err != nil {
+		return err
+	}
+	handle, mountFD, err := nameToHandleAt(dir, name)
+	if err != nil {
+		return fmt.Errorf("name_to_handle_at: %w", err)
+	}
+	defer syscall.Close(mountFD)
+	if err := syscall.Unlink(path); err != nil {
+		return fmt.Errorf("unlink: %w", err)
+	}
+	return expectOpenByHandleAtErrno(mountFD, handle, syscall.ESTALE)
+}
+
+// expectOpenByHandleAtErrno calls open_by_handle_at and reports an error unless
+// it failed with want (a successful call's fd is closed first).
+func expectOpenByHandleAtErrno(mountFD int, handle []byte, want syscall.Errno) error {
+	fd, err := openByHandleAtSyscall(mountFD, handle, syscall.O_RDONLY)
+	if err == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("open_by_handle_at succeeded, want %v", want)
+	}
+	if !errors.Is(err, want) {
+		return fmt.Errorf("open_by_handle_at: %w, want %v", err, want)
+	}
+	return nil
 }
 
 // fileHandle matches the kernel's struct file_handle layout.

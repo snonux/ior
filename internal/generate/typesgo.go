@@ -115,6 +115,7 @@ func AddTypesImports(code string) string {
 	importBlock := `import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 )
@@ -173,10 +174,12 @@ func writeTypeDefsAndMaps(b *strings.Builder, constants []CConstant) {
 		return strings.ToLower(s)
 	})
 	writeTraceIdFamilyMap(b, sysConstants)
+	writeTraceIdNoReturnSet(b, sysConstants)
 
 	writeTraceIdStringMethod(b)
 	writeTraceIdNameMethod(b)
 	writeTraceIdFamilyMethod(b)
+	writeTraceIdNoReturnMethod(b)
 	b.WriteString("\n")
 }
 
@@ -223,6 +226,23 @@ func writeTraceIdFamilyMap(b *strings.Builder, constants []CConstant) {
 	}
 	b.WriteString(strings.Join(entries, ", "))
 	b.WriteString(",\n}\n\n")
+}
+
+// writeTraceIdNoReturnSet emits the sys_enter trace IDs of the noreturn
+// syscalls (isNoreturnSyscall), the userspace half of the generator's noreturn
+// rule: the BPF side gets an enter handler without enter state and no exit
+// handler, and the event loop, which can never see an exit for these, turns
+// the enter itself into the row (eventLoop.completeNoReturnEnter). Deriving
+// the set here keeps a single source of truth for both sides.
+func writeTraceIdNoReturnSet(b *strings.Builder, constants []CConstant) {
+	b.WriteString("var noReturnTraceIds = map[TraceId]bool{\n")
+	for _, c := range constants {
+		name, isEnter := strings.CutPrefix(c.Name, "SYS_ENTER_")
+		if isEnter && isNoreturnSyscall(strings.ToLower(name)) {
+			fmt.Fprintf(b, "\t%s: true,\n", c.Value)
+		}
+	}
+	b.WriteString("}\n\n")
 }
 
 func syscallFamilyConstName(family SyscallFamily) string {
@@ -291,6 +311,17 @@ func (s TraceId) Family() SyscallFamily {
 `)
 }
 
+func writeTraceIdNoReturnMethod(b *strings.Builder) {
+	b.WriteString(`// NoReturn reports whether this is the sys_enter tracepoint of a syscall
+// that never returns to its caller (exit, exit_group, rt_sigreturn), whose
+// sys_exit tracepoint therefore never fires.
+func (s TraceId) NoReturn() bool {
+	return noReturnTraceIds[s]
+}
+
+`)
+}
+
 func writeGoStruct(b *strings.Builder, s CStruct) {
 	goName := snakeToCamel(s.Name)
 	selfRef := strings.ToLower(goName[:1])
@@ -322,9 +353,16 @@ func writeGoStruct(b *strings.Builder, s CStruct) {
 
 var compatibilityFields = map[string][]CMember{
 	"FdEvent": {
+		{TypeName: "__u32", FieldName: "flags"},
 		{TypeName: "__u64", FieldName: "size"},
 		{TypeName: "__u32", FieldName: "size_valid"},
 		{TypeName: "__u32", FieldName: "schema_version"},
+		// Not an older layout: the name tail of fd_name_event, the record
+		// close sends in place of fd_event when its file has a last path
+		// component (task xz2). It decodes into FdEvent like the wide
+		// layouts, so the pair is handled as any other close.
+		{TypeName: "__u32", FieldName: "name_len"},
+		{TypeName: "char", FieldName: "name", ArraySize: "IOR_FD_NAME_LENGTH"},
 	},
 	"EventfdEvent": {
 		{TypeName: "char", FieldName: "filename", ArraySize: "MAX_FILENAME_LENGTH"},
@@ -369,6 +407,11 @@ func writeStringMethod(b *strings.Builder, goName, selfRef string, members []CMe
 			// the terminator are stale ring-buffer data from earlier records
 			// and must never reach a warning, a log line or a stream row.
 			ref = fmt.Sprintf("StringValue(%s[:])", ref)
+		}
+		if m.TypeName == "__u8" && m.ArraySize != "" {
+			// A byte array is binary (a file handle), not a string: render it
+			// as hex instead of as one decimal number per byte.
+			ref = fmt.Sprintf("hex.EncodeToString(%s[:])", ref)
 		}
 		argParts = append(argParts, ref)
 	}
@@ -497,6 +540,11 @@ var specialCodecs = map[string]func(b *strings.Builder, selfRef string){
 // requested-size layout decodable through the regular constructor. The fast
 // decoder owns the shared validation; duplicating it here would let the two
 // public constructors disagree on schema or padding.
+//
+// The lean record ends in the file identity word (task 603), the wide one
+// has the flags word at that offset and no identity. An event that was
+// decoded from an fd_name_event (ENTER_FD_NAME_EVENT, task xz2) is written
+// back as one: the lean record plus name_len and name, 104 bytes.
 func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("var poolOfFdEvents = sync.Pool{\n\tNew: func() any { return &FdEvent{} },\n}\n\n")
 	b.WriteString("func NewFdEvent(raw []byte) *FdEvent { return NewFdEventFast(raw) }\n\n")
@@ -510,10 +558,18 @@ func writeFdSyncPool(b *strings.Builder, selfRef string) {
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[16:20], %s.Pid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[20:24], %s.Tid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], %s.FileIdent)\n", selfRef)
 	b.WriteString("\tif size == 48 {\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[28:32], %s.Flags)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
 	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tif %s.EventType == ENTER_FD_NAME_EVENT {\n", selfRef)
+	b.WriteString("\t\traw = append(raw[:32], make([]byte, 4+IOR_FD_NAME_LENGTH)...)\n")
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[28:32], %s.FileIdent)\n", selfRef)
+	fmt.Fprintf(b, "\t\tbinary.LittleEndian.PutUint32(raw[32:36], %s.NameLen)\n", selfRef)
+	fmt.Fprintf(b, "\t\tcopy(raw[36:], %s.Name[:])\n", selfRef)
 	b.WriteString("\t}\n\treturn raw, nil\n}\n\n")
 	fmt.Fprintf(b, "func (%s *FdEvent) Recycle() {\n\tpoolOfFdEvents.Put(%s)\n}\n", selfRef, selfRef)
 }
@@ -525,6 +581,7 @@ func writeFdSizeSyncPool(b *strings.Builder, selfRef string) {
 	b.WriteString("func NewFdSizeEvent(raw []byte) *FdSizeEvent { return NewFdSizeEventFast(raw) }\n\n")
 	writeEncodeHeader(b, "FdSizeEvent", selfRef, 48)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[24:28], uint32(%s.Fd))\n", selfRef)
+	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[28:32], %s.Flags)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint64(raw[32:40], %s.Size)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[40:44], %s.SizeValid)\n", selfRef)
 	fmt.Fprintf(b, "\tbinary.LittleEndian.PutUint32(raw[44:48], %s.SchemaVersion)\n", selfRef)
@@ -708,7 +765,7 @@ func snakeToCamel(s string) string {
 
 func cTypeToGoType(t string) string {
 	switch t {
-	case "char":
+	case "char", "__u8":
 		return "byte"
 	case "__s32":
 		return "int32"

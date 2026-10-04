@@ -3,9 +3,11 @@ package flamegraph
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	common "ior/internal/tui/common"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -55,26 +57,68 @@ func resetBoolSet(values map[int]bool) map[int]bool {
 	return values
 }
 
+// resetBaseline is the flame model's own handling of the `r` key, used when
+// the model runs without a parent that owns the baseline (the dashboard does
+// not: see WantsBaselineReset). It resets the live trie and then drops the
+// flame view state through ClearBaseline.
 func (m *Model) resetBaseline() {
 	if m.liveTrie != nil {
 		m.liveTrie.Reset()
 	}
+	m.ClearBaseline()
+}
+
+// WantsBaselineReset reports whether msg is the flame tab's baseline-reset
+// key (`r`) and should reset the baseline rather than be typed text: while the
+// search input is open `r` is a search character, so it reports false. The
+// dashboard asks this before routing the key, because the baseline is shared:
+// the live trie, the stats engine behind the other tabs and the stats
+// generation all restart together (Model.resetBaselineCmd), and only the
+// dashboard can reach all of them. Letting the flame model consume the key
+// itself reset just the flamegraph and left the stats tabs on pre-reset totals.
+func (m *Model) WantsBaselineReset(msg tea.KeyPressMsg) bool {
+	return !m.search.isActive() && isResetBaselineKey(msg)
+}
+
+// ClearBaseline drops the flame view state after the live trie was reset by
+// the `r` key (resetBaseline here, or the dashboard's resetBaselineCmd).
+// It deliberately drops the flame selection: clearSnapshotState resets the
+// selection manager together with the zoom, as it does for a field-order or
+// metric change, because the user asked for a fresh baseline. The automatic
+// 30s reset and the `r` key on the dashboard tables are different on
+// purpose: they keep the selected item (the tables via stickyKey, the flame
+// via SelectionManager's wantedPath) so the cursor does not jump to row 0 /
+// root every time the data refills.
+// It also stamps lastKeyAt: the dashboard consumes `r` without routing it
+// through Update (which stamps every key), yet it is a user keypress, so the
+// first snapshot after the reset must snap into place instead of animating
+// in from an empty view, exactly like the standalone resetBaseline path.
+// The stamp does not delay that snapshot: RefreshFromLiveTrieCmd only defers
+// to a driving user while a snapshot exists, and the state was just cleared.
+// It does not touch the live trie.
+func (m *Model) ClearBaseline() {
+	m.lastKeyAt = time.Now()
 	m.clearSnapshotState(true)
 	m.statusMessage = "Baseline reset"
 }
 
+// cycleFieldOrder switches the trie to the next field-order preset. The model's
+// fieldIndex only advances once the trie accepted the preset: advancing first
+// would make the toolbar's o:order(...) label advertise a preset the trie
+// rejected and is not using.
 func (m *Model) cycleFieldOrder() {
 	if len(m.fieldPresets) == 0 {
 		return
 	}
-	m.fieldIndex = (m.fieldIndex + 1) % len(m.fieldPresets)
-	nextPreset := m.fieldPresets[m.fieldIndex]
+	nextIndex := (m.fieldIndex + 1) % len(m.fieldPresets)
+	nextPreset := m.fieldPresets[nextIndex]
 	if m.liveTrie != nil {
 		if err := m.liveTrie.Reconfigure(nextPreset); err != nil {
 			m.statusMessage = "Field order error: " + err.Error()
 			return
 		}
 	}
+	m.fieldIndex = nextIndex
 	m.clearSnapshotState(false)
 	m.statusMessage = "Order: " + strings.Join(nextPreset, "/")
 }
@@ -124,13 +168,15 @@ func (m *Model) toolbarLine() string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s | view:%s | o:order(%s) | b:metric(%s) | v:height(%s) | /:search | enter/click:zoom | click ancestor:undo | u/esc:undo | r:reset | space:pause",
 		state, compactFramePath(m.currentRootPath()), order, m.countFieldLabel(), m.heightFieldLabel()))
+	// The search query is typed by the user but can be pasted, and the status
+	// message can echo errors or frame names: both are sanitised.
 	if query := m.search.query(); query != "" {
 		b.WriteString(" | filter:")
-		b.WriteString(query)
+		b.WriteString(common.Sanitize(query))
 	}
 	if m.statusMessage != "" {
 		b.WriteString(" | ")
-		b.WriteString(m.statusMessage)
+		b.WriteString(common.Sanitize(m.statusMessage))
 	}
 	if flameKeyDebugEnabled && m.lastKeyDebug != "" {
 		b.WriteString(" | ")
@@ -152,6 +198,9 @@ func (m *Model) helpOverlay() string {
 	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(help, width))
 }
 
+// selectionStatusLine renders the bottom status bar: live/paused mode, the
+// selected frame's position, path, depth, total and share, the optional
+// height metric, and the active search filter.
 func (m *Model) selectionStatusLine() string {
 	width := m.width
 	if width <= 0 {
@@ -161,12 +210,12 @@ func (m *Model) selectionStatusLine() string {
 	if m.paused {
 		mode = "PAUSED"
 	}
-	heightLabel := ""
-	if m.heightMetricActive() {
-		heightLabel = " | height:" + m.heightFieldLabel()
-	}
 	frames := m.anim.currentFrames()
 	if len(frames) == 0 {
+		heightLabel := ""
+		if m.heightMetricActive() {
+			heightLabel = " | height:" + m.heightFieldLabel()
+		}
 		line := fmt.Sprintf("[%s] sel:none | arrows/hjkl navigate | enter zoom | / filter%s", mode, heightLabel)
 		return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(line, width))
 	}
@@ -175,40 +224,56 @@ func (m *Model) selectionStatusLine() string {
 		selIdx = 0
 	}
 	frame := frames[selIdx]
-	if m.heightMetricActive() {
-		maxHeightTotal := uint64(0)
-		for i := range frames {
-			if frames[i].HeightTotal > maxHeightTotal {
-				maxHeightTotal = frames[i].HeightTotal
-			}
+	query := m.search.query()
+	// Use a Builder to avoid a separate allocation for the optional filter suffix.
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
+		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total,
+		m.selectionShareLabel(frames, frame, query), m.selectionHeightLabel(frames, frame)))
+	if query != "" {
+		// Sanitised like the toolbar copy of the query (task io2).
+		b.WriteString(" | filter:")
+		b.WriteString(common.Sanitize(query))
+	}
+	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
+}
+
+// selectionHeightLabel returns the " | height(...)" suffix for the selected
+// frame, as a share of the tallest visible frame, or "" when no height
+// metric is active.
+func (m *Model) selectionHeightLabel(frames []tuiFrame, frame tuiFrame) string {
+	if !m.heightMetricActive() {
+		return ""
+	}
+	maxHeightTotal := uint64(0)
+	for i := range frames {
+		if frames[i].HeightTotal > maxHeightTotal {
+			maxHeightTotal = frames[i].HeightTotal
 		}
-		heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
-		heightLabel = fmt.Sprintf(" | height(%s)=%d (%.1f%% of max)", m.heightFieldLabel(), frame.HeightTotal, heightShare)
+	}
+	heightShare := percentOfTotal(frame.HeightTotal, maxHeightTotal)
+	return fmt.Sprintf(" | height(%s)=%d (%.1f%% of max)", m.heightFieldLabel(), frame.HeightTotal, heightShare)
+}
+
+// selectionShareLabel returns the selected frame's share: of the filtered
+// total while a search query has matches with a non-zero coverage, otherwise
+// of the global total (falling back to the frame's layout percent when the
+// global total is unknown).
+func (m *Model) selectionShareLabel(frames []tuiFrame, frame tuiFrame, query string) string {
+	metric := m.countFieldLabel()
+	if matches := m.search.matches(); strings.TrimSpace(query) != "" && len(matches) > 0 {
+		filterTotal, _ := filterCoverageTotals(frames, matches, m.globalTotal)
+		if filterTotal > 0 {
+			selectedFilterTotal := filterCoverageTotalForPath(frames, matches, frame.Path)
+			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
+			return fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
+		}
 	}
 	systemShare := frame.Percent
 	if m.globalTotal > 0 {
 		systemShare = percentOfTotal(frame.Total, m.globalTotal)
 	}
-	metric := m.countFieldLabel()
-	shareLabel := fmt.Sprintf("%.2f%% of total %s", systemShare, metric)
-	query, matches := m.search.query(), m.search.matches()
-	if strings.TrimSpace(query) != "" && len(matches) > 0 {
-		filterTotal, _ := filterCoverageTotals(frames, matches, m.globalTotal)
-		if filterTotal > 0 {
-			selectedFilterTotal := filterCoverageTotalForPath(frames, matches, frame.Path)
-			filterShare := percentOfTotal(selectedFilterTotal, filterTotal)
-			shareLabel = fmt.Sprintf("%.2f%% of filtered %s", filterShare, metric)
-		}
-	}
-	// Use a Builder to avoid a separate allocation for the optional filter suffix.
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("[%s] sel:%d/%d %s | path:%s | depth:%d | total(%s):%d | %s%s",
-		mode, selIdx+1, len(frames), frame.Name, compactFramePath(frame.Path), frame.Depth, m.countFieldLabel(), frame.Total, shareLabel, heightLabel))
-	if query != "" {
-		b.WriteString(" | filter:")
-		b.WriteString(query)
-	}
-	return common.Current().HelpBarStyle.Width(width).Render(padOrTrim(b.String(), width))
+	return fmt.Sprintf("%.2f%% of total %s", systemShare, metric)
 }
 
 func (m *Model) currentFieldPresetLabel() string {

@@ -1,0 +1,595 @@
+package internal
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/printer"
+	"go/token"
+	"slices"
+	"strings"
+	"testing"
+
+	"ior/internal/globalfilter"
+	"ior/internal/probemanager"
+	"ior/internal/statsengine"
+	"ior/internal/types"
+)
+
+// newTraceEventLoop is what -plain and -flamegraph (and the TUI) run, so the
+// kernel counts of a sampled run reach their drain loop only if it stores the
+// source it opened. A nil module is the smallest seam: openAggregateSource is
+// faked, and the drop-counter lookup on a nil module fails the way an older BPF
+// object does, which is non-fatal and reported through warnSetup.
+func TestNewTraceEventLoopWiresTheAggregateSource(t *testing.T) {
+	stub := &aggregateSourceStub{rows: [][]statsengine.SyscallAggregate{
+		{{TraceID: types.SYS_ENTER_READ, Count: 90}},
+	}}
+	opened := useAggregateSource(t, stub, nil)
+
+	var warnings []string
+	el, err := newTraceEventLoop(mustParseArgs(t, "-plain", "-syscall-sampling-syscalls", "read=10"), nil,
+		func(args ...any) { warnings = append(warnings, fmt.Sprint(args...)) })
+	if err != nil {
+		t.Fatalf("newTraceEventLoop() error = %v, want nil", err)
+	}
+	defer el.shutdownCommResolver()
+
+	if *opened != 1 {
+		t.Fatalf("aggregate source opened %d times, want once", *opened)
+	}
+	// Identity, not just non-nil: a different source would drain other counts.
+	if el.aggregateSrc != syscallAggregateSource(stub) {
+		t.Fatalf("el.aggregateSrc = %v, want the source openAggregateSource returned", el.aggregateSrc)
+	}
+	// The missing drop counter stays a warning, never a failure or a half-wired loop.
+	if el.dropSrc != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "drop counter unavailable") {
+		t.Fatalf("dropSrc = %v, warnings = %q; want no drop source and one drop-counter warning", el.dropSrc, warnings)
+	}
+}
+
+// When the source cannot be opened the loop is not handed out at all: a run
+// that asked for exact totals must not start without the counts.
+func TestNewTraceEventLoopFailsWithoutTheAggregateSource(t *testing.T) {
+	boom := errors.New("no syscall_aggregate_map")
+	useAggregateSource(t, nil, boom)
+
+	el, err := newTraceEventLoop(mustParseArgs(t, "-plain"), nil, func(...any) {})
+	if !errors.Is(err, boom) {
+		t.Fatalf("newTraceEventLoop() error = %v, want it to wrap %v", err, boom)
+	}
+	if el != nil {
+		t.Fatalf("newTraceEventLoop() returned a loop alongside the error: %v", el)
+	}
+}
+
+// The sampling report lists only syscalls whose probe really attached, by
+// asking the probe manager. This drives a real probemanager.Manager (fake
+// attacher, only openat attaches) through the exact method value the setup
+// passes, so a manager-side change in how IsActive names syscalls breaks it.
+func TestRestrictSamplingToActiveWithARealProbeManager(t *testing.T) {
+	el := sampledLoop(t, "-plain", "-syscall-sampling-syscalls", "read=10,openat=10")
+	attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+	onlyOpenat := func(tp string) bool { return strings.HasSuffix(tp, "_openat") }
+	mgr, err := attachSyscallProbes(attacher, onlyOpenat, syscallPairNames("openat", "read"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	el.restrictSamplingToActive(mgr.IsActive)
+
+	if got := el.samplingPlan().Rates(); got != "openat=10" {
+		t.Fatalf("plan rates = %q, want only the attached openat=10", got)
+	}
+}
+
+// The call that connects the two - setupTraceInfraWithEventLoop handing the
+// manager's IsActive to the loop - cannot run without a kernel, so it is pinned
+// structurally, like the other setup-order pins in ior_setup_test.go: replacing
+// it by `_ = infra.mgr`, or by an always-true func, silently turns the stats
+// and footers of a run that traced fewer syscalls than it sampled into reports
+// of syscalls that were never measured.
+func TestSetupTraceInfraRestrictsSamplingToAttachedProbes(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+
+	restrict := callsNamed(decl, "restrictSamplingToActive")
+	if len(restrict) != 1 {
+		t.Fatalf("shared trace setup calls restrictSamplingToActive %d times, want exactly once", len(restrict))
+	}
+	call := restrict[0]
+	receiver, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector || !isIdentifier(receiver.X, "el") {
+		t.Fatal("restrictSamplingToActive must be called on the event loop el")
+	}
+	// A method value of the real manager, not a literal that could say yes to all.
+	assertCallArguments(t, call, []string{"infra.mgr.IsActive"})
+	// Position and arguments alone stay green if the call is wrapped in a
+	// closure nobody invokes, deferred, or hidden behind `if false`.
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil")
+
+	wire := firstCallPosition(decl, "wireEventLoopLogging")
+	signal := firstCallPosition(decl, "signalTraceStarted")
+	if !wire.IsValid() || !signal.IsValid() {
+		t.Fatal("shared trace setup lost wireEventLoopLogging or signalTraceStarted")
+	}
+	// After the probes attached (infra.mgr is set by setupTraceInfraBPF, before
+	// the loop is built) and before the loop can run; nothing fallible may follow
+	// the start signal, and the report must be final by then.
+	if call.Pos() < wire {
+		t.Fatalf("restrictSamplingToActive at %s precedes wireEventLoopLogging at %s", fset.Position(call.Pos()), fset.Position(wire))
+	}
+	if call.End() >= signal {
+		t.Fatalf("restrictSamplingToActive at %s must precede the start signal at %s", fset.Position(call.Pos()), fset.Position(signal))
+	}
+}
+
+// TestWatchProbeChangesWithARealProbeManager drives the loop's probe-change
+// hook through a real probemanager.Manager (fake attacher), with the exact
+// method value the setup passes (task o03): a probe detached and attached
+// again at runtime clears the kernel's pending restarts and moves the loop's
+// change stamp at each report - one for the detach, two for the attach - and
+// the startup attach, which ran before the loop listened, is covered by the
+// clear and the stamp taken when the hook was installed. The attach is counted
+// as in flight between its two reports and no longer (task x13): the fake
+// program looks at the count while it attaches.
+func TestWatchProbeChangesWithARealProbeManager(t *testing.T) {
+	prog := &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}
+	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: prog}, nil, syscallPairNames("read"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	f := newReexecFixture(t, globalfilter.Filter{})
+	pending := &scriptedPendingClearer{}
+	f.el.restartPending = pending
+	var inFlight []int64
+	prog.during = func(string) { inFlight = append(inFlight, f.el.restarts.probes.inFlight.Load()) }
+
+	f.clockAt(100)
+	f.el.watchProbeChanges(mgr.SetChangeHook, mgr.IsActive)
+	if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != 100 || clears != 1 {
+		t.Fatalf("after installing the hook: stamp=%d clears=%d, want the install stamp 100 and one clear", stamp, clears)
+	}
+	wantClears := []int64{2, 4} // the install, the detach, the attach twice
+	for i, change := range []func(string) error{mgr.Detach, mgr.Attach} {
+		at := uint64(200 + 100*i)
+		f.clockAt(at)
+		if err := change("read"); err != nil {
+			t.Fatalf("probe change %d: %v", i, err)
+		}
+		if stamp, clears := f.el.restarts.probes.changedAt.Load(), pending.clears.Load(); stamp != at || clears != wantClears[i] {
+			t.Fatalf("after probe change %d: stamp=%d clears=%d, want %d and %d", i, stamp, clears, at, wantClears[i])
+		}
+	}
+	if !slices.Equal(inFlight, []int64{1, 1}) || f.el.restarts.probes.inFlight.Load() != 0 {
+		t.Fatalf("attaches in flight while the two tracepoints were attached = %v, afterwards %d; want 1, 1 and 0",
+			inFlight, f.el.restarts.probes.inFlight.Load())
+	}
+}
+
+// attachWindowProgram is a probe program whose attach first runs a callback:
+// what the traced host does while the manager is attaching a pair.
+type attachWindowProgram struct {
+	fakeProbeProgram
+	during func(tracepoint string)
+}
+
+func (p *attachWindowProgram) AttachTracepoint(category, name string) (probemanager.Link, error) {
+	if p.during != nil {
+		p.during(name)
+	}
+	return p.fakeProbeProgram.AttachTracepoint(category, name)
+}
+
+// attachWindowRun is a loop that listens to a real probe manager whose one
+// pair, restart_syscall, is registered and not attached, and whose program
+// lets a test act while the manager attaches it.
+type attachWindowRun struct {
+	f    *restartFixture
+	mgr  *probemanager.Manager
+	prog *attachWindowProgram
+}
+
+// newAttachWindowRun builds that run. listen is what the loop registers its
+// hook through: the manager's SetChangeHook, or a wrapper of it.
+func newAttachWindowRun(t *testing.T, listen func(*probemanager.Manager) func(func(probemanager.Change))) *attachWindowRun {
+	t.Helper()
+	r := &attachWindowRun{f: newReexecFixture(t, globalfilter.Filter{}),
+		prog: &attachWindowProgram{fakeProbeProgram: fakeProbeProgram{link: &fakeProbeLink{}}}}
+	none := func(string) bool { return false }
+	mgr, err := attachSyscallProbes(&fakeProbeAttacher{prog: r.prog}, none, syscallPairNames("restart_syscall"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	r.mgr = mgr
+	r.f.clockAt(restartBase - 1000)
+	r.f.el.watchProbeChanges(listen(mgr), mgr.IsActive)
+	return r
+}
+
+// TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall: the two
+// tracepoints of a pair are attached one after the other, after the attach was
+// reported. While restart_syscall's are being attached a traced sleep is
+// stopped - after that report, so its task is pending - and resumed before the
+// enter tracepoint is there: its restart_syscall is never seen. The
+// restart_syscall BPF announces later, from the entry that outlived it,
+// resumes another stopped call of the thread, one that left no record. With
+// the attach reported only beforehand it was folded into the sleep, whose row
+// was held. The loop reads the stopped sleep while the attach is in flight
+// here and does not hold its row; the report after the attach is younger than
+// that row, for a loop that reads it later
+// (TestRowInterruptedDuringAProbeAttachIsNotHeldByALaggingLoop). Either way
+// the restart_syscall is a row of its own.
+func TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall(t *testing.T) {
+	r := newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.Change)) {
+		return mgr.SetChangeHook
+	})
+	f := r.f
+	var rows []restartRow
+	r.prog.during = func(tracepoint string) {
+		if tracepoint != "sys_enter_restart_syscall" {
+			return
+		}
+		// Interrupted after the first report, resumed unseen before this
+		// attach returns.
+		f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+		rows = f.feed(f.sleepExit(restartBase+500, restartTid, -516))
+		f.requireNothingHeld()
+		f.clockAt(restartBase + 1000)
+	}
+	f.clockAt(restartBase - 100)
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if stamp := f.el.restarts.probes.changedAt.Load(); stamp != restartBase+1000 {
+		t.Fatalf("change stamp = %d after the attach, want %d: a report once both tracepoints are attached", stamp, restartBase+1000)
+	}
+
+	rows = append(rows, f.foldSleepFrom(restartBase)...)
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+	f.requireNothingHeld()
+}
+
+// TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns is what
+// the two stamps left open (task x13), driven through a real manager: the
+// thread is stopped and continued twice within one attach of restart_syscall's
+// probes - first in a traced sleep, resumed before the enter tracepoint is
+// attached, then in a call that leaves no record - and the fresh pair records
+// the second restart_syscall at both ends before the manager has made its
+// second report. The loop reads that exit before the second report has stored
+// anything (the wrapper below feeds it right ahead of the loop's hook), so no
+// stamp refuses the sleep's row, which the first stamp is older than. It was
+// folded. The attach being in flight is what refuses now: two rows.
+func TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns(t *testing.T) {
+	var rows []restartRow
+	var r *attachWindowRun
+	beforeTheEndIsNoted := func() {
+		rows = append(rows, r.f.feed(r.f.restartExit(restartBase+3000, restartTid, 0))...)
+	}
+	r = newAttachWindowRun(t, func(mgr *probemanager.Manager) func(func(probemanager.Change)) {
+		return func(hook func(probemanager.Change)) {
+			mgr.SetChangeHook(func(change probemanager.Change) {
+				if change.Phase == probemanager.ChangeEnds {
+					beforeTheEndIsNoted()
+				}
+				hook(change)
+			})
+		}
+	})
+	f := r.f
+	r.prog.during = func(tracepoint string) {
+		if tracepoint == "sys_enter_restart_syscall" {
+			f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+			rows = append(rows, f.feed(f.sleepExit(restartBase+500, restartTid, -516))...)
+			return
+		}
+		// The enter tracepoint is attached by now: the later call's
+		// restart_syscall is announced and its enter recorded.
+		rows = append(rows, f.feed(f.resumeRecord(restartBase+1500, restartTid))...)
+		rows = append(rows, f.feed(f.restartEnter(restartBase+1500, restartTid))...)
+	}
+	f.clockAt(restartBase - 100)
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	requireSleepAndRestartRows(t, rows, restartBase, restartBase+1500, restartBase+3000, 0)
+	f.requireNothingHeld()
+	if got := f.el.restarts.probes.inFlight.Load(); got != 0 {
+		t.Fatalf("%d attaches in flight after Attach returned, want 0", got)
+	}
+}
+
+// TestSetupTraceInfraReportsProbeChangesToTheLoop pins the call that connects
+// the two, structurally like its sibling above: without it the TUI's probes
+// modal changes probes and the loop keeps folding into rows whose continuation
+// ran unseen (task o03). It must hand the loop the real manager's
+// SetChangeHook, on every setup that published its manager to a TUI, before
+// the loop can run. On those only: a headless run changes no probe, and
+// listening starts with a stamp that refuses the folds of the calls interrupted
+// before it - in a time namespace whose positive boottime offset could not be
+// determined (bootclock.go), where the stamp lies in the records' future,
+// every fold for the length of the offset.
+func TestSetupTraceInfraReportsProbeChangesToTheLoop(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	watch := callsNamed(decl, "watchProbeChanges")
+	if len(watch) != 1 {
+		t.Fatalf("shared trace setup calls watchProbeChanges %d times, want exactly once", len(watch))
+	}
+	call := watch[0]
+	receiver, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector || !isIdentifier(receiver.X, "el") {
+		t.Fatal("watchProbeChanges must be called on the event loop el")
+	}
+	assertCallArguments(t, call, []string{"infra.mgr.SetChangeHook", "infra.mgr.IsActive"})
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes != nil")
+	// A headless loop that listens takes the install's stamp and refuses the
+	// folds of the calls interrupted before it, for nothing.
+	assertGuarded(t, decl, call, "watchProbeChanges must not run for a manager that no TUI was given")
+	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
+		t.Fatalf("watchProbeChanges at %s must precede the start signal", fset.Position(call.Pos()))
+	}
+}
+
+// tuiProbeRun is a loop that listens to a real probe manager (fake attacher)
+// as a TUI run's does, through the two method values the setup passes. The
+// manager has clock_nanosleep attached and restart_syscall registered and not
+// attached: a TUI session started without it.
+type tuiProbeRun struct {
+	f        *restartFixture
+	mgr      *probemanager.Manager
+	attacher *fakeProbeAttacher
+}
+
+func newTUIProbeRun(t *testing.T) *tuiProbeRun {
+	t.Helper()
+	r := &tuiProbeRun{f: newReexecFixture(t, globalfilter.Filter{}),
+		attacher: &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}}
+	onlyTheSleep := func(tp string) bool { return strings.HasSuffix(tp, "_clock_nanosleep") }
+	mgr, err := attachSyscallProbes(r.attacher, onlyTheSleep,
+		syscallPairNames("clock_nanosleep", "restart_syscall"), failOnLog(t))
+	if err != nil {
+		t.Fatalf("attachSyscallProbes() error = %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	r.mgr = mgr
+	r.f.clockAt(restartBase - 1000)
+	r.f.el.watchProbeChanges(mgr.SetChangeHook, mgr.IsActive)
+	return r
+}
+
+// TestStoppedSleepFollowsTheRestartSyscallProbeOfARealManager drives the
+// loop's knowledge of restart_syscall's probes through a real
+// probemanager.Manager (task 023): what IsActive says at the install, and
+// what the reports of Attach and Detach carry. A manager-side change in how
+// a report names its syscall, or in what it says the change left attached,
+// would otherwise leave every TUI session holding -516 rows again, or never
+// folding one.
+func TestStoppedSleepFollowsTheRestartSyscallProbeOfARealManager(t *testing.T) {
+	r := newTUIProbeRun(t)
+	f := r.f
+	f.requireStoppedSleepNotHeld(restartBase)
+
+	f.clockAt(restartBase + 10_000)
+	if err := r.mgr.Attach("restart_syscall"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	attached := restartBase + 20_000
+	requireFoldedSleep(t, f.foldSleep(attached), attached, "restart_syscall was attached at runtime")
+
+	f.clockAt(restartBase + 30_000)
+	if err := r.mgr.Detach("restart_syscall"); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	f.requireStoppedSleepNotHeld(restartBase + 40_000)
+
+	// The sleep's own probes change: restart_syscall's state must not.
+	f.clockAt(restartBase + 50_000)
+	for _, change := range []func(string) error{r.mgr.Detach, r.mgr.Attach} {
+		if err := change("clock_nanosleep"); err != nil {
+			t.Fatalf("probe change of clock_nanosleep: %v", err)
+		}
+	}
+	f.requireStoppedSleepNotHeld(restartBase + 60_000)
+}
+
+// TestFailedAttachOfRestartSyscallLeavesStoppedSleepsUnheld: an attach of
+// restart_syscall that fails through the real manager is reported as having
+// left nothing attached, and the loop goes on emitting -516 rows at their
+// exit. Without the outcome in the report it would hold them from the
+// attach's first report on, with nothing attached to end the wait.
+func TestFailedAttachOfRestartSyscallLeavesStoppedSleepsUnheld(t *testing.T) {
+	r := newTUIProbeRun(t)
+	r.attacher.err = errors.New("no such program")
+	r.f.clockAt(restartBase - 500)
+	if err := r.mgr.Attach("restart_syscall"); err == nil {
+		t.Fatal("Attach with a failing attacher returned nil")
+	}
+	if r.mgr.IsActive("restart_syscall") {
+		t.Fatal("restart_syscall is active after its attach failed")
+	}
+	r.f.requireStoppedSleepNotHeld(restartBase)
+}
+
+// TestTraceSetIsFinalWithARealProbeManager drives traceSetIsFinal through a
+// real probemanager.Manager (fake attacher), with the exact method value the
+// setup passes (task u13): the loop stops holding -516 rows exactly when the
+// manager has no restart_syscall probe attached. A manager-side change in how
+// IsActive names syscalls would otherwise call restart_syscall inactive in
+// every headless run and silently end the stopped-sleep fold there.
+func TestTraceSetIsFinalWithARealProbeManager(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		attach       func(tracepoint string) bool
+		wantUntraced bool
+	}{
+		{"restart_syscall attached", nil, false},
+		{"only the sleep attached", func(tp string) bool { return strings.HasSuffix(tp, "_clock_nanosleep") }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+			mgr, err := attachSyscallProbes(attacher, tc.attach,
+				syscallPairNames("clock_nanosleep", "restart_syscall"), failOnLog(t))
+			if err != nil {
+				t.Fatalf("attachSyscallProbes() error = %v", err)
+			}
+			defer func() { _ = mgr.Close() }()
+			f := newRestartFixture(t, globalfilter.Filter{})
+
+			f.el.traceSetIsFinal(mgr.IsActive)
+
+			if got := f.el.restarts.restartSyscallUntraced; got != tc.wantUntraced {
+				t.Fatalf("restartSyscallUntraced = %t, want %t", got, tc.wantUntraced)
+			}
+		})
+	}
+}
+
+// TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal pins the call that
+// connects the two, structurally like its siblings above (task u13). It must
+// hand the loop the real manager's IsActive, before the loop can run, and on
+// the setups that published their manager to nobody - on those only: a TUI's
+// probes modal attaches restart_syscall while the loop runs, and a loop told
+// at startup that it is not traced would never fold a stopped sleep again.
+func TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal(t *testing.T) {
+	decl, fset := parseInternalFunction(t, "ior.go", "runTraceSetup")
+	final := callsNamed(decl, "traceSetIsFinal")
+	if len(final) != 1 {
+		t.Fatalf("shared trace setup calls traceSetIsFinal %d times, want exactly once", len(final))
+	}
+	call := final[0]
+	receiver, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector || !isIdentifier(receiver.X, "el") {
+		t.Fatal("traceSetIsFinal must be called on the event loop el")
+	}
+	assertCallArguments(t, call, []string{"infra.mgr.IsActive"})
+	assertRunsUnconditionallyOnceManagerExists(t, decl, call, "infra.mgr != nil && hooks.probes == nil")
+	// An unguarded call is the defect itself: a TUI's loop told that its trace
+	// set is final.
+	assertGuarded(t, decl, call, "traceSetIsFinal must not run for a manager that was published to a TUI")
+	if signal := firstCallPosition(decl, "signalTraceStarted"); !signal.IsValid() || call.End() >= signal {
+		t.Fatalf("traceSetIsFinal at %s must precede the start signal", fset.Position(call.Pos()))
+	}
+}
+
+// TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap pins, structurally
+// again, the statement that gives the loop the kernel's restart_pending_map to
+// clear at a probe change (task o03). It needs a loaded BPF module to do
+// anything, so no test without root reaches it, and without it nothing fails
+// loudly: the loop's time rule still refuses the folds, and only the cases the
+// clear exists for - a stamp the records cannot be compared with - go wrong.
+func TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap(t *testing.T) {
+	decl, _ := parseInternalFunction(t, "ior.go", "newTraceEventLoop")
+	attach := callsNamed(decl, "attachRestartPendingMap")
+	if len(attach) != 1 {
+		t.Fatalf("newTraceEventLoop calls attachRestartPendingMap %d times, want exactly once", len(attach))
+	}
+	assertCallArguments(t, attach[0], []string{"el", "bpfModule"})
+	// A plain statement of the body: not behind a condition, in a closure
+	// nobody calls, or deferred past the return of the loop.
+	plain := slices.ContainsFunc(decl.Body.List, func(statement ast.Stmt) bool {
+		expression, ok := statement.(*ast.ExprStmt)
+		return ok && expression.X == attach[0]
+	})
+	if !plain {
+		t.Fatal("attachRestartPendingMap must be a plain statement of newTraceEventLoop's body")
+	}
+}
+
+// TestAttachRestartPendingMapWithoutAMapLeavesTheLoopWithout: an object
+// without restart_pending_map (here: no module at all) is not an error and
+// leaves a loop that guards the folds by time alone.
+func TestAttachRestartPendingMapWithoutAMapLeavesTheLoopWithout(t *testing.T) {
+	f := newReexecFixture(t, globalfilter.Filter{})
+	attachRestartPendingMap(f.el, nil)
+	if f.el.restartPending != nil {
+		t.Fatalf("restartPending = %v without a module, want nil", f.el.restartPending)
+	}
+	f.changeProbes(restartBase)
+	if got := f.el.restarts.probes.changedAt.Load(); got != restartBase {
+		t.Fatalf("change stamp = %d without a map to clear, want %d", got, restartBase)
+	}
+}
+
+// assertGuarded fails with message when call is a plain statement of decl's
+// body. assertRunsUnconditionallyOnceManagerExists accepts that shape - a call
+// no condition guards runs on every pass, which is what most of its callers
+// want - so a test whose point is the guard itself (the call must NOT run for
+// some setups) asks this as well.
+func assertGuarded(t *testing.T, decl *ast.FuncDecl, call *ast.CallExpr, message string) {
+	t.Helper()
+	for _, statement := range decl.Body.List {
+		if expression, ok := statement.(*ast.ExprStmt); ok && expression.X == call {
+			t.Fatal(message)
+		}
+	}
+}
+
+// assertRunsUnconditionallyOnceManagerExists requires call to execute on every
+// pass of the setup that has a probe manager: it must be an expression
+// statement that is either a direct statement of the function body, or the
+// direct statement of the body of an `if <guard>` that has no init and no else.
+// Any other nesting - an unsent closure (`_ = func(){...}`), go/defer, a
+// different or inverted condition such as `if false` - does not match, because
+// the statement holding the call is then not an ExprStmt of those two shapes
+// (or the guard text differs and the test fails on it). The failure names the
+// method call is a call of.
+func assertRunsUnconditionallyOnceManagerExists(t *testing.T, decl *ast.FuncDecl, call *ast.CallExpr, guard string) {
+	t.Helper()
+	name := "the call"
+	if method, isSelector := call.Fun.(*ast.SelectorExpr); isSelector {
+		name = method.Sel.Name
+	}
+	isCallStatement := func(statement ast.Stmt) bool {
+		expression, ok := statement.(*ast.ExprStmt)
+		return ok && expression.X == call
+	}
+	for _, statement := range decl.Body.List {
+		if isCallStatement(statement) {
+			return // unguarded: runs on every pass, a superset of the guarded case
+		}
+		guarded, ok := statement.(*ast.IfStmt)
+		if !ok || guarded.Init != nil || guarded.Else != nil {
+			continue
+		}
+		for _, inner := range guarded.Body.List {
+			if !isCallStatement(inner) {
+				continue
+			}
+			var condition bytes.Buffer
+			if err := printer.Fprint(&condition, token.NewFileSet(), guarded.Cond); err != nil {
+				t.Fatalf("render guard condition: %v", err)
+			}
+			if condition.String() != guard {
+				t.Fatalf("%s is guarded by %q, want %q", name, condition.String(), guard)
+			}
+			return
+		}
+	}
+	t.Fatal(name + " must be a plain statement of the setup body or of an `if " + guard +
+		"` directly in it, not inside a closure, go/defer, or another construct")
+}
+
+// TestSetupTraceInfraBPFClosesTheModuleThroughTheCloser pins how a session's
+// teardown closes its module (task 723): closeTraceInfra gets
+// libbpfModuleCloser{bpfModule}, whose Close takes the module off the list of
+// attached programs before closing their fds. *bpf.Module has a Close of its
+// own and satisfies moduleCloser as well, so passing the raw module would
+// compile and close it - but never forget it, and the list would go on
+// holding its closed descriptors, gone or reused by another file
+// (closeLibbpfModule). Nor may the setup close anything itself.
+func TestSetupTraceInfraBPFClosesTheModuleThroughTheCloser(t *testing.T) {
+	decl, _ := parseInternalFunction(t, "ior.go", "setupTraceInfraBPF")
+	call := singleBareCall(t, decl, "closeTraceInfra")
+	assertCallArguments(t, call, []string{
+		"logTeardown", "infra.rb", "mgr", "releaseBindings",
+		"libbpfModuleCloser{bpfModule}",
+		"infra.stopSignals", "infra.progress", "infra.releasing",
+	})
+	if closes := callsNamed(decl, "Close"); len(closes) != 0 {
+		t.Fatalf("setupTraceInfraBPF calls Close %d times itself; the "+
+			"module is closed by closeTraceInfra alone", len(closes))
+	}
+}

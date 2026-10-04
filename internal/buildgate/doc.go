@@ -1,6 +1,8 @@
 // Package buildgate holds fitness tests for the repository's static-analysis
 // gates: that `mage world` still runs them, and that the lint configuration's
-// exclusions stay scoped to the package they were written for.
+// exclusions stay scoped to the package they were written for. It also pins
+// that `mage integrationTest` runs the root-only link tests of ./internal,
+// which no unprivileged gate can run (rootlink_test.go).
 //
 // It has no production code. The gates it guards are configuration
 // (Magefile.go, .golangci.yml) rather than Go APIs, so nothing else in the

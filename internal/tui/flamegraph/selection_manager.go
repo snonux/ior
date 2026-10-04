@@ -4,7 +4,13 @@ import (
 	"cmp"
 	"slices"
 	"strings"
+	"time"
+
+	common "ior/internal/tui/common"
 )
+
+// wishClock is the clock the wanted-path expiry reads; tests replace it.
+var wishClock = time.Now
 
 // SelectionManager tracks the currently selected frame index and its subtree
 // highlight set. It does not own the frame slice or the search state: the
@@ -14,6 +20,18 @@ import (
 type SelectionManager struct {
 	selectedIdx int
 	subtreeSet  map[int]bool
+	// wantedPath is the path the user selected but restoreByPath could only
+	// approximate (typically because a baseline reset emptied the trie and
+	// only the root frame is left). It is a wish: every restore looks for
+	// wantedPath again, so the selection returns once the frame does. The
+	// wish ends when the frame is found, when the user moves the selection
+	// (cancelWish, called by every user-driven mutator - never inferred from
+	// where the selection happens to sit), on reset(), or after
+	// common.SelectionWishGrace since it was first made.
+	wantedPath string
+	// wantedSince is when wantedPath was first made, the start of the grace
+	// window. It is not moved by repeating the same wish.
+	wantedSince time.Time
 }
 
 // frameFilter reports whether frame idx may be selected. A nil frameFilter
@@ -60,6 +78,7 @@ func (s *SelectionManager) selectFrame(frames []tuiFrame, ancestry frameAncestry
 	if idx < 0 || idx >= len(frames) {
 		return false
 	}
+	s.cancelWish()
 	s.selectedIdx = idx
 	s.refreshSubtree(frames, ancestry)
 	return true
@@ -74,6 +93,7 @@ func (s *SelectionManager) refreshSubtree(frames []tuiFrame, ancestry frameAnces
 // (direction < 0) search match, wrapping around, and keeps the subtree
 // highlight in sync. With no matches the selection does not move.
 func (s *SelectionManager) jumpToMatch(frames []tuiFrame, ancestry frameAncestry, matchIndices map[int]bool, direction int) {
+	s.cancelWish()
 	s.selectedIdx, s.subtreeSet = jumpMatch(frames, matchIndices, ancestry, s.selectedIdx, direction, s.subtreeSet)
 }
 
@@ -81,6 +101,7 @@ func (s *SelectionManager) jumpToMatch(frames []tuiFrame, ancestry frameAncestry
 // place, as done when the snapshot state is discarded.
 func (s *SelectionManager) reset() {
 	s.selectedIdx = 0
+	s.cancelWish()
 	s.subtreeSet = resetBoolSet(s.subtreeSet)
 }
 
@@ -176,29 +197,77 @@ func (s *SelectionManager) ensureVisible(frames []tuiFrame, height int, navigabl
 	}
 }
 
-// restoreByPath tries to set selectedIdx to the frame with the given path.
-// Falls back to a boundary-prefix match if the exact path is gone.
+// restoreByPath tries to set selectedIdx to the frame with the given path,
+// the path the selection had before the frames were replaced. If the exact
+// path is gone it falls back to a boundary-prefix match (an ancestor or
+// descendant), but remembers the path as wanted: the frames vanish for a
+// moment on every baseline reset (the auto-reset), and without that memory the
+// fallback - the root frame - would itself become the remembered path and the
+// selection would never come back when the data refills. See resolveWanted
+// for which path is looked for.
 func (s *SelectionManager) restoreByPath(frames []tuiFrame, path string) {
-	if path == "" || len(frames) == 0 {
+	path = s.resolveWanted(path)
+	if path == "" {
+		return
+	}
+	if len(frames) == 0 {
+		// Nothing to select yet: keep looking for the path once frames exist.
+		s.wish(path)
 		return
 	}
 	for idx, frame := range frames {
 		if frame.Path == path {
 			s.selectedIdx = idx
+			s.cancelWish()
 			return
 		}
 	}
 	for idx, frame := range frames {
 		if hasPathBoundaryPrefix(path, frame.Path) || hasPathBoundaryPrefix(frame.Path, path) {
 			s.selectedIdx = idx
+			s.wish(path)
 			return
 		}
 	}
 }
 
+// resolveWanted picks the path restoreByPath should look for: the pending
+// wantedPath while its grace lasts (prevPath is then only where the last
+// approximation put the selection), otherwise prevPath itself. Whether the
+// user moved since is not guessed from prevPath - a user who walks away from
+// the fallback frame and back onto it would be indistinguishable from one who
+// never moved - but recorded: every user-driven move calls cancelWish.
+func (s *SelectionManager) resolveWanted(prevPath string) string {
+	if s.wantedPath == "" {
+		return prevPath
+	}
+	if wishClock().Sub(s.wantedSince) > common.SelectionWishGrace {
+		s.cancelWish()
+		return prevPath
+	}
+	return s.wantedPath
+}
+
+// wish remembers path as the frame to look for. Repeating the pending wish
+// keeps the original start of the grace window, so a layout that never
+// brings the frame back lets the wish expire.
+func (s *SelectionManager) wish(path string) {
+	if s.wantedPath == path {
+		return
+	}
+	s.wantedPath, s.wantedSince = path, wishClock()
+}
+
+// cancelWish ends the wish: the frame was found, or the user (or a
+// deliberate reset) took the selection somewhere on purpose.
+func (s *SelectionManager) cancelWish() {
+	s.wantedPath, s.wantedSince = "", time.Time{}
+}
+
 // moveVertical moves the selection one depth level up or down within the frame set.
 // Picks the horizontally closest frame at the target depth.
 func (s *SelectionManager) moveVertical(frames []tuiFrame, delta int, navigable frameFilter) {
+	s.cancelWish()
 	if len(frames) == 0 {
 		return
 	}
@@ -224,6 +293,7 @@ func (s *SelectionManager) moveVertical(frames []tuiFrame, delta int, navigable 
 // moveVerticalWithFallback tries primaryDelta, then fallbackDelta, then
 // traversal order when the selection does not change.
 func (s *SelectionManager) moveVerticalWithFallback(frames []tuiFrame, navigable frameFilter, primaryDelta, fallbackDelta, traversalDelta int) {
+	s.cancelWish()
 	before := s.selectedIdx
 	s.moveVertical(frames, primaryDelta, navigable)
 	if s.selectedIdx == before && fallbackDelta != 0 {
@@ -237,6 +307,7 @@ func (s *SelectionManager) moveVerticalWithFallback(frames []tuiFrame, navigable
 // moveSibling navigates to the previous or next sibling at the same depth.
 // Falls back to traversal order when there is only one sibling.
 func (s *SelectionManager) moveSibling(frames []tuiFrame, delta int, navigable frameFilter) {
+	s.cancelWish()
 	if len(frames) == 0 {
 		return
 	}
@@ -270,6 +341,7 @@ func (s *SelectionManager) moveSibling(frames []tuiFrame, delta int, navigable f
 // jumpToTop moves the selection to the deepest frame closest to the current
 // horizontal column.
 func (s *SelectionManager) jumpToTop(frames []tuiFrame, navigable frameFilter) {
+	s.cancelWish()
 	if len(frames) == 0 {
 		return
 	}
@@ -305,6 +377,7 @@ func (s *SelectionManager) jumpToTop(frames []tuiFrame, navigable frameFilter) {
 // jumpToRoot moves the selection to the shallowest frame closest to the current
 // horizontal column. Prefers the zoom root path when available.
 func (s *SelectionManager) jumpToRoot(frames []tuiFrame, rootPath string, navigable frameFilter) {
+	s.cancelWish()
 	if len(frames) == 0 {
 		return
 	}
@@ -348,6 +421,7 @@ func (s *SelectionManager) jumpToRoot(frames []tuiFrame, rootPath string, naviga
 
 // moveTraversal navigates through frames in depth-then-column order.
 func (s *SelectionManager) moveTraversal(frames []tuiFrame, delta int, navigable frameFilter) {
+	s.cancelWish()
 	if len(frames) == 0 || delta == 0 {
 		return
 	}

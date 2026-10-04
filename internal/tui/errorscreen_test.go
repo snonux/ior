@@ -246,8 +246,13 @@ func TestErrorScreenQuitSurvivesARecorderThatCannotStop(t *testing.T) {
 	next, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	updated := assertQuits(t, next, cmd)
 
-	if updated.lastErr == nil || updated.lastErr.Error() != "boom" {
+	if updated.lastErr == nil || !strings.HasPrefix(updated.lastErr.Error(), "boom") {
 		t.Fatalf("expected the displayed error to survive the quit, got %v", updated.lastErr)
+	}
+	// The recording is lost and Stop marked its failure reported, so the quit
+	// must carry it out with the displayed error instead of dropping it.
+	if !strings.Contains(updated.lastErr.Error(), "finalising Parquet recording") {
+		t.Fatalf("expected the recorder Stop failure to be kept, got %v", updated.lastErr)
 	}
 }
 

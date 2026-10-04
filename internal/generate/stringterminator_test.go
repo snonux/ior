@@ -40,8 +40,8 @@ var structsWithComm = map[string]bool{"open_event": true, "exec_event": true}
 
 // handWrittenStringStructs are the structs with a string field that only
 // hand-written BPF code fills; TestHandWrittenBPFStringCapturesNeedNoMemset
-// covers them.
-var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true}
+// covers them, and fdname_harness_test.go the name of fd_name_event.
+var handWrittenStringStructs = map[string]bool{"open_name_fixup_event": true, "process_exec_event": true, "task_newtask_event": true, "task_rename_event": true, "fd_name_event": true}
 
 var handlerStructRE = regexp.MustCompile(`(?m)^/// \S+ is a struct (\w+)`)
 
@@ -253,26 +253,36 @@ func TestStringFieldListsMatchTypesH(t *testing.T) {
 	}
 }
 
-// TestHandWrittenBPFStringCapturesNeedNoMemset pins the same rule for the two
+// TestHandWrittenBPFStringCapturesNeedNoMemset pins the same rule for the
 // hand-written string captures: the open-name fixup record is submitted only
-// after a successful (hence terminated) read, and sched_process_exec's comm is
-// written in full by bpf_get_current_comm.
+// after a successful (hence terminated) read, sched_process_exec's comm is
+// written in full by bpf_get_current_comm, and so is task_newtask's (the creator's
+// context holds the name the child inherits). task_newtask deliberately does not
+// copy the tracepoint's own comm field: it is not guaranteed to be zero-padded
+// on older kernels (strlcpy leaves stale bytes after the NUL), and copying it out
+// of the context needs pointer arithmetic old verifiers reject. Userspace cuts
+// at the first NUL (types.StringValue), so either would be safe to read, but only
+// the helper needs no assumption at all. task_rename cannot use that helper (the
+// tracepoint fires before the kernel stores the new name, and the renamed task
+// need not be the current one), so it reads the name from the raw tracepoint's
+// comm argument with bpf_probe_read_kernel_str and discards the record when that
+// read fails.
 func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	filterC, err := readCSource("filter.c")
 	if err != nil {
 		t.Fatalf("read filter.c: %v", err)
 	}
-	fixup := regexp.MustCompile(`(?s)static __always_inline void ior_emit_open_name_fixup\(.*?\n\}\n`).FindString(filterC)
+	fixup := regexp.MustCompile(`(?s)static __always_inline void ior_emit_name_fixup\(.*?\n\}\n`).FindString(filterC)
 	if fixup == "" {
-		t.Fatal("ior_emit_open_name_fixup not found in filter.c")
+		t.Fatal("ior_emit_name_fixup not found in filter.c")
 	}
 	if strings.Contains(fixup, "__builtin_memset") {
-		t.Error("ior_emit_open_name_fixup memsets its filename")
+		t.Error("ior_emit_name_fixup memsets its filename")
 	}
 	failedReadDiscards := "    if (bpf_probe_read_user_str(ev->filename, sizeof(ev->filename), (void *)filename_ptr) < 0) {\n" +
 		"        bpf_ringbuf_discard(ev, 0);\n        return;\n    }\n"
 	if !strings.Contains(fixup, failedReadDiscards) {
-		t.Error("ior_emit_open_name_fixup must discard a record whose read failed; only a successful read is terminated")
+		t.Error("ior_emit_name_fixup must discard a record whose read failed; only a successful read is terminated")
 	}
 	if !strings.Contains(filterC, "// String fields in ring-buffer records.") {
 		t.Error("filter.c lost the documented decision about stale bytes after the terminator")
@@ -291,6 +301,42 @@ func TestHandWrittenBPFStringCapturesNeedNoMemset(t *testing.T) {
 	}
 	if !strings.Contains(handler, commCaptureLine) {
 		t.Error("handle_sched_process_exec must capture comm unconditionally")
+	}
+
+	newtask := regexp.MustCompile(`(?s)int handle_task_newtask\(.*?\n\}\n`).FindString(execC)
+	if newtask == "" {
+		t.Fatal("handle_task_newtask not found in exec.c")
+	}
+	if strings.Contains(newtask, "__builtin_memset") {
+		t.Error("handle_task_newtask memsets comm")
+	}
+	if !strings.Contains(newtask, commCaptureLine) {
+		t.Error("handle_task_newtask must capture comm with bpf_get_current_comm unconditionally")
+	}
+	// Copying ctx->comm compiles to ctx pointer arithmetic that RHEL/Rocky 8/9
+	// verifiers reject (see the comment in exec.c); the buildgate objdump test
+	// checks the compiled object, this one catches the source pattern early.
+	if strings.Contains(newtask, "ctx->comm") {
+		t.Error("handle_task_newtask must not read the tracepoint's comm array out of the context")
+	}
+
+	// task_rename's name is copied out of the kernel buffer the raw tracepoint
+	// hands over. The helper terminates it on success and the record is
+	// discarded on failure, so an unterminated string never reaches userspace.
+	rename := regexp.MustCompile(`(?s)int handle_task_rename\(.*?\n\}\n`).FindString(execC)
+	if rename == "" {
+		t.Fatal("handle_task_rename not found in exec.c")
+	}
+	if strings.Contains(rename, "__builtin_memset") {
+		t.Error("handle_task_rename memsets comm")
+	}
+	const renameCommRead = "    if (bpf_probe_read_kernel_str(ev->comm, sizeof(ev->comm), args->comm) < 0) {\n" +
+		"        bpf_ringbuf_discard(ev, 0);\n        ior_count_ringbuf_drop();\n        return 0;\n    }\n"
+	if !strings.Contains(rename, renameCommRead) {
+		t.Error("handle_task_rename must discard a record whose comm read failed and count it as a drop (task mz2); only a successful read is terminated")
+	}
+	if strings.Contains(rename, "ctx->newcomm") {
+		t.Error("handle_task_rename must not read the classic tracepoint's newcomm array out of the context")
 	}
 }
 
@@ -314,7 +360,9 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 	const (
 		unlinkNull   = "        ev->pathname[0] = 0;\n        ev->pathname_status = PATH_READ_NULL;\n"
 		unlinkFailed = "            ev->pathname_status = PATH_READ_FAILED;\n            ev->pathname[0] = 0;\n"
-		execFailed   = "(void *)ctx->args[0]) < 0)\n        ev->filename[0] = 0;\n"
+		execFailed   = "            ev->filename_status = PATH_READ_FAILED;\n            ev->filename[0] = 0;\n"
+		// The failed branch of a recovering kind ends with the pointer stash.
+		unlinkStash = "            ior_stash_pending_filename(tid, ctx->args[0]);\n"
 	)
 	cases := []struct {
 		name, handler, old, replacement string
@@ -325,7 +373,8 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 		{"NULL branch unterminated", "sys_enter_unlink", unlinkNull, "        ev->pathname_status = PATH_READ_NULL;\n"},
 		{"failed read unterminated", "sys_enter_unlink", unlinkFailed, "            ev->pathname_status = PATH_READ_FAILED;\n"},
 		{"terminator on the success path", "sys_enter_unlink",
-			unlinkFailed + "        }\n", "            ev->pathname_status = PATH_READ_FAILED;\n        }\n        ev->pathname[0] = 0;\n"},
+			unlinkFailed + unlinkStash + "        }\n",
+			"            ev->pathname_status = PATH_READ_FAILED;\n" + unlinkStash + "        }\n        ev->pathname[0] = 0;\n"},
 		{"terminator at the wrong index", "sys_enter_unlink", unlinkNull,
 			"        ev->pathname[1] = 0;\n        ev->pathname_status = PATH_READ_NULL;\n"},
 		{"probe result unchecked", "sys_enter_unlink", "        if (bpf_probe_read_user_str(", "        (void)(bpf_probe_read_user_str("},
@@ -339,9 +388,10 @@ func TestCheckHandlerStringFieldsRejectsViolations(t *testing.T) {
 			commCaptureLine + "    __builtin_memset(&(ev->comm), 0, sizeof(ev->comm));\n"},
 		{"open comm captured conditionally", "sys_enter_openat", commCaptureLine,
 			"    if (flags)\n        bpf_get_current_comm(&ev->comm, sizeof(ev->comm));\n"},
-		{"exec failed read unterminated", "sys_enter_execve", execFailed, "(void *)ctx->args[0]) < 0)\n        ;\n"},
-		{"exec terminator erases every read", "sys_enter_execve", execFailed,
-			"(void *)ctx->args[0]) < 0)\n        ;\n    ev->filename[0] = 0;\n"},
+		{"exec failed read unterminated", "sys_enter_execve", execFailed, "            ev->filename_status = PATH_READ_FAILED;\n"},
+		{"exec terminator erases every read", "sys_enter_execve",
+			"            ev->filename[0] = 0;\n        }\n    }\n",
+			"        }\n    }\n    ev->filename[0] = 0;\n"},
 		{"named eventfd unterminated", "sys_enter_memfd_create", "            ev->filename[0] = 0;\n", ""},
 		{"two-fd names unterminated", "sys_enter_move_mount", "            ev->newname[0] = 0;\n", ""},
 		{"notification path unterminated", "sys_enter_inotify_add_watch",

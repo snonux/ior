@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"ior/internal/file"
+	"ior/internal/textsafe"
 	"ior/internal/types"
 )
 
@@ -32,6 +33,9 @@ func TestPairCalculateDurationsFirstEvent(t *testing.T) {
 	if pair.DurationToPrev != 0 {
 		t.Fatalf("DurationToPrev = %d, want 0 for first event", pair.DurationToPrev)
 	}
+	if !pair.FirstOnTID {
+		t.Fatal("FirstOnTID = false, want true without a previous pair")
+	}
 }
 
 func TestPairCalculateDurationsWithPreviousExit(t *testing.T) {
@@ -56,6 +60,9 @@ func TestPairCalculateDurationsWithPreviousExit(t *testing.T) {
 	}
 	if pair.DurationToPrev != 500 {
 		t.Fatalf("DurationToPrev = %d, want 500", pair.DurationToPrev)
+	}
+	if pair.FirstOnTID {
+		t.Fatal("FirstOnTID = true, want false with a previous pair")
 	}
 }
 
@@ -86,6 +93,66 @@ func TestPairCalculateDurationsNegativeDelta(t *testing.T) {
 	}
 	if pair.DurationToPrev != 0 {
 		t.Fatalf("DurationToPrev = %d, want 0 when enter < prevPairTime (underflow guard)", pair.DurationToPrev)
+	}
+	// A clamped gap still had a previous pair: it is a measured 0, not "first".
+	if pair.FirstOnTID {
+		t.Fatal("FirstOnTID = true, want false for a clamped gap")
+	}
+}
+
+// Recycle must clear FirstOnTID before the pair goes back to the pool, so a
+// pooled pair cannot carry it into its next use. The pair is inspected right
+// after Recycle (test only: nothing else takes it from the pool meanwhile).
+func TestPairRecycleClearsFirstOnTID(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	pair.ExitEv = &types.RetEvent{Time: 1100, Tid: 2}
+	pair.CalculateDurations(0)
+	if !pair.FirstOnTID {
+		t.Fatal("precondition: FirstOnTID = false, want true")
+	}
+
+	pair.Recycle()
+	if pair.FirstOnTID {
+		t.Fatal("Recycle kept FirstOnTID")
+	}
+}
+
+// TestPairNoteRestartCountsAndSaturates covers task 203: every folded restart
+// counts one, and the count stops at 255 instead of wrapping to a small number
+// (the 256th would read 0, "never interrupted").
+func TestPairNoteRestartCountsAndSaturates(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	defer pair.Recycle()
+	if pair.Restarts != 0 {
+		t.Fatalf("new pair Restarts = %d, want 0", pair.Restarts)
+	}
+	pair.NoteRestart()
+	pair.NoteRestart()
+	if pair.Restarts != 2 {
+		t.Fatalf("Restarts after two folds = %d, want 2", pair.Restarts)
+	}
+	for i := 0; i < 400; i++ {
+		pair.NoteRestart()
+	}
+	if pair.Restarts != 255 {
+		t.Fatalf("Restarts after 402 folds = %d, want 255 (saturated)", pair.Restarts)
+	}
+}
+
+// A pooled pair must not carry the count of the folded call it last was into
+// its next use: Recycle clears it, and the next pair starts at 0. Inspected
+// right after Recycle, as in the FirstOnTID test above.
+func TestPairRecycleClearsRestarts(t *testing.T) {
+	pair := NewPair(&types.OpenEvent{Time: 1000, Tid: 2})
+	pair.NoteRestart()
+	pair.Recycle()
+	if pair.Restarts != 0 {
+		t.Fatalf("Recycle kept Restarts = %d", pair.Restarts)
+	}
+	fresh := NewPair(&types.OpenEvent{Time: 3000, Tid: 3})
+	defer fresh.Recycle()
+	if fresh.Restarts != 0 {
+		t.Fatalf("NewPair Restarts = %d, want 0", fresh.Restarts)
 	}
 }
 
@@ -307,5 +374,91 @@ func TestPairStringCarriesRetForKindSpecificExits(t *testing.T) {
 				t.Fatalf("Pair.String() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// Attacker-controlled -plain payloads: a comm that plants a spoofed OSC 8
+// hyperlink and a file name that hides text with SGR, forges a row with a
+// newline and reverses the rest of the line with RLO.
+const (
+	osc8Comm      = "\x1b]8;;http://evil\aclick\x1b]8;;\a"
+	hostilePath   = "/tmp/a\x1b[8m,hidden\x1b[0m\nfake\u202efdp.exe"
+	escapedComm   = `\x1b]8;;http://evil\x07click\x1b]8;;\x07`
+	escapedPathFd = `/tmp/a\x1b[8m,hidden\x1b[0m\x0afake\u202efdp.exe%(3,O_RDONLY)`
+)
+
+// hostileTestPair returns a pair whose comm and file carry the terminal
+// injection payloads above.
+func hostileTestPair() *Pair {
+	return newStringTestPair(osc8Comm, 7, 8, types.SYS_ENTER_OPENAT, types.SYS_EXIT_OPENAT, 3, file.NewFd(3, hostilePath, 0))
+}
+
+// parseSingleCSVRow parses row with encoding/csv and fails unless it is
+// exactly one record with the EventStreamHeader column count.
+func parseSingleCSVRow(t *testing.T, row string) []string {
+	t.Helper()
+	records, err := csv.NewReader(strings.NewReader(row)).ReadAll()
+	if err != nil {
+		t.Fatalf("row %q is not valid CSV: %v", row, err)
+	}
+	if len(records) != 1 || len(records[0]) != len(strings.Split(EventStreamHeader, ",")) {
+		t.Fatalf("row %q parses into %v, want one 7-column record", row, records)
+	}
+	return records[0]
+}
+
+// TestPairCSVRowEscapesForTerminal is the regression test for task 7p2: with
+// the terminal escaper the free-text columns carry no ESC/BEL/C1/bidi rune,
+// the row is still valid single-record CSV (the escaped LF no longer splits
+// or even quotes-with-newline the row) and the fields hold the visible
+// escape notation.
+func TestPairCSVRowEscapesForTerminal(t *testing.T) {
+	row := hostileTestPair().CSVRow(textsafe.Escape)
+	if textsafe.FirstUnsafe(row, false) >= 0 {
+		t.Fatalf("terminal row %q still contains unsafe runes", row)
+	}
+	fields := parseSingleCSVRow(t, row)
+	if fields[2] != escapedComm {
+		t.Errorf("comm = %q, want %q", fields[2], escapedComm)
+	}
+	if fields[6] != escapedPathFd {
+		t.Errorf("file = %q, want %q", fields[6], escapedPathFd)
+	}
+}
+
+// TestPairCSVRowRawWithoutEscaper checks the piped/redirected behaviour: a
+// nil escaper (and String) keep the exact traced bytes, and the CSV reader
+// round-trips them, including the embedded newline and comma.
+func TestPairCSVRowRawWithoutEscaper(t *testing.T) {
+	pair := hostileTestPair()
+	row := pair.CSVRow(nil)
+	if row != pair.String() {
+		t.Fatalf("String() = %q differs from CSVRow(nil) = %q", pair.String(), row)
+	}
+	fields := parseSingleCSVRow(t, row)
+	if fields[2] != osc8Comm {
+		t.Errorf("comm = %q, want raw %q", fields[2], osc8Comm)
+	}
+	if want := hostilePath + "%(3,O_RDONLY)"; fields[6] != want {
+		t.Errorf("file = %q, want raw %q", fields[6], want)
+	}
+}
+
+// TestPairFileValueVersusFileName pins task pq2: FileName is display text
+// (placeholder for a fileless pair), FileValue is what data files store
+// (empty for it), and a real file named like the placeholder keeps its name.
+func TestPairFileValueVersusFileName(t *testing.T) {
+	fileless := &Pair{}
+	if got := fileless.FileName(); got != NoFileName {
+		t.Errorf("fileless FileName() = %q, want %q", got, NoFileName)
+	}
+	if got := fileless.FileValue(); got != "" {
+		t.Errorf("fileless FileValue() = %q, want empty", got)
+	}
+	for _, name := range []string{"/tmp/f", NoFileName} {
+		p := &Pair{File: file.NewFd(3, name, 0)}
+		if p.FileName() != name || p.FileValue() != name {
+			t.Errorf("file %q: FileName()=%q FileValue()=%q, want both the real name", name, p.FileName(), p.FileValue())
+		}
 	}
 }

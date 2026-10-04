@@ -120,8 +120,9 @@ func TestClassifySyscallPairAccepted(t *testing.T) {
 		{"syslog", FormatSyslog, FormatExitSyslog, KindNull},
 		{"open_by_handle_at", FormatOpenByHandleAt, FormatExitOpenByHandleAt, KindOpenByHandleAt},
 		{"name_to_handle_at", FormatNameToHandleAt, FormatExitNameToHandleAt, KindPathname},
-		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindFd},
-		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindFd},
+		{"io_uring_enter", FormatIoUringEnter, FormatExitIoUringEnter, KindIoUringFd},
+		{"io_uring_register", FormatIoUringRegister, FormatExitIoUringRegister, KindIoUringFd},
+		{"io_uring_setup", FormatIoUringSetup, FormatExitIoUringSetup, KindIoUringSetup},
 		{"pread64", FormatPread64, FormatExitPread64, KindFd},
 		{"symlink", FormatSymlink, FormatExitSymlink, KindName},
 		{"mknod", FormatMknod, FormatExitMknod, KindPathname},
@@ -328,8 +329,8 @@ func TestClassifyPhaseAByteSyscallPairsAccepted(t *testing.T) {
 		enterKindText string
 		retText       string
 	}{
-		{"recvfrom", "struct fd_event", "READ_CLASSIFIED"},
-		{"recvmsg", "struct fd_event", "READ_CLASSIFIED"},
+		{"recvfrom", "struct fd_size_event", "READ_CLASSIFIED"},
+		{"recvmsg", "struct fd_size_event", "READ_CLASSIFIED"},
 		{"sendto", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendmsg", "struct fd_event", "WRITE_CLASSIFIED"},
 		{"sendfile64", "struct fd_event", "TRANSFER_CLASSIFIED"},
@@ -520,4 +521,67 @@ func mustParseAll(t *testing.T, data string) []Format {
 		t.Fatalf("ParseFormats failed: %v", err)
 	}
 	return formats
+}
+
+// TestMetadataNameCoversEveryKind guards the kindMetadataNames table: every
+// kind between KindNone and the kindCount sentinel must have a real name (so a
+// newly added kind without a table entry fails here), and the sentinel itself,
+// like any unknown kind, reports "none".
+func TestMetadataNameCoversEveryKind(t *testing.T) {
+	if got := KindNone.MetadataName(); got != "none" {
+		t.Fatalf("KindNone.MetadataName() = %q, want none", got)
+	}
+	for k := KindNone + 1; k < kindCount; k++ {
+		if got := k.MetadataName(); got == "none" || got == "" {
+			t.Errorf("kind %d has no metadata name (got %q)", k, got)
+		}
+	}
+	if got := kindCount.MetadataName(); got != "none" {
+		t.Errorf("out-of-range kind MetadataName() = %q, want none", got)
+	}
+	aliases := map[TracepointKind]string{KindFdSize: "fd", KindTwoFdNames: "two-fd", KindNamedEventfd: "eventfd"}
+	for k, want := range aliases {
+		if got := k.MetadataName(); got != want {
+			t.Errorf("kind %d MetadataName() = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestClassifyNameAndFieldRules checks the per-name rule table, including the
+// exact-type dup rule and the fall-through to the generic open-filename rule
+// when a named tracepoint's field does not match.
+func TestClassifyNameAndFieldRules(t *testing.T) {
+	tests := []struct {
+		name, fieldType, fieldName string
+		want                       ClassificationResult
+		wantOK                     bool
+	}{
+		{"sys_enter_dup", "unsigned int", "fildes", ClassificationResult{Kind: KindFd}, true},
+		{"sys_enter_dup", "int", "fildes", ClassificationResult{}, false},
+		{"sys_enter_dup3", "unsigned int", "oldfd", ClassificationResult{Kind: KindDup3}, true},
+		{"sys_enter_mount", "char *", "dir_name", ClassificationResult{Kind: KindPathname, PathnameField: "dir_name"}, true},
+		{"sys_enter_mount", "char *", "dev_name", ClassificationResult{}, false},
+		{"sys_enter_mq_open", "const char *", "u_name", ClassificationResult{Kind: KindMqOpen}, true},
+		{"sys_enter_mq_open", "const char *", "filename", ClassificationResult{Kind: KindOpen}, true},
+		{"sys_enter_openat", "const char *", "filename", ClassificationResult{Kind: KindOpen}, true},
+		{"sys_enter_read", "const char *", "filename", ClassificationResult{}, false},
+	}
+	for _, tt := range tests {
+		got, ok := classifyNameAndField(tt.name, tt.fieldType, tt.fieldName)
+		if ok != tt.wantOK || got != tt.want {
+			t.Errorf("classifyNameAndField(%q, %q, %q) = %+v, %v; want %+v, %v",
+				tt.name, tt.fieldType, tt.fieldName, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
+
+// The io_uring kinds only change the wire record; -trace-kinds keeps selecting
+// the three calls as "fd" (enter/register) and "null" (setup), as before.
+func TestIoUringKindsKeepStableMetadataNames(t *testing.T) {
+	if got := KindIoUringFd.MetadataName(); got != "fd" {
+		t.Errorf("KindIoUringFd metadata name = %q, want fd", got)
+	}
+	if got := KindIoUringSetup.MetadataName(); got != "null" {
+		t.Errorf("KindIoUringSetup metadata name = %q, want null", got)
+	}
 }

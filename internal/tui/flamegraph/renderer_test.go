@@ -3,9 +3,12 @@ package flamegraph
 import (
 	"fmt"
 	"image/color"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 // buildTerminalLayout lays out the whole snapshot (no zoom root) into terminal
@@ -917,4 +920,253 @@ func frameIndexByPathRenderer(frames []tuiFrame, path string) int {
 		}
 	}
 	return -1
+}
+
+// sgrPattern matches the colour/attribute escape sequences lipgloss emits.
+var sgrPattern = regexp.MustCompile("\x1b\\[[0-9;:]*m")
+
+// stripSGR removes styling so tests can index a rendered row by column.
+func stripSGR(s string) string {
+	return sgrPattern.ReplaceAllString(s, "")
+}
+
+// overlapTestFrames returns a row-1 pair where B starts inside A's cell, the
+// shape the spring animation produces while A is still shrinking and B has
+// already jumped left. B is narrower than A so the old "narrowest frame wins"
+// hit test would have picked B inside the overlap even though A is drawn there.
+func overlapTestFrames() []tuiFrame {
+	return []tuiFrame{
+		{Name: "root", Row: 0, Col: 0, Width: 100, Path: "root"},
+		{Name: "A", Row: 1, Col: 0, Width: 60, Path: "root" + pathSeparator + "A"},
+		{Name: "B", Row: 1, Col: 40, Width: 50, Path: "root" + pathSeparator + "B"},
+	}
+}
+
+func TestRenderRowClipsAFrameStartingInsideThePreviousCell(t *testing.T) {
+	frames := overlapTestFrames()
+	row := []indexedFrame{{idx: 1, frame: frames[1]}, {idx: 2, frame: frames[2]}}
+	line := stripSGR(renderRow(row, 100, "", nil, nil, -1, true, true))
+	if got := lipgloss.Width(line); got != 100 {
+		t.Fatalf("row width=%d want 100: %q", got, line)
+	}
+	// A keeps its full cell; B is drawn only from where A ends (col 60) to
+	// its own right edge (col 90), then the row is blank-padded.
+	if got := strings.Index(line, "B"); got != 60 {
+		t.Fatalf("B label at col %d want 60: %q", got, line)
+	}
+}
+
+func TestRenderRowNeverExceedsWidth(t *testing.T) {
+	tests := []struct {
+		name   string
+		frames []tuiFrame
+	}{
+		{"fully covered", []tuiFrame{{Name: "A", Col: 0, Width: 50}, {Name: "B", Col: 10, Width: 20}}},
+		{"same col", []tuiFrame{{Name: "A", Col: 5, Width: 30}, {Name: "B", Col: 5, Width: 60}}},
+		{"past right edge", []tuiFrame{{Name: "A", Col: 70, Width: 60}, {Name: "B", Col: 80, Width: 40}}},
+		{"starts at width", []tuiFrame{{Name: "A", Col: 0, Width: 10}, {Name: "B", Col: 100, Width: 5}}},
+		{"zero width", []tuiFrame{{Name: "A", Col: 20, Width: 0}}},
+		{"negative width", []tuiFrame{{Name: "A", Col: 20, Width: -4}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			row := make([]indexedFrame, len(tc.frames))
+			for i, f := range tc.frames {
+				row[i] = indexedFrame{idx: i, frame: f}
+			}
+			sortFramesByCol(row)
+			line := stripSGR(renderRow(row, 100, "", nil, nil, -1, true, true))
+			if got := lipgloss.Width(line); got != 100 {
+				t.Fatalf("row width=%d want 100: %q", got, line)
+			}
+		})
+	}
+}
+
+func TestFindFrameAtLineMatchesDrawnOverlap(t *testing.T) {
+	frames := overlapTestFrames()
+	for _, tc := range []struct{ x, want int }{
+		{0, 1}, {45, 1}, {59, 1}, // the overlap [40,60) is drawn as A
+		{60, 2}, {89, 2}, // B owns the rest of its cell
+		{90, -1}, {99, -1}, // blank tail
+		{-1, -1}, {100, -1}, // outside the viewport
+	} {
+		if got := findFrameAtLine(frames, frameLine{row: 1, band: -1}, tc.x, 100); got != tc.want {
+			t.Errorf("x=%d: got frame %d want %d", tc.x, got, tc.want)
+		}
+	}
+	if got := findFrameAtLine(frames, frameLine{row: 7, band: -1}, 10, 100); got != -1 {
+		t.Errorf("empty row: got frame %d want -1", got)
+	}
+}
+
+// TestAnimatedLayoutRowsStayWithinWidth drives the real spring animation from
+// root{B} to root{A,B} (the reported repro: B slides right while the new A
+// appears at its target) and checks every intermediate render line is exactly
+// width cells and that mouse hit testing reports the frame drawn at each cell.
+func TestAnimatedLayoutRowsStayWithinWidth(t *testing.T) {
+	const width, height = 100, 12
+	before := &snapshotNode{Name: "root", Total: 100, Children: []*snapshotNode{{Name: "B", Total: 100}}}
+	after := &snapshotNode{Name: "root", Total: 100, Children: []*snapshotNode{
+		{Name: "A", Total: 50}, {Name: "B", Total: 50},
+	}}
+	state := NewAnimationState(30, 6.0, 1.0)
+	state.SetTargets(buildTerminalLayout(before, width, height))
+	state.SnapToTargets()
+	state.SetTargets(buildTerminalLayout(after, width, height))
+
+	sawOverlap := false
+	for tick := 0; tick < 120 && !state.Settled(); tick++ {
+		state.Tick(1.0 / 30)
+		frames := state.CurrentFrames()
+		sawOverlap = sawOverlap || rowHasOverlap(frames, 1)
+		out := RenderTerminalView(RenderContext{Frames: frames, Width: width, Height: height, SelectedIdx: 0, MetricLabel: "samples", IsDark: true})
+		// Toolbar, every frame-area row and the status line are all padded
+		// to exactly width cells; anything else would misalign the view.
+		for i, line := range strings.Split(out, "\n") {
+			if got := lipgloss.Width(line); got != width {
+				t.Fatalf("tick %d line %d width=%d want %d: %q", tick, i, got, width, stripSGR(line))
+			}
+		}
+		assertHitsMatchDrawnRow(t, frames, 1, width)
+	}
+	if !sawOverlap {
+		t.Fatal("animation never produced an overlapping row; the test no longer covers the bug")
+	}
+}
+
+// rowHasOverlap reports whether any two frames of row start inside each other.
+func rowHasOverlap(frames []tuiFrame, row int) bool {
+	var cols [][2]int
+	for _, f := range frames {
+		if f.Row == row {
+			cols = append(cols, [2]int{f.Col, f.Col + f.Width})
+		}
+	}
+	slices.SortFunc(cols, func(a, b [2]int) int { return a[0] - b[0] })
+	for i := 1; i < len(cols); i++ {
+		if cols[i][0] < cols[i-1][1] {
+			return true
+		}
+	}
+	return false
+}
+
+// assertHitsMatchDrawnRow checks, cell by cell, that findFrameAtLine returns a
+// frame whose label is the one rendered at that cell.
+func assertHitsMatchDrawnRow(t *testing.T, frames []tuiFrame, row, width int) {
+	t.Helper()
+	var items []indexedFrame
+	for idx, f := range frames {
+		if f.Row == row {
+			// Uniform one-letter labels make every drawn cell identify its frame.
+			f.Name = strings.Repeat(f.Name, width)
+			items = append(items, indexedFrame{idx: idx, frame: f})
+		}
+	}
+	sortFramesByCol(items)
+	line := []rune(stripSGR(renderRow(items, width, "", nil, nil, -1, true, true)))
+	for x := 0; x < width; x++ {
+		got := findFrameAtLine(frames, frameLine{row: row, band: -1}, x, width)
+		drawn := line[x]
+		if got < 0 {
+			if drawn != ' ' {
+				t.Fatalf("x=%d: no hit but %q is drawn", x, drawn)
+			}
+			continue
+		}
+		// Each label is its letter repeated past the cell width, so padOrTrim
+		// cuts it and the "…" lands on the frame's last drawn cell only: the
+		// next cell must then belong to another frame (or be off-screen).
+		if drawn == '…' {
+			if x+1 < width && findFrameAtLine(frames, frameLine{row: row, band: -1}, x+1, width) == got {
+				t.Fatalf("x=%d: \"…\" drawn inside frame %q, not at its last cell: %q", x, frames[got].Name, string(line))
+			}
+			continue
+		}
+		if want := []rune(frames[got].Name)[0]; drawn != want {
+			t.Fatalf("x=%d: hit %q but %q is drawn: %q", x, frames[got].Name, drawn, string(line))
+		}
+	}
+}
+
+func TestPadOrTrimMeasuresDisplayWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		in    string
+		width int
+		want  string
+	}{
+		{"ascii pad", "ab", 4, "ab  "},
+		{"ascii exact", "abcd", 4, "abcd"},
+		{"ascii cut", "abcdef", 4, "abc…"},
+		{"wide fits", "日本", 4, "日本"},
+		{"wide pad", "日本", 5, "日本 "},
+		{"wide cut", "日本語", 5, "日本…"},
+		// Cutting at 4 cells cannot keep half of 本, so the result is one
+		// cell short before padding: 日 (2) + … (1) + space (1).
+		{"wide cut odd boundary", "日本語", 4, "日… "},
+		{"wide single cell", "日本", 1, "…"},
+		{"zero width", "abc", 0, ""},
+		{"negative width", "abc", -3, ""},
+		{"empty", "", 3, "   "},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := padOrTrim(tc.in, tc.width)
+			if got != tc.want {
+				t.Fatalf("padOrTrim(%q, %d)=%q want %q", tc.in, tc.width, got, tc.want)
+			}
+			if tc.width > 0 && lipgloss.Width(got) != tc.width {
+				t.Fatalf("padOrTrim(%q, %d) is %d cells wide", tc.in, tc.width, lipgloss.Width(got))
+			}
+		})
+	}
+}
+
+func TestFrameLabelWideNameFillsExactWidth(t *testing.T) {
+	name := "/data/日本語のファイル名.txt"
+	for _, tc := range []struct {
+		selected, match bool
+	}{{false, false}, {true, false}, {false, true}} {
+		for width := 1; width <= 40; width++ {
+			if got := lipgloss.Width(frameLabel(name, width, tc.selected, tc.match)); got != width {
+				t.Fatalf("selected=%v match=%v width=%d: label is %d cells", tc.selected, tc.match, width, got)
+			}
+		}
+	}
+}
+
+// TestRenderRowWideCharLabelKeepsRowWidth is the reported repro: a CJK file
+// name in a 20-cell frame used to be sized by rune count and produced an
+// 89-cell line at width 80.
+func TestRenderRowWideCharLabelKeepsRowWidth(t *testing.T) {
+	name := "/data/日本語のファイル名.txt"
+	row := []indexedFrame{
+		{idx: 0, frame: tuiFrame{Name: name, Col: 0, Width: 20, Path: "root" + pathSeparator + "a"}},
+		{idx: 1, frame: tuiFrame{Name: name, Col: 20, Width: 60, Path: "root" + pathSeparator + "b"}},
+	}
+	for _, selected := range []int{-1, 0, 1} {
+		line := renderRow(row, 80, "", nil, nil, selected, true, true)
+		if got := lipgloss.Width(line); got != 80 {
+			t.Fatalf("selected=%d: row width=%d want 80: %q", selected, got, stripSGR(line))
+		}
+	}
+}
+
+// The placeholder panels are shown exactly when the viewport is small, so they
+// must not be wider than it: a wider line soft-wraps into rows the dashboard
+// has not budgeted. Negative control: a wide terminal keeps the whole message.
+func TestPlaceholderPanelFitsTheWidth(t *testing.T) {
+	for width := 1; width < minFlameWidth; width++ {
+		out := RenderTerminalView(RenderContext{Width: width, Height: 10})
+		for _, line := range strings.Split(out, "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Fatalf("width %d: placeholder line is %d cells: %q", width, w, line)
+			}
+		}
+	}
+	if out := RenderTerminalView(RenderContext{Width: 100, Height: 10}); !strings.Contains(out, "Flame: waiting for data...") {
+		t.Errorf("a wide terminal cut the message:\n%s", out)
+	}
 }

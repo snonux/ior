@@ -2,12 +2,14 @@ package parquet
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ior/internal/streamrow"
 )
@@ -226,9 +228,11 @@ func TestRecorderStressQueueSaturation(t *testing.T) {
 	}
 }
 
-func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
+func TestRecorderStopReportsTerminalErrorOnceOnRepeatedCalls(t *testing.T) {
 	// Queue overflow no longer aborts a session, so a writer failure stands
-	// in for the terminal error a finished session may carry.
+	// in for the terminal error a finished session may carry. Repeated Stop
+	// calls must all return promptly (the done channel is already closed),
+	// but only the first reports the failure: a failure is reported once.
 	terminalErr := errors.New("parquet writer failed")
 	recorder := NewRecorder(RecorderConfig{})
 	session := newRecordingSession(1)
@@ -243,10 +247,55 @@ func TestRecorderStopReturnsTerminalErrorOnRepeatedCalls(t *testing.T) {
 	}
 	recorder.mu.Unlock()
 
-	for i := 0; i < 2; i++ {
-		if err := recorder.Stop(); !errors.Is(err, terminalErr) {
-			t.Fatalf("Stop() call %d error = %v, want %v", i+1, err, terminalErr)
+	if err := recorder.Stop(); !errors.Is(err, terminalErr) {
+		t.Fatalf("first Stop() error = %v, want %v", err, terminalErr)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("second Stop() error = %v, want nil (already reported)", err)
+	}
+}
+
+// TestRecorderWritesValidUTF8ForInvalidTracedText feeds rows with invalid
+// bytes through the real Recorder and reads the finished file back. It pins
+// that the recorder persists RecordFromStream's sanitized values, not the raw
+// row text: DuckDB rejects every query touching a column with an invalid byte.
+func TestRecorderWritesValidUTF8ForInvalidTracedText(t *testing.T) {
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 8, BatchSize: 2, FlushInterval: time.Hour})
+	path := filepath.Join(t.TempDir(), "session")
+	if err := recorder.Start(path, StartOptions{Metadata: FileMetadata{Mode: "tui"}}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	row := testStreamRow(1, "rename", false)
+	row.Comm = "a\xffb"
+	row.FileName = "/tmp/f\xff\xfeinv"
+	row.OldName = "/tmp/old\xc3"
+	cut := testStreamRow(2, "read", false)
+	cut.Comm = "äääääää\xc3" // kernel cut mid-rune
+	for _, r := range []streamrow.Row{row, cut} {
+		if err := recorder.Record(r, 0); err != nil {
+			t.Fatalf("Record() error = %v", err)
 		}
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	got := readAllRecords(t, recorder.Status().Path)
+	if len(got) != 2 {
+		t.Fatalf("read %d rows, want 2", len(got))
+	}
+	for i, rec := range got {
+		for name, v := range map[string]string{"comm": rec.Comm, "file": rec.File, "old_file": rec.OldFile} {
+			if !utf8.ValidString(v) {
+				t.Errorf("row %d column %s = %q is not valid UTF-8", i, name, v)
+			}
+		}
+	}
+	if got[0].Comm != `a\xffb` || got[0].File != `/tmp/f\xff\xfeinv` || got[0].OldFile != `/tmp/old\xc3` {
+		t.Errorf("row 0 not sanitized as expected: %+v", got[0])
+	}
+	if got[1].Comm != "äääääää" {
+		t.Errorf("row 1 comm = %q, want the partial rune trimmed", got[1].Comm)
 	}
 }
 
@@ -317,4 +366,80 @@ func (w *blockingWriter) TempPath() string {
 
 func (w *blockingWriter) releaseWrites() {
 	w.releaseOnce.Do(func() { close(w.release) })
+}
+
+// TestRecorderStatusPathFollowsSuffixedPublish pins that when an auto-named
+// path is already taken, the recording is published under a "-N" name and
+// Status().Path names the file that actually holds it.
+func TestRecorderStatusPathFollowsSuffixedPublish(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.parquet")
+	taken := []byte("someone else's file")
+	if err := os.WriteFile(path, taken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 4, BatchSize: 2, FlushInterval: time.Hour})
+	if err := recorder.Start(path, StartOptions{AutoNamed: true}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := recorder.Status().Path; got != path {
+		t.Fatalf("Status().Path while recording = %q, want the requested %q", got, path)
+	}
+	// RequestedPath is what the user asked for; it must survive the suffixed
+	// publish so the UI can say "requested X, saved as Y".
+	if got := recorder.Status().RequestedPath; got != path {
+		t.Fatalf("Status().RequestedPath while recording = %q, want %q", got, path)
+	}
+	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	want := filepath.Join(dir, "session-1.parquet")
+	if got := recorder.Status().RequestedPath; got != path {
+		t.Fatalf("Status().RequestedPath after Stop = %q, want the unchanged request %q", got, path)
+	}
+	if got := recorder.Status().Path; got != want {
+		t.Fatalf("Status().Path after Stop = %q, want %q", got, want)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(taken) {
+		t.Errorf("existing file was clobbered: %q", got)
+	}
+	if rows := readAllRecords(t, want); len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("published file rows = %+v, want the one recorded row", rows)
+	}
+}
+
+// TestRecorderExplicitPathReplacesExisting is the counterpart for a
+// user-chosen path (StartOptions.AutoNamed false): it is replaced in place and
+// Status().Path stays the requested path.
+func TestRecorderExplicitPathReplacesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chosen.parquet")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := NewRecorder(RecorderConfig{QueueCapacity: 4, BatchSize: 2, FlushInterval: time.Hour})
+	if err := recorder.Start(path, StartOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := recorder.Record(testStreamRow(1, "read", false), 0); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := recorder.Status().Path; got != path {
+		t.Fatalf("Status().Path = %q, want %q", got, path)
+	}
+	if rows := readAllRecords(t, path); len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("file rows = %+v, want the one recorded row", rows)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("dir holds %v, want only chosen.parquet", entries)
+	}
 }

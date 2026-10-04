@@ -181,41 +181,6 @@ func (e *recycleCountingEvent) GetTime() uint64           { return 0 }
 func (e *recycleCountingEvent) Equals(other any) bool     { return false }
 func (e *recycleCountingEvent) Recycle()                  { atomic.AddInt32(e.recycleCount, 1) }
 
-// TestTracepointEnteredRecyclesDroppedEnterEvent verifies that an enter event
-// dropped by the comm-filter branch (no cached comm for the TID) is recycled
-// instead of leaked.
-func TestTracepointEnteredRecyclesDroppedEnterEvent(t *testing.T) {
-	el := &eventLoop{
-		pairs:        newPairTracker(),
-		fdTracker:    newFDTracker(make(map[uint64]file.File)),
-		commResolver: newHermeticCommResolver(),
-		cfg:          eventLoopConfig{},
-		done:         make(chan struct{}),
-	}
-	defer el.commResolver.shutdown()
-	el.SetFilter(testFilter("nginx", ""))
-	warnings := make(chan string, 1)
-	el.warningCb = func(message string) { warnings <- message }
-
-	var recycles int32
-	el.tracepointEntered(&recycleCountingEvent{tid: defaultTid, recycleCount: &recycles})
-
-	if got := atomic.LoadInt32(&recycles); got != 1 {
-		t.Fatalf("dropped enter event recycle count = %d, want 1", got)
-	}
-	if got := len(el.pairs.enters); got != 0 {
-		t.Fatalf("expected no pending pair for the dropped event, got %d", got)
-	}
-	select {
-	case msg := <-warnings:
-		if msg == "" {
-			t.Fatalf("expected non-empty warning message")
-		}
-	default:
-		t.Fatalf("expected warning notification for the dropped event")
-	}
-}
-
 // TestTracepointEnteredRetainsFilteredEnterEvent verifies the happy path is
 // unchanged: an enter event with a cached comm is stored, not recycled.
 func TestTracepointEnteredRetainsFilteredEnterEvent(t *testing.T) {

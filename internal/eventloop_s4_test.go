@@ -82,8 +82,8 @@ func TestLegacyFsmountPayloadUsesStableFallbackIdentity(t *testing.T) {
 	if ok := el.handleEventfdExit(ep, enter); !ok {
 		t.Fatal("handleEventfdExit returned false")
 	}
-	if ep.File == nil || ep.File.Name() != "eventfd:1" {
-		t.Fatalf("legacy fsmount identity = %v, want eventfd:1", ep.File)
+	if ep.File == nil || ep.File.Name() != "fsmountfd:1" {
+		t.Fatalf("legacy fsmount identity = %v, want fsmountfd:1", ep.File)
 	}
 }
 
@@ -261,8 +261,8 @@ func TestHandleFsmountFallsBackWhenSourceIdentityCannotBeResolved(t *testing.T) 
 	if ok := el.handleEventfdExit(ep, enter); !ok {
 		t.Fatal("handleEventfdExit returned false")
 	}
-	if ep.File == nil || ep.File.Name() != "eventfd:1" {
-		t.Fatalf("fsmount fallback = %v, want eventfd:1", ep.File)
+	if ep.File == nil || ep.File.Name() != "fsmountfd:1" {
+		t.Fatalf("fsmount fallback = %v, want fsmountfd:1", ep.File)
 	}
 }
 
@@ -301,7 +301,23 @@ func TestHandleBpfExitRegistersOnlySuccessfulFdCommands(t *testing.T) {
 	}{
 		{name: "map create", cmd: bpfMapCreate, ret: 63, wantTracked: true, wantName: "bpf:map_create"},
 		{name: "enable stats", cmd: bpfEnableStats, ret: 62, wantTracked: true, wantName: "bpf:enable_stats"},
+		{name: "prog load with common attrs", cmd: bpfProgLoad | bpfCommonAttrs, ret: 65, wantTracked: true, wantName: "bpf:prog_load"},
+		{name: "map create with common attrs", cmd: bpfMapCreate | bpfCommonAttrs, ret: 66, wantTracked: true, wantName: "bpf:map_create"},
+		{name: "btf load with common attrs", cmd: bpfBtfLoad | bpfCommonAttrs, ret: 67, wantTracked: true, wantName: "bpf:btf_load"},
+		{name: "link create with common attrs", cmd: bpfLinkCreate | bpfCommonAttrs, ret: 68, wantTracked: true, wantName: "bpf:link_create"},
+		// BPF_MAP_UPDATE_ELEM (2) is a real, known command that returns 0 or
+		// -errno rather than an fd: flagged or not it must stay untracked, so
+		// the mask must never turn a non-fd command into an fd-producing one.
+		{name: "map update elem with common attrs is not fd-producing", cmd: 2 | bpfCommonAttrs, ret: 7},
+		// Bit 16 alone decodes to command 0, which is BPF_MAP_CREATE (the
+		// kernel strips the flag and dispatches the remaining 0), so it is
+		// tracked as a map_create.
+		{name: "common attrs bit alone decodes to map_create", cmd: bpfCommonAttrs, ret: 7, wantTracked: true, wantName: "bpf:map_create"},
+		// Only bit 16 is the flag; any other high bit is part of an invalid
+		// command (the kernel answers EINVAL) and must not be masked away.
+		{name: "other high bit is not stripped", cmd: 1<<17 | bpfProgLoad, ret: 7},
 		{name: "fd command error", cmd: bpfMapCreate, ret: -int64(syscall.EPERM)},
+		{name: "fd command error with common attrs", cmd: bpfProgLoad | bpfCommonAttrs, ret: -int64(syscall.EPERM)},
 		{name: "positive non-fd return", cmd: 10, ret: 7},
 		{name: "unknown command fails closed", cmd: 999, ret: 7},
 	}
@@ -323,6 +339,25 @@ func TestHandleBpfExitRegistersOnlySuccessfulFdCommands(t *testing.T) {
 				t.Fatalf("bpf identity pair=%v tracked=%v, want %q", ep.File, tracked, tt.wantName)
 			}
 		})
+	}
+}
+
+func TestBpfBaseCommandStripsCommonAttrsFlag(t *testing.T) {
+	for cmd, want := range map[uint32]uint32{
+		5:                    5,
+		5 | bpfCommonAttrs:   5,
+		bpfCommonAttrs:       0,
+		36 | bpfCommonAttrs:  36,
+		999:                  999,
+		999 | bpfCommonAttrs: 999,
+		// Only bit 16 is stripped: a wider mask such as 0xffff would wrongly
+		// fold these invalid commands onto valid ones.
+		1<<17 | 5:                  1<<17 | 5,
+		1<<17 | 5 | bpfCommonAttrs: 1<<17 | 5,
+	} {
+		if got := bpfBaseCommand(cmd); got != want {
+			t.Errorf("bpfBaseCommand(%#x) = %d, want %d", cmd, got, want)
+		}
 	}
 }
 

@@ -119,6 +119,30 @@ func TestMatchPairErrorsOnlyUsesTheErrnoReturnWindow(t *testing.T) {
 	}
 }
 
+// TestMatchPairErrorsOnlyRejectsKernelRestartCodes covers task aq2: a call a
+// signal interrupted exits with -512/-513/-514/-516, which user space never
+// sees, so errors-only must not show it; a ret filter still matches the raw
+// value so the row can be found explicitly.
+func TestMatchPairErrorsOnlyRejectsKernelRestartCodes(t *testing.T) {
+	pair := samplePair()
+	retEvent := pair.ExitEv.(*types.RetEvent)
+	for _, ret := range []int64{-512, -513, -514, -516} {
+		retEvent.Ret = ret
+		if MatchPair(Filter{ErrorsOnly: true}, pair) {
+			t.Errorf("errors-only filter matched restart code %d", ret)
+		}
+		if !MatchPair(Filter{RetVal: &NumericFilter{Op: OpEq, Value: ret}}, pair) {
+			t.Errorf("ret == %d filter did not match the raw restart code", ret)
+		}
+	}
+	for _, ret := range []int64{-4, -511, -515} {
+		retEvent.Ret = ret
+		if !MatchPair(Filter{ErrorsOnly: true}, pair) {
+			t.Errorf("errors-only filter rejected real errno %d", ret)
+		}
+	}
+}
+
 // renamePair models what handleNameExit builds: File.Name() is the newname and
 // the source path only reaches the filter through Pair.Oldname.
 func renamePair() *event.Pair {
@@ -204,6 +228,7 @@ func (c stubCandidate) GapValue() uint64     { return 0 }
 func (c stubCandidate) BytesValue() uint64   { return 0 }
 func (c stubCandidate) ReturnValue() int64   { return 0 }
 func (c stubCandidate) ErrorValue() bool     { return false }
+func (c stubCandidate) NoReturnValue() bool  { return false }
 
 // TestMatchesSeesTheCandidateOldName is the Candidate-level counterpart of
 // TestMatchPairSeesTheRenameOldname. The Stream tab and its CSV export filter
@@ -213,13 +238,13 @@ func TestMatchesSeesTheCandidateOldName(t *testing.T) {
 	row := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", oldFile: "/tmp/old.txt", latency: 1_000_000}
 	singleName := stubCandidate{syscall: "renameat2", file: "/tmp/new.txt", latency: 1_000_000}
 
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).Matches(row) {
+	if !(&Filter{File: &StringFilter{Pattern: "/tmp/new.txt"}}).Matches(row) {
 		t.Fatal("expected a newname match to be accepted")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(row) {
+	if !(&Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(row) {
 		t.Fatal("expected an oldname match to be accepted")
 	}
-	if (Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).Matches(row) {
+	if (&Filter{File: &StringFilter{Pattern: "/tmp/other.txt"}}).Matches(row) {
 		t.Fatal("expected a pattern matching neither name to be rejected")
 	}
 
@@ -228,16 +253,16 @@ func TestMatchesSeesTheCandidateOldName(t *testing.T) {
 	// anchored pattern "^$" is the sharp case - it matches the empty string,
 	// so an absent oldname satisfying it would let `-path '^$'` keep every
 	// single-name row instead of only the genuinely empty-path ones.
-	if (Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(singleName) {
+	if (&Filter{File: &StringFilter{Pattern: "/tmp/old.txt"}}).Matches(singleName) {
 		t.Fatal("an absent oldname must not satisfy the file dimension")
 	}
-	if !(Filter{File: &StringFilter{Pattern: "^$"}}).Matches(stubCandidate{syscall: "read", file: ""}) {
+	if !(&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(stubCandidate{syscall: "read", file: ""}) {
 		t.Fatal("an empty-path row must satisfy -path '^$'")
 	}
-	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(singleName) {
+	if (&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(singleName) {
 		t.Fatal("an absent oldname must not satisfy -path '^$'")
 	}
-	if (Filter{File: &StringFilter{Pattern: "^$"}}).Matches(row) {
+	if (&Filter{File: &StringFilter{Pattern: "^$"}}).Matches(row) {
 		t.Fatal("a non-empty oldname must not satisfy -path '^$'")
 	}
 

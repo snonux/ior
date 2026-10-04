@@ -8,7 +8,7 @@ import (
 
 // The trackers own their invariants: the loop's injection seam
 // (configuredFDTracker/configuredCommResolver) and the state accessors
-// (fdState/commState/pendingHandleState) must be able to complete ANY
+// (fdState/commState/handleState) must be able to complete ANY
 // tracker - including a hand-built one carrying entries without its
 // metadata - without the loop spelling out the tracker's map fields. These
 // tests pin exactly that, because the field-poking they replace is what
@@ -17,12 +17,13 @@ import (
 // old map type).
 
 // TestFDTrackerEnsureInitCompletesHandBuiltState covers the tracker that
-// carries entries but no metadata: ensureInit must seed the pid-presence set
-// from both maps so deletePid's nil-set guard cannot silently skip eviction.
+// carries entries but no metadata: ensureInit must seed the per-pid index
+// from both maps so deletePid, which only consults the index, cannot
+// silently skip eviction.
 func TestFDTrackerEnsureInitCompletesHandBuiltState(t *testing.T) {
 	fdt := &fdTracker{}
 	// Hand-build entries the way an injected fixture would: files and procfs
-	// cache contents, but no ages and no presence set.
+	// cache contents, but no ages and no per-pid index.
 	fdt.files = map[uint64]file.File{
 		fdKey(42, 3): file.NewFd(3, "/tmp/one.txt", 0),
 	}
@@ -35,15 +36,17 @@ func TestFDTrackerEnsureInitCompletesHandBuiltState(t *testing.T) {
 	if fdt.fileAges == nil || fdt.procFdAges == nil {
 		t.Fatal("ensureInit must allocate the LRU age metadata")
 	}
-	if fdt.pidPresent == nil {
-		t.Fatal("ensureInit must allocate the pid-presence set")
+	if fdt.pidIndex == nil {
+		t.Fatal("ensureInit must allocate the per-pid index")
 	}
-	if _, ok := fdt.pidPresent[42]; !ok {
-		t.Fatal("the presence set must be seeded from the pre-existing entries")
+	keys, ok := fdt.pidIndex[42]
+	if !ok || len(keys.files) != 1 || len(keys.cache) != 1 {
+		t.Fatal("the per-pid index must be seeded from the pre-existing entries of both maps")
 	}
 
-	// The seeded set is what lets a process exit evict the hand-built
-	// entries; without it deletePid's nil-guard would skip them silently.
+	// The seeded index is what lets a process exit evict the hand-built
+	// entries; deletePid only consults the index, so without it the entries
+	// would be skipped silently.
 	fdt.deletePid(42)
 	if _, ok := fdt.get(3, 42); ok {
 		t.Fatal("expected the hand-built fd entry to be evicted by deletePid")
@@ -53,18 +56,30 @@ func TestFDTrackerEnsureInitCompletesHandBuiltState(t *testing.T) {
 	}
 }
 
-// TestPendingHandleTrackerZeroValueIsUsable pins the usable-zero-value
-// contract: a tracker that never went through ensureInit must still be safe
-// to consume from, and its first set() must complete the initialization.
-func TestPendingHandleTrackerZeroValueIsUsable(t *testing.T) {
-	var tracker pendingHandleTracker
+// TestHandleTrackerZeroValueIsUsable pins the usable-zero-value contract: a
+// tracker that never went through ensureInit must still be safe to read
+// from, and its first store() or park() must complete the initialization.
+func TestHandleTrackerZeroValueIsUsable(t *testing.T) {
+	var tracker handleTracker
+	key := testHandleA.key()
 
-	if _, ok := tracker.consume(1); ok {
-		t.Fatal("consuming from a zero-value tracker must not report a hit")
+	if _, ok := tracker.lookup(key, 1); ok {
+		t.Fatal("looking a handle up in a zero-value tracker must not report a hit")
 	}
-	tracker.set(1, "/tmp/handle.txt")
-	if pathname, ok := tracker.consume(1); !ok || pathname != "/tmp/handle.txt" {
-		t.Fatalf("consume after set = (%q, %v), want the stored pathname", pathname, ok)
+	if _, ok := tracker.claim(1, 100); ok {
+		t.Fatal("claiming from a zero-value tracker must not report a hit")
+	}
+	tracker.dropTaken(1)             // deleting from nil maps must be a no-op, not a panic
+	tracker.store(key, handleName{}) // so must superseding a name that was never stored
+	tracker.store(key, newHandleName("/tmp/handle.txt", 1))
+	if name, ok := tracker.lookup(key, 2); !ok || name != "/tmp/handle.txt" {
+		t.Fatalf("lookup after store = (%q, %v), want the stored pathname", name, ok)
+	}
+
+	var parking handleTracker
+	parking.park(1, key, 100)
+	if got, ok := parking.claim(1, 100); !ok || got != key {
+		t.Fatalf("claim after park on a zero value = (%+v, %v), want the parked handle", got, ok)
 	}
 }
 

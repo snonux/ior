@@ -59,16 +59,6 @@ func firstLineContaining(value, needle string) string {
 	return ""
 }
 
-func TestStreamViewportUsesSharedChromeCalculator(t *testing.T) {
-	wantWidth, wantHeight := common.EffectiveViewport(120, 40)
-	wantHeight -= streamChromeRows
-
-	width, height := streamViewport(120, 40)
-	if width != wantWidth || height != wantHeight {
-		t.Fatalf("streamViewport() = %dx%d, want %dx%d", width, height, wantWidth, wantHeight)
-	}
-}
-
 func TestFlameViewportClampsHeightWithExpandedHelp(t *testing.T) {
 	wantWidth, _ := common.EffectiveViewport(80, 2)
 
@@ -459,11 +449,11 @@ func TestSyscallsTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "write" {
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "^write$" {
 		t.Fatalf("expected syscall write filter, got %+v", req.Filter.Syscall)
 	}
-	if req.Action != "syscall~write" {
-		t.Fatalf("expected action syscall~write, got %q", req.Action)
+	if req.Action != "syscall~^write$" {
+		t.Fatalf("expected action syscall~^write$, got %q", req.Action)
 	}
 }
 
@@ -553,7 +543,7 @@ func TestSyscallsSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "read" {
+	if req.Filter.Syscall == nil || req.Filter.Syscall.Pattern != "^read$" {
 		t.Fatalf("expected visible sorted row to filter read, got %+v", req.Filter.Syscall)
 	}
 }
@@ -666,11 +656,11 @@ func TestFilesTabEnterEmitsGlobalFilterRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/b" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/b$" {
 		t.Fatalf("expected file /tmp/b filter, got %+v", req.Filter.File)
 	}
-	if req.Action != "file~/tmp/b" {
-		t.Fatalf("expected action file~/tmp/b, got %q", req.Action)
+	if req.Action != "file~^/tmp/b$" {
+		t.Fatalf("expected action file~^/tmp/b$, got %q", req.Action)
 	}
 }
 
@@ -767,7 +757,7 @@ func TestFilesSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp/a.log" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/a.log$" {
 		t.Fatalf("expected visible sorted row to filter /tmp/a.log, got %+v", req.Filter.File)
 	}
 }
@@ -796,7 +786,7 @@ func TestFilesDirSortEnterUsesSortedVisibleRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GlobalFilterRequestedMsg, got %T", msg)
 	}
-	if req.Filter.File == nil || req.Filter.File.Pattern != "/tmp" {
+	if req.Filter.File == nil || req.Filter.File.Pattern != "^/tmp/*" {
 		t.Fatalf("expected visible sorted grouped row to filter /tmp, got %+v", req.Filter.File)
 	}
 }
@@ -1645,8 +1635,8 @@ func TestFlameTabReceivesResetAndPauseKeys(t *testing.T) {
 
 	next, cmd := model.Update(tea.KeyPressMsg{Code: []rune{'r'}[0], Text: string([]rune{'r'})})
 	model = next.(*Model)
-	if cmd != nil {
-		t.Fatalf("expected flame reset key to be handled by flame tab without global refresh command")
+	if cmd == nil {
+		t.Fatalf("expected flame reset key to return the shared baseline reset command")
 	}
 	if model.activeTab != TabFlame {
 		t.Fatalf("expected flame tab to stay active after reset key")
@@ -1681,8 +1671,10 @@ func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected tick command batch")
 	}
-	if engine.snapshots != 1 {
-		t.Fatalf("expected one snapshot call, got %d", engine.snapshots)
+	// The snapshot is built by the returned command, not by Update itself
+	// (TestRefreshTickBuildsTheSnapshotOffTheUpdatePath pins this).
+	if engine.snapshots != 0 {
+		t.Fatalf("Update built a snapshot on the UI goroutine: %d calls", engine.snapshots)
 	}
 
 	msg := cmd()
@@ -1702,6 +1694,9 @@ func TestRefreshTickEmitsStatsTickMsg(t *testing.T) {
 		t.Fatalf("expected batch message, got %T", msg)
 	}
 
+	if engine.snapshots != 1 {
+		t.Fatalf("expected one snapshot call once the commands ran, got %d", engine.snapshots)
+	}
 	_ = next
 }
 
@@ -1844,11 +1839,14 @@ func TestHelpToggleIgnoresH(t *testing.T) {
 }
 
 func TestTranslateFlamegraphMouseMsgOffsetsTabBarRow(t *testing.T) {
-	translated := translateFlamegraphMsg(tea.MouseClickMsg{
+	translated, forward := translateFlamegraphMsg(tea.MouseClickMsg{
 		X:      17,
 		Y:      9,
 		Button: tea.MouseLeft,
-	})
+	}, true)
+	if !forward {
+		t.Fatal("a click must reach a drawn flamegraph")
+	}
 	click, ok := translated.(tea.MouseClickMsg)
 	if !ok {
 		t.Fatalf("expected translated message to stay mouse click, got %T", translated)
@@ -1856,11 +1854,24 @@ func TestTranslateFlamegraphMouseMsgOffsetsTabBarRow(t *testing.T) {
 	if click.X != 17 || click.Y != 8 {
 		t.Fatalf("expected click coordinates (17,8), got (%d,%d)", click.X, click.Y)
 	}
+	// With the flamegraph not drawn (the "terminal too small" notice) every
+	// pointer event is dropped.
+	for _, msg := range []tea.Msg{
+		tea.MouseClickMsg{Y: 9}, tea.MouseReleaseMsg{Y: 9}, tea.MouseMotionMsg{Y: 9}, tea.MouseWheelMsg{Y: 9},
+	} {
+		if _, forward := translateFlamegraphMsg(msg, false); forward {
+			t.Errorf("%T reached a flamegraph that is not drawn", msg)
+		}
+	}
 }
 
 func TestTranslateFlamegraphMsgLeavesNonMouseUnchanged(t *testing.T) {
 	msg := messages.StatsTickMsg{}
-	translated := translateFlamegraphMsg(msg)
+	// Non-mouse messages pass even while the flamegraph is not drawn.
+	translated, forward := translateFlamegraphMsg(msg, false)
+	if !forward {
+		t.Fatal("a non-mouse message must always reach the flamegraph")
+	}
 	if _, ok := translated.(messages.StatsTickMsg); !ok {
 		t.Fatalf("expected non-mouse message to remain unchanged, got %T", translated)
 	}
@@ -2088,5 +2099,138 @@ func TestFormatAutoResetRemainingFormats(t *testing.T) {
 				t.Fatalf("formatAutoResetRemaining(%v, %v) = %q, want %q", tc.armedAt, tc.every, got, tc.want)
 			}
 		})
+	}
+}
+
+// newFlameResetDashboard returns a dashboard on the Flame tab with a seeded
+// live trie (and so a flame snapshot), backed by a stats source that counts
+// its resets.
+func newFlameResetDashboard(t *testing.T) (*Model, *fakeSnapshotSource, *coreflamegraph.LiveTrie) {
+	t.Helper()
+	liveTrie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 0)
+	engine := &fakeSnapshotSource{
+		snap:      &statsengine.Snapshot{TotalSyscalls: 42},
+		resetSnap: &statsengine.Snapshot{TotalSyscalls: 0},
+	}
+	m := NewModelWithConfig(engine, nil, 250, 200, common.DefaultKeyMap())
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	m.SetLiveTrie(liveTrie)
+	if m.activeTab != TabFlame || !m.flamegraphModel.HasSnapshot() {
+		t.Fatal("expected a laid-out flamegraph on the Flame tab")
+	}
+	return m, engine, liveTrie
+}
+
+// TestFlameResetKeyResetsStatsBaselineToo: `r` on the Flame tab restarts the
+// whole baseline, not just the flamegraph. Before the fix the flame model
+// consumed the key itself, so the stats engine was never reset, the stats
+// generation stayed put and the other tabs kept their pre-reset totals.
+func TestFlameResetKeyResetsStatsBaselineToo(t *testing.T) {
+	m, engine, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+	versionBefore := liveTrie.Version()
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+
+	if engine.resetCount != 1 {
+		t.Fatalf("stats engine resets = %d, want 1", engine.resetCount)
+	}
+	if m.statsGen != genBefore+1 {
+		t.Fatalf("statsGen = %d, want %d", m.statsGen, genBefore+1)
+	}
+	if liveTrie.Version() == versionBefore {
+		t.Fatalf("expected the live trie to be reset")
+	}
+	if m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("expected the flame snapshot state to be cleared")
+	}
+	if m.activeTab != TabFlame {
+		t.Fatalf("expected the Flame tab to stay active")
+	}
+	if cmd == nil {
+		t.Fatalf("expected the post-reset stats command")
+	}
+	tick, ok := cmd().(messages.StatsTickMsg)
+	if !ok {
+		t.Fatalf("expected a StatsTickMsg from the reset command")
+	}
+	if tick.Generation != m.statsGen || tick.Snap == nil || tick.Snap.TotalSyscalls != 0 {
+		t.Fatalf("expected a post-reset tick of the new generation, got %+v", tick)
+	}
+	next, _ = m.Update(tick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got == nil || got.TotalSyscalls != 0 {
+		t.Fatalf("stats tabs still show pre-reset totals: %+v", got)
+	}
+}
+
+// TestFlameSearchTypedRDoesNotResetBaseline is the negative half: while the
+// flame search input is open `r` is search text and must reset nothing.
+func TestFlameSearchTypedRDoesNotResetBaseline(t *testing.T) {
+	m, engine, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+	versionBefore := liveTrie.Version()
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+
+	if !m.flamegraphModel.SearchActive() {
+		t.Fatalf("expected the search input to stay open")
+	}
+	if engine.resetCount != 0 || m.statsGen != genBefore || liveTrie.Version() != versionBefore {
+		t.Fatalf("typing r in the search reset the baseline: resets %d gen %d->%d", engine.resetCount, genBefore, m.statsGen)
+	}
+	if !m.flamegraphModel.HasSnapshot() {
+		t.Fatalf("typing r in the search cleared the flame snapshot")
+	}
+}
+
+// TestFlameResetKeyDropsInFlightResults drives `r` through the real dashboard
+// while a flame refresh and a stats tick are in flight. Both were built before
+// the reset, so neither may repaint pre-reset data: the flame result is
+// dropped by the flame's refresh generation (ClearBaseline) and the stats tick
+// by the stats generation (resetBaselineCmd). The flame model's own `r`
+// handling is not the production path any more, so this is the test that
+// covers the stale-result guards end to end.
+func TestFlameResetKeyDropsInFlightResults(t *testing.T) {
+	m, _, liveTrie := newFlameResetDashboard(t)
+	genBefore := m.statsGen
+
+	// A refresh job that already snapshotted the pre-reset trie.
+	coreflamegraph.SeedTestLiveFlameData(liveTrie, 1)
+	refreshCmd := m.flamegraphModel.RefreshFromLiveTrieCmd()
+	if refreshCmd == nil {
+		t.Fatal("expected a flame refresh to dispatch")
+	}
+	staleFlame := refreshCmd()
+	staleTick := messages.StatsTickMsg{Generation: genBefore, Snap: &statsengine.Snapshot{TotalSyscalls: 99}}
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	m = next.(*Model)
+	if m.statsGen != genBefore+1 {
+		t.Fatalf("statsGen = %d, want %d", m.statsGen, genBefore+1)
+	}
+
+	next, _ = m.Update(staleFlame)
+	m = next.(*Model)
+	if m.flamegraphModel.HasSnapshot() {
+		t.Fatal("stale flame refresh result repainted the pre-reset flamegraph")
+	}
+	next, _ = m.Update(staleTick)
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got != nil && got.TotalSyscalls == 99 {
+		t.Fatal("stale stats tick was applied after the reset")
+	}
+
+	// The post-reset tick of the new generation still lands.
+	next, _ = m.Update(cmd())
+	m = next.(*Model)
+	if got := m.LatestSnapshot(); got == nil || got.TotalSyscalls != 0 {
+		t.Fatalf("post-reset tick not applied: %+v", got)
 	}
 }

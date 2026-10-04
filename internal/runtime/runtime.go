@@ -14,6 +14,7 @@ import (
 	"ior/internal/probemanager"
 	"ior/internal/statsengine"
 	"ior/internal/streamrow"
+	"ior/internal/types"
 )
 
 // TraceStarter starts tracing and returns when startup succeeds or fails.
@@ -47,6 +48,13 @@ type TraceRequest struct {
 	// that keeps tracing in the background claims it and owns its completion.
 	// Nil means nobody waits for the session's teardown.
 	ShutdownReporter *TraceShutdownReporter
+	// AttachSyscalls is the syscall probe set the session attaches, as bare
+	// syscall names. Nil keeps the starter's configured tracepoint selection
+	// (the -trace-* / -tps flags); non-nil - even empty - replaces it, so
+	// exactly these syscalls are attached. The TUI sets it once the user has
+	// changed the attached probes at runtime (probes modal), so a trace
+	// restart keeps that set rather than reverting to the startup flags.
+	AttachSyscalls []string
 }
 
 // TraceShutdownPhase identifies the currently observable phase of a trace
@@ -190,14 +198,78 @@ type Sequencer interface {
 	Next() uint64
 }
 
-// RowRecorder is the one-method write side of the parquet recorder that the
-// tracing core needs: appending one stream row, stamped with the filter epoch
-// it was captured under. Keeping the core seam at exactly this method means
-// core wiring can be tested against a fake, and parquet signature changes
-// cannot ripple through this contract unnoticed.
+// RowRecorder is the write side of the parquet recorder that the tracing
+// core needs: appending one stream row, stamped with the filter epoch it was
+// captured under, and claiming a dead recording's failure so it is reported
+// exactly once. Keeping the core seam this narrow means core wiring can be
+// tested against a fake, and parquet signature changes cannot ripple through
+// this contract unnoticed.
 // *parquet.Recorder satisfies it.
 type RowRecorder interface {
 	Record(row streamrow.Row, filterEpoch uint64) error
+	// TakeFailure returns the error the last recording died with, once per
+	// failure, and nil when there is nothing (new) to report - including a
+	// failure the recorder already returned from Stop.
+	TakeFailure() error
+}
+
+// WarningRecorder is the optional extension of RowRecorder for a recorder
+// that can publish a stream warning atomically with the recorder call that
+// produced it. The TUI's per-session recorder view implements it.
+//
+// Plain Record followed by TakeFailure and a separate warning push is three
+// steps with gaps in between: when the session is retired in a gap, the
+// failure has already been claimed (and marked reported) but its warning row
+// is dropped, so nobody ever shows it. RecordWarning runs the record call, the
+// failure claim and the warning push under one session gate instead, so the
+// failure is either claimed and its row lands, or (session already retired)
+// not claimed at all and stays available to the next session or the record
+// modal. *parquet.Recorder does not implement it; callers fall back to the
+// three steps, which is exact there because nothing retires a session.
+type WarningRecorder interface {
+	RowRecorder
+	// RecordWarning records row like Record, then calls describe with the
+	// underlying recorder and Record's result. A non-empty message it returns
+	// is published as a stream warning before the gate is released. describe
+	// runs inside the gate, so it must not call back into the session view;
+	// it may call rec.TakeFailure. A retired session ignores the row and never
+	// calls describe. Pass a long-lived function, not a per-row closure:
+	// this is on the per-event hot path.
+	RecordWarning(row streamrow.Row, filterEpoch uint64, describe func(rec RowRecorder, result error) string)
+}
+
+// RowEmitter is the per-event output of the trace core: it delivers one
+// event's stream row to everything a session feeds with it - the stream
+// buffer, the recorder and the recorder's warning - behind a single session
+// gate, instead of one gate per destination (EventSink.Push, then
+// WarningRecorder.RecordWarning). The TUI's session view implements it: the
+// print callback runs once per event pair, and the second gate's read-lock
+// round trip and closure call were a measurable part of the per-event cost
+// (task yp2).
+//
+// EmitRow keeps the semantics of the pair it replaces, in the same order:
+// push the row, record it stamped with the filter epoch current inside the
+// gate, and publish the warning the recorder result deserves
+// (RecorderWarningText). A retired session's row is dropped entirely, and
+// once the session's retirement returns no EmitRow of it is still in flight.
+//
+// The row is passed by value on purpose: through an interface, a pointer
+// parameter makes the caller's per-event local escape to the heap (one ~224
+// byte allocation per event, measured), which costs far more than the copy.
+type RowEmitter interface {
+	EmitRow(row streamrow.Row)
+}
+
+// RowEmitterSource is the optional capability of a RuntimeState to hand out
+// the session's RowEmitter. It is optional so bindings without a session gate
+// (fakes, headless wiring) need not implement it; the core then falls back to
+// the separate Push and RecordRow calls, which behave the same minus the
+// single gate. When a source does hand out an emitter, the core no longer
+// consults Recorder() or FilterEpoch() for event rows: the emitter owns the
+// stream push, the recording, the recorder warning and the filter-epoch
+// stamp, and reads the recorder and epoch from its own state.
+type RowEmitterSource interface {
+	RowEmitter() RowEmitter
 }
 
 // RecordingController is the full recorder surface the TUI needs on top of
@@ -211,7 +283,8 @@ type RecordingController interface {
 	// Start opens a new recording at path with the given options.
 	Start(path string, options parquet.StartOptions) error
 	// Stop closes the active recording. When no recording is active it
-	// reports the last session's terminal state instead of starting one.
+	// reports the last session's failure instead, unless that failure was
+	// already reported (via TakeFailure or an earlier Stop).
 	Stop() error
 	// Status reports the recording's state, including queue-overflow drops.
 	Status() parquet.Status
@@ -268,11 +341,21 @@ type EventIngester = statsengine.Accumulator
 type LiveTrieSource = flamegraph.LiveTrieSource
 
 // ProbeManager exposes runtime probe controls to the TUI probes modal.
-// *probemanager.Manager implements this interface.
+// *probemanager.Manager implements this interface. Attach and Detach set one
+// probe to a definite state (the modal's all-on/all-off). AttachFamily and
+// DetachFamily are the batch operations behind the modal's Families view:
+// they report per-syscall failures in the result and progress through the
+// callback, and may take seconds, so callers run them off the UI goroutine;
+// they stop between probes once ctx is cancelled (the TUI passes the trace
+// session's context, so a restart does not wait for a stale batch).
 type ProbeManager interface {
 	States() []probemanager.ProbeState
 	Toggle(syscall string) error
+	Attach(syscall string) error
+	Detach(syscall string) error
 	ActiveCount() (int, int)
+	AttachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
+	DetachFamily(ctx context.Context, family types.SyscallFamily, progress func(completed, total int)) (probemanager.BatchResult, error)
 }
 
 // RuntimePublisher is the write side of the TUI runtime contract.

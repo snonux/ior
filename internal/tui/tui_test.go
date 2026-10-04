@@ -37,7 +37,15 @@ type fakeProbeManager struct {
 
 func (f fakeProbeManager) States() []probemanager.ProbeState { return f.states }
 func (f fakeProbeManager) Toggle(string) error               { return nil }
+func (f fakeProbeManager) Attach(string) error               { return nil }
+func (f fakeProbeManager) Detach(string) error               { return nil }
 func (f fakeProbeManager) ActiveCount() (int, int)           { return len(f.states), len(f.states) }
+func (f fakeProbeManager) AttachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
+func (f fakeProbeManager) DetachFamily(context.Context, types.SyscallFamily, func(int, int)) (probemanager.BatchResult, error) {
+	return probemanager.BatchResult{}, nil
+}
 
 type testStreamSink interface {
 	eventstream.Source
@@ -76,13 +84,14 @@ func TestBeginCmdHandsStarterItsInputsExplicitly(t *testing.T) {
 	// must not alias it.
 	filter.Comm.Pattern = "mutated"
 	filter.PID.Value = 7
-	if msg := cmd(); msg != (TracingStartedMsg{}) {
-		t.Fatalf("begin command = %T, want TracingStartedMsg", msg)
+	msg := cmd()
+	if msg != (traceSessionResultMsg{session: lifecycle.session, result: TracingStartedMsg{}}) {
+		t.Fatalf("begin command = %#v, want this session's TracingStartedMsg", msg)
 	}
 	req := <-requests
 
-	if req.Bindings != TraceRuntimeBindings(bindings) {
-		t.Fatalf("request bindings = %v, want the model's runtime bindings", req.Bindings)
+	if view, ok := req.Bindings.(traceSessionBindings); !ok || view.bindings != bindings {
+		t.Fatalf("request bindings = %v, want a session view of the model's runtime bindings", req.Bindings)
 	}
 	if req.Filter == nil {
 		t.Fatal("request carries no filter; the starter would keep the startup filter on every restart")
@@ -98,9 +107,9 @@ func TestBeginCmdHandsStarterItsInputsExplicitly(t *testing.T) {
 	}
 }
 
-// TestNewTraceRequestTreatsNilBindingsAsAbsent is the negative case: a nil
-// *runtimeBindings must become a nil interface, not a typed nil the starter's
-// "no TUI attached" check would miss before calling methods on it.
+// TestNewTraceRequestTreatsNilBindingsAsAbsent is the negative case: absent
+// bindings must stay a nil interface, which the starter's "no TUI attached"
+// check relies on.
 func TestNewTraceRequestTreatsNilBindingsAsAbsent(t *testing.T) {
 	req := newTraceRequest(nil, globalfilter.Filter{}, nil)
 	if req.Bindings != nil {
@@ -530,6 +539,11 @@ func TestStartupPIDPickerQuitsOnQuitKeys(t *testing.T) {
 			if m.router.current() != ScreenPIDPicker || hasReturn(m) {
 				t.Fatalf("expected startup PID picker with no pending return")
 			}
+			// The filter input starts focused and would take a typed q as
+			// text (see textinput_keys_test.go); Down moves the selection
+			// off it, which is when q is a command again.
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(*Model)
 			stopCalls := 0
 			m.tracer.traceStop = func() { stopCalls++ }
 
@@ -572,6 +586,10 @@ func TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc(t *testing.T) {
 			if m.router.current() != ScreenPIDPicker || !hasReturn(m) {
 				t.Fatalf("expected reselect PID picker with a pending return")
 			}
+			// Down blurs the filter input, which would otherwise take a
+			// typed q as text (see textinput_keys_test.go).
+			next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(*Model)
 
 			next, cmd := m.Update(tt.press)
 			updated := next.(*Model)
@@ -678,7 +696,9 @@ func TestQuitKeyClosesExportModalLikeEsc(t *testing.T) {
 	}
 }
 
-func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
+// While the flame search input is open a q is typed text (see
+// textinput_keys_test.go), so it is Esc - not q - that closes the search.
+func TestEscClosesFlameSearch(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.router.showDashboard()
 	m.attaching = false
@@ -691,16 +711,16 @@ func TestQuitKeyClosesFlameSearchLikeEsc(t *testing.T) {
 		t.Fatalf("expected flame search footer to open on /")
 	}
 
-	next, cmd := m.Update(tea.KeyPressMsg{Code: []rune{'q'}[0], Text: string([]rune{'q'})})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(*Model)
 	if cmd != nil {
-		t.Fatalf("expected q in flame search to close search, not quit")
+		t.Fatalf("expected esc in flame search to close search, not quit")
 	}
 	if m.quitting {
-		t.Fatalf("expected q in flame search not to set quitting state")
+		t.Fatalf("expected esc in flame search not to set quitting state")
 	}
 	if strings.Contains(m.View().Content, "0/0 matches") {
-		t.Fatalf("expected q to close flame search like esc")
+		t.Fatalf("expected esc to close flame search")
 	}
 }
 
@@ -731,7 +751,7 @@ func TestDashboardRefreshPicksLateBoundSource(t *testing.T) {
 	source := lateBoundDashboardSource{runtime: runtime}
 
 	want := &statsengine.Snapshot{TotalSyscalls: 77}
-	runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: want})
+	runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: want})
 
 	got, err := source.Snapshot()
 	if err != nil {
@@ -746,7 +766,7 @@ func TestLateBoundDashboardSourceResetForwardsToWiredSource(t *testing.T) {
 	runtime := newRuntimeBindings()
 	source := lateBoundDashboardSource{runtime: runtime}
 	wired := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 42}}
-	runtime.SetDashboardSnapshotSource(wired)
+	runtime.setDashboardSnapshotSource(wired)
 
 	source.Reset()
 
@@ -783,12 +803,12 @@ func TestLateBoundDashboardSourceWithoutSourceIsInert(t *testing.T) {
 func TestRuntimeBindingsStoreAndExposeLiveTrie(t *testing.T) {
 	runtime := newRuntimeBindings()
 	trie := coreflamegraph.NewLiveTrie([]string{"comm", "path"}, "count", "count")
-	runtime.SetLiveTrie(trie)
+	runtime.setLiveTrie(trie)
 	if got := runtime.liveTrie(); got != trie {
 		t.Fatalf("expected live trie to be stored and returned")
 	}
 
-	runtime.SetLiveTrie(nil)
+	runtime.setLiveTrie(nil)
 	if got := runtime.liveTrie(); got != nil {
 		t.Fatalf("expected live trie to clear on nil assignment")
 	}
@@ -845,7 +865,7 @@ func TestProbeToggledMsgResetsDashboardStatsSource(t *testing.T) {
 	src := &fakeDashboardSource{snap: &statsengine.Snapshot{TotalSyscalls: 99}}
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetDashboardSnapshotSource(src)
+	m.runtime.setDashboardSnapshotSource(src)
 	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
@@ -870,7 +890,7 @@ func TestProbeToggledMsgKeepsLastGoodSnapshotOnFailure(t *testing.T) {
 	src := &fakeDashboardSource{snap: good, err: errors.New("snapshot build failed")}
 
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetDashboardSnapshotSource(src)
+	m.runtime.setDashboardSnapshotSource(src)
 	m.router.showDashboard()
 	m.attaching = false
 	m.probeModal = probes.NewModel(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}}).Open()
@@ -896,7 +916,7 @@ func TestTracingStartedRebindsEventStreamSource(t *testing.T) {
 	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "read", Comm: "proc", PID: 1, TID: 1})
 
 	m := NewModelWithConfig(flags.Config{PidFilter: -1, TidFilter: -1, TUIExportEnable: true}, -1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetEventStreamSource(rb)
+	m.runtime.setEventStreamSource(rb)
 	m.router.showDashboard()
 	m.attaching = true
 
@@ -1008,7 +1028,7 @@ func TestTracingStartedUsesCurrentViewportForFlameNavigationWithoutResize(t *tes
 	m.attaching = true
 	m.width = 120
 	m.height = 30
-	m.runtime.SetLiveTrie(trie)
+	m.runtime.setLiveTrie(trie)
 
 	next, _ := m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -1049,7 +1069,7 @@ func TestTracingStartedAppliesViewportWhenModelSizeIsUnset(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
 	m.router.showDashboard()
 	m.attaching = true
-	m.runtime.SetLiveTrie(trie)
+	m.runtime.setLiveTrie(trie)
 	m.width = 0
 	m.height = 0
 
@@ -1071,6 +1091,47 @@ func TestExportKeyOpensModalOnDashboard(t *testing.T) {
 	updated := next.(*Model)
 	if !updated.exporter.Visible() {
 		t.Fatalf("expected export modal to open on e key")
+	}
+}
+
+// The e export snapshots the live ring even while the stream tab is paused, so
+// a user looking at the frozen table would get different rows than shown. The
+// modal must say so (and name x as the way to write the paused rows) only while
+// paused; a live stream keeps the plain wording (task 2r2).
+func TestExportModalWarnsWhenStreamPaused(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	m.router.showDashboard()
+	m.attaching = false
+	rb := eventstream.NewRingBuffer()
+	rb.Push(eventstream.StreamEvent{Seq: 1, Syscall: "write", Comm: "proc", PID: 1, FD: 3})
+	m.dashboard.SetStreamSource(rb)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'7'}[0], Text: "7"})
+	m = next.(*Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: "e"})
+	m = next.(*Model)
+	if !m.exporter.Visible() {
+		t.Fatalf("expected the e modal to open")
+	}
+	if live := m.exporter.View(120, 30); strings.Contains(live, "paused") {
+		t.Fatalf("live stream: modal must not mention the paused view:\n%s", live)
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = next.(*Model)
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = next.(*Model)
+	if !m.dashboard.StreamPaused() {
+		t.Fatalf("expected space to pause the stream tab")
+	}
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'e'}[0], Text: "e"})
+	m = next.(*Model)
+	paused := strings.Join(strings.Fields(strings.ReplaceAll(m.exporter.View(120, 30), "│", " ")), " ")
+	if !strings.Contains(paused, "Live ring, not the paused view - use x on the Stream tab for the paused rows") {
+		t.Fatalf("paused stream: modal lacks the live-ring warning:\n%s", paused)
 	}
 }
 
@@ -1768,7 +1829,12 @@ func TestHelpOverlayCanOpenFromPIDPicker(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	next, _ := m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
+	// The picker's filter input starts focused and would take an H as text
+	// (see textinput_keys_test.go); Down moves the selection off it, which is
+	// when H is the help shortcut again.
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = next.(*Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: []rune{'H'}[0], Text: string([]rune{'H'})})
 	m = next.(*Model)
 	if !m.helpOverlayVisible {
 		t.Fatalf("expected help overlay to open on pid picker screen")
@@ -1916,7 +1982,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected applying selected-cell global filter to restart tracing")
 	}
-	if m.filters.global.Comm == nil || m.filters.global.Comm.Pattern != "systemd" {
+	if m.filters.global.Comm == nil || m.filters.global.Comm.Pattern != "^systemd$" {
 		t.Fatalf("expected selected comm applied globally, got %+v", m.filters.global.Comm)
 	}
 	if !stopped {
@@ -1925,7 +1991,7 @@ func TestPausedStreamEnterAppliesSelectedCellAsGlobalFilter(t *testing.T) {
 	if !m.attaching {
 		t.Fatalf("expected selected-cell global filter to restart tracing")
 	}
-	if len(m.filters.stack) != 1 || m.filters.stack[0] != "comm~systemd" {
+	if len(m.filters.stack) != 1 || m.filters.stack[0] != "comm~^systemd$" {
 		t.Fatalf("expected selected-cell action pushed to filter stack, got %+v", m.filters.stack)
 	}
 }
@@ -2157,8 +2223,8 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 	oldTrie := aggregateTestTrie("oldsvc", "/srv/old")
 	newTrie := aggregateTestTrie("newsvc", "/srv/new")
 
-	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: oldSnap})
-	m.runtime.SetLiveTrie(oldTrie)
+	m.runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: oldSnap})
+	m.runtime.setLiveTrie(oldTrie)
 
 	next, _ := m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -2185,8 +2251,8 @@ func TestGlobalFilterApplyResetsAggregatesAndFlameToPostRestartSources(t *testin
 		t.Fatalf("expected filter apply to restart tracing")
 	}
 
-	m.runtime.SetDashboardSnapshotSource(&fakeDashboardSource{snap: newSnap})
-	m.runtime.SetLiveTrie(newTrie)
+	m.runtime.setDashboardSnapshotSource(&fakeDashboardSource{snap: newSnap})
+	m.runtime.setLiveTrie(newTrie)
 
 	next, _ = m.Update(TracingStartedMsg{})
 	m = next.(*Model)
@@ -2417,7 +2483,7 @@ func TestDashboardTabKeysChangeActiveView(t *testing.T) {
 
 func TestProbeModalViewDoesNotStackDashboardContent(t *testing.T) {
 	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
-	m.runtime.SetProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
+	m.runtime.setProbeManager(fakeProbeManager{states: []probemanager.ProbeState{{Syscall: "read", Active: true}}})
 	m.probeModal = probes.NewModel(m.runtime.currentProbeManager())
 	m.router.showDashboard()
 	m.attaching = false
@@ -2556,6 +2622,54 @@ func TestGlobalHelpOverlayFitsStandardTerminal(t *testing.T) {
 	}
 }
 
+// TestGlobalHelpOverlayKeepsFlameNoteAt80Columns: the probes-key note ("O on
+// Flame") used to share a line with the family hint and was cut to "(O on
+// Fla..." by the 70-cell help box at 80 columns. The Global section is the
+// first thing in the overlay, so each of its lines must appear untruncated
+// (other sections may still be cut; they are not this test's concern).
+func TestGlobalHelpOverlayKeepsFlameNoteAt80Columns(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	sections := m.helpSections()
+	out := renderGlobalHelpOverlay(80, 24, sections)
+
+	for _, line := range sections[0].lines {
+		if !strings.Contains(out, line) {
+			t.Errorf("global help line cut or missing at 80 columns: %q\n%s", line, out)
+		}
+	}
+	if !strings.Contains(out, "on Flame, o cycles the frame order") {
+		t.Fatalf("help overlay lacks the Flame note for O:\n%s", out)
+	}
+}
+
+// TestGlobalHelpOverlayKeepsNoteAndExportHintAt80x24: at 80x24 the overlay
+// keeps only height-4 = 20 lines. A fourth Global line (added for the O note)
+// once pushed the last Dashboard Tabs line, "stream: x/X export  E open", out
+// of the overlay so the export keys were not documented anywhere. With default
+// flags (export enabled) both the Flame/O note and the export hint must show,
+// and the Global section must stay at three lines to leave room for them.
+func TestGlobalHelpOverlayKeepsNoteAndExportHintAt80x24(t *testing.T) {
+	m := NewModel(-1, func(context.Context, TraceRequest) error { return nil })
+	if !m.keys.ExportEnabled() {
+		t.Fatalf("test assumes export is enabled by default")
+	}
+	sections := m.helpSections()
+	out := renderGlobalHelpOverlay(80, 24, sections)
+
+	for _, want := range []string{
+		"on Flame, o cycles the frame order",
+		"stream: x/X export  E open",
+		"e stream export",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help overlay at 80x24 lacks %q:\n%s", want, out)
+		}
+	}
+	if got := len(sections[0].lines); got > 3 {
+		t.Errorf("Global help has %d lines, want <= 3 so the export hint fits in 20 lines", got)
+	}
+}
+
 // TestNextAutoResetIntervalCyclesThroughPresets walks the full preset
 // sequence (off -> 10s -> 30s -> 60s -> 2m -> 5m -> off) to lock in the
 // user-facing behavior of the `I` hotkey. The cycle wraps so the user
@@ -2649,11 +2763,10 @@ func TestNewTestFlamesModelHonoursConfigPidFilter(t *testing.T) {
 	if m.proc.pid != 2002 {
 		t.Fatalf("expected pid filter 2002, got %d", m.proc.pid)
 	}
-	// -pid clears -tid, exactly as the production path does via
-	// resolveStartupPIDFilters. Test-flames must not honour a pid+tid
-	// combination the real TUI drops, or it stops being a faithful harness.
-	if m.proc.tid != -1 {
-		t.Fatalf("expected -pid to clear the tid filter as production does, got %d", m.proc.tid)
+	// -pid and -tid combine, exactly as on the production path through
+	// resolveStartupPIDFilters (TestNewRunModelKeepsTidWithPid).
+	if m.proc.tid != 2202 {
+		t.Fatalf("expected -tid to combine with -pid as production does, got %d", m.proc.tid)
 	}
 }
 
@@ -2673,12 +2786,12 @@ func TestNewTestFlamesModelHonoursConfigTidFilterAlone(t *testing.T) {
 
 // TestNewRunModelWiresTheProductionStartup guards the struct literal on the one
 // path real users take. Every field is asserted across its two subtests
-// (tidFilter is only reachable when no -pid is given, because an attach pid
-// clears it): a modelStartup field is silently optional where a positional
-// argument would not compile, so an omission anywhere in this literal is valid
-// Go that no other test in the repo would notice. Dropping initialPID made
-// `ior -pid <n>` open the PID picker instead of the dashboard; dropping
-// `filter` would strip -comm/-path from the trace filter just as quietly.
+// (tidFilter is exercised by the -tid tests below): a modelStartup field is
+// silently optional where a positional argument would not compile, so an
+// omission anywhere in this literal is valid Go that no other test in the repo
+// would notice. Dropping initialPID made `ior -pid <n>` open the PID picker
+// instead of the dashboard; dropping `filter` would strip -comm/-path from the
+// trace filter just as quietly.
 func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = 1234
@@ -2721,11 +2834,9 @@ func TestNewRunModelWiresTheProductionStartup(t *testing.T) {
 }
 
 // TestNewRunModelWiresTidFilterWithoutPid covers the one modelStartup field the
-// case above cannot reach: with an attach pid, resolveStartupPIDFilters forces
-// tid to -1, so only `ior -tid T` with no -pid exercises tidFilter. Dropping it
-// silently degrades to -1, losing the model-side tid filter and the
-// "Filter: tid=..." status display (kernel-side filtering still applies, so
-// rows stay correct - it is a display/filter-stack loss, not data loss).
+// case above cannot reach: `ior -tid T` with no -pid is the one startup that
+// leaves pidFilter at -1. Dropping tidFilter silently degrades it to -1,
+// losing the model-side tid filter and the "Filter: tid=..." status display.
 func TestNewRunModelWiresTidFilterWithoutPid(t *testing.T) {
 	cfg := flags.NewFlags()
 	cfg.PidFilter = -1

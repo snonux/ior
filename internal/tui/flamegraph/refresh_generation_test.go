@@ -232,3 +232,30 @@ func TestFailedStateChangeKeepsInFlightRefreshCurrent(t *testing.T) {
 		t.Fatal("completion did not release its in-flight slot")
 	}
 }
+
+// TestClearBaselineSnapsFirstSnapshot pins that the dashboard's `r` path
+// (ClearBaseline, no Update call that would stamp lastKeyAt) still counts as
+// user input: the first snapshot after the reset must snap into place instead
+// of animating in from the empty view, and the refresh that loads it must not
+// be deferred by the drive window (the cleared state has no snapshot).
+func TestClearBaselineSnapsFirstSnapshot(t *testing.T) {
+	m, _ := newGenerationTestModel(t)
+	m = deliver(t, m, dispatchAndCompute(t, m))
+	m = settleFlameAnimation(t, m)
+
+	m.ClearBaseline()
+	if !m.userDriving() {
+		t.Fatal("ClearBaseline did not stamp lastKeyAt")
+	}
+	fresh := dispatchAndCompute(t, m) // also proves the drive window does not defer it
+	m = deliver(t, m, fresh)
+	if !m.HasSnapshot() {
+		t.Fatal("first snapshot after the reset was not applied")
+	}
+	if m.Animating() {
+		t.Fatal("first snapshot after the reset animated in instead of snapping")
+	}
+	if len(m.anim.frames) != len(fresh.targetFrames) {
+		t.Fatalf("frames did not snap to target: %d != %d", len(m.anim.frames), len(fresh.targetFrames))
+	}
+}

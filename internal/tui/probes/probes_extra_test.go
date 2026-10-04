@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -214,33 +215,58 @@ func TestViewInvisibleReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestVisibleRowsDefault verifies the fallback when height is zero.
+// TestVisibleRowsDefault verifies an unreported height budgets rows for the
+// same defaultHeight View renders into, so Update and View agree.
 func TestVisibleRowsDefault(t *testing.T) {
 	m := NewModel(nil)
 	m.height = 0
-	if got := m.visibleRows(); got != 10 {
-		t.Fatalf("visibleRows with height=0 = %d, want 10", got)
+	want := NewModel(nil).SetSize(0, defaultHeight).visibleRows()
+	if got := m.visibleRows(); got != want {
+		t.Fatalf("visibleRows with height=0 = %d, want %d (defaultHeight)", got, want)
 	}
 }
 
-// TestVisibleRowsMinimum verifies that visibleRows never returns less than 3.
+// TestVisibleRowsMinimum verifies that visibleRows keeps at least one row
+// (so the selection stays visible) even when the full chrome alone exceeds
+// the terminal height: the box sheds its padding, blank lines, wrapping and
+// title first (probeLevels) until one row fits: a 5-row terminal keeps the
+// title and one row in the box, and a 1-row one, drawn bare, still one.
 func TestVisibleRowsMinimum(t *testing.T) {
 	m := NewModel(nil)
-	m.height = 5
-	if got := m.visibleRows(); got < 3 {
-		t.Fatalf("visibleRows = %d, want >= 3", got)
+	for height, want := range map[int]int{5: 1, 1: 1} {
+		m.height = height
+		if got := m.visibleRows(); got != want {
+			t.Fatalf("height %d: visibleRows = %d, want %d", height, got, want)
+		}
 	}
 }
 
-// TestSanitizeOneLine verifies embedded control characters are replaced with
-// spaces.
-func TestSanitizeOneLine(t *testing.T) {
-	out := sanitizeOneLine("a\nb\rc\td")
-	if strings.ContainsAny(out, "\n\r\t") {
-		t.Fatalf("sanitizeOneLine left control chars: %q", out)
+// TestRenderProbeRowSanitizesError verifies a probe error carrying control
+// characters (newlines, an OSC 8 hyperlink, SGR hidden text) is rendered on
+// one line with no escape byte reaching the terminal (task io2).
+func TestRenderProbeRowSanitizesError(t *testing.T) {
+	m := NewModel(nil)
+	row := m.renderProbeRow(probemanager.ProbeState{
+		Syscall: "openat",
+		Error:   "a\nb\x1b]8;;http://evil\x07x\x1b[8m",
+	}, false)
+	if strings.ContainsAny(row, "\n\r\t\x1b\x07") {
+		t.Fatalf("renderProbeRow left control chars: %q", row)
 	}
-	if out != "a b c d" {
-		t.Fatalf("sanitizeOneLine = %q, want 'a b c d'", out)
+	if !strings.Contains(row, "a b?]8;;http:") {
+		t.Fatalf("renderProbeRow = %q, want newline as space and ESC as '?'", row)
+	}
+}
+
+// TestRenderViewSanitizesLastErr verifies the "Error:" line of the probe list
+// is sanitised as well.
+func TestRenderViewSanitizesLastErr(t *testing.T) {
+	m := NewModel(nil)
+	m.lastErr = "boom\x1b[8mhidden\x9b"
+	for _, line := range m.buildProbeLines(m.layout(), m.filtered()) {
+		if strings.ContainsAny(line, "\x1b") || strings.Contains(line, "\x9b") {
+			t.Fatalf("line %q contains escape bytes", line)
+		}
 	}
 }
 
@@ -264,12 +290,17 @@ func TestTruncateText(t *testing.T) {
 	if got := truncateText("abcde", 0); got != "" {
 		t.Fatalf("truncateText 0 = %q, want empty", got)
 	}
+	// Wide runes are measured in cells: 8 cells leave 5 for text, and the
+	// third 2-cell rune would straddle the cut, so only 2 runes are kept.
+	if got := truncateText("権限がありません", 8); got != "権限..." {
+		t.Fatalf("truncateText cjk = %q, want 権限...", got)
+	}
 }
 
 // TestToggleCmdNilManager verifies that toggleCmd with a nil manager returns a
 // ProbeToggledMsg carrying an error.
 func TestToggleCmdNilManager(t *testing.T) {
-	cmd := toggleCmd(nil, "read")
+	cmd := toggleCmd(nil, "read", 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {
@@ -280,10 +311,10 @@ func TestToggleCmdNilManager(t *testing.T) {
 	}
 }
 
-// TestBulkToggleCmdNilManager verifies that bulkToggleCmd with a nil manager
+// TestBulkToggleCmdNilManager verifies that SetAllCmd with a nil manager
 // returns a ProbeToggledMsg carrying an error.
 func TestBulkToggleCmdNilManager(t *testing.T) {
-	cmd := bulkToggleCmd(nil, nil, false)
+	cmd := SetAllCmd(context.Background(), nil, true, 0)
 	msg := cmd()
 	toggled, ok := msg.(ProbeToggledMsg)
 	if !ok {
@@ -328,10 +359,12 @@ func TestFKeySetsSearchMode(t *testing.T) {
 }
 
 // TestViewWithProbeErrors verifies that View shows probe error annotations.
+// A probe with an error is always an inactive one: a failed attach leaves it
+// detached, and so does a detach whose destroy reported an error.
 func TestViewWithProbeErrors(t *testing.T) {
 	fm := &fakeManager{
 		states: []probemanager.ProbeState{
-			{Syscall: "read", Active: true, Error: "attach failed"},
+			{Syscall: "read", Active: false, Error: "attach failed"},
 		},
 	}
 	m := NewModel(fm).Open()

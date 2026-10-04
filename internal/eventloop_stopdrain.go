@@ -1,0 +1,284 @@
+package internal
+
+import (
+	"fmt"
+	"time"
+
+	"ior/internal/event"
+)
+
+// defaultStopDrainBudget bounds how long the event loop keeps decoding the
+// records that were still buffered in rawCh when the trace was stopped. The
+// backlog is at most appconfig.DefaultChannelBufferSize records, which decode
+// in milliseconds; the budget only matters when the consumer behind the print
+// callback is slow (a stalled stdout pipe, a saturated TUI), so that a stop
+// can never hang on it. Records left when it runs out are counted, not
+// silently lost (numDiscardedAtStop).
+const defaultStopDrainBudget = time.Second
+
+// The stop first waits for the ring-buffer poller to come to rest (see
+// backlogAtStop). stopSettleBudget bounds that wait: the looks at the ring's
+// two positions and the pauses between them. It does not bound the one walk
+// over the ring that follows when records were left there, which costs time
+// in proportion to them (about 30 ms per million records left; see
+// kernelRingUnread.Unread). Neither is taken from the drain budget, which
+// starts when the snapshot is there. The poller needs microseconds per
+// record, so it either empties the ring or fills rawCh (4096 records) within
+// about a millisecond; the budget only matters on a starved host, or for a
+// poller that is gone. stopSettleStep is the pause between two looks: a
+// poller moves its consumer position within nanoseconds of handing a record
+// on, so one step after the send that filled rawCh the position is behind
+// that record.
+const (
+	stopSettleBudget = 50 * time.Millisecond
+	stopSettleStep   = time.Millisecond
+)
+
+// drainBacklogAtStop decodes the records that were already buffered in rawCh
+// when ctx was cancelled, then records what it could not get to and what the
+// kernel ring buffer still held.
+//
+// Why: the BPF ring buffer's poller (libbpfgo) fills rawCh ahead of the
+// decoder, and RingBuffer.Stop discards whatever is left in it. Returning at
+// ctx.Done() alone therefore threw away up to a full channel of records that
+// the kernel had already delivered - and they were in neither "tracepoints"
+// (decoded) nor "ring buffer drops" (kernel-side loss), so "drops: 0"
+// overstated completeness and the tail of a -plain / -parquet / -flamegraph
+// trace went missing whenever the consumer lagged (task tq2).
+//
+// Only the backlog present at the stop is drained (the snapshot backlogAtStop
+// takes), not whatever the still-attached probes add meanwhile: the trace
+// window ends at the stop, and a loop that chased a saturated producer would
+// never finish. The drain also ends early when the time budget runs out or
+// the -plain output already failed (its rows have nowhere to go); the
+// undecoded remainder is added to numDiscardedAtStop and reported by stats().
+//
+// The kernel ring is counted in the same snapshot, before the drain, not
+// after it (task f23): every record the drain takes makes room in rawCh, the
+// poller moves a record from the ring into it, and RingBuffer.Stop throws
+// that one away later. Counted after the drain, a lagging run was short of
+// exactly one channel's worth of records in every end-of-run figure.
+//
+// The drain's time budget starts when the snapshot is taken, not before:
+// waiting for the poller and counting a large ring (tens of milliseconds at
+// 256 MiB) must not be paid for with records the drain could have decoded.
+//
+// It runs on the event-loop goroutine, so the drain emits in stream order on
+// the same goroutine as the running loop and, like it, leaves no pair pending
+// when run returns.
+func (e *eventLoop) drainBacklogAtStop(rawCh <-chan []byte, pairs chan *event.Pair, flush *flushTimer) {
+	backlog, ringLeft := e.backlogAtStop(rawCh)
+	budget := e.stopDrainBudget
+	if budget <= 0 {
+		budget = defaultStopDrainBudget
+	}
+	taken := e.decodeBacklog(rawCh, backlog, time.Now().Add(budget), pairs, flush)
+	left := backlog - taken
+	if left > 0 {
+		e.numDiscardedAtStop += uint(left)
+		e.notifyWarningOrLog(discardedAtStopWarning(left, e.outputErr != nil))
+	}
+	e.countKernelRingLeftAtStop(ringLeft)
+	// Rows of the trace window are missing from a TUI recording that is
+	// still being fed by this session, so its totals are a lower bound, as
+	// the raw modes' are (samplingResult). This reaches the recording only
+	// when the trace ended by itself (the target's exit, -duration) with the
+	// session still current. A stop the user asked for retires the session
+	// first, which drops this mark at the session gate; that path has
+	// already marked the recording itself, because the loop was still
+	// running (flushSessionForRecording in internal/tui).
+	if left > 0 || ringLeft.records > 0 {
+		e.markRecordingLowerBound()
+	}
+}
+
+// decodeBacklog consumes up to backlog records from rawCh, until the deadline
+// or a failed output, and reports how many of the backlog are accounted for:
+// the records it took, or the whole backlog when rawCh turned out closed or
+// empty early (someone else took the rest, so none of it is left to discard).
+func (e *eventLoop) decodeBacklog(rawCh <-chan []byte, backlog int, deadline time.Time, pairs chan *event.Pair, flush *flushTimer) int {
+	taken := 0
+	for taken < backlog && e.outputErr == nil && time.Now().Before(deadline) {
+		select {
+		case raw, ok := <-rawCh:
+			if !ok {
+				return backlog // closed and emptied early
+			}
+			taken++
+			e.consumeRaw(raw, pairs, flush)
+		default:
+			return backlog // emptied by someone else
+		}
+	}
+	return taken
+}
+
+// backlogAtStop takes the stop's snapshot: how many records rawCh holds for
+// the drain, and what the kernel ring buffer holds behind them. The two must
+// be read while the poller rests, or a record on its way from the ring into
+// rawCh is counted in both or in neither. The poller (libbpfgo's
+// ringbufferCallback under libbpf's ring_buffer__poll) handles one record at
+// a time: it sends the copy to rawCh, and only when the send returned does
+// libbpf advance the ring's consumer position. Nothing receives from rawCh
+// while this runs, so the poller comes to rest in one of two ways
+// (pollerRestsOnEmptyRing looks for them, reading only the ring's two
+// positions, which costs microseconds whatever the ring holds):
+//
+//   - the ring is empty: the consumer position has reached the producer
+//     position. Positions reads the consumer position first, so "empty" means
+//     every record produced until then was consumed, and its send into rawCh
+//     came before that: len(rawCh), read afterwards, holds them all. Nothing
+//     is left in the ring, and it is not walked. Records produced later are
+//     behind the stop. A record that is still being written (busy) keeps the
+//     ring non-empty: the poller cannot get past it, but records other CPUs
+//     committed behind it are delivered as soon as it is committed, so the
+//     stop waits for that instead of taking the ring for empty (it did so
+//     before, and those records were in no figure).
+//   - rawCh is full and the poller is blocked sending the record at the
+//     consumer position, which is therefore in the ring's count and not in
+//     rawCh. A poller that is not blocked yet, having just sent the record
+//     that filled rawCh, advances the consumer position next, and until then
+//     that record is in rawCh and in the ring's count. So the ring is counted
+//     only when rawCh was already full one stopSettleStep earlier: the send
+//     that filled it is then at least a step old. That is not a proof (a
+//     poller thread descheduled for the whole step between the send and the
+//     advance would count one record twice), only as good as waiting gets:
+//     libbpfgo offers no way to stop its poller without also discarding
+//     rawCh.
+//
+// A ring that is not empty is then walked, once, for its records
+// (countRingAtStop). When the poller did not come to rest within
+// stopSettleBudget - it is starved, or gone - the ring is counted as it is
+// then, and a record the poller moves between that count and len(rawCh) is
+// in both.
+//
+// Without a reader (tests, a failed attach) or when the ring cannot be read,
+// the snapshot is len(rawCh) alone, as before task us2.
+func (e *eventLoop) backlogAtStop(rawCh <-chan []byte) (int, ringbufUnread) {
+	if e.ringUnread == nil {
+		return len(rawCh), ringbufUnread{}
+	}
+	settleBy := time.Now().Add(stopSettleBudget)
+	var unread ringbufUnread
+	empty, err := e.pollerRestsOnEmptyRing(rawCh, settleBy)
+	if err == nil && !empty {
+		unread, err = e.countRingAtStop(settleBy)
+	}
+	if err != nil {
+		e.notifyWarningOrLog(fmt.Sprintf("could not read the kernel ring buffer backlog at stop: %v", err))
+		return len(rawCh), ringbufUnread{}
+	}
+	return len(rawCh), unread
+}
+
+// pollerRestsOnEmptyRing waits until the poller rests (see backlogAtStop) or
+// settleBy has passed, and reports whether it rests on an empty ring, with
+// nothing left to count. A stop that finds the ring empty takes one look and
+// does not sleep.
+func (e *eventLoop) pollerRestsOnEmptyRing(rawCh <-chan []byte, settleBy time.Time) (bool, error) {
+	wasFull := false
+	for {
+		positions, err := e.ringUnread.Positions()
+		if err != nil {
+			return false, err
+		}
+		if positions.empty() {
+			return true, nil
+		}
+		full := len(rawCh) == cap(rawCh)
+		if (full && wasFull) || !time.Now().Before(settleBy) {
+			return false, nil
+		}
+		wasFull = full
+		time.Sleep(stopSettleStep)
+	}
+}
+
+// countRingAtStop walks the ring for the records left in it. One walk is the
+// rule. A walk that ended at a busy record (one a CPU is still writing) did
+// not see the records other CPUs committed behind it, which the poller will
+// deliver once the busy one is committed and RingBuffer.Stop will discard;
+// that takes nanoseconds, so the ring is walked again one step later while
+// settleBy has not passed. Past it the count is taken as it is: the records
+// behind a record that stays busy that long are in no figure. They were
+// committed in the instant of the stop, a handful at most (one per CPU that
+// reserved behind the busy record).
+func (e *eventLoop) countRingAtStop(settleBy time.Time) (ringbufUnread, error) {
+	for {
+		unread, err := e.ringUnread.Unread()
+		if err != nil || !unread.busy || !time.Now().Before(settleBy) {
+			return unread, err
+		}
+		time.Sleep(stopSettleStep)
+	}
+}
+
+// discardedAtStopWarning words the warning for records the stop drain could
+// not decode. It goes through notifyWarningOrLog because it reports lost data.
+func discardedAtStopWarning(left int, outputFailed bool) string {
+	reason := "the stop-time drain ran out of time"
+	if outputFailed {
+		reason = "the output had already failed"
+	}
+	return fmt.Sprintf("%d buffered ring-buffer records were discarded at stop: %s", left, reason)
+}
+
+// discardedAtStopStatLine renders the end-of-run "discarded at stop" line. It
+// is empty on a run that decoded its whole backlog, like outputLossStatLine.
+// These records reached userspace but were never decoded, so they appear in
+// neither "tracepoints" nor "ring buffer drops"; without this line a
+// "drops: 0" run would read as complete.
+func (e *eventLoop) discardedAtStopStatLine() string {
+	if e.numDiscardedAtStop == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\trecords discarded at stop: %d (delivered but not decoded; not counted in tracepoints or ring buffer drops)\n",
+		e.numDiscardedAtStop,
+	)
+}
+
+// countKernelRingLeftAtStop records what the stop left in the kernel ring
+// buffer (task us2), as backlogAtStop saw it. The libbpfgo poller feeds rawCh
+// ahead of the decoder and blocks when it is full, so a consumer that lagged
+// until the stop leaves records in the kernel's ring. Lag is the usual
+// reason, not the only one: nothing receives from rawCh while backlogAtStop
+// waits for the poller to rest, and the probes stay attached, so a trace
+// whose tasks produce faster than the poller hands on fills rawCh during
+// that wait although the loop had kept up, and the records produced during
+// the stop itself are then counted here. The count is true either way
+// (records produced before the snapshot and not decoded), so the warning
+// names the fact and no cause. The poller still moves some of them into
+// rawCh while the drain makes room there, and RingBuffer.Stop abandons those
+// like the rest: none of them is decoded (only the poller consumes the ring,
+// and the trace window ended), which is why the count is the one from before
+// the drain (task f23). They are counted so "drops: 0" does not read as a
+// complete trace.
+func (e *eventLoop) countKernelRingLeftAtStop(unread ringbufUnread) {
+	if unread.records == 0 {
+		return
+	}
+	e.numLeftInKernelRing += uint(unread.records)
+	e.notifyWarningOrLog(fmt.Sprintf(
+		"%d records were still in the kernel ring buffer when the trace stopped and were not decoded",
+		unread.records,
+	))
+}
+
+// leftInKernelRingStatLine renders the end-of-run "left in the kernel ring
+// buffer" line, empty when the stop found nothing there. These records were
+// not decoded: they were still in the kernel ring at the stop (the poller may
+// hand up to a channel's worth of them to rawCh afterwards, where
+// RingBuffer.Stop discards them), so they appear in none of "tracepoints",
+// "ring buffer drops" and "discarded at stop". The line says where they
+// were, not why (see countKernelRingLeftAtStop).
+func (e *eventLoop) leftInKernelRingStatLine() string {
+	if e.numLeftInKernelRing == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\trecords left in the kernel ring buffer at stop: %d (not decoded: behind the stop-time backlog when the trace stopped; "+
+			"not counted in tracepoints, ring buffer drops or discarded at stop)\n",
+		e.numLeftInKernelRing,
+	)
+}

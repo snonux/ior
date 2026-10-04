@@ -6,12 +6,32 @@ import (
 	"time"
 
 	"ior/internal/flags"
+	"ior/internal/sampling"
 	"ior/internal/streamrow"
+	"ior/internal/textsafe"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 )
 
 // Record is the persisted Parquet schema for one syscall stream row.
+//
+// The string columns (comm, file, old_file, ...) are annotated STRING/UTF8, and
+// strict readers (DuckDB, Arrow) reject a whole query that touches a column
+// holding an invalid UTF-8 byte. The traced values are not guaranteed valid:
+// the kernel cuts comm at 15 bytes regardless of rune boundaries, the BPF
+// side cuts a path at MAX_FILENAME_LENGTH-1 bytes just the same, and any
+// local user can create file names (or, via prctl(PR_SET_NAME), comm names)
+// with arbitrary bytes. RecordFromStream therefore repairs them with
+// textsafe.SanitizeComm/SanitizePath (internal/textsafe/utf8repair.go, shared
+// with the stream and snapshot CSV exports); a Record built by hand is written
+// as given.
+//
+// No-file and no-descriptor conventions (task pq2): File is empty when the
+// syscall has no file. The "N:file" placeholder of the terminal views is
+// display text and is never persisted, so a non-empty `file` selects exactly the
+// rows with a file and a real file literally named "N:file" keeps that name. FD is
+// -1 (streamrow.UnknownFD) when the syscall has no descriptor, not 0: 0 is a
+// real descriptor (stdin), so a zero would make "none" indistinguishable from it.
 type Record struct {
 	Seq               uint64 `parquet:"seq"`
 	TimeNS            uint64 `parquet:"time_ns"`
@@ -45,7 +65,33 @@ type Record struct {
 	EpollOp       string `parquet:"epoll_op"`
 	EpollTargetFD int32  `parquet:"epoll_target_fd"`
 	EpollEvents   uint32 `parquet:"epoll_events"`
+	// Restarts is the number of kernel restarts folded into the row (task 203;
+	// streamrow.Row.Restarts): each restart_syscall continuation of a call
+	// stopped with -516 and each re-execution after -512/-513/-514 counts one,
+	// saturating at 255. Such a row holds the call's final return, so this
+	// column is what tells it from an uninterrupted call. 0 for every other
+	// row; a row folded N times, interrupted once more and not provably
+	// continued after that (EINTR, a refused fold, the end of the trace) has
+	// both a count and a restart code in ret. It is the last column on
+	// purpose: columns are only appended, and a recording made before it
+	// simply has no such column (readers that select by name see it as
+	// missing, parquet-go fills in 0).
+	Restarts uint8 `parquet:"restarts"`
 }
+
+// Footer key/value keys that mark a recording as sampled (see
+// sampling.Summary). Both are absent from a recording that traced every syscall
+// in full, so `ior.sampling` being present is the marker.
+const (
+	// KeySampling holds the effective rates, "read=10,write=0" (0 is
+	// aggregate-only: no rows at all). Written when the file is created.
+	KeySampling = "ior.sampling"
+	// KeySamplingTotals holds the exact per-syscall population as a JSON array
+	// (rows written plus invocations only the kernel counted), or the word
+	// "unavailable". Written when the recording stops, since the counts are
+	// only known then (Recorder.SetSamplingTotals).
+	KeySamplingTotals = "ior.sampling.totals"
+)
 
 // FileMetadata captures constant metadata written once into the parquet file.
 type FileMetadata struct {
@@ -53,6 +99,10 @@ type FileMetadata struct {
 	StartedAtUnixNano uint64
 	Mode              string
 	IORVersion        string
+	// Sampling carries the run's effective sampling rates; only its entries'
+	// Syscall and Rate are written here (KeySampling). The zero value, a run
+	// that sampled nothing, writes no sampling key.
+	Sampling sampling.Summary
 }
 
 // NewFileMetadata constructs file-level metadata for a parquet trace file,
@@ -70,13 +120,19 @@ func NewFileMetadata(mode string) FileMetadata {
 }
 
 // RecordFromStream converts one shared stream row into the persisted format.
+// Free-form traced text (comm, file, old_file) is made valid UTF-8 first
+// (textsafe.SanitizeComm/SanitizePath) so the STRING columns stay readable by
+// strict Parquet readers. The rewrite happens here, on the single
+// row-to-Record path, so every recording (TUI, plain, headless) gets it; the
+// stream CSV export applies the same textsafe functions to the same fields, so
+// both files hold identical text for a row.
 func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 	return Record{
 		Seq:               row.Seq,
 		TimeNS:            row.TimeNs,
 		GapNS:             row.GapNs,
 		LatencyNS:         row.DurationNs,
-		Comm:              row.Comm,
+		Comm:              textsafe.SanitizeComm(row.Comm),
 		PID:               row.PID,
 		TID:               row.TID,
 		Syscall:           row.Syscall,
@@ -88,13 +144,16 @@ func RecordFromStream(row streamrow.Row, filterEpoch uint64) Record {
 		RequestedSleepNS:  row.RequestedSleepNs,
 		Nfds:              row.Nfds,
 		TimeoutNS:         row.TimeoutNs,
-		File:              row.FileName,
-		IsError:           row.IsError,
-		FilterEpoch:       filterEpoch,
-		OldFile:           row.OldName,
-		EpollOp:           row.EpollOp,
-		EpollTargetFD:     row.EpollTargetFD,
-		EpollEvents:       row.EpollEvents,
+		// FileValue, not FileName: a fileless row's FileName is the "N:file"
+		// display placeholder, which must not be persisted (task pq2).
+		File:          textsafe.SanitizePath(row.FileValue()),
+		IsError:       row.IsError,
+		FilterEpoch:   filterEpoch,
+		OldFile:       textsafe.SanitizePath(row.OldName),
+		EpollOp:       row.EpollOp,
+		EpollTargetFD: row.EpollTargetFD,
+		EpollEvents:   row.EpollEvents,
+		Restarts:      row.Restarts,
 	}
 }
 
@@ -112,6 +171,9 @@ func writerMetadataOptions(meta FileMetadata) []parquetgo.WriterOption {
 	}
 	if meta.IORVersion != "" {
 		options = append(options, parquetgo.KeyValueMetadata("ior.version", meta.IORVersion))
+	}
+	if rates := meta.Sampling.Rates(); rates != "" {
+		options = append(options, parquetgo.KeyValueMetadata(KeySampling, rates))
 	}
 	return options
 }

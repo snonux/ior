@@ -294,3 +294,29 @@ func TestModeRegistryRequiresExactlyOneDefault(t *testing.T) {
 		t.Fatalf("no default: error = %v, want registry bug error", err)
 	}
 }
+
+// TestModeRegistryRejectsFlamegraphNameWithPathSeparator pins the -name policy:
+// it is a base name, and a '/' fails at argument validation - before the root
+// gate and before any tracing - instead of after the whole trace when the
+// recording cannot be created. Other modes never use -name, so they ignore it.
+func TestModeRegistryRejectsFlamegraphNameWithPathSeparator(t *testing.T) {
+	cfg := flags.Config{FlamegraphOutput: true, OutputName: "/tmp/out/mytrace"}
+	// failingDeps fails the test if any runner is called; euid is left
+	// non-root on purpose to show validation precedes the privilege gate.
+	err := dispatchRunWithDeps(cfg, failingDeps(t))
+	if err == nil || !strings.Contains(err.Error(), "base name") {
+		t.Fatalf("error = %v, want the -name base-name rejection", err)
+	}
+	if err := validateRunConfig(cfg); err == nil {
+		t.Error("validateRunConfig accepted a -name with '/'")
+	}
+
+	cfg = flags.Config{FlamegraphOutput: true, OutputName: "mytrace"}
+	if err := validateRunConfig(cfg); err != nil {
+		t.Errorf("plain base name rejected: %v", err)
+	}
+	cfg = flags.Config{PlainMode: true, OutputName: "a/b"}
+	if err := validateRunConfig(cfg); err != nil {
+		t.Errorf("-name is unused without -flamegraph, want no error, got %v", err)
+	}
+}

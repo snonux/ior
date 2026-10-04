@@ -45,7 +45,7 @@ set). That is why unchecked `fmt.Fprintf(os.Stderr, …)` and
 `strings.Builder`/`bytes.Buffer` writes are reported nowhere in the tree, while
 the same `Fprintf` to a generic `io.Writer` is: `cmd/ior/main.go:59`
 writes an unannotated `fmt.Fprintf(os.Stderr, …)`, while
-`integrationtests/harness.go:296` has to write `_, _ = fmt.Fprintln(w, line)`
+`integrationtests/harness.go`'s `scanIorOutput` has to write `_, _ = fmt.Fprintln(w, line)`
 because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
 not an oversight, and unannotated stderr writes are common throughout the
 tree.
@@ -114,8 +114,8 @@ mage buildDockerEl8                    # Build ior inside a Rocky Linux 8 contai
 mage test                              # Run all tests
 mage testRace                          # Run all tests with the race detector enabled (-race)
 TEST_NAME=TestEventloop mage testWithName  # Run specific test
-mage integrationTest                   # Build + run integration tests in parallel (parallelism capped to NumCPU)
-mage integrationTestSerial             # Build + run integration tests one at a time
+mage integrationTest                   # Build + run the root link tests of ./internal, then integration tests in parallel (parallelism capped to NumCPU)
+mage integrationTestSerial             # Build + run the root link tests of ./internal, then integration tests one at a time
 mage vet                               # go vet with the libbpfgo cgo env (use instead of bare `go vet ./...`)
 mage lint                              # golangci-lint (errcheck + staticcheck SA) with the same cgo env
 mage generate     # Generate code (required after modifying tracepoint definitions)
@@ -127,6 +127,46 @@ mage world        # Clean + generate + fmtCheck + vet + lint + test + build (rec
 mage demo         # Regen docs/tutorial/ GIFs + screenshots (needs vhs+ttyd, sudo -v warmed)
 TAPE=07-stream-live mage demoOne       # Regen one demo tape only
 mage installDemoTools  # One-time: install vhs (go install) + ttyd (dnf) — Fedora/RHEL/Rocky only
+```
+
+**Fold tests that cannot fold**: the integration tests that require an
+interrupted call to come out folded run through `runFoldScenarioRows`
+(`integrationtests/helpers_test.go`). ior refuses a fold when the kernel lost
+or skipped a record of the run (task 723), so such a test retries once and
+then SKIPS with the counts (`GiveUpOnFolds`, `integrationtests/kernelloss.go`).
+`IOR_REQUIRE_FOLDS=1` (read by the test binary; `mage integrationTest` passes
+its environment through `sudo -E`) makes it FAIL instead - use it where the
+folds must be shown. Since the binary runs without `-test.v`, which prints no
+skip, a skipping fold test also prints one `ior-integration: fold test
+skipped: ...` line to stdout, and `mage integrationTest` ends with a count and
+list of them (`gatecmd.SkipSummary`, which is `FoldSkipSummary` plus the lists
+below; nothing when none skipped). One skip is a busy moment; most of them
+mean a host whose real-time tasks preempt BPF programs all the time, where the
+folds went untested.
+
+**Single-row presence tests that cannot be judged** (task a33):
+`AssertRowsPresent` / `AssertEventsPresent` (`integrationtests/expectations.go`)
+retry a remembered scenario run when the rows they ask for are missing and the
+run's kernel-side loss (ring drops or skipped probe runs) can explain the
+shortfall (`integrationtests/rowpresence.go`, up to three attempts). A wrong
+row (the call was recorded but does not match) or a shortfall larger than the
+reported loss still fails hard, as does a missing row with zero loss. When
+every run is unexplained the same way, the test SKIPS and prints
+`ior-integration: row test skipped: ...` (`GiveUpOnRows`);
+`IOR_REQUIRE_ROWS=1` makes it FAIL instead. `gatecmd.SkipSummary` lists those
+under `RowSkipSummary`, between the fold and unexercised sections.
+
+**Tests whose case was not exercised** use the same channel: a test that can
+judge a run but cannot make it take the path it is there for (the lagging stop
+of `TestStopAccountsForEveryRecord`, task f23) retries and then skips through
+`SkipUnexercised` (`integrationtests/unexercised.go`), which prints an
+`ior-integration: test skipped, case not exercised: ...` line; the summary
+lists those under their own count (`gatecmd.UnexercisedSkipSummary`). A pass
+there would claim a check that never ran.
+
+```bash
+IOR_REQUIRE_FOLDS=1 mage integrationTest
+IOR_REQUIRE_ROWS=1 mage integrationTest
 ```
 
 **Opt-in stress signals**: `IOR_STRESS_TEST=1` turns on the two timing/throughput
@@ -247,13 +287,66 @@ pooled buffers made the byte total depend on GC frequency. The test now measures
 each real refresh between its own `runtime.ReadMemStats` pair, with the event
 that advances the trie version outside the interval. No GC setting is changed.
 
-With gap-free child-span allocation, the completed fixture costs 26366
-allocations / 1479201 bytes per refresh in an idle non-race run. With
-`GOGC=1`, `GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, it held to 26376 / 1480425;
-a full `-race` run also stayed below the ceilings. The ceilings are 30000
-allocations and 1650000 bytes. Both dimensions still matter: removing the
-`childStates` preallocation in `livetrie.go` reaches 30009 / 1829280 outside
-`-race` and trips both.
+Since `LiveTrie` snapshots prune before they build (task 1o2), the completed
+fixture costs 3686 allocations / 439512 bytes per refresh in an idle non-race
+run, 3686 / 439601 with `GOGC=1`, `GOMEMLIMIT=16MiB` and `GOMAXPROCS=128`, and
+3686 / 446248 under `-race`. The ceilings are 4200 allocations and 500000
+bytes (about 12-14% headroom). Both dimensions still matter: the former
+full-walk snapshot, which cloned and sorted every trie node's children before
+pruning, cost 26366 / 1479201 and trips both.
+
+### LiveTrie snapshot cost and growth bound
+
+`SnapshotTree` holds the trie's read lock, and every event's `AddRecord`
+needs the write lock, so snapshot cost is ingest stall time. It is therefore
+proportional to the *visible* nodes, not the recorded history:
+`insertLiveTriePath` (the live trie's insert; the batch `insertTriePath` skips the
+`topChildren` upkeep) maintains each node's subtree totals and its
+`topChildren` (the 8 largest non-empty children) on every insert, and the
+`snapshotBuilder` decides pruning from those before recursing — a pruned
+subtree is never walked or allocated, and a wide fan-out's pruned tail is
+usually not even scanned. The fallback set is exactly `topChildren`.
+`TestLiveTrieSnapshotMatchesFullWalkReference` keeps the old full-walk
+algorithm as an oracle and must stay exactly equal (its cases assert whether
+the fallback fired, so they cannot silently stop exercising it).
+On a shared, noisy dev box `BenchmarkLiveTrieSnapshotTree` measured 10k/100k
+distinct paths at 0.4-1.1ms / 9-15ms per snapshot before and 0.09-0.12ms /
+0.05-0.07ms after (549KB/4.9MB -> 16KB allocated), and a 100k-wide depth-one
+fallback (`...WideFallback`) went from 10.7ms to about 1µs.
+`IOR_STRESS_TEST=1` `TestLiveTrieStressHighRateConcurrentSnapshot` ingest went
+from 584 to about 300000 events/s.
+
+The trie is capped at `liveTrieMaxNodes` (2^18 nodes, ~210-290 B each, so
+~55-75MB). Past it, `compactLocked` folds the lowest-ranked subtrees into a
+per-parent `[other;]` bucket leaf (the `;` is deliberate: no frame contains
+one, so a real comm or path component spelled `[other]` can never share the
+bucket's name and path, which is all the TUI sorts and zooms by), only as many
+as needed to get back to about half the cap. The rank is a node's *rate*, not
+its all-time total: its total over the root events since its birth
+(`trieNode.birthRootTotal`) plus one compaction window, maxed with its
+children's ranks so a child never outranks its parent (ties go to the deeper
+node, then walk order). Nodes the current snapshot shows (fallback children
+included) are spared unless that cannot suffice, so the view only gains
+buckets; buckets are identified by `trieNode.bucket`, not by name, and never
+take part in the fallback decision.
+Totals stay exact; only attribution of folded frames is lost. Pitfalls the
+tests pin: a single threshold fold per cycle (the first version) kept
+restarting late, steady frames from zero so they never became visible
+(`TestLiveTrieCompactionKeepsAFrameThatAppearsLate`), overshot the target by
+orders of magnitude and wiped zero-total tries into one root bucket; ranking
+by all-time totals let more than cap/2 old idle frames starve a steady late
+frame forever (`TestLiveTrieCompactionKeepsALateFrameOverOldIdleFrames`).
+
+Compaction runs inside the `AddRecord` that crossed the cap, under the write
+lock, and that is the event-loop goroutine (`internal/ior.go` print callback
+-> `rt.liveTrie.Ingest`): for tens of ms at the default cap (measured 40-70ms
+with `BenchmarkLiveTrieCompaction`; over 100ms on a heavily oversubscribed dev
+box), plus GC of the folded nodes, no
+events are consumed, so under a high rate of unique paths the BPF ring buffer
+can back up and drop events. It happens at most once per cap/4 new nodes. A
+lower cap shortens the pause proportionally; moving ingestion off the event
+loop (a buffered hand-off) would hide it entirely. Tests lower
+`LiveTrie.maxNodes` to exercise compaction.
 
 ## Demo Pipeline
 
@@ -345,7 +438,31 @@ committed set contains syscalls that only exist on recent mainline kernels
   (`TestInitDoesNotMutateModel` in `tui`, `pidpicker` and `flamegraph`,
   `TestInitDoesNotArmAutoReset` in `dashboard`; task fc).
 - **Dashboard tabs**: `/internal/tui/dashboard/` contains tab renderers (flame/overview/syscalls/files/processes/latency+gaps/stream) and tab framework model.
+- **Dashboard frame height budget** (task ls2; `layout.go`, `Model.View`): `View` never renders more lines than the terminal has rows, at any height from 1 up. `splitFrameRows` hands out the rows in priority order: the status block first (the help hint, or the expanded help bar with the filter/recording status on its last row; a too-short terminal keeps its tail, so the status line is always the last line), then the tab bar, then the body. `renderBody` clips the tab's output to its share (`clipLines`) as a last line of defence, and below the tab's minimum (`tabDescriptor.MinBodyRows`; the generic `minBodyRows` is 3, `altVizMinRows` for bubbles/treemap/icicle, and `overviewMinRows`/`latencyMinRows`/`flameMinRows` for the panel tabs, `streamTableMinRows` = 6, the stream panel alone, for the Stream tab) it shows a one-line "terminal too small" notice instead of a fragment cut mid-panel. Tables no longer keep a minimum row count: `tableRowBudget` is the body height minus the header and hint lines (it used to be `max(5, h-6)`, which overflowed below ~10 rows), and it is also the paging step's basis. A new tab or panel must honour its budget itself (it gets `height` rows and must not draw more) and declare the smallest height at which it is complete in `MinBodyRows`; that minimum must not depend on transient state (pause, a status message, an open modal), or the body flaps between the tab and the notice while the user acts, and a modal hidden behind the notice still takes the keys. The Stream tab therefore gets the standard content viewport (its real body rows) and fits everything beyond its panel itself: `eventstream.Model.View` appends the Row/Sel footer and then the status message only into rows the table leaves free (with a single free row a status message takes it in place of Row/Sel, since it is how "Export failed", "Open failed", "Invalid regex" or "No match" reach the user; `TestStatusMessageTakesTheOnlySpareRow`). Row/Sel follows the help bar while live (`footerShown`: help on or paused), the status message does not: with the help bar off and the stream live it used to be set but never drawn (e.g. a search error once space resumed the stream; task iz2), so `appendStreamFooter` draws it in every state, cut to the width, from a 7-row body up (at the 6-row minimum the panel fills the body and no message fits there, so `eventstream.Model.UndrawnStatusMessage` hands it to the dashboard, which shows it in the status line's badge slot that the Stream tab leaves free, `streamMessageBadges`: whole, then cut to 24 and 12 cells, dropped before the filter summary loses a cell; task 403); `TestStatusMessageMatrix` (heights 6..30, widths 20..200, help/pause/message on and off, five real messages incl. wide runes and escapes), `TestStreamStatusMessageReachesTheFrame` (the full frame contract at heights 1..30) and `TestStreamSearchErrorsStayShownWhenResumedWithHelpOff`. It draws the filter-stack line only while it fits besides the row a status message needs (`fittingFilterStack`: the message outranks the stack line, which the dashboard status line summarises, so a 7-row stream body on a 9-row terminal shows "Export failed" rather than the stack; `TestStatusMessageOutranksTheFilterStack`), and the search/export modals (`renderModal`, `eventstream/modalbox.go`) are capped at the view width (lines cut, not wrapped) and shed vertical padding, blank lines, label and title until they fit the height, keeping input, hint and a whole border down to 4-5 rows. Their key hint is fitted by whole " • " segments (`fitModalHint`, never "Esc cance"), and their text inputs are sized to the box (`SearchModal`/`ExportModal.Resize`, called from `SetViewport` and `View`; `fitModalInput`): bubbles' `textinput.SetWidth` only stores the width and its scroll window is recomputed only when the cursor leaves it, not after a width change nor after an insert, paste or delete inside it (with two-cell runes that window outgrew the box and the box cut the cursor off; with ASCII the cursor could sit over a blank mid-value), so the modals remember the window's start (`inputStart`) and after every `Update`, `Resize` and `View` `fitModalInput` keeps it while the cursor is drawn over its rune in it, moving it only as far as needed (`modalWindowStart`, which mirrors textinput's window arithmetic; a re-anchor around the cursor alone pinned the cursor to the left edge and hid text typed mid-value), then applies it through public cursor moves (end, window start, back to the cursor), keeping value and position (`TestStreamModalInputKeepsTheCursorInTheBox`; `TestStreamModalInputSurvivesMidValueEdits`: seeded random type/paste/backspace/delete/left/right/home/resize sequences on ASCII and wide-rune values at widths 8/9-80, checked after every step, a typed rune must stay drawn; `TestStreamModalInputScrollsMinimally`: Left/Right walks move the window by at most one/two runes, mid-value typing keeps the typed rune drawn). A bump of bubbles must keep `modalWindowStart` (`headWindowEnd`, `tailWindowStart`) in step with `textinput.handleOverflow`. The tests catch a drift on either side because they read the drawn window back (`scrollModal.windowStart`) and require it to start at the remembered `inputStart` after Open and every step, not only a correct-looking screen: a drifted `tailWindowStart` still drew right, since `CursorEnd` rebuilds textinput's own last screenful, while `inputStart` silently disagreed (`TestStreamModalInputRemembersTheDrawnWindow`: Open, Left, Right, Home, End and typing on both modals, ASCII and wide runes, every width 8/9-80; the random and scroll tests check it too). `renderBody` lays the tab out for `min(activeHeight, bodyRows)`, the body budget rather than the taller content viewport. `TestEveryTabFitsTheTerminalHeight` (`tabheight_test.go`) pins every tab in every visualization mode at heights 1..30, four widths (20 to 200 columns) and help on/off: `View().Content` must equal the tab bar (first line), the tab's own unclipped output or the notice, and the status tail (last line), so the clip has nothing to cut (it only protects the status line), and no line may be wider than the terminal; below 20 columns (`narrowBodyWidth`) the panels' own minimum widths (a bordered box is 5 cells, the overview panels 16-20) no longer fit, so `renderBody` also cuts each body line to the width (`cutBodyToWidth`, task qz2; `TestEveryTabFitsNarrowTerminals` sweeps every tab and mode over widths 1..19 and heights 1..30), measured by both `lipgloss.Width` and `ansi.StringWidth` (`assertFrameWidth`; the Flame placeholder panels such as "terminal too narrow" are cut to the width for this, the Syscalls/Files/Processes tables are fitted to it since task cz2, which removed their `knownWideTable` exemption). View's geometry never hands a tab more viewport than body budget, so `TestRenderBodyLaysTheTabOutForTheBudget` drives `renderBody` with smaller budgets to pin that cap. While the Flame body is the notice, `translateFlamegraphMsg(msg, bodyDrawn)` drops pointer events (`Model.activeBodyDrawn` false), so a click on the notice cannot select or zoom into an invisible frame. `TestStreamBodyKindSurvivesTransientState` pauses the stream, sets a status message and opens the search modal (alone and combined) at heights 1..20, widths 20-100 and help on/off, and requires the same body kind (table or notice) as the live stream plus the full frame contract; `TestStreamModalsFitTheirView` holds both modals to every view from 7x1 to 120x30. Not covered by this budget: the matrix does not open the FD-trace overlay (it fits from 6 rows by dropping its footer line, `TestFDTraceViewFitsItsHeight`), the line-count clip bounds height only (a line wider than the terminal soft-wraps past it, which is why every body must also fit the width), the export overlay composed in the top-level `tui.go` (`m.exporter`, not the stream modals) is drawn over this frame (bullet after next, task ns2). The Latency+Gaps panels fit the width as well (next bullet), and so do the Syscalls, Files and Processes tabs (**Dashboard table width**, the bullet after the export overlay).
+- **Histogram panel width** (task ps2; `histogram.go`): a histogram panel never lays out a row wider than its inner width: the panel renders through `PanelStyle.Width`, so lipgloss would not draw a wider line but soft-wrap the row inside the panel, the panel would outgrow its row budget, `fitBlocks` would cut it mid-row (no bottom border) and the shown counts would stop adding up to `total=`. `planHistogramLayout` picks, per width, the full layout ("label | bar count" rows plus the scale legend, `histogramChromeRows` = 4) while a bar column of `histogramMinBarWidth` cells fits, else the compact one ("label | count", no legend, `histogramCompactChromeRows` = 3); the title falls back from "Latency Histogram" to the short "Latency" (`histogramSpec.shortTitle`) but always keeps "(total=N)". Columns are measured over every bucket and every label folding could produce (`histogramColumnWidths`: "[0,1us)" folds to the wider "[0,+inf)"), so the layout does not change with the height and a folded tail row always fits. Below the compact layout's width (`histogramMinWidth`: with the real buckets 20 columns plus the digits of the total for Latency, 19 plus them for Gaps, e.g. 24 at total=2259 and 27 at 1,000,000) the panel is a "Latency: terminal too narrow (need >= N columns)" notice, worded like Flame's and cut to the width by `common.RenderMessagePanel` (shared with the Flame placeholders; also used for the waiting-for-stats and no-data panels). The sparkline panel is drawn only when its labelled line fits the panel (`renderHistogramSparkline`: from 31 columns for Latency, 27 for Gaps). Tests: `TestLatencyTabFitsNarrowTerminals` sweeps `View` at widths 1..28, heights 1..30 and help on/off (frame contract, panels whole, a histogram drawn exactly from its minimum width and body rows), `TestHistogramSectionsFitNarrowWidths` sweeps the three renderers at widths 1..40 with labels folding widens and with the waiting-for-stats and no-data placeholders (also swept through `View` by `TestLatencyTabPlaceholdersFitNarrowTerminals`), `TestHistogramCountColumnFitsBucketsAheadOfTotal` holds the count column to a torn snapshot (taken mid-update) whose rendered folded tail row carries more digits than `total=` ("[100us,+inf) | 120003" under total=9999): every panel of the three renderers at widths 1..60 must be whole (bucket rows summing to the buckets' sum, bottom border, at most height rows) and drawn exactly from a hand-computed 25 columns, so a count column sized from `total=` alone fails on the soft-wrapped, cut panel in the Latency-only and Gaps-only renderers alike, and every Latency+Gaps cell of the height matrix runs `assertHistogramsWhole` (each drawn panel has rows, they sum to `total=`, and its bottom border is drawn). Below 20 columns `assertFrameFits` only checks that the last line is the status block's last line (the "filter:" text is cut there).
+- **Export overlay over the dashboard** (task ns2; `internal/tui/exportoverlay.go`, `internal/tui/export/box.go`): the `e` export modal (`tuiexport.Model`) is drawn over the dashboard or PID picker, never above it. It used to be its full-screen `View` stacked on the whole base (`modal + "\n" + base`), about twice the terminal's height on every tab; `placeToViewport` does not help there, since `lipgloss.Place` only pads and returns taller or wider content unchanged. Now `overlayExportModal` composes `Model.Box` (the bare box) over the base on a `lipgloss.NewCanvas(width, height)`, so the frame is exactly the terminal's size by construction (base lines wider than the terminal are cut; wide runes and SGR runs split cleanly at the box's edges). `placeOverlayBox` puts the box where it covers neither the base's first line (tab bar) nor its last (status line): between them or in the blank rows below a short base (a table without data draws three rows), the larger region first; only when neither fits the compact box is it fitted to the whole frame (`fitOverlayBox`: height-2, then height-1 rows, so the status line outranks the tab bar as in `splitFrameRows`), ending above the last row. `Box` itself never outgrows its area: at most the view's width (from 7 columns), lines cut, the paused note and status message wrapped at whitespace only (`strings.Fields`: any Unicode white space, a tab or no-break space too, each run written as one plain space) and hard-wrapped inside a word longer than the line by `fitMessage`/`common.WrapAtSpaces` (`common/wrap.go`, moved out of `export` by task rz2 so the other modals share it; each line is then cut to the width, so a two-cell rune in a 7-column view's one-cell text area shows as a blank row instead of widening the box; lipgloss's own wrap let a long word widen a narrow box, and `ansi.Wordwrap`/`ansi.Wrap` also break after every '-', which split a fitting export path at "ior-" and left the note's " - " alone on a line; the dash now stays at the end of the line before when it fits, else opens the next, followed by "use"; alone only below five cells), and it sheds padding, blank lines, wrapping, title and then the paused note (`boxLayouts`) to fit the height, keeping the options, status and key hint (`fitHint`, whole " • " segments) in a whole border down to 5-6 rows. The other top-level modals (filter, record, probes) still replace the dashboard, but each now returns a frame exactly the terminal's width x height (task rz2): `lipgloss.Place` only pads, so their boxes used to come out 23-26 rows tall and wider than a small terminal and the terminal scrolled. They share `internal/tui/common` pieces: `ModalBoxWidth`/`RenderModalBox` (box at most the view width, bordered), `CutLine`, `FitSegments`/`FitHint` (whole " • " key-hint segments), `KeepRanked`/`PlaceModal` (a ladder of `ModalLayout`s from the roomy box down to the compact one, then a borderless `bare` fallback keeping the input, cursor and hint by rank), `WrapAtSpaces`/`FitWrapped`, and `FitTextInput`/`WindowStart`/`InputView` (the text input's scroll window, moved from `eventstream`'s modal logic so typed text stays drawn at any width; `tui.Model` calls the modals' `Resize(width)` on every window size and when they are rebuilt). They stay full-screen rather than overlays since the filter box takes 23 rows and the probes box 24 at 80x24. Pinned by `TestViewFitsEverySize` (tracefilter), `TestRecordingModalFitsEverySize`, `TestDashboardModalFramesFitTheTerminal`, `TestViewNeverExceedsTerminalHeight`/`Width` (probes) and `TestPlaceModalFitsEverySize`. Tests: `TestExportOverlayFitsTheTerminal` (every tab, help on/off, and the picker, heights 1..30, widths 1, 7, 30, 52 and 120 (`overlayWidths`): height and width bounds, modal text shown, tab bar and status line kept and not repeated), `TestPlaceOverlayBox`, `TestFitOverlayBoxReservesTwoRowsFirst`, `TestBoxFitsItsArea` (every modal state, wide-rune status messages included, 1x1 to 56x30 plus 80 and 120 columns), `TestBoxShedsInOrder`, `TestFitHintKeepsWholeSegments`, `TestBoxHintIsWholeSegments`, `TestWrapKeepsAHyphenatedPathWhole`, `TestWrapNeverLeavesTheNotesDashAlone`, `TestWrapShowsTheWholeMessage`, `TestWrapAtWhitespace`, `TestBoxShowsTheWholeStatus`, `TestViewIsClippedToItsHeight` (`Model.View`, the stand-alone rendering only tests call, cuts to its height), and the integration test `TestTUIIntegration_Export_SubmitWritesCSV`, which rejoins the wrapped status lines rather than matching a fragment of a temp path.
+- **Dashboard table width** (task cz2; `tablefit.go`, `table.go`): the Syscalls, Files (plain and dir-grouped) and Processes tables never draw a line wider than the terminal, at any width from 1 up. Their fixed columns used to make 80-89-cell rows (and hint lines) at every width; bubbletea v2.0.1 does not soft-wrap such a line (its renderer draws `View` through `uv.StyledString` with `Wrap` false, i.e. clips at the terminal edge), so the height budget held, but the rightmost columns, the path and the hint were cut off mid-cell, and a renderer that wraps would break the budget. Each table is a `tableSpec`: its logical columns at their natural widths (the selected column index, "Col x/N", the sort keys of `syscallSortKeyForColumn`/`fileSortKeyForColumn`/... and Enter's filter dimension keep referring to them, so fitting never changes what a column means), one flex column (Syscall, Comm, Path/Directory) with a minimum (8 cells for names, `filePathMinWidth` = 10 for paths) and a cut rule (`truncatePathMiddle` keeps both ends of a path, `truncateText` the start of a comm; the rows carry the whole sanitised value and only the shown cells are cut, at their fitted width), and a drop order of the optional columns. `fitTableColumns` keeps the natural layout whenever it fits (so wide terminals render byte-identically: a differential of the pre-cz2 renderers against the fitted ones over widths 60-200, three data shapes and whole frames differed only where the old output overflowed), else drops optional columns in order until the rest fits beside the flex column, skipping the selected one (the cell the user navigated to stays on screen), gives the flex column the remaining width, and drops the selected column only when the flex column could not keep its minimum beside it. Drop orders: Syscalls p99, p95, Family, Bytes, Errors, Rate/s, Avg (required: name, Count; compact set below 140 columns, the full set always fits); Files Max Latency, Write, Read, Avg Latency (required: Accesses, Path); dir-grouped Max Latency, Write, Read, Files, Avg Latency; Processes Rate/s, Total Bytes, Avg Latency, Syscalls (required: PID, Comm). Below `tableSpec.minWidth` (required columns plus the flex minimum: 15 for Syscalls, 19 for the others) the table is the one-line "Files: terminal too narrow (need >= 19 columns)" notice, cut to the width. The "[Row x/N Col y/M] [...]" hint keeps whole segments from the left (`fitHintSegments`; the position segment is cut only when alone it does not fit), and the placeholders ("waiting for stats", "no data", the PID-filter note, `renderWaitingForStats` via `common.RenderMessagePanel`, and the bubble/treemap/icicle empty states via `fitPlaceholderLines`) are cut to the width. Tests (`tablefit_test.go`): `TestTablesFitTheTerminalWidth` (every table view at widths 1-100 and a spread to 200, data shapes with long names and paths, wide runes and keycap clusters, `MaxUint64` figures, an empty and a nil snapshot, dir rows with a remainder row: no line wider than the width by `lipgloss.Width` and `ansi.StringWidth`, notice exactly below the minimum, header and rows on the fitted columns, the row window the height allows), `TestFitTableColumnsPolicy` (natural layout kept when it fits, all of the width used otherwise, required and selected columns, drop order, monotone in the width), `TestTableFitPolicyPerTable`, `TestNarrowTableKeepsSelectionAndHint`, `TestTableTabsFitNarrowTerminals` (every view of the three tabs through `View` at widths 1-19 and around each table's natural width) and `TestTableTabPlaceholdersFitNarrowTerminals` (waiting and no-data states through `View` at widths 1-40). A new table must come with a `tableSpec` and be added to `tableRenderers`.
+- **Chart rendering and bubble animation** (`internal/tui/dashboard/gridcell.go`, `bubbles.go`, `ticks.go`, `bubbleframe.go`; task yq2). The bubble, treemap and icicle views paint into a `[][]gridCell`; `renderGridRow` emits one styled run per stretch of same-style cells, with the per-palette-slot styles built once per frame and their escape sequences captured from a probe (`gridStyle`), instead of a `Style.Render` per cell (treemap 400x118 155ms -> 3.6ms). `TestRunRenderingMatchesLegacyOnRandomRows` compares it with the vendored pre-change renderer (`legacyRenderGridRow`); the one deliberate difference is an empty palette, where coloured cells now render uncoloured (selected ones bold-only) instead of panicking. **Animation is bounded, not frame-capped**: the 30fps bubble tick chain (`bubbleTickMsg`) re-arms only while `bubbleChart.Tick` reports motion. The ambient drift wobble runs for `bubbleDriftSeconds` (6s, fading over the last 2s) after the last *real* change - a bubble added or removed, or a bubble's anchor or radius moved by more than `bubbleRetargetEpsilon` (0.02 cells; smaller moves keep the old anchor and accumulate) - then the springs snap onto their targets and the chain ends, so a quiet workload costs nothing and an idle `View` is served from the exact-input frame cache (`bubbleFrameCache`). Every real change resets the wobble to the full 6s, so a workload whose counters reshuffle the bubbles on every 1s stats tick keeps the chain running at 30fps: only quiet workloads settle. What shrank there is the cost per frame (a tick plus re-render is about 0.4ms at 120x40 and 1.8ms at 300x80 instead of 10ms and 46ms), not the frame rate; capping the rate while data keeps changing was evaluated and left out (see `TestBubbleChainRunsWhileDataKeepsChangingThenSettles`). The chain is restarted (`tickScheduler.startBubble`, which supersedes the previous generation) by exactly these triggers, each pinned by a Model-level test in `bubblechain_test.go`: a stats tick that changes the active tab's bubbles (`handleStatsTick`), a resize (`handleWindowSize`), entering bubbles mode with `v` (`cycleVisualizationMode`), the `b` metric key (`toggleBubbleMetric`), switching into a bubbles-mode tab with the tab keys (`postKeyTransitionCmd` -> `tabEntryTickCmd`; `TestTabSwitchByKeyRestartsSettledBubbleChain`), and `Init`'s `tickChainsStartMsg` after a focus regain (`tabEntryTickCmd`). A blurred dashboard drops the ticks. The Files directory-grouping toggle needs no trigger: bubbles mode exists only while grouped and leaving grouped mode resets the tab to the table. Any new code path that changes what the bubble chart shows must call `startBubble` when the chart reports animation, or the picture freezes after the chain has ended.
+- **Stats snapshots are built off the UI goroutine** (`internal/tui/dashboard/statstick.go`; task 8r2). `engine.Snapshot` costs up to ~22ms with stale latency reservoirs (2.9ms at 20 active syscalls, 8.9ms at 60, 22.5ms at 150; startup and after every auto-reset), and `Update` runs on the Bubble Tea loop, so the periodic refresh (`handleRefreshTick`), `SnapshotCmd` and the `r`/auto-reset baseline reset (`resetBaselineCmd`) only capture the engine and `statsGen` in `Update` and let a `tea.Cmd` call `Snapshot`; the result returns as a `StatsTickMsg` whose generation check (`handleStatsTick`) already drops a snapshot built before a reset. The baseline reset itself (engine clear plus generation bump) still happens synchronously in `Update`. `refreshStatsCmd` returns nil while the previous refresh build is running (an atomic flag the command clears when its build ends, not when the message is delivered, so an undelivered result cannot wedge refreshing): a skipped tick costs one refresh interval and builds never stack. `ResetStats` (the parent's probe toggles and filter swaps) deliberately stays synchronous so the fresh baseline is on screen when it returns; the engine was just cleared, so that build is cheap. Pinned by `TestRefreshTickBuildsTheSnapshotOffTheUpdatePath` (Update returns while `Snapshot` is held blocked), `TestRefreshStatsCmdSkipsWhileTheBuildIsRunning`, `TestRefreshBuiltBeforeAResetIsDropped` and `TestSnapshotCmdAndBaselineResetBuildWhenRun`. Any new `Update` path that needs fresh stats should use `statsTickCmd`, not `statsTick()` (the synchronous form exists for `ResetStats` and tests).
 - **Export modal**: `/internal/tui/export/model.go` implements the centered modal used for CSV export flow in TUI mode.
+- **libbpf log policy**: `internal/libbpflog.go` owns libbpf's process-global print callback in every mode. It is installed exactly once, in `init()` (`bpf.SetLoggerCbs` writes a plain libbpfgo variable that libbpf's threads read unsynchronised, so it must never be called again); `startTUITrace` only switches the mode via `setLibbpfLogging(true)`, which touches no routing. WARN lines are kept, INFO/DEBUG are dropped: libbpfgo's default logger printed ~23.5k DEBUG lines (2.6 MB) to stderr on every headless start. Headless keeps WARN on stderr, in full. TUI never writes stderr: during BPF load/attach `setupTraceInfraBPF` routes WARN lines into that session's setup-warning collector through a per-session `libbpfRoute`; `end` unhooks only the route it installed (TUI restarts overlap the cancelled session's setup, so a late `end` must not clear the newer session's routing, and `setupWarnings` is mutex-guarded because libbpf lines can arrive from the other session's goroutine). libbpf's callback carries no session identity, so during an overlap lines go to the newest route; a collector never receives a line after its own `end`. Routed rows are shaped for the dashboard: the per-tracepoint `failed to determine tracepoint ... perf event ID` lines are dropped (`bpfSetupLog` already reports skipped tracepoints through the probe manager), each row is shaped by `shortenWarning` (`internal/libbpflog_shorten.go`) to at most 512 bytes in all (the marker and `...` ellipses count; a single-line result within the bound and not ending in `\r` is returned unchanged, and every result is one, so shortening is idempotent at a given bound - a cut below 3 bytes has no ellipsis and could end on a mid-line `\r`, so the result's trailing `\r` is trimmed; `TestShortenWarningProperties` checks bound, single line, UTF-8 validity and idempotence over seeded random inputs at limits 0..40 and 512): a failed program load is ONE WARN holding the whole verifier log behind a `prog 'x': -- BEGIN PROG LOAD LOG --` banner, so its row becomes the banner's `libbpf: prog 'x':` prefix plus `verifier:` and the log's last three non-empty lines (offending instruction, the reason such as `R1 invalid mem access 'scalar'`, `processed N insns`) joined by ` | ` on ONE row, with a `... (N more lines)` marker counting the omitted non-blank log lines (`(1 more line)` for one; `splitMoreLinesMarker` recognises the singular with a count of 1 and the plural with any other run of digits - every form `moreLinesMarker` renders, plus counts it never renders such as `0` or `007`, which only a warning's own text could hold and which are kept whole either way). The prefix is capped at 96 bytes (`maxVerifierPrefixBytes`, ellipsis included) so a pathological program name cannot eat the row, and the kept lines share the rest by max-min fairness (`fairShares`: a short line keeps its length and lends the remainder to the long ones, so the reason line is not cut while the row has room). The log can be megabytes and is handled under the libbpf logger's mutex, so the kept lines are found by scanning backwards from the END marker and the omitted ones are only counted. A missing END marker, CRLF and blank lines are tolerated, a log without any text becomes `verifier: (empty log)`, and a message without the banner (or with nothing after the banner's line) falls back to the generic rule; any other multi-line warning is its first line plus the marker; at most 16 rows are routed per setup plus one summary row. `IOR_LIBBPF_DEBUG=1` restores the full output for headless modes (ignored in TUI mode; empty, `0`, `false`, `no` and `off`, case-insensitive, mean off); it is listed in the `-h` epilogue (`flags.setUsage`) and the README troubleshooting section. When setup fails the event loop never starts, so the collector is not replayed as rows: `setupTraceInfraWithEventLoop` (the wrapper around `runTraceSetup`, which owns the collector) returns the failure through `setupWarnings.explainFailure`, which appends the undelivered warnings to the error as a `Warnings logged during setup:` block (each row through the same `shortenWarning`, so verifier rows keep their reason lines and an already-routed row keeps its `(N more lines)` marker while only its content is cut, at most 512 bytes with marker and ellipses included (`maxFailureWarningBytes`, equal to the route bound, so a routed row passes byte for byte unchanged), escaped with `textsafe.Escape`, at most 8 listed plus a `... and N more warning(s)` row; `errors.Is`/`As` still reach the cause, and an error with no warnings is returned unchanged). The TUI's error screen shows that text, wrapped to the terminal width (`wrapErrorText`: `ansi.Wordwrap` then `ansi.Hardwrap` on the sanitised plain text before `ErrorStyle` styles each line, then every line re-measured with `ansi.StringWidth` and re-broken by `splitToWidth` through `common.TruncateRight`, because ansi's wrap and `Truncate` count a keycap such as `1\ufe0f\u20e3` as 1 cell where `StringWidth`, lipgloss and the terminal count 2; lipgloss's `Style.Width` wrap split a decomposed grapheme, putting a combining accent at the start of the next line), because the rows are far longer than a narrow terminal, and cut to the rows above the key hint with a `... (N more lines)` row (`errorScreenView`/`fitErrorBody`, `internal/tui/errorscreen.go`): 8 rows of 512 bytes wrap into 50+ lines at 80 columns, and `lipgloss.Place` pads short content but never shortens tall content, so the hint saying how to leave used to fall off the bottom. Its width is fitted too: the key hint (13 columns, 21 for the recoverable `esc  back  •  q  quit`) is cut to the terminal width with `common.TruncateRight` (`errorScreenHintText`), and `wrapErrorText` hard-wraps what word wrapping leaves too wide (a `  - ` indent or a word longer than the terminal, broken between graphemes) and drops only a grapheme wider than the whole terminal (a 2-cell rune or keycap at width 1; a grapheme that fits is never dropped with it, even where `TruncateRight` keeps nothing because ansi's `Truncate` counts an orphan combining mark plus a keycap as 1 cell at width 1 - the zero-width mark leads the next piece), so the hint's key line stays on screen and no line is wider than the terminal at any size from 1x1 up (`TestErrorScreenFitsNarrowTerminals`, widths 1..24; `TestErrorScreenFitsWithKeycapsAtEverySize`, widths 1..40 x heights 1..10, measured with `StringWidth` and `lipgloss.Width`). No grapheme is split except a space+combining-mark cluster at a word break (any space before a mark: `SanitizeLines` keeps a literal space and turns a tab or CR into one): the break drops the space and the zero-width mark leads the next line, still within the width. `cutBytes`/`shortenWarning` return "" for a limit of zero or less instead of indexing an empty string; a successful setup is untouched and still replays the warnings as rows.
+- **Records left in the kernel ring at stop** (task us2; `internal/ringbuf_unread.go`, `eventLoop.countKernelRingLeftAtStop`): the libbpfgo poller feeds `rawCh` ahead of the decoder and blocks when it is full, so a consumer that lags until the stop leaves committed records in the kernel's BPF ring buffer, which `RingBuffer.Stop` abandons: they were in neither `tracepoints`, `ring buffer drops` (the kernel did not drop them) nor `records discarded at stop` (only what had reached `rawCh`, task tq2), so `drops: 0` overstated completeness. At the stop, before the stop-time drain (task f23, below), the loop reads the ring's own bookkeeping (`kernelRingUnread`: consumer page and producer page + doubled data area mapped read-only from the map fd; `countUnreadRingRecords` walks the 8-byte-aligned records between the two positions like libbpf's consumer, counts committed non-discard records, stops at a busy one and says so in `ringbufUnread.busy`) and reports `records left in the kernel ring buffer at stop: N (not decoded: behind the stop-time backlog when the trace stopped; ...)` in the statistics plus a warning (`N records were still in the kernel ring buffer when the trace stopped and were not decoded`). Neither names a cause: a lagging consumer is the usual one, but nothing receives from `rawCh` while the stop waits for the poller to rest and the probes stay attached, so a busy trace that had kept up, stopped by `-duration` or a signal while its tasks produce faster than the poller hands records on, fills `rawCh` during that wait and leaves the records produced during the stop itself in the ring. The count is true either way (produced before the snapshot, not decoded); the warning said "the consumer lagged" until the second f23 review. Tried live (a Python `getppid` loop, `-duration 2`, `-mapSize` 256 MiB): up to about 290,000 records/s the stop found the ring empty at its first look and printed no line; faster loops were ones ior really lagged behind (73,000 to 2.9M records left); the few-records case was not hit. "Not decoded", not "never delivered": the poller hands up to one channel's worth of them to `rawCh` after the snapshot, where `RingBuffer.Stop` discards them. **The ring is counted in the same snapshot as `rawCh`, with the poller at rest** (task f23; `backlogAtStop` in `internal/eventloop_stopdrain.go`): counted after the drain, a lagging run lost exactly one channel's worth (4096) from every figure, because each record the drain takes makes room in `rawCh`, the still-running poller moves one from the ring into it, and `RingBuffer.Stop` throws it away. libbpfgo offers no way to stop its poller without discarding `rawCh` (`Stop` starts its own drain goroutine and the poller then empties the whole ring into it), so the loop waits for the poller to rest instead (`pollerRestsOnEmptyRing`; nothing receives from `rawCh` meanwhile). The wait looks only at the ring's two positions (`kernelRingUnread.Positions`: two one-page mappings, tens of microseconds whatever the ring holds) and is bounded by `stopSettleBudget` = 50 ms: either the ring is empty (the consumer position is read before the producer position, so everything produced until then is in `rawCh`, whose `len` is read afterwards: nothing left, all of it drained, the ring never walked - a run that kept up reports no loss and pays one look, no sleep) or `rawCh` is full on two looks one `stopSettleStep` (1 ms) apart (the poller is blocked sending the record at the consumer position, which is in the ring's count and not in `rawCh`; the wait covers the poller's gap between the send that filled `rawCh` and libbpf's advance of the consumer position - a poller thread descheduled in that gap for the whole step would count one record twice; not provable from outside, only made unlikely). A ring that is not empty is then walked ONCE for its records (`countRingAtStop` -> `Unread`, which maps the whole doubled data area and reads every unread record's header: about 30 ms per million records left, mostly page faults of the fresh mapping; measured for the whole snapshot of a lagging stop 4-6 ms at 0.1-0.25M records left in a 16 MiB ring and 31-40 ms at 1.2M in a 256 MiB one, where two walks used to take 9-24 ms and 57-111 ms). So the snapshot is NOT bounded by 50 ms on a large full ring, and for that reason **the drain's 1 s budget starts when the snapshot is there**, not before: the wait and the walk are never paid for with records the drain could have decoded (`TestStopDrainBudgetStartsAfterTheSnapshot`). A poller that never rests (ring not empty, `rawCh` never full: starved, or gone) is given the 50 ms and then the ring is counted as it is (`TestStopGivesUpOnAPollerThatNeverRests`). **A busy record** (reserved, not committed) keeps the ring non-empty for the wait - it used to read as an empty ring, and the records other CPUs had committed behind it were in no figure - and a walk that ended at one is repeated a step later while the 50 ms last (`TestStopWalksTheRingAgainBehindABusyRecord`); past them the count is taken as it is, short of the handful of records committed behind a record that stayed busy that long. The identity `records produced before the stop = tracepoints + ring buffer drops + records discarded at stop + records left in the kernel ring buffer` then holds exactly; verified live on 9 of 9 runs that lagged at the stop (544,000 `getppid` calls under `-pid`, stop on target exit: 1,088,001 records each; 5 at the default `-mapSize` with drops, 4 at 256 MiB without) and on 93 of 93 judged runs of the integration test in its present form (80 of them lagging, the host under load from other test runs; each sum 3,000,001). Records produced after the snapshot are behind the stop and in no figure. A record left in the ring also marks the sampling totals as a lower bound (`samplingResult`), like a drop or a discard, and so does either at the stop for a TUI recording the stopping session still feeds (`markRecordingLowerBound` at the end of `drainBacklogAtStop`). That mark reaches the recording only when the trace ended by itself with the session still current; a stop the user asked for retires the session first (`traceLifecycle.stop`), which drops the mark at the session gate, and that path has already marked the recording in `flushSessionForRecording` because the loop was still running. Pinned by `internal/eventloop_stopaccount_test.go` (a fake ring whose poller keeps refilling `rawCh`: full channel refilled during the drain, poller caught between send and advance, ring emptied by the poller, failed output, a whole `run` stopped mid-stream), `internal/eventloop_stopsettle_test.go` (the settle cap, the drain budget, the busy record, the recording mark) and end to end by `TestStopAccountsForEveryRecord` (`integrationtests/stopaccounting_test.go`, ioworkload scenario `getppid-burst`: tracepoints + drops + discarded + left must be exactly 3,000,001, two records for each of 1.5M calls and one exit record; drops are part of the sum, a run with kernel-skipped probe runs is not judged). **The traced process is a raw-fork child of the workload, not the workload** (`startGetppidBurstChild`, a prestart hook: the child is forked and parked on a pipe read before ior starts, its pid published through `$IOR_WORKLOAD_CHILD_PID_FILE`, and the test passes `-pid <child>`, which overrides the harness's own; the scenario writes the start byte and reaps it). A fork child is one thread for its whole life, so nothing but its `getppid` records and its exit record passes the filter. The first version traced the Go workload itself and added one exit record per thread, counted by polling `/proc/<pid>/task` every 2 ms; it failed falsely about once in 13 runs, because the Go runtime starts threads whenever it likes, also in the last millisecond of the burst: such a thread was missed by the poll, and a thread created under the trace also emits a `task_newtask` record the sum had no term for (5, 6 and 7 threads were seen, and a sum two above the expected one). A Go process cannot be the target of an exact record count. With the fix reverted to "ring counted after the drain" the test fails every lagging run (45 of 45, short by 4096, once by 3788). It bites only when the stop finds ior lagging, i.e. when the liveness watcher (500 ms, `targetWatchInterval`) sees the exit before the loop reaches the exit record, and that is the host's timing: with the harness's fixed release delay the phase against the watcher is the same in every run, and on the idle development host every run stopped at the exit record with nothing left (18 of 18), the test passing without testing anything. So the test judges every run, logs `lagging stop exercised: yes/no` for each, and runs again with the release delayed by another 100 ms (`TestHarness.ReleaseDelay`, up to 5 attempts) until one stopped lagging (at the default `-mapSize` anything from the first to the fourth attempt here, depending on the host's load). If none did it SKIPS, visibly: `SkipUnexercised` prints an `ior-integration: test skipped, case not exercised: ...` line that `mage integrationTest` lists at the end (`gatecmd.SkipSummary`, see "Fold tests that cannot fold"). The reader is wired next to the drop counter (`attachRingbufUnreadReader`, non-fatal) and maps and unmaps on every call - a few position looks and at most a few walks per stop - so it holds no mapping when the module is closed. Verified live with `-plain` into a pipe nobody reads for 9 s under a `dd bs=1` load (380831 records left). Pinned by the `countUnreadRingRecords` tests (committed, discarded, busy, consumer offset, wrap) and the accounting tests.
+- **Text-input cursor stays on grapheme boundaries** (task pz2; `common.UpdateTextInput`/`snapCursorToGrapheme`): bubbles' textinput moves and edits by rune, so Left/Right could park the cursor between an emoji and its U+FE0F (or the two regional indicators of a flag), drawing it over a lone continuation rune that the terminal glues to the previous cell and that is measured one cell wider (the stream modals' input line outgrew its box). After every update through `UpdateTextInput` a cursor inside a cluster is moved to its edge in the direction it travelled (Left to the start, Right to the end), so one press crosses one grapheme; a cursor at a boundary, typing and deleting are untouched. The frame contract measures with `lipgloss.Width` and `ansi.StringWidth` (`TestStreamModalInputFitsWithMultiCodePointEmoji` sweeps flags, hearts and combining accents over widths 7..60); `uniseg.StringWidth` still counts some emoji sequences one cell wider than those two (a library disagreement, not ior's), which the sweep does not assert.
+- **Ctrl+V in text inputs** (task uz2; `common.UpdateTextInput`/`isClipboardPaste`): bubbles' textinput answers Ctrl+V with a system-clipboard read whose result only the textinput can unwrap, and every host dropped that command, so the key did nothing. It is now swallowed in the one shared update path (no command, input unchanged); paste is the terminal's own (bracketed paste arrives as `tea.PasteMsg`, which works and is untouched). ior runs as root, often over SSH, where the clipboard is usually unreachable, so wiring the read up was not worth it. Pinned by `TestUpdateTextInputSwallowsTheClipboardPasteKey`, which also fails if bubbles stops answering Ctrl+V with a command.
+- **Percentiles of aggregate-only syscalls** (task 003; `statsengine.SyscallSnapshot.NoPercentiles`/`NoPercentileData`): a syscall at sampling rate 0 (futex, clock_gettime by default in the TUI) is counted only by the kernel aggregate, which has a timed mean/min/max but no per-invocation samples, so the percentile reservoir stays empty and P50/P95/P99 are 0 placeholders. `NoPercentiles` (`!hasSamples`, a negative flag like `NoLatency` so literal fixtures keep their values) says so, and the Syscalls table (full and compact), bubble and treemap details render `-` for the percentile cells only; mean/min/max keep their numbers. A row with at least one streamed timed pair (rate N, or rate 1) has percentiles. Pinned by `TestSnapshotNoPercentilesMarksRowsWithoutSamples` and `TestSyscallRowsShowDashForNoPercentiles`.
+- **Event-loop receive batching** (task 5s2; `consumeReadyRaw`, `internal/eventloop_runtime.go`): `processRawEvents` does one `select` (flush timer, `rawCh`, ctx) per wakeup and then drains up to `maxReadyBatch` (256) records already waiting in `rawCh` with plain non-blocking receives. A select per record cost ~17% (-flamegraph) / ~8% (-plain) of ior's CPU in `perf`; measured with 1.26M traced syscalls at ~190k/s (no drops, `-plain`): user CPU 2.38 s -> 1.90 s. The bound keeps the flush timer and a cancelled ctx waiting at most one batch. Not done: batched hand-over from the cgo callback (libbpfgo's per-record `C.GoBytes` + `chansend`), the rest of the cost.
+- **Restart RSS** (task yr2; `internal/mallocarena.go`): each TUI trace restart loads and tears down a BPF module, and glibc kept libbpf's freed load allocations in per-thread arenas: anonymous RSS grew from 2 MB to ~155-175 MB over 12 load/close cycles (Go heap ~5 MB, fds and programs back at baseline), measured with a throwaway sudo loop over `setupBPFModule` + close. `MALLOC_ARENA_MAX=1` alone plateaus at ~35 MB, `malloc_trim` alone at 60-75 MB, both at ~25 MB. So a C constructor in the `internal` package calls `mallopt(M_ARENA_MAX, 1)` before the Go runtime starts threads (an explicit `MALLOC_ARENA_MAX` in the environment wins) and `closeTraceInfra` calls `releaseFreedHeap` (`malloc_trim(0)`) after the module's `Close`. Not covered by a unit test (it needs root and a BPF load); to re-measure, loop `setupBPFModule(ctx, flags.NewFlags(), nil, bpfSetupLog{})` + `mgr.Close()` + `release()` + `mod.Close()` as root and read `RssAnon` from `/proc/self/status`.
+- **Cheap per-syscall BPF bookkeeping** (task 2s2; `internal/c/filter.c`, `internal/c/maps.h`, `internal/generate/bpfhandler.go`): every traced syscall used to cost ~280 ns (a `bs=1` dd ran 2.6x slower), mostly hash-map helper calls. Two changes cut a traced 6M-syscall dd from ~2.5 s to ~1.75 s (`dd bs=1 count=3000000` traced system-wide with a non-matching `-comm`, untraced 0.63 s). (1) `syscall_sampling_rate_map` is a `BPF_MAP_TYPE_ARRAY` indexed by the enter trace ID (an inlined lookup instead of a helper call; max_entries 4096, IDs top out near 1900); an array has no absent state, so a slot stores **rate + 1** and 0 means "not configured, rate 1" (`ior_sampling_rate` decodes, `encodeSamplingRate` in `internal/syscall_aggregate_consumer.go` encodes and saturates the largest rate so it cannot wrap to 0; an ID past the array's end also reads as the default). Anything writing that map must use the encoding. (2) At rate 1 `ior_on_syscall_enter` writes **no** `syscall_enter_state_map` entry: the entry only carries the sampling decision (always "emit" at rate 1) and the start time (only the kernel aggregate, which rate 1 never writes, uses it), so the exit takes the stateless path, `ior_stateless_exit_emits`, which is what a lost entry already did. The handlers that stash a pending filename onto the entry (the faulted-path recovery kinds and the output-path `getcwd` capture) need it at every rate, so the generator makes them call `ior_on_syscall_enter_stateful` (`handlerSpec.keepsEnterState`: decided by whether the kind body contains `ior_stash_pending_filename` or the syscall has an output-path argument, not by a kind table); other rates keep the entry everywhere. Pinned by the `enterstate_fallback_test.go` harness (`rate 1 elides the enter state`, `stateful enter keeps the rate-1 state` and three mutations), `TestGeneratedEnterHooksMatchTheirStash` (every committed handler: stash iff stateful hook) and `TestEncodeSamplingRateRoundTripsThroughTheBPFDecoder`. Not done: task-storage enter state (needs a pre-5.11 fallback for el8) and skipping the exit-side lookup at rate 1 (it also reaps a stale foreign entry).
+- **Path-capturing exits do one enter-state lookup** (task 0t2; `internal/c/filter.c` `ior_on_syscall_exit_impl`, `internal/generate/bpfhandler.go` `renderTakingExitHook`): the faulted-path recovery used to take its pending pointer(s) with a separate `ior_take_pending_filename` (+ `ior_take_pending_filename2` for rename/link/move_mount) lookup ahead of the exit hook's own, i.e. 2-3 `syscall_enter_state_map` lookups per exit. The hook is now one function with two optional out pointers; `ior_on_syscall_exit` (no pointers), `ior_on_syscall_exit_take_filename` and `ior_on_syscall_exit_take_filenames` are thin wrappers (constant NULLs inline away). It zeroes the outputs, and copies `pending_filename`/`pending_filename2` out of the entry only after the `enter_trace_id` guard (a missing or foreign entry stays the stateless path with 0 pointers) and before the final delete; the generated exit declares the locals, reads the clock and calls the hook, and the fixup still follows a successful hook and precedes the handler's own reserve. Rate-1 non-stateful handlers are untouched (no entry, plain hook). Pinned by the `enterstate_fallback_test.go` harness (scenarios `exit hook ...`; the harness poisons deleted entries and presets the out pointers to garbage; mutations for not taking, leaking a foreign pointer, unset outputs, reading after the delete), `checkExitHookTakesPendingPointers` (source order inside the impl: one lookup, take after the guard and before the delete), `checkRecoveryOrdering` (generated handlers: decl, one taking hook, no plain hook or standalone take, emit between hook and reserve) and the getcwd oracle mutations in `syscall_semantics_test.go`. Measured: per-program `bpf_stats` times are too noisy on a laptop to resolve it (the unchanged `close` exit moved as much between runs), but the structure is deterministic: map-lookup call sites in the xlated programs `sys_exit_openat` 7 -> 6, `sys_exit_rename` 9 -> 7 (`close` unchanged at 5), and the kernel instructions of a 400k-iteration open+close+stat loop under `-comm nomatch` (`perf stat -e instructions:k`, 8 interleaved runs each) fell from a median 6.536G to 6.478G (-0.9%, min -0.65%, ~55-70 instructions saved per path exit).
+- **Registered-ring io_uring rows name the ring** (task js2; `internal/c/iouring.c`, `renderRingFdsHook`/`ringFdsSyscalls` in `internal/generate`, `internal/eventloop_ringfds.go`, `file.NewRegisteredRingOf`): `io_uring_enter(IORING_ENTER_REGISTERED_RING)` and `io_uring_register` with `IORING_REGISTER_USE_REGISTERED_RING` pass an index into the calling THREAD's registered-ring table (`struct io_uring_task.registered_rings[IO_RINGFD_REG_MAX]`, 16 slots) where a descriptor would be; such rows used to be labelled `io_uring:reg[<index>]` with fd -1 (task cq2) and are now named after the ring the thread registered under the index (`anon_inode:[io_uring]`, the ring's descriptor and flags; `String()` is `io_uring:reg[0]=anon_inode:[io_uring]%(5,O_RDWR|O_CLOEXEC)`), falling back to the label whenever the slot is not known. *BPF.* The index→fd mapping lives only in the user array of `struct io_uring_rsrc_update {offset, resv, data}` that `io_uring_register(fd, IORING_REGISTER_RING_FDS (20) / IORING_UNREGISTER_RING_FDS (21), arg, nr_args)` takes, and the kernel writes the allocated index back into `offset` (`io_ringfd_register`, `io_uring/tctx.c`); both opcodes return the number of leading entries processed, at most 16 (a larger `nr_args` is `-EINVAL`). So the enter handler parks the opcode and the array pointer in the two pending slots of the enter state (`ior_stash_ring_fds`) and the exit handler, for `ret > 0`, copies the first `ret` entries with ONE bounded variable-length `bpf_probe_read_user` (no loop; a fixed 256-byte read would fault for the usual one-element array at the end of its mapping) into a 296-byte `RING_FDS_EVENT` (67) control record ahead of its exit record (`ior_emit_ring_fds`). Both opcodes are read at exit: the unregister array is not changed by the kernel, and only `ret` says how many entries count. Two deliberate departures from the k03 handle record: (1) the record is published **whether or not the sampling verdict emits the call's own records** - the generated handlers keep the hook's verdict in `int emits` and return only after the stash/emit - because a registration that fell to a sampling rate would leave the index naming its PREVIOUS ring, a wrong name rather than a missing one; (2) it is **self-contained** and applied on arrival, not paired with a pending enter (everything it says is in it). Its `time` is the exit handler's clock read and is used only to notice a loss: an exit of a 20/21 call with `ret > 0` whose thread table carries another record time drops that table (`confirmRingFdsRecord`; this is also what an `IOR_BPF_OBJECT` built before js2 amounts to - no records, no tables, the old label). An unreadable array is submitted with `RING_FDS_READ_FAILED` rather than discarded, so user space forgets the table, and a counted ring-buffer drop forgets every table (`applyPendingCommRefresh`). That sweep runs while the loop is still consuming records reserved BEFORE the loss, so `handleRingFdsEvent` also refuses (and drops the thread's table for) a record no newer than the drop notice (`recordMayPredateDrop`, the lz2 rule): it would put back a slot a lost unregister/re-register changed since. A record can also be published for a call that is NO ring-fds call: at rate 1 the other opcodes neither write nor clear the enter state, so the entry of a ring-fds call whose exit never ran (exit probe detached and re-attached, or the task died in the call and the tid was reused) is matched by trace id at the next `io_uring_register` exit with `ret > 0` and read through the stale pointer; BPF cannot tell (the parked opcode is the stale call's), so `confirmRingFdsRecord` drops the table when the exit row of another opcode finds a record of its own time applied. The exit-time read is not atomic with the kernel's copy of the array (another thread may rewrite it); user space only refuses an index >= 16 and a descriptor not known as an io_uring file. *Cost rule kept.* `ior_on_syscall_enter` still writes no enter state at rate 1 for `io_uring_register`; `ior_stash_ring_fds` writes the entry itself for the two opcodes only (as the stateful hook would, `emit_event` 1, and only onto/over an entry that is not this call's - same trace ID AND this handler's clock read). Of the 736 program sections of the object exactly the two `io_uring_register` ones differ from develop's (`llvm-objcopy --only-section` + `cmp`; `io_uring_enter`'s are byte-identical). Measured with `perf stat -e instructions:k` on a pinned loop traced by `ior -plain -pid` (3 runs each, medians, no ring-buffer drops): 100k `io_uring_enter` 182.9M → 178.9M kernel instructions (identical programs; run-to-run spread ~4%), 100k `io_uring_register` of another opcode 256.0M → 256.8M (one masked compare at enter, a zero test at exit; inside the spread), 40k register/unregister calls 93.7M → 151.1M, i.e. **+~1435 kernel instructions (~+0.4 µs) per ring-fds call** for the enter-state write/lookup/delete, the 296-byte reserve, its zero-fill and the user read - paid once per ring per thread by a liburing program. *User space.* `ringTracker` mirrors the table per tid. A slot holds a `Detach()`ed SNAPSHOT of what the fd table (or procfs) knew the registered descriptor as when the record was handled, not the fd number: **a registered ring stays usable after `close(fd)`** (the kernel table holds its own file reference) and the number may come back for any file, so a row-time lookup of the number would name the row after that file. The number is shown only while the fd table still holds that very entry (`ringSlot.stillBound`: the slot remembers which of ior's entries the snapshot was taken of - the fd table's, else the procfs cache's (`cachesExactly`) - and the number is the ring's only while that very entry is still held; a procfs-named ring so loses it at a traced close, at a traced call binding the number, at a re-read answer or the cache's eviction, and a ring whose procfs answer was not kept never shows one) and is -1 from then on, for good; the name stays. Only a descriptor named `anon_inode:[io_uring]` is believed (the kernel refuses to register anything else, `io_ring_add_registered_fd`: `-EOPNOTSUPP`), which is why `handleIoUringSetupExit` now names its descriptor without procfs (`[io_uring]`, `O_RDWR|O_CLOEXEC` - `io_uring_get_file`/`io_uring_install_fd` - instead of a `/proc/<pid>/fd` link read when the loop gets there, which is another file once the task closed and reused the number). The file identity (task 603) cannot help: all io_uring files share one anonymous inode, so a number reused by ANOTHER ring before the record is handled names the slot correctly but with that other ring's descriptor. A released slot is kept, marked with the releasing record's time, until another call uses the index: liburing releases through `IORING_REGISTER_USE_REGISTERED_RING`, i.e. the releasing call's own row passes the index it releases and is still that ring's. *Lifetime (kernel facts).* The table is per task and not inherited by any clone (`copy_process`: `p->io_uring = NULL`, `kernel/fork.c`), is released at thread exit (`do_exit` → `io_uring_files_cancel` → `io_uring_unreg_ringfd`) and at exec (`begin_new_exec` → `io_uring_task_cancel` → `__io_uring_cancel(true)`); the tables are dropped at the thread's exit record, at a task_newtask for the tid, and at the exec record (both tids of a non-leader exec). A table made under another pid is a recycled tid's and is dropped. `io_uring_setup(IORING_SETUP_REGISTERED_FD_ONLY)` puts a ring without a descriptor into the slot it returns: the slot is forgotten and the row keeps the index label. *Not handled:* a full `syscall_enter_state_map` for a sampled-out ring-fds call (no entry to stash on, nothing reports it); the io_uring_register probes detached at runtime (TUI probe toggle) or not selected (`-trace-syscalls io_uring_enter` alone: empty mirror, old label - detaching midway leaves the tables as they were); `-tid` sees one thread's table only (and only its rows). Loaded and run on Linux 7.2 only; for the 4.18/5.14 verifiers the bounded read is the same argument as `ior_read_file_handle`'s, not a test. Tests: C harness with mutations (`internal/generate/ringfds_harness_test.go`: opcode masking, the rate-1 entry, foreign/stale entries, read bounds incl. a count beyond 32 bits and an array ending at its mapping, unreadable array, full ring buffer), the semantics oracle (`syscall_semantics_ringfds_test.go`, incl. "`io_uring_enter` gains the capture"), the decoder (`TestNewRingFdsEventFastKernelLayout`, `TestRingFdsEventUpdate`), the table rules with negatives (`internal/eventloop_ringfds_test.go`, incl. the pre-drop record on both sides of the sweep, the record of another opcode's call, and both halves of the procfs-named ring's number) and `TestIouringRegisteredRing`/`TestIouringRegisteredRingLifecycle` (scenario `iouring-ring-lifecycle`: array at a mapping end, descriptor closed and its number reused by a decoy, another thread passing the index, release by index, then EBADF) plus `TestIouringRegisteredRingRegisteredBySampledOutCall` (`io_uring_register=1000000`: the registration has no row and still names the enters; moving either the stash or the emit behind `if (!emits) return 0;` fails it).
+- **Noreturn syscalls are rows at enter** (task pr2; `internal/eventloop_noreturn.go`, `internal/c/filter.c`, `internal/generate/typesgo.go`): `exit`, `exit_group` and `rt_sigreturn` never return (for `rt_sigreturn`, `restore_sigcontext` sets `orig_ax = -1`, so `ftrace_syscall_exit` skips it), so the generator emits no exit handler for them (`isNoreturnSyscall`) and their enter uses `ior_on_noreturn_syscall_enter`, which writes no `syscall_enter_state_map` entry (nothing would ever delete it). Userspace used to park their enters like any other, so selecting them produced no row at all. The same generator set is now emitted as `types.TraceId.NoReturn` (`noReturnTraceIds`, `writeTraceIdNoReturnSet`), and `syscallEntered` hands such an enter to `completeNoReturnEnter`, which builds the pair at once: a synthetic exit (`noReturnExit`: a `*types.NullEvent` at the enter's time and tid, trace ID enter-1, no `ret`) and `Pair.NoReturn`, then the normal exit path (`applyDerivedPairValues`, `handleTracepointExit` -> `finishPair`, `finalizeTracepointPair`, `sendPair`), so every filter dimension applies, `numSyscalls` counts it, and the tid's gap baseline advances (the next syscall after a signal handler measures its gap from the `rt_sigreturn`). It also recycles a stale enter still parked under the tid, as `pairTracker.set` would. Representation: `Duration` 0 and no return value; `-plain` leaves `ret` empty, Parquet and the stream CSV export write `ret = 0`, `latency_ns = 0` (non-nullable columns; documented in `docs/parquet-querying.md`), `streamrow.Row.NoReturn` makes the Stream tab show `-` for both, and the stats engine books the pair as untimed (global `totalUntimed`, per-syscall `untimedCount`, per-process `untimedCount`), so it never enters a latency mean, histogram, series or percentile reservoir. Views and filters treat the absent outcome as absent, not as 0 (review follow-up, task pr2): `statsengine.SyscallSnapshot.NoLatency` (`!syscallStats.hasTimed`, the flag rather than `count - untimedCount`, whose aggregate part may be one too high after a torn read) and `ProcessSnapshot.NoLatency` (timed count 0; exact, process rows get no aggregates) mark a row without any timed sample, and the dashboard renders its latency cells (`latencyCell`/`latencyCellUint`: Syscalls full/compact table, Processes table, bubble and treemap details) as `-` instead of `0ns`; it is a negative flag so literal snapshot fixtures keep their figures. `globalfilter.Candidate.NoReturnValue` (`pairCandidate`: `Pair.NoReturn`; `streamrow.Row`: `NoReturn`) makes `Filter.matchesOutcome` reject the row under every configured `LatencyNs`/`RetVal` predicate, whatever the operator (`ret == 0`, `latency < X` no longer list every `exit_group` as a fast success; errors-only already rejects it, `ErrorValue` is false), consistent with `aggregateIngestAllowedForFilter` dropping all aggregate rows, and so their untimed noreturn counts, under those filters; `NoReturnValue` is only called when an outcome predicate is set (lazy `Matches`). The paused Stream tab refuses Enter on the `-` Latency/Ret cells of such a row (`setNumericCellFilter`), like the File cell of a fileless row. Pinned by `internal/globalfilter/noreturn_test.go`, `TestNoReturnRowFailsOutcomeFilters` (streamrow), `TestPausedEnterOnNoReturnPlaceholderCellIsNotHandled`, `TestSnapshotNoLatencyMarksRowsWithoutTimedSamples` and `internal/tui/dashboard/nolatency_test.go`; user-facing in `docs/parquet-querying.md` ("Syscalls that never return") and the tutorial's Stream section. Kernel side, a noreturn enter the sampling rate suppresses is counted untimed in `syscall_aggregate_map` by the hook (it used to be counted nowhere, because the aggregate is otherwise written at `sys_exit`). Pinned by `internal/eventloop_noreturn_test.go`, `internal/statsengine/noreturn_test.go`, `TestNoReturnMarksExactlyTheNoreturnEnters` (committed artifact), `TestGenerateTypesGoNoReturnSet` and the integration tests `TestNoReturnSyscallsAreRows` (exactly one `exit_group` from the main thread, exactly one `exit` from the ended worker thread, `rt_sigreturn` per handled signal, `tgkill` as the paired control) and `TestAggregateOnlyNoReturnSyscallsAreCounted` (Parquet footer totals with `rt_sigreturn=0`), both on the `noreturn-syscalls` ioworkload scenario.
+- **Lost enter and exit halves are counted** (task c23; `internal/eventloop_losthalves.go`, `pairTracker.lastEnters`, `eventLoop.countSupersededEnter`/`countUnpairedExit`): `numTracepointMismatches` only sees an exit paired with another syscall's enter, and a lost half rarely ends that way, so with ~12600 skipped probe runs (each call lost one half, task 723) the statistics said 0 mismatches. Two always-printed lines follow the `syscalls:` line: `enters without an exit: N` counts an enter still parked (or shed by the raw enter filter with its exit unseen) when the same thread enters its next syscall - parked (`pairTracker.set`), shed or noreturn (`passEnter`) - or a non-exec enter left under a non-leader exec caller's old tid (`moveExecCaller`); `exits without an enter: N (...; M look like a filter's answer: ...)` counts an exit that finds no enter of a thread the tracker has seen enter before, unless it is the exit of the thread's shed enter (`lastEnter.shed`, trace-ID adjacency like the mismatch check). Not counted, by construction: noreturn enters (never parked), enters evicted with their task (`evictTid` at sched_process_exit / task_newtask / the dead leader in `moveExecCaller`), the exec enter `moveExecCaller` moves, enters the restart fold takes/keeps (a release reparks through `syscallEntered`), LRU-trimmed enters (`prune` -> `forgetTrimmed` makes the tid unknown, so a late exit passes), enters still parked at stop, a thread's first record (call in flight at start, clone child's first return, recycled tid), and any half whose thread was last seen entering before `lostHalvesFrom` (boot clock after the initial attach, `judgeHalvesFrom` in `applyProbeCapabilities`; enter and exit tracepoints attach one by one) or at/before a runtime probe change (`restartProbeWatch.changedSince`). Sampling never splits a call (BPF emits an exit only with its enter). A call a seccomp filter answers itself (sys_exit only) of a known thread IS counted, and the line's share `M look like a filter's answer` (`numFilterLikeExitsWithoutEnter`, `looksLikeSeccompAnswer`) counts the two recognisable shapes: a failed exit (`SECCOMP_RET_ERRNO`, `SECCOMP_RET_TRACE` without a tracer) and an exit whose return value is the syscall's own number (`SECCOMP_RET_TRAP` does NOT fail: it rolls ax back to the syscall number and raises SIGSYS - on a desktop Firefox's sandbox produces sched_getscheduler=145, sched_getaffinity=204, openat=257 all the time). The number comes from `types.TraceId.SyscallNumber` (`internal/types/syscallnr_amd64.go`, a by-name table of x86_64 numbers because trace IDs are tracepoint event IDs; other architectures have an empty table and recognise only failed exits; `TestEveryTracedSyscallHasItsNumber` fails when a new tracepoint lacks its line). The share is a hint: a lost enter can fail or return its own number too (x86_64: read of 0 bytes, write of 1), and errno 0 or a `SECCOMP_RET_USER_NOTIF` supervisor's success is not recognised. A ptrace tracer that sets the syscall number to -1 silences BOTH halves; only `PTRACE_SYSEMU` leaves the exit alone. Sampled/aggregate-only syscalls emit no stateless exit (`ior_stateless_exit_emits`), so nothing shows for them. False negatives (the counts are lower bounds, far below the drop count under bulk ring-buffer drops): the lost exit of a thread's last traced call is never superseded; exit A lost then enter B lost for the SAME syscall on one thread pairs into one wrong row with no count; both halves lost or a lost enter of an unseen thread leaves nothing; the TUI does not show the counts (the statistics block is headless-only). Runtime detach caveat (review finding, left as documented): `probemanager` Detach destroys the enter and exit links concurrently and reports `Changed` only after both are gone, with no in-flight count, so a thread whose exit goes unseen in that window and whose next enter is processed before the stamp is counted as a lost exit; the probe manager's contract was not changed (tasks o03/x13/023 rest on it) and the claim is narrowed instead, since headless runs never change probes after the initial attach. `forgetTrimmed` takes the map key (tid the enter is parked under), not the enter's own tid: an exec enter moved by `moveExecCaller` sits under the leader tid. Workload scenario `seccomp-denied` + `TestSeccompDeniedCallsShowAsExitsWithoutEnter` drive RET_ERRNO for real (RET_TRAP is not driven: Go treats a kernel-sent SIGSYS as fatal; it is pinned by `TestExitWithoutEnterLooksLikeAFilterAnswer`). `lastEnters` costs one map read+write per enter (allocation-free once grown; `TestLostHalfBookkeepingDoesNotAllocate`) and is cleared whole above 4x the pending-enter limit (undercount, never a false loss). The integration helper `ParseKernelLoss` reads both lines into `KernelLoss.EntersWithoutExit`/`ExitsWithoutEnter`/`FilterLikeExits` (not part of `Any()`: ior refuses no fold over them). Pinned by `internal/eventloop_losthalves_test.go` and `internal/eventloop_losthalves_review_test.go` (attach stamp set by `applyProbeCapabilities` and its `<` boundary, enters parked at stop, the exec move of `lastEnters`, its bound, the trimmed moved exec enter).
+- **Kernel restart codes vs errors** (task aq2; `internal/event/return.go`, `internal/c/filter.c`, `docs/parquet-querying.md`): a signal that interrupts a blocked syscall leaves -512/-513/-514/-516 (`ERESTARTSYS`, `ERESTARTNOINTR`, `ERESTARTNOHAND`, `ERESTART_RESTARTBLOCK`) at `sys_exit`; user space never sees them. `event.IsErrnoRet` (-4095..-1) means "no result" and is what fd tracking and byte accounting use (the interrupted call created no descriptor and moved no bytes), so it deliberately includes the restart codes. Everything that counts or flags a *failure* (statsengine error counters, `streamrow` `is_error`/Parquet, the errors-only filter, the BPF aggregate's `ior_is_errno_ret`) uses `event.IsErrorRet` = `IsErrnoRet` minus `IsRestartRet`. `ret` keeps the raw value, so `ret == -512` still finds the rows. Nuance: the kernel (x86 `handle_signal`) restarts -513 always, -512 only with no handler or `SA_RESTART`, and -514/-516 only when no handler ran (-516 via `restart_syscall`); otherwise the program really gets `EINTR` (e.g. -512 without `SA_RESTART`, a relative `nanosleep` cut by a handled signal, -516), but `sys_exit` fires before that rewrite, so ior shows the restart code with `is_error=false`; only a literal -4 from the syscall itself is an error (pinned by `TestIsErrorRetExcludesRestartCodes` and the per-consumer tests). A -516 call resumed through `restart_syscall` is folded into one row (next bullet, task fs2), and so is a call the kernel restarts by re-execution when BPF proves it (the bullet after, task 103); a program's own retry after a real `EINTR` (`read` -512 then `read` n) stays two rows. The `signal-restart` ioworkload scenario (`cmd/ioworkload/scenario_restart.go`, `integrationtests/restart_codes_test.go`) produces them deterministically; its blocking calls use `syscall.Syscall`/`Syscall6`, not `RawSyscall`, so the runtime releases the P and the signal-sending goroutine still runs with `GOMAXPROCS=1` or one CPU.
+- **restart_syscall folds into the call it resumes** (tasks fs2 and t13; `internal/eventloop_restart.go`, `restartTracker`, `internal/c/restart.c`): a call stopped without a handler (SIGSTOP/SIGCONT, ptrace or freezer stop) inside nanosleep, clock_nanosleep, poll or a timed futex wait exits -516 and is resumed by the kernel through `restart_syscall`, which used to give two or more rows (`clock_nanosleep ret=-516`, `restart_syscall ret=0` without the requested sleep). `tracepointExited` now holds a pair whose exit is a `*types.RetEvent` with -516 (`restartTracker.hold`, at most `maxHeldRestarts` = 4096 rows, beyond that unfolded; only in a run whose `signal_deliver` and `sched_process_exit` probes attached, `restartTracker.restartBlock`, see **The fold needs BPF's RESUME** below) before its exit handler, derived values and pair filter run; `routeHeldRestart`, called by `rawRuntimeEventHandler` for every decoded record before anything else (so before the raw enter filter), then decides on the held tid's next records: BPF's RESUME control record puts the row into `restartResumed`, the `restart_syscall` enter that carries the RESUME record's time (`isAnnouncedEnter`, `continuationEnterID`) is taken out of the stream (kept with the row and parked again if the row is released before the fold, so a `restart_syscall` whose fold does not happen is still a row of its own - see the task 103 bullet), the following `restart_syscall` exit is folded (its `Ret` and `Time` are written into the held exit, which keeps the original trace ID; a fold ending in -516 again is held again) - both steps only when no record may have been lost since the interrupted exit, see **Lost records** below - and any other record of that tid - an enter (a `restart_syscall` enter that no RESUME announced included), another exit, a HANDLER record, a control record such as its `sched_process_exit` or a `task_newtask` for the recycled tid - first completes the held row unchanged (`completeTracepointPair`, the old tail of `tracepointExited`). `processRawEvents` completes every row still held when it stops (`releaseAllHeldRestarts`, oldest exit first, before `run`'s `flushOutput`). The folded row is the original call: its enter, arguments, requested sleep and gap, the final `ret`, and a latency from the first enter to the final exit, stopped time included (the resumed sleep ends at the original deadline, so a short stop does not lengthen it); `numSyscalls` counts it once, and filters, stats engine, Parquet, CSV and flamegraph see one row. **The fold needs BPF's RESUME** (task t13). fs2 folded on the stream alone - "a -516 exit whose tid's next record is a `restart_syscall` enter" - because `restart_syscall` resumes nothing but a -516. That is a proof only while the next record that *arrived* is the next thing the thread did. A -516 call cut by a **handled** signal has no `restart_syscall` (x86 `handle_signal` turns -516 into `EINTR` like -514; only `arch_do_signal_or_restart`'s no-handler path sets `restart_syscall` up), and what would release its row - the handler's syscalls, its `rt_sigreturn` - is silent when `rt_sigreturn` is outside the trace set, sampled out, aggregate-only or detached, or the handler leaves by `siglongjmp`; a later, equally silent call of the thread that gets stopped then had its `restart_syscall` folded into the row, with no record lost and nothing sampled (live: a 1 s nanosleep cut by a handled SIGUSR1 at 0.3 s, then a stopped `poll(0,0,2500)`, traced with `-trace-syscalls clock_nanosleep,restart_syscall`, was ONE row `clock_nanosleep ret=0` of 2.80 s; now `clock_nanosleep -516` 300 ms and a `restart_syscall 0` row of 1.70 s). So -516 takes task 103's kernel proof (next bullet): `ior_restart_on_exit` makes a task pending on an emitted -516 exit as well (`ior_is_restart_ret`; the code field of a `restart_pending_map` word is 3 bits now, -516 is code 5, the decided bit moved to bit 35), `handle_signal_deliver` forgets it on the first user handler and emits HANDLER (-516 never survives one, `ior_restart_survives_handler`; userspace releases the row at once), and `ior_restart_on_enter` - unchanged - emits RESUME before the first traced enter of a task still pending, which is the `restart_syscall` the kernel set up whenever `restart_syscall` is traced (the hook does not know the syscall: with `restart_syscall` untraced the RESUME precedes some later enter, which userspace tells by its trace ID and releases the row where one is held; a run that knows `restart_syscall`'s probes to be off did not hold it, tasks u13 and 023 below). `restart_syscall`'s own -516 exit makes the task pending for the next hop. Userspace: `heldRestart.step` no longer takes a `restart_syscall` enter in `restartWaiting`; `stepRestartRecord` applies HANDLER and RESUME to every held row. Folding on RESUME rather than releasing on HANDLER is what makes it sound: a HANDLER record that never arrived (lost, or the entry evicted by a colliding tid before the signal) leaves the row waiting, and then no RESUME comes either - nothing is concluded from an absent record. **Without the probes** (`foldProvenRestarts(signal, exit)` sets `restartBlock = signal && exit`, `reexec` additionally needs `dropSrc`) -516 rows are not held at all and a stopped sleep is the pre-fs2 two rows; likewise, with the probes attached, an `IOR_BPF_OBJECT` override that predates t13 never announces a `restart_syscall`, so the held row is released by the tid's next record. Chosen over keeping the stream-only fold there (keeps the wrong row) and over "hold only while `rt_sigreturn` is traced at rate 1" (still wrong after a `siglongjmp` handler, and makes the fold depend on the trace set): a run without the probes needs an object override older than them or a refused attach, each with a startup warning, and two correct rows are what every refused fold degrades to. Without `signal_deliver` a handler ending a -516 call is still caught at its `rt_sigreturn` (`ior_restart_on_sigreturn` forgets a pending task at depth 0), so only the `siglongjmp` handler would leave a stale entry - hence the gate. Not folded although the kernel resumed: a handler delivered in a later pass of the kernel's exit loop after `restart_syscall` was already set up (judged as a first handler; the `restart_syscall` after it is a row of its own), and `restart_syscall` untraced. Known wrong fold, as for 103: a stale entry at depth 0 (a ptrace tracer; `restart_syscall`'s probes detached in the TUI across the continuation and re-attached was one too, until task o03, see **Runtime probe changes end the restart folds' wait** below) whose task's next traced enter is the `restart_syscall` of a later silent stopped call. Cost: none on the hot path - the enter hook is untouched and the exit hook differs only inside the `[-516, -512]` branch (`perf stat -e instructions:k`, pinned `bs=1` dd of 3M, `-comm nomatch`, 6 interleaved runs each: 11.693G -> 11.683G median, ranges overlap). -512/-513/-514 are restarted by re-executing the syscall, which the stream cannot tell apart from a program that got `EINTR` and retried; their fold is the next bullet (task 103). Because a record may now release held rows before completing its own pair, the pair channel has `pairChannelSlots` = 3 slots (`sendPair` still panics on one more): the record's own pair, the row held under its tid, and - for the exec side of a non-leader exec only, task 103 - the row held under the caller's pre-exec tid. A held row is delayed until its tid's next record; released unchanged (handled signal, i.e. `EINTR`) that is BPF's HANDLER record, emitted as the handler is delivered. Kernel-side aggregates are per invocation and unfolded. **Lost records** (task p03): the fold reasons about the records that *arrived*. With the first `restart_syscall`'s exit lost together with the thread's records up to a later stopped call's `restart_syscall` (that call's enter, its -516 exit, its RESUME and its `restart_syscall` enter, one backpressure burst), the later call's `restart_syscall` exit followed the kept enter and its `ret`/`Time` were folded into the earlier row; with the first `restart_syscall` lost whole (RESUME included), the later call's RESUME and enter arrive in its place. So when the loop has a drop counter (`dropSrc`), the -516 fold asks the same `restartDropWatch` as the re-execution fold (`restartProofLost`, `commitsToFold`; rule and invariant in the task 103 bullet): at **RESUME** (a refusal releases the row there and the `restart_syscall` enter that follows is an ordinary one) and again at the `restart_syscall` **exit** (the two can be a long sleep apart; a refusal releases the row, reparks the kept enter and the exit pairs with it). Either way the outcome is the pre-fs2 two rows, `clock_nanosleep ret=-516` and a `restart_syscall` row with the real result, both counted, nothing lost. `since` is the held exit's time, which a fold rewrites, so each hop of a call stopped several times is checked from its own interruption (a refused second hop leaves the row folded up to the second -516). A loss the monitor saw before the interruption, or while the call was still blocked, does not refuse; one first seen at or after the interrupted exit does, as does a counter that exists but cannot be read. Host-wide, like the re-execution check: under backpressure stopped sleeps are two rows. **Without a drop counter** (counter map not opened; startup warning) the -516 fold is deliberately left unchecked, on RESUME alone - unlike the re-execution fold, which is off in such a run: refusing would undo fs2 for every stopped sleep of the run to avoid a wrong row that needs five consecutive records of one twice-stopped thread lost with the burst ending inside the later call's `restart_syscall` (the two shapes above), in a run that reports none of its losses anyway. The later call must itself be recorded for that: BPF announces a `restart_syscall` only after an emitted -516 exit, so with the later call untraced or sampled out its `restart_syscall` comes unannounced and releases the row (before t13 two lost records were enough there). That residual is pinned (`TestRestartSyscallFoldWithoutADropCounterIsUnchecked`). **Sampling is not a drop** (task s13): `restart_syscall` (family Process, no built-in rate) can be sampled with `-syscall-sampling-syscalls restart_syscall=N` or `-syscall-sampling-families Process=N`, BPF decides per invocation for enter and exit together, and the drop counter never moves for a sampled-out record. At N > 1 the stream alone would fold a stranger with no loss, with or without a counter: call A recorded and held, A's `restart_syscall` sampled out, a later stopped call B silent (sampled out, aggregate-only like a default-rate futex wait in the TUI, or untraced), B's `restart_syscall` sampled in. So **a run that samples `restart_syscall` folds no -516 row**: `newEventLoop` sets `restartTracker.restartSyscallSampled` from `restartSyscallSampled(cfg.aggregateIngestTraceIDs)` - the set of enter trace IDs whose effective rate is not 1, built by `buildAggregateIngestTraceIDs` from the same `buildSyscallSamplingRates` that `applySyscallSamplingRates` loads into BPF, in every output mode (default < family < syscall; a family 0 promoted to 1 in raw modes is not in it, an explicit `restart_syscall=0` is) - and `holdable` then refuses -516 pairs, so they are completed at once and `restart_syscall` is a row of its own whenever it is sampled in (the pre-fs2 rows; rate 0 emits none and had nothing to fold). Since t13 the guard is no longer what keeps the stranger out: RESUME goes out before the sampling decision and names its enter by time, so A's sampled-out `restart_syscall` leaves a RESUME whose time no later enter carries, and B's `restart_syscall` releases the row (`TestSampledOutRestartSyscallIsNotFoldedWithoutTheGuard`; removing the guard leaves `TestSampledRestartSyscallNeverFoldsAStranger` green) - how the re-execution fold has always handled a sampled-out re-execution. **The guard stays** (task u13 asked whether it is redundant; it is not). Without it a run at rate N would fold the stopped calls whose `restart_syscall` is sampled in (one hop in N), and under the time rule no other sampled case goes wrong: a sampled-out interrupted call holds no row and is not pending, BPF decides once per invocation so a sampled-in `restart_syscall` has both records, a sampled-out one that is stopped again leaves the task not pending (`ior_restart_on_exit` takes emitted exits only) so the next hop comes unannounced, and the rates are written once before any probe attaches. But (1) the rows of a sampled run would be **late**: a row whose `restart_syscall` is sampled out gets its RESUME, goes to `restartResumed` and waits for an enter that never comes, so it is emitted with the thread's next record - the end of the sleep or the thread's exit - which is N-1 rows in N and every row at rate 0, for a fold that then never happens (live, guard disabled, `restart_syscall=2`, a `sleep 5` stopped twice, 6 runs: never one whole row; the -516 row appeared at +4.00 s, the process's exit, instead of +0.02 s after the first stop, or a row folded up to the second stop, -516 after 2.0 s, also at the exit; no wrong fold); and (2) on a clocksource too coarse to give two enters of a thread different readings (`jiffies`) the time rule cannot tell B's `restart_syscall` from A's sampled-out one - the records are those of a real continuation and fold at rate 1 - which is the residual the re-execution fold has and this fold does not (`TestSampledRestartSyscallNeverFoldsACoarseClockStranger`). The interrupted syscall's rate (`clock_nanosleep=N`) needs no guard under either rule: a sampled-out interrupted call holds no row and is not pending in BPF, so it is only one way B stays silent, and sampling it leaves the fold on. **`restart_syscall` outside a final trace set** (task u13): a -516 row whose `restart_syscall` is not attached can never fold, and held it waits for the thread's next record (the RESUME ahead of its next traced enter, its exit, the end of the run - live 4 s for a twice-stopped `sleep 5` traced with `-trace-syscalls clock_nanosleep`). `runTraceSetup` now tells the loop when its trace set cannot change - `el.traceSetIsFinal(infra.mgr.IsActive)` under `infra.mgr != nil && hooks.probes == nil`, i.e. every headless run, the exact complement of the `watchProbeChanges` condition - and `traceSetIsFinal` sets `restartTracker.restartSyscallUntraced` when the manager calls `restart_syscall` inactive (no link of the pair and neither tracepoint attached: not selected, or its attach failed and took back its enter link - also when that destroy reported an error, see "A link's `Destroy` is final" in the o03 bullet); `restartBlockHeld` (`restartBlock && !restartSyscallSampled && !restartSyscallUntraced`) is what `holdable` asks for -516, so the row is completed by its own exit (live: +0.02 s) and BPF's later RESUME finds no row. Not holding can only cost a fold and there is none to make, so this is sound whatever the manager says. **A TUI run follows `restart_syscall`'s probes** (task 023; it used to hold such a row and keep the delay): the probes modal changes the set while the loop reads the stream behind the ring buffer, so "attached now" does not answer "attached when this row was interrupted". The change hook now carries a `probemanager.Change{Syscall, Phase, Attached}` - `Attached` is true only at the `ChangeEnds` of an attach that has its links; the manager cannot be asked instead: the hook runs under `attachMu` and without `m.mu`, so `IsActive` does not deadlock there, but a change is committed after its last report and the answer is the state from before it, inactive throughout an attach and active throughout a detach - and `restartProbeWatch.restartSyscall` (one atomic: unknown / may be attached / detached) keeps the state of that one pair. `watchProbeChanges(SetChangeHook, IsActive)` seeds it once the hook is set, by compare-and-swap from "unknown", so a report that races the install stands (`seedRestartSyscall`; a TUI can start without `restart_syscall`); `probesChanged` stores "may be attached" first thing at the `ChangeBegins` of `restart_syscall`, and `noteProbeChange` stores "detached" **between its two stamps** at its `Changed` and at a `ChangeEnds` with `Attached` false; `restartBlockHeld` additionally requires `!probes.restartSyscallOff()`, and reports about other syscalls leave the state alone. The order of the writes carries it (the loop's read order, stamps then state, carries nothing). Stored after the first stamp: a loop that reads "detached" for a row interrupted at T finds a stamp taken with the probes already off - a T that is not younger is refused by the o03 time rule anyway, and a younger T means the probes were off at T and until the loop read the row, so its `restart_syscall` can be recorded only after an attach whose first stamp refuses the row; no fold is given up (stored ahead of that stamp, a lagging loop could lose the fold of a call stopped and resumed while the probes were on). Stored before the second reading: every row held under the earlier state was read, so interrupted, before the store and is older than the second stamp, whose wake releases it (`releaseRestartsBehindProbeChange`); no row stays held behind a detach. Both claims compare a row's time with a stamp and so assume the two on one clock: in a time namespace with an undetermined negative boottime offset the stamps lie in the records' past ("What is left open" in `eventloop_restart.go`), a lagging loop can read "detached" for a sleep stopped and resumed while the probes were on - held and folded before this rule, now two (correct) rows - and the second stamp does not release a row held just before the detach, which waits for its thread's next record as before. While an attach of `restart_syscall` is in flight and after it succeeded the rule is silent and the x13 count and the o03 stamps decide as before (a row interrupted during the attach is not held, for the count). Not holding never makes a wrong row, so the residuals are harmless: a manager closed under an attach leaves "may be attached" (the old delay, in a session that is ending), and an attacher that panics reports `Attached` false with an enter tracepoint possibly attached (two right rows; the real attacher does not panic). Live in the TUI (tmux, `-comm sleep`, a `sleep 5` stopped twice): with `-trace-syscalls clock_nanosleep` the -516 row was in the Stream tab 0.06 s after the first stop (4.29 s, the process's exit, with `restartBlockHeld` not asking the watch); with `clock_nanosleep,restart_syscall` one folded 5.00 s row, after `restart_syscall` was switched off in the probes modal the -516 row at +0.19 s (the tab refreshes every 250 ms), and after it was switched on again one folded row. Pinned by `internal/eventloop_restart_untraced_test.go` (row at its own exit and a later RESUME ignored, on all three fixtures; the fold with only `restart_syscall` active; the re-execution fold untouched; task 023: a TUI started without `restart_syscall` emits the row at its exit and one started with it folds, a runtime detach releases the held row by the wake and stops holding later ones, a lagging loop's row from before the detach is two rows, `restart_syscall` attached while a sleep is stopped never folds, an attach in flight leaves the rule silent and a sleep after it folds, a failed attach leaves it detached, other syscalls' reports change nothing, the install does not overwrite a racing report, and the state at the three readings of a report), `internal/eventloop_restart_probes_test.go` (`TestRunningLoopEmitsAStoppedSleepAtOnceWithRestartSyscallDetached`, and `TestRestartSyscallProbeChangesRaceWithTheRunningLoop` under `-race`: every sleep is one folded row or its -516 row plus its `restart_syscall` row), `TestStoppedSleepFollowsTheRestartSyscallProbeOfARealManager`/`TestFailedAttachOfRestartSyscallLeavesStoppedSleepsUnheld` (real manager, fake attacher) and `TestChangeReportNamesTheSyscallAndWhatItLeftAttached` in `internal/probemanager/change_hook_test.go` and `internal/ior_trace_wiring_test.go` (`TestTraceSetIsFinalWithARealProbeManager`, and the structural `TestSetupTraceInfraTellsAHeadlessLoopItsTraceSetIsFinal`, which also refuses the unguarded call the shared helper accepts); each fails under its mutation of `restartBlockHeld`, `traceSetIsFinal` (inverted, another syscall) and the `runTraceSetup` statement (guard widened, inverted or dropped, call removed, a constant func). Pinned by `internal/eventloop_restart_sampling_test.go` (the no-loss stream on all three fixtures for a syscall rate, a family rate and a TUI family 0; the same stream with the stranger in the RESUME record's tick; the row is not held; the fold still happens at rate 1, with the interrupted syscall or its family sampled, with `restart_syscall=1` over a sampled family and with a promoted family 0; `newEventLoop` wiring against `buildSyscallSamplingRates` for 14 configurations; -512/-513/-514 holds unchanged; each fails under its mutation of `restartBlockHeld`/`restartSyscallSampled`/the `newEventLoop` line). Pinned by `internal/eventloop_restart_drops_test.go` (both lost-record shapes with the re-execution proof on and off, the no-counter residual, folds with no loss / a loss seen before the interruption / while blocked, refusals by the monitor, at the enter and at the exit, the unreadable counter, a two-hop chain refused at the second hop and one whose refused first hop does not block the second, a sleep interrupted inside a restarting handler judged from its own interruption; each fails under its mutation of `restartProofLost`/`commitsToFold`), `internal/eventloop_restart_test.go` (fold, repeated stops, other tid, no held row, intervening syscall, cut-short continuation, rt_sigreturn release, thread-exit release, both stop paths, filters on the folded row, the bound in the tracker and through the loop; every loop test runs on three fixtures via `eachRestartFixture` - no drop counter, a counter that never moves, and that with the re-execution fold on, the run ior normally makes; every folding stream carries RESUME before the `restart_syscall` enter, `restartFixture.resume`), `internal/eventloop_restart_handled_test.go` (task t13: HANDLER releases the row at once for either `SA_RESTART` flag; the defect stream - handled sleep, then a later silent call's unannounced `restart_syscall` - is two rows with the HANDLER record and without it (lost, evicted, pre-t13 object); a second hop without RESUME keeps what the first proved; the sampled-out `restart_syscall` with the guard off; no row held and two rows without either probe, with and without a counter; each fails under its mutation: the stream-only `restartWaiting` case restored, -516 surviving an `SA_RESTART` handler, `holdable` ignoring `restartBlock`, `isAnnouncedEnter` without the time or with the row's own trace ID, `restartBlock` from one probe only), the C harness scenarios `a stopped -516 call is announced at every hop`, `a handler ends a -516 call`, `a -516 call is forgotten without its handler record` (next bullet), `TestRunSurvivesHandlerProducingTooManyPairs`, the integration test `TestSignalHandledSleepIsNotFoldedWithALaterStoppedCall` on the `signal-handled-sleep` ioworkload scenario (`cmd/ioworkload/scenario_handled_sleep.go`: a 3 s `clock_nanosleep` cut by a handled SIGUSR1 once `/proc` shows the thread blocked in it - the workload requires `EINTR` - then a `nanosleep(2)`, a syscall outside the trace set, stopped and continued by the external stopper and required to return 0; traced with `-trace-syscalls clock_nanosleep,restart_syscall` the main thread must show the sleep with ret -516, a latency below its request, and exactly one `restart_syscall` row with ret 0 that starts after the sleep row ends; on the pre-t13 binary it is one `clock_nanosleep ret=0` row and no `restart_syscall` row), and the integration test `TestStoppedSleepIsOneRow` on the `stop-restart` ioworkload scenario (a child `sh` sends SIGSTOP/SIGCONT to the workload during a 600ms sleep; exactly one `clock_nanosleep` row with ret 0, the requested 600ms and latency >= 600ms, no `restart_syscall` on that thread).
+- **A kernel-re-executed call folds into one row** (task 103; `internal/c/restart.c`, `restart_pending_map`, `internal/eventloop_restart.go`): a blocked `read`/`accept`/`wait4`/... that exits -512/-513/-514 is restarted by the kernel running the same syscall again (x86 `handle_signal`: always when no handler runs, after the handler for -513 and for -512 with `SA_RESTART`; -514 and -512 without `SA_RESTART` become `EINTR`), which used to give two rows. A `signal:signal_deliver` record alone cannot prove it: sibling threads of a stopped group, and a thread whose signal another thread took, exit -512 and re-enter with **no** `signal_deliver` in their context (checked with bpftrace), so "no handler ran" has no record and inferring it from an absent record would turn every dropped record into a wrong fold; and after an `SA_RESTART` handler the handler's own syscalls precede the re-executed enter. So the proof is kept in BPF, one `__u64` per task in `restart_pending_map` - a direct-mapped `ARRAY` indexed by `tid & 4095` holding tid, code, a decided bit and the handler depth, not a hash, so the per-enter check is an inlined lookup + load + compare (colliding tids evict each other: the evicted call is just not folded; single-word stores keep a slot from mixing two tasks). `ior_restart_on_exit` (called by the three exit hooks with their verdict) makes a task pending on an **emitted** exit with -512/-513/-514 (and, since task t13, -516: fs2 bullet) and clears a leftover entry on any other exit in the range (an unemitted one, or -515); `handle_signal_deliver` applies the kernel's rule to the first user handler (`sa_handler > SIG_IGN`) delivered to a pending task - `EINTR` forgets the task, otherwise decided + depth 1 - and emits a `SYSCALL_RESTART_EVENT` with `RESTART_PHASE_HANDLER` and the `SA_RESTART` bit, later handlers only add depth; `handle_restart_sigreturn`, a second program on `sys_enter_rt_sigreturn` attached in every session (the generated one only exists when rt_sigreturn is traced), closes one depth; `ior_restart_on_enter` (both enter hooks, before the sampling decision) emits `RESTART_PHASE_RESUME` for a pending task at depth 0 right before that enter's own record, stamped with the handler's `now` - the same value the handler writes to the enter's `ev->time` - and forgets the task; `handle_sched_process_exit` forgets a dying task. Userspace folds **only** on RESUME: `restartTracker.holdable` parks -512/-513/-514 rows of any `RetCarrier` exit kind when `foldProvenRestarts` saw the `signal_deliver` **and** `sched_process_exit` probes attach (`signalAttachRecorder`, `exitAttachRecorder`: without the exit probe BPF never forgets a dead task and a recycled tid would inherit its entry) and the loop has a drop counter (`dropSrc`); without any of them, or with an older `IOR_BPF_OBJECT`, rows stay exactly as before (-516 rows need the two probes but not the counter, fs2 bullet). `heldRestart.step` walks waiting -> (HANDLER the call survives, `restartSurvivesHandler`: in-handler, the handler's syscall records pass through as rows, at most `maxHandlerRecords` = 256) -> RESUME -> the tid's very next record must be an enter of the same syscall **carrying the RESUME record's time** (`heldRestart.resumeTime`, `isAnnouncedEnter`; taken out of the stream but **kept** on `heldRestart.continuation`, not recycled) -> its exit replaces the held exit (`foldRestartExit`, which recycles the kept enter; a restart code again is held again). **A release never costs the continuation its row**: any release from `restartContinuing` (a refused fold, a `task_rename` another thread wrote, loop stop; the -516 `restart_syscall` fold alike) first completes the held row and then parks the kept enter again through `syscallEntered` (`releaseTakenRestart`/`reparkContinuation`: comm seeding, raw enter filter, exec snapshot), before the releasing record is processed, so a fold that does not happen is exactly the pre-103 two rows and the continuation's exit pairs, runs its exit handler and is counted (recycling the enter at consume time made that exit an unpaired one: no row, no count, no warning, although nothing of the thread was lost). The repark sends no pair (`syscallEntered` only completes noreturn enters), so it does not count against the pair channel's bound; it may displace an enter still pending under the tid (one that passed while the handler ran and whose exit record never arrived), exactly as the continuation's enter would have without the fold (`pairTracker.set` recycles it). **Except when the releasing record says the task is gone** (`reportsTaskGone`, task r13: the task's `sched_process_exit` record, a `task_newtask` record handing its tid to a new task, or - task v13 - the exec record of a non-leader thread, whose tid was the dead leader's until then; `moveExecCaller` evicted that leader's enter within the same record, after the parking could have trimmed live enters): the row is still completed, but the continuation was cut short inside the kernel and never returns, so `routeHeldRestart` recycles the kept enter instead of parking it (`dropContinuation`). The control handler evicted a parked one within the same record anyway (`handleProcessExitEvent`, `retireRecycledTid`), but parking it first could trim live enters from a full pending-enter table, and after a `ChildOutOfScope` newtask record nothing evicted it at all: it stayed parked under a tid that was another task's and stayed a `parkedExecCaller` hint for a later `adoptLostExecCaller`. Since task v13 `handleTaskNewtaskEvent` retires the tid in that branch as well (`retireRecycledTid` before `markBlind`: the number is a brand-new task's, so whatever is kept under it is a dead previous owner's, and no record of the out-of-scope owner will ever displace it), which also takes an exec enter that was parked all along - a non-leader thread that died inside an uninterrupted `execve` with its records lost. **A non-leader exec releases the row held under its old tid** (`releaseExecCallerRestart`, first thing in `handleProcessExecEvent`; `adoptLostExecCaller` does the same when the exec record was lost): held rows are found by the record's tid (`routeHeldRestart`), but after `de_thread` the exec'ing thread reports under the leader's tid and gets no `sched_process_exit` under its old one, so only the exec record's `OldTid` still points at the row. Two rows can wait there: the `execve` itself, interrupted with -513 (a signal while it waited for `cred_guard_mutex`: a concurrent exec in the group, a ptrace attach) and re-executed with its enter kept for the fold - left alone, `moveExecCaller` found no parked enter, the successful exit under the leader tid paired with nothing and the exec had **no row** (before task 103: `execve -513`, `execve 0`), and the -513 row sat under the vanished tid until loop stop or tid reuse; and a call whose restarting handler exec'd instead of returning (row held until loop stop). The release runs before `rekeyExecCaller` (the reparked enter must be there to be moved) and before `fdTracker.dropOnExec` (the reparked exec enter resolves its target against the pre-exec descriptors, `storeEnter`). With the leader's own row (only when its exit record was lost) and `completeUntracedExec` that makes up to three pairs for one exec record, hence `pairChannelSlots` = 3 rather than an argument that the kernel-side `-tid` filter keeps the first and the last apart. The exec record parks the enter kept under the caller's old tid again only when it is an exec enter, the `execve` the thread is inside; any other kept enter there (a re-executed call whose exit record was lost before the thread exec'd) is recycled with the release (task v13), since `moveExecCaller` recycled it within the same record anyway and the parking could trim live enters. **The interrupted-and-re-executed non-leader `execve` whose exec record is also lost** (task r13): its kept enter is not parked, so the `execCallers` index has no hint for it; when `adoptLostExecCaller` finds no parked caller it asks the held rows instead (`restartTracker.reexecutingExecCaller`: a row of the exit's pid, held under a non-leader tid in `restartContinuing`, whose kept enter is an exec enter of the exit's own syscall, `execve` or `execveat`; of several the one entered last, then the higher tid), releases that row and pairs the exit with the enter the release parks again - since task v13 only on evidence that a record was lost since that enter, see below. That gives the two rows of the delivered record - the -513 row, then the `execve` ret=0 row from the re-executed enter, both under the caller's pre-exec tid - and not one folded row, because a record of this very exec is known to be lost. Before r13 that exit was dropped unpaired and the -513 row stayed held until loop stop or tid reuse. A parked caller is preferred when the process has both. **The exit under the leader tid when the dead leader still holds a row** (task v13): with the leader's exit record lost as well as the exec record, and the leader's row in `restartContinuing`, the `execve` exit is routed to the leader's row first (`routeHeldRestart` goes by the record's tid). It is no step of that fold and releases the row; the kept enter used to be parked again and the exit paired with it - a trace-ID mismatch and no row for the exec - while `adoptLostExecCaller` was never reached and the real caller's -513 row stayed held. Now `continuationCutShortBy` recycles a kept enter that is not the exec's own when the releasing record is the successful exit of an exec under that tid (`completedExec`: `execve`/`execveat`, ret 0, `tid == pid`): a thread has one call in flight, so that call is over - the dead leader's, or one whose exit record was lost - and the exit goes on to `adoptLostExecCaller` (leader's row, caller's -513 row, the `execve` row: three pairs, the bound). Other exits of another syscall are left to pair and count as the mismatch they always were. **Not decided, and documented at `adoptLostExecCaller`**: the leader's kept enter is an exec enter of the exit's own syscall **and** a non-leader thread holds a re-executed exec too (or has one parked). Either may have won - the leader (the other's -513 exit, the other's exit record and the exec record lost) or the other (the leader's -513 exit, the leader's exit record and the exec record lost), three records of the same three kinds each way, and nothing that arrives tells them apart - so the exit stays with the row of its own tid: folded, or -513 row plus `execve` row when `restartProofLost` refuses; if the other thread was the caller that is a successful `execve` under the dead leader's enter and filename. The other thread's row is released behind the exit either way. **An exec releases the rows of the threads it ended** (task v13; `restartTracker.noteExec`, `eventLoop.releaseRestartsBehindExec`, called by `consumeRaw` behind every record): `de_thread` kills every other thread and each releases its row with its own exit record; with that record lost the row sat under a tid no record names again, until loop stop or tid reuse. A record that **proves** the exec makes the loop take every row still held for that pid (`takeProcess`), oldest exit first: each is emitted unchanged, its kept continuation enter recycled (never parked), and - for every tid but the leader's, which is the new program's - the tid retired like its exit record would have (`retireRecycledTid`: comm, a parked enter of a handler's call, the gap baseline the release just wrote - while the row was held every foreign record of that tid would have released it, so all of it is the dead thread's). The proofs are (1) the exec record when it names its caller (`noteExecRecord`: `OldTid != 0`, `Tid == Pid`; a record without `OldTid` may be a non-leader's whose row and kept enter the exit still has to adopt, so it proves nothing here), (2) a successful exec exit that paired with an exec enter - parked under the leader tid, re-parked after a refused fold, or adopted from a non-leader on evidence that the exec record was lost (`tracepointExited` -> `noteExecExit`, behind the trace-ID check: an exec exit that took a read's enter is a mismatch and no proof), (3) that exit folded into the leader's own interrupted exec (`foldRestartExit`). A row still held under the **leader** tid behind such a record can only stand in `restartInHandler` (every other phase is settled by the exit itself, and the exec record releases the leader's row in every phase): a call whose restarting handler exec'd, with the exec record lost and the `execve` exit passed as a handler syscall; it is released with the others, tid kept (`TestProvenExecReleasesTheLeadersRowWhoseHandlerExeced`). **An exit without an enter is not a proof and releases nothing**: a seccomp filter answering `execve` with `SECCOMP_RET_ERRNO|0` (or a user-notification supervisor reporting success) makes the leader's call return 0 without running it - checked live with bpftrace: `sys_exit_execve` ret=0 with `tid == pid`, no `sys_enter_execve`, no `sched_process_exec`, the process and its threads live on - and releasing then would recycle live threads' kept enters and cost each continuation its row. So this residual stays: exec record lost (or its probe not attached) **and** the `execve` exit unpaired - its enter lost, or the caller left nothing to adopt because its RESUME record or its re-executed enter was lost - leaves the dead threads' rows held until loop stop or tid reuse, as before. The rows are released by the loop, not by the record's handler, because one exec can end any number of threads and a handler has `pairChannelSlots` slots: like `releaseAllHeldRestarts` it sends one row and drains it before the next (bound unchanged at 3; `TestExecReleasesMoreRowsThanThePairChannelHolds` runs the real loop over six). Consequences: the rows follow the record's own rows (the `execve`'s) although their calls ended earlier, and after a delivered exec record `dropOnExec` has already run, so the row of a call on a close-on-exec descriptor loses or mislabels its path: the lookup falls back to `/proc/<pid>/fd/N`, which is the new program's table by then - the number closed (no path) or already reused (seen live: a dead thread's pipe read labelled `/etc/ld.so.cache`) - both as at loop stop. Cost: `restartTracker.heldOf` counts the held rows per pid (`hold` in, `take`/`takeWhere` out), so the proven exec of a process that holds none - nearly every exec, and each is proven twice, by its record and by its exit - is one map lookup and no allocation instead of a scan of every held row (61 us and 32 KB at `maxHeldRestarts` before; `TestProvenExecOfAProcessWithoutHeldRowsAllocatesNothing`, `TestHeldRowsAreCountedPerProcess`, `BenchmarkProvenExecOfAProcessWithoutHeldRows`). Not touched: enters parked (not held) under dead threads' tids, which still wait for LRU trimming or tid reuse. **The adoption asks for the lost record it presupposes** (`eventLoop.lostExecRecord`, `trustExecRecords`, `execAttachRecorder`): `adoptLostExecCaller` used to take any unpaired successful exec exit under the leader tid at its word, so a filter-answered leader `execve` while a non-leader thread sat in a real one adopted that thread's enter - one wrong `execve` row before v13, and with the adopted pair counting as a proof, the held rows of every **live** thread released, their kept enters recycled and their tids retired, so the re-executed calls came back without a row and uncounted. Exec records are trusted when the `sched_process_exec` probe attached (it attaches before every syscall probe, so no exec whose enter the trace saw passes unseen) and the drop counter can be read; then the exec record of a real exec by the candidate is missing only if a record was dropped since the candidate's enter, and the exit adopts - and proves - only when `restartDropWatch.lostSince(<that enter's time>)` says a record may have been (one counter read, paid only by such an exit with a candidate). Otherwise it adopts nothing and is dropped unpaired like any filter-answered call, and a refused parked caller keeps its `execCallers` hint. Without that trust - no counter, the probe not attached, or an exec record without `OldTid` seen (an object that predates the field: every non-leader exec of such a run depends on the adoption, so `noteExecRecord` ends the trust for the run) - the exit adopts as before, since the run has no other way to that row, but the pair proves nothing. Residual: filter answer, a thread inside a real `execve` and a drop the watch cannot place before that thread's enter, all at once. **RESUME names its enter by time** because it is emitted before the sampling decision and before the enter's own reserve: at 1-in-N the announced enter is suppressed (N-1)/N of the time (or a full ring buffer refuses it), and without the time check the tid's *next* call of that syscall, whenever it came, was folded in - at `read=2` 11 of 27 rows of a 100 ms stopped read spanned two to four reads. The equal timestamps are therefore part of the record's contract (`types.h`, `restart.c`, the single-clock-read paragraph in `filter.c`, `clockread_test.go`); carrying the interrupted call's sampling decision over in BPF was rejected (a second verdict on the enter hot path, rows the rate did not select, and no help against a refused reserve), so at a rate above 1 a re-execution folds only when both halves are sampled in and otherwise keeps its restart-code row. A HANDLER that means `EINTR` releases the row at once; every other record releases it unchanged; a call interrupted inside the handler releases the outer row **first** and is then held in its place if there is room (`holdRestart`: judged against the bound before the release, the inner call went unheld with `maxHeldRestarts` rows held, the outer row stayed, and BPF's RESUME for the inner call folded it into the outer row), matching BPF's one entry per task. That release happens on the inner **exit record itself**, paired or not (`stepHandlerRecord`: any exit of the tid with a restart code while the handler runs): BPF replaces or clears its entry on every emitted restart-range exit, while an exit whose enter the raw enter filter shed (`-path`/`-comm` on an open) or that was lost never pairs and never reached `holdRestart` - the outer row then took the inner same-syscall re-execution for its own. **Lost records**: a lost RESUME means no fold, a lost HANDLER makes the handler's first syscall release the row, a lost announced enter fails the time check; the losses that leave a well-formed stream (re-executed exit + next call's enter, or the exit of a same-syscall call interrupted inside the handler) are closed by `restartDropWatch`/`restartProofLost`; the -516 `restart_syscall` fold asks the same watch at its RESUME and at its `restart_syscall` exit whenever a drop counter exists (task p03, fs2 bullet - without a counter that fold runs unchecked, this one not at all). An observation is a read of the kernel drop counter plus a boot-clock stamp taken **after** it; the watch keeps the latest total and the stamp of the **earliest** observation that returned it (`firstSeenAt`), fed by the periodic drop monitor (`handleRingbufDropResult`; mutex, it runs on the monitor goroutine - what matters is the poll that returns a **changed** total: it stamps the new total within one monitor period of the drop, and that is what lets a call interrupted afterwards fold again; a poll returning the watched total is a no-op in `observe`, and the only unchanged-delta poll that moves the watch is a stale monitor read landing after a newer direct read, which re-stamps twice and costs the folds of the calls interrupted before the next read, usually one) and by the loop's own reads at RESUME and at the folding exit (the monitor may lag by a period, and a snapshot at hold time would already include later drops because the loop consumes a backlog). Invariant: the counter returned `total` in a read that finished at or before `firstSeenAt`, so a read now that returns the same total proves no drop in between. The fold is allowed only when the read now returns the watched total **and** `firstSeenAt` is before the interrupted exit's time; it is refused when the counter cannot be read, when this read is the first to see a new total, and when the total was first seen after the interruption even though the drop itself may be older (no observation between the drop and the interruption: the proof is impossible, at most one monitor period wide). So an old drop the monitor has seen no longer blocks later calls - before, the counter was only read at fold time, so the first fold after any drop, however old, was refused. The check is host-wide, so nothing folds under backpressure; a refused fold is two rows (above), never a lost one. Remaining assumption: the time-namespace boottime offset `bootClockNs` takes out is known (y13 bullet below). Rows of a restarting handler complete before the call they interrupted: `detourGapBaseline` makes them measure their gap from the interrupted exit and `completeHeldRestart` gives the folded row the gap of its own enter without moving the baseline backwards. Cost: +1.2% kernel instructions on a `bs=1` dd traced with `-comm nomatch` (`perf stat -e instructions:k`, 6 interleaved runs: 11.521G -> 11.663G median, about 24 instructions per syscall), wall time unchanged within noise (8 interleaved runs: 2.49/2.58 s -> 2.47/2.55 s min/median). Known wrong folds (exotic; the full list with the mechanics is in `restart.c`'s header). Each needs the entry to stand at depth 0 although no re-execution is coming **and** the task's first syscall enter that ior traces afterwards to be the very syscall that was interrupted, with its exit recorded - any other traced syscall takes the RESUME and releases the row: a restarting handler that rewrites the saved context to resume other code; a nested handler that `siglongjmp`s into an outer one; a ptrace tracer rewriting the interrupted call's registers at the signal-delivery stop (gdb inferior call: `orig_ax = -1`) or at its syscall-exit stop, which comes after `sys_exit` (replacing the restart code); the re-executed call taken away before its `sys_enter` tracepoint - a ptrace tracer cancelling it or changing its number to an untraced syscall at the re-execution's syscall-**entry** stop (`strace --inject` `error=`/`retval=` sets the number to -1, per strace(1)), a seccomp user-notification supervisor, or syscall user dispatch; a kernel/driver bug leaking -ERESTARTSYS with no signal pending. One wrong fold is of another kind - the re-execution did follow and RESUME was right, but its enter was sampled out and the time rule cannot tell the thread's next call of that syscall from it: a clocksource too coarse (jiffies) to give two enters of a thread different times. Closed: tid reuse after a failed exit-probe attach (the gate above), the sampled-out and lost-record cases, the unpaired interrupted exit inside a handler. Not run on the 4.18/5.14 verifiers: the probes use an `ARRAY` map and scalar context loads through a CO-RE flavor, pinned by `TestSignalDeliverHandlerHasNoContextPointerArithmetic`. Pinned by `internal/generate/restart_harness_test.go` (the real restart.c functions **and its two SEC programs** compiled natively against a simulated map, ring buffer, tracepoint context and clock: 15 scenarios including the 255/256-deep handler nesting and the three -516 ones of task t13, 32 mutations including the depth overflow, a RESUME not stamped with the enter's `now`, swapped `sa_handler`/`sa_flags`, tgid-for-tid, and for t13 the pre-t13 exit hook (-516 not pending), -516 surviving an `SA_RESTART` handler, -515 pending, a code field too narrow for -516 and a decided bit inside it; `ior_is_restart_ret` is cut from the real filter.c; plus the hook call sites and the slot count), `internal/eventloop_restart_reexec_test.go` (each rule, the EINTR negative control, lost HANDLER/RESUME/continuation records, the sampled-out re-execution, the lost-continuation shapes, the refused fold and the `task_rename` release that keep the continuation's row, the taken enter going back through the enter filter and being recycled on an accepted fold, the drop watch with a live clock (a loss seen before the interruption or while the call blocked folds; one seen after it, or not observed before it, refuses), the unpaired interrupted exit inside a handler, several signals, no held row, thread exit and loop stop in every phase, the handler bound, the inner call at the hold bound, the -516 interplay, the gap baseline, the non-leader exec with a held row in both shapes plus the lost exec record, the re-executed `execve`/`execveat` recovered without its exec record (task r13: its negatives including a failed exit, a twice-interrupted `execve`, the parked caller's precedence, the lookup's choice among several rows), the dead task's kept enter recycled on its exit record or a `task_newtask` record, task v13 (`TestSuccessfulExecReleasesTheRowsOfItsDeadThreads` over every proof with another process's row left held and the dead tids retired, `TestOnlyAProvenExecOfTheProcessReleasesItsThreadsRows` with the unpaired exit, the exit paired with a read enter (a mismatch), the caller-less exec record, a failed exit and another process's exec, `internal/eventloop_restart_execproof_test.go` (`TestFilterAnsweredLeaderExecveCostsNoLiveThreadItsRow` with nothing dropped and with a drop seen before the enter, for a parked and a kept candidate; `TestLostExecRecordAdoptionReleasesTheDeadThreadsRows`; `TestUntrustedExecRecordsAdoptButProveNothing`; `TestTrustExecRecordsNeedsTheProbeAndTheCounter`; `TestLostExecRecordExitWithAParkedCallerStaysWithTheLeadersExecve` for the undecided stream's parked form), `TestExecRecordWithoutACallerLeavesTheCallersRowToTheExit`, `TestExecProofIsSpentWithItsRecord`, `TestTakeProcessOrdersItsRowsByExitThenTid`, `TestDeadThreadsKeptEnterIsNotParkedBehindAnExec`, `TestLostExecRecordExitIsNotPairedWithTheDeadLeadersEnter` for a kept read, restart_syscall and execveat enter, its parked-caller and no-caller variants, `TestFailedExecExitStillParksTheKeptEnter`, the undecided stream pinned in `TestLostExecRecordExitWithTwoReexecutedExecvesGoesToItsOwnTid`, `TestNonLeaderExecRecordDoesNotParkTheDeadLeadersEnter` / `...TheCallersDeadEnter` on a full pending-enter table, `TestOutOfScopeNewtaskRetiresTheDeadTasksParkedExecEnter`), the leader exec, three pairs from one exec record and from the `execve` exit that stands in for a lost one, a panic in the released row's handler that must not cost the kept enter, failed (-EAGAIN/-EINTR) handler syscalls and another thread's -512 that leave the row held, the watch under `-race` and its stamp-after-read order, a name fixup spliced into the kept enter and refused as a step of the -516 fold), `internal/eventloop_restart_trust_test.go` (both recorders, the three-part gate, and task v13's exec recorder with its way into the loop), `TestAttachRestartFoldProbes...`, `TestNewSyscallRestartEventFastKernelLayout`, and the integration tests `TestSignalRestartedReadIsOneRow` / `TestSignalRestartedReadFoldsAroundTheHandlersRows` on the `signal-reexec` ioworkload scenario (`cmd/ioworkload/scenario_reexec.go`: one blocking read interrupted by an external SIGSTOP/SIGCONT stopper, by an `SA_RESTART` handler and by a handler with `SA_RESTART` cleared plus the program's own retry; every step is a handshake - `/proc/<pid>/task/<tid>/syscall` shows the thread blocked in the read before the signal is sent, the stopper reports the stop, the runtime forwards the handled signal - and the workload checks the `EINTR` count itself; the reading thread's rows must return exactly 1, 2, -512, 3), and `TestSignalStoppedReadsEachFoldIntoOneRow` / `TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls` on `signal-reexec-many` (`scenario_reexec_sampled.go`: 32 stopped reads, read i on its own descriptor 300+i returning i+1 bytes, so descriptor (from the enter) and return value (from the exit) identify the call without timing: at rate 1 exactly one row per read; with `-syscall-sampling-syscalls read=2` every row on descriptor i returns i+1 or -512, at most once each - without the time check 4-5 rows per run paired descriptor i with a later read's count).
+- **A folded row counts its restarts** (task 203; `event.Pair.Restarts`/`NoteRestart`, `eventLoop.foldRestartExit`, `streamrow.Row.Restarts`, `parquet.Record.Restarts`, `streamCSVHeader`): a row folded by either of the two bullets above holds the call's final return, so the restart code is gone from it. `foldRestartExit`, the only place a fold is accepted, therefore counts each continuation the row takes (`Pair.NoteRestart`, a `uint8` that saturates at 255 so a call restarted more often never reads a small number or 0); a chain (a sleep stopped twice, a re-execution interrupted again) keeps the same pair and counts every hop. Every refusal goes through `releaseTakenRestart`, which neither counts nor touches the continuation's own pair: an unfolded restart-code row and the continuation's row both have 0. A row can have a count AND a restart code (carried on N times, then interrupted again and that hop refused), and a `restart_syscall` row that stands on its own and is stopped in turn counts the `restart_syscall`s folded into it. The count is one column for both kinds of fold: a query asks whether and how often a call was interrupted, the syscall usually tells the kind (-516 only comes from nanosleep/clock_nanosleep/poll/timed futex waits), and a chain never mixes the two in practice, so a second column would add width to every row for nothing. It reaches the data outputs only, as the LAST column of each: Parquet `restarts` (UInt8, required, appended behind `epoll_events`; there is no schema version, columns are only ever appended, recordings made before it simply lack the column and parquet-go reads them with 0) and the stream CSV export's 23rd column. `-plain`'s seven-column CSV and the Stream tab are unchanged. Unit tests: `eventloop_restart_count_test.go` (once/three times stopped, re-executed once/twice, handler rows, refused folds, partly folded chain, saturation), `TestPairNoteRestartCountsAndSaturates`, `TestNewCarriesTheRestartCount`, `TestRestartsColumnRoundTrips`, `TestRestartsIsTheLastUInt8Column`, `TestRecordingsAcrossTheRestartsColumnStayReadable` (old file read with today's `Record` and the reverse), `TestWriteStreamCSVAppendsRestartsLast`. End to end: `TestStoppedSleepIsOneRow` (1), `TestTwiceStoppedSleepCountsBothRestarts` (scenario `stop-restart-twice`, which stops the sleep a second time only once `/proc` shows the thread inside `restart_syscall`; 2), `TestSignalRestartedReadIsOneRow` (1, 1, and 0 for the EINTR pair), `TestSignalStoppedReadsEachFoldIntoOneRow` (1 each), `TestSignalHandledSleepIsNotFoldedWithALaterStoppedCall` (0 and 0). User-facing text: "Finding the calls that were interrupted" in `docs/parquet-querying.md`.
+- **Runtime probe changes end the restart folds' wait** (task o03; `probemanager.Manager.SetChangeHook`, `eventLoop.watchProbeChanges`/`probesChanged`, `restartProbeWatch` in `internal/eventloop_restart.go`, `internal/restart_pending_map.go`): BPF takes a pending task's first traced enter for the continuation, which holds only while the continuation's enter tracepoint is attached when the kernel runs it. A `read` that exits -512, has `read`'s probes switched off in the probes modal and is re-executed unseen left its `restart_pending_map` entry standing; with the probes on again the task's next `read`, a call the program made itself, was announced (RESUME, enter and exit in order, nothing lost) and folded into the row userspace still held (same for a -516 row and `restart_syscall`'s probes). Now the probe manager reports every runtime change of a syscall pair through its change hook, **under the probe's `attachMu`, so the opposite change of that syscall cannot begin before the hook returns**: `Detach` once, with the phase `probemanager.Changed`, after `destroyLinkPair` (only when there was a link; a destroy that reported an error is reported like any other: its tracepoint is detached too), `Attach` **twice**, with `ChangeBegins` before `attachPair` and with `ChangeEnds` after it (`attachReported`, task x13 below; also when the attach failed: it may have had the enter tracepoint attached for a moment, which is an attach and a detach in one, also when the destroy of that enter link reported an error: task z13 below); `AttachAll` at startup runs before the hook is set, `Close` reports nothing, a family batch reports per probe. `runTraceSetup` wires it **only when the manager was published to a TUI** (`if infra.mgr != nil && hooks.probes != nil { el.watchProbeChanges(infra.mgr.SetChangeHook, infra.mgr.IsActive) }`; `IsActive` is asked once, for `restart_syscall`, task 023 in the fs2 bullet, the same test `attachSessionProbes` calls headless; pinned structurally by `TestSetupTraceInfraReportsProbeChangesToTheLoop`): a headless run cannot change a probe, installs no hook, takes no stamp and refuses no fold on this account. `watchProbeChanges` reports one change itself (`noteProbeChange`, what every report does: stamp, clear, stamp, wake), because the TUI gets the manager (`publishProbeManager`) before the loop exists and a toggle made in between is reported to nobody. The hook runs on the goroutine that changes the probe, never on the loop's, and touches only the BPF map, the watch's atomics and a one-slot channel - the tracker's map stays the loop's own, and so do the loop's callbacks. Every report (`probesChanged` -> `noteProbeChange`) does three things - in the order stamp and wake, clear, stamp and wake again, the list below is by purpose -: (1) `restartPendingMap.Clear` writes 0 to all 4096 slots (one `BPF_MAP_UPDATE_BATCH`, ~0.3 ms measured; per-slot fallback for kernels before 5.6 or a short batch, ~2 ms; a failure warns once per run - through the loop, see task x13 below - and changes nothing else; wired by `attachRestartPendingMap` in `newTraceEventLoop` only, pinned structurally by `TestNewTraceEventLoopHandsTheLoopTheRestartPendingMap` - the headless Parquet run cannot change probes; the key/value slices are rebuilt per call on purpose, two toggles run as two TUI commands and may clear concurrently); (2) it reads the boot clock (`readDropStampClock`) and stores it as the latest change, forward only (CAS, two probes may change at once) - the reading after the clear is the one that counts (every entry the clear removed is older than it), and a first reading is stored before the clear so that a stamp exists as soon as possible after an attach; (3) it wakes the loop (`case <-e.restarts.probes.wake` in `processRawEvents`), which releases every held row whose interrupted exit is at or before the stamp (`releaseRestartsBehindProbeChange`, `takeInterruptedBy`; a taken continuation enter is parked again, so its exit is a row of its own). **The time rule is what carries the proof, not the wake and not the clear**: `holdable` refuses a row interrupted at or before the stamp and `restartAcrossProbeChange` releases a held one at the two committing steps (RESUME and the continuation's exit, where `restartProofLost` asks too). A stale RESUME is reserved after the re-attach, hence after the detach's stamp was stored, so the loop sees the stamp when it processes that record however far behind the ring buffer it is; "release what is held when the change is noticed" alone fails for a lagging loop, which notices the change before it has read the interrupted exit (`TestRowInterruptedBeforeAProbeChangeIsNotHeld`). The clear is the second line (no stale RESUME is emitted at all; with an unknown boottime offset, where record times and `bootClockNs` readings cannot be compared, it is the line that is left for an entry made before a report - it does not reach an entry made while an attach is in flight, see **Time namespaces**) and is itself racy against BPF on other CPUs: a signal delivery or `rt_sigreturn` that read the slot before the clear and writes the changed word back keeps that entry, which the time rule then refuses. `Attach` reports too. **Before attaching**, for an entry the detach's stamp can miss: an exit handler still running on another CPU when `Destroy` returns would store an entry microseconds younger than the stamp (possible if the kernel does not wait for a grace period there, which it may not while another perf event keeps the tracepoint registered - see `perf_trace_event_unreg`; not verified against kernel source, and the design does not depend on it); it cannot announce that syscall while the probes are off and is cleared, its row refused, by the attach's first report. **After attaching**, because the two tracepoints are attached one after the other and the first stamp is older than both: with `restart_syscall`'s probes being attached, a traced `poll` stopped after the first report (row held, task pending) and resumed before the enter tracepoint is there has its `restart_syscall` unseen, nothing releases the row, and the thread's next recorded enter - the `restart_syscall` of a later stopped call that is itself not recorded - was announced and folded into it (`TestCallStoppedDuringAnAttachIsNotFoldedWithALaterRestartSyscall`, a real manager whose fake program feeds the loop during the attach). The second report is younger than that row. **A link's `Destroy` is final, so no change leaves a pair half attached** (task z13; the contract comment at `probemanager.Link`). `Destroy` is called at most once on a link, and afterwards the link is gone also when it returned an error: the manager takes a link off its entry before destroying it (`probeEntry.takeLinks`, `takeLinksToDetach`, `detachProbeEntry`), records the error and never keeps a link to try again. `attachPair` returns links or an error, never both - when the exit attach fails and the enter link's `Destroy` reports an error too, it returns no link and the joined error (on one line, task 223 below) - so the probe is **inactive with `lastErr` set**; `Detach` ends with the probe **inactive and without a link whatever the destroys returned**, the error (`detach enter <syscall>: ...; detach exit <syscall>: ...`, wrapping both) recorded and returned; `Close` destroys only what is still on an entry, and an attach that finds the manager closed at commit destroys the links it brought once and stores none. `IsActive`/`States`/`ActiveCount` therefore say "both tracepoints attached" or "none"; the probes modal shows a probe whose detach or attach reported an error as `[ ] name ! error` and its toggle attaches both tracepoints afresh; a family detach lists such a probe under `BatchResult.Errors` although it is detached, and the modal counts it among the detached (`familyOutcome`: "FS: detached 3 of 3 probes" with "1 reported an error, first ..." - it used to say "detached 2 of 3" and "1 failed" beside a Families row showing none attached; an attach keeps "attached 1 of 2" and "1 failed", those probes did stay detached; task 223); the headless "no syscall probe attached" guard (`noProbesError`) fires when every pair failed, with or without failed cleanups (`TestAttachRequiredTraceProbesHeadlessFailsWhenEveryCleanupFailsToo`); and `traceSetIsFinal` sees such a `restart_syscall` as inactive. **Why** (libbpfgo v0.9.2-libbpf-1.5.1, read from the sources; a failing `Destroy` is provoked in the root tests of task 123, see below - `mage integrationTest` and `mage integrationTestSerial` run them as root before the integration tests, so a libbpfgo bump is checked by that gate (task 223: `runRootLinkTests` in `Magefile.go` builds the `./internal` test binary to the integration test binary's path - the one path a scoped sudoers rule allows; the step removes it again in a defer, and the integration binary is compiled there afterwards - and runs it from `internal/` with `gatecmd.RootLinkTestArgs()`, the argv for the three tests of `gatecmd.RootLinkTests()`; the step fails unless each of them printed a top-level `--- PASS:` line (`gatecmd.RootLinkTestsNotPassed`), so a pattern that matches nothing, which exits 0, and an all-skipped run both fail; `internal/buildgate/rootlink_test.go` pins that the step is there and runs before the integration compile and run, each exactly once, that its failure stops the target, that the Magefile passes exactly that argv in `internal/`, that the binary is removed in a defer, and that the list names exactly the tests of the file); by hand: `go test -c ./internal/ -o internal.test && cd internal && sudo -n -E ../internal.test -test.run 'ModuleClose|BareLibbpfgo'`): libbpf 1.5.1 `src/libbpf.c` `bpf_link__destroy` (line 10666) calls `link->detach` and then frees the link whatever detach returned; `bpf_link_perf_detach` (line 10789), the detach of a tracepoint link, closes the perf event fd and the link fd also when `PERF_EVENT_IOC_DISABLE` failed, and closing them is what detaches the program - **the kernel-side detach happens even when `Destroy` reports an error**; libbpfgo `link.go` `BPFLink.Destroy` (lines 70-81) returns the errno before it clears its pointer to the freed link, so a second `Destroy` is a use after free and a double free. The first z13 fix kept the enter link of a failed attach on the entry "so that `Detach`/`Close` retry the destroy", and `commitDetach` had always kept a link whose destroy failed: both destroyed a freed link again, and the first also let a headless run with every pair "half attached" pass the no-probe guard. The defect z13 was filed for (the enter tracepoint stays attached, a later `Attach` adds a second enter program, every enter record twice) **cannot happen with the real link**: its enter tracepoint is detached by the failed destroy. Should a kernel ever keep a program attached past the close of those fds, ior could not detach it any more (the link is freed); that case is not handled. Not in the manager's reach: libbpfgo's `Module.Close` (`module.go` lines 194-198) destroys every link whose pointer is still set, i.e. also one whose `Destroy` failed - a use after free and a double free at teardown (a bare `Module.Close` then dies with SIGSEGV in `bpf_link__destroy`). **ior therefore hands out every libbpfgo link wrapped, and the wrapper zeroes the `BPFLink` after a `Destroy` that reported an error** (task 123; `libbpfLink`/`newLibbpfLink` in `internal/ior_bpflink.go`, used by `attachLibbpfTracepoint`/`attachLibbpfRawTracepoint`, the two functions both attach methods of `libbpfTracepointProgram` pass their program to, so the probe manager's links and the hand-attached probes' alike): `Destroy` calls libbpfgo's once (an atomic swap takes the link, so a second call, a nil or an empty wrapper never reach libbpf), passes the error on and, only when there is one, does `*link = bpf.BPFLink{}`. That compiles from outside the package and clears the private pointer `Module.Close` tests (`module.go` line 195), so the close skips that link and releases everything else as usual - no fd, program, map or ring buffer is left behind, and the teardown wiring is the plain one (`setupBPFModule` returns the `*bpf.Module`, `closeTraceInfra` closes it). A failed attach hands out an untyped nil link, never a wrapper around a nil `*bpf.BPFLink`. **Caveat**: a zeroed link has a nil `prog`, which `Module.linkExist` (`module.go` lines 460-468, reached only from `Module.AttachPrograms`) dereferences, and `Module.DetachPrograms` destroys the module's links behind the wrappers' backs; ior attaches each program by name and calls neither, pinned by `TestIorNeverCallsTheModuleWideAttachOrDetach` (a by-name scan of every Go file in the repository). A failing `Destroy` does not occur in practice but **can be provoked**: close the link's fds behind libbpf's back (the new `anon_inode:bpf_link` / `anon_inode:[perf_event]` entries in `/proc/self/fd`) and `Destroy` returns `EBADF` - for a classic tracepoint from the `PERF_EVENT_IOC_DISABLE` ioctl alone (`bpf_link_perf_detach` ignores the results of its `close(2)` calls), for the raw tracepoint from the `close(2)` in `bpf_link__detach_fd`. The libbpfgo fix would be to clear `l.link` in `BPFLink.Destroy` before returning the errno; not filed upstream, and the cgo build's libbpfgo checkout is not patched. Once libbpfgo does that the zeroing is a harmless no-op and can be removed (`TestBareLibbpfgoLinkKeepsItsPointerAfterAFailedDestroy` fails then). Tests: `internal/ior_bpflink_test.go` (no root: error passed on and link zeroed, a successful destroy leaves the struct alone, at most one libbpfgo call also under concurrent calls, nil safety, the untyped nil, the structural pins `TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks` and the scan above, and for task 223 `TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks` and `TestAttachesOfDifferentSyscallsNeverOverlapInLibbpfgo`, see below); `internal/ior_bpflink_root_test.go` (**root only, skipped otherwise**; `mage integrationTest` runs them, or run the `./internal` test binary under `sudo -n -E` by hand: the real object is loaded, `sched_process_exec` and the raw `task_rename` are attached through `libbpfTracepointModule`, their fds closed, both `Destroy` calls return `EBADF`, `Module.Close` survives and leaves no BPF fd open; the clean negative; and the characterization of a bare libbpfgo link, whose pointer is still set after the failed `Destroy` and whose `Module.Close` crashes - the crash is only logged, a use after free need not crash). Each scenario runs in a re-executed child (`TestLibbpfLinkHelperProcess`), because a crash in C takes the test binary with it and because closing fds libbpf still believes it owns is only safe in a process that opens nothing else in between. **Leftovers of z13 and 123** (task 223). *One attach at a time through libbpfgo*: libbpfgo appends every link to its module's list without a lock (`prog.go` lines 385 and 405, `p.module.links = append(...)`), the manager holds only the changed probe's `attachMu`, and the TUI runs each single toggle of the probes modal as a command on a goroutine of its own - two probes toggled on in quick succession were two attaches of different syscalls racing on that slice (a lost entry at best; the modal refuses a single toggle only while a family batch or an all-on/all-off walk runs, and those, like the startup attach, are loops on one goroutine). `libbpfAttachMu` in `internal/ior_bpflink.go` now serialises both attach calls: one mutex for the process (one module per session, two only during a TUI restart), held across libbpfgo's call. Destroys are **not** serialised: `BPFLink.Destroy` touches its own link only (`link.go` lines 70-81), never the list, and the manager destroys the links of a pair - at `Close` hundreds - at once on purpose (grace periods merge only when they overlap); `Module.GetProgram` takes no lock either (a lookup in the loaded object and a fresh `BPFProg`). `TestAttachesOfDifferentSyscallsNeverOverlapInLibbpfgo` attaches 16 syscalls at once through a real manager and the real seam over stubbed attach calls (`attachBPFTracepoint`/`attachBPFRawTracepoint`, variables like `destroyBPFLink`) that append to an unsynchronised list: it counts overlaps and, under `-race`, fails by itself. *Nothing attaches beside the seam*: the pin on `libbpfTracepointProgram`'s methods alone left any other function free to call `GetProgram` on the module, attach and hand out the bare link; `TestOnlyTheLibbpfSeamUsesLibbpfgoProgramsAndLinks` scans every non-test Go file for the selectors `GetProgram`, `BPFProg`, `BPFLink`, `prog` and every `Attach...` method name of libbpfgo's `BPFProg`, `BPFMap` and `Module` (enumerated by reflection, so a libbpfgo bump is covered) outside the places listed in `libbpfSeamNames` (by name, so the `probemanager.Attacher` call sites are listed too; a program reached through none of these names, e.g. `Module.Iterator`, is not seen); `TestLibbpfTracepointModuleGetProgramOnlyWrapsTheProgram` compares the body of the allow-listed `libbpfTracepointModule.GetProgram` whole with a reviewed text (an attach planted there needs no pinned name), and `TestLibbpfSeamViolationsFindsABypass` feeds the scan a table of bypasses and the seam itself. *An attach whose end report panics keeps its links*: `attachReported` defers the commit (`commitAttach`) behind the deferred `ChangeEnds` report - the order "reported, then committed" is unchanged - so a listener that panics there leaves the probe active with both links instead of dropping them (they stayed attached until `Module.Close` while the manager called the probe inactive, and the next `Attach` attached a second pair: every record twice); an attacher that panics commits nothing, as before. *The recorded error stays until a change replaces it*: a `Detach` that finds no link, and `Close` for an entry without one, leave `lastErr` alone (`commitDetach`'s `destroyed`, `detachProbeEntry`; they used to clear it), so the modal's `! error` - why the probe is off - survives a no-op detach, and `States` of a closed manager (the modal keeps the manager it was opened with) still shows it; `Close` records only the outcome of its own destroys. *Errors on one line*: `joinOnOneLine` (`lineError` in `internal/probemanager/errors.go`, "; " where `errors.Join` puts a line feed, `Unwrap() []error` so `errors.Is`/`errors.As` work as before) joins the attach error with a failed cleanup in `attachPair` and the errors of `commitAttach` on a closed manager - the texts shown in the modal's probe row and error line and in the one-line skip warning (`ior: skipping tracepoint for <syscall>: ...`); `BatchResult.Err()` still lists one syscall per line and is shown nowhere. *No destroy under the manager lock*: `commitAttach` on a closed manager stores nothing (`storeAttach`) and destroys the two links it brought after releasing `m.mu`, both at once (`destroyLinkPair`) - nobody else can reach them, and the caller's `attachMu` is what `Close` waits on. *`Close` counts a pair a `Detach` is destroying* (`pairEntry.active`), now pinned by the progress assertion in `TestManagerCloseWaitsForDetachAndDoesNotDoubleDestroy`. **libbpfgo's link list is never pruned**: every attach adds a `BPFLink` that stays on `Module.links` after its `Destroy` (pointer cleared) and keeps its `BPFProg` alive. Measured as root on the real module (3000 attach/destroy cycles of `sched_process_exec`): **104 bytes and 2 heap objects per attach** (56-byte `BPFLink`, 32-byte `BPFProg`, the 8-byte list slot), so ~208 bytes per probe pair switched on; one all-off/all-on round over all 367 pairs costs ~76 KB and 100 such rounds ~7.6 MB, freed when the session's module is closed (every trace restart). `Module.Close` with 3050 dead entries on the list took 2.4 ms. Left alone: the list is private to libbpfgo, so pruning it would take a patched libbpfgo, and nothing is lost past the session. Tests: `internal/probemanager/outcome_test.go`, `TestSkipWarningOfAnAttachWhoseCleanupFailedToo`, `internal/tui/probes/failed_detach_test.go`. z13 left the hook contract as it was (two reports for an attach, failed or not; one for a detach that had a link). Tests: `internal/probemanager/final_destroy_test.go`; every fake link of the package records a `Destroy` beyond one per link handed out and `TestMain` fails the run over it. **An attach in flight holds and folds nothing** (task x13). The two reports of an attach are made around the attach call, not when the kernel attaches: begin (stamp S1, clear), the kernel attaches the enter tracepoint (k1), then the exit tracepoint (k2), the call returns, end (stamp S2, clear). The fresh pair records from k1 on, before S2 exists, and the two stamps left one wrong fold: with `restart_syscall`'s probes being attached, a `poll` interrupted between S1 and k1 (row held, S1 is older) and resumed unseen before k1, a later silent call of the thread stopped and resumed after k1 (its `restart_syscall` announced from the entry the `poll` left, enter recorded), exit after k2, and the loop at that exit before the second report had stored anything - one thread stopped and continued twice within one attach. No stamp can be taken at k1, so the hook now carries a phase (`probemanager.ChangePhase`: `Changed` for a detach, `ChangeBegins`/`ChangeEnds` for an attach; since task 023 inside a `probemanager.Change` that also names the syscall and says whether the change left it attached) and `restartProbeWatch.inFlight` counts the attaches between the two: `probesChanged` raises it **before** the begin notes anything and lowers it **after** the end has stored its last stamp, and `changedSince` - what `holdable` and `restartAcrossProbeChange` ask - answers yes while it is above zero. Why "in flight now" is enough although the loop lags the ring buffer: a record of the new attachment exists only after k1, so after the count went up, and the loop processes it either while the count is up (refused) or after it came down, when S2 is stored - and the row it would fold into was interrupted before that record was made, hence not after S2 if that was before the end read the clock for S2 (later, the attach call had returned, both tracepoints were attached at the interruption and the fold is sound); a loop that finds the count at zero is therefore ahead of every begin whose end it does not see, or behind an end whose stamp it sees; a lagging loop that reads older records while the count is up refuses those too, which costs folds only. **What the proof rests on is the order of the end's two writes**: the stamp is stored, then the count lowered, so the loop never finds the count down with the stamp from before S2 still standing, however long the reporting goroutine is off its CPU in between (with the writes swapped the hold check and both committing checks can all fall into that gap). It does **not** rest on `changedSince` loading the count before the stamp: every fold asks three times (hold, RESUME, the continuation's exit) and one end can slip between the two loads of only one of them, so with the loads swapped the worst case is a row held for a moment and released by the wake token the end's note left, or refused at the next check. Raising the count before the begin notes anything likewise only spares such a transient hold. Rows are not held while the count is up either: they would wait for the thread's next record and then, all but always, not fold, S2 being younger than every row interrupted before the end's last clock reading (a row interrupted between that reading and the count coming down, and read by the loop in that instant, is younger than S2 and would have folded soundly - it is not held either, which costs that one fold); one held just before the begin is older than S1 and released by its wake. A count, not a flag: a family toggle and single toggles attach several probes at once. `Detach` keeps its single report: its tracepoints only go away, a stale entry needs the continuation's enter unseen, and then no enter of that syscall is recorded until the next attach, which begins after the detach's stamp. Manager side (`SetChangeHook` comment is the contract): an `Attach` reads the hook once (`changeReporter`) and makes both reports to it, `ChangeEnds` deferred (`attachReported`), so every begin that returned gets exactly one end - also when the attach fails or panics, or the hook is replaced or removed meanwhile - and no end comes without its begin; `SetChangeHook` with a non-nil hook returns only when every `Attach`/`Detach` that began before it is over (`probeEntry.awaitChange` passes each `attachMu` once; a nil hook waits for nothing, and a hook must not set another hook), so the install's own stamp in `watchProbeChanges` is younger than a change the TUI had under way and every later change reports in full. If the begin report itself panicked after raising the count, the count would stay up and the run would fold nothing more (conservative; not handled further). **The failed-clear warning is raised by the loop** (task x13): `probesChanged` runs on the probe manager's goroutine, and trace setup installs the hook (`runTraceSetup`) before `runTraceLoop` -> `configureEventLoopOutput` writes the loop's `warningCb` without a lock, while the TUI already has the manager - the hook reading `warningCb` was a data race (a failed clear plus a toggle within milliseconds of startup). The hook now leaves the message on the watch (`restartProbeWatch.clearFailedWith`, `clearWarning`, an atomic pointer; once per run as before) and the woken loop raises it (`probeChangeNoticed` in the `wake` case of `processRawEvents`, then `releaseRestartsBehindProbeChange`), on the goroutine every other loop warning comes from; a warning left after the loop stopped is not shown. **Residual**: none where record times and stamps are on one clock, which is any host and any time namespace whose boottime offset `bootClockNs` could read (y13 bullet below); with an offset it could not read, see next. **Time namespaces**: the stamp is a `bootClockNs` reading, i.e. on the host's boot clock like the `bpf_ktime_get_boot_ns` record times (y13 bullet below). Only with an unknown boottime offset (taken as 0, one setup warning per trace session) do the two differ, by the real offset. Positive: the stamps lie in the records' future and every fold is refused for the length of the offset after each probe change (the install included) - conservative, costs folds only. Negative: the stamps lie in the records' past, the time rule does not refuse a row interrupted less than the offset before a change, and the o03/x13 protections against a stale entry are down to the map clear and the in-flight count (which no clock enters). **The attach-window wrong fold is then possible again** for a loop that lags past the end of the attach: a call interrupted and resumed unseen while the attach was in flight left its entry, the stale RESUME was emitted after the kernel attached the enter tracepoint and before the end's clear (so that clear cannot guard it), and a loop that reads those records after the end finds the count down and S2 older than the row, holds it and folds the later call into it. Not closed; it needs the offset, and the run was warned. TUI runs only, since headless runs take no stamp. The rule is coarse on purpose: any pair's change refuses every row interrupted before it, of every syscall and task (a family toggle refuses folds for as long as it runs; refused folds cost no row), and the hand-attached probes (`signal_deliver`, `sched_process_exit`, the fold's own `rt_sigreturn` program) never change at runtime. Tests: `internal/eventloop_restart_probes_test.go` (every held phase released as its own row; the task's stream with a loop that is never woken; the change after the enter was taken; the lagging loop; the negatives - a change before the interruption, a row interrupted after it left held; a change while the call was blocked, before its interruption - rows are judged by the interrupted exit, not the enter; the woken loop releasing a row interrupted exactly at the stamp and keeping one a nanosecond younger; clear-before-stamp order and the first stamp standing during the clear; a failed clear; the install clearing and waking, with the hook registered before that report; the idle running loop woken without a record, and its released row leaving a `-plain` sink through the flush timer the wake case arms; changes racing the running loop under `-race`; for x13: the twice-stopped thread within one attach as two rows with nothing held, also through a real manager with the later `restart_syscall` exit fed ahead of the end report (`TestCallStoppedTwiceWithinOneAttachIsNotFoldedBeforeTheAttachReturns` in `ior_trace_wiring_test.go`); the lagging loop refused by the end stamp; both committing steps refused on the count alone; the negatives - an attach that is over, and the count with two attaches in flight; the count up at both clock readings and the clear of either report (`TestProbeAttachIsCountedBeforeItsFirstReadingAndUntilItsLast` - a single goroutine cannot see the store, so the store-then-lower order of the end is watched by a second goroutine in `TestEndOfAProbeAttachStoresItsStampBeforeItLowersTheCount`: 200000 attaches reported while a reader asks about an instant inside the latest report; a count lowered between the last reading and its store was answered wrong tens of thousands of times per run on several CPUs, and passes with `GOMAXPROCS=1`, where the test proves nothing); the warning left for the loop, raised once, by the running loop, also for a clear that failed at the install and is raised when the loop starts, and `TestFailedClearOfPendingRestartsIsReportedByTheLoop`, which under `-race` fails on a hook that warns by itself), `internal/restart_pending_map_test.go` (fake map), `internal/probemanager/change_hook_test.go` (the phases and what the fakes had seen at each report - none at `ChangeBegins`, both attaches at `ChangeEnds`, also for a failed attach and one that panics; the end reaching a hook removed during the attach; `SetChangeHook` parked until an attach under way is over, the new hook told nothing of it, and until a detach under way is over, which reports to the new hook; the opposite change parked on `attachMu` while the hook runs; every wait of these tests is bounded (`awaitWithin`, 10 s, and `parkwait.Await` with `Done`), and a hook is removed during a change on a goroutine of its own (`removeHookDuringAChange`), so a `SetChangeHook` that waits where it must not, or holds the manager lock while it waits, fails the test by name instead of by the binary's timeout), `TestWatchProbeChangesWithARealProbeManager`, and the harness scenario "userspace clears the map at a probe change" (`internal/generate/restart_harness_test.go`, a `clear` command). Not covered by an integration test: only the TUI changes probes at runtime, and the integration harness runs ior headless.
+- **Boot-clock readings are converted to the host's clock** (task y13; `internal/bootclock.go`): BPF stamps records with `bpf_ktime_get_boot_ns`, which is not namespaced, while `clock_gettime(CLOCK_BOOTTIME)` inside a time namespace returns host + the namespace's boottime offset (Linux 7.2, `unshare -T --boottime 1000`: `/proc/uptime` 127791.96 vs BPF 126791.75 s). `bootClockNs` is the one place Go reads that clock and subtracts the offset, read once (`sync.OnceValue`) from `/proc/self/timens_offsets`, so the four comparisons with record times (`provisionalSeedNeedsRecheck`, `fdTracker.cacheReadBefore`, `restartDropWatch`, `noteProbeChange`) hold inside a namespace too. An assumption is left only where the offset is unknown. Facts the code relies on, all measured: the offsets are relative to the host whatever the nesting (a namespace created inside +1000 and given 500 reads host + 500); they cannot change once a task entered the namespace (EACCES); a negative offset is printed as negative seconds plus non-negative nanoseconds (`-2 500000000` = -1.5 s); the file describes `time_for_children`, which is not the process's own namespace for a task that called `unshare(CLONE_NEWTIME)` (it kept the host clock while the file showed the offset) nor for one exec'd by it on a kernel that does not switch on exec. Hence the offset is used only when `/proc/self/ns/time` and `ns/time_for_children` are the same link; otherwise, and when the file is unreadable or malformed, the offset is taken as 0 and `warnUnknownBootClock` adds one setup warning per trace session (so again after a TUI restart of the trace). `runTraceSetup` must call it **before** `wireEventLoopLogging`, which drains the setup warnings; the first version called it after and the warning was never shown (`TestTraceSetupCollectsNoWarningAfterTheDrain` pins that nothing is handed `warnSetup` after the drain). A missing file is offset 0 without a warning only when `ns/time` is missing too in an existing `/proc/self` (no CONFIG_TIME_NS); with the link present, or without `/proc/self` (not mounted, or another PID namespace's), it is unknown. Before the fix, inside +1000 s no procfs answer counted as read before a close (the close of `closeuntracked-0.txt` was unnamed) and a TUI run refused every restart fold for the length of the offset after a probe change; inside -1000 s most of the 64 close rows were named after the reusing pipe. Never read `CLOCK_BOOTTIME` for a comparison with record times except through `bootClockNs`. Tests: `internal/bootclock_test.go` (parser, fake `/proc/self` trees, `hostBootNs`; `TestBootClockNsReadsTheHostClockOfThisProcess` is meaningful when the test binary is run under `unshare -T --boottime N`), integration `TestCloseUntrackedInsideTimeNamespace` (ior started through `TestHarness.IorWrapper` = `unshare --time --boottime ±1000 --`; skipped without unshare(1) or time namespaces, or where the exec'd program is not moved into the new namespace) and `TestUnknownTimeNamespaceOffsetIsWarnedAboutOnce` (a garbled file bind-mounted over ior's `/proc/<pid>/timens_offsets` in a private mount namespace; the warning must be printed exactly once).
 
 ## Integration-test output ownership
 
@@ -366,20 +483,63 @@ the row-only fields. Dedicated deterministic ENOENT/EBADF scenarios assert both
 the exact negative errno in `RetVal` and `IsError=true`; presence/count alone is
 not sufficient.
 
+Scenarios whose ior arguments depend on workload state use two harness hooks.
+`TestHarness.IorArgsForPID` (`func(pid int) ([]string, error)`) returns extra
+ior args from the workload PID (appended after the harness's own, so `-pid -1`
+overrides its `-pid`), honoured by both `RunWithIorArgs` and
+`RunParquetWithIorArgs`. The callback runs after the workload has started, so it
+must report failure through its error result and never call `t.Fatal`/`Goexit`:
+when it returns an error, the harness kills and reaps the workload before
+failing the run, whereas an unwound goroutine would skip that cleanup and leave
+the workload waiting 30s for its startup file as a zombie. On the workload side,
+`scenarioPrestarts` (`cmd/ioworkload/scenario_threadexit.go`) runs a hook
+*before* the PID is printed, i.e. before ior starts: `thread-exit-tid-worker`
+and `exec-non-leader-thread-tid` use it (`startParkedWorker`) to park a worker
+thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
+`IorArgsForPID` reads to pass `-tid <worker>`. `TestHarness.IorEnv` adds
+`KEY=VALUE` entries to ior's environment for every run built through
+`iorCommand`, e.g. ior's `IOR_TEST_*` hooks (task wz2).
+
 ## TUI Behavior
 
 - **Default mode** is TUI (`-plain` disables TUI and prints CSV rows to stdout).
+- **Terminal-safe traced text** (`internal/textsafe`): comm names, paths, argv and frame names are attacker-controlled (a file named `"\x1b]8;;http://evil\a..."` plants an OSC 8 link). `textsafe.ClassAt`/`FirstUnsafe` is the single classification of unsafe runes (C0/DEL/C1 controls, invalid UTF-8 bytes, invisible/bidi format runes, blank-rendering space lookalikes (`textsafe.IsBlankLookalike`: every Unicode `Zs` space except U+0020, e.g. U+00A0 and U+3000, plus the pinned blank symbols U+2800, U+303F, U+FFFC, U+13441, U+13442, U+16FE4, U+1D159; the zero-width joiner marks such as U+2D7F are deliberately left alone, see `blank.go`; so legitimate names with a no-break or ideographic space show as `?`/`\u00a0` too, task ms2), a ZWJ outside an emoji sequence). The TUI replaces them with one-cell placeholders (`tui/common.Sanitize`); `-plain` (`event.Pair.AppendCSVRow`, `plainSink`) and `ior collapsed` (`CollapsedOptions.Escape`) rewrite them as `\x1b`/`\u202e`/`\U000e0041` via `textsafe.Escape`, selected by the shared `-escape=auto|always|never` flag (`textsafe.EscapeMode`, a `flag.Value`, so an invalid value is a parse error; `EscapeMode.Escaper` decides once per run). `auto` (default) escapes only when stdout is a terminal, so piped or redirected output stays byte-exact, but a pipe that ends in a terminal (`| less -R`, `| grep`, `| tee`) still shows raw bytes: that is what `always` is for; `never` keeps raw bytes on a terminal. The -plain default printCb (`plainStdoutSink.Print`) binds `os.Stdout` on the first pair, not at loop construction. It formats rows append-style into a reused buffer (`AppendCSVRow`, allocation-free for clean rows) and writes them in 64 KiB batches instead of one write(2) per row; a terminal stdout is written per row, and otherwise the event loop flushes within `plainFlushInterval` (20ms) of the first buffered row and when it stops (`eventLoop.flusher`, flushed by a defer in `run` that fires first on every exit, including a panic unwinding through it). `SetPrintCallback` drops the flusher (right for a callback that replaces the sink); a wrapper that still feeds the previous callback must use `WrapPrintCallback`, which keeps it, and `configureEventLoopOutput` must therefore use `WrapPrintCallback`, never `SetPrintCallback`, for the active-probe filter, or the 20ms timer and the shutdown flush silently vanish and rows leave only in 64 KiB chunks. Accepted trade-off: an exit that bypasses `run`'s defers (a crash in another goroutine, SIGQUIT, SIGKILL) can lose up to `plainFlushInterval` / 64 KiB of buffered rows, which the old unbuffered writer did not; SIGINT/SIGTERM, and SIGHUP in the headless modes unless the process inherited it as ignored (see **Headless signal handling**), cancel the context and flush normally. A failed write drops that batch, including the bytes of a partial write, and is recorded in `plainStdoutSink.Err()`; it is also reported through the sink's `onErr(err, droppedRows)`, which `newEventLoop` wires to `eventLoop.outputFailed` (the CSV header write reports the same way). The first failure warns on stderr (`notifyWarningOrLog`), stops the trace (`stopTrace`, wired to the trace's cancel func by `runTraceLoop`, so ior does not keep tracing into the void), adds the dropped rows to `rowsLost` (shown as `rows lost to stdout write errors: up to N` in the statistics, an upper bound because a partial write counts its whole batch), and `runTraceWithContext` joins `eventLoop.outputError()` into its result, so `ior -plain ... > /dev/full` exits 2 with `Failed to run: writing -plain output to stdout: ...` instead of 0. EPIPE takes the same path, but normally never gets there: `-plain` keeps die-on-SIGPIPE (see **Headless signal handling**), so the process ends from the signal first; the error path covers a parent that started ior with SIGPIPE ignored. Pinned by `TestPlainRunStopsOnFullDisk`, `TestPlainRunStopsOnUnwritableStdout` and `TestOutputFailedStopsTraceOnce`. The CSV header line is written directly to stdout by `run` before the first row and never goes through the sink, so it must stay ahead of every buffered row (`TestPlainRunHeaderPrecedesRows`). Escaping runs before CSV quoting and adds no delimiter, so rows stay valid CSV. Add new unsafe classes in `textsafe`, never in one renderer only. Independently of `-escape`, `WriteCollapsedStacks` always encodes LF/CR inside a frame as `\x0a`/`\x0d` (`encodeCollapsedFrame`, applied before aggregation) because they are structural in the line-based collapsed format; `;` never reaches a frame since `buildFrames` splits on it, and the weight is always the last token. A positive-weight record whose selected fields all render empty is counted under the `[unknown]` frame (`collapsedEmptyFrame`) so the total weight is preserved (the event count for the default `-count count`, the sum of that counter otherwise); it is not collision-free (a comm or relative path component named `[unknown]` merges into it, harmless), and zero-weight records are omitted.
+- **The `-flamegraph` recorder is bounded** (`internal/flamegraph/recordcap.go`, task uq2): a `.ior.zst` record is one row per distinct `(path, tracepoint, comm, pid, tid, flags)` key (~250 B of heap each while recording; `Recorder.Write` adds only ~1-2 MB whatever the count, because `encodeRecords` streams the records message batch by batch, see the next bullet; `ior collapsed -fields` picks frames after the fact, so every field must be stored), which a fork- or thread-churning system-wide run grows by ~6000 keys/s, over 1 GB in the default 900s. `NewRecorder` therefore caps it at `DefaultMaxRecordKeys` (2^19 records, ~130 MB) and degrades in two stages, churning pid/tid first and the default collapsed fields (`comm,tracepoint,path`) last. Keys that already exist keep aggregating exactly; only a NEW key past the cap is folded. **Stage 1** folds it into the record of the same path, comm, tracepoint and flags with pid 0 and tid 0 (new stage-1 records may use a headroom of cap/8 beyond the cap, `stageOneHeadroom`; under pid/tid churn alone nothing the default fields show is lost). **Stage 2**, only when that stage-1 record would be new and the headroom is used up, folds it into a per-(tracepoint, flags) record with path and comm `[other]` and pid/tid 0. Totals (count, durations, bytes) are exact at every stage, the first keys seen win, and the memory bound is cap + cap/8 + one `[other]` record per (tracepoint, flags) seen. The fold is announced, not silent: the first event of each stage prints a one-time stderr notice during the run (the recording is only written at the end, up to 900s later), and `Recorder.Write` prints a summary after `Wrote <file>` with the number of events folded per stage (events, not keys: remembering keys would defeat the cap); a run under the cap prints neither. Only the live recorder is bounded: recordings loaded by `ior collapsed`/`LoadRecording`, `WriteRecordingFile` and test fixtures use `maxKeys == 0` (unbounded) and never fold. Same ambiguity class as `[unknown]` above: a real comm or path spelled `[other]` with pid/tid 0 shares a record with the stage-2 fold, and a real event with pid/tid 0 (idle task) shares its record with the stage-1 fold of its path and comm; frames of a recording are free-form text, so the labels cannot be made collision-free. The cap is configurable (task rs2): `-flamegraph-max-keys` (`flags.Config.FlamegraphMaxKeys`, default `DefaultMaxRecordKeys`) is passed by `maybePrependFlamegraphConfigure` to `NewRecorderWithMaxKeys`; `validateNumericLimits` rejects values outside `[1, MaxRecordKeysLimit]` (2^24 records, ~4 GB plus the cap/8 headroom; bigger is most likely a typo), and `NewRecorderWithMaxKeys` maps a non-positive cap from a hand-built `Config` to the default, so a live recorder is never unbounded. The flag is ignored without `-flamegraph` (the TUI's LiveTrie and the Parquet recorder have their own bounds), and the stage-1 notice names it so a user who hits the cap learns how to raise it. Pinned by `internal/flamegraph/recordcap_test.go` (both stages, both churn patterns, exact totals, flags kept apart at both stages, warn-once, a lowered and a raised cap, `BenchmarkAddDistinctKeysCapped` for the allocation-free at-cap path), `internal/flags/flamegraphkeys_test.go` (default, range, rejected values, help text including the save-time memory) and `internal/ior_flamegraph_maxkeys_test.go` (the flag reaches the recorder).
+- **The records message of a `.ior.zst` is streamed** (`internal/flamegraph/recordsgob.go`, `gobwire.go`, task tz2): the format is unchanged (magic, gob header, ONE gob message holding the `map[recordKey]Counter`, decoded by a single `Decode`), but `encodeRecords` no longer calls `enc.Encode(records)`, which built the whole message in a buffer grown by append and handed it to zstd in one `Write` (answered with a CompressBound-sized copy): measured ~240-390 B/record peak extra heap (GOGC 10/100, 2^17 and 2^19 records), ~580-660 B/record allocated. `writeRecordsMessage` writes the same bytes from documented gob wire-format pieces: the stream's own encoder probes an empty map for the type definitions it still owes and the `int(typeID) 0x00` prefix, then `recordsBatchSize` (1024) records at a time are gob-encoded by a separate batch encoder as a `map[*recordKey]*Counter` (gob flattens pointers, so the key/elem pairs are identical, but reflect copies no struct per record, so encoding is allocation-free) and stripped of their framing; a sizing pass sums the pair bytes for the length prefix, the writing pass re-encodes and writes one batch per `Write` and fails (`errRecordsChanged`) if the bytes differ from the sized length. Measured after: ~1-2 MB peak extra heap whatever the record count (~10 B/record at 2^17, ~3 at 2^19), save ~10% slower (two encode passes; 2^19 records ~1.1 s vs ~1.0 s). A recording with at most one record is byte-identical to the old encoder's; with more, only the pair order differs (gob map order is random anyway). Pinned by `recordsgob_test.go` (byte identity incl. nil/empty/sampled, same-pairs-any-order and decode equality across batch boundaries with plain gob and `decodeRecords`, compressed file round trip, a failing writer at every byte offset, the size-mismatch check, and `TestEncodeCompressedHeapStaysBounded`: <= 16 B/record at 2^17, skipped with `-short` and under `-race`) and `gobwire_test.go` (uint encoding against gob itself). The libzstd compression context is C memory outside these figures and unchanged. A gob upgrade that changed the wire format would fail the probe/batch checks (an error, the temp file is discarded), not write a corrupt file.
+- **Refreshing the emoji table** (`internal/textsafe/emojitable.go`): `isEmojiBase` is a generated range table (Extended_Pictographic + Emoji_Modifier_Base + Emoji_Modifier), never hand-edited (it carries a `Code generated ... DO NOT EDIT.` header naming the Unicode version and source file date). For a new Unicode version get its `emoji-data.txt` (Fedora `unicode-ucd`, or https://www.unicode.org/Public/<version>/ucd/emoji/emoji-data.txt), then run `go generate ./internal/textsafe` (reads `/usr/share/unicode/ucd/emoji/emoji-data.txt`) or `cd internal/textsafe && go run gen_emoji.go -in <path>/emoji-data.txt` (the generator is the build-ignored `gen_emoji.go`; output is sorted, merged and deterministic), review the diff, and run `go test ./internal/textsafe`. `TestEmojiBasesMatchEmojiData` compares the table against the installed `emoji-data.txt` and names the `go generate` command in its failure message when the table is stale; `TestEmojiZWJSequencesStaySafe` checks that every sequence in `emoji-zwj-sequences.txt` still classifies as Safe and prints no regenerate hint (a failure there means the context rules in `ClassAt` or the table need attention, not a regeneration). Both skip when no file is found; `IOR_EMOJI_DATA` (table test) and `IOR_EMOJI_ZWJ_SEQUENCES` (sequence test) point them at another Unicode version.
+- **Headless signal handling** (`shutdownSignals`/`guardBrokenPipe` in `internal/ior.go`, task mq2): every headless mode (`-flamegraph`, `-parquet`, `-plain`) treats SIGINT, SIGTERM and SIGHUP as a graceful stop (context cancelled, recording finalised and published); the TUI has its own path (task rr2, `internal/tui/signals.go` and `signalwatch.go`): Bubble Tea turns SIGTERM/SIGINT into `QuitMsg`/`InterruptMsg` and returns from `Run` without calling `Update`, which used to skip the quit path and leave an active `R` recording as a 0-byte `ior-recording-*.parquet.tmp`, and it does not handle SIGHUP at all. Its handler is also one-shot (it returns and unregisters after the first signal), so a second signal could never end a hung shutdown. `newProgram` therefore disables it (`tea.WithoutSignalHandler`) and `watchTerminationSignals` owns SIGINT/SIGTERM/SIGHUP for the whole run with these semantics: the **first** signal sends `signalQuitMsg`, which `Model.handleSignalQuit` turns into the same cleanup as the `q` key (recording stopped and published, trace cancelled, BPF teardown awaited; a recorder Stop failure is kept in `lastErr` so the exit is reported and non-zero); a **second** signal arriving more than `repeatSignalWindow` (1s; SIGTERM+SIGHUP bursts from systemd or a closing terminal are one request) after the first while the shutdown is still running aborts it: `Program.Kill` restores the terminal, `Run` returns `errShutdownForced` and the safety net still publishes the recording (`cmd/ior/main.go` reports it as "Failed to run: ..." and exits with status 2); if `Run` does not return within `forceExitGrace` (5s; `Update` is wedged, e.g. a Stop stuck on a dead disk) `hardExit` ends the process with status 1. Exit codes of the TUI signal path: 0 after a clean shutdown, 2 for a forced exit (`errShutdownForced`), 1 for `hardExit`. Later signals are ignored. A forced exit publishes the recording itself first (`terminationWatcher.publishRecording`, straight through the recorder, bounded by `recordingStopWait`, never through the event loop), and a signal that arrives only after `Run` returned cleanly is a no-op (`finish`/`beginForce` under one lock; `stop` awaits a forced exit in progress and disarms `hardExit`), so a clean shutdown always exits 0. **Editor sessions**: the stream tab's "open in editor" runs the editor through `common.ExecProcess` (never bare `tea.ExecProcess`), which blocks Bubble Tea's event loop inside the child, so `Update` cannot run the quit path and a queued `signalQuitMsg` waits until the editor exits. While `common.ExecActive()`: SIGINT is ignored entirely (Ctrl+C in the cooked-mode editor reaches ior too but is the editor's key, exactly what Bubble Tea's own handler did via `ignoreSignals`; it does not count as the first signal); the first SIGTERM/SIGHUP (external kill, closing terminal) publishes the recording at once from the watcher goroutine and sends the editor SIGTERM, and the queued quit then runs the normal shutdown once the loop is free; a second one publishes again, SIGKILLs the editor and aborts as above. Known limitation: the editor is signalled directly (SIGTERM/SIGKILL to its pid) and shares ior's process group, so with a shell-wrapper `EDITOR` (`sh -c 'vim ...'`) killing the wrapper can leave the real editor running on the terminal after ior exits; a process-group kill would need `Setpgid` on the child plus a terminal hand-off (`tcsetpgrp`) so the editor still owns the tty, which is not done. Ctrl+C typed during the shutdown screen (`handleKeyWhileShuttingDown`) aborts the same way; every other key is ignored there. `signalQuitFilter` (`tea.WithFilter`) stays as a guard that converts a stray `QuitMsg`/`InterruptMsg` into `signalQuitMsg` while the model is not `quitting`. `runProgram` finalises a still-active recording after `Run` returns (`finaliseRecording`, a safety net for panics and aborted shutdowns; a Stop failure is joined onto the returned error), so a signal ends the TUI with exit 0 after a clean shutdown instead of "program was interrupted" (exit 2). SIGHUP is relayed only under the nohup rule below. **nohup rule**: SIGHUP is claimed only when `!signal.Ignored(syscall.SIGHUP)`, because `signal.Notify` installs a handler over an inherited SIG_IGN and would defeat `nohup ior -flamegraph -duration 3600 &` (or a `trap` that ignores HUP); the decision is `shutdownSignalsFor(cfg, sighupIgnored)`, tested without process state and end-to-end by `TestHeadlessRecordingKeepsInheritedSIGHUPIgnore`. SIGINT has the same ignore-override behaviour (Notify replaces an inherited ignore); that predates mq2 and was left alone. `-flamegraph`/`-parquet` also call `guardBrokenPipe` first thing in `Run`, so a closed stdout/stderr pipe yields EPIPE (status writes ignore errors) instead of SIGPIPE killing the run before the recording is written; `-plain` keeps die-on-SIGPIPE on purpose, its product is the stdout stream. The flamegraph `Wrote <file>` line goes to stderr (`flamegraph.statusOut`) after the file is published.
+- **A headless `-pid` run ends with its target** (`eventLoop.endTraceOnTargetExit`, `internal/eventloop_targetexit.go`, task vr2): `-plain`, `-flamegraph` and `-parquet` with `-pid N` used to count the group-dead `sched_process_exit` record of N (`group-dead exits: 1`) and keep probing until `-duration` (900s by default), and once the kernel reused the pid the still-armed PID filter traced an unrelated process under the old filter. Like `strace -p`/`perf record -p`, `applyProcessDeath` now reaches `stopTrace` (the trace's cancel func, wired by `runTraceLoop`) through `endTraceOnTargetExit`/`targetExited` on the first, deduplicated group-dead record whose tgid equals `-pid`, after printing `Traced process N exited, stopping the trace` on stderr; the normal shutdown then drains, prints the statistics and publishes the recording, exit status 0. The ring buffer is ordered, so every row the target produced before dying has been handled. Only a *known* group-dead record of exactly that pid ends the run: a thread exit, a legacy 24-byte record (`IsGroupDeadKnown` false) and other processes' deaths do not, and neither does a run without `-pid`. It is armed only when `runTraceLoop` is called with `verbose` (every headless mode, `eventLoop.stopOnTargetExit`): the TUI keeps its session (and the last data) open after the target died. `-tid` is covered by the thread rule below (task os2); with both `-pid P -tid T` the run also still ends on P's group-dead record. **Liveness-watcher fallback**: one ring record is a fragile trigger (lost to ring-buffer backpressure, or never produced when the target dies during the ~5s probe attach, in which case wr2's startup check has already passed), so `runTraceWithContext` (and `runHeadlessParquetWith`, pinned by `TestTargetWatchOpensBeforeTheProbesAttach`) opens a `targetWatch` (`internal/ior_targetwatch.go`) *before* the probes attach (pidfd from `pidfd_open`, plus the start time, field 22 of `/proc/<pid>/stat`, so a recycled pid counts as dead; a zombie process leader with no other thread counts as gone, a zombie `-tid` thread always does; unknown stat errors count as alive) and `runTraceLoop` polls it every `targetWatchInterval` (500 ms, immediately first) in `watchTargetLiveness`; both triggers go through `eventLoop.targetExited`, whose atomic `targetExitSeen` makes the stop and the status line happen once. Only headless runs start it (`traceInfra.targetGone`). Test hook: `IOR_TEST_DISABLE_TARGET_EXIT_RECORD=1` (exactly `1`; any other value leaves them on) disables every record trigger, because it leaves `eventLoop.stopOnTargetExit` false, which `endTraceOnTargetExit` and (since task os2) `endTraceOnTargetThreadExit` both check, so `TestHeadlessPidRunEndsViaLivenessWatcherWithoutExitRecord` and the "liveness watcher only" `-tid` subtests prove the watcher alone ends a run, and the opposite hook `IOR_TEST_DISABLE_TARGET_WATCH=1` (exactly `1`, `targetWatchDisabled`) keeps `startTargetLivenessWatcher` from starting, so `TestHeadlessPidRunEndsWhenTargetExits` proves the record alone ends it: both triggers print the same status line and the watcher polls every 500 ms, so only switching the other one off proves a trigger works (unit: `ior_targetwatch_test.go`, incl. `TestTargetExitRecordHookIsExactlyOne`/`TestTargetWatchHookIsExactlyOne`). There is no opt-out flag. Pinned by `TestPidTargetGroupDeadExitStopsTheTrace`, `TestTargetExitIgnoresEveryOtherExit`, `TestHeadlessPidRunEndsWithItsTarget`, `TestInteractivePidRunSurvivesItsTarget` and the integration test `TestHeadlessPidRunEndsWhenTargetExits`. **`-tid` runs end with the traced thread** (task os2; `endTraceOnTargetThreadExit`, `traceTarget` in `internal/tracetarget.go`). `newTraceTarget(pid, tid)` picks what a headless run follows: the `-tid` thread when given (the narrower scope; with `-pid P -tid T` it follows T, whose exit precedes or equals P's death), else the `-pid` process. A `-tid`-only run used to idle to `-duration` after its thread (or process) died and then trace a recycled tid. The trigger is a `sched_process_exit` record whose *tid* equals `-tid`, whatever its `group_dead` flag (the legacy 24-byte record included), unless it is flagged `IOR_EXIT_TID_INHERITED` (the exec hand-over below): the record is the thread's own `do_exit`, and `filter()` already admits the traced tid. For a leader target (`-tid` = pid) a group-dead record whose *tgid* equals `-tid` ends the run too. Decided semantics: a non-leader thread ends the run when *it* exits while its process lives on; the thread-group *leader* (`-tid` = pid) ends it when the leader thread itself exits, even if siblings run on (its `do_exit` fires the record, it executes nothing more and stays a zombie; strace -p LEADER would wait for the whole group, ior does not); whole-process death ends it through the traced thread's own record (every thread runs `do_exit`) and, for a leader target, also through the group-dead record of its process that the `-tid` bypass forwards from another thread (`ior_process_exit_in_scope`: whichever task held the tid is gone, which covers an exec'ing thread killed inside `de_thread()` after the old leader's record was flagged); for a non-leader target no tgid equals the tid, so that record never matches (its own record precedes it anyway); exits of sibling threads, of other processes and the same exit in the TUI do nothing. The status line names the thread (`Traced thread N exited, stopping the trace`). Tid reuse: a matching record cannot be a recycled tid (a recycled tid exists only after the original task is gone, and that end already stopped the run through its own record, the group-dead record or the watch; a flagged record does not free the tid, the exec'ing task holds it, so skipping it opens no reuse window), and a death during the probe attach is caught by the liveness watch, whose start-time snapshot (field 22 of `/proc/<tid>/stat`, valid for any thread) tells a recycled tid from the original; for a thread the pidfd is opened with `PIDFD_THREAD` (Linux 6.9+, `pidfdThread`; readable as soon as the thread has exited, a zombie counts; older kernels answer EINVAL and the watch uses procfs alone). **An `execve` in a non-leader thread**: `de_thread()` kills the old leader, whose record carries the leader's tid (`group_dead` 0), then hands that tid and the leader's start time to the exec'ing thread, which runs on as the new program. Under `-tid <leader>` the BPF tid filter, a `PIDFD_THREAD` pidfd and `/proc/<tid>` all follow the new program (as `strace -p` does), so the run continues and ends when the new program exits: the BPF exit handler (`ior_exit_tid_inherited`, `internal/c/exec.c`) sets bit `IOR_EXIT_TID_INHERITED` of the record's `exit_flags` word (the former always-zero `reserved` word, so an older object reads "the tid is gone") when the exiting task is a leader and `signal->group_exec_task` (Linux 5.17+; `group_exit_task` on 5.16 and older, read through CO-RE flavors; that path compiles but has not been run on an old kernel yet, task gz2) is another thread (through 5.16 the core-dump code also set `group_exit_task` to the dumping thread, so there a `-tid <leader>` that exits on its own just as a sibling starts a core dump is flagged too and the run ends a little later, on the dumper's group-dead record or the watcher; see the comment in `exec.c`), and `endTraceOnTargetThreadExit` skips such a record (`ProcessExitEvent.TidInherited`, `types.ProcessExitTidInherited` is a hand-kept copy of the define). Under `-tid <non-leader>` the exec'ing thread loses its own tid without a record under it, and the BPF filter no longer matches the program: the watcher (the `/proc/<tid>` entry vanished, the pidfd turned readable) ends the run. The watcher trusts a thread target's exit (readable pidfd, zombie state) only when two consecutive polls see it (`targetWatch.exitSeen`, `confirmExit`), unless `/proc/<tid>` is gone or its start time changed (final at once): during `de_thread()` the old leader is briefly a zombie before the tid hand-over, while a leader that really exited stays a zombie and is confirmed one interval (500 ms) later; a process target's exit still counts at once. `-pid P -tid T` with T not a thread of P is wr2's startup error headless and a TUI warning, where nothing is armed. Pinned by `TestTidTargetExitStopsTheTrace`, `TestTidTargetExitIgnoresEveryOtherExit`, `TestTidLeaderSurvivesANonLeaderExec`, `TestTidTargetExitStopsOnce`, `TestHeadlessTidRunEndsWithItsThread`, `TestHeadlessTidRunSurvivesOtherExits`, `TestThreadWatchIgnoresTheExecHandoverZombie`, `TestTargetWatchRealThread` (asserts the `PIDFD_THREAD` pidfd opens on 6.9+ and that a pidfd-only watch, procfs faked alive, sees the exit), `TestNewProcessExitEventFastDecodesTidInherited`, `TestProcessExitTidInheritedMatchesTheBPFDefine` and the integration tests (`integrationtests/tid_target_exit_test.go`) `TestHeadlessTidRunEndsWhenItsThreadExits` and `TestHeadlessTidRunOutlivesSiblingExitsAndEndsWithTheLeader`, each with an "exit record only" (`IOR_TEST_DISABLE_TARGET_WATCH=1`) and a "liveness watcher only" (`IOR_TEST_DISABLE_TARGET_EXIT_RECORD=1`) subtest, and `TestHeadlessTidLeaderRunSurvivesANonLeaderExec` (ioworkload scenario `exec-non-leader-into-open`, with both triggers and with each alone; `signalTarget` in `signal_shutdown_test.go` points the shared run helper at another scenario and scope). Because the target's exit now ends the run, integration tests that need ior to outlive the target (signal/pipe shutdown in `integrationtests/signal_shutdown_test.go`) keep the `ioworkload` alive after its scenario through `IOR_WORKLOAD_HOLD_FILE` (it exits once that file exists) and release it with `signalRun.releaseTarget`.
+- **Startup refuses scopes that can only trace nothing** (task wr2). A `-tps`/`-tpsExclude`/`-trace-*` selection that matches none of the traceable syscall tracepoints fails in `flags.validateTracepointSelection` (every mode, before any BPF work; the message adds a hint when the same `-tps` patterns with their leading `^` / trailing `$` stripped would attach at least one traceable tracepoint, judged with the real selector so `-trace-*` allowlists and `-tpsExclude` against the full `sys_enter_*`/`sys_exit_*` names suppress it; the message names the stripped patterns, shell-quoted when they contain metacharacters, and gives no hint for a pattern that strips to empty such as `^$`. It exists because `-tps '^openat$'` matches nothing: patterns match tracepoint names such as `sys_enter_openat`, so write `-tps openat`). `setupBPFModule` then checks the scope with `reportTraceTarget` (`internal/ior_targetcheck.go`): `-pid` must exist, `-tid` must exist and, together with `-pid`, be a thread of it; headless (`probes == nil`) that is a startup error, in the TUI a warning row (stream tab; `eventstream.filterRows` lets synthetic `IsWarning` rows bypass the user filter, so the active `-pid`/`-tid` predicates of exactly these scopes cannot hide the "trace will stay empty" explanation, task ur2; the other tabs point at these rows with the status-line warning badge, task ys2, next bullet but one). After the attach, `attachRequiredTraceProbes`/`requireAttachedProbes` treat zero attached syscall probes the same way (headless error with everything released; TUI warning pointing at the probes modal). The existence check stats `/proc/<pid>` in ior's own mount and PID namespace while the BPF filters compare host TGIDs, so ior inside a PID-namespaced container rejects a host pid (correct from the container's view: run ior in the host PID namespace), and under `hidepid=2` an unprivileged ior cannot see other users' pids (ior needs root for BPF anyway: run it as `sudo ./ior`). Only a definite ENOENT rejects; other stat errors fail open. Pinned by `internal/ior_targetcheck_test.go`, `internal/ior_bpfsetup_required_test.go` and `TestParseRejectsSelectionThatMatchesNoTracepoint`.
+- **TUI startup honours `-tid`** (task ur2): `ior -pid P -tid T` puts both predicates in the first `TraceRequest`, and `ior -tid T` alone skips the PID picker and traces just that thread (PID predicate unset), like the headless modes. `resolveStartupPIDFilters` (`internal/tui/tui.go`) used to force tid to -1 whenever an attach pid existed, and `-tid` alone opened the picker whose `PidSelectedMsg` discards the tid, so the whole process was traced. Now an attach pid clears the tid only when it differs from the configured `-pid` (`NewModelWithConfig` with another target), and `initialScreen` treats a positive `tidFilter` as an attach target. The startup tid seeds only the first session: picking another process in the picker replaces it. `--testflames` shares the same resolution. Pinned by `internal/tui/startuptid_test.go`. `-pid P -tid T` with T not a thread of P is reachable this way: wr2's warning row is pushed to the stream buffer, and `filterRows` (`internal/tui/eventstream/model.go`, also used by the CSV export, which then drops the warning rows itself, so the file holds the filtered real rows only) always keeps `IsWarning` rows, so the Stream tab shows it instead of `total:1 filtered:0` (the status line's `filtered` counter therefore counts bypassed warning rows too: an intended trade-off, warning visibility over counter purity, pinned in the model-level test); pinned by `TestFilterRowsKeepsWarningRowsWhateverTheFilterSays` and `TestModelShowsStartupWarningBehindAnActivePidTidFilter`.
+- **Stream warning badge** (task ys2; `streamrow.RingBuffer.WarningCount`, `eventstream.Model.WarningCount`, `internal/tui/dashboard/statusbadge.go`): setup/runtime warnings (wr2's wrong `-tid`, zero probes attached, libbpf warnings, drops) exist in the TUI only as synthetic `streamrow.NewWarning` rows in the Stream tab, so the dashboard's status line points at them from every other tab: `warnings: N (7:Stream)` in `ErrorStyle` (the warning rows' style). The count is kept exactly by the ring buffer under its mutex (`Push` adds a warning row and subtracts the warning row a wrap overwrites, `Reset` - the PID/TID reselect's stream clear - zeroes it), not by scanning a snapshot per frame; the eventstream model reads it from the live source through the optional exported `eventstream.WarningCounter` interface (a `Source` without it reports 0), because the model's own snapshot is frozen while paused and refreshed only while the Stream tab ticks. Every type the TUI publishes as the stream source must implement it: the raw `*streamrow.RingBuffer` (before the first trace, after `resetStreamBuffer`, and the `-tuiTestFlames` modes) and, during every real trace, the session's gated `tui.sessionEventSink` (`wireRuntimeBindings` publishes `bindings.StreamBuffer()`, and `handleTracingStarted` hands it to the dashboard), whose `WarningCount` forwards to the same ring buffer, so the count survives a trace restart. Both carry a compile-time assertion (`warnings.go`, `tracesession.go`); before the sink had the forward the badge read 0 from the moment a trace started. Pinned through the real session wiring by `internal/tui/sessionwarnings_test.go` (`beginSession` + `StreamBuffer` + `SetEventStreamSource` + `TracingStartedMsg`, the status line shows the badge; it persists across a restart and goes with the PID-change reset). Every counted row is in the Stream tab's buffer since warning rows bypass the stream filter (`filterRows`, ur2), but not necessarily on screen: a paused stream shows a frozen snapshot without later warnings, and in follow mode an early warning scrolls up out of view. The badge is still left out while the Stream tab is active: its job is to name the tab holding the rows, which is then the current one, and it would only take room from the filter summary (space resumes, `g` jumps to the oldest rows). `fitStatusRow` lays the status row out as `help | badge | summary` with the priority summary > badge > help: the summary is only ever cut to the width, the badge takes its longest rendering that fits beside it (`warnings: N (7:Stream)`, `warn: N (7)`, `!N`; `warningBadges`, tab number from the registry) and is dropped before the summary loses a cell, and the help text gets the rest. In the styled (>= 90 columns) row the text after the badge is re-rendered in the help bar's muted colour, since the badge's SGR reset would otherwise drop it. The help overlay's Dashboard Tabs section ends with a line explaining the badge (last, so an 80x24 overlay cuts it before the key hints). Tests: `internal/streamrow/ringbuffer_warnings_test.go` (insert, eviction on wrap, Reset, a seeded random mix over several laps against a scan, concurrent pushes under `-race`) and `internal/tui/dashboard/statusbadge_test.go` (row priorities at widths 1..200, unchanged row without warnings, badge on every tab but Stream, follows the ring through growth/wrap/reset, widths 1..200 x heights 1/3/24 x help on/off: height, status line last and within the width, the full frame contract from 20 columns, the badge shown exactly when it fits; ErrorStyle in both themes and readable with the colour stripped).
+- **Stream tab column widths and warning rows** (task 923; `internal/tui/eventstream/render.go`): `computeColumnLayout` sizes the columns from the panel's text width alone (terminal width minus 4), never from the rows in view (a column sized by its rows shifts the table whenever a longer name scrolls in): the compact 78-cell layout is shrunk by `columnShrinkSteps` on narrower rows (an 80-column terminal cuts long syscall names, both ends kept) and widened by `columnGrowSteps` on wider ones, an ordered list of (column, ceiling) steps with File taking what the last one leaves. Names and paths take turns in it: File to 20, PID/TID to 7, Syscall to `syscallUsualWidth` (12, about four in five generated names), File to 28, Syscall to `syscallCommonWidth` (17, all but a handful of names; whole from a terminal of about 109 columns), Comm 10 / FD 4 / Ret 5 / Bytes 8, File to 40, Syscall to the longest name of the generated table (`syscallFullWidth`, from about 132 columns), File to 60, then Comm to `commFullWidth` (15, the kernel's longest comm) and PID/TID to 8. So a 100-column terminal has File 24 / Syscall 12, 120 columns File 34 / Syscall 17, 160 columns File 61 / Syscall 23 / Comm 15, 200 columns File 101. Going straight from 8 to 17 for Syscall left File at 20 cells (paths cut) on terminals of about 90 to 101 columns beside mostly blank Syscall cells. Invariants, pinned over text widths 1..400 by `TestColumnLayoutNeverNarrowsAsWidthGrows`: the row is exactly the text width from the all-ones minimum (19) up, and no column is ever narrower on a wider terminal; `TestColumnGrowOrder` pins the exact layout inside every growth stage, and two tests fail when a regenerated syscall table outgrows the two literal targets. A warning row (`Row.IsWarning`) is one line spanning the row, `warning: <message>` (`warningLine`: sanitised, since the message is foreign text such as libbpf output) cut at the end, in `ErrorStyle`, or in the row selection style when selected; it is not ten cells with the message cut in the middle of the File column. It has no cells, so paused Enter pushes no filter from it, and the paused search (`streamEventMatchesRegex`) matches it by that same `warningLine` text only, not by the placeholders behind it (comm `ior`, pid 0, ret -1, the error flag). Pinned by `render_width_test.go` at 80, 120, 200 and 220 columns and by `TestSearchMatchesAWarningRowByItsVisibleTextOnly` / `TestPausedSearchSkipsAWarningRowsHiddenValues`. Task b23 on top of that: numeric cells (PID, TID, FD, Ret, Bytes) are cut at the LEFT, sign kept, behind the one-cell marker `…` (`fitNumberCell`: `…34430`, `-…67`), not in the middle like text cells, because the low digits are what tells ids apart (a 7-digit PID is whole from 91 columns, a TID from 92); a cut number always carries the marker, so with one cell left for the digits the cell is the marker alone (`…`, `-…`; a cut negative in a one-cell column is `…` too, `-` being the absent value), never a bare low digit that reads as another value (`-22` as `-2`); a cut TID equal to the PID reads `=PID`, `=` under four cells (`tidCell`). `…` (U+2026) is East-Asian-ambiguous like the panels' box-drawing borders; why it is kept over an ASCII marker is at `common.Ellipsis` (`internal/tui/common/truncate.go`). The width table did not change (Ret stays 4/5 cells: errnos fit, sizes and addresses fit in no affordable width). Paused Enter on a warning row opens `WarningModal` (`warningmodal.go`) with the whole message, sanitised with its line feeds kept (`common.SanitizeLines`), wrapped by display cells and scrollable when taller than the view (the title names the window and the hint the scroll keys, each in the longest form the box holds: `Warning, lines 1-6 of 11` / `Warning 1-2/28` / `27-28/28`, `Esc/Enter close • j/k scroll` down to `j/k Esc`; `View` clamps the offset itself, because a view enlarged after `G` has fewer lines than the stored offset); it owns the keyboard (Esc/Enter/q close) and must stay listed in the Stream tab's `BlocksGlobalShortcut`. The paused footer's hints follow the selected row (`Enter show warning` there, no `Col`/`push-filter`/`fd-trace`) and the filter stack (`Esc/F undo` only while there is a layer to pop; with an empty stack the keys are not handled). Pinned by `render_numeric_test.go`, `warningmodal_test.go` and `internal/tui/streamwarning_keys_test.go`.
 - **TUI trace flow** ingests events into the in-memory stats engine by default. It writes rows to Parquet only while the user has an `R` recording active.
-- **File output in TUI** has two explicit paths. `e` exports the current filtered stream snapshot to `ior-stream-<timestamp>.csv` in the current directory; its modal picks an option, and the filename is generated at submit time. The Stream tab's `X` modal prompts for a filename. `R` starts or stops a Parquet recording, with a filename prompt when starting.
+- **One session gate per event row** (task yp2, `internal/tui/tracesession.go`, `internal/ior.go`): the print callback hands each row to a `runtime.RowEmitter` (`EmitRow(streamrow.Row)`), resolved once per event loop. The TUI's session view provides it through the optional `runtime.RowEmitterSource` on its bindings; `sessionRowEmitter.EmitRow` takes the session read lock once and does the stream push, the recorder `Record` and the recorder warning inside it, so `endSession` stays a barrier (task 5o2: once it returns no row of the retired session is in flight) at one lock round trip per event. Bindings without the capability (headless modes, fakes, bindings with no stream buffer) get `plainRowEmitter`, the old ungated push plus `recordRow`. The recorder and the filter epoch have one owner each: with an emitter the gate reads them from the live bindings on every event (the epoch inside the gate, as fresh as possible), and `wireRuntimeBindings` copies them into `tuiRuntime` only for the plain fallback. The row is passed **by value** on purpose: a `*streamrow.Row` through the interface makes the caller's per-event row escape (1 alloc, 224 B per event); the measured saving over the old two-gate path is only about 10-35 ns per event pair (most of the rest is the ring buffer's and the recorder's own locks), not the ~100 ns the task first estimated. Benchmarks: `BenchmarkSessionEmitRow*` and `BenchmarkSessionPushThenRecordWarning` in `internal/tui/tracesession_bench_test.go`; the epoch-in-gate stamp is pinned by `TestSessionEmitRowStampsTheEpochReadInsideTheGate`.
+- **Parquet recorder overflow policy** (task 4s2, `internal/parquet/recorder.go`, `internal/ior_parquet_sink.go`): the recorder queue sits between the print callback (event-loop goroutine) and the writer goroutine, whose row-group flush compresses every column at once. The old 4096-slot queue covered ~5 ms at ~870k rows/s, so headless `-parquet` shed ~2% of rows the event loop had already processed (`Warning: N events were dropped (parquet recorder queue overflow)`). Two modes now, chosen by `RecorderConfig.BlockWhenFull`: **shed** (zero value, the TUI `R` recording, queue `defaultRecorderQueueCapacity` = 16384) never blocks the event loop, which also feeds the live views, and counts drops in `Status().RowsDropped`; **backpressure** (headless, `headlessRecorderConfig`, queue `HeadlessQueueCapacity` = 65536 slots, ~14 MiB of slot array at 224 bytes/slot) makes `Record` wait for room, so the file matches `syscalls after filter` and any overload surfaces as the kernel's counted `ring buffer drops`. Memory stays bounded by the queue in both modes, but the slot array is not all of it: a queued row also pins its heap strings (`FileName`, `OldName`, `Comm`). Kernel-captured names are capped at `MAX_FILENAME_LENGTH` = 256 bytes (`Comm` at 16) and a row carries at most two (rename/link rows: `FileName` + `OldName`) plus its `Comm`, so a completely full queue adds at most 65536 x (512 + 16) bytes, about 33 MiB, of kernel-sourced strings. That is a loose upper bound, typically a few MiB (one short path per row): fd-based rows share the name string cached in the fd table, while path-based rows (`openat`, `stat`, ...) convert their captured path into a fresh string each. Names the event loop resolves itself (`/proc/<pid>/fd` readlinks, dirfd-joined paths) can be longer, up to PATH_MAX = 4096 bytes, but only for distinct deep paths, which is not a realistic full-queue load. Which mode each call site uses is pinned by `TestRunHeadlessParquetBuildsABackpressuredRecorder` (headless, via the `newHeadlessRecorder` seam) and `TestRuntimeBindingsRecorderShedsInsteadOfBlocking` (TUI, via `Recorder.Config()`). Deadlock safety of the blocking send: a waiter holds `session.senders` (RLock) while it waits and gives up on `stopC`, which `Stop` and a dead writer (`abortSession`) both close, so it cannot wait on a gone consumer; `stopSession` takes the write lock (`awaitSenders`) before the final drain, so a row a waiter enqueued while stopping is drained, never stranded (pinned by `TestRecorderStopWaitsForRegisteredWaiter`, which fails on its first trial without the barrier: it waits with `parkwait` for the session goroutine to park in `awaitSenders` and fails if Stop returns first; `waiterRegisteredHook` is the test seam). A row accepted just as the writer dies is lost with the aborted recording, which Stop/Status report as the failure. Live check (host, whole-system trace plus `dd bs=1` 2.2M reads): the old build wrote 1718749 rows vs 1789693 `syscalls after filter` (70944 shed, warning); the new build wrote 2162764 rows = 2162764 after filter, no warning.
+- **File output in TUI** has two explicit paths. `e` exports the current filtered stream snapshot to `ior-stream-<timestamp>.csv` in the current directory; its modal picks an option, and the filename is generated at submit time. `e` always snapshots the live ring, even while the stream is paused (`eventstream.Model.ExportInputs`); `x`/`X` write the paused rows. Because the frozen table and the live ring differ then, the `e` modal shows `export.PausedNote` while the stream tab is paused (`export.Model.OpenFor`, fed by `dashboard.Model.StreamPaused`); `T` (fd trace) and the stream footer note it raises (`FD trace: ...`, cleared by the next key) work on the paused snapshot (`m.allEvents`), never the live ring; the fd trace is bounded to the selected row's life of the descriptor number (`fdLifetimeEvents`: it stops at the successful `close` that ends that life and starts after the one that ended the previous, task cr2; a number reused without a close row in the snapshot still shares a trace). Enter in the Syscalls bubbles/treemap and the Files directory bubbles/treemap/icicle acts on the highlighted item (`selectedSyscallSnapshot`/`selectedDirSnapshot` resolve it by key like `selectedProcessSnapshot`; always by name in those Syscalls views, never by the table's family column; an icicle tile that is not a directory row selects nothing). The Stream tab's `X` modal prompts for a filename, which `resolveExportPath` (`internal/tui/eventstream/export.go`, task 9s2) honours as typed: a bare name lands in `exportDir` (`.`), a relative name with a directory part is resolved against it, an absolute one is used as is, `.csv` is appended to the last element. The directory part used to be dropped by `filepath.Base`, so `/tmp/x.csv` silently became `./x.csv`; it is not confined to `exportDir` because the user types it in their own TUI and the `R` prompt and `-parquet` take any path too (a symlink at the name is replaced, never written through, like every user-chosen name). Missing parents are not created. Empty and NUL-containing names, names that denote a directory (`.`, `..`, or ending in `/`, `/.` or `/..`; judged on the raw text, since `out/.` cleans to `out`) and a file name over `NAME_MAX` (the probe only creates a short temp name, so it would otherwise fail at the publish) are rejected in `resolveExportPath`, which cleans the path lexically, not the way the kernel resolves it (`lnk/../x` becomes `x` even when `lnk` is a symlink elsewhere); and `probeExportPath` (`atomicfile.ProbeReplace`, `Probe` for a generated name) turns a missing/unwritable directory or an existing directory at the name into one readable error that names the directory, never the internal `ior-<hex>.tmp` (publish-time errors too: `atomicfile.publishError` names the final path once with the bare errno, not the temp file or the doubled paths of an `*os.LinkError`). A refused name reopens the modal with the typed text, the cursor where it was and the error (`ExportModal.Reject`) instead of closing it; the error clears on the next edit keystroke (also the `filename is required` one), not on cursor movement, and Esc closes without saving; the generated-name test (`isDefaultStreamExportName`) looks at the file name only, so a default name typed with a directory part is still never replaced. Pinned by `TestResolveExportPath`, `TestExportRowsToCSV*` (`...UnwritableSysDirectory` also runs as root), `TestExportModal*`, `TestPublishErrorsDoNotNameTheTempFile` and `TestPausedExportModal*`. `R` starts or stops a Parquet recording, with a filename prompt when starting.
 - **Export toggle flag**: `-tuiExport=true|false` (default `true`) enables or disables TUI stream CSV export at runtime, including the Stream tab's x/X/E shortcuts and their hints. It does not disable `R` Parquet recording.
+- **Output file naming and publishing** (`internal/atomicfile`): every exporter writes to a unique `ior-<16hex>.tmp` sibling (`O_EXCL|O_NOFOLLOW`, fixed length so any valid final name fits `NAME_MAX`) and publishes by rename. Names ior generates (`.ior.zst` flamegraph, `ior-stream-*.csv`, `ior-recording-*.parquet`) use `Publish`/`WriteFile`: `renameat2(RENAME_NOREPLACE)` and a `-N` suffix on collision, and the actual path must be reported (flamegraph prints it, the Stream tab shows `Exported: <path>`, the recorder's `Status().Path` and the `rec: saved as` status/headless log line follow it). Names the user chose (`-parquet <path>`, names typed into the `X`/`R` prompts) use `PublishReplace`/`ReplaceFile` and keep the historical replace-in-place semantics (the replaced file's permission bits and, best effort, owner are carried over to the new file; a symlink at the name is replaced, never written through); the TUI tells them apart with the strict `atomicfile.IsGeneratedName` (exact zero-padded layout incl. extension, judged on the name as typed, so a missing `.csv`/`.parquet` counts as user-chosen for both exporters; `isDefaultStreamExportName`, `isDefaultParquetRecordingName`). A `-N` suffix truncates the stem (rune-safe) to stay within `NAME_MAX`. Crashed runs leave orphan `*.tmp` files; `mage mrproper` removes them, there is no automatic sweep. **Outputs are checked at startup, not at the end** (task oq2): a trace can run for `-duration` (900s default) and the recording is written only afterwards, so every `-flamegraph`/`-parquet` output problem must fail before BPF setup. `-name` is a base name (`flamegraph.ValidateName` rejects `/`, both in the `-flamegraph` mode handler's `validate` and again in `Recorder.Prepare`); the file always lands in the working directory. `Recorder.Prepare` (called first in `runTraceWithContext`) also rejects a final name over `NAME_MAX`, probes the directory with a real temp file (`atomicfile.Probe`: unwritable dir, NFS root_squash, read-only mount, vanished cwd) and probes the characters the name really contains that vfat/exFAT/SMB refuse (`atomicfile.RiskyNameChars` -> `atomicfile.ProbeNameChars`: the time of day's `:`, any `? * " < > | \` or control byte in `-name`, then its non-ASCII runes and invalid-UTF-8 bytes, each once, capped at 64 bytes - Linux takes arbitrary bytes but vfat `iocharset`, ZFS `utf8only` and casefolded ext4 answer EINVAL/EILSEQ); only EINVAL/EILSEQ (`atomicfile.IsNameRejected`) count as a naming rule, any other probe error (ENOSPC, EIO, ...) is returned. A rejection cured by the colon-free `2006-01-02_15-04-05` layout switches to it with a status note; the note names only the time-of-day `:` (probed alone, not the combined set); if the `-name` itself carries a refused character, startup fails. `ProbeReplace`'s name probe is pinned by a NUL in the name (real EINVAL on every filesystem, `TestProbeReplaceProbesNameCharsAgainstARealRejection`); EILSEQ is only reachable through the flamegraph `probeNameChars` hook. Probe errors name the absolute directory and the bare errno, never the internal temp name. `-parquet` runs `parquet.CheckOutputPath` (`atomicfile.ProbeReplace`: missing/unwritable directory, final name is a real directory - an `Lstat` check, since a symlink to a directory is replaced by the rename, not followed - and special characters in the file name) before `setup`; the real temp file is still created by the recorder's `Start`, so the probe is an early rejection, not a reservation.
+- **Stream CSV export columns** (task rq2/ts2, `internal/tui/eventstream/export.go`; user-facing list in `docs/parquet-querying.md`): `writeStreamCSV` writes the header `streamCSVHeader` and then one `streamCSVRecord` per row: the 23 columns `seq, time_ns, gap_ns, latency_ns, comm, pid, tid, syscall, fd, ret, bytes, file, error, family, requested_sleep_ns, nfds, timeout_ns, address_space_bytes, old_file, epoll_op, epoll_target_fd, epoll_events, restarts`, i.e. the full per-event Parquet schema under the same names, except that `error` is Parquet's `is_error` and the recorder-internal `filter_epoch` is not exported. The first 17 columns are a positional contract that must never move; new columns are only appended. Synthetic warning rows (`Row.IsWarning`: UI notes with a wall-clock `time_ns` and placeholder pid/ret) are skipped, never exported. `comm`, `file` and `old_file` go through `textsafe.SanitizeComm`/`SanitizePath`, the same functions `parquet.RecordFromStream` uses, so the CSV gets the same UTF-8 repair as the recording (next entry) and strict readers such as DuckDB `read_csv` accept it; the other cells are written directly from the row. The package deliberately does not call `RecordFromStream` (only its tests import `internal/parquet`): that import pulled the Parquet library into its build, 341 instead of 140 packages in `go list -deps ./internal/tui/eventstream` (task 4z2). Two tests in `export_schema_test.go` guard drift against Parquet. `TestStreamCSVHeaderMatchesParquetSchema` ties `streamCSVHeader` to the `parquet.Record` `parquet:"..."` tags by reflection (negative cases in `TestColumnDriftDetectsAddedAndRemovedColumns`), so adding or removing a column on one side without the other fails. `TestStreamCSVCellsMatchParquetRecord` is the cell-level half: it writes one row in which every field has a distinct non-zero value (`distinctRow`) and compares every CSV cell to the `parquet.Record` field of the same column name (`RecordFromStream` output), so a swapped, missing or hard-coded cell fails by column name; the test also fails if `distinctRow` leaves a non-bool field zero or repeats a value. A new Parquet column therefore needs a `streamCSVHeader` entry, a `streamCSVRecord` cell and a value in `distinctRow`, or an entry in the test's `notExported`.
+- **Parquet strings are always valid UTF-8** (`internal/parquet/schema.go`, repair in `internal/textsafe/utf8repair.go`): `comm`, `file` and `old_file` are STRING columns, and DuckDB/Arrow reject every query touching a column with an invalid byte. `RecordFromStream` is the single row-to-Record conversion point; it calls `textsafe.SanitizeComm`/`textsafe.SanitizePath` (moved out of `internal/parquet` in task 4z2 so the CSV writers share them without importing the Parquet library; tests in `internal/textsafe/utf8repair_test.go`, plus `TestRecordFromStreamUsesTextsafeRepair` pinning that the recording equals them), which call `textsafe.TrimPartialRune` to drop a multi-byte rune cut at the 15-byte comm limit or, for file/old_file, at the 255-byte BPF path capture limit (only paths of exactly that length, plus the getcwd `...` form; shorter paths are never trimmed). Names resolved against a dirfd are trimmed earlier, in `resolveDirfdPath` (`trimCutPathname`), before the join makes them longer than the limit; that also drops the garbage half-rune from TUI/plain output, and `textsafe.SanitizeUTF8` rewrites any other invalid byte as `\xHH` via `textsafe.Escape` (lossy by design: a literal `\xff` in a name is indistinguishable, no exact-bytes column; independent of `-escape`). **No-file rows** (task pq2): `event.NoFileName` (`N:file`) is display text. Data files never store it: `RecordFromStream` and the stream CSV export (`streamCSVRecord`, which calls `ev.FileValue()` itself and repairs it with `textsafe.SanitizePath`, not through `RecordFromStream`) write `streamrow.Row.FileValue()` (empty when `Row.NoFile`), the `.ior.zst` flamegraph record stores `event.Pair.FileValue()` (empty path when `Pair.File == nil`, shown as `[unknown]` by `ior collapsed -fields path`; the live trie drops the empty frame), only the `-plain` stdout CSV still prints the placeholder (`appendCSVFile`, pinned by `pair_test.go`), and the descriptor column is `-1` (`streamrow.UnknownFD`) when there is none, because 0 is a real fd; a real file literally named `N:file` is stored under that name. `.ior.zst` recordings made before this change (and Parquet files, see `docs/parquet-querying.md`) still hold `N:file` as a real path frame; there is no format version bump, `ior collapsed` prints them as written. The live TUI flame view drops the empty path frame (fileless events only add to the root self value) whereas `collapsed` shows `[unknown]`. Build Parquet `Record`s through `RecordFromStream`, never by hand; the one exception among the `streamrow.Row` writers is the stream CSV export, which builds its cells by hand with `textsafe` to keep the Parquet library out of `internal/tui/eventstream` (see above), guarded by `TestWriteStreamCSVRepairsInvalidUTF8LikeParquet` (repaired text equals `RecordFromStream`'s) and the ts2 tests `TestStreamCSVHeaderMatchesParquetSchema`/`TestStreamCSVCellsMatchParquetRecord` (columns and cells). Document new free-form string columns in `docs/parquet-querying.md`. The other persisted data is not built from a `streamrow.Row` and so never goes through `RecordFromStream`: the `.ior.zst` flamegraph record (built from `event.Pair`; its text is not UTF-8-repaired). (The dashboard snapshot CSV, `internal/export`, `ior-snapshot-*.csv`, task 3z2, was removed in task jz2: since task 364 the stream export replaced it and nothing called it.) Piped `-plain` stdout is deliberately not repaired: it stays byte-exact under `-escape=auto`.
+- **Runtime family toggle**: the probes modal (`o`/`O`) has a Syscalls and a Families view (`tab` switches); in Families, `space`/`enter` attaches or detaches a whole family with progress (`probemanager.AttachFamily`/`DetachFamily`). The modal only requests a batch (`probes.FamilyBatchRequestMsg`); `tui.Model` owns the run (`startFamilyBatch`: one at a time, numbered, survives modal rebuilds) and records the batch's intended attached set before it starts, so a restart during the batch still attaches it; the batch runs on the trace session's context (`traceLifecycle.sessionContext`; `AttachFamily`/`DetachFamily` take a ctx and stop between probes once it is cancelled), so it is cancelled when the session ends, and `familyBatchRunning()` blocks (one at a time, Syscalls-view refusal) only while the run's session is still current - a new session can start a family batch immediately; a stale run's progress is not replayed into the modal, and a stale result keeps the recorded intent instead of reading back the new manager and reports a "batch cancelled" note when the cancellation was what stopped it (not as an error). Single toggles are tagged the same way (`ProbeToggledMsg.Session`/`Intent`, set via `probes.Model.WithSession`): a stale single-toggle result applies only its delta (adds or removes its syscall) to the recorded selection, so it cannot clobber a batch intent recorded since; a nil selection stays absolute. **`a`/`n` (all on/off) are model-owned exactly like family batches** (task wp2): the modal only emits `probes.SetAllRequestMsg`, and `startSetAll` records the intent (every registered syscall, or none) as the selection at the key press, then runs `probes.SetAllCmd` on `sessionContext()` (it stops between probes once the session ends) with results tagged by the session; a stale result records nothing (the intent counts from the key press, not from the seconds-later result, so a restart during the walk starts the next session with it and a late result can never re-apply it over newer changes). One walk runs per session (`bulkRunState`, `bulkRunning()`), refusing another `a`/`n` and a family batch meanwhile, and while it runs `rememberProbeSelection` records its intent instead of the half-done read-back. The modal refuses `space`/`enter`/`a`/`n` with a notice while the walk runs, like during a family batch: the model tells it (`probes.Model.SetBulkRunning`: set when the walk starts, cleared by the walk's own result - never by a stale session's - and re-derived for every rebuilt or rebound modal), so a single toggle cannot race the walk on the same manager. A stale single or bulk result is also never shown in the modal (`handleProbeToggledMsg` checks the session before forwarding), because its error ("probe manager is closed") describes a manager that is gone. A probes modal left open across a session change follows it (`beginTraceCmd` -> `rebindProbeModal` / `probes.Model.Rebind`, again when `handleTracingStarted` publishes the new manager): it would otherwise keep the old manager and session tag, so its toggles would fail against a closed manager and their outcome would be dropped as stale; between the restart and the new manager it lists no probes, and the cursor and the info line (a family batch's "trace restarted" outcome) are kept while an old-session error or refusal is dropped (`Rebind` clears `lastErr`). While a family batch runs, the Syscalls view refuses `space`/`enter`/`a`/`n` with a notice (the running batch is replayed into every rebuilt modal, so the guard survives reopening it); `a`/`n` read `States()` fresh and use `Attach`/`Detach`, so they touch only probes not yet in the requested state and are idempotent. After any current runtime probe change the TUI stores the live attached set on the trace lifecycle (`rememberProbeSelection`, `internal/tui/probeselection.go`) - with a running family batch's intent applied on top, so a toggle mid-batch cannot drop the rest of the family. The carried set can therefore be an intent: probes in it that cannot attach are retried and skipped (logged) at each session start until the next change reads the truth back. Every later `TraceRequest` carries the selection as `AttachSyscalls`, so restarts (PID/TID reselect, filter changes) keep it and it replaces the startup `-trace-*` selection (nil = keep the flags, empty = attach nothing). `[`/`]` only re-scope the view; onto a family with no attached probe (but some registered) the status line shows `<Family> not traced: press O, tab, space to attach`, and `O` opens the modal with the Families cursor on the scoped family so those keys attach exactly it (`O`, not `o`: the Flame tab, the default, consumes lowercase `o` as its frame-order key, so `o` cannot open the modal there; the probes binding matches both and is labelled `o/O`).
 - **Tab navigation** supports `tab/shift+tab` and numeric keys `1..7` only. `left/right` and `h/l` navigate table columns (and the flame graph); they do not switch tabs.
 - **Family visibility**: the Syscalls tab shows a per-syscall Family column classified via `TraceId.Family()`; there is no dedicated Non-IO tab.
+- **Dashboard row filters select what the row counts** (`internal/tui/dashboard/rowfilter.go`). Enter on a table row pushes a global filter built from the row's value, never a plain substring of it:
+  - Syscall and file rows use `globalfilter.ExactPattern` (`^value$`), so Enter on `read` does not also admit `readv`/`pread64`, and `/tmp/a` does not also admit `/tmp/ab`. Because `trimAnchors` strips exactly one anchor per end and blanks are trimmed only outside the anchors, the wrapper also keeps a value's leading/trailing blanks and a literal edge `^`/`$` intact (`^x$$` is exactly `x$`).
+  - Dir-grouped Files rows count only the files **directly** in their directory, so they use `globalfilter.DirPattern`, the directory-children pattern `^dir/*` (the root is `^/*`; `^//*` parses to the root too; a dir already ending in `/` still gets `/*` appended, so `a/` from `a//b` is `^a//*`). The matcher (`internal/globalfilter/dirchildren.go`) defines `^dir/*` as "`globalfilter.LiteralDir(value) == dir`", and the stats engine groups rows by `statsengine.DirOf`, which is `LiteralDir` (or the `.` no-dir group) - the literal text before the path's last `/`, not `filepath.Dir` - so the filter selects exactly the files the row counts: never a subdirectory's files (they have their own rows) and, for the `/` row, only top-level entries. `./src/x`, `//usr/lib/x`, `a/../b/c` stay under their literal dirs. Like a shell glob, `*` never crosses a `/`. `^dir/*$` stays the exact path `dir/*`; the text `^dir/*` no longer means the literal prefix `dir/*` (no row filter produced it). The `.` group (names with no `/`, and `./`-relative ones) has no pattern selecting exactly that mix: Enter on it pushes no filter and sets a filter notice instead.
+  - **Directory rows come from the engine, not from the top-64 files** (`internal/statsengine/dirrank.go`). The Files tab's directory view (table, bubbles, treemap, icicle) reads `Snapshot.Dirs()`/`DirsOther()`, which the engine's `dirRanker` fills on every ingested file pair: it aggregates per `DirOf` directory regardless of whether any single file made the top-N, so a directory of 10,000 once-read files ranks by its total (`TestDirRankerCountsDirectoriesOfFilesOutsideTheTopN`, `TestDirViewsShowTheDominantDirectoryOutsideTheTopFiles`). `Snapshot.Files()` still holds only the top-N files; a snapshot built without engine rows (`NewSnapshot` in tests/exporters) falls back to `AggregateFilesByDir(Files())`. Rows beyond the top-N directories are folded into one remainder row (`DirSnapshot.IsRemainder`, label `(other: N dirs)`) that every sort pins last and whose identity is not a path: it has no filter, so Enter on it sets `otherDirsNotice` instead of pushing a filter (like the `.` group's `noDirGroupNotice`), and its selection key is NUL-based so it cannot collide with a real path. Memory is bounded: once more than `32*topN` directories are tracked, compaction keeps the best `max(topN, maxSeen/2)` by accesses (`dirRankKeep`; the margin was measured to keep all true top-64 directories exact on a 20,000-directory Zipf workload, where keeping only `topN` lost 4-6 of them) and folds the rest into the remainder, so accesses/bytes/latency stay exact in total. Eviction trade-off (documented on `dirRanker`, pinned by `TestDirRankerEvictedDirectoryRestartsButTotalsStayExact` and `TestDirRankerCompactionKeepsAMarginBelowTheTopN`): a dropped directory that reappears restarts its own row from zero (its earlier counts stay in the remainder), a real top directory that trailed more than `maxSeen/2` others at some compaction is under-ranked the same way, and the remainder's `FileCount` counts a returning directory's files twice (once from before eviction, once in its own row). The per-directory `FileCount` is a k-minimum-values sketch (`filesketch.go`, k=256): exact below 256 files, about 6.3% standard error and unbiased beyond (`TestFileSketchIsUnbiasedWithTheDocumentedError` averages 400 fixed seeds; `TestFileSketchEstimatorFormula` pins the formula). The path hash is an injectable field (`dirRanker.hash`, a randomly seeded maphash in production so file names cannot skew a sketch); tests inject `seededPathHash` to be deterministic.
+  - Family rows (Family column of the Syscalls tab) keep the bare family name: families are a closed set in which no name contains another, and the `[`/`]` family cycle (`internal/tui/familycycle.go`) reads the current family back by its bare name.
+  - The Processes tab's Comm cell pushes the *trimmed substring* comm, not an exact pattern: the row aggregates every thread of the PID while the comm filter matches each thread's own comm, and thread names commonly extend the process's (`chrome` -> `Chrome_ChildIOT`). A comm starting with `^` or ending with `$` cannot be a literal substring pattern, so that row falls back to the PID filter (`commSubstringUsable`), as does every other Processes column.
+  - Case rule (`globalfilter.matchString`, one rule for typed and row filters): substring, `^prefix` and `suffix$` patterns are case-insensitive; the fully anchored `^exact$` form is **case-sensitive**, because anchoring both ends means "exactly this value" and Linux paths/comms are case-sensitive (`^/tmp/a$` does not select `/tmp/A`). The rule lives in the pattern text, not in a flag on `StringFilter`, so a row filter round-trips unchanged through the filter modal and a user typing `^foo$` gets the same exact semantics. The directory-children form `^dir/*` is **case-sensitive** as well: it is derived from exact row values, so the `/tmp/A` row does not admit `/tmp/a/x`. The exact and directory-children forms are plain string comparisons (zero-alloc for any input); the other modes keep the zero-alloc ASCII fold path (`fold.go`). `ValidateTracepointFields` measures an exact pattern by its raw length only (its lowered form is no witness), `^dir/*` by its shortest witness `dir/` (`/` for the root), other patterns by the shorter of raw and lowered. The filter modal's help line documents `^dir/*`. Pinned by `TestStringFilterCaseSensitivityByAnchorMode`, `TestMatchStringASCIIFoldAgreesWithLowering`, `TestMatchStringASCIIDoesNotAllocate` and `TestValidateTracepointFields*` (`internal/globalfilter`).
+  - The Stream tab's paused Enter-on-cell (`requestGlobalFilterFromSelectedCell` / `setStringCellFilter` in `internal/tui/eventstream/model.go`) follows the same rule: its Comm, Syscall and File cells push `globalfilter.ExactPattern`, and a blank string cell pushes nothing. Unlike the Processes tab's Comm cell, the Stream Comm cell is exact because a Stream row is one event showing that event's own thread comm. Numeric cells keep equality (`pid=`, `tid=`, `fd=`, `ret=`, `bytes=`); Gap/Latency push a `>=` lower bound.
+  - Pinned by `TestEnterRowFilterSelectsExactlyTheRow`, `TestEnterDirRowFilterSelectsExactlyTheFilesItCounts`, `TestEnterOnNoDirGroupShowsNotice`, `TestEnterFamilyFilterStaysBare` (`internal/tui/dashboard/filteraction_test.go`), `TestPausedEnterStringCellFilterIsExact` (`internal/tui/eventstream/model_test.go`), `TestExactPatternMatchesOnlyTheValue`, `TestDirPatternMatchesDirectChildrenOnly`, `TestDirChildrenPatternIsCaseSensitive` (`internal/globalfilter/filter_test.go`), `TestValidateTracepointFieldsDirChildrenPattern` (`internal/globalfilter/trace_test.go`), `TestDirOf` (`internal/statsengine/dirrank_test.go`, the grouping key) and `TestModelRoundTripsExactRowPatterns` (`internal/tui/tracefilter/model_test.go`).
 - **When export is disabled**, export key hints are hidden from dashboard help and `e` and the Stream tab's x/X/E shortcuts do not open the export modal or write CSV files.
 - **Fast-refresh cadence**: `-tui-fast-refresh` (default `250ms`) controls the high-frequency tick interval for the flamegraph and stream tabs; set to `0` to fall back to the built-in 200ms flame/stream tick constants (high-frequency refresh never fully stops — it does not fall back to the slower standard dashboard cadence).
 - **Attach-time tracepoint selection**: with no `-trace-*`/`-no-trace-*` flags the default allowlist is the **FS family only** — the other 11 families (`Network`, `Memory`, `Signals`, `Sched`, `IPC`, `Time`, `Process`, `Security`, `Polling`, `AIO`, `Misc`) are opt-in via `-trace-families`/`-trace-kinds`/`-trace-syscalls`. Only the full opt-in set reaches the ~300+ syscalls the generator classifies; the default attaches a subset of them.
 - **Sampling / aggregate-only mode**:
   - `-syscall-sampling-families` and `-syscall-sampling-syscalls` control per-family/per-syscall sampling (`0` = aggregate-only, `1` = all events, `N` = 1-in-N).
   - Current defaults include aggregate-only (`0`) for `futex`, `futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`, and `clock_gettime`.
+  - Precedence, lowest to highest: built-in per-syscall default < `-syscall-sampling-families` rate < explicit `-syscall-sampling-syscalls` rate. The defaults live in `Config.DefaultSyscallSamplingRates`, separate from the user-explicit `Config.SyscallSamplingRates`, so e.g. `-syscall-sampling-families Time=100` reaches `clock_gettime` and `IPC=1` reaches the futex variants (`buildSyscallSamplingRates` in `internal/syscall_aggregate_consumer.go`). Test this through `flags.ParseArgs`, not `flags.NewFlags()` (whose default map is empty).
   - In raw output modes (`-plain`, `-flamegraph`, headless `-parquet`) the default aggregate-only rates are automatically promoted to `1` because these modes lack a TUI aggregate sink. Explicit per-family rate `0` is also promoted to `1` in raw modes (a family zero would otherwise erase the whole family from output with no aggregate to preserve it); user-explicit `-syscall-sampling-syscalls` overrides are still preserved.
   - **Sampled counts are exact, not scaled.** The kernel aggregates exactly the
     events it does *not* emit (`ior_on_syscall_exit` in `internal/c/filter.c`
@@ -392,17 +552,167 @@ not sufficient.
     (`buildAggregateIngestTraceIDs`), so TUI/stats counts, error counts,
     latency totals and the latency histogram for sampled syscalls are the true
     full-population values with no double counting and no scaling estimate.
+  - **Gap statistics are between traced calls.** Aggregate rows carry no
+    inter-syscall gap, and a pair's `DurationToPrev` runs from the previous
+    *emitted* pair of its TID, so under sampling or aggregate-only rates it
+    spans the untraced calls. `Snapshot.GapMeanNs`, the gap histogram and the
+    gap sparkline all use the traced pairs that have a previous pair
+    (`event.Pair.FirstOnTID` excludes a thread's first); the Overview labels
+    the mean `Traced gap`. Dividing by all counted calls instead would be
+    diluted by threads that make only aggregate-only calls (parked futex
+    waiters).
+  - The partition also holds without a per-tid enter state
+    (`syscall_enter_state_map` full, clone/fork child exits, syscalls in
+    flight at attach, and the two non-leader exec exits that stay stateless:
+    `-tid <leader>` filtered the caller's enter, or the enter-state move
+    failed; see *Non-leader exec* below): a failed enter-state write is
+    counted *untimed* into the aggregate at sys_enter unless the rate
+    is `1`, and a stateless or mismatched sys_exit is emitted only at rate `1`
+    and never counted (see "Enter state and its two fallbacks" in
+    `internal/c/filter.c`). Untimed counts bump `count` only; userspace reports
+    them as `SyscallAggregate.UntimedCount` and keeps them out of min/max,
+    the latency means and the latency sparkline. The kernel stores `count`
+    last, and the consumer tolerates torn per-CPU reads (histogram ahead of
+    count is deferred until the actual count arrives, never synthesized from
+    the histogram, so the final settled drain retains the count needed to
+    carry late latency/errors; a slot's first timed sample read before its
+    min/max landed is deferred to the next drain instead of seeding a 0
+    minimum; a baseline only advances with a new count). This relies on the
+    copy reading `count` first, so `count` must stay the first field of
+    `struct syscall_aggregate` in `maps.h`. Completed invocations are recorded
+    as at least 1ns, so a settled slot's min/max are never 0; the consumer
+    relies on that to tell a settled slot from one still being written. The
+    accounting functions of `filter.c` are compiled and exercised on the host
+    by `internal/generate/enterstate_fallback_test.go`.
+  - **Raw-mode outputs of a sampling run say so and keep the exact totals**
+    (task qq2; `internal/sampling`, `internal/sampling_tally.go`). A raw mode
+    (`-plain`, `-flamegraph`, headless `-parquet`) has no stats engine, so a run
+    with an explicit rate other than 1 (`rawModeSamplingRates`; the promoted
+    defaults sample nothing) used to write its 1-in-N rows with no marker and
+    never read the kernel counts of the other invocations. Now `newEventLoop`
+    gives such a run a `samplingTally` as its aggregate sink, so the drain loop
+    runs (headless Parquet wires the aggregate source only in this case; an
+    unsampled run pays nothing): `traced` is counted where the loop emits a pair
+    (`drainPairs`), `counted` is the drained aggregate rows, and their sum is
+    the exact per-syscall population (the two sources are disjoint, see above).
+    The totals are withheld, not guessed, when they cannot be trusted: a filter
+    the syscall-keyed kernel rows cannot answer (`aggregateIngestAllowedForFilter`,
+    e.g. `-comm`) or a last drain that failed gives `Unavailable` with the
+    reason, rates still reported. Lost rows make them inexact, not
+    unavailable: a dropped event is an emitted row that is in neither `traced`
+    nor the kernel aggregate, so `samplingResult` marks the `Summary` with
+    `AtLeast()` (`LowerBound`) whenever `numRingbufDrops > 0`, the kernel
+    skipped probe runs (`numSkippedRuns > 0`, task 723: such a run of a
+    traced task is in neither count, and the counter cannot say whose it
+    was), either counter could not be read (`kernelLossPossible`), or
+    `numDiscardedAtStop > 0` (records discarded
+    by the stop-time drain are emitted rows that never reached decoding, so
+    they are in neither `traced` nor the kernel aggregate either; pinned by the
+    "records were discarded at stop" case of
+    `TestSamplingTotalsAreALowerBoundUnderRingbufDrops` and the parquet footer
+    twin); the stats block says "at least", the footer JSON
+    carries `"lower_bound":true` per element. The report is compact:
+    `sampling.New` folds syscalls that run at a `-syscall-sampling-families`
+    rate into `Summary.Families` (`FS=10`, once) and keeps an `Entry` only for
+    those with a nonzero total plus the explicit per-syscall rates, so neither
+    the startup line, the stats, the footer/header nor `ior collapsed` list a
+    family's 100+ syscalls. `Entry.Family` is set when the effective rate equals
+    the family's rate. The rates are intersected with the probes that really
+    attached (`restrictSamplingToActive`, called from
+    `setupTraceInfraWithEventLoop` with `Manager.IsActive`), so a syscall that
+    was never traced gets no "0 calls" line. `openAggregateSource` is the seam
+    that lets `TestHeadlessParquetLoopWiresTheKernelCountsIntoTheFooter` drive
+    the real `newHeadlessParquetEventLoop` without a BPF module. `traced` counts
+    pairs at `drainPairs`, before the Parquet queue and the active-probe filter,
+    so it can exceed the file's row count (`RowsDropped`, inactive probes).
+    Surfaces: startup line on stderr
+    (`announceSampling`), a block in the end-of-run statistics
+    (`samplingStatLines`, incl. "syscalls including kernel-counted only"),
+    Parquet footer keys `ior.sampling` (rates, written at start) and
+    `ior.sampling.totals` (JSON or `unavailable`, added by
+    `Recorder.SetSamplingTotals` just before the footer is written; neither key
+    exists in an unsampled file, so the key is the marker), and the `.ior.zst`
+    header's `Sampling` field, which writes format version 2 (version 1 stays
+    for unsampled runs; a pre-qq2 reader refuses version 2 rather than show
+    sampled counts as complete). `ior collapsed` prints the sampling to stderr
+    (`CollapsedOptions.Notice`) and `flamegraph.LoadRecording` returns it.
+    `-plain` stdout stays the fixed CSV: its marker is the stderr lines only.
+    TUI `R` recordings are marked too (task qs2, next item). The first
+    version was verified with stubs only; the fix round checked the
+    1000-read scenario, a ring-buffer-drop run (`-mapSize 4096`, 3M reads)
+    and a family rate live.
+  - **TUI `R` recordings carry the same footer keys** (task qs2;
+    `internal/recording_sampling.go`, `internal/tui/recordingsampling.go`,
+    `sampling.Tally`, `internal/parquet/recorder_sampling.go`). The TUI's
+    sampled list always holds the aggregate-only futex*/clock_gettime
+    defaults, but `ior.sampling` lists only sampled syscalls attached at Start
+    (`Tally.Plan`), and the default `-trace-families` attaches FS only: a
+    default R file is unmarked (live-checked); with `-trace-families
+    FS,IPC,Time` (or the probes modal) it is marked
+    `clock_gettime=0,futex=0,...`. The totals do NOT come from the stats
+    engine: it is reset by the auto-reset timer, `r` and every live filter
+    swap and replaced per session, while a recording spans all of that.
+    Instead each recording gets a fresh `sampling.Tally`
+    (`parquet.StartOptions.SamplingTally`): `traced` is counted by the
+    recorder where it writes a row (writer goroutine, so it equals the file's
+    rows; shed rows make it a lower bound), `counted_only` arrives from the
+    TUI event loop's aggregate drain (`forwardAggregatesToRecording` ->
+    session-gated `sessionRecorder.CountKernelOnly` ->
+    `Recorder.CountKernelOnly`, a no-op without an active recording). Window
+    exactness: the session publishes a `runtime.RecordingSampling` (sampled
+    syscalls + `FlushCounters`, via `aggregateDrainer.Flush` and
+    `ringbufDropMonitor.Flush`: the drop monitor polls only every 1s, so its
+    edge reads put the last second's drops into the stopping recording and
+    baseline the pre-start drops away), and the TUI flushes before `Start`,
+    before `Stop` (also at quit and from the signal watcher, pinned by
+    `TestSignalWatcherFlushesTheCountersIntoTheRecording`) and before a
+    session retires while recording (`runtimeBindings.endSession`), so
+    consecutive recordings get disjoint deltas. A failed drain at the start
+    flush reaches no recording, so `FlushCounters` returns false and
+    `beginRecordingSampling` marks the new tally unavailable (its undrained
+    deltas would leak pre-start counts in). A session retired mid-recording
+    while its loop may still run (live-filter setter still registered: set
+    before the loop, removed after it returned) marks a lower bound: its
+    undelivered rows are dropped by the gate and the restart does not wait
+    (`flushSessionForRecording`). Rates: those attached at Start
+    (`ior.sampling`); rates never change at runtime (flags only), but a
+    sampled probe attached mid-recording still appears in the totals once
+    invoked. Lower bound: ring-buffer drops or an unreadable drop counter
+    during the recording (`handleRingbufDropResult`), shed rows, a retired
+    live session. Unavailable: a drain failure (incl. the start flush), or
+    counts withheld by a filter the kernel rows cannot answer
+    (`aggregateDrainResult.withheld`). The sampled-syscall list outlives its
+    session (`runtimeBindings.sampledSyscalls`) so an R pressed while the next
+    session attaches is still marked; the flush does not.
   - What stays sampled for rate `N` syscalls: per-event detail only — stream
     rows, file/process attribution, byte totals, gaps, and latency percentiles
     come from the ~1/N emitted pairs (kernel aggregate rows carry no bytes,
     gaps, files or processes). Counts/errors/latency-sums/histograms are full.
-  - While a runtime filter with an unsupported dimension is active, aggregate
-    ingestion is gated off entirely (`aggregateIngestAllowedForFilter`), so
-    aggregate-only syscalls disappear and sampled syscalls fall back to their
-    1-in-N counts until the filter is cleared.
+  - The runtime filter applies to aggregate rows per row where a
+    syscall-keyed row can answer it (`aggregateDrainer.filterRowsForIngest`):
+    `Syscall` and `Family` via `Filter.MatchesSyscallRow`, so `-syscall futex`
+    still counts an aggregate-only futex and `-family FS` keeps other
+    families' aggregate rows out of the dashboard totals. A `PID`/`TID`
+    equality is honoured only when it equals the kernel-enforced
+    `PID_FILTER`/`TID_FILTER` scope the program was loaded with
+    (`kernelProcessScope`). Any other dimension (comm, file, fd,
+    latency, gap, bytes, retval, errors-only, or a PID/TID the kernel does not
+    enforce) gates aggregate ingestion off entirely
+    (`aggregateIngestAllowedForFilter`), so aggregate-only syscalls disappear
+    and sampled syscalls fall back to their 1-in-N counts until the filter is
+    cleared.
+  - A live filter swap (`eventLoop.SetFilter` while the drain loop runs) goes
+    through `aggregateDrainer.SwapFilter`: it drains and ingests the map under
+    the *outgoing* filter before installing the new one, serialised with the
+    poll ticks. The counts pending at swap time therefore land in the pre-swap
+    baseline the TUI resets right after (`resetAggregatesAfterLiveSwap`)
+    instead of inflating the first post-swap interval.
+    The drain loop's stop retires the drainer under its lock during the final
+    drain (clearing its handle and source), so a SetFilter that races the stop
+    swaps the filter without draining the possibly closed map.
 - **Additional metric dimensions**:
-  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`.
-  - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints).
+  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`. What feeds it (task hq2, `internal/eventloop_addrspace.go`): successful `mmap`/`munmap`/`mremap` (larger of old/new size) and `brk`, each rounded up to the host page size because the kernel maps whole pages (`mmap(len=1)` maps 4096 bytes). `brk` is the movement of the per-process break since the previous `brk` (`brkTracker`, evicted on exec, group-dead exit, and `task_newtask` proving a new process lifetime; thread births and malformed same-creator process records preserve it; the first sighting and `brk(0)` only baseline). `msync`/`mprotect`/`madvise`/`mlock*` leave the extent unchanged and report 0. Huge-page mappings stay at base-page granularity. Accepted approximation: `brkTracker` keys by tgid, not by address space, so a `CLONE_VM`/vfork child (own tgid, shared mm) baselines its first `brk` to 0 and the parent's stale baseline later attributes the shared heap's movement to itself; exec clears the baseline, which covers the common vfork-then-exec case.
+  - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests whose nanoseconds are unrepresentable in `__s64` saturate to `S64_MAX` (`generateExtraSleep`). The kernel similarly clamps to `KTIME_MAX`, but from `tv_sec >= KTIME_SEC_MAX` regardless of `tv_nsec`, so values within ~1s of the boundary may differ.
 - **The trace-started signal is a promise, not a progress report**: in TUI mode
   `setupTraceInfra` closing the `started` channel is what makes
   `tuiTraceStarterFromRunTrace` report success, and from that moment nothing is
@@ -429,8 +739,10 @@ not sufficient.
   as the signalling bug above, reached without any restart. The limits are one
   byte below those constants, because the kernel NUL-terminates what it writes.
   "Cannot be found" is scoped to the kernel-field gates: a path resolved
-  through the procfs fallback (`/proc/<pid>/fd`, getcwd) can be longer than the
-  event field, so the check is conservative for those rows. `Model.refuseUnusableFilter`
+  through the procfs fallback (`/proc/<pid>/fd`) can be longer than the event
+  field, and a getcwd row whose cwd did not fit the captured field reports its
+  `MAX_FILENAME_LENGTH - 1`-byte prefix plus a `...` suffix, so the check is
+  conservative for those rows. `Model.refuseUnusableFilter`
   (`internal/tui/tui.go`) therefore runs `ValidateTracepointFields` at *both*
   entry points into the pipeline tail - `applyGlobalFilter` (modal apply,
   table drill-downs, undo-stack pushes) and `replaceGlobalFilter` (the `[`/`]`
@@ -453,7 +765,8 @@ not sufficient.
   warning row is carried by `streamrow.NewWarning` with `Comm: "ior"`, so the
   *still-active* comm filter would filter the warning about it out of the
   stream tab. Because the notice lives in the status half of a shared row,
-  `appendStatusText` now trims the static help text rather than the live status
+  the status row (`fitStatusRow`, `internal/tui/dashboard/statusbadge.go`; it
+  was `appendStatusText`) trims the static help text rather than the live status
   when the row cannot hold both. Pinned by
   `TestLiveFilterSwapRefusesAnOverLongCommPattern`,
   `TestLiveFilterSwapRefusesAnOverLongPathPattern`,
@@ -539,13 +852,206 @@ not sufficient.
   `TestErrorScreenQuitOutranksTheHelpOverlay` and the reporting/cleanup tests in
   `internal/tui/errorscreen_test.go`.
 
-  The startup PID picker follows the same visible-screen rule: with no pending
-  dashboard return, `q`/`ctrl+c` quit with best-effort cleanup; during a
-  re-selection they remain Back, like `esc`
-  (`TestStartupPIDPickerQuitsOnQuitKeys`,
+  The startup PID picker follows the same visible-screen rule, with one
+  addition (the next paragraph): once its filter input is blurred (Up/Down) and
+  there is no pending dashboard return, `q` quits with best-effort cleanup;
+  during a re-selection `q` is Back, like `esc`. `ctrl+c` always quits and `esc`
+  always leaves the picker, even mid-typing
+  (`TestStartupPIDPickerQuitsOnQOnceTheInputIsBlurred`,
+  `TestStartupPIDPickerCtrlCStillQuitsWhileTyping`,
+  `TestStartupPIDPickerEscStillQuitsWhileTyping`,
+  `TestStartupPIDPickerQuitsOnQuitKeys`,
   `TestQuitKeysOnReselectPIDPickerReturnToDashboardLikeEsc`). The bounded
-  "Attaching tracepoints..." overlay still swallows quit keys until
-  `defaultStartupTimeout` resolves it; it is a wait rather than a dead end.
+  "Attaching tracepoints..." overlay does not swallow quit keys:
+  `handleQuitKeyPress` calls `quitWithBestEffortCleanup` while
+  `attachingOnDashboard()` is true
+  (`TestQuitWhileDashboardIsAttachingWaitsForBlockedStarterCleanup`).
+
+  **A focused text input owns printable keys** (task xq2). In
+  `handleGlobalKeyPress`, after the error screen and the help overlay but before
+  picker-cancel, quit, `H` help and the dashboard shortcuts, a key whose
+  `msg.Key().Text != ""` is passed on untouched (`return m, nil, false`) when
+  `Model.textInputFocused` says the screen or modal receiving keys has a
+  focused input. Otherwise typing `mysql` in the startup picker quit ior at the
+  `q`, `Hypr` opened help, and a `q` in the filter modal's Comm field applied a
+  truncated filter. Keys without text (`ctrl+c`, `esc`, arrows, alt/ctrl
+  chords) never count as typing, so they keep their global meaning and are not
+  inserted as characters. A visible modal decides before the active screen, and
+  the attaching overlay reports no focus so `q` still leaves it. Each input
+  reports focus through a `TextInputFocused` predicate: the PID/TID picker
+  filter (focused by default, blurred by Up/Down, re-focused by the next
+  printable key), the trace-filter modal (only while a field is being edited,
+  not while navigating), the record modal path, the probes modal search line,
+  and on the dashboard (aggregated by `dashboard.Model.TextInputFocused` via
+  `tabDescriptor.TextInputFocused`) the flame `/` search and the stream search
+  and export-filename modals. A new text input must add its predicate there or
+  `q`/`H` will again be eaten as commands. Because plain `r` is filter text
+  while the picker input is focused, the picker footer and help show
+  `ctrl+r refresh` in that state and `r refresh` once the input is blurred.
+  Pinned by `internal/tui/textinput_keys_test.go` (one test per input, each
+  asserting both "no quit/help" and "the typed text reached the input",
+  the TID picker, modified-key negatives, ctrl+r and the attaching guard) and
+  `TestFooterAdvertisesTheRefreshKeyThatWorksInEachFocusState`.
+
+  **A bracketed paste reaches every text input** (task 4r2). bubbletea v2
+  enables bracketed paste by default, so a terminal paste is one `tea.PasteMsg`,
+  not a run of key presses, and every layer between `Model.Update` and the
+  `textinput` has to forward it or it vanishes without a trace (pasting
+  `/var/log/messages` into the filter File field applied nothing). The routes:
+  the filter modal's `Update` (only while a field is being edited), the probes
+  modal's `Update` (only while the search line is open), the flamegraph's
+  `Update` (only while `/` search is active), `dashboard.Model.handlePaste` ->
+  `tabDescriptor.HandlePaste` (gated by `TextInputFocused`) -> the flame model or
+  `eventstream.Model.HandlePaste` (the stream's keys are key *names*, so the
+  search/export modals get a separate entry point), and the PID/TID picker,
+  where a paste focuses a blurred input like a printable key. With no input open
+  a paste is dropped, never replayed as commands (`c`, `q`, `7`, `/` would
+  otherwise clear filters, quit or switch tabs). `Model.Update` also drops it
+  while the shutdown/attaching screen, the error view or the help overlay covers
+  the screens (`textlessViewCovers`, the non-modal half of `overlayCoversScreen`), so a modal hidden underneath cannot be filled
+  unseen, and `updateDashboardForModal` does not hand a paste to the dashboard
+  behind a modal (`TestPasteWhileModalCoversFocusedDashboardInputIsNotForwarded`;
+  `textlessViewCovers` and `modalVisible` are the two halves of
+  `overlayCoversScreen`, pinned by `TestOverlayPredicatesCoverEveryOverlayState`).
+  Known cosmetic limit: while a text input is being edited it shows a pasted
+  bidi override (U+202E), zero-width character or blank-rendering space
+  lookalike (NBSP, U+3000, U+2800, ...) as is. Bubbles v2.0.0
+  `internal/runeutil` (what `textinput` uses on typed and pasted runes) drops
+  exactly the runes `unicode.IsControl` reports and U+FFFD (`utf8.RuneError`),
+  and replaces each tab, CR and LF with one space (`textinput` configures
+  `ReplaceTabs(" ")` and `ReplaceNewlines(" ")`); everything else, including
+  Cf format runes (bidi, zero-width) and Zs spaces, is kept. Every editing view
+  renders `textinput.View()` unsanitised (PID picker, filter modal while a field is edited, flamegraph `/`
+  search bar, probes search, stream search/export modals, recording modal), so
+  that is the documented limit. Once the text is committed and shown somewhere
+  else it is rendered through `common.Sanitize`: the filter modal's fields, the
+  flamegraph toolbar, status-bar `filter:` query and the `Filter "..."` status
+  line / no-match placeholder (`%q` alone prints U+2800 and U+FFFC raw), the
+  stream search status and filter summary, and the probes modal's `Filter:`
+  header (task ms2). The stored value stays raw for matching and only the
+  display is made safe.
+  A new text input must accept `tea.PasteMsg` as well as keys.
+  Pinned by `internal/tui/paste_test.go` and the per-package `*Paste*` tests.
+
+  **Every textinput is fed through `common.UpdateTextInput`** (task kz2,
+  `internal/tui/common/textinput.go`), never `textinput.Model.Update`
+  directly. bubbles' `textinput.deleteWordForward` (v2.0.0, still in v2.2.1,
+  so a version bump does not help) steps past the last rune and reads one
+  past the value: Alt+D / Alt+Delete with the cursor on the last rune
+  panicked the whole TUI in the PID picker, flame search, probes search,
+  record modal, filter modal and (until 9z2) the stream search/export
+  modals. `UpdateTextInput` turns exactly that press into a plain Delete,
+  which removes the same rune (also for masked inputs, where bubbles
+  deletes after the cursor); every other cursor position and message passes
+  through. Pinned by `common/textinput_test.go` (values, wide runes, masked,
+  negative controls, and `TestBubblesDeleteWordForwardStillPanicsOnTheLastRune`,
+  which fails once an upgraded bubbles fixes the bug so the guard can go),
+  `internal/tui/textinput_deleteword_test.go` (every host end to end through
+  `Model.Update`) and `common/textinput_hosts_test.go`, a type-checked scan
+  of `internal/tui` (each package type-checked from source against the
+  export data of `go list -export`) that fails when a non-test file uses
+  the `Update` method of `textinput.Model` outside the allow-list
+  (`common/textinput.go` only). It resolves the method itself, so any
+  expression of type `textinput.Model` or `*textinput.Model` is caught:
+  fields, pointer fields, parameters, locals and copies, slice/map
+  elements, getter results, embedded fields, method values and method
+  expressions. Only dynamic dispatch (an interface value holding the
+  input, reflection) gets past it.
+
+  **The stream search/export modals get the real key press** (task 9z2).
+  `eventstream.Model.HandleTeaKey` hands an open modal the `tea.KeyPressMsg`
+  itself instead of round-tripping it through its name, and the `textinput`
+  types only the press's `Text`. The old route went through `HandleKey(name)`,
+  whose `keyMsgFromString` knew six names and made every other one a press
+  with `Text` set to the name. Bound names (Ctrl+A/E/B/F/H/D/K/U/W, Home/End,
+  Alt+B/F/D/Backspace/Delete, Ctrl+V) still acted as keys that way, because
+  bubbles' `key.Matches` compares `msg.String()`, which returns the `Text`.
+  What changed: unbound keys (Ctrl+X, Alt+X, Insert, PgUp, Shift+Tab) are no
+  longer typed as their names, and Ctrl/Alt+Left/Right now move by word
+  (`HandleTeaKey`'s switch used to send them to `HandleKey("left"/"right")`,
+  dropping the modifier). `HandleKey(name)` stays for name-driven callers and
+  tests: `keyMsgFromString` (`modalkeys.go`) maps the fifteen named keys the
+  stream uses plus the `pgdn`/`pagedown`/`pageup` aliases, with modifier
+  prefixes, and reports anything else (`f13`, which it leaves out, or `abc`)
+  as no key, which an open modal consumes and ignores. Alt+D/Alt+Delete on the
+  last rune already panicked in both modals before task 9z2 (bubbles v2.0.0
+  `deleteWordForward` indexes past the value); their `Update` now turns it
+  into Delete there (`common.UpdateTextInput`, which since task kz2 guards
+  every textinput, see above). Pinned by `eventstream/modalkeys_test.go`
+  (both modals, both entry points; comments mark which cases pin changed
+  behaviour) and
+  `dashboard/streammodalkeys_test.go` (end to end through `dashboard.Update`
+  with presses built as Bubble Tea delivers them).
+- **The stream's FD-trace overlay (`T`) owns the keyboard like its two modals** (task 3r2).
+  `eventstream.Model.FDTraceVisible` joins `ExportModalVisible`/`SearchModalVisible` in the
+  Stream tab's `BlocksGlobalShortcut`, so `q` (and `ctrl+c`) is re-routed as Esc and closes
+  the overlay instead of starting the shutdown, and the `tui.go` dashboard shortcuts
+  (`f`, `R`, `o`, ...) stay inert behind it. `handleFDTraceKey` consumes every key for the same
+  reason: an unhandled key used to fall through to the dashboard's tab/view/reset shortcuts.
+  The overlay has no text input, so a paste is dropped. Any new stream overlay must add its
+  predicate there. Pinned by `TestQClosesTheFDTraceOverlayInsteadOfQuitting`,
+  `TestFDTraceOverlayBlocksGlobalShortcuts` (`internal/tui/textinput_keys_test.go`) and
+  `TestFDTraceOverlayConsumesEveryKey` (`internal/tui/eventstream/model_test.go`).
+- **The PID/TID picker selection follows the process, not the row number**
+  (`pidpicker.Model.applyFilter` -> `relocateSelection`): a rescan or a typed
+  filter reorders rows, so the selected pid (tid in TID mode) is looked up again
+  in the rebuilt list. If it vanished (exited, or no longer matches the filter)
+  the PID picker enters `noSelection`: no row is highlighted, a one-line notice
+  (`pid 30 exited - pick a process`) is shown and Enter is a no-op, because the
+  fallback All row means a system-wide trace (`selectedPIDFilter(0) == -1`) and a
+  reflexive Enter must not start one unexplained. The state is sticky across
+  rescans and edits until Up/Down moves the selection (either key lands on the
+  All row, so tracing everything stays one deliberate keypress away). The TID
+  picker keeps the plain fallback to "All TIDs", which stays inside the process.
+  Pinned by `internal/tui/pidpicker/selection_test.go`.
+  A selection the user has not made is derived from the filter instead (task
+  hs2, `selection.go`: `Model.implicit`, `followFilter`): no filter text selects
+  the All row (a bare Enter still means all PIDs), a filter with matches selects
+  the first match, so typing `mysql` and pressing Enter picks that process
+  rather than the whole system, and a filter without a match selects nothing
+  (the `noSelection` state with a "no process matches the filter" notice,
+  "thread" in the TID picker; Enter is a no-op in both). That notice stays
+  hidden while an empty list does not mean "no match": before the first scan
+  result is in (it only means "not loaded yet") and after a failed scan (the
+  scan error line explains it). The derived state is recomputed on every edit of
+  the text and every rescan, so backspacing to an empty filter returns to All. A
+  derived process row keeps its pid across a rescan (`applyScan`,
+  `keepDerivedProcess`): a new process sorting ahead does not take over, and if
+  the highlighted first match left the list the next match is selected with a
+  notice that names both and the reason (`pid 30 exited - selected pid 40
+  instead`, or `pid 30 no longer matches the filter - ...` when the process
+  still runs; `tid` in the TID picker) instead of silently. A failed scan
+  empties the list, and what that does depends on the selection
+  (`TestFailedScanOutcomeDependsOnTheSelection`). A selection derived from a
+  non-empty filter ends up with nothing selected (`followFilter`'s no-match
+  branch, Enter a no-op, only the scan error shown, no notice), and a derived
+  pid is held (`heldPid`) for the next successful scan, which keeps it or
+  announces the move the same way; a real edit of the filter text drops the held
+  pid. A derived All row (empty filter) and an All row the user moved onto stay
+  highlighted, so Enter still traces all PIDs (all TIDs of the process in the
+  TID picker); a thread the user picked in the TID picker falls back to All
+  TIDs, and a process the user picked in the PID picker is lost like one that
+  exited (`noSelection` with the lost-selection notice). Up/Down hands the
+  selection to the user (a process row then follows the process as above); a
+  user who moved back onto the All row and then edits the filter text gets it
+  handed back to the filter, so typing a filter with a match highlights that
+  match even after Up. Enter right after typing still means All in two cases: a
+  whitespace-only filter, which trims to an empty query and so derives the All
+  row (`TestWhitespaceOnlyFilterKeepsAllRow`), and, in the TID picker, a thread
+  the user moved onto that the typed character hides, which falls back to the
+  user-owned All TIDs row (it stays within the process). Only a change of the
+  text counts (`editFilter` compares the value and rebuilds nothing otherwise):
+  cursor keys, an empty paste or any other message that reaches the focused
+  input leave the selection alone, so a derived pid tracked across a rescan is
+  not reset to row 1 by an unrelated key. The same keeps the All TIDs row of
+  that TID fallback (it is not swapped for another thread; the next real edit
+  hands it to the filter). Startup is unaffected: `-pid`/`-tid` skip the picker
+  (task ur2), and the picker's `PidSelectedMsg` still replaces any startup tid.
+  Pinned by `internal/tui/pidpicker/filterselect_test.go` and, as a seeded
+  randomized comparison with an independent reference model in both PID and TID
+  mode (Enter emits exactly the highlighted row's message, the All message only
+  for the All row, nothing without a selection; the notice line matches word for
+  word), `internal/tui/pidpicker/selection_model_test.go`.
 - **An unmatchable `-comm`/`-path` is rejected at parse time**: `validateConfig`
   (`internal/flags/flags.go`) ends in
   `BuildTraceFilter(cfg).ValidateTracepointFields()`, so a pattern longer than
@@ -565,7 +1071,11 @@ not sufficient.
   once per second (`ringbufDropMonitor`): a growing count raises a live warning
   (a TUI stream warning row, stderr in `-plain`/headless modes) and the run
   total is always printed in the end-of-run `Statistics:` block as
-  `ring buffer drops: N (N/s, N% of events)`.
+  `ring buffer drops: N (N/s, N% of events)`. The same block also reports
+  `group-dead exits: N` (whole-process `sched_process_exit` records, counted
+  once per process death: repeats of a pid within 100ms are suppressed, see the
+  fd-table notes below); the thread-exit integration tests assert both lines
+  through the harness's `OutputCapture`, the drop line being `0`.
 
   That line is a statement of fact, which is why *both* of its inputs are
   guarded. **Every mode must hear about a failed reading**: only
@@ -605,6 +1115,107 @@ not sufficient.
   ordering bug, not a data race - and nor can a test: what is pinned instead is
   the intermediate state
   (`TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal`).
+- **A skipped probe run may be a lost record** (task 723;
+  `internal/skipped_run_counter.go`, `internal/bpf_prog_misses.go`): the kernel
+  does not run a tracepoint program while `bpf_prog_active` is raised on the
+  CPU (classic tracepoints, `trace_call_bpf`; raised by every `bpf(2)` map
+  lookup/update/delete with preemption enabled, so a task preempted mid-way
+  blocks the CPU's programs) or while the same program is in flight there (raw
+  tracepoints, and on 7.2 - not yet on 6.19 - the syscall tracepoints, which
+  run preemptibly through `trace_call_bpf_faultable`). Such a run reserves
+  nothing, so `ringbuf_drop_map` stays put; the kernel counts it in the
+  program's `recursion_misses` (`bpf_prog_info`; classic tracepoints only
+  since 6.7). Rules:
+  - **It is weaker evidence than a drop and never added to one.**
+    `ringbuf_drop_map` is bumped after BPF's `filter()` passed: a record ior
+    wanted. `recursion_misses` is bumped before any program code ran, for
+    every task on the host, so under `-pid`/`-tid`/`-comm` it also counts
+    tasks outside the filter (`-pid <looper>` plus an unrelated `SCHED_FIFO`
+    task on that CPU: tens of thousands of skips, no row missing).
+    `recordLossSource.Total()` is the ring drops alone; the skipped runs come
+    through `skippedRunSource`, and `numRingbufDrops`/`numSkippedRuns` and
+    their two failure flags are published apart (a failed sweep must not turn
+    the ring line into `unknown`, nor the reverse).
+  - **Per consumer** (`handleRingbufDropResult`, `restartDropWatch`): a skip
+    refuses a restart fold like a drop (`lostSince`; one row stays two); it
+    lets the exec exit ADOPT but the pair proves no exec
+    (`evidenceSince` -> `maybeSkippedRecord`, `lostExecRecord`: a proof
+    releases live threads' held rows and needs `countedRecordLoss`); it
+    requests the comm sweep (only `/proc` reads, once per monitor period);
+    it marks sampling totals `lower_bound` ("at least" holds either way,
+    "exact" is not known). The warning and the statistics line say `events
+    may be missing; the count includes tasks outside the trace filter`
+    (`skippedRunsMeaning`), never that events ARE missing.
+  - **Only attached programs are swept**: `libbpfLinkOf(prog, name)` lists
+    the program of every link ior hands out in `attachedProgramSet`, under
+    the tracepoint name it was attached to (no category: `sys_enter_read`,
+    `signal_deliver`, `task_rename`), until that link's `Destroy` returned
+    (`libbpfAttachedProgramFDs`, and `libbpfAttachedProgramFDsOn` for some
+    tracepoints; own tiny mutex, never the probe manager's), and a full
+    sweep also reads once more what was attached at the previous sweep and
+    is gone. **A fold also asks detached programs**: `fdsOn` names every
+    program once attached to the tracepoints until the module is closed
+    (count 0 entries), because a detach is stamped for the folds
+    (`noteProbeChange`) only after both links of the pair are destroyed and
+    the manager reported - a lagging fold decided in between is not refused
+    by the probe change and must still read the program's skips. Reading a
+    detached program is safe: `bpf_link__destroy` closes the link's fds,
+    never the program's, which go with `bpf_object__close`; so the module
+    is closed through `closeLibbpfModule` / `libbpfModuleCloser`, which
+    first `forget`s it (root test `requireDetachedProgramsAsked`).
+    `NextProgram` is pinned to no place; the attach functions are
+    pinned to `return libbpfLinkOf(prog, name)(attachBPF...(prog, ...,
+    name))`.
+  - **A fold asks about its own programs only** (`restartFoldTracepoints`,
+    `skippedRunCounter.SkippedSince`): the interrupted syscall's pair,
+    `restart_syscall`'s for a -516 row, and the six hand probes
+    (`restartFoldHandTracepoints`) - 8 programs, 9 when `rt_sigreturn` is
+    traced (its generated program shares `sys_enter_rt_sigreturn` with the
+    restart program), two more for a -516 row. `SkippedSince` also returns
+    the counter's total, and `lostSince` tells the watch when it changed
+    (`noteSkipped`): a skip first seen by a fold's read is dated then, not at
+    the next full sweep, so a later exec adoption about an enter after that
+    fold does not take it for a skip after the enter. The comment on `restartFoldTracepoints`
+    has the soundness argument: the fold's records are the held tid's own;
+    between the interruption and the continuation the tid runs only a
+    handler's syscalls, at depth >= 1, whose enters change nothing in BPF,
+    and a skipped exit of an inner interrupted call leaves the outer entry
+    as the kernel will resume it. A program's latest read (of a full sweep
+    or of another fold's question) answers when it began after the record
+    that asks; the counts and stamps are kept per program, so a read made
+    for one fold never answers for a program it did not read. The drop
+    monitor's full sweep keeps counting every program for the statistics,
+    the comm sweep and sampling; the exec adoption still asks the full sum
+    (`TotalAsOf`).
+  - **Cost**: one `BPF_OBJ_GET_INFO_BY_FD` per attached program, in which the
+    kernel sums per-CPU counters over every possible CPU, so it scales with
+    the host's CPU count (8 CPUs, 7.2.5: 0.24-0.38 ms for the 242 programs
+    of a default run, 8-20 us for the 8 of a one-syscall run). A full sweep
+    per fold made a caught-up default run sweep 242 programs per question
+    (a pipe read interrupted ~6,000 times a second by an `SA_RESTART`
+    signal, `-plain -pid`, 10 s, 8 CPUs: 14.2-15.9 M `bpf(2)` calls and
+    2.0-2.2 s user / 6.9-7.6 s sys, against 126-131 k and 0.5-0.6 / 1.5-1.6
+    without skip counting); asking the fold's own programs costs 0.65 M
+    calls and 0.7-0.8 / 1.6-2.0 s. The
+    loop never asks for "now" but for the time of the record it decides
+    about (`lostSince`'s `upTo`, `TotalAsOf`), which a read begun after that
+    time answers. A read stamped by an unreadable clock (`math.MaxUint64`)
+    is never reused: for this one comparison the maximum is the accepting
+    side (`bootclock.go`).
+  - `bpf_prog_info` is input too: `progMissesReader` clears its reused
+    buffer before each call, or the kernel answers `EFAULT` for the lengths
+    the previous call left in it. A closed fd is `EBADFD`, not `EBADF`.
+  - A kernel before 6.7 gets the ring counter alone and the statistics line
+    says `not counted`, never `0`.
+  - Integration tests: a host with real-time tasks skips runs for real.
+    `assertSkippedProbeRunsReported` only logs a non-zero count, and tests that
+    require exact folds run through `runFoldScenarioRows`, which retries a
+    run that saw loss once and then skips with the counts - visibly, and as
+    a failure under `IOR_REQUIRE_FOLDS=1` (see "Fold tests that cannot fold"
+    under Build/Test Commands).
+  Reproduce with a `SCHED_FIFO` task that wakes up and makes a syscall on a
+  CPU where another task loops over the same syscall: rows of the looper go
+  missing with `ring buffer drops: 0` when the looper is traced.
 - **Comm resolution across `execve`**: most event payloads carry no command
   name, so it comes from `commResolver` (`internal/eventloop_comm.go`), an
   asynchronous `/proc/<tid>/comm` cache. Every lookup is bounded by
@@ -622,28 +1233,457 @@ not sufficient.
   taken after the kernel installed the new name. It is not a syscall
   tracepoint, so it lives outside `probemanager` and is attached directly by
   `attachProcessExecProbe` — **before** the syscall tracepoints, and regardless
-  of `-trace-*` selection. Control records never become rows; they only refresh
-  the cache (`handleProcessExecEvent`), and because the ring buffer preserves
-  reservation order and the event loop has a single consumer goroutine, the
-  refresh lands before the new program's first syscall pair — **for every record
-  that is actually delivered**. Two residual paths are handled explicitly:
+  of `-trace-*` selection. Control records never become rows themselves (the
+  exec record may complete an untraced-exit execve pair, see *Non-leader
+  exec*); they refresh the cache (`handleProcessExecEvent`), and because the
+  ring buffer preserves reservation order and the event loop has a single
+  consumer goroutine, the refresh lands before the new program's first syscall
+  pair — **for every record that is actually delivered**. Two residual paths are handled explicitly:
   - *Lost record.* Under backpressure `bpf_ringbuf_reserve()` fails and the
-    control record is never emitted (counted in `ringbuf_drop_map`). With
-    `-comm X` active the usual self-healing path is closed too, because
-    `matchRawOpenEvent` drops non-matching opens at enter so `handleOpenExit`
-    never refreshes the cache from the kernel comm. A non-zero drop delta
+    control record is never emitted (counted in `ringbuf_drop_map`). The
+    payload comm of an open or exec enter heals a tid that opens or execs
+    (`seedCommFromEnterPayload`, applied before the raw `-comm` gate so even a
+    dropped open refreshes the cache), but a tid that only reads and writes has
+    no such record to heal it. A non-zero drop delta
     therefore flags the whole comm cache stale (`markAllStale`, requested by the
     drop monitor goroutine and applied by the event-loop goroutine in
     `applyPendingCommRefresh`). A stale entry keeps serving its current value
     and triggers one asynchronous procfs re-read on next use — that read happens
     after the exec, so it heals the label. Evicting instead would blank the comm
-    column and, under `-comm`, drop the tid's events at the enter-side gate.
+    column and, under `-comm`, drop the tid's rows at the exit-side comm check.
+  - *Non-leader exec.* An `execve` by a thread other than the leader enters
+    under the caller's tid but returns under the leader's (`de_thread`). The
+    record carries the pre-exec tid (`old_tid`); the BPF handler moves the
+    in-flight `syscall_enter_state_map` entry to the new tid
+    (`ior_on_exec_tid_change` in `filter.c`), and userspace re-keys the parked
+    execve enter and its gap baseline the same way (`rekeyExecCaller`, gap
+    baselines are keyed by the exit's tid), so the execve row is emitted with
+    the caller's tid and nothing leaks under the vanished one. If the record
+    is lost after the BPF move, a successful execve exit under `tid == pid`
+    with no enter of its own adopts the process's parked non-leader exec
+    enter (`adoptLostExecCaller`, via the pair tracker's per-pid
+    `execCallers` index) or, when the execve was interrupted with -513 and
+    re-executed, the enter kept with the row its caller holds
+    (`restartTracker.reexecutingExecCaller`, task r13; see the task 103
+    bullet). Integration test: `TestNonLeaderExecIsPaired`
+    (scenario `exec-non-leader-thread`).
+    Under `-tid <that non-leader>` the post-exec (leader) tid is filtered, so
+    the execve's exit never reaches userspace. The exec record is still
+    emitted for the traced caller (`ior_exec_record_scope` in `exec.c`:
+    `old_pid == TID_FILTER`, `PID_FILTER` still applies, ior excluded) and
+    flagged `exit_untraced`; userspace evicts the FD_CLOEXEC descriptors and
+    completes the parked enter from the record (`completeUntracedExec`: ret
+    0, duration ending at `sched_process_exec`). **`-tid` tracing of that
+    thread ends at the exec**: `TID_FILTER` is a load-time constant and
+    following the renumbered task would cost a map lookup in `filter()` for
+    every rejected event. Residual gap: if that flagged record is lost to
+    ring-buffer backpressure, the BPF enter state is already gone and no exit
+    ever arrives, so `adoptLostExecCaller` has nothing to adopt from and the
+    execve row (at rate `N` also its count) is lost; only `ringbuf_drop_map`
+    shows it, and the parked enter ages out of the LRU. Integration test:
+    `TestNonLeaderExecUnderTidFilterIsCompleted` (scenario
+    `exec-non-leader-thread-tid`, which parks the exec thread in a prestart
+    hook so its tid is known before ior starts).
   - *Late lookup worker.* A resolver worker that read `/proc/<tid>/comm` before
     the exec could otherwise overwrite the authoritative post-exec name. Each
     cache entry carries an exec epoch, bumped by `handleProcessExecEvent`; a
     worker samples it before its procfs read and its result is discarded when
     the epoch moved on. Both writes are mutex-protected, so this is a logical
     race the race detector cannot see.
+
+  **A new task is named by a record, not looked up (task fr2).** The exec
+  record renames an existing tid; nothing named a *new* one, so its comm came
+  from the same asynchronous procfs read and lost the race against short-lived
+  tasks: a thread that exited before the lookup ran has no `/proc/<tid>` and
+  every row it produced carried an empty comm, the first rows of a thread that
+  lives on did too, and under `-comm` a tid with no cached comm has an empty
+  comm at the exit-side filter, which matches no ordinary pattern (only `^$`,
+  `^` and `$` match an empty comm), so those rows were dropped silently (0 of
+  200 in the report). The hand-written `task:task_newtask` handler in `internal/c/exec.c` (`handle_task_newtask`, attached by
+  `attachTaskNewtaskProbe` next to the exec and exit probes, before the syscall
+  tracepoints, regardless of `-trace-*`) emits a 56-byte `TASK_NEWTASK_EVENT`
+  control record from the creator's context, before the child is first woken:
+  child tgid, child tid, the inherited comm, the raw `clone_flags` and the
+  creator's tgid (`creator_pid`; a legacy 48-byte record of an older
+  `IOR_BPF_OBJECT` decodes with `CreatorPid` 0 = unknown).
+  `handleTaskNewtaskEvent` (`internal/eventloop_newtask.go`) seeds the comm in
+  ring-buffer order before the child's first pair, as a *provisional* name
+  (`setCachedProvisional`): the inherited name is the creator's, and a new
+  thread often renames itself at once (`prctl(PR_SET_NAME)`,
+  `pthread_setname_np`: tokio, Java, Chrome, Bun pools), which the
+  `task:task_rename` record (task lr2, below) reports. A provisional entry does
+  not bump the tid's rename epoch and is flagged stale (unless rename records are
+  trusted, task xr2 below), so the first use of the
+  tid queues exactly one
+  `/proc/<tid>/comm` read whose result replaces it (a read of an already-gone
+  thread comes back empty and leaves the seed). Seeding as authoritative
+  (`setCachedCommFromKernel`, which bumps the epoch and so discards later procfs
+  results) pinned the parent's name on renamed threads for good and hid their
+  rows from `-comm <renamed>`; exec and open records are still authoritative
+  and outrank an in-flight read. Rows emitted before that read lands carry the
+  inherited name (and are matched against it under `-comm`), as the first rows
+  did before any name was known (the `task_rename` record normally makes even
+  those rows right). The record also retires the per-tid state of a dead
+  previous owner whose exit record was lost (`retireRecycledTid`: cached comm
+  and in-flight lookup, parked enter, `-gap` baseline, parked
+  name_to_handle_at handle), the same set the exit record clears. The child's
+  tgid is derived (`CLONE_THREAD` -> the creator's tgid, else the child's tid)
+  rather than read from the task struct, and the record is scoped like
+  `filter()` but applied to the *child* (`ior_task_in_scope`): a thread of a
+  `-pid` target is in scope, its `fork()` child is not, ior's own threads are
+  excluded. A fork that execs is renamed by the exec record that follows. A lost
+  record (`ringbuf_drop_map`), a failed attach or an older `IOR_BPF_OBJECT`
+  without the program degrade to the old procfs lookup.
+
+  **The corrective read is skipped when renames are reported (task xr2).**
+  Under thread churn that one read per new thread was nearly all of the
+  resolver's work (300 threads/s: 4375 `/proc/<tid>/comm` reads in 15s, 99%
+  ENOENT because the thread had exited, each followed by a `/proc/<tid>/exe`
+  readlink failing the same way). The seed is now flagged stale only when a
+  rename could go unreported (`eventLoop.provisionalSeedNeedsRecheck`): when
+  the `task_rename` probe attached *and* the drop counter is monitored
+  (`dropSrc`), a rename normally arrives as a record or its loss shows up as a
+  drop whose `markAllStale` sweep flags the seed. Trace setup learns the attach
+  through `bpfSetupLog.attached` (`attachHandProbe` announces every sched probe
+  that attached; `renameAttachRecorder` keeps only `task_rename`) and hands it
+  to `eventLoop.trustRenameRecords` after the event-loop factory (which wires
+  `dropSrc`) and before the start signal
+  (`TestRunTraceSetupTrustsRenameRecordsBeforeTheStart`,
+  `TestRenameAttachRecorderNotesOnlyTheRenameProbe`,
+  `TestTraceSetupCarriesTheRenameAttachToTheLoop`). Two cases keep the read
+  anyway. While the drop counter's latest read failed (`ringbufDropReadFailed`)
+  a lost rename would not show up as a drop, so trust is suspended until a read
+  succeeds (a one-off failure is harmless: the counter is cumulative, so the
+  next poll still reports and stamps the drops). And the sweep reaches only
+  entries that exist when the loop applies it, but the loop consumes a backlog,
+  so a newtask record reserved before a reported drop can be seeded *after* the
+  sweep while the lost record was a rename of that thread.
+  `requestCommSweepAfterDrop` therefore stamps `lastDropSeenBootNs`
+  (the host's boot clock via `bootClockNs`, the clock of
+  `bpf_ktime_get_boot_ns`, read after the counter) *before* raising `commRefreshPending`
+  (`TestDropStampIsStoredBeforeTheSweepIsRequested`; the other order lets the
+  loop sweep and then seed such a record against the old stamp), and a seed
+  whose record time is not newer keeps its read. **Not covered** (each wrong
+  name stays until the thread execs, renames again or makes an open/exec
+  syscall whose payload comm contradicts the cache): two microsecond-wide windows in
+  `copy_process` - a third thread writing the child's `/proc/<tid>/comm`
+  between `attach_pid` and `trace_task_newtask` (its rename record precedes the
+  newtask record, whose seed then overwrites the newer name with the
+  creator's), or a sibling renaming the creator between `dup_task_struct` and
+  the tracepoint (the record carries a name the child never had). A rename record `handle_task_rename` cannot read the name of is counted as a ring-buffer drop (task mz2), so the drop sweep covers it. Kernel-sourced comm writes (rename and exec records, open/exec enter payloads) from a record no newer than the last drop stamp (`lastDropSeenBootNs`) leave the entry stale (`setCachedCommFromKernel`, `seedCommFromEnterPayload`, task lz2): such a record was reserved before the drop but consumed from the backlog after the sweep, which only flagged the entries that existed then, so without the flag the record the drop lost could never be healed. Before xr2
+  the corrective read healed both windows. `resolveCommFromProcWithError`
+  returns at once on ENOENT/ESRCH instead of trying the exe fallback
+  (`TestResolveCommOfAGoneTaskSkipsTheExeFallback`, over a fake procfs root
+  through `resolveCommFromProcRoot`). Negative-caching ENOENT per tid was
+  measured and not needed: no tid was looked up twice. Benchmarks:
+  `BenchmarkThreadChurnCommLookups` (~16.5k -> ~6.1k CPU ns and 1 -> 0 lookups
+  per thread) and `BenchmarkResolveCommOfGoneTid`
+  (`internal/eventloop_commchurn_bench_test.go`); tests in
+  `internal/eventloop_newtask_recheck_test.go` and
+  `internal/eventloop_newtask_trust_test.go`.
+
+  **A rename is reported by a record too (task lr2).** Nothing reported a task
+  changing its own name: `prctl(PR_SET_NAME)` and `pthread_setname_np` (a write to
+  `/proc/self/task/<tid>/comm`, also possible from a sibling thread) change
+  `task->comm` with no syscall record, exec record or open payload to say so, so
+  the cache kept serving the old name until an `openat` of that thread happened to
+  heal it. Every later row carried the wrong comm and `-comm` inverted:
+  `-comm <new>` dropped the renamed thread's rows, `-comm <old>` kept admitting
+  them, and an `openat` dropped at the enter-side gate could not heal the cache
+  either (the next `close` row was `E:name`). The hand-written
+  `task_rename` handler in `internal/c/exec.c` (`handle_task_rename`, attached by
+  `attachTaskRenameProbe` with the other sched probes, regardless of `-trace-*`)
+  emits a 40-byte `TASK_RENAME_EVENT` control record (renamed task's tgid and
+  tid, the new comm) for every `__set_task_comm()` - including the exec's own
+  rename, which merely repeats the exec record's name. `handleTaskRenameEvent`
+  (`internal/eventloop_taskrename.go`) writes it through
+  `setCachedCommFromKernel`: authoritative, so an in-flight procfs lookup that
+  read the old name cannot undo it, and it settles a provisional newtask seed
+  (the corrective `/proc` read becomes unnecessary). The record is ordered with
+  the task's syscall records, but a row is labelled when it is *paired*, so what
+  it carries depends on the kind. Most kinds take the label at the syscall's
+  exit (`e.comm(tid)`): a syscall that entered before a sibling's rename and
+  exits after it is labelled with the NEW name (the `prctl` row itself pairs
+  after the record and carries the new one too). The open kinds and `execve`
+  carry the kernel comm of their ENTER record (`ep.Comm = openEv.Comm`), so an
+  `open` that entered before the rename keeps the old name on its own row even
+  when it exits after it. The *cache* is always the newest name in ring order:
+  the payload comm of an open/exec enter is applied when the enter is consumed
+  (`seedCommFromEnterPayload`, before the raw `-comm` gate), not at the exit,
+  because an exit-time write restored the pre-rename payload over a rename that
+  landed in between (a thread blocked in `open(fifo)` renamed by a sibling, task
+  lr2 review: its later `pwrite64`/`close` rows kept the old name). That write
+  (`commResolver.setCachedFromEnterPayload`) is authoritative like the others
+  (it bumps the epoch), but it leaves the entry stale, so the tid's next use
+  queues one `/proc/<tid>/comm` re-read, in two cases. An *exec* enter names the
+  program that is about to be replaced: the `task_rename`/exec records that
+  follow clear the flag again, and without them (probes not attached, an older
+  `IOR_BPF_OBJECT`, both records lost) the re-read is the only thing that learns
+  the new program's name; clearing the flag there turned a fork child's
+  provisional parent name final when its first syscall was `execve` (a failed
+  `execve` pays one redundant read). A payload that *contradicts* the cached
+  name is re-checked too: usually the cache was wrong (a lost record), but it
+  also mitigates a narrow sibling-rename race. `__set_task_comm()` fires
+  `task_rename` *before* it stores the new name, so a sibling's
+  `/proc/<tid>/comm` write (`pthread_setname_np`) racing with the renamed
+  thread's `openat` enter on another CPU can put the old name in a payload
+  behind the rename record; the re-read heals it on the next use instead of the
+  old name sticking until the next open or rename (the row labelled in between
+  still carries the old name; a self-rename via `prctl` cannot race this way;
+  documented next to `handle_task_rename` in `exec.c`). A matching payload, the
+  common case, costs nothing, and so does an open payload for a tid with no
+  cached entry, which contradicts nothing
+  (`TestOpenPayloadWithoutACachedEntryQueuesNoRead`). A rename *to the same
+  name* just rewrites the same cache entry (and bumps its epoch, discarding an
+  in-flight procfs read); an empty name (`prctl(PR_SET_NAME, "")` stores an
+  empty comm) is ignored and keeps the cached name, because an empty label is
+  indistinguishable from "not resolved yet".
+  Two details differ from the other hand-written handlers. It is a **raw**
+  tracepoint (`SEC("raw_tracepoint/task_rename")`, attached through
+  `probemanager.RawTracepointProgram`, a separate interface so the syscall probe
+  manager's `Program` stays small): the classic tracepoint's context holds the new
+  name in a `char newcomm[16]` member, and copying a context array needs the ctx
+  pointer arithmetic the 4.18/5.14 verifiers reject (one rejected program fails
+  the whole object, as for `task_newtask`); the raw arguments (task, comm
+  pointer) are plain u64 loads at offsets 0 and 8, and the name is read from the
+  kernel buffer with `bpf_probe_read_kernel_str`. It cannot use
+  `bpf_get_current_comm` instead: the tracepoint fires *before* the kernel stores
+  the name, and the renamed task need not be the current one. Scope is therefore
+  judged on the renamed task's own tgid and tid (read from the task struct),
+  with the same predicate as the newtask handler (`ior_task_in_scope`). A failed
+  name read drops the record (`bpf_ringbuf_discard`) rather than sending an
+  unterminated string. A lost record (`ringbuf_drop_map`), a failed attach or an
+  older `IOR_BPF_OBJECT` degrade to the old behaviour (stale name until another
+  record corrects it). Pinned by the `TestTaskRename*`,
+  `TestRenamedTaskWithoutARecord*` and `TestMalformedTaskRenameRecord*` tests
+  (`internal/eventloop_taskrename_test.go`, with the negative fixture without a
+  record), `TestSameNameRenameKeepsTheLabelAndQueuesNoRead` and the
+  enter/rename/exit ordering tests of
+  `internal/eventloop_taskrename_race_test.go` (`TestOpenPayloadComm*`,
+  `TestFailedExecComm*`, `TestFilteredOutOpenStillSeedsTheCache`, each with its
+  no-rename control), the stale-payload tests
+  `TestExecEnterKeepsTheInheritedSeedCorrectable` and
+  `TestContradictingOpenPayloadIsRecheckedAgainstProcfs` (with their no-read
+  controls `TestExecRecordsMakeTheExecEnterRecheckUnnecessary` and
+  `TestMatchingOpenPayloadQueuesNoRead`), the attach tests in
+  `internal/ior_bpfsetup_execprobe_test.go`, the
+  decoder layout test, the buildgate test that the handler has no ctx
+  relocation, `TestTaskRenameHandlerChecksTheScopeBeforeEmitting` (the compiled
+  handler reads `IOR_PID_FILTER`/`PID_FILTER`/`TID_FILTER` before it reserves
+  ring-buffer space: `if (0)` in place of `ior_task_in_scope` fails it), and end
+  to end by `TestRenamedTasksAreRelabelledByTheRenameRecord` and the two `-comm`
+  tests in `integrationtests/taskrename_test.go` (scenario
+  `thread-comm-late-rename`: the main thread and workers renamed by
+  `prctl`, by a write to their own procfs comm and by a write from another
+  thread) and `TestRenameBetweenOpenEnterAndExitIsNotUndone` (scenario
+  `thread-comm-rename-in-open`: a worker blocked in `open(fifo)` renamed by a
+  sibling; its later `pwrite64` and `close` rows must carry the new name).
+
+  **A forked child inherits its creator's fd-table entries (task gr2).** The fd
+  table is keyed by tgid and nothing modelled fork, so a new process started
+  with no entries and every descriptor it inherited fell back to
+  `/proc/<pid>/fd`, which renames it (`pipe:0:3:4` -> `pipe:[N]`,
+  `memfd:name` -> `/memfd:name (deleted)`, `eventfd:0` ->
+  `anon_inode:[eventfd]`) and, once the child was gone before the lazy read, to
+  `E:name`; a child's `dup2` of an inherited fd then copied a procfs answer.
+  `handleTaskNewtaskEvent` now calls `inheritFdTable`
+  (`internal/eventloop_newtask.go`) from the record's flags: `CLONE_THREAD`
+  does nothing (the thread already uses the creator's tgid entries);
+  a new process without `CLONE_FILES` (fork, vfork, posix_spawn, plain clone)
+  gets a copy of the creator's fd-table entries *and* procfs-cache entries
+  (`fdTracker.inherit`: one `FdFile.Dup` per descriptor, so FD_CLOEXEC stays per
+  table while the status word is shared with the parent's entry through the
+  open-file-description object, as the kernel's fork shares it (task nr2, below);
+  the copy is a snapshot of the table, what the parent closes or reopens after
+  the fork does not reach the child). **The copy is bounded**: a parent tracking more than
+  `maxInheritedEntries` (128) fd-table plus cache entries passes none on, and a
+  copy that would not fit in ior's own tracker maps (`filesLimit`/`cacheLimit`,
+  `inheritFits`; not the traced process's fd table) is skipped too (the child
+  then resolves through procfs, as before gr2; `fdTracker.inheritSkipped`
+  counts them, together with the same skip when an exec or
+  `CLOSE_RANGE_UNSHARE` leaves a shared table (`copyTable`), and a non-zero
+  count is printed in the end-of-run `Statistics:` block as `fd-table copies
+  skipped: N (source table over 128 entries or no room in ior's fd tracker;
+  descriptors resolved through procfs)`, hidden at 0 like `rows lost`/`records
+  discarded at stop` (task ss2, `eventLoop.fdCopySkipStatLine`,
+  `internal/eventloop_fdcopyskip_stats_test.go`); it explains rows of a child
+  that show the procfs spelling of an inherited descriptor). Reason: the copy
+  is O(entries) per fork on
+  the one event-loop goroutine plus the same again at the child's exit
+  (`BenchmarkForkStorm`: 1.2 us for 8 entries, 11 us for 64, 28 us for 128, and
+  0.27 ms for 1024, 3.7-7.8 ms for 8192 before the cap, i.e. half a core for a
+  1000-fd parent forking 1000/s), and unbounded copies of live children filled
+  the 32768-entry table and evicted the parent's own entries. A fork never
+  prunes the LRU (it skips instead of overflowing the cap) and the copies are
+  stamped with age 0, the oldest: they are the first to go when any later
+  insertion prunes, and the child's own lookups stamp what it really uses. A lazy
+  per-fd copy was rejected: O(1) per fork, but keeping the snapshot semantic
+  when the parent closes or reopens a descriptor after the fork needs
+  copy-on-write on the parent's side, which is unbounded again.
+  A `CLONE_FILES` process gets *no* snapshot but the creator's very table
+  (task hr2, below): a copy would go stale on the first open/close of either
+  side. In every non-thread case the entries under the child's tgid are dropped
+  first: a new process's tgid is fresh, so they belong to a previous owner whose
+  exit record was lost. A fork+exec child then loses the close-on-exec entries
+  through the ordinary exec record (`dropOnExec`). A record without a creator
+  (legacy object), a lost record or a fork child out of scope (`-pid`
+  children) leave the child's table empty as before. The inherited copy is only as good as the
+  creator's table: entries the trace never saw (a `-path`/`-comm` run drops
+  non-matching opens at enter) stay on the procfs path. Pinned by
+  `internal/eventloop_newtask_fdinherit_test.go` (including a real child process
+  against real procfs) and end to end by
+  `TestForkedChildReadsInheritedPipeUnderItsTracedName` (scenario
+  `fork-inherit-fds`, a raw `fork(2)` child reading an inherited pipe end: the
+  row says `pipe:<flags>:<r>:<w>`, the pre-fix procfs spelling was `pipe:[N]`).
+  The fork child is out of scope under `-pid`, so that test uses
+  `TestHarness.RunSystemWideWithIorArgs` (no `-pid`, narrowed by `-comm`; ior
+  then lasts the full `-duration`, so pass a short one). A system-wide run also
+  sees other `ioworkload` processes (a parallel test), so the assertion only
+  counts rows of this test's own child: the scenario writes the child's pid to
+  `$IOR_WORKLOAD_CHILD_PID_FILE`.
+
+  **Duplicated descriptors share one open file description (task nr2).** The
+  kernel keeps the status word (access mode, `O_APPEND`, `O_NONBLOCK`, ...) in
+  the open file description that `dup`, `dup2`, `dup3`,
+  `fcntl(F_DUPFD*)` and `fork` share between descriptors, and `FD_CLOEXEC` in the
+  descriptor itself; a second `open()` of the same path is a new description.
+  The model's shared word is that status word *as `open()` reported it* and
+  `F_SETFL` updated it since: it still carries `O_CREAT`/`O_TRUNC`/`O_EXCL`/
+  `O_NOCTTY` from `open()`'s arguments, which the kernel drops from `f_flags`
+  (its `F_GETFL` returns e.g. `0106001`, without `O_CREAT|O_TRUNC`), until an
+  `F_GETFL` replaces the whole word with the kernel's, for every duplicate.
+  `FdFile` mirrors that split (`internal/file/fdfile_desc.go`): the status word
+  is a `*openFileDesc` (no `O_CLOEXEC` bit in it), `closeOnExec`/`closeOnExecKnown`
+  and the number and name are per `FdFile`, and `Flags()` folds the descriptor's
+  `FD_CLOEXEC` into the shared word for display. `FdFile.Dup` creates a second
+  descriptor on the *same* description (used by `registerDup`, the fork copy and
+  `copyTable`); `FdFile.Detach` makes an independent snapshot that shares
+  nothing (used by `freezePairForEmission` for every emitted row and by
+  `snapshotExecTarget`, because a row must keep the flags of its moment while the
+  live table entry moves on). Before nr2 `Dup` copied the flag word, so an
+  `fcntl(dup, F_SETFL, O_APPEND|O_NONBLOCK)` updated one table entry and the
+  original kept reporting `O_WRONLY|O_CREAT|O_TRUNC` (open()'s word; the kernel's
+  `F_GETFL`: `0106001`), and a
+  later `dup(orig)` started from the stale word even after `F_GETFL` refreshed
+  the original. Rule for new code: change a status flag through
+  `SetStatusFlags`/`MergeFlags`/`AddFlags` on the descriptor the syscall named
+  (the change is then seen by every duplicate); never copy a flag word between
+  `FdFile`s by hand and never hold a live table entry on an emitted pair. A
+  `Dup` or `Detach` is one allocation (`FdFile` and its description share an
+  object, pinned by `TestFdFileDetachAndConstructorsAllocateOnce`). Not modelled:
+  descriptors that share a description through a transfer ior does not
+  model as a dup (`SCM_RIGHTS`, `pidfd_getfd`, which registers nothing) are
+  resolved per descriptor through procfs, so each carries its own word until
+  procfs or `F_GETFL` re-reads it. Pinned by
+  `internal/eventloop_ofdshare_test.go` (every dup variant, both directions, dup
+  of a dup, cleared flags, `F_GETFL` refresh incl. later dups, independent opens
+  and `FD_CLOEXEC` per descriptor as negative controls, close of one leaves the
+  other, emitted rows keep their moment, fork), by
+  `internal/eventloop_ofdshare_boundary_test.go` (a fork-inherited
+  *procfs-cache-only* descriptor shares its word with the child's copy, with an
+  independent description as negative control; and a `-race` test that an emitted
+  row's `File` can be read and `Dup`ed from another goroutine while the loop
+  does `F_SETFL`/`F_SETFD`/`dup` on the live table, which fails with a DATA RACE
+  if `freezePairForEmission` stops calling `Detach`) and the `TestFdFile*` tests
+  in `internal/file/file_test.go`.
+
+  **`CLONE_FILES` processes share one fd table (task hr2).** The kernel gives two
+  processes that `clone(CLONE_FILES)` a single descriptor table, so what one
+  closes, opens or `dup2()`s changes what the other's numbers mean; a per-tgid
+  table kept answering with the old name (a read of fd 3 labelled
+  `/etc/hostname` while the kernel had pointed it at `/etc/os-release`).
+  `fdTracker` now translates every pid to a *table id* first (`tableID`,
+  `internal/eventloop_fdshare.go`; the map is empty for an ordinary trace, so
+  the cost is one length check per lookup): an in-scope `CLONE_FILES` child is
+  pointed at its creator's table by `shareTable`, so both tgids read and write
+  the same entries (they count once toward the table caps); procfs reads still
+  use the real pid. A member leaves the sharing by `exec` (the kernel copies the
+  table before closing close-on-exec descriptors: `dropOnExec` calls
+  `detachShared`, which hands the exec'ing process a bounded private copy,
+  `copyTable`), by `close_range(CLOSE_RANGE_UNSHARE)` (`unshareFiles`, same copy, before the range
+  is applied; **only for a thread-group leader**: the kernel privatises just the
+  calling *thread's* table, so a worker thread's call leaves the tgid's table
+  exactly as it is - no detach, no range applied, no un-blind - and a leader is
+  taken to be alone, which the event stream cannot prove) and by exit (`deletePid`: a table others still share outlives its
+  holder and is re-keyed onto the smallest sharer, `handOverTable`, so no table
+  id dangles on a tgid the kernel may reuse). **A `CLONE_FILES` child that is out
+  of scope** (`-pid`/`-tid` names the creator): the filter hides every syscall
+  of the child, so nothing says what it does to the creator's table. The BPF
+  handler therefore emits the one record an out-of-scope task ever produces, for
+  a `CLONE_FILES` *process* child of an in-scope creator, flagged by
+  `IOR_NEWTASK_CHILD_OUT_OF_SCOPE` in the record's `scope_flags` word (formerly
+  the always-zero reserved word, so an older object reads "in scope";
+  `TaskNewtaskEvent.ChildOutOfScope`). Userspace marks the creator's table
+  *blind* (`markBlind`): its entries are dropped and no new ones are stored,
+  every lookup reads `/proc/<pid>/fd`, the live shared table, until the table
+  dies or its holder execs (an exec is exact: `de_thread` killed every other
+  thread, so nobody invisible shares the new table; `CLOSE_RANGE_UNSHARE` never
+  un-blinds, because the caller may have sibling threads still sharing the old
+  table with the invisible process, so an unsharing leader stays blind with an
+  empty private table - names stay right, only the speed-up is lost). The price:
+  one successful procfs resolution (`NewFdWithPid`, 6 to 13 us measured, depending on
+  host and descriptor type; the 4.5 us figure is only a *failing* `readlink`) per event of that process and
+  procfs spellings for anonymous descriptors (`pipe:[N]`) instead of the traced
+  ones - the state before gr2. The out-of-scope child's exit is filtered out
+  too, so nothing ever says the invisible sharer is gone: **a blind table stays
+  blind for the life of its holder** (until exec, or exit). The record changes
+  nothing else: no comm seed, no tid retirement.
+  **Documented limitations** (no signal names them): (1) a *thread* that makes
+  its own table private with `unshare(CLONE_FILES)` or
+  `close_range(CLOSE_RANGE_UNSHARE)` stays mapped to its process's table - the
+  tracker is keyed by tgid and has no per-thread table (the main thread's reads
+  of a number the thread reused keep showing the old name; a worker's
+  `close_range(UNSHARE)` is deliberately ignored altogether, see above); (2) under
+  `-tid`, a sibling thread's close/reopen of a shared descriptor is filtered out
+  in the kernel and invisible. A hidden `CLONE_THREAD` sibling cannot be flagged
+  like the `CLONE_FILES` process child: the filter hides it by design and there is
+  no tgid of its own to blind. (1) and (2) keep the pre-hr2 behaviour: stale names
+  until the number is re-registered or the table is dropped. (3) **Not the
+  pre-hr2 behaviour:** a `CLONE_FILES` child *process* that calls
+  `unshare(CLONE_FILES)` stays aliased to its creator's table, because `unshare`
+  is a null-kind record that carries no flags (the argument is not captured, so
+  the call cannot be told from `unshare(CLONE_NEWNS)`); the kernel gave the child
+  a copy, but its later close/open of a shared number overwrites the creator's
+  entry here, a wrong-name mode that did not exist while each tgid had its own
+  table (`close_range(CLOSE_RANGE_UNSHARE)` by such a child *is* handled).
+  Recognising it would need the syscall's flags in the BPF record and was left
+  out. (4) A `-pid` target that was itself created with `CLONE_FILES` by a
+  creator the trace never saw (records exist only for children of in-scope
+  creators) is aliased by nobody and blinded by nobody: a sibling's writes to its
+  table go unnoticed (as before hr2, so (4) is no regression). (5) **Also not the pre-hr2 behaviour,
+  like (3):** a leader that calls `close_range(CLOSE_RANGE_UNSHARE)`
+  while sibling threads still share the old table is treated as alone: it leaves
+  the sharing (a blind table stays blind), and the siblings' later rows on those
+  numbers keep the leader's view. Pinned by
+  `internal/eventloop_fdshare_test.go` (sharing both ways, exit/hand-over,
+  exec and `CLOSE_RANGE_UNSHARE` detach (leader) / no-op (worker thread) / stays
+  blind (also a blind leader with sharers that unshares), a recycled tgid that was a stale sharer or holder, blind table, a plain fork that stays
+  independent, an unshared trace that keeps the fast path, bookkeeping
+  invariants incl. the blind-set properties: a blind id is a table id and tracks nothing) and `TestNewTaskNewtaskEventFastScopeFlags`
+  and `TestTaskNewtaskChildOutOfScopeMatchesTheBPFDefine` (the Go constant is a
+  hand-kept copy of the define in `internal/c/exec.c`; the latter parses the C
+  source) in `internal/types/fastdecode_test.go`.
+
+  Old-kernel portability (RHEL/Rocky 8 and 9, 4.18/5.14): the handler takes
+  `void *` and reads `pid`/`clone_flags` through the local CO-RE flavor
+  `trace_event_raw_task_newtask___ior`, so the object compiles against a
+  `vmlinux.h` without the struct, and it takes the comm from
+  `bpf_get_current_comm()` (the handler runs in the creator's context) because
+  copying the tracepoint's `char comm[16]` out of the context compiles to
+  context pointer arithmetic that old verifiers reject ("dereference of modified
+  ctx ptr"), which fails the load of the whole object. Pinned by the buildgate
+  tests `TestBPFObjectCompilesWithoutTaskNewtaskStruct` and
+  `TestTaskNewtaskHandlerHasNoContextPointerArithmetic` (llvm-objdump of the
+  compiled handler). Not yet run on a real RHEL 8/9 kernel (the rocky VM was
+  unreachable when this was written). Pinned by `TestTaskNewtask*`
+  (`internal/eventloop_newtask_test.go`, `internal/eventloop_newtask_rename_test.go`,
+  including the negative fixtures without a record) and end to end by
+  `TestNewThreadsAreNamedWithoutAFilter` / `TestNewThreadsSurviveACommFilter`
+  (scenario `thread-comm-short-lived`) and `TestRenamedThreadsKeepTheirNewName` /
+  `TestRenamedThreadsSurviveTheRenamedCommFilter` (scenario
+  `thread-comm-renamed`), all in `integrationtests/newtask_test.go`; the
+  scenarios' threads must be created after ior attached - they skip goroutines
+  that land on pre-existing Go runtime threads, for which no record can exist.
 
   **Tid recycling is a separate failure mode with the same symptom.** The two
   paths above are residuals of the exec record; this one is not about `execve`
@@ -654,13 +1694,14 @@ not sufficient.
   short-lived processes. The `sched:sched_process_exit` control record already
   attached for the fd table (below) therefore also evicts the comm entry for
   its `ev.Tid` (`commResolver.evictTid`, called from `handleProcessExitEvent`).
-  The record fires per *task* and this cache is keyed per task, so unlike the
-  fd-table eviction this is precise rather than degraded: a thread exit drops
-  only that thread's name. Eviction, not `markAllStale`, is right here because
-  there is nothing left to serve - the value is not merely at risk of being
-  outdated, its owner is gone; the recycled tid then behaves exactly like a
-  never-before-seen one (async lookup, and under `-comm` its first
-  non-open/exec syscall dropped at the enter-side gate).
+  The record fires per *task* and this cache is keyed per task, so this runs
+  on every exit record and is precise: a thread exit drops only that thread's
+  name (the fd-table eviction, keyed by tgid, waits for the group-dead
+  record). Eviction, not `markAllStale`, is right here because there is nothing
+  left to serve - the value is not merely at risk of being outdated, its owner
+  is gone; the recycled tid then behaves exactly like a never-before-seen one
+  (async lookup, and under `-comm` its rows dropped at the exit-side comm check
+  until the name is known).
 
   Retiring an in-flight lookup needs its own counter here: the entry's exec
   epoch cannot do it, because eviction *deletes* the entry, so a result landing
@@ -678,10 +1719,10 @@ not sufficient.
   `TestProcessExitEvictsOnlyTheExitedTasksComm`
   (`internal/eventloop_processexit_comm_test.go`).
 
-  **The same record evicts the tid's pair state and its pending handle**, for
+  **The same record evicts the tid's pair state and its parked handle**, for
   the same reason and with the same precision: `pairTracker.enters` and
   `pairTracker.prevTimes` (`pairTracker.evictTid`), and
-  `pendingHandleTracker.paths`, are all tid-keyed too. Of the pair tracker's
+  `handleTracker.taken`, are all tid-keyed too. Of the pair tracker's
   two, the parked enter is the sharper: a task killed *inside* a syscall never
   gets its `sys_exit`, so its enter stays parked, and the next task handed that
   tid number has its own
@@ -690,50 +1731,66 @@ not sufficient.
   gap between the two tasks. The trace-ID guard in `tracepointExited` cannot
   see it, because a recycled tid running the same syscall produces matching
   IDs. (Reaching it needs the new owner's own enter to be missing, which is
-  routine: ring-buffer loss, or - under `-comm` - the enter-side gate dropping
-  a brand-new tid's first non-open/exec syscall, which the comm eviction above
-  guarantees is the recycled tid's state.) `prevTimes` is the milder half: it
-  gave the new owner's first pair a `DurationToPrev` measured from the dead
-  task's last syscall, which `-gap` filters on. The parked enter is *dropped*
+  routine: ring-buffer loss. Before task dr2 the `-comm` enter-side gate
+  also dropped a brand-new tid's first non-open/exec syscall, which the comm
+  eviction above guaranteed was the recycled tid's state; that gate is gone.)
+  `prevTimes` is the milder half: it gave the new owner's first pair a
+  `DurationToPrev` measured from the dead task's last syscall, which `-gap`
+  filters on. The parked enter is *dropped*
   rather than emitted as a synthetic row - the syscall never returned, so it
   has no return value, bytes or latency, and the only timestamp available is
   the task's death, which would fabricate the very latency the eviction
-  removes - and the drop is counted nowhere: `numTracepoints` already counted
+  removes - and the drop is counted nowhere (not even as an enter without an
+  exit, which counts *lost exit records*, task c23): `numTracepoints` already counted
   the enter record when it was seen, `numSyscalls` is only reached by a pair
   that found its enter, and `numTracepointMismatches` means *the tracker paired
   two records that do not belong together*, so putting ordinary
   kill-inside-syscall traffic there would mask a real pairing regression - and
-  would cancel out a real gain: on a run tracing the `Process` family,
-  `exit_group` emits an enter with no matching exit trace ID, so the enter
-  parks forever and any exit that reaches it is necessarily a spurious
-  mismatch. (Usually the recycled tid's own enter supersedes it first and
-  nothing is counted - the mismatch needs that enter to be missing.) Pinned by
+  would cancel out a real gain: a killed task's surviving enter is consumed by
+  the recycled tid's exit of a different syscall whenever that tid's own enter
+  was lost, which is a spurious mismatch. (The noreturn syscalls used to be the
+  common source of such forever-parked enters; since task pr2 they are rows at
+  enter and never park, see "Noreturn syscalls are rows at enter". That row is
+  not the synthetic row refused here: a noreturn call is complete at enter and
+  its row carries the enter's own time and no latency.) Pinned by
   `TestRecycledTidDoesNotPairWithTheDeadTasksEnter`,
   `TestRecycledTidDoesNotInheritTheDeadTasksGap` and
   `TestProcessExitEvictsOnlyTheExitedTasksPairState`
   (`internal/eventloop_processexit_pair_test.go`).
 
-  `pendingHandleTracker` is the one with the longest reach.
-  `name_to_handle_at` parks a pathname under the tid until the matching
-  `open_by_handle_at` consumes it, and the two need not be the same task -
-  passing the handle to another process is what the API is for - so an
-  unconsumed pathname outliving its task is ordinary rather than exceptional.
-  Left behind it does more damage than a parked enter: `handleOpenByHandleAtExit`
-  labels the row with the dead task's path *and* registers that path in the fd
-  table for the new process, so every later read, write and close on the
-  descriptor reports it too. Both syscalls are FS-family, so a default run
-  reaches it. Pinned by
-  `TestRecycledTidDoesNotInheritTheDeadTasksPendingHandle`.
+  `handleTracker.taken` is the mildest of them. It parks the handle a
+  `name_to_handle_at` returned (from its `FILE_HANDLE_EVENT` control record)
+  until the call's exit record claims it a few records later, so an entry
+  outlives its task only when that exit record was lost. It cannot mislabel
+  the recycled tid - a claim needs the exit record's exact time - so dropping
+  it is hygiene. What a task's exit record must **not** drop are the handle
+  *names* (`handleTracker.names`): they are keyed by the handle itself, and
+  taking a handle for another thread or process to open is what the API is
+  for, so a name outlives the task that took the handle. (The one exception
+  is tgid-keyed, not tid-keyed: a name scoped to the taker's process goes
+  with that process's group-dead record, task 523, `dropScoped`.) (While
+  the pathname
+  was parked per tid, until task k03, it had to be dropped here, or the
+  recycled tid's next `open_by_handle_at` was labelled, row and fd table
+  entry, with the dead task's path.) Pinned by
+  `TestTaskExitDropsTheParkedHandleAndKeepsTheHandleNames`.
 
   A failed attach is non-fatal and simply degrades to the old procfs-only
-  labelling. Correspondingly, `handleExecExit` deliberately does **not** cache
-  the `sys_enter_execve` comm of a *successful* execve (that is the *calling*
-  program's name); it does cache it for a **failed** one, where no
-  `sched_process_exec` fires and the task keeps running under exactly that name.
-  Kernel-sourced names — the control record, an open event's payload comm, a
-  failed execve's payload comm — all go in through
-  `commResolver.setCachedFromKernel`, which bumps the tid's rename generation
-  and so retires any procfs lookup still in flight for it. A `markAllStale`
+  labelling. Correspondingly, the `sys_enter_execve` comm is the *calling*
+  program's name: it is cached when the enter record is consumed
+  (`seedCommFromEnterPayload`), so a *successful* execve's own records (the
+  `task_rename` of `begin_new_exec` and the exec record) replace it in ring
+  order, and a **failed** one, where no `sched_process_exec` fires, leaves the
+  task under exactly that name. Neither exit handler writes the cache.
+  Kernel-sourced names all bump the tid's rename generation and so retire any
+  procfs lookup still in flight for it: the exec and rename control records go
+  in through `commResolver.setCachedFromKernel`, the payload comm of an open or
+  exec enter through `commResolver.setCachedFromEnterPayload`, which shares
+  that epoch-bumping write but leaves the entry stale for an exec enter or a
+  contradicting open payload (see the lr2 paragraph above). The bump matters
+  for the exec enter too: a pre-exec read queued by a fork child's dup2/close
+  would otherwise land after it, store the parent's name and clear the flag
+  (`TestExecEnterRetiresAPreExecReadInFlight`). A `markAllStale`
   sweep likewise bumps a resolver-wide sweep generation, so a lookup that was
   already in flight when the sweep ran lands *stale* rather than silently
   clearing the flag it never received.
@@ -756,7 +1813,8 @@ not sufficient.
     is a *wrong* row rather than a missing one. Unlike the numeric dimensions
     this was CLI-reachable. Pinned by
     `TestDroppedDupStillRegistersTheDuplicatedFd` and
-    `TestDroppedFcntlSetflStillUpdatesTheFdTable`
+    `TestDroppedFcntlSetflStillUpdatesTheCachedAnswer` (it updates the cached
+    procfs answer since task a23, which no longer promotes it into the table)
     (`internal/eventloop_dupfilter_test.go`). Eviction is the same rule from the
     other side — `applyFdCloseState` and `applyCloseRangeState` also run ahead of
     the checkpoint, because a *stale* entry mislabels the next syscall that
@@ -771,18 +1829,27 @@ not sufficient.
     (`TestFailedDupDoesNotRegisterAnFd`) and so does the `pidfd_getfd` branch
     (`TestFailedPidfdGetfdDoesNotRegisterAnFd`).
 
-    Scope caveat: this rule is about the *pair-filter checkpoint*. Two earlier
-    gates still drop events before any exit handler runs, so it does not make
+    Scope caveat: this rule is about the *pair-filter checkpoint*. One earlier
+    gate still drops events before any exit handler runs, so it does not make
     the fd table unconditionally correct under a filter. `matchRawOpenEvent`
-    drops non-matching opens at enter, so under `-path X` an open of a different
-    file never registers its fd at all (the one exception is an open whose
-    payload filename is *empty* — see "Recovering a faulted open filename"
-    below, where the path dimension is deferred to the exit checkpoint); and
-    with `-comm` active
-    `tracepointEntered` recycles a non-open/exec enter event for a tid whose
-    comm is not cached yet — and comm resolution is asynchronous, so a brand-new
-    tid's first syscall is exactly the exposed one. The `NewFdWithPid` procfs
-    fallback covers both while the descriptor is still open.
+    drops non-matching opens at enter, so under `-path X` (or `-comm X`) an
+    open of a different file (or program) never registers its fd at all (the
+    one exception is an open whose payload filename is *empty* — see
+    "Recovering a faulted open filename" below, where the path dimension is
+    deferred to the exit checkpoint). The `NewFdWithPid` procfs fallback covers
+    it while the descriptor is still open. There used to be a second gate: with
+    `-comm` active `tracepointEntered` recycled a non-open/exec enter for a tid
+    whose comm was not cached yet, and comm resolution is asynchronous, so a
+    brand-new thread's close/dup2/dup3/close_range/fcntl never reached the
+    table and rows the run *did* want kept a closed file's name (task dr2).
+    `tracepointEntered` now parks every enter; an uncached tid has an empty comm
+    at the checkpoint, which matches no ordinary `-comm` pattern, so its own row
+    is dropped there after the state work ran (the patterns `^$`, `^` and `$` do
+    match an empty comm and select such a row; the TUI's exact-pattern helper
+    emits `^$` for a row with an empty comm cell, so that is intended)
+    (`TestUncachedThreadFdChangesReachTheFdTableUnderCommFilter`). The
+    `task:task_newtask` record still matters: it names the tid before its first
+    syscall so that thread's *own* rows can match `-comm`.
   - *Filter input must be the reported value.* `pidfd_getfd` re-points `ep.File`
     at the transferred descriptor; while that happened after the checkpoint the
     pair was judged on the **source pidfd**, so `-path <transferred file>`
@@ -805,7 +1872,337 @@ not sufficient.
     the full pair filter at all.
   - The path kinds and `open_by_handle_at` run the full `finishPairForTid`; for
     `open_by_handle_at` that is the *only* filtering it gets, because its raw
-    enter filter is `nil` (see `rawRuntimeEvents`).
+    enter filter is `nil` (see `rawSyscallEvents`). A *failed*
+    `open_by_handle_at` (EPERM, EBADF, ESTALE, ...) reaches that checkpoint
+    too, as a descriptor-less pathname row like a failed open
+    (`failedHandleFile`). It used to be recycled in
+    `handleOpenByHandleAtExit`, so failed calls produced no row, no error and
+    no "syscalls after filter" count (task eq2).
+
+    **An `open_by_handle_at` is named by its handle** (task k03;
+    `internal/c/handle.c`, `internal/eventloop_handle.go`). The call passes no
+    pathname, only an opaque `struct file_handle`, so both ends carry the
+    handle itself - `handle_type`, `handle_bytes` and up to `MAX_HANDLE_SZ`
+    (128) bytes of `f_handle`:
+    - `sys_enter_open_by_handle_at` reads it from `args[1]` into its enter
+      record (`ior_read_file_handle`; `struct open_by_handle_at_event` grew
+      from 32 to 168 bytes - the syscall is rare, and no other record
+      changed). `handle_status` says what the fields hold:
+      `FILE_HANDLE_OK`, `_NULL`, `_READ_FAILED` (nofault read of a page that
+      is not resident), `_TOO_LARGE` (`handle_bytes` > 128; nothing read), or
+      `FILE_HANDLE_NONE` for the legacy 32/28-byte record of an older
+      `IOR_BPF_OBJECT`, which the decoder recognises by its length (the status
+      word sits in what was unwritten tail padding). The header is read
+      first and then exactly `handle_bytes` bytes: a fixed 128-byte read would
+      fail as a whole on a shorter buffer at the end of its mapping.
+      `f_handle` is zero-filled first, so the record holds the handle and
+      zeros (binary data has no terminator to stop at, unlike the string
+      fields).
+    - `name_to_handle_at` returns the handle through an output buffer, so
+      there is nothing to read at enter: `outputHandleSyscalls`
+      (`internal/generate/classify.go`) makes the enter handler park `args[2]`
+      on the enter state (`ior_stash_pending_handle`) and the exit handler,
+      **only for `ret == 0`**, publish the handle as a `FILE_HANDLE_EVENT`
+      (65) control record ahead of its own exit record
+      (`ior_emit_file_handle`). A failed call emits nothing - that includes
+      the `EOVERFLOW` a caller provokes with `handle_bytes = 0` to learn the
+      size. The pointer travels in the *second* pending slot
+      (`pending_filename2`): the syscall has one path, so the slot is free,
+      and reusing it keeps `struct syscall_enter_state` at its size and the
+      exit at one map lookup (`ior_on_syscall_exit_take_handle`, which hands
+      back the pathname pointer, the handle pointer and the state's
+      `start_ns` from that lookup). The control record (176 bytes) names both
+      ends of its call by their clock reads: `time` is the exit handler's
+      single read, i.e. exactly the `time` of the exit record that follows,
+      and `enter_time` is that `start_ns`, i.e. exactly the `time` of the
+      call's enter record.
+
+    Userspace keeps `handleTracker.names`: handle key (`handleKey`: type,
+    length, bytes) -> `handleEntry` (the absolute name and, next to it, the
+    latest scoped one). `handleFileHandleEvent` parks the handle
+    per tid (`handleTracker.taken`) while the call's enter is still pending;
+    `recordNameToHandleAt` claims it at the exit record and files the name.
+    `handleOpenByHandleAtExit` looks the name up by the key of its enter
+    record: a hit names the row and the fd table entry (flags: the call's)
+    without asking procfs, and names a failed call too. Decisions:
+    - *The control record is tied to both ends of its call, by time.* It is
+      accepted only while the enter pending for the tid is a
+      `name_to_handle_at` with the record's `enter_time`
+      (`ownsPendingEnter`), and claimed only by an exit with the record's
+      `time` (`handleTracker.claim`). Position alone is not enough in either
+      direction: a handle whose exit record was lost would be filed under
+      the next call's pathname, and - the case `enter_time` exists for - a
+      pending enter can be an *earlier* call's (its exit lost) while the
+      enter of the record's own call never arrived (lost, or shed by
+      `-path`), which filed the earlier pathname under this handle for
+      good. Both checks are as fine as the clock; see the residuals.
+    - *A name must come from a traced call, never from a look at procfs*
+      (`takenHandleName`). An absolute pathname is filed as given; a
+      pathname below a dirfd, or an empty one with `AT_EMPTY_PATH`, is
+      resolved through the fd table only (`fdTracker.get`, not `resolve`),
+      and a table entry that was itself named from procfs
+      (`FdFile.NameFromProcFS`, the mark of a name ior cannot vouch for: an
+      `open_by_handle_at` of an unknown handle, `io_uring_setup`, and the
+      duplicate, the forked child's copy and the re-keyed table's entry of
+      any of them; a procfs answer an `fcntl` or an `ioctl`
+      `FIOCLEX`/`FIONCLEX` touches is no longer promoted into the table
+      since task a23 and stays in the procfs cache, `storeFcntlFdFile`) is
+      refused. So is
+      an entry whose name was *built* from such a look (task 523):
+      `resolveDirfdPath` passes the mark of the directory it resolved - an
+      untracked dirfd read from procfs, or a marked table entry - on to the
+      joined name and to the directory itself for an empty pathname, and
+      the exit handlers that store the result keep it (`fdFileNamedAs`:
+      `handleOpenExit` for `openat`, `openat2`, `open_tree`,
+      `open_tree_attr`; `attachPathExitFd` for `fspick` and `creat`);
+      `fsmount` copies the name of its fs-context descriptor the same way
+      (`fsmountFdFile` - the result is an `O_PATH` descriptor on the new
+      mount's root, so a handle *can* be taken through it); a context
+      without a name leaves fsmount's own unmarked class name
+      `fsmountfd:<flags>` (task 823 - it used to fall to the default
+      `eventfd:<flags>`, so such rows read `eventfd:0`). One marked name
+      involves no look at procfs: the bare pathname of a descriptor opened
+      below a directory ior has no name for is marked whatever that
+      directory is - procfs without an answer, or a *tracked* entry with an
+      empty name, e.g. an `openat` whose filename BPF could not read
+      (`unvouchedBarePathname`); unmarked it read as a path relative to the
+      working directory. That is every way a name ior did not get from a
+      call's own arguments or from an unmarked entry reaches the fd table:
+      `socket`, `socketpair`, `pipe`, the eventfd family,
+      `perf_event_open` and `bpf` (which reads fdinfo for the flags only)
+      name the descriptor themselves, and `accept` inherits a listener's
+      name only when it is ior's own class name, never a `socket:[N]` link.
+      An absolute or `AT_FDCWD` pathname is the caller's own and unmarked,
+      as is a name joined to a tracked, unmarked, named directory. Nothing
+      but the handle names reacts to the mark (`namedFromProcfs` has two
+      callers: `takenHandleName` refuses, `fdFileNamedAfter` propagates);
+      rows are named as before. Otherwise the only name is the
+      `/proc/<pid>/fd` link as it is when the loop handles the exit: a task
+      that closed the descriptor and reused the number would have the
+      *newer* file filed under the handle, and every later open of it, in
+      any process, named after the wrong file - the lagging look this
+      design removed from the open, moved to the take. No name is filed
+      then; an absolute name the handle already has stays (see the unnamed
+      take below), and without one the open falls back as for an unknown
+      handle. `registerDup` applies the same caution to a duplicated
+      descriptor.
+    - *A name that is not an absolute pathname stays in the process that
+      took the handle* (`handleName.scoped`). A relative pathname is
+      relative to the taker's working directory, which ior does not track,
+      and a descriptor name without a path (`memfd:x`, `pidfd:0`) names one
+      of the taker's descriptors; either names the opens of every thread of
+      that process (`pid`) and none of another, which falls back.
+    - *A scoped name is kept next to the absolute one, not instead of it*
+      (task 523, `handleEntry`, `handleTracker.store`). Process B taking, by
+      a relative pathname, a handle process A filed under an absolute one
+      used to replace the entry, and A and every other process fell back to
+      procfs - the lagging look, and no name for a failed call. Now B is
+      named by its own take and everyone else still by the absolute name. A
+      scoped take is no evidence against that name (the same file spelled
+      relative to a working directory is the likeliest reason for the two to
+      differ), and what it can be wrong about - a rename in between, a
+      cross-filesystem collision - it is equally wrong about when nobody
+      takes the handle again. One scoped name is kept per handle (the latest
+      scoped take) and an absolute take replaces the whole entry.
+    - *A take ior has no name for leaves the absolute name too*
+      (`handleTracker.store`, `clearScoped`; changed in the task 523 review,
+      k03 dropped the whole entry). k03 argued with a rename between the
+      two takes and a cross-filesystem collision, but neither holds up: a
+      renamed file leaves the absolute name stale whether or not anybody
+      takes the handle again, a colliding handle is misnamed by the older
+      entry before the second take as much as after, and the unnamed take -
+      usually the same file reached through a descriptor ior did not see
+      being opened - tells neither apart from the ordinary case. Dropping
+      also did not avoid a wrong name: the fallback is the lagging look at
+      procfs, and no name at all for a failed call, for every opener, each
+      time one process took the handle that way - which the mark of task
+      523 made more frequent. The one thing such a take ends is the taker's
+      *own* scoped name: within a process the latest take wins, and that
+      one has no name, so the taker is named by the absolute name like
+      everyone else, or falls back. Another process's scoped name stays.
+    - *A scoped name lives as long as its process* (task 523,
+      `handleTracker.dropScoped`, O(names of the pid) through the
+      `scopedKeys` index). It goes with the fd table, on the same trigger
+      (`dropProcessState`): the **group-dead** exit record, not the leader's
+      - a leader that calls `pthread_exit` dies before its threads - and,
+      for a pid whose exit record was lost, the task record of the next
+      process handed the number (`retireRecycledPid`). A thread's exit and
+      a new thread leave it. So does an `execve`, leader's or not: the pid
+      and the working directory are the same, and the handle opens the same
+      file whether or not the descriptor it was taken through survived. A
+      forked child gets none of its creator's scoped names.
+    - *The map is global and an entry is never consumed.* A handle is valid
+      system-wide, is passed between threads and processes and can be opened
+      any number of times; a failed open says nothing against the name. The
+      latest `name_to_handle_at` of a handle wins within its audience (see
+      above; one without a name ior can vouch for ends only the taker's own
+      scoped name), a lookup
+      that names an open refreshes the entry, and above
+      `defaultMaxHandleEntries` the least recently used are evicted.
+    - *No handle, no guess.* An enter record that identifies no handle
+      (`handleKeyOf`: status other than OK, zero bytes, a count beyond the
+      field) and a handle ior has no name for are named from
+      `/proc/<pid>/fd/<fd>` (`procFdFile`), as an `open_by_handle_at` without
+      a stash always was; a failed call is then unnamed. One answer is not
+      believed (task 423, `reachableByHandle`): a link that reads
+      `socket:[N]`, `pipe:[N]` or `anon_inode:...` is a file no handle can
+      open (sockfs, pipefs and the generic anonymous inodes have no export
+      operations), so the number was closed and reused before the loop
+      looked. Row and fd table entry are then unnamed with the call's flags,
+      exactly as when procfs has no answer - the entry is kept, unnamed and
+      marked, because dropping it would send the next row on the number
+      back to procfs for the name just refused. The kept entry lasts like
+      any other: rows on the number are unnamed, with the call's flags,
+      until a close of it is processed (the next row then asks procfs
+      afresh, `TestRefusedProcfsNameLastsUntilTheClose`) or the LRU cap
+      evicts it - also if that close was never seen; the entry kept when
+      procfs has no answer has the same exposure. It is a deny list with one
+      exact exemption, `anon_inode:[pidfd]` (pidfs exports; the text is what
+      7.2.5 shows, and a `pidfd:[N]` spelling would pass anyway); paths,
+      namespaces (`net:[N]`, `mnt:[N]`, ...; nsfs exports) and anything
+      unknown are believed. Checked on 7.2.5 with
+      `name_to_handle_at(fd, "", AT_EMPTY_PATH)`: `EOPNOTSUPP` for a socket,
+      both pipe ends, eventfd, epoll, timerfd, signalfd and inotify; success
+      for a pidfd and every `/proc/self/ns/*`.
+    - *The mount is not part of the key.* `name_to_handle_at` returns a mount
+      ID but `open_by_handle_at` takes a mount *fd*; mapping one to the other
+      needs `/proc/<pid>/fdinfo` (the lagging look this design removes) or
+      walking the file table in BPF, and a mount ID is not the filesystem
+      anyway (a handle is valid on every bind mount of it). Equal type and
+      bytes on two filesystems therefore share an entry.
+
+    This replaced the per-tid stash and its procfs arbitration (tasks j03,
+    l03, m03: `classifyHandlePath`, `compareHandleLinkText`,
+    `tracedHandleLink`, `confirmedHandleFd`,
+    `fixedFlagsMask`/`sameFixedFlags`, the opaque-stash rules and
+    `FdFile.NamedAfterTmpfileDir`, all deleted; `reachableByHandle` went
+    with them and came back alone in task 423, see above). That design
+    could only ask
+    what the returned *number* is when the loop handles the exit, which is a
+    later file once the task closed and reused it: a reuse with the same fixed
+    flags named the row and the fd table entry after the newer file
+    (`TestOpenByHandleAt` passed thanks to the workload's fd numbering), a
+    failed call was named after the thread's *last* handle, and a handle
+    opened by another thread was never matched. Checked against the
+    pre-change binary with the scenarios below: 5/5 reused numbers named
+    after the decoy, 5/5 older-handle failures named after the newer file,
+    10/10 cross-thread rows unnamed.
+
+    Still wrong, and accepted:
+    - *Stale names.* The name is the one the handle was *taken* by: a file
+      renamed or unlinked since keeps it, as an fd table entry does. A
+      scoped relative name survives a `chdir` of its process. A recycled pid
+      inherits its predecessor's scoped names only if both that process's
+      group-dead exit record and its own task record were lost.
+    - *Mount namespaces and chroots.* An absolute pathname is a path in the
+      taker's root and mount namespace, and ior tracks neither (no path row
+      does): an opener in another one - a container opening a handle the
+      host took, or the reverse - gets the taker's view of the path.
+    - *Cross-filesystem collisions are ordinary for some encodings*, not
+      remote. A handle only has to be unique within its filesystem. Seen on
+      Linux 7.2: ext4 (type 1) is inode number + `i_generation`, random for
+      ordinary files, but the root directory is inode 2 / generation 0 on
+      *every* ext4 filesystem; tmpfs (type 1) carries a random generation;
+      btrfs (type 77) is object ID + root ID + the creating transaction's
+      generation, a small counter, so two btrfs filesystems of similar
+      history produce equal triples; cgroup/kernfs (type 254) is the node
+      ID, and the root is node 1 on cgroup2 and on every cgroup v1
+      hierarchy; FUSE is whatever node ID and generation the server
+      assigns, so servers counting from 1 with generation 0 would collide
+      between mounts (not verified). The cost is a row named after the file
+      that took such a handle last; a program working on one filesystem,
+      the usual case, never sees it.
+    - *Handles ior did not see being taken* fall back to procfs with its
+      lag (a failed call is then unnamed; a number reused by a file, a
+      directory, a pidfd or a namespace still names the row after the newer
+      one - only a socket, pipe or anonymous inode is recognised and left
+      unnamed): taken before the trace started;
+      outside a `-pid`/`-tid` scope; by a `name_to_handle_at` the raw enter
+      filter shed under `-path`/`-comm`; by one BPF did not report - sampled
+      out (the N-1 of 1-in-N), aggregate-only (rate 0), or with its enter or
+      exit probe not attached (detached at runtime, a failed attach); with a
+      lost control record; through a descriptor only procfs could name; or
+      evicted by the LRU cap.
+    - *The fd table is trusted for every unmarked entry.* The mark says
+      where a name came from, not whether it is right, and the table itself
+      can be behind - a close ior did not see, a number reused through an
+      untraced call - so a take through such an entry files the old name.
+      The mark changes no row either: a row on a marked descriptor shows
+      the lagging name, or the bare pathname, as before.
+    - *An absolute name survives a scoped take.* If the file was renamed in
+      between, every process but the scoped taker keeps the old pathname
+      where it used to fall back to procfs - the stale name of the first
+      residual, no staler than without the second take. A second process
+      taking the handle by a scoped name displaces the first one's.
+    - *An absolute name survives an unnamed take as well.* If the file was
+      renamed before that take, or the take was of another filesystem's
+      file with an equal handle, every opener keeps the older pathname - as
+      it would had nobody taken the handle again
+      (`TestHandleTrackerUnnamedTakeKeepsTheAbsoluteName`,
+      `TestUnnamedTakeLeavesTheAbsoluteNameInPlace`).
+    - *A coarse clock.* The two time checks compare clock reads of one tid
+      that are at least a syscall entry or exit apart. A clocksource too
+      coarse to move in that time (the jiffies fallback) makes two calls
+      look alike; a misfiled name then additionally needs the lost records
+      described above within one tick.
+    - *An `IOR_BPF_OBJECT` built before k03 is named from procfs only.* It
+      emits no handle record and a handle-less open record
+      (`FILE_HANDLE_NONE`), so nothing is ever filed. This is **not** the
+      "older object degrades to the old behaviour" rule the other record
+      changes in this file follow: before k03 such a row was named from the
+      thread's last `name_to_handle_at`, and that per-tid stash was deleted
+      together with the procfs arbitration it needed rather than kept as a
+      fallback. With an older object, failed calls are unnamed and a
+      descriptor already closed or reused when the loop looks is unnamed or
+      named after the newer file.
+    - *Old verifiers.* Not run on a 4.18/5.14 kernel. The variable-length
+      `bpf_probe_read_user` gets its size as [1, 128] in the register the
+      bound checks were made on, at `-mcpu` v1, v2 and v3 (`llvm-objdump`
+      evidence in `internal/c/handle.c`); it loads on 7.2 and is untested on
+      the old verifiers.
+
+    Pinned by `internal/eventloop_handle_test.go` (naming by handle, a number
+    reused by another file / directory / pipe, cross-thread and
+    cross-process, not consumed, latest wins),
+    `internal/eventloop_handle_key_test.go` (type/byte/length sensitivity,
+    unusable statuses, legacy record, LRU, claim-by-time, a scoped and an
+    unnamed take keeping the absolute name, `dropScoped` and the scoped
+    index),
+    `internal/eventloop_handle_dirfd_test.go` (the mark of a name built
+    from a look at procfs, per call and pathname form, of an `fsmount`
+    descriptor named after such an fs-context descriptor and of a bare
+    pathname below an unnamed tracked directory, and its absence for a
+    tracked, named directory and the caller's own pathname),
+    `internal/eventloop_handle_exit_test.go` (scoped names end with the
+    group-dead record and a recycled pid's task record, not with a thread
+    exit, an `execve` or a malformed task record naming the creator as its
+    own child; absolute names outlive their taker),
+    `internal/eventloop_handle_name_test.go` (failed and size-probe calls,
+    refused control records, a lost exit, `AT_EMPTY_PATH` names),
+    `internal/eventloop_handle_source_test.go` (no name from an untracked or
+    procfs-named descriptor, nor from a duplicate or a forked child's copy
+    of one - the mark travels with `FdFile.Dup`, see
+    `TestFdFileCopiesKeepTheProcfsMark` in `internal/file` -, absolute names
+    below a tracked dirfd, scoped
+    names, a record whose own enter never arrived, a malformed exit),
+    `internal/eventloop_restart_handle_test.go` (a handler's
+    `name_to_handle_at` passes a held restart row),
+    `internal/eventloop_handle_fail_test.go`,
+    `internal/eventloop_handle_reach_test.go` (the fallback's deny list: each
+    handle-less kind unnamed, the socket's entry until its close, pidfd and namespace kept, and
+    the kernel asked again whether the denied kinds really cannot be
+    exported - only an answer that they can fails, a kernel that cannot be
+    asked is logged), the decoder
+    tests in
+    `internal/types/fastdecode_test.go`, the generator, harness and oracle
+    tests (`TestGenerateNameToHandleAtCapturesItsOutputHandle`,
+    `TestFileHandleCapture`,
+    `TestSyscallSemanticsOracleRejectsHandleCaptureMutations`) and the
+    integration tests `TestOpenByHandleAtIsNamedByItsHandleNotItsNumber`
+    (scenario `open-by-handle-at-reuse`),
+    `TestOpenByHandleAtMatchesAHandleTakenOnAnotherThread`
+    (`open-by-handle-at-threads`) and
+    `TestOpenByHandleAtFailuresAreErrorRows` (`open-by-handle-at-fail`).
   - `handleOpenExit` runs the full `finishPair`. Its raw enter filter
     (`MatchOpenEvent`) covers the comm and path dimensions only, so before this
     checkpoint existed `-syscall`/`-family`/`-fd`/`-ret`/`-latency`/`-bytes` and
@@ -846,16 +2243,163 @@ not sufficient.
   safe because `resolve` falls back to the procfs cache and then
   `/proc/<pid>/fd`), and a `sched:sched_process_exit` control record — the
   sibling of `sched_process_exec` in `internal/c/exec.c`, attached the same
-  way in `internal/ior_bpfsetup.go` — whose `handleProcessExitEvent`
-  (`internal/eventloop_processexit.go`) drops the exited tgid's entries from
-  both maps, and — keyed by tid rather than tgid — the exited task's cached
-  comm, its pair state (parked enter plus gap baseline) and its unconsumed
-  `name_to_handle_at` pathname (see "Comm resolution across `execve`"). It
-  fires per *task*, so a thread exit in a still-living multithreaded process
-  evicts that process early: degraded, not wrong — the procfs fallback still
-  answers and re-populates the table. For the three tid-keyed structures the
-  same record is precise rather than degraded, which is why one record serves
-  all four.
+  way in `internal/ior_bpfsetup.go` — handled by `handleProcessExitEvent`
+  (`internal/eventloop_processexit.go`). The record fires per *task* and
+  carries a `group_dead` flag (`ProcessExitEvent.IsGroupDead`), set by
+  `ior_exit_group_dead` in `exec.c` from the tracepoint's own `group_dead`
+  field when the kernel has it (CO-RE `bpf_core_field_exists`), else from
+  `task->signal->live == 0` (runtime-verified only on kernels with the
+  field). The field is read through a local CO-RE flavor type,
+  `struct trace_event_raw_sched_process_exit___ior` (libbpf ignores the `___ior`
+  suffix and matches the kernel's type by name), and the `exec.c` exit handlers
+  take `void *ctx`: the build host's `vmlinux.h` may lack
+  `struct trace_event_raw_sched_process_exit` altogether (RHEL/Rocky 8 and 9
+  kernels define the tracepoint from a shared template), so naming the kernel
+  type would fail the compile there (`internal/buildgate` compiles the object
+  against a `vmlinux.h` with that struct stripped). The `signal->live`
+  fallback can report `group_dead` on several threads of one `exit_group`, so
+  userspace de-duplicates per pid (`groupDeadDedup` in
+  `internal/eventloop_groupdead_dedup.go`: a repeat of the same pid within a
+  100ms window of boot-clock time is dropped, a FIFO queue expires entries from
+  the front, so a recycled pid dying later still counts). The cleanup is split by key: every record drops the exited task's
+  tid-keyed state — cached comm, pair state (parked enter plus gap baseline)
+  and parked `name_to_handle_at` handle (see "Comm resolution across
+  `execve`") — while the tgid's entries in both fd maps are dropped only on
+  the group-dead record. Evicting them on a mere thread exit pushed the
+  surviving threads' descriptors through the `/proc/<pid>/fd` fallback,
+  which renames them (`pipe:0:3:4` → `pipe:[N]`), loses already-closed ones,
+  and under lag can resolve a reused fd number to the wrong file
+  (`TestThreadExitKeepsFdName` covers it end to end). A group-dead exit
+  bypasses `-tid` in BPF, because the thread that ends the group is usually
+  not the traced one; the bypass is scoped to the traced thread's process via
+  the `TID_FILTER_TGID` global (`tidFilterTgid` in `internal/bpfsetup.go`).
+  An object that predates the global (every one that emits the legacy exit
+  record) does not define it: `setTidFilterTgid` treats libbpfgo's "symbol not
+  found" (`isMissingSymbol`) as non-fatal - silent without `-tid`, one setup
+  warning with it saying the object cannot scope the process-exit forwarding
+  to the `-tid` target (depending on its age it forwards every group-dead exit
+  or none; the warning claims no mechanism) - so such an `IOR_BPF_OBJECT`
+  still loads. Any other setter error stays fatal
+  (`TestSetTidFilterTgidClassifiesSetterErrors`, injected setter), a missing
+  `TID_FILTER` stays fatal, and `TestLibbpfgoReportsAMissingGlobalAsSymbolNotFound`
+  guards libbpfgo's error text unprivileged: the tests open the real object
+  through `NewModuleFromFileArgs{SkipMemlockBump: true}` (the buffer variant
+  always bumps RLIMIT_MEMLOCK and needs root).
+  Every group-dead record that reaches userspace and is not a per-pid
+  duplicate is counted (`numGroupDeadExits`) and printed in the end-of-run `Statistics:` block as
+  `group-dead exits: N`; `TestTidFilterForwardsGroupDeadExitOfUntracedThread`
+  parses that exact line to prove the bypass forwards the group-dead exit of an
+  untraced thread under `-tid <worker>` (it reads 0 with the bypass disabled),
+  so keep its format stable. That test runs ior with both target-exit
+  triggers off (`IOR_TEST_DISABLE_TARGET_EXIT_RECORD=1`,
+  `IOR_TEST_DISABLE_TARGET_WATCH=1`, through the harness's `IorEnv`), so the
+  run lasts until `-duration` (task wz2): since os2 a headless `-tid <worker>`
+  run ends on the worker's own exit record, before the process exits, and the
+  stop drain only decodes the backlog present at the stop (the trace window
+  ends there, by design), so the later group-dead record was counted only when
+  it happened to be buffered already. Bisected to `15f7ecd` (20 runs each:
+  `15f7ecd^` 20/20 pass, `15f7ecd` 11/20; 1/10 on `d97df48`); with the
+  triggers off it passed 20/20 idle and 20/20 under 2x-nproc CPU load. It also
+  fails on any "exited, stopping the trace" line, so a renamed hook cannot
+  bring the race back silently. In a real headless `-tid <non-leader>` run the
+  bypassed record therefore normally arrives after the stop; it matters to the
+  TUI, which outlives its target, and to a leader target, whose process's
+  group-dead record is a stop trigger (`endTraceOnTargetThreadExit`).
+  Both control records keep a pre-change `IOR_BPF_OBJECT` override
+  compatible (`NewProcessExitEventFast`/`NewProcessExecEventFast` in
+  `internal/types/fastdecode.go`). The legacy 24-byte exit record predates
+  `group_dead`, so it decodes as "group-dead unknown"
+  (`IsGroupDeadKnown` false, `IsGroupDead` false; the marker is an all-ones
+  `GroupDead` the kernel never writes, because the generated struct cannot
+  carry a Go-only field). `applyProcessDeath` still evicts the tgid's fd
+  entries on such a record, as every exit did before the flag existed —
+  a thread exit costs the survivors a `/proc/<pid>/fd` fallback, whereas
+  never evicting would keep a dead process's descriptors — but neither counts
+  it in `group-dead exits` nor retires the stats row, which would split a
+  live multi-threaded process into one row per exited thread. The current
+  32-byte exit record's last word is `exit_flags` (task os2; it used to be an
+  always-zero `reserved` pad): bit `IOR_EXIT_TID_INHERITED` marks a
+  thread-group leader killed by a sibling's `execve`, whose tid lives on in
+  the new program (see "`-tid` runs end with the traced thread"). An older
+  object writes 0 there and the legacy record decodes with `ExitFlags` 0,
+  both reading "the tid is gone", i.e. the pre-os2 behaviour. The legacy
+  40-byte exec record predates `old_tid`/`exit_untraced` and decodes with
+  both 0 ("tid kept", exit still coming): an old object never re-keys a
+  non-leader exec's enter or suppresses an execve exit. Payloads longer than
+  the current layout decode its prefix (forward compatible with appended
+  fields); every other shorter size is rejected rather than decoded at the
+  wrong offsets. Dropping the legacy sizes instead flooded the TUI with a
+  malformed-event warning per task exec/exit.
+- **Procfs cache hygiene (task ir2)**: `fdTracker.resolve` caches only a *successful*
+  procfs lookup (non-empty name). A failed readlink is returned for that row but
+  never stored, so a number that later names a descriptor created by an untraced
+  syscall (pipe/socketpair) is re-read instead of staying nameless with O_NONE.
+  The price is one failing readlink (~3-4 us, 7 allocs) per event on a number
+  procfs cannot answer, so EBADF, the hot shape of that (close loops, the
+  `fcntl(F_GETFD)` closefrom sweep over ~1000 numbers), never reaches procfs:
+  every fd-resolving exit handler (read/write family, fcntl/ioctl, dup3, mmap,
+  two-fd, epoll_ctl, poll, accept, inotify/fanotify, io_uring) calls
+  `eventLoop.resolveOnExit`, which on an EBADF exit evicts the procfs-cache
+  entry and uses the fd-table entry if present (unless, in a run with the
+  file identity capture, that entry was bound after the call entered: then
+  the row stays unnamed and the entry is kept, task a23), else an unnamed file with
+  unknown flags, with no procfs read (`TestEveryFdResolveGoesThroughTheEBADFHelper`
+  parses the package's non-test sources and fails on any function outside its
+  explicit allowlist that mentions a `resolve` selector, so aliasing the tracker
+  does not bypass it and comments do not trip it). The fd table itself is left
+  alone on EBADF: traced syscalls own it and a reordered exit must not erase a
+  correct name. The guard is per function, not per call site: a new direct
+  resolve inside an already-allowlisted function would pass. Known gaps: an
+  fd-table entry whose close event was lost stays stale after EBADF; a syscall
+  whose EBADF can concern a descriptor other than the labelled one (epoll_ctl's
+  target fd, dup2/dup3's out-of-range new fd, the source of
+  sendfile/splice/tee/copy_file_range which are labelled by the destination,
+  pidfd_getfd's targetfd, fanotify_mark's dirfd, and read/write on an open fd
+  of the wrong access mode) leaves its row unnamed when the labelled fd is
+  valid but has no table entry (the next non-EBADF event resolves it;
+  close_range never returns EBADF) - and, since task a23, also when the
+  labelled fd's entry was bound after the call entered (a narrow race). fanotify_mark is the exception to
+  "unnamed": `handleFdPathExit` names the row from the captured pathname, so
+  only its flags are unknown (-1);
+  dirfd-relative path resolution (`resolveDirfdPath`) has no exit record and is
+  not shortened; and successful events of an already-exited pid or an fd closed
+  before the event was processed still cost one failing readlink each (no
+  per-pid "dead" marker: a failing readlink cannot tell dead pid from closed fd).
+- **Close rows never read procfs (task jr2, `internal/eventloop_procfs_close.go`)**:
+  `resolveOnExit` routes close and close_range (not `CLOSE_RANGE_CLOEXEC`,
+  and not a close_range that failed, e.g. EINVAL: both close nothing, so their
+  rows keep the ordinary resolution, procfs included; `closesDescriptor`) to
+  `fdTracker.resolveClosing`: the fd-table entry, else
+  a procfs-cache entry whose read time (`fdTracker.procFdReadAt`, the host's
+  boot clock via `bootClockNs`, stamped by `resolve` after the readlink
+  returned, the clock of the BPF record timestamps) is earlier than the close's enter time, else an unnamed row with
+  unknown flags. Reading `/proc/<pid>/fd` for a close row happens after the
+  close, so it named nothing or the file that reused the number (`close(3);
+  pipe()` reported the new pipe). Doing the readlink when the *enter* record is
+  processed is no better: user space consumes it after the kernel finished the
+  close (prototype, 200 pre-attach fds closed and each reused by a pipe, 3 runs:
+  exit-time 0/600 correct names, 181 reuser's pipe; enter-time 0/600 correct, 29
+  pipe). Only BPF can name the file before the close: since task xz2 it
+  reports the last path component, which names a close row these rules leave
+  unnamed ("Name of a closed file" below). The read time is needed
+  because the cache itself lags: a write processed after its fd's close and
+  reuse caches the reuser. It lives in a side map, not in `file.FdFile`, so
+  per-row files keep their size; `copyTable`/`rekeyTable` carry it along and
+  `deleteCacheKey` drops it, and `setProcFdCache` (no time) makes an entry a
+  close row ignores. A close of an untracked fd no longer costs a procfs read
+  (`BenchmarkCloseUntrackedOpenFd`: ~22 allocs and 33-79 us to 2 allocs and
+  ~4-6 us on a busy host). A blind table (`markBlind`, a CLONE_FILES sharer
+  the trace cannot see) keeps no entries and no cache answers, so every close
+  row there is unnamed, even for fds ior saw opened (before jr2: procfs after
+  the close, empty or wrong). The stamp comparison, like
+  `provisionalSeedNeedsRecheck`, is on the host's boot clock: `bootClockNs`
+  takes a time namespace's boottime offset out of the reading (task y13, see
+  "Boot-clock readings are converted to the host's clock"). Integration: `TestCloseUntrackedNeverNamesTheReusingFile`
+  (scenario `close-untracked`: 64 fds opened in a prestart hook, before ior
+  attaches; pre-fix 58-62 of 64 close rows named after the pipe; the other 63 files are
+  also written right before their close, so the lagging write caches the pipe
+  and the test fails without the read-time check: 62 of 63 pipe-named closes,
+  5/5 runs).
 - **The pair filter runs on a fully derived Pair**: `tracepointExited` calls
   `applyDerivedPairValues` (bytes, address-space extent, requested sleep,
   latency and inter-syscall gap) *before* dispatching to the exit handler, i.e.
@@ -885,38 +2429,118 @@ not sufficient.
 
   Retrying at `sys_enter` cannot help (still nofault, still not resident), but
   by `sys_exit` the kernel's own `getname()` has faulted the page in, so the
-  identical read succeeds. The generator therefore emits, **for the open kinds
-  only** (`KindOpen`/`KindMqOpen`, flagged by `recoversFilename` in
-  `internal/generate/kindregistry.go`; an exit handler learns what its enter
-  captured through `GeneratedTracepoint.EnterKind`, since every `sys_exit_*`
-  format is just `long ret` and so classifies as `KindRet`):
+  identical read succeeds. The generator therefore emits, for every kind that
+  captures a path — the open kinds
+  (`KindOpen`/`KindMqOpen`/`KindOpenTree`), the named eventfd creators
+  memfd_create/fsopen, and the pathname, fd-pathname, name and two-fd-names
+  kinds (`KindPathname`/`KindFdPathname`/`KindName`/`KindTwoFdNames`: stat,
+  access, unlink, mkdir, inotify_add_watch, rename, link, move_mount, ...),
+  flagged by `recoversFilename` in `internal/generate/kindregistry.go`. A
+  second flag, `recoversSecondFilename` (set for the two-path kinds: `KindName`,
+  the rename/link family, and `KindTwoFdNames`, move_mount), makes the exit
+  handler also recover the second path (newname, to_pathname) through its own
+  stash and fixup slot, because either read can fault independently of the
+  other; it implies `recoversFilename`
+  and is what `bpfhandler.go` keys the exit handler's second-slot take/emit
+  calls on. An exit handler learns what its enter captured through
+  `GeneratedTracepoint.EnterKind`, since every `sys_exit_*` format is just
+  `long ret` and so classifies as `KindRet`:
   - enter: `ior_stash_pending_filename(tid, ptr)` when the read fails, parking
     the user pointer in `syscall_enter_state.pending_filename`;
-  - exit: `ior_take_pending_filename(tid, SYS_ENTER_X)` **before**
-    `ior_on_syscall_exit`, which deletes the per-tid entry — guarded on
-    `enter_trace_id` so a stale entry cannot graft a foreign path — then
+  - exit: `ior_on_syscall_exit_take_filename(tid, SYS_ENTER_X, ctx->ret, now,
+    &pending_filename)` (`_take_filenames` with both out pointers for the
+    two-path kinds; `_take_handle` for `name_to_handle_at`, whose second
+    slot is its output handle pointer and which also gets the enter time):
+    the exit hook itself copies the stashed pointer(s) out of
+    the enter-state entry it looks up anyway, **before** it deletes that entry —
+    guarded on `enter_trace_id` so a stale entry cannot graft a foreign path
+    (the outputs stay 0 for a missing or foreign entry) — then
     `ior_emit_open_name_fixup(...)`, which re-reads the string and publishes it
     as an `OPEN_NAME_FIXUP_EVENT` (48) control record **before** reserving the
-    handler's own exit record. All three helpers live in `internal/c/filter.c`.
+    handler's own exit record. The helpers live in `internal/c/filter.c`.
+
+  **Stat, access, unlink and the other path kinds were the same bug** (task
+  fq2). Only the open kinds used to recover, so a `stat`/`access`/`unlinkat`/
+  `rename` whose path string sat on a never-touched page kept an empty file:
+  `-path` could not match the row and the Files tab attributed it to `''`.
+  Reproduced with every path argument on a freshly `mmap`'ed untouched file
+  page: `access`, `newfstatat` (x2), `unlinkat`, `rename`, `link` and `symlink`
+  rows all had an empty file before the change and all named their path after
+  it, and `-path no-such-unlink` went from 0 matched rows to 1. The mechanism
+  is the same shared one; two details are specific to the new kinds:
+  - **Two names, two slots.** rename/link/symlink carry two paths, and so
+    does move_mount (from_pathname/to_pathname, carried as the
+    `two_fd_names_event` oldname/newname), and either, both or neither read
+    can fault. The second name has its own stash
+    (`syscall_enter_state.pending_filename2`, `ior_stash_pending_filename2`, read back
+    by `ior_on_syscall_exit_take_filenames`) and its own fixup call
+    (`ior_emit_second_name_fixup`), and the record says which name it is for:
+    `open_name_fixup_event.slot` (`OPEN_NAME_FIXUP_SLOT_FIRST` = filename,
+    pathname or oldname/from_pathname; `_SECOND` = newname/to_pathname).
+    Without the slot a recovered newname would land on a still-empty oldname. `ior_emit_open_name_fixup`
+    and `ior_emit_second_name_fixup` are thin wrappers over
+    `ior_emit_name_fixup(tid, id, ptr, slot)`.
+  - **Gap kept on purpose.** `exec` does not retry (a successful exec
+    replaces the address space the pointer belonged to). `move_mount`
+    (`KindTwoFdNames`) used to be a second gap and recovers both paths since
+    task vs2; its enter has no raw-enter gate (`enterRaw(..., nil)`), so
+    nothing judges a faulted name before the fixup lands, and
+    `applyRecoveredTwoFdNames` splices into the `types.TwoFdEvent` that
+    `decodeTwoFdNamesEvent` builds. Verified with
+    `integrationtests/faultedpath_test.go` (`path-faulted-move-mount`: every
+    combination of a faulted from/to path; on the previous BPF object every
+    faulted path came out empty).
+
+  **getcwd reuses the same three helpers for an output buffer.** Its path only
+  exists once the call has returned, so `outputPathSyscalls`
+  (`internal/generate/classify.go`, currently just `getcwd`) makes the enter
+  handler stash `args[0]` *unconditionally* right after `ior_on_syscall_enter_stateful`
+  (only emitted enters get this far) while the enter stays a header-only
+  `null_event`; the exit handler takes it before `ior_on_syscall_exit` and
+  emits the fixup only under `if (ctx->ret > 0)`, since a failed call wrote
+  nothing into the buffer. Userspace does not splice it into the enter event:
+  `applyCapturedOutputPath` (`internal/eventloop_getcwd.go`, keyed on
+  `capturedOutputPathEnters`, which a test pins to
+  `generate.OutputPathSyscalls()`) puts the path on the pending pair and
+  `handleNullExit` validates it with `finishGetcwdPath` against `ret` (the byte
+  count including the NUL): no path on failure or when the record was lost, a
+  `...` suffix when the cwd was longer than the field, a cut to `ret - 1`
+  bytes otherwise. This replaced a `/proc/<tid>/cwd` readlink at processing
+  time, which reported the wrong directory when the loop lagged behind a
+  `chdir`, nothing once the tracee had exited, and cost a syscall per getcwd
+  on the event loop.
 
   The record uses a dedicated `struct open_name_fixup_event` carrying only the
-  enter trace ID, tid and filename alongside its event type: 268 bytes instead
-  of the 304-byte `struct open_event`, with no unused comm lookup, timestamp,
-  pid or flags. Its generated `OpenNameFixupEvent` and dedicated `fastdecode`
-  entry travel through the narrow control-record dispatch contract rather than
-  claiming the PID/time semantics of a syscall `event.Event`. The decoder also
-  accepts the former 300/304-byte `open_event` layouts so a pre-change
-  `IOR_BPF_OBJECT` override remains compatible; every other size is rejected
-  rather than decoded at the wrong offsets.
+  enter trace ID, tid, filename and path slot alongside its event type: 272
+  bytes instead of the 304-byte `struct open_event`, with no unused comm
+  lookup, timestamp or pid. The slot trails the string so the 268-byte prefix
+  older readers decode (tid at 8, filename at 12) did not move. Its generated
+  `OpenNameFixupEvent` and dedicated `fastdecode` entry travel through the
+  narrow control-record dispatch contract rather than claiming the PID/time
+  semantics of a syscall `event.Event`. The decoder also accepts the pre-slot
+  268-byte record (read as slot FIRST, the only thing it ever carried) and the
+  former 300/304-byte `open_event` layouts so a pre-change `IOR_BPF_OBJECT`
+  override remains compatible; every other size is rejected rather than
+  decoded at the wrong offsets.
   `handleOpenNameFixupEvent`
   (`internal/eventloop_openfixup.go`) splices it into the still-pending enter
-  event: the ring buffer preserves reservation order and the event loop has a
-  single consumer goroutine, so the fixup always lands while the enter event is
-  unpaired. It never overwrites a name the enter side captured itself, and it
-  re-checks the enter trace ID so an `openat` fixup cannot be grafted onto a
-  pending `open`. A still-failing re-read is discarded kernel-side rather than
-  submitted; a fixup lost to backpressure simply never arrives and the row keeps
-  its empty name, exactly as before.
+  event (`spliceRecoveredPath`, per kind and slot: open/eventfd filename,
+  path/fd-path pathname, name oldname or newname): the ring buffer preserves
+  reservation order and the event loop has a single consumer goroutine, so the
+  fixup always lands while the enter event is unpaired. It never overwrites a
+  name the enter side captured itself, and it re-checks the enter trace ID so
+  an `openat` fixup cannot be grafted onto a pending `open`. A status other
+  than `PATH_READ_FAILED` (a NULL pointer, a read that succeeded) is never
+  promoted, and a slot that does not exist for the kind (a `SECOND` record for a
+  single-path kind, or a raw value that is neither slot) is ignored, as is a
+  record whose tid has no pending enter. A still-failing re-read is discarded
+  kernel-side rather than submitted; a fixup lost to backpressure simply never
+  arrives and the row keeps its empty name, exactly as before.
+
+  Cost note: the take used to be a separate `ior_take_pending_filename` lookup
+  (two for the rename/link family and move_mount) on top of the hook's own;
+  task 0t2 folded it into the hook (`ior_on_syscall_exit_impl`), so a
+  path-capturing exit does one `syscall_enter_state_map` lookup like any other.
 
   **The enter gate defers, it does not waive.** `matchRawOpenEvent` used to
   judge the path dimension on the payload filename, so an empty-name open was
@@ -924,22 +2548,543 @@ not sufficient.
   exactly these events. For an empty payload name the *file* dimension alone is
   now deferred (`Filter.MatchOpenEventComm`); the comm dimension still applies
   at enter, and the full pair filter applies at the exit checkpoint, where
-  `handleOpenExit` ends in `finishPair` (see above). Nothing leaks: an
-  unrecovered name reaches `finishPair` empty, and no non-empty `-path` pattern
-  matches the empty string, so the row is dropped there instead of here.
+  `handleOpenExit` ends in `finishPair` (see above). `matchRawPathEvent` and
+  `matchRawNameEvent` defer the same way for a `PATH_READ_FAILED` name (the
+  fd-pathname and two-fd-names kinds have no enter gate; their pairs are
+  filtered at exit). Nothing leaks: an unrecovered name reaches `finishPair`
+  empty, and no non-empty `-path` pattern matches the empty string, so the row
+  is dropped there instead of here.
   Evidence, identical 4s fork/exec workload: `E:name` rows 6153/41063 (14.98%)
   → 0/39617 (0.00%), and `-path locale-archive` — the path those opens were
   actually taking — went from 0 matched rows to 6211.
+
+- **Stop-time drain** (task tq2; `internal/eventloop_stopdrain.go`): the BPF
+  ring buffer's poller (libbpfgo) fills `rawCh` (4096 records) ahead of the
+  decoder, and `RingBuffer.Stop` discards what is left in it, so returning at
+  `ctx.Done()` alone lost the tail of the trace window whenever the consumer
+  lagged - in neither `tracepoints` nor `ring buffer drops`, so `drops: 0`
+  overstated completeness. `drainBacklogAtStop` therefore decodes, on the
+  event-loop goroutine, the snapshot of `len(rawCh)` taken at the stop, once
+  the poller is at rest (`backlogAtStop`, task f23, see "Records left in the
+  kernel ring at stop"; not
+  what the still-attached probes add meanwhile: the window ends at the stop and
+  chasing a saturated producer would never finish). It is capped at 1 s
+  (`defaultStopDrainBudget`, `stopDrainBudget` in tests) so a stalled stdout
+  pipe or saturated TUI cannot hang the stop, and it is skipped when a `-plain`
+  output write already failed (`outputErr`; the rows have nowhere to go).
+  Whatever it could not decode is added to `numDiscardedAtStop`, raised as a
+  warning through `notifyWarningOrLog` (every mode), and printed as the
+  conditional stats line `records discarded at stop: N (delivered but not
+  decoded; ...)` (`discardedAtStopStatLine`, absent when the backlog was
+  drained, like `outputLossStatLine`). A nonzero count also marks sampling
+  totals as lower bounds (see the sampling notes). This is the userspace half
+  of loss observability: records the kernel could not reserve stay in `ring
+  buffer drops`, and the loss that remains in the kernel ring buffer itself at
+  stop is tracked separately (task us2). Pinned by
+  `internal/eventloop_stopdrain_test.go` and `TestRunStopsPromptlyAfterCancel`
+  (nothing is emitted after `run` returned).
 
 - **Control records in the statistics**: `numTracepoints` counts every non-empty
   ring-buffer record the event loop pulled off the ring. It is incremented
   before dispatch, so it counts records *seen*: undecodable records
   (`dropMalformedRawEvent`) and unhandled event types are included, and so are
-  control records. Both the mismatch percentage and the `ring buffer drops: … %
-  of events` denominator therefore cover the whole ring-buffer stream rather
-  than syscall pairs alone. That is deliberate: `internal/c/exec.c` also counts
-  a control record it fails to reserve in `ringbuf_drop_map`, so the drop share
-  only stays arithmetically honest if the events side counts them too.
+  control records. The `ring buffer drops: … % of events` denominator
+  therefore covers the whole ring-buffer stream rather than syscall pairs
+  alone. That is deliberate: `internal/c/exec.c` also counts a control record
+  it fails to reserve in `ringbuf_drop_map`, so the drop share only stays
+  arithmetically honest if the events side counts them too. The mismatch
+  percentage is the opposite case: `numTracepointMismatches` is counted once
+  per enter/exit *pair*, so it is shown on the `syscalls:` line as a share of
+  `numSyscalls` (the pairs formed, incremented just before the trace-ID
+  check). Dividing pairs by ring-buffer records mixed units and capped the
+  figure near 50% even if every pair mismatched (task sq2). The two lost-half
+  lines below it (`enters without an exit`, `exits without an enter`, task
+  c23) are plain counts of calls, not shares.
+
+### File identity of a descriptor (task 603)
+
+A record that names a file by descriptor number does not say which file that
+was. The fd table (built from traced opens) goes stale when the number is
+rebound by something the trace cannot see - io_uring's `IORING_OP_CLOSE` /
+`IORING_OP_OPENAT`, an untraced or lost call - and `/proc/<pid>/fd` is read
+when the event loop reaches the row, after a possible close and reuse. So the
+kernel program reports the file, and user space compares.
+
+- **Identity**: the low 32 bits of the inode number (`ior_file_ident`,
+  `internal/c/fileident.c`; `file.IdentOfInode`), 0 = unknown. It is the
+  `i_ino` that `/proc/<pid>/fdinfo/<fd>` prints as `ino:` (since 5.14), so a
+  procfs answer can be checked without touching the file's filesystem. No
+  device: fdinfo has none, and `stat`'s `st_dev` is not `sb->s_dev` on btrfs
+  and overlayfs. The `struct file` pointer is reused by the very next open.
+- **What the identity cannot tell apart** - so it may only ever *refuse* a
+  name, never admit one another rule would refuse (the close-row rule below
+  got that wrong once): the anon-inode descriptors (eventfd, epoll, io_uring,
+  timerfd share one inode - `ino: 1058` for an eventfd and an epoll fd alike
+  on the development host; pipes and sockets have their own); a file that got
+  the inode number of one unlinked just before (ext4 and xfs reuse a freed
+  number at once); equal inode numbers on different filesystems (every tmpfs
+  counts from the same start) and in different subvolumes or snapshots of one
+  btrfs filesystem (`i_ino` is unique per subvolume only); inode numbers that
+  differ only above bit 31.
+- **Capture**: every `fd_event` enter (`generateExtraFd`), the `dup3_event`
+  enter (`generateExtraDup3`, the old descriptor; task d23) and the
+  `ret_event` exits of the open kinds and `creat` (`returnsOpenedFile`:
+  `kindMeta.returnsFile` plus `openedFileSyscalls`); every other `ret_event`
+  writes 0. The word took the tail padding of `fd_event` and `ret_event`
+  (offsets 28 and 36), so they are still 32 and 40 bytes. `dup3_event` had
+  none and grew from 32 to 40 bytes (word at 32, then tail padding; 36 as
+  `binary.Write` writes it); `NewDup3EventFast` still takes an older
+  object's 32-byte record, with identity 0, and the `IOR_FILE_IDENT` gate
+  below decides whether the word is read at all. The other descriptor
+  records carry none. `fd_size_event` (48 bytes), `fcntl_event` (40) and
+  `epoll_ctl_event` (40) have no spare word and would grow by 8 bytes;
+  `mmap_event` (tail, offset 60), `poll_event` (28), `accept_event` (28) and
+  `two_fd_event` (tail, 44) do have one (task a23 corrected "none of them"),
+  but the decoders and the tests' `Bytes()` layouts would change all the
+  same. The walk costs the same everywhere: measured for `fcntl_event`
+  (task a23, an experimental object with the word and the walk in
+  `sys_enter_fcntl`, 40 -> 48 bytes; 1M `fcntl(F_GETFL)` pinned with
+  `taskset`, `-comm` of the loop, `-mapSize 268435456`, no drops, 16
+  interleaved runs each on a loaded host) +80 `instructions:k` per call
+  (medians 2.000G -> 2.080G, minima 1.817G -> 1.907G), about 4% of a traced
+  fcntl. Not added: since the no-promotion rule below, a wrong name on
+  these rows mostly stays on the one row. The exception was dup3, which
+  copies a table entry to a new number (dup and dup2 are `fd_event`s and
+  were checked): task d23 gave it the word. Measured the same way (1M
+  `dup3(fd, 100, O_CLOEXEC)` pinned with `taskset -c 3`, `-comm` of the
+  loop, `-mapSize 268435456`, no drops, 8 interleaved runs each, load 1 to
+  6): `instructions:k` medians 1.8830G -> 1.9660G, minima 1.8823G ->
+  1.9655G, spread within each set 0.1% => +83 per dup3 (4.4% of a traced
+  dup3, a rare call). `handleDup3Exit` resolves the old descriptor with
+  `resolveIdentifiedOnExit`, so a stale entry is dropped (or, bound after
+  the call entered, left alone with the row unnamed) and `registerDup`
+  copies nothing: the new number goes to procfs on first use, as for a dup
+  of a procfs answer. fcntl F_DUPFD* still copies unchecked (no word in
+  `fcntl_event`). The design per kind is in task a23's annotations.
+- **Cost is why the walk has no probe read.** `current->files->fdt->fd[fd]
+  ->f_inode->i_ino` through seven `bpf_probe_read_kernel` calls cost +645
+  instructions per event (each ~90), half of what a traced syscall costs. The
+  committed walk uses `bpf_get_current_task_btf()` and direct BTF loads, and
+  the `bpf_rdonly_cast` kfunc - one cast - for the one pointer a field load
+  cannot type: the fd slot behind `struct file **`, borrowed as a `struct
+  kiocb`, whose first member is a `struct file *` (the file loaded from the
+  cast slot is typed by that load): +83 instructions per fd
+  syscall (dd `bs=1`: 3.980G -> 4.15G `instructions:k` for 2M syscalls, +6.6%
+  of ior's share; open+close+stat loop +77 per walk). Measure with a ring
+  buffer large enough for the whole run (`-mapSize 268435456`, 1M dd
+  iterations): a dropped record skips everything after the reserve, the walk
+  included, and a run with drops under-reports. Wall time and `cycles:k` do
+  not resolve the difference on a shared box. A BPF-side "tracked fd" map or
+  LRU gate was rejected: one hash helper call costs more than the walk.
+- **Kernels**: the capture needs the `bpf_rdonly_cast` kfunc: mainline 6.2.
+  Kernels without it are mainline before 6.2 and el8; el9 rebases its BPF
+  subsystem and may have it (unverified). Without it the weak ksym is
+  unresolved, `ior_file_ident_supported()` is a constant 0, libbpf poisons
+  the call in a branch the verifier never follows, and every identity is 0 -
+  user space then behaves exactly as before. No probe-read fallback (it would
+  have to be opt-in at that cost, and could not be tested here).
+  **Loaded and run on Linux 7.2 only**; the same object with the kfunc
+  declared under a name the kernel lacks loads and reports 0. Any other
+  kernel that has the kfunc therefore runs the walk through a verifier it was
+  never loaded on; the fallback load below is the safety net for that.
+- **Capability, not size**: an older `IOR_BPF_OBJECT` leaves stale padding
+  where the word is, and the record size is the same. The object therefore
+  has a rodata global `IOR_FILE_IDENT` (0 in the object); `setFileIdentGlobal`
+  sets it to 1 before the load, a missing symbol means "not captured", and
+  the answer goes `bpfSetupLog.fileIdent` -> `traceInfra.fileIdentCaptured`
+  -> `applyProbeCapabilities` -> `eventLoop.trustFileIdents`
+  (`fdTracker.identOn`). Off, nothing reads the word. `IOR_FILE_IDENT=0` in
+  ior's environment switches the capture off (the walk is then pruned as
+  dead code).
+- **The global is set only where the kernel can capture**
+  (`fileIdentCaptureWanted`, `internal/bpfsetup_kfunc.go`): "the object has
+  the global" is not "the kernel fills the word". Without the kfunc user
+  space would compare identities that are all 0 - harmless for the rows, but
+  every procfs resolution would pay a second readlink for nothing - so setup
+  looks `bpf_rdonly_cast` up in the string section of
+  `/sys/kernel/btf/vmlinux` (the table libbpf resolves the ksym against; a
+  7 MB read, once per process) and leaves the global at 0 where it is
+  missing. Unreadable or unparsable BTF counts as "has it": nothing known
+  must not switch the check off. Rejected: `/proc/kallsyms` (220 ms of system
+  time per start here), and guessing from the records ("the first N
+  identities were 0" is what a close-everything loop after fork looks like on
+  a kernel that captures fine).
+- **A refused load is retried without the capture** (`loadWithIdentFallback`,
+  `internal/ior_bpfsetup.go`): the walk is compiled into every
+  single-descriptor handler and relies on newer verifier features than the
+  rest, so a kernel that refused it would leave ior unable to trace at all.
+  When `BPFLoadObject` fails for an object with the capture on, setup warns,
+  closes the module and loads once more with the global at 0; ior then runs
+  as it did before the capture existed. Only that stage and only a capturing
+  load are retried; an unrelated failure fails again and is reported from the
+  second attempt. Checked by hand with an object whose walk dereferences a
+  scalar (the verifier's "invalid mem access" on the first load, a normal
+  trace after the retry).
+- **Rules** (`internal/eventloop_fileident.go`, `resolveIdentifiedOnExit`,
+  called by `handleFdExit` and, since task d23, `handleDup3Exit`). For a row with identity r != 0:
+  - *fd-table entry* (`trackedFile`): of the file r, it names the row. One
+    that disagrees (another file, or no identity yet) is judged by age: an
+    entry remembers when it was bound (`FdFile.BoundAt`, below). Bound
+    *after* the row's call entered, the row may be of the file the number
+    named before - a read that blocked on X while another thread closed the
+    number and an open returned it for Y is processed after that open - so
+    the entry stays untouched and only the row goes unnamed, uncounted.
+    Bound *before*: an entry without identity takes r; an entry of another
+    file is a stale binding, dropped, and the row is resolved as untracked.
+    Without the times the late row of X evicted the correct entry of Y, and
+    an identity-less entry (a pipe) took X's identity and dropped itself on
+    its own first row.
+  - *procfs-cache entry of another file*: read *after* the row's call
+    entered, the number was reused; the row stays unnamed and the entry
+    stays. Read *before*, it is dropped and procfs is read again - but for
+    rows of one file at most once per `identRereadIntervalNs` (100 ms of
+    record time, `worthReadingAgain`, `fdTracker.refusedFor`): a thread on a
+    private table (unshare(CLONE_FILES)) disagrees with `/proc/<tgid>/fd`
+    for good, and each of its rows cost two readlinks and an fdinfo read.
+    Once rows of a second file were refused on the key too, the note becomes
+    `refusedSeveral` and every file's rows are rationed: one identity per key
+    let two alternating files (two private-table threads) read procfs on
+    every row.
+  - *fresh procfs answer of another file*: cached but not given to the row.
+  - *close rows* use a cache entry only if it was read before the close
+    began (task jr2's rule, unchanged) and never one of another file. An
+    equal identity does **not** replace the read time: an untracked eventfd
+    is closed, an epoll fd takes the number, a lagging row caches
+    `anon_inode:[eventpoll]` with the same identity.
+  - *a close forgets* the number's entries (`closeIdentified`), except what
+    describes a later file: an fd-table entry bound after the close entered
+    (another thread's open returned the number and was processed first), a
+    cached answer of another file read after it.
+  - EBADF with a known identity is the call's own error (the descriptor was
+    open), so the row is named. Identity 0 on either side contradicts
+    nothing.
+  - *rows without identity* still consult the binding time where the row
+    cannot be of a later binding (task a23): an EBADF row (the number was not
+    open, or was another file, when the call looked) and a close row
+    (`resolveAfterEBADF`, `resolveClosing`) are unnamed when the fd-table
+    entry was bound after the call entered, and the entry stays. They used
+    to be named after the later file. Every other row without identity
+    (the record kinds that have no word) is named by the entry as before.
+- **Binding time** (`FdFile.BoundAt`, `fdTracker.stampBinding`): the exit
+  time of the pair whose handler created the entry (`noteExit` keeps it in
+  `fdTracker.bindNs`; every `set` call is in an exit handler), because the
+  call's exit record is the first moment a row of the new file can follow.
+  A dup is bound at the dup's exit (`Dup` resets the time, `set` stamps); a
+  fork's copy has none, i.e. is older than every row of the child, which
+  cannot have entered before the fork; an entry stored again after a flag
+  change keeps its time, and a fork's copy stays unstamped (`set` looks the
+  key up first and stamps only an object the key did not already hold,
+  `stampStored`); `rekeyTable` moves the objects.
+  Nothing is stamped in a run without identities. The word is in
+  `FdFile` because a side map would cost a write per open and a delete per
+  close; it did not grow the per-row allocation, since the open file
+  description moved from a sibling field of the allocation into the struct
+  (`FdFile.own`, 48 bytes, `TestFdFileKeepsItsSize`).
+- **Read times the rules cannot use** (`fdTracker.identReadAt`): every rule
+  above that compares a procfs read time - an answer kept through a close,
+  an answer not read again - keeps state when the time is later than the
+  row, so a time that is too late makes the state permanent. `bootClockNs`
+  returns `math.MaxUint64` when the clock read fails, and with an unknown
+  time-namespace offset (the boot-clock warning; 0 is assumed) every reading
+  may be in the records' future. Both count as "no read time" there: the
+  answer goes with a close, and procfs is read again (unrationed - a cost,
+  not a wrong name). The close row's own rule (`cacheReadBefore`,
+  task jr2) still reads the stamps: the sentinel withholds that one name.
+- **No promotion of procfs answers** (task a23, `storeFcntlFdFile`): an
+  fcntl (F_SETFD/F_GETFD/F_SETFL/F_GETFL) or ioctl FIOCLEX/FIONCLEX on a
+  descriptor known only to the procfs cache used to store the answer in the
+  fd table. The `fcntl_event` record has no identity word, so a lagging
+  answer (the number reused by an untraced call) became a "traced" binding:
+  dup/dup3 copied it to another number, and the next row of the file really
+  behind the number dropped it as a stale binding - in a 40 s system-wide
+  run most of the `stale fd bindings dropped`. Now only an entry the table
+  already holds is stored again; the flag change of an answer stays on the
+  cache entry (the answer object itself), which the exec-time close-on-exec
+  drop and later rows see as well. Lost: a dup of such a descriptor is not
+  copied but resolved from procfs on first use, and a change on an answer
+  that was not cached (no answer, torn) lasts for its row only. The fcntl
+  row is still named after the answer, like every row without identity.
+- **open_by_handle_at's procfs fallback** (task a23, `procFdFile` in
+  `internal/eventloop_handle.go`): for a handle ior has no name for, the
+  answer is read with its fdinfo inode (`readProcFd`) and refused - row and
+  fd table entry unnamed with the call's flags, the exit record's identity
+  (`E:ino:<n>`) and the procfs mark - when it describes another file than
+  the exit record reports (counted as a refused answer), or, with the
+  capture on, changed under both readings, also when the exit record has no
+  identity (task d23: such a torn name used to become the table entry). A
+  torn answer is not counted, as in `resolveUntracked`: the stat line counts
+  answers of another file, and a torn one may name the opened file in one
+  of its readings (task a23 had counted it here only). That closes the reused-number residual of tasks k03/423 for a
+  reuse by a regular file, a directory, a pidfd or a namespace, which task
+  423's deny list cannot see; files the identity cannot tell apart still
+  pass. A named handle is not checked (the handle says which file it is).
+- **Procfs answers** carry their identity when `identOn`
+  (`file.NewFdWithPidIdent`): the `ino:` line of the fdinfo read that
+  supplies the flags anyway. The link is read a second time because the
+  reads are not atomic; if it then reads differently, or fdinfo was gone, the
+  number was rebound under the read and the answer mixes two files. Such an
+  answer is read once more (`fdTracker.readProcFd`) and, if torn again, not
+  cached - as "unknown identity" it would contradict nothing and name every
+  later row - and not given to a row that has an identity. Not `stat` on the
+  descriptor link: that goes to the file's filesystem (it can block on a dead
+  NFS server, is refused on another user's FUSE mount, and reports the
+  filesystem's getattr rather than `i_ino`). `FdFile.ident` sits in the
+  padding after `fd`; `Dup` and `Detach` copy it.
+- **Unnamed rows** keep the row's identity and print `E:ino:<n>` instead of
+  `E:name` (`FdFile.appendUnnamed`); `Name()` stays empty, so filters, the
+  Files tab and the Parquet `file` column are unchanged. The end-of-run
+  statistics get a `file identity:` line when a binding was dropped or an
+  answer refused: `N stale fd bindings dropped, M rows refused a procfs
+  answer for another file`. M counts rows, not answers (task a23; it said
+  "answers not used", but a cached answer refused for a write is refused
+  again for the close after it). Both figures are of the rows the run
+  reported (task e23). The exit handler runs for every pair before the
+  userspace pair filter decides (`finishPair`): a descriptor table belongs
+  to the process while `-comm` judges the thread, and `-path` judges the
+  name the handler has yet to find, so the tracker counts for rows the
+  filter then drops as well - a 1000-call dup3 loop traced under `-comm`
+  printed 2242 refused rows, nearly all of other processes.
+  `handleTracepointExit` reads the two counters before the handler and
+  books what a dropped pair added as `droppedRowStale` /
+  `droppedRowRejected` (`fdTracker.bookDroppedRow`; two loads per pair,
+  no flag through the resolvers, no allocation). The line prints the
+  difference and, only when a dropped row counted, the rest behind it:
+  `... for another file (rows a filter dropped, not counted: S stale fd bindings, R refused)`,
+  with `0 ..., 0 ...` in front when only dropped rows counted. The rest is
+  kept because under `-path` a refused row is unnamed and therefore always
+  dropped, and a binding dropped for a filtered thread was stale for its
+  reported siblings too. Filters the kernel applies (`-pid`, `-tid`, the
+  syscall set) never reach the handler and are in neither figure. The
+  other lines of the block need no such split: `syscalls` and its
+  mismatches are by their label counts before the filter (`syscalls after
+  filter` follows), `group-dead exits` and `fd-table copies skipped` count
+  processes ior tracks, not rows, the sampling totals are withheld under a
+  filter the kernel aggregate cannot apply, and the drop and skipped-run
+  lines say they are host-wide. Tests:
+  `internal/eventloop_fileident_filter_test.go`. System-wide 20 s runs on
+  the development host, other workers loading it: 5 stale / 60 refused
+  before task a23's no-promotion rule, 0 / 64 after (different load, so only indicative; the
+  task's own 40 s run had traced the stale ones to promoted answers).
+- **What it does not do**: name a file that is no longer open when the loop
+  looks (a rebound descriptor is named only while procfs still shows that
+  file; the rows of an exited process stay unnamed, as `E:ino:<n>`). The one
+  exception is the close of an untracked descriptor, which BPF names by its
+  last path component ("Name of a closed file" below, task xz2); why the
+  other rows do not get that is in "Rows of an exited process" there. An entry
+  that takes its identity from the first row was not checked against it. A
+  call that entered between another thread's fd install and that call's exit
+  record on the very number being installed (a dup2 target written to
+  concurrently) is left unnamed although it may be of the new file.
+- **Tests**: `fileident_harness_test.go` (the committed C helper against a
+  simulated task, 22 cases, 13 mutations), `syscall_semantics_fileident_test.go`
+  (which handlers capture, with independent lists of the open syscalls and
+  of the enter records with the word - `fd_event`, `dup3_event`; it caught
+  `creat`, a pathname-kind call), `internal/types/fileident_test.go` (also
+  the three dup3 layouts),
+  `internal/eventloop_fileident_test.go` (real descriptors and procfs),
+  `internal/eventloop_fileident_age_test.go` (both orders of row and
+  binding, per way an entry is made), `internal/eventloop_fileident_procfs_test.go`
+  (re-read rationing, also for alternating files, and torn answers through a
+  scripted reader, `fdTracker.readFdIdent`),
+  `internal/eventloop_fileident_clock_test.go` (read times the rules cannot
+  use), `internal/eventloop_fcntl_promote_test.go` (task a23: no promotion,
+  no dup3 copy of an answer, a marked table entry's dup3 copy keeps the
+  mark), `internal/eventloop_dup3_ident_test.go` (task d23: dup3 of a stale,
+  a matching and a later entry; capture off and the 32-byte record copy as
+  before), `internal/eventloop_handle_ident_test.go` (task a23: the
+  open_by_handle_at fallback against the exit identity, torn answers with
+  and without one, uncounted),
+  `internal/bpfsetup_fileident_test.go`,
+  `internal/bpfsetup_kfunc_test.go`, and the integration tests
+  `TestIouringReopenRowsFollowTheFile` (scenario `iouring-reopen`),
+  `TestIouringReopenWithoutFileIdentityKeepsTheOpenedName` (the control,
+  `IOR_FILE_IDENT=0`), `TestCloseUntrackedWritesAreNeverNamedAfterTheReusingPipe`
+  and its control
+  `TestCloseUntrackedWritesWithoutFileIdentityAreNamedAfterTheReusingPipe`.
+  The control used to need the loop to lose one race of 63; since task a23
+  it checks the scenario's last write, which ior cannot win: it blocks on a
+  full FIFO in its own thread while the descriptor is closed and a pipe
+  takes the number, and only then is the FIFO drained
+  (`closeUnderBlockedWrite`, `cmd/ioworkload`), so its exit record follows
+  the pipe2's. Capture off it is named after the pipe, on it is unnamed.
+  Both runs trace pipe2 (`-trace-families FS,IPC`,
+  `closeUntrackedPipeTraceArgs`): the default set (FS) has no pipe2, so the
+  pipe was not in the fd table, the write's name was a live read of
+  `/proc/<pid>/fd` when ior got to the row, and the workload exits about
+  0.5 ms after that write - under load procfs was gone and the control
+  failed (3/10 to 9/40 at load 25-100; cause found in the review of task
+  xz2: zero pipe2 rows in 30 of 30 runs). With the table entry the name
+  does not depend on the lag.
+  The integration tests show what the identities lead to; none compares an
+  identity with `stat(2)`.
+
+### Name of a closed file (task xz2)
+
+The close of a descriptor ior never saw opened (opened before the trace, by
+a call outside the trace set, evicted, or in a blind table) cannot be named
+from procfs: the descriptor is gone when the row is processed (task jr2).
+The kernel program sees the file as the close enters, so it says what the
+file is called.
+
+- **What**: the dentry's own name, `file->f_path.dentry->d_name` - the last
+  path component - through the task-603 walk (`ior_file_of_table`, split out
+  of `ior_file_ident_of_table`). No more: `bpf_d_path` is not available to
+  tracepoint programs, every parent costs a `d_parent` load and another
+  copy, a walk to the root needs a loop bound and ends at the root of the
+  file's filesystem, not of the mount tree (a path that looks absolute and
+  is not). Not captured when the dentry is its own parent: pipes and sockets
+  (empty name), anon-inode files (`[eventfd]`), memfds, and the root
+  directory of a filesystem (`/` says nothing about where it is mounted).
+  Not captured either when the dentry is the **root of the mount** the file
+  was opened through (`file->f_path.mnt->mnt_root`, two loads and a
+  compare): its `d_name` is the name it has in the filesystem it comes from.
+  The parent test alone let those through whenever the mount root is not a
+  filesystem root - found in review on a btrfs host, where `close(open("/"))`
+  printed `*/root` (the subvolume) and `/home` `*/home` by luck; a
+  bind-mounted directory, and a bind-mounted single **file** (container
+  volumes, Kubernetes `subPath`), showed the source's name instead of the
+  one the process opened. The name the process used is the mount point's
+  dentry in the parent mount, reachable only through `struct mount`, which
+  is private to `fs/`. A file **below** a bind-mounted directory is no mount
+  root and keeps its own last component, which is right. Checked live on 7.2
+  (`/`, `/home`, a bind-mounted directory and a bind-mounted file:
+  `E:ino:<n>`; a file below the bind mount and its source directory: named).
+- **Record**: `fd_name_event` (`ENTER_FD_NAME_EVENT` 66; `EXIT_` 67 is
+  reserved by convention, nothing sends it), 104 bytes: `fd_event`'s 32
+  bytes, `name_len` (the component's real length; 0 = not readable) and
+  `name[IOR_FD_NAME_LENGTH = 68]`. close sends it **instead of** its
+  `fd_event` when the file has such a name; `fd_event` did not grow and
+  every other handler is byte-for-byte the object it was (`llvm-objdump -d`
+  of read, write, pread64, fsync, dup3 and the exits before/after: equal;
+  close 205 -> 254 instructions). `ior_emit_fd_name_enter`
+  (`internal/c/fdname.c`) does the one walk, returns 1 when it sent the wide
+  record (or had no room for it: counted, and no second attempt) and
+  otherwise hands the identity to the plain record, so no close walks twice.
+  The generator emits the attempt between the enter hook and the reserve for
+  `fdNameSyscalls` (`close` only; `internal/generate/classify.go`,
+  `renderFdNameEnter`), and `generateExtraFd` then stores the local
+  `file_ident`.
+- **Rejected: a control record behind the enter** (the `FILE_HANDLE_EVENT`
+  pattern of task k03, paired by tid and time). Measured first, because it
+  needs no new enter type: +477 `instructions:k` per close (open+close of
+  one file x300k, pinned, `-comm`, `-mapSize 268435456`, no drops, medians
+  of 6 interleaved runs: the walk done again +117, the second reserve and
+  submit +200, `bpf_probe_read_kernel_str` +110..160).
+- **Cost of the committed form** (same method; `dup(fd)` + `close` x300k
+  with `-trace-syscalls close`, which spreads 0.2% where the open+close loop
+  spreads 1%; 7 usable interleaved runs each, load 9-10): a close of a
+  named file +146 instructions (medians 768.37M -> 812.24M; 5.7% of that
+  loop's kernel instructions, i.e. of an untraced dup plus a traced close);
+  a close of a pipe +21..28 (767.99M -> 776.40M, and 768.38M -> 774.54M in
+  an earlier set: the dentry loads and the compare); open+close x300k +110
+  per iteration (3.4549G -> 3.4878G, +0.95%). One run of the 8 was thrown
+  out: ior had not attached within the 4 s the script waits (half the
+  instruction count in both columns). read and write: no change, by the
+  disassembly above. The name is copied with `bpf_probe_read_kernel` and
+  `d_name.len`, not `_str`: the byte-wise string copy cost 115 instructions
+  more for a 15-byte name (+261 against +146). The price is in `fdname.c`:
+  length and pointer are two loads, so a close racing a rename of its own
+  file can report a prefix of the name for that row, and for a short
+  (inline) name, which a rename overwrites in place, a mix of old and new
+  bytes. Always terminated inside the record. (These figures are from before
+  the mount-root test, which adds two loads, a null test and a compare to a
+  close of a file with a parent; not measured again.)
+- **Why every close of a named file**: BPF does not know which descriptors
+  user space tracks, a tracked-fd map costs more than the capture (603), and
+  `struct file` does not say when it was opened.
+- **Gate**: `IOR_FILE_IDENT` and the kfunc, as for the identity - a kernel
+  before 6.2, an older `IOR_BPF_OBJECT` and `IOR_FILE_IDENT=0` send no such
+  record and rows are as before. The record is an event type of its own, so
+  user space needs no capability flag for it. Loaded and run on Linux 7.2
+  only; the variable-length read into the ring-buffer record is one more
+  thing `loadWithIdentFallback` covers on a kernel whose verifier refuses
+  it.
+- **User space** (`internal/eventloop_fdname.go`): the record decodes into
+  `types.FdEvent` (`NewFdNameEventFast`; `NameLen`/`Name` are
+  `compatibilityFields`, so the struct is 128 bytes, and the hot decoder
+  clears a pooled name with one comparison of the last word of the first
+  cache line; `decodeFdSizeEvent` takes its `FdEvent` from the pool too
+  since the review of this task - it allocated one per recvfrom, recvmsg,
+  fgetxattr and flistxattr record, 64-byte class before the name, 128 with
+  it: `FdSizeEvent.AsFdEvent`). The name fields were left in `FdEvent`:
+  pooled records pay no allocation for them (pipeline benchmarks against
+  develop: allocs/op and B/op equal within 0.3%; `BenchmarkHandleFdExit`
+  153 -> 226 B/op is the benchmark's own per-iteration copy of the struct
+  escaping to the heap, not a path of the loop). `handleFdExit` resolves
+  the row as always and then, only for
+  a record with a name, `leafNamed` replaces an **unnamed** result by
+  `file.NewFdLeaf`. A name from the fd table or from a procfs answer read
+  before the close is never replaced (a full path says more, and a file
+  renamed since its open is still right under the name it was opened as).
+  The component is read by the closing task from the file its descriptor
+  names as the close enters, so it also names the rows the identity rules
+  refuse on purpose (an entry bound after the close, an answer of another
+  file or read too late) and the closes of a blind table. It is not proof:
+  the program holds no reference to the file, `struct file` is
+  `SLAB_TYPESAFE_BY_RCU`, and a close racing another thread's close of the
+  same number can in theory read the dentry of the file the slab gave the
+  memory to - "a wrong word, not a fault", as for the identity. It is not
+  stored for the number.
+- **Notation and what sees it**: `Name()` is `*/app.log`
+  (`file.LeafPrefix`), `*/<67 bytes>...` for a cut component
+  (`types.TruncatedPathSuffix`, as for a cut getcwd path; a half character
+  at the cut is dropped; cut means `name_len >= 68` **and** 67 bytes of
+  text - the length alone marked a short name as cut when a rename raced
+  the close). Unknown flags, the cannot-vouch mark
+  (`NameFromProcFS`), the row's identity. The partial name **is** the name:
+  the stream, the Files tab, the flamegraph (under a top-level `*`), the
+  Parquet `file` column and `-path` see it. Decided against keeping `Name()`
+  empty and printing a label in `-plain` only, as `E:ino` does: every view
+  but `-plain` reads `Name()`, so the name would have reached almost nobody.
+  Cost of the decision: such a row is not grouped with the rows that carry
+  the file's full path, and a `-path` filter for a directory does not match
+  it (it did not match the unnamed row either). Files of different
+  directories with the same last component are **one** name, hence one file
+  in the Files views and one `file` value in Parquet (README "Known
+  limitations", docs/parquet-querying.md). In the directory-grouped views
+  (dir rows, treemap, icicle) such names count under `NoDirGroup` (`.`),
+  with the pipes and sockets: `statsengine.DirOf` asks `file.IsLeafName`.
+  Before that `DirOf("*/x")` was `"*"`, a pseudo-directory row (icicle
+  `root/*`) lumping unrelated directories together and offering the filter
+  `^*/*`. No name ior reads from
+  procfs begins with `*/`; a traced relative pathname could, if a program
+  opens a file below a directory literally called `*`.
+- **Not done**: `close_range` (a range, not a file; `two_fd_event`); more
+  than one component; pseudo files; mount roots; kernels without the kfunc.
+- **Rows of an exited process (task as2) stay `E:ino:<n>`**. Evaluated with
+  this task, nothing sound and cheap was found:
+  - *The exit record*: in `do_exit` (kernel/exit.c, 6.19.8)
+    `trace_sched_process_exit` runs **before** `exit_files`, so the table is
+    intact at the tracepoint. But the process's rows are ahead of the exit
+    record in the ring and are emitted in stream order, and naming a table
+    is a bounded loop over all its descriptors per exit.
+  - *Reading procfs earlier* (in the ring-reader goroutine, or for all
+    descriptors on first sight of a pid): gains at most the raw channel's
+    lag, needs the fd tracker shared between goroutines, and still loses to
+    a process that exits inside that lag or while ior is stopped - the
+    task's own repro.
+  - *The name on every descriptor row*: what close now does, +146
+    instructions per call, would be about 10% of a traced read or write
+    (the identity walk is +83 and was the budget task 603 accepted), and a
+    BPF-side "already named" map costs more than the walk.
+  Such rows keep the identity label of task 603. `fdNameSyscalls` is the
+  place to add a syscall should a run ever want names at that price.
+- **Tests**: `internal/generate/fdname_harness_test.go` (the committed
+  helper against a simulated task and ring buffer: 16 cases, 24 mutations),
+  `syscall_semantics_fileident_test.go` (the attempt belongs to close only,
+  once, for its own trace ID and descriptor argument, between hook and
+  reserve; 9 mutations), `internal/types/fdname_test.go` (layout against the
+  generated C struct, `LeafName`, pooled reuse), `internal/file`
+  (`TestNewFdLeaf*`), `internal/eventloop_fdname_test.go` (through the
+  loop's decoder table: untracked close named, names never replaced,
+  refused answers and later bindings, records without a component, cut and
+  stale-tail names, nothing kept for the number), and the integration tests
+  `TestCloseUntrackedClosesAreNamedByTheirLastComponent` (all 64 files of
+  `close-untracked` and its FIFO, whose close no procfs read can name; the
+  workload's close of `/` must not be named, which bites where `/` is a
+  mount root but no filesystem root, e.g. a btrfs subvolume) and
+  the control `TestCloseUntrackedClosesWithoutFileIdentityStayUnnamed`
+  (`IOR_FILE_IDENT=0`).
 
 ## Code Style
 
@@ -968,6 +3113,26 @@ not sufficient.
   `error` (e.g. `errors.Is(err, syscall.EINTR)`). A bare `errno` returned by
   `syscall.RawSyscall` is a concrete `syscall.Errno` that cannot be wrapped, so
   `errno != 0` and `errno != syscall.EAGAIN` stay as direct comparisons.
+- Tests that must wait until a goroutine is parked on a lock (to change
+  shared state only once it provably waits) use `internal/parkwait`, never a
+  sleep: take `parkwait.Count` as the baseline, start the goroutine, then
+  `parkwait.Await{...}.Run(t)`, which polls `runtime.Stack` until the
+  goroutine's dump header shows the wait reason inside the given frame. It
+  matches by function name, filtered to goroutines started by the calling
+  test goroutine, so start the goroutine and call Count/Run from the test
+  goroutine itself. Test-only: never import it from production code.
+- Event-loop test fixtures that model a made-up process use pids/tids of the
+  form `absentPidBase + n` (`internal/eventloop_absentpid_test.go`;
+  `defaultPid`, `execCommPid`, `forkChildPid` are built that way), never a
+  plain small literal. Every descriptor or comm the loop has not seen traced
+  falls back to the real `/proc/<pid>/...`, so a fixture pid that happens to
+  be alive on the host answers with that process's files: plain pid 7100 made
+  the fork negative control read `anon_inode:[eventfd]` (task zs2).
+  `absentPidBase` is `PID_MAX_LIMIT` (2^22); the kernel never allocates a pid
+  at or above it, and `TestAbsentPidsCannotExistOnThisHost` checks that
+  premise. A test that needs a live process uses its own pid or a child it
+  starts; one that needs specific procfs contents takes a fake root
+  (`resolveCommFromProcRoot`, `checkTraceTarget`).
 
 ## Rollback
 

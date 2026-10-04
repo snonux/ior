@@ -42,29 +42,31 @@ func defaultSyscallSamplingRates() map[string]uint32 {
 	return out
 }
 
-func mergeSyscallSamplingRates(overrides map[string]uint32) map[string]uint32 {
+// resolveDefaultSyscallSamplingRates returns the built-in per-syscall defaults
+// for the given output mode. They are deliberately kept apart from the user's
+// explicit -syscall-sampling-syscalls entries (Config.SyscallSamplingRates):
+// merging them into one map would make an implicit default indistinguishable
+// from an explicit choice and let it beat an explicit -syscall-sampling-families
+// rate. The consumer applies the precedence built-in default < family rate <
+// explicit syscall rate.
+//
+// The defaults are aggregate-only (rate 0). In raw output modes (-plain,
+// -flamegraph, headless -parquet) there is no aggregate sink, so rate 0 would
+// suppress every ring-buffer event and silently erase these syscalls from the
+// output; there the defaults are promoted to rate 1 (emit every event). The
+// promotion applies to built-in defaults only: explicit user rates, including
+// an explicit 0, never pass through here.
+func resolveDefaultSyscallSamplingRates(rawOutput bool) map[string]uint32 {
 	out := defaultSyscallSamplingRates()
-	for syscall, rate := range overrides {
-		out[syscall] = rate
+	if !rawOutput {
+		return out
+	}
+	for syscall, rate := range out {
+		if rate == 0 {
+			out[syscall] = 1
+		}
 	}
 	return out
-}
-
-// promoteAggregateOnlyForRawOutput replaces default aggregate-only rates (0)
-// with rate 1 (emit every event) when running in a raw output mode that lacks
-// an aggregate sink. Without this promotion, BPF suppresses ring-buffer
-// events for these syscalls and no rows appear in -plain, -flamegraph, or
-// headless -parquet output. User-explicit overrides (present in userOverrides)
-// are preserved unchanged.
-func promoteAggregateOnlyForRawOutput(merged map[string]uint32, userOverrides map[string]uint32) {
-	for _, syscall := range defaultAggregateOnlySyscalls {
-		if _, explicit := userOverrides[syscall]; explicit {
-			continue
-		}
-		if merged[syscall] == 0 {
-			merged[syscall] = 1
-		}
-	}
 }
 
 func parseFamilySamplingRates(raw string) (map[types.SyscallFamily]uint32, error) {

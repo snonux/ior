@@ -2,6 +2,7 @@ package file
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -92,6 +93,77 @@ func TestNewAnonymousMapping(t *testing.T) {
 	}
 }
 
+func TestNewRegisteredRing(t *testing.T) {
+	f := NewRegisteredRing(0)
+
+	if got := f.Name(); got != "io_uring:reg[0]" {
+		t.Fatalf("Name() = %q, want io_uring:reg[0]", got)
+	}
+	if got := f.String(); got != "io_uring:reg[0]" {
+		t.Fatalf("String() = %q, want io_uring:reg[0]", got)
+	}
+	// The index is not a descriptor, so the row must not claim one.
+	if got := f.FD(); got != -1 {
+		t.Fatalf("FD() = %d, want -1", got)
+	}
+	if got := f.Flags(); got != unknownFlag {
+		t.Fatalf("Flags() = %v, want unknown", got)
+	}
+	if got := NewRegisteredRing(17).Name(); got != "io_uring:reg[17]" {
+		t.Fatalf("Name() = %q, want io_uring:reg[17]", got)
+	}
+}
+
+// TestNewRegisteredRingOf pins the file of a registered-ring index whose
+// ring is known (task js2): the row reports the ring - name, flags and
+// descriptor - and its text keeps the index in front of it.
+func TestNewRegisteredRingOf(t *testing.T) {
+	ring := NewFd(5, "anon_inode:[io_uring]", syscall.O_RDWR|syscall.O_CLOEXEC)
+	f := NewRegisteredRingOf(2, ring, false)
+	if got := f.Name(); got != "anon_inode:[io_uring]" {
+		t.Errorf("Name() = %q, want the ring's name", got)
+	}
+	if got := f.FD(); got != 5 {
+		t.Errorf("FD() = %d, want the ring's descriptor 5", got)
+	}
+	if got := f.Flags(); got != ring.Flags() {
+		t.Errorf("Flags() = %v, want the ring's %v", got, ring.Flags())
+	}
+	if got, want := f.String(), "io_uring:reg[2]=anon_inode:[io_uring]%(5,O_RDWR|O_CLOEXEC)"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestRegisteredRingWithoutItsDescriptor: once the number is no longer the
+// ring's, the file still is the ring but claims no descriptor, in FD() and
+// in its text alike.
+func TestRegisteredRingWithoutItsDescriptor(t *testing.T) {
+	f := NewRegisteredRingOf(0, NewFd(5, "anon_inode:[io_uring]", syscall.O_RDWR), true)
+	if got := f.Name(); got != "anon_inode:[io_uring]" {
+		t.Errorf("Name() = %q, want the ring's name", got)
+	}
+	if got := f.FD(); got != -1 {
+		t.Errorf("FD() = %d, want -1", got)
+	}
+	if got, want := f.String(), "io_uring:reg[0]=anon_inode:[io_uring]%(-1,O_RDWR)"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestRegisteredRingOfNothingIsTheIndexLabel: without a ring the constructor
+// is NewRegisteredRing, whatever it is told about the descriptor.
+func TestRegisteredRingOfNothingIsTheIndexLabel(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		f := NewRegisteredRingOf(4, nil, closed)
+		if f != NewRegisteredRing(4) {
+			t.Errorf("closed=%v: %+v, want NewRegisteredRing(4)", closed, f)
+		}
+		if f.Name() != "io_uring:reg[4]" || f.String() != "io_uring:reg[4]" || f.FD() != -1 || f.Flags() != unknownFlag {
+			t.Errorf("closed=%v: name %q text %q fd %d flags %v, want the bare label", closed, f.Name(), f.String(), f.FD(), f.Flags())
+		}
+	}
+}
+
 func TestFdFileSetFlags(t *testing.T) {
 	fdFile := NewFd(1, "test.txt", 0)
 	if fdFile.Flags() != Flags(0) {
@@ -154,10 +226,10 @@ func TestFdFileMergeFlags(t *testing.T) {
 	}{
 		{
 			// The real caller's shape: F_GETFL, OR in a bit, F_SETFL. The
-			// access mode and the creation flags must come through untouched;
+			// access mode and the open-only flags must come through untouched;
 			// replacing the word instead of merging it left O_NONBLOCK alone
 			// and reported the descriptor as O_RDONLY from here on.
-			name:  "settable bit added, access mode and creation flags kept",
+			name:  "settable bit added, access mode and open-only flags kept",
 			start: syscall.O_RDWR | syscall.O_CREAT,
 			arg:   syscall.O_RDWR | syscall.O_NONBLOCK,
 			want:  Flags(syscall.O_RDWR | syscall.O_CREAT | syscall.O_NONBLOCK),
@@ -271,4 +343,257 @@ func TestParseFlagsFromFdInfo(t *testing.T) {
 			t.Fatalf("parseFlagsFromFdInfo scanner error flags = %v, want %v", flags, unknownFlag)
 		}
 	})
+}
+
+// TestFdFileCloseOnExec pins the accessor exec handling relies on: the state
+// is unknown until observed, follows open flags, and follows descriptor-level
+// updates even while the status word stays unknown.
+func TestFdFileCloseOnExec(t *testing.T) {
+	check := func(name string, f *FdFile, wantSet, wantKnown bool) {
+		t.Helper()
+		if set, known := f.CloseOnExec(); set != wantSet || known != wantKnown {
+			t.Errorf("%s: CloseOnExec() = (%v, %v), want (%v, %v)", name, set, known, wantSet, wantKnown)
+		}
+	}
+	check("unknown flags", NewFd(1, "a", -1), false, false)
+	check("open O_CLOEXEC", NewFd(1, "a", syscall.O_RDONLY|syscall.O_CLOEXEC), true, true)
+	check("open without O_CLOEXEC", NewFd(1, "a", syscall.O_RDONLY), false, true)
+
+	f := NewFd(1, "a", -1)
+	f.AddFlags(syscall.O_CLOEXEC)
+	check("close_range CLOEXEC on unknown", f, true, true)
+	f.MergeFlags(syscall.O_CLOEXEC, 0)
+	check("F_SETFD cleared", f, false, true)
+	f.SetFlags(-1)
+	check("reset to unknown", f, false, false)
+	check("dup keeps state", NewFd(1, "a", syscall.O_CLOEXEC).Dup(2), true, true)
+}
+
+// escapeBrackets is a stand-in escaper that visibly rewrites its input, so a
+// test can tell which parts of a rendered file went through it.
+func escapeBrackets(s string) string { return "[" + s + "]" }
+
+// TestAppendStringMatchesString checks every File kind: AppendString with no
+// escaper is exactly String(), it appends to (never clobbers) dst, and an
+// escaper reaches the traced paths but not the fixed decoration.
+func TestAppendStringMatchesString(t *testing.T) {
+	tests := []struct {
+		name        string
+		f           interface{ String() string }
+		wantEscaped string
+	}{
+		{"fd", NewFd(5, "/tmp/a", 0), "[/tmp/a]%(5,O_RDONLY)"},
+		{"fd empty name", NewFd(5, "", 1), "E:name%(5,O_WRONLY)"},
+		{"pathname", NewPathname([]byte("/p")), "pathname:[/p]%(O_NONE)"},
+		{"oldname/newname", NewOldnameNewname([]byte("/a"), []byte("/b")), "old:[/a] ->new:[/b]%(O_NONE)"},
+		{"anonymous", NewAnonymousMapping(), "anon"},
+		// Fixed decoration plus a number: nothing attacker-controlled to escape.
+		{"registered ring", NewRegisteredRing(3), "io_uring:reg[3]"},
+		// The ring's name is traced text; the label and "%(fd,flags)" are not.
+		{"registered ring of a known ring", NewRegisteredRingOf(3, NewFd(5, "/tmp/a", 0), false),
+			"io_uring:reg[3]=[/tmp/a]%(5,O_RDONLY)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appender, ok := tt.f.(StringAppender)
+			if !ok {
+				t.Fatalf("%T does not implement StringAppender", tt.f)
+			}
+			if got := string(appender.AppendString([]byte("pre:"), nil)); got != "pre:"+tt.f.String() {
+				t.Errorf("AppendString(nil) = %q, want %q", got, "pre:"+tt.f.String())
+			}
+			if got := string(appender.AppendString(nil, escapeBrackets)); got != tt.wantEscaped {
+				t.Errorf("AppendString(escape) = %q, want %q", got, tt.wantEscaped)
+			}
+		})
+	}
+}
+
+// TestFdFileAppendStringIsAllocationFree pins the -plain hot-path property:
+// rendering into a reused buffer costs no allocation.
+func TestFdFileAppendStringIsAllocationFree(t *testing.T) {
+	f := NewFd(5, "/tmp/a", syscall.O_RDWR|syscall.O_CLOEXEC)
+	buf := make([]byte, 0, 128)
+	if allocs := testing.AllocsPerRun(100, func() { buf = f.AppendString(buf[:0], nil) }); allocs != 0 {
+		t.Fatalf("AppendString allocates %.1f times, want 0", allocs)
+	}
+}
+
+// TestNewFdWithProcNameKeepsTheGivenName: the caller's link text is used as is
+// (no second readlink), while the flags still come from the live fdinfo.
+func TestNewFdWithProcNameKeepsTheGivenName(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	got := NewFdWithProcName(int32(f.Fd()), uint32(os.Getpid()), "/given/name")
+	if got.Name() != "/given/name" {
+		t.Errorf("name = %q, want the given link text", got.Name())
+	}
+	if got.Flags() == Flags(-1) {
+		t.Error("flags must come from the live fdinfo of the open descriptor")
+	}
+
+	unreadable := NewFdWithPid(1<<20, uint32(os.Getpid()))
+	if unreadable.Name() != "" || unreadable.Flags() != Flags(-1) {
+		t.Errorf("unreadable fd = (%q, %v), want an unnamed file with unknown flags", unreadable.Name(), unreadable.Flags())
+	}
+}
+
+// TestFdFileCopiesKeepTheProcfsMark: a duplicate (dup, fork) and a snapshot
+// carry the name of their source, so they must also say where that name came
+// from. A copy that dropped the mark would pass a look at procfs off as a
+// name a traced call gave (task k03: a handle taken through the duplicate
+// would be filed under it for every later open). A name the event loop
+// built from a link and marked itself (MarkNameFromProcFS, task 523) is
+// copied the same way.
+func TestFdFileCopiesKeepTheProcfsMark(t *testing.T) {
+	built := NewFd(3, "/proc/link/below.txt", syscall.O_RDONLY)
+	built.MarkNameFromProcFS()
+	sources := map[string]*FdFile{
+		"read from procfs":       NewFdWithProcName(3, uint32(os.Getpid()), "/proc/link"),
+		"procfs had no answer":   NewFdWithPid(1<<20, uint32(os.Getpid())),
+		"refused procfs answer":  NewUnresolvedFd(3),
+		"built from a link":      built,
+		"given by a traced call": NewFd(3, "/traced", syscall.O_RDONLY),
+	}
+	for name, source := range sources {
+		want := name != "given by a traced call"
+		if got := source.NameFromProcFS(); got != want {
+			t.Fatalf("%s: NameFromProcFS() = %v, want %v", name, got, want)
+		}
+		copies := map[string]*FdFile{
+			"Dup": source.Dup(4), "Dup of a Dup": source.Dup(4).Dup(5),
+			"Detach": source.Detach(), "Detach of a Dup": source.Dup(4).Detach(),
+		}
+		for kind, c := range copies {
+			if got := c.NameFromProcFS(); got != want {
+				t.Errorf("%s, %s: NameFromProcFS() = %v, want %v", name, kind, got, want)
+			}
+		}
+	}
+}
+
+// Task nr2: the status word lives in the open file description that duplicates
+// share; FD_CLOEXEC lives in the descriptor.
+
+func TestFdFileDupSharesTheStatusWord(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_WRONLY|syscall.O_CREAT)
+	dup := orig.Dup(4)
+	third := dup.Dup(5)
+
+	dup.MergeFlags(settableStatusFlags, syscall.O_APPEND|syscall.O_NONBLOCK)
+
+	want := Flags(syscall.O_WRONLY | syscall.O_CREAT | syscall.O_APPEND | syscall.O_NONBLOCK)
+	for name, f := range map[string]*FdFile{"original": orig, "dup": dup, "dup of dup": third} {
+		if f.Flags() != want {
+			t.Errorf("%s flags = %v, want %v", name, f.Flags(), want)
+		}
+	}
+
+	// F_GETFL through any one of them refreshes all of them, and a dup made
+	// afterwards starts from the refreshed word.
+	third.SetStatusFlags(syscall.O_RDWR)
+	if orig.Dup(6).Flags() != Flags(syscall.O_RDWR) || orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("SetStatusFlags through a dup did not reach the original: %v", orig.Flags())
+	}
+	if orig.Name() != "a.txt" || dup.FD() != 4 {
+		t.Errorf("dup lost its own name/number: %q %d", orig.Name(), dup.FD())
+	}
+}
+
+func TestFdFileDupLearnsAnUnknownStatusWordForEveryone(t *testing.T) {
+	orig := NewFd(3, "", -1)
+	dup := orig.Dup(4)
+	dup.SetStatusFlags(syscall.O_RDWR)
+	if orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("original flags = %v, want the word learned through the dup", orig.Flags())
+	}
+}
+
+func TestFdFileCloseOnExecIsNotShared(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_RDWR)
+	dup := orig.Dup(4)
+
+	dup.MergeFlags(syscall.O_CLOEXEC, syscall.O_CLOEXEC)
+	if set, _ := orig.CloseOnExec(); set || orig.Flags() != Flags(syscall.O_RDWR) {
+		t.Errorf("original picked up the duplicate's FD_CLOEXEC: set=%v flags=%v", set, orig.Flags())
+	}
+	if dup.Flags() != Flags(syscall.O_RDWR|syscall.O_CLOEXEC) {
+		t.Errorf("dup flags = %v, want O_RDWR|O_CLOEXEC", dup.Flags())
+	}
+
+	// A status change through the original keeps each descriptor's own bit.
+	orig.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if dup.Flags() != Flags(syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC) {
+		t.Errorf("dup flags = %v, want the shared O_NONBLOCK and its own O_CLOEXEC", dup.Flags())
+	}
+	if orig.Flags() != Flags(syscall.O_RDWR|syscall.O_NONBLOCK) {
+		t.Errorf("original flags = %v, want O_NONBLOCK without O_CLOEXEC", orig.Flags())
+	}
+	dup.AddFlags(syscall.O_CLOEXEC)
+	if set, _ := orig.CloseOnExec(); set {
+		t.Error("AddFlags(O_CLOEXEC) on the duplicate reached the original")
+	}
+}
+
+func TestFdFileIndependentOpensShareNothing(t *testing.T) {
+	a := NewFd(3, "same.txt", syscall.O_WRONLY)
+	b := NewFd(4, "same.txt", syscall.O_WRONLY)
+	a.MergeFlags(settableStatusFlags, syscall.O_APPEND)
+	if b.Flags() != Flags(syscall.O_WRONLY) {
+		t.Errorf("an independent open picked up O_APPEND: %v", b.Flags())
+	}
+}
+
+func TestFdFileDetachSharesNothing(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_WRONLY|syscall.O_CLOEXEC)
+	dup := orig.Dup(4)
+	snap := dup.Detach()
+
+	orig.MergeFlags(settableStatusFlags, syscall.O_APPEND)
+	dup.MergeFlags(syscall.O_CLOEXEC, 0)
+
+	if snap.FD() != 4 || snap.Name() != "a.txt" {
+		t.Errorf("snapshot lost its identity: fd %d name %q", snap.FD(), snap.Name())
+	}
+	if snap.Flags() != Flags(syscall.O_WRONLY|syscall.O_CLOEXEC) {
+		t.Errorf("snapshot flags = %v, want the flags at snapshot time", snap.Flags())
+	}
+	// And the snapshot's own changes stay its own.
+	snap.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if orig.Flags().Is(syscall.O_NONBLOCK) {
+		t.Error("a change to the snapshot reached the live descriptor")
+	}
+}
+
+func TestZeroFdFileKeepsItsHistoricalMeaning(t *testing.T) {
+	var f FdFile
+	if f.Flags() != Flags(syscall.O_RDONLY) {
+		t.Errorf("zero FdFile flags = %v, want O_RDONLY", f.Flags())
+	}
+	dup := f.Dup(1)
+	dup.MergeFlags(settableStatusFlags, syscall.O_NONBLOCK)
+	if !f.Flags().Is(syscall.O_NONBLOCK) {
+		t.Error("a zero FdFile does not share its description with its dup")
+	}
+}
+
+// TestFdFileDetachAndConstructorsAllocateOnce pins the single-allocation layout
+// (FdFile and its description in one object): Detach runs once per emitted row.
+func TestFdFileDetachAndConstructorsAllocateOnce(t *testing.T) {
+	orig := NewFd(3, "a.txt", syscall.O_RDWR)
+	var sink *FdFile
+	if allocs := testing.AllocsPerRun(100, func() { sink = orig.Detach() }); allocs != 1 {
+		t.Errorf("Detach allocates %v times, want 1", allocs)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { sink = orig.Dup(4) }); allocs != 1 {
+		t.Errorf("Dup allocates %v times, want 1", allocs)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { sink = NewFd(3, "a.txt", syscall.O_RDWR) }); allocs != 1 {
+		t.Errorf("NewFd allocates %v times, want 1", allocs)
+	}
+	_ = sink
 }

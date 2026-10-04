@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"ior/internal/globalfilter"
 	"ior/internal/parquet"
 	"ior/internal/runtime"
+	"ior/internal/sampling"
 	"ior/internal/statsengine"
 	common "ior/internal/tui/common"
 	dashboardui "ior/internal/tui/dashboard"
@@ -99,8 +101,10 @@ type runtimeBindings struct {
 	streamBuffer *eventstream.RingBuffer
 	// streamSeq is the shared monotonic counter for stream row sequencing.
 	streamSeq *eventstream.Sequencer
-	// recorder handles optional parquet stream recording.
-	recorder *parquet.Recorder
+	// recorder handles optional parquet stream recording. It is held as the
+	// runtime contract (a *parquet.Recorder in production) so tests can
+	// substitute a recorder whose recordings fail.
+	recorder runtime.RecordingController
 	// liveTrieSource is the flamegraph trie injected by the trace starter.
 	liveTrieSource runtime.LiveTrieSource
 	// probeManager is the BPF probe manager injected by the trace starter.
@@ -109,10 +113,28 @@ type runtimeBindings struct {
 	// event loop in-place so BPF probes need not be restarted.
 	liveFilterSetter       func(globalfilter.Filter)
 	liveFilterRegistration *liveFilterRegistration
+	// recordingSampling is the current session's sampling description and
+	// aggregate flush for Parquet recordings; cleared when the session ends,
+	// like the probe manager, so no flush reaches a retired session.
+	recordingSampling runtime.RecordingSampling
+	// sampledSyscalls is the last list a session published. Unlike
+	// recordingSampling it outlives the session: the rates are fixed for the
+	// process, so a recording started between two sessions (while the next
+	// one attaches) is still marked. See recordingsampling.go.
+	sampledSyscalls []sampling.Entry
+	// session is the generation of the newest trace session, advanced by
+	// beginSession. A traceSessionBindings view publishes only while its
+	// generation is still this one, so an older session that finishes setup
+	// or teardown late cannot overwrite or clear the newer session's state.
+	session uint64
 	// filterEpoch increments on every filter change and is stored in parquet rows.
 	filterEpoch atomic.Uint64
 }
 
+// newRuntimeBindings builds the TUI's bindings. Their recorder is the zero
+// RecorderConfig on purpose: the shed (non-blocking) overflow mode, because the
+// event loop that records also feeds the live views and must never stall
+// behind the disk (the headless run asks for backpressure instead; task 4s2).
 func newRuntimeBindings() *runtimeBindings {
 	streamBuffer := eventstream.NewRingBuffer()
 	return &runtimeBindings{
@@ -121,20 +143,6 @@ func newRuntimeBindings() *runtimeBindings {
 		streamSeq:    eventstream.NewSequencer(0),
 		recorder:     parquet.NewRecorder(parquet.RecorderConfig{}),
 	}
-}
-
-// SetDashboardSnapshotSource wires the stats engine into the dashboard.
-func (r *runtimeBindings) SetDashboardSnapshotSource(source runtime.ResettableSnapshotSource) {
-	r.mu.Lock()
-	r.snapshotSource = source
-	r.mu.Unlock()
-}
-
-// SetEventStreamSource wires the stream buffer into the TUI stream view.
-func (r *runtimeBindings) SetEventStreamSource(source runtime.StreamSource) {
-	r.mu.Lock()
-	r.streamSource = source
-	r.mu.Unlock()
 }
 
 // StreamBuffer returns the TUI-owned ring buffer. The full EventSink (push
@@ -153,15 +161,11 @@ func (r *runtimeBindings) StreamBuffer() runtime.EventSink {
 
 // Recorder returns the parquet recorder for optional stream recording,
 // behind the runtime contract (the concrete recorder stays an implementation
-// detail of these bindings). A nil recorder is returned as a nil interface:
-// handing a typed-nil pointer through would make the caller's nil check see
-// a non-nil interface whose every call panics.
+// detail of these bindings). The field already has the interface type and is
+// only ever assigned a real recorder or left nil, so no typed-nil can leak.
 func (r *runtimeBindings) Recorder() runtime.RecordingController {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if r.recorder == nil {
-		return nil
-	}
 	return r.recorder
 }
 
@@ -180,30 +184,24 @@ func (r *runtimeBindings) FilterEpoch() uint64 {
 	return r.filterEpoch.Load()
 }
 
-// SetLiveTrie wires the live flamegraph trie into the TUI flamegraph view.
-func (r *runtimeBindings) SetLiveTrie(liveTrie runtime.LiveTrieSource) {
-	r.mu.Lock()
-	r.liveTrieSource = liveTrie
-	r.mu.Unlock()
-}
+// The runtime bindings deliberately have no exported setters and so do not
+// satisfy runtime.RuntimePublisher: trace sessions publish only through their
+// traceSessionBindings view (see tracesession.go), whose writes are dropped
+// once the session is superseded. Handing *runtimeBindings to a trace starter
+// directly would bring back the clobbering that view prevents.
 
-// SetProbeManager wires the BPF probe manager into the TUI probes modal.
-func (r *runtimeBindings) SetProbeManager(manager runtime.ProbeManager) {
-	r.mu.Lock()
-	r.probeManager = manager
-	r.mu.Unlock()
-}
-
-// SetLiveFilterSetter registers the live filter callback so the TUI can update
-// the running trace pipeline in-place. The returned function clears the setter
-// only while this registration still owns it, preventing a slow teardown from
-// an older trace session from unregistering a newer session's callback.
-func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) func() {
+// installLiveFilterSetterLocked stores setter under a fresh registration and
+// returns it. The caller must hold r.mu for writing.
+func (r *runtimeBindings) installLiveFilterSetterLocked(setter func(globalfilter.Filter)) *liveFilterRegistration {
 	registration := &liveFilterRegistration{}
-	r.mu.Lock()
 	r.liveFilterSetter = setter
 	r.liveFilterRegistration = registration
-	r.mu.Unlock()
+	return registration
+}
+
+// liveFilterUnregisterer returns the release func of one registration: it
+// clears the setter only while that registration is still the installed one.
+func (r *runtimeBindings) liveFilterUnregisterer(registration *liveFilterRegistration) func() {
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -219,6 +217,11 @@ func (r *runtimeBindings) SetLiveFilterSetter(setter func(globalfilter.Filter)) 
 // registered by the trace starter, returning true if a setter was available.
 // Returning false tells the caller it must fall back to a full trace restart
 // (typically because no trace is currently running).
+//
+// With a setter it advances the filter epoch first, so rows recorded under
+// the new filter carry the new epoch. Without one it advances nothing: the
+// caller's restart path advances the epoch only after it stopped the old
+// session, so none of that session's rows can be stamped with the new epoch.
 func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	r.mu.RLock()
 	setter := r.liveFilterSetter
@@ -226,6 +229,7 @@ func (r *runtimeBindings) applyLiveFilter(filter globalfilter.Filter) bool {
 	if setter == nil {
 		return false
 	}
+	r.advanceFilterEpoch()
 	setter(filter)
 	return true
 }
@@ -317,8 +321,25 @@ func RunWithTraceStarterConfig(cfg flags.Config, starter TraceStarter) error {
 // nothing - wiring tea.NewProgram directly into those entry points leaves
 // every test green while a quit from the error screen exits 0 with no reason,
 // which is the state the fix exists to end.
+//
+// The program is built by newProgram, and watchTerminationSignals owns the
+// termination signals for the whole run: the first SIGTERM/SIGINT/SIGHUP
+// reaches the model's quit path (recording finalised), a second one aborts a
+// hung shutdown (Run then returns errShutdownForced). Bubble Tea's own handler
+// is disabled because it is one-shot and skips Update, see signalQuitFilter.
 var runTeaProgram = func(model *Model) (tea.Model, error) {
-	return tea.NewProgram(model).Run()
+	return runWatchedProgram(newProgram(model), model)
+}
+
+// newProgram builds the Bubble Tea program for model with the signal filter
+// installed and Bubble Tea's own signal handler disabled (the caller owns
+// signals, see watchTerminationSignals). It is the one constructor for
+// production and tests, so a test that drives the real event loop (with its own
+// input and output) exercises exactly the wiring the binary uses. Extra options
+// come after the built-in ones.
+func newProgram(model tea.Model, opts ...tea.ProgramOption) *tea.Program {
+	base := []tea.ProgramOption{tea.WithFilter(signalQuitFilter), tea.WithoutSignalHandler()}
+	return tea.NewProgram(model, append(base, opts...)...)
 }
 
 // runProgram runs one Bubble Tea program and reports the error the model was
@@ -332,12 +353,15 @@ var runTeaProgram = func(model *Model) (tea.Model, error) {
 // Every exported entry point must go through here rather than calling
 // tea.NewProgram itself, which is what TestExportedEntryPointsReportTheError
 // pins - testing runProgram alone leaves the entry points free to bypass it.
+//
+// After the program returns, an active recording is finalised as a safety net
+// (finaliseRecording), so no exit path leaves an orphan ior-recording-*.tmp.
 func runProgram(model *Model) error {
 	final, err := runTeaProgramQuietly(model)
-	if err != nil {
-		return err
+	if err == nil {
+		err = finalModelError(final)
 	}
-	return finalModelError(final)
+	return finaliseRecording(model, err)
 }
 
 // runTeaProgramQuietly runs the program with the standard logger discarded.
@@ -375,19 +399,19 @@ func finalModelError(final tea.Model) error {
 // filter of pid=1 would hide every stream row and export nothing but a CSV
 // header. Any real -pid/-tid the user passed is still honoured.
 //
-// The pid/tid pair goes through resolveStartupPIDFilters, the same helper the
-// production path uses, so that "the exact same model wiring" above is true of
-// the filters too: an explicit -pid clears -tid here exactly as it does for a
-// real attach, rather than test-flames quietly honouring a combination the
-// real TUI drops.
+// The raw -pid/-tid values are passed straight through: with initialPID -1
+// newModelWithRuntimeConfig runs them through resolveStartupPIDFilters, the
+// same helper the production path uses, which only normalises non-positive
+// values to -1 here (there is no attach pid that could differ from -pid and
+// clear the tid). So -pid and -tid combine here exactly as they do for a real
+// `ior -pid P -tid T` startup.
 func NewTestFlamesModel(cfg flags.Config, starter TraceStarter) *Model {
-	pidFilter, tidFilter := resolveStartupPIDFilters(cfg.PidFilter, cfg.PidFilter, cfg.TidFilter)
 	model := newModelWithRuntimeConfig(modelStartup{
 		initialPID:    -1,
 		skipPicker:    true,
 		filter:        filterFromConfig(cfg),
-		pidFilter:     pidFilter,
-		tidFilter:     tidFilter,
+		pidFilter:     cfg.PidFilter,
+		tidFilter:     cfg.TidFilter,
 		exportEnabled: cfg.TUIExportEnable,
 		startTrace:    starter,
 	})
@@ -407,9 +431,9 @@ func RunTestFlamesWithTraceStarterConfig(cfg flags.Config, starter TraceStarter)
 type keyboardState struct {
 	enhancements      tea.KeyboardEnhancementsMsg
 	enhancementsKnown bool
-	lastEventID       string
-	lastEventAt       time.Time
-	lastEventWasPress bool
+	// pressed is the set of physical keys whose press was delivered and whose
+	// release has not arrived yet; see normalizeKeyEvent. Lazily allocated.
+	pressed map[rune]struct{}
 	// Some terminals emit release+press for a single physical key event.
 	// When we fallback-handle a release as a press, suppress the immediate
 	// matching press to avoid double-handling.
@@ -472,6 +496,13 @@ type Model struct {
 	exportEnabled bool
 	isDark        bool
 	focused       bool
+	// familyRun is the family attach/detach batch in flight (see
+	// startFamilyBatch); it lives here, not in the probes modal, because the
+	// modal is rebuilt on every open.
+	familyRun familyRunState
+	// bulkRun is the all-on/all-off walk in flight (see startSetAll), kept
+	// here for the same reason.
+	bulkRun bulkRunState
 
 	kb keyboardState
 }
@@ -514,8 +545,9 @@ func NewModelWithConfig(cfg flags.Config, initialPID int, startTrace TraceStarte
 // stream to pid=1 as well.
 type modelStartup struct {
 	// initialPID is a genuine attach target. When > 0 it both seeds the
-	// pid filter (overriding pidFilter/tidFilter) and skips the picker.
-	// Use -1 for "no attach target".
+	// pid filter and skips the picker. It clears tidFilter only when it
+	// differs from pidFilter (see resolveStartupPIDFilters). Use -1 for
+	// "no attach target".
 	initialPID int
 	// skipPicker starts on the dashboard and begins tracing immediately
 	// without an attach target, for modes whose data is seeded rather than
@@ -523,7 +555,8 @@ type modelStartup struct {
 	skipPicker bool
 	// filter is the startup global filter (built from the CLI config).
 	filter globalfilter.Filter
-	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter).
+	// pidFilter/tidFilter are the CLI -pid/-tid values (-1 = no filter). A
+	// positive tidFilter also skips the picker (see initialScreen).
 	pidFilter int
 	tidFilter int
 	// exportEnabled mirrors -tuiExport.
@@ -577,22 +610,35 @@ func newModelWithRuntimeConfig(startup modelStartup) *Model {
 
 // initialScreen picks the first screen: the dashboard when startup has an
 // attach target or explicitly skips the picker, otherwise the PID picker.
+//
+// A -tid given without -pid is an attach target as well: the thread id names
+// the process to trace, so the picker would only ask for something the user
+// already answered - and its PID result (handlePidSelected) discards the tid,
+// turning `-tid T` into a whole-process trace of whatever was picked. The
+// trace then starts with just the TID predicate, exactly as headless mode does.
 func initialScreen(startup modelStartup) Screen {
-	if startup.initialPID > 0 || startup.skipPicker {
+	if startup.initialPID > 0 || startup.skipPicker || startup.tidFilter > 0 {
 		return ScreenDashboard
 	}
 	return ScreenPIDPicker
 }
 
 // resolveStartupPIDFilters computes the effective pid/tid filter values from
-// the startup arguments. When initialPID is provided it overrides the config
-// PID filter and forces tid to -1 (no TID filter).
+// the startup arguments. An initialPID that differs from the configured -pid
+// is a different attach target than the one -tid was given for, so it
+// overrides the config PID filter and clears the TID filter. When initialPID
+// is the configured -pid itself (the production `ior -pid P -tid T` path,
+// where newRunModel passes cfg.PidFilter for both), the -tid is kept: it used
+// to be dropped unconditionally, so the first TraceRequest covered the whole
+// process instead of the one thread the user named.
 func resolveStartupPIDFilters(initialPID, startupPidFilter, startupTidFilter int) (pid, tid int) {
 	pid = selectedPIDFilter(startupPidFilter)
 	tid = selectedPIDFilter(startupTidFilter)
 	if initialPID > 0 {
+		if selectedPIDFilter(initialPID) != pid {
+			tid = -1
+		}
 		pid = selectedPIDFilter(initialPID)
-		tid = -1
 	}
 	return pid, tid
 }
@@ -668,7 +714,14 @@ type fallbackWindowSizeMsg tea.WindowSizeMsg
 func (m *Model) applyWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.probeModal = m.probeModal.SetHeight(msg.Height)
+	// The probes modal budgets its rows from the same effective viewport View
+	// renders into, so its scroll offset matches the rows actually drawn.
+	width, height := common.EffectiveViewport(msg.Width, msg.Height)
+	m.probeModal = m.probeModal.SetSize(width, height)
+	// The filter and record modals fit their text input to the width View
+	// draws them at, so typing scrolls the input with that width (task rz2).
+	m.filterModal = m.filterModal.Resize(width)
+	m.recordModal = m.recordModal.Resize(width)
 	next, cmd := m.updateActiveModel(msg)
 	return next, cmd, true
 }
@@ -687,6 +740,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	msg = normalizedMsg
+
+	// Mouse input is positional: it only means something to what is drawn
+	// under the pointer. While an overlay, modal or full-screen view covers
+	// the dashboard, a click would otherwise land on the tab hidden behind it
+	// (zooming the Flame tab, say) and only show up once the overlay closed.
+	if isMouseMsg(msg) && m.overlayCoversScreen() {
+		return m, nil
+	}
+
+	// A paste is typing, so it only means something to a text input that is on
+	// screen. While the shutdown or attaching screen, the error view or the
+	// help overlay covers the screens, a modal or input hidden behind must not
+	// receive it (the keys they would have got are swallowed the same way).
+	if _, isPaste := msg.(tea.PasteMsg); isPaste && m.textlessViewCovers() {
+		return m, nil
+	}
 
 	if handled, cmd := m.dashboard.HandleFlameRefreshCompletion(msg, m.canApplyFlameRefresh()); handled {
 		return m, cmd
@@ -710,15 +779,50 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Hidden completions are still consumed by their persistent dashboard owner,
 // but are discarded after releasing the matching in-flight slot.
 func (m *Model) canApplyFlameRefresh() bool {
-	return m.router.current() == ScreenDashboard &&
-		!m.quitting &&
-		!m.attaching &&
-		m.lastErr == nil &&
-		!m.helpOverlayVisible &&
-		!m.filterModal.Visible() &&
-		!m.recordModal.Visible() &&
-		!m.probeModal.Visible() &&
-		!m.exporter.Visible()
+	return m.router.current() == ScreenDashboard && !m.overlayCoversScreen()
+}
+
+// overlayCoversScreen reports whether something drawn by View replaces or
+// sits on top of the active screen, so that the screen behind it is not what
+// the user is looking at: a view that takes no text (textlessViewCovers) or a
+// modal (modalVisible). It mirrors the precedence of View, and is the single
+// place that decides which input positional events (mouse) must not reach the
+// hidden screen and when an async result may not be applied to it. Paste
+// drops on textlessViewCovers alone, from the same helper, so a new overlay
+// is added to exactly one of the two groups and both gates see it
+// (TestOverlayPredicatesCoverEveryOverlayState).
+func (m *Model) overlayCoversScreen() bool {
+	return m.textlessViewCovers() || m.modalVisible()
+}
+
+// textlessViewCovers reports whether the shutdown or attaching screen, the
+// full-screen error view or the help overlay is drawn. None of them has a text
+// input; they consume keys themselves (Update gives them precedence), so a
+// paste, which is a single message instead of keys, must be dropped rather
+// than reach a modal or input hiding underneath.
+func (m *Model) textlessViewCovers() bool {
+	return m.quitting || m.attaching || m.lastErr != nil || m.helpOverlayVisible
+}
+
+// modalVisible reports whether the filter, record, probe or export modal is
+// open. Modals own keys and pastes themselves, so a paste is not dropped for
+// them, but the positional events and async results still must not reach
+// the dashboard behind.
+func (m *Model) modalVisible() bool {
+	return m.filterModal.Visible() ||
+		m.recordModal.Visible() ||
+		m.probeModal.Visible() ||
+		m.exporter.Visible()
+}
+
+// isMouseMsg reports whether msg is any pointer event: click, release,
+// motion or wheel.
+func isMouseMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg, tea.MouseWheelMsg:
+		return true
+	}
+	return false
 }
 
 // dispatchTypedMsg handles all typed message cases that require no modal check.
@@ -735,6 +839,8 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m.applyWindowSize(tea.WindowSizeMsg(msg))
+	case signalQuitMsg:
+		return m.handleSignalQuit()
 	case tea.BackgroundColorMsg:
 		m.applyTheme(msg.IsDark())
 		return m, nil, true
@@ -753,7 +859,7 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case tea.KeyPressMsg:
 		if m.quitting {
-			return m, nil, true
+			return m.handleKeyWhileShuttingDown(msg)
 		}
 		if next, cmd, handled := m.handleGlobalKeyPress(msg); handled {
 			return next, cmd, true
@@ -766,7 +872,24 @@ func (m *Model) dispatchTypedMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 // dispatchAppMsg handles application-level message types (export, probe, trace,
 // filter) that are not tea framework messages.
 // It is called after dispatchTypedMsg returns unhandled for non-framework types.
+// The work is split by area so each switch stays small: export and probe/PID
+// selection messages first, then trace-lifecycle and global-filter messages.
 func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	if next, cmd, handled := m.dispatchExportMsg(msg); handled {
+		return next, cmd, true
+	}
+	if next, cmd, handled := m.dispatchSelectionMsg(msg); handled {
+		return next, cmd, true
+	}
+	if next, cmd, handled := m.dispatchTraceMsg(msg); handled {
+		return next, cmd, true
+	}
+	return m.dispatchFilterMsg(msg)
+}
+
+// dispatchExportMsg handles the CSV export request and its completion/failure
+// results.
+func (m *Model) dispatchExportMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case tuiexport.RequestMsg:
 		// Capture the export inputs HERE, on the Update goroutine: the command
@@ -782,8 +905,25 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		var cmd tea.Cmd
 		m.exporter, cmd = m.exporter.Update(msg)
 		return m, cmd, true
+	}
+	return m, nil, false
+}
+
+// dispatchSelectionMsg handles probe/family/all-on-off toggles, family batch progress and
+// the PID/TID picker results.
+func (m *Model) dispatchSelectionMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case probes.ProbeToggledMsg:
 		next, cmd := m.handleProbeToggledMsg(msg)
+		return next, cmd, true
+	case probes.FamilyBatchRequestMsg:
+		return m, m.startFamilyBatch(msg), true
+	case probes.SetAllRequestMsg:
+		return m, m.startSetAll(msg), true
+	case probes.FamilyBatchProgressMsg:
+		return m, m.handleFamilyBatchProgress(msg), true
+	case probes.FamilyToggledMsg:
+		next, cmd := m.handleFamilyToggledMsg(msg)
 		return next, cmd, true
 	case PidSelectedMsg:
 		next, cmd := m.handlePidSelected(msg)
@@ -791,9 +931,26 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case TidSelectedMsg:
 		next, cmd := m.handleTidSelected(msg)
 		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+// dispatchTraceMsg handles the trace-session lifecycle: initial start, the
+// session-tagged start/error results, and shutdown progress.
+func (m *Model) dispatchTraceMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case initialTraceStartMsg:
 		next, cmd := m.handleInitialTraceStart()
 		return next, cmd, true
+	case traceSessionResultMsg:
+		// A result of a session the lifecycle has since stopped or replaced
+		// must not touch the model: a stale TracingStartedMsg would end the
+		// new session's attaching state early and a stale error would show
+		// the old session's failure against the new one.
+		if !m.tracer.isCurrent(msg.session) {
+			return m, nil, true
+		}
+		return m.dispatchAppMsg(msg.result)
 	case TracingStartedMsg:
 		next, cmd := m.handleTracingStarted()
 		return next, cmd, true
@@ -808,6 +965,14 @@ func (m *Model) dispatchAppMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, tea.Quit, true
 		}
 		return m, m.tracer.waitForShutdownCmd(), true
+	}
+	return m, nil, false
+}
+
+// dispatchFilterMsg handles global-filter apply/undo requests and the
+// open-in-editor request.
+func (m *Model) dispatchFilterMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case messages.GlobalFilterRequestedMsg:
 		next, cmd := m.applyGlobalFilter(msg.Filter, msg.Action)
 		return next, cmd, true
@@ -838,16 +1003,6 @@ func (m *Model) handleFocusMsg() (tea.Model, tea.Cmd) {
 	return m, focusCmd
 }
 
-// handleProbeToggledMsg resets the dashboard aggregates after a probe toggle
-// so the new probe set is reflected immediately. The post-reset tick goes
-// through the dashboard's normal stats handling, so a failed snapshot keeps
-// the last good one exactly as a failed refresh or baseline reset does.
-func (m *Model) handleProbeToggledMsg(msg probes.ProbeToggledMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	m.probeModal, cmd = m.probeModal.Update(msg)
-	return m, tea.Batch(m.dashboard.ResetStats(), cmd)
-}
-
 // handleTracingStarted wires live sources into the dashboard once the trace
 // starter confirms the trace is running.
 func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
@@ -855,7 +1010,10 @@ func (m *Model) handleTracingStarted() (tea.Model, tea.Cmd) {
 	m.dashboard.SetStreamSource(m.runtime.eventStreamSource())
 	m.dashboard.SetLiveTrie(m.runtime.liveTrie())
 	m.dashboard.SetGlobalFilter(m.filters.current())
+	// The new session's probe manager is published now, so this also gives a
+	// family scope that was set while it attached its "not traced" hint.
 	m.syncDashboardFilterState()
+	m.rebindProbeModal()
 	width, height := common.EffectiveViewport(m.width, m.height)
 	next, sizeCmd := m.dashboard.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	m.dashboard = next.(*dashboardui.Model)
@@ -892,6 +1050,42 @@ func (m *Model) shouldRouteQuitToEsc(msg tea.KeyPressMsg) bool {
 		(m.filterModal.Visible() || m.exporter.Visible() || m.recordModal.Visible() || m.probeModal.Visible() || m.dashboard.BlocksGlobalShortcuts(msg))
 }
 
+// textInputFocused reports whether the screen or modal that currently receives
+// keys has a focused text input. Modals sit on top of the screens, so a visible
+// modal decides; otherwise the active screen does. It is only consulted for
+// keys that reach handleGlobalKeyPress, which has already dealt with the error
+// screen and the help overlay.
+func (m *Model) textInputFocused() bool {
+	switch {
+	case m.attaching:
+		return false
+	case m.filterModal.Visible():
+		return m.filterModal.TextInputFocused()
+	case m.recordModal.Visible():
+		return m.recordModal.TextInputFocused()
+	case m.probeModal.Visible():
+		return m.probeModal.TextInputFocused()
+	case m.exporter.Visible():
+		// The export option menu is a list, not a text input.
+		return false
+	}
+	switch m.router.current() {
+	case ScreenPIDPicker:
+		return m.pidPicker.TextInputFocused()
+	case ScreenDashboard:
+		return m.dashboard.TextInputFocused()
+	}
+	return false
+}
+
+// isTypingIntoTextInput reports whether msg is printable text bound for a
+// focused text input. Keys without text (ctrl+c, Esc, arrows) are never
+// typing, so the global quit/cancel handling keeps working while an input has
+// focus.
+func (m *Model) isTypingIntoTextInput(msg tea.KeyPressMsg) bool {
+	return msg.Key().Text != "" && m.textInputFocused()
+}
+
 // handleGlobalKeyPress intercepts keys that apply regardless of the active
 // screen: help overlay toggle, quit, and dashboard-level shortcuts. Returns
 // (model, cmd, handled); when handled is false the caller falls through to
@@ -910,6 +1104,13 @@ func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, b
 	}
 	if m.helpOverlayVisible {
 		return m.handleHelpOverlayKeyPress(msg)
+	}
+	if m.isTypingIntoTextInput(msg) {
+		// A focused text input owns every printable key: q and H are letters
+		// of a process name, filename or search term there, not the quit and
+		// help shortcuts. ctrl+c and Esc carry no text, so they still take
+		// the paths below.
+		return m, nil, false
 	}
 	if m.shouldCancelPickerToDashboard(msg) {
 		next, cmd := m.cancelPickerToDashboard()
@@ -948,7 +1149,7 @@ func (m *Model) handleQuitKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 		return m.quitWithBestEffortCleanup()
 	}
 	if m.canHandleDashboardShortcut(msg) {
-		if err := m.stopRecording(); err != nil {
+		if err := m.stopRecordingAtQuit(); err != nil {
 			m.setError(err, errorScreenRecoverable)
 			return m, nil, true
 		}
@@ -1002,17 +1203,39 @@ func (m *Model) dismissRecoverableError() (tea.Model, tea.Cmd, bool) {
 // quitFromErrorScreen leaves the full-screen error view. It performs the same
 // cleanup as the dashboard quit path - stop the recorder, cancel the trace
 // context - but treats the recorder result as best effort: the dashboard path
-// turns a recorderStop failure into m.lastErr and returns *without* quitting,
-// and doing that here would swallow the key for a second error the user is
-// already looking at. m.lastErr is left untouched so the displayed error is
-// the one runProgram reports to the caller on exit.
+// turns a recorderFinalise failure (a Stop error, or the unreported failure of
+// a recording that aborted on its own) into an error screen and returns
+// *without* quitting, and doing that here would swallow the key for a second
+// error the user is already looking at. The displayed error stays in
+// m.lastErr, which runProgram reports to the caller on exit; a recorder
+// failure is joined to it rather than dropped (see quitWithBestEffortCleanup).
 func (m *Model) quitFromErrorScreen() (tea.Model, tea.Cmd, bool) {
 	return m.quitWithBestEffortCleanup()
 }
 
+// quitWithBestEffortCleanup stops the recorder and begins the shutdown no
+// matter what the recorder says. Stop marks the failure it returns as reported
+// (parquet.Recorder.TakeFailure will not hand it out again), so ignoring it
+// here would make the lost recording vanish without a trace: no stream row
+// (the trace is ending), no record modal, and the post-run safety net sees an
+// inactive recorder. The failure is therefore kept in m.lastErr, joined to
+// whatever the screen already shows, and leaves the program through
+// runProgram like the signal quit's does.
 func (m *Model) quitWithBestEffortCleanup() (tea.Model, tea.Cmd, bool) {
-	_ = m.stopRecording()
+	m.keepRecordingStopFailure(m.stopRecordingAtQuit())
 	return m.beginShutdown()
+}
+
+// keepRecordingStopFailure joins a recorder Stop failure (nil is a no-op) to
+// m.lastErr without replacing the error already displayed. The process is
+// leaving, so unlike the dashboard 'q' it cannot stay on an error screen; the
+// recording the user asked for is lost, so the error must reach the exit
+// status and stderr instead. Shared by the quit paths that do not stop on a
+// failing recorder.
+func (m *Model) keepRecordingStopFailure(err error) {
+	if err != nil {
+		m.lastErr = errors.Join(m.lastErr, fmt.Errorf("finalising Parquet recording: %w", err))
+	}
 }
 
 func (m *Model) beginShutdown() (tea.Model, tea.Cmd, bool) {
@@ -1062,15 +1285,15 @@ func (m *Model) routeQuitAsEsc() (tea.Model, tea.Cmd, bool) {
 // must verify canHandleDashboardShortcut before calling this method.
 func (m *Model) handleDashboardShortcutKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.exportEnabled && key.Matches(msg, m.keys.Export) {
-		m.exporter = m.exporter.Open()
+		m.exporter = m.exporter.OpenFor(m.dashboard.StreamPaused())
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Record) {
 		return m.handleRecordKey()
 	}
 	if key.Matches(msg, m.keys.Probes) {
-		_, height := common.EffectiveViewport(m.width, m.height)
-		m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(height).Open()
+		width, height := common.EffectiveViewport(m.width, m.height)
+		m.probeModal = m.newProbeModal().SetSize(width, height).Open()
 		return m, nil, true
 	}
 	if key.Matches(msg, m.keys.Filter) {
@@ -1114,7 +1337,24 @@ func (m *Model) handleRecordKey() (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	m.recordModal = m.recordModal.Open(defaultParquetRecordingFilename())
+	m.recordModal = m.recordModal.SetError(takePreviousRecordingFailure(m.runtime.Recorder()))
 	return m, nil, true
+}
+
+// takePreviousRecordingFailure claims a failure of the previous recording
+// that nobody has reported yet, wrapped for display, or returns nil. The
+// event loop normally reports such a failure in the stream on the next
+// event, but Start discards an untaken failure, so a recording started
+// before any further event would otherwise lose it silently. TakeFailure is
+// exclusive, so the failure is shown here or in the stream, never both.
+func takePreviousRecordingFailure(recorder runtime.RecordingController) error {
+	if recorder == nil {
+		return nil
+	}
+	if err := recorder.TakeFailure(); err != nil {
+		return fmt.Errorf("previous recording failed: %w", err)
+	}
+	return nil
 }
 
 // cycleAutoResetInterval advances the dashboard's auto-reset cadence to
@@ -1127,8 +1367,18 @@ func (m *Model) cycleAutoResetInterval() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateDashboardForModal keeps the dashboard behind a modal alive by
+// forwarding the non-key messages it needs (ticks, spinner and async results).
+// Keys and pastes belong to the modal. Mouse events never get here: Update
+// drops them while any modal is visible (overlayCoversScreen), so a click
+// cannot act on the tab the modal covers. A paste does get here (the modal
+// dispatch runs for every message) and is reachable with a focused dashboard
+// input behind the modal, so the guard is load-bearing, not just defence
+// (TestPasteWhileModalCoversFocusedDashboardInputIsNotForwarded).
 func (m *Model) updateDashboardForModal(msg tea.Msg) (*Model, tea.Cmd) {
-	if _, isKey := msg.(tea.KeyPressMsg); isKey || m.router.current() != ScreenDashboard {
+	_, isKey := msg.(tea.KeyPressMsg)
+	_, isPaste := msg.(tea.PasteMsg)
+	if isKey || isPaste || m.router.current() != ScreenDashboard {
 		return m, nil
 	}
 	next, cmd := m.dashboard.Update(msg)
@@ -1171,7 +1421,7 @@ func (m *Model) updateRecordModal(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !submit {
 		return m, dashboardCmd
 	}
-	if err := recorderStart(m.runtime.Recorder(), path, m.syncDashboardFilterState); err != nil {
+	if err := m.startRecording(path); err != nil {
 		m.recordModal = m.recordModal.SetError(err)
 		return m, dashboardCmd
 	}
@@ -1287,9 +1537,10 @@ func (m *Model) enterPicker(picker pidpicker.Model) (tea.Model, tea.Cmd) {
 	m.attaching = false
 	m.clearError()
 	m.exporter = tuiexport.NewModel()
-	m.probeModal = probes.NewModel(m.runtime.currentProbeManager()).SetDarkMode(m.isDark).SetHeight(m.height)
-	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark)
-	m.recordModal = newRecordingModal().SetDarkMode(m.isDark)
+	m.probeModal = m.newProbeModal().SetSize(common.EffectiveViewport(m.width, m.height))
+	width, _ := common.EffectiveViewport(m.width, m.height)
+	m.filterModal = tracefilterui.NewModel().SetDarkMode(m.isDark).Resize(width)
+	m.recordModal = newRecordingModal().SetDarkMode(m.isDark).Resize(width)
 	var sizeCmd tea.Cmd
 	m.pidPicker, sizeCmd = applyWindowSizeToPicker(picker.SetDarkMode(m.isDark), m.width, m.height)
 	return m, tea.Batch(sizeCmd, m.pidPicker.Init())
@@ -1327,7 +1578,8 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 //
 // It does not stop the previous session itself: beginTraceCmd owns that
 // (traceLifecycle.beginCmd cancels any running session before starting the
-// next), so at most one session is ever live. Callers that must quiesce the
+// next), so at most one session is ever current (the cancelled one may still
+// be tearing down, see traceLifecycle.beginCmd). Callers that must quiesce the
 // old session before touching state it feeds - selectProcess before
 // resetStreamBuffer, the filter fallback before PrepareForTraceRestart - stop
 // it explicitly first, and beginCmd's stop is then a no-op. With no tracer
@@ -1344,8 +1596,19 @@ func (m *Model) restartTrace() tea.Cmd {
 // session's cancel func on the tracer, so it must only be called from Update
 // (never from Init, which stays side-effect free) on the *Model Bubble Tea
 // holds, so the cancel func survives to the next restart or quit.
+//
+// A probes modal left open across the session change follows it
+// (rebindProbeModal): it would otherwise keep the old session's probe manager
+// and session tag, so its toggles would hit a closed manager and their
+// outcome would be dropped as stale. Right after the restart the new session
+// has no manager yet, so the modal lists and toggles nothing until
+// handleTracingStarted binds it to the manager the session published. No key
+// path restarts while the modal is open today; this keeps it correct if one
+// ever does.
 func (m *Model) beginTraceCmd() tea.Cmd {
-	return m.tracer.beginCmd(m.runtime, m.filters.current())
+	cmd := m.tracer.beginCmd(m.runtime, m.filters.current())
+	m.rebindProbeModal()
+	return cmd
 }
 
 // filterFromConfig delegates to flags.BuildTraceFilter to resolve the active
@@ -1378,13 +1641,16 @@ func (m *Model) setGlobalFilter(filter globalfilter.Filter) {
 }
 
 // syncDashboardFilterState pushes all filter-related state (PID, global
-// filter, label stack, recording status) into the dashboard model so the
-// status bar stays consistent.
+// filter, label stack, recording status, family "not traced" hint) into the
+// dashboard model so the status bar stays consistent. Every change of the
+// filter on screen comes through here, which is what keeps the hint in step
+// with the family scope (undo, PID/TID pick, pushed filters alike).
 func (m *Model) syncDashboardFilterState() {
 	m.dashboard.SetPidFilter(m.proc.pid)
 	m.dashboard.SetGlobalFilter(m.filters.current())
 	m.dashboard.SetFilterStack(m.filters.labelStack())
 	m.dashboard.SetRecordingStatus(recorderStatus(m.runtime.Recorder()))
+	m.refreshFamilyHint()
 }
 
 // refuseUnusableFilter reports whether filter is one the trace pipeline cannot
@@ -1403,7 +1669,9 @@ func (m *Model) syncDashboardFilterState() {
 // the only writer - undoGlobalFilter and setProcessFilters clear it too,
 // because both change the filter on screen without going through here - but it
 // is the only one that ever sets a reason, and between the three the notice
-// cannot outlive the filter it describes.
+// cannot outlive the filter it describes. (The family "not traced" hint is a
+// separate dashboard slot that refreshFamilyHint owns; it never touches this
+// notice.)
 func (m *Model) refuseUnusableFilter(filter globalfilter.Filter) bool {
 	err := filter.ValidateTracepointFields()
 	if err == nil {
@@ -1457,7 +1725,6 @@ func (m *Model) reapplyActiveFilter(changed bool) (tea.Model, tea.Cmd) {
 // changes the active filter drives the pipeline - and resets the aggregates -
 // identically.
 func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model, tea.Cmd) {
-	m.runtime.advanceFilterEpoch()
 	// Try the in-place swap first: hand the new filter to the running
 	// eventloop via the registered setter. The BPF probes stay attached, so
 	// the user no longer sees the multi-second 'Attaching tracepoints'
@@ -1469,9 +1736,12 @@ func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model,
 
 	// Fallback: no trace currently running (e.g. first invocation), so
 	// restart the pipeline so the new filter takes effect on the next
-	// trace start. The old session is cancelled before its aggregates are
-	// cleared, as before; beginTraceCmd's stop is then a no-op.
+	// trace start. The old session is stopped - which also retires its
+	// bindings view, so none of its rows is recorded from here on - before
+	// the epoch advances and its aggregates are cleared; beginTraceCmd's
+	// stop is then a no-op.
 	m.tracer.stop()
+	m.runtime.advanceFilterEpoch()
 	m.dashboard.PrepareForTraceRestart()
 	return m, m.restartTrace()
 }
@@ -1523,13 +1793,20 @@ func (m *Model) undoGlobalFilter() (tea.Model, tea.Cmd) {
 // startRecording opens the parquet recorder at path and syncs dashboard status.
 // Tests and the Model's record-modal handler call this method.
 func (m *Model) startRecording(path string) error {
-	return recorderStart(m.runtime.Recorder(), path, m.syncDashboardFilterState)
+	return recorderStart(m.runtime.Recorder(), path, m.runtime, m.syncDashboardFilterState)
 }
 
 // stopRecording closes an active parquet recorder and syncs dashboard status.
 // Tests and the quit/reselect paths call this method.
 func (m *Model) stopRecording() error {
-	return recorderStop(m.runtime.Recorder(), m.syncDashboardFilterState)
+	return recorderStop(m.runtime.Recorder(), m.runtime, m.syncDashboardFilterState)
+}
+
+// stopRecordingAtQuit is stopRecording for the quit paths: it also reports a
+// failure of an already dead recording that nothing has shown yet (see
+// recorderFinalise).
+func (m *Model) stopRecordingAtQuit() error {
+	return recorderStopAtQuit(m.runtime.Recorder(), m.runtime, m.syncDashboardFilterState)
 }
 
 func (m *Model) applyTheme(isDark bool) {
@@ -1579,13 +1856,7 @@ func (m *Model) View() tea.View {
 	}
 
 	if m.lastErr != nil {
-		theme := common.Current()
-		hint := "q / esc  quit"
-		if m.errorKind == errorScreenRecoverable {
-			hint = "esc  back  •  q  quit"
-		}
-		body := theme.ErrorStyle.Render(m.lastErr.Error()) + "\n\n" + theme.HelpBarStyle.Render(hint)
-		return altScreenView(placeToViewport(width, height, theme.ScreenStyle.Render(body)), title)
+		return altScreenView(m.errorScreenView(width, height), title)
 	}
 	if m.helpOverlayVisible {
 		helpView := renderGlobalHelpOverlay(width, height, m.helpSections())
@@ -1616,17 +1887,28 @@ func (m *Model) shutdownView() string {
 	return fmt.Sprintf("Detaching BPF probe pairs... %d/%d\n[%s]", completed, m.shutdown.Total, bar)
 }
 
-// viewPickerScreen renders the PID picker screen with optional export overlay.
+// viewPickerScreen renders the PID picker screen with optional export overlay,
+// drawn over the picker (overlayExportModal) so the frame keeps the
+// terminal's size.
 func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 	base := m.pidPicker.View().Content
 	if m.exporter.Visible() {
-		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
+		return altScreenView(overlayExportModal(m.exporter, base, width, height), title)
 	}
 	return altScreenView(placeToViewport(width, height, base), title)
 }
 
 // viewDashboardScreen renders the dashboard screen with the appropriate modal
-// overlay (filter, record, probes, export) if one is active.
+// overlay (filter, record, probes, export) if one is active. The filter,
+// record and probes modals replace the dashboard: each View returns a frame
+// exactly width x height, its box shed to fit or drawn bare below the most
+// compact box (common.PlaceModal, task rz2; placeToViewport only pads, so
+// the box used to come out taller and wider than a small terminal). They
+// stay full-screen rather than drawn over the dashboard because at 80x24 the
+// filter box takes 23 rows and the probes box all 24, so an overlay would
+// show next to nothing of it. The export modal is drawn over the dashboard
+// (overlayExportModal), keeping the tab bar and the status line in view
+// where the terminal has the rows (task ns2).
 func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {
@@ -1639,7 +1921,7 @@ func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 		return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 	}
 	if m.exporter.Visible() {
-		return altScreenView(placeToViewport(width, height, m.exporter.View(width, height)+"\n"+base), title)
+		return altScreenView(overlayExportModal(m.exporter, base, width, height), title)
 	}
 	return altScreenView(placeToViewport(width, height, base), title)
 }
@@ -1716,6 +1998,10 @@ func (s lateBoundDashboardSource) Reset() {
 	source.Reset()
 }
 
+// placeToViewport pads content to a width x height frame anchored top-left.
+// It only pads: lipgloss.Place returns content taller or wider than the frame
+// unchanged, so a view must fit the terminal itself (the dashboard's row
+// budget, overlayExportModal's canvas).
 func placeToViewport(width, height int, content string) string {
 	if width <= 0 || height <= 0 {
 		return content
@@ -1729,9 +2015,10 @@ func placeToViewport(width, height int, content string) string {
 // drifts out of sync with the interface it claims to satisfy.
 
 var (
-	// *runtimeBindings must satisfy the full TUI runtime contract, which
-	// composes RuntimePublisher (write side) and RuntimeState (read side).
-	_ runtime.TraceRuntimeBindings = (*runtimeBindings)(nil)
+	// *runtimeBindings provides the read side of the runtime contract. The
+	// write side (RuntimePublisher) is only provided per session, by
+	// traceSessionBindings (asserted in tracesession.go).
+	_ runtime.RuntimeState = (*runtimeBindings)(nil)
 
 	// lateBoundDashboardSource must satisfy the resettable snapshot-source
 	// contract used by the dashboard model. It wraps the injected stats engine
