@@ -136,7 +136,8 @@ func TestFirstRunWithoutKernelLossStopsAtAnError(t *testing.T) {
 	}
 }
 
-// recordingVerdict is a foldVerdict that records how the test ended.
+// recordingVerdict is a foldVerdict (and rowVerdict) that records how the
+// test ended.
 type recordingVerdict struct {
 	skipped, failed string
 }
@@ -149,6 +150,7 @@ func (v *recordingVerdict) Skipf(format string, args ...any) {
 func (v *recordingVerdict) Fatalf(format string, args ...any) {
 	v.failed = fmt.Sprintf(format, args...)
 }
+func (v *recordingVerdict) Logf(string, ...any) {}
 
 // TestGiveUpOnFoldsSkipsVisiblyOrFailsOnRequest: by default a fold test
 // whose runs all lost records skips, and prints the marked line mage

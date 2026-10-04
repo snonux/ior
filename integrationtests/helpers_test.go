@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"testing"
 
+	"ior/internal/flamegraph"
 	iorparquet "ior/internal/parquet"
 )
 
@@ -59,10 +60,33 @@ func runScenarioResult(t *testing.T, scenario string, expected []ExpectedEvent) 
 	return runScenarioResultWithIorArgs(t, scenario, expected, nil)
 }
 
+// runScenarioResultWithIorArgs runs scenario once in flamegraph mode and
+// asserts the expected events. A run that lacks events its kernel-side loss
+// can explain is run again (judgedEventRun; task a33), and the result and
+// pid returned are those of the run the assertion was made on, which is
+// remembered so that a later AssertEventsPresent on it is treated the same.
 func runScenarioResultWithIorArgs(t *testing.T, scenario string, expected []ExpectedEvent, extraIorArgs []string) (TestResult, int) {
 	t.Helper()
 	enableParallelIfRequested(t)
+	again := func() judgedRun[flamegraph.IterRecord] {
+		return flamegraphScenarioRun(t, scenario, extraIorArgs)
+	}
+	first := again()
+	t.Cleanup(eventRunSources.remember(first, again))
+	run := judgedEventRun(t, first.rows, expected)
+	t.Cleanup(eventRunSources.remember(run, again))
+	result := TestResult{Records: run.rows}
+	AssertEventsPresent(t, result, expected)
+	return result, run.pid
+}
+
+// flamegraphScenarioRun runs scenario once in flamegraph mode, with a
+// harness of its own, and fails the test when the run fails or records an
+// event of another process or comm.
+func flamegraphScenarioRun(t *testing.T, scenario string, extraIorArgs []string) judgedRun[flamegraph.IterRecord] {
+	t.Helper()
 	h := newTestHarness(t)
+	h.IorOutput = &OutputCapture{}
 	result, pid, err := h.RunWithIorArgs(scenario, defaultDuration, extraIorArgs)
 	if err != nil {
 		t.Fatalf("run scenario %s: %v", scenario, err)
@@ -70,8 +94,7 @@ func runScenarioResultWithIorArgs(t *testing.T, scenario string, expected []Expe
 
 	AssertNoUnexpectedPID(t, result, pid)
 	AssertNoUnexpectedComm(t, result, "ioworkload")
-	AssertEventsPresent(t, result, expected)
-	return result, pid
+	return judgedRun[flamegraph.IterRecord]{rows: result.Records, logged: h.IorOutput.String(), pid: pid}
 }
 
 func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
@@ -81,10 +104,21 @@ func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIo
 
 // runParquetScenarioRowsAllowingComms is runParquetScenarioRows for scenarios
 // whose threads rename themselves: a row may carry any of comms (or none).
+//
+// The run is remembered (parquetRunSources), so an AssertRowsPresent on the
+// returned rows that finds rows missing can ask whether the run's
+// kernel-side loss explains them, and run the scenario again (task a33). The
+// rows and the pid returned stay those of the first run: a rerun serves the
+// one assertion that asked for it.
 func runParquetScenarioRowsAllowingComms(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string, comms ...string) ([]iorparquet.Record, int) {
 	t.Helper()
 	enableParallelIfRequested(t)
-	run := parquetScenarioRun(t, scenario, duration, extraIorArgs, workloadEnv, comms...)
+	again := func() judgedRun[iorparquet.Record] {
+		run := parquetScenarioRun(t, scenario, duration, extraIorArgs, workloadEnv, comms...)
+		return judgedRun[iorparquet.Record]{rows: run.rows, logged: run.logged, pid: run.pid}
+	}
+	run := again()
+	t.Cleanup(parquetRunSources.remember(run, again))
 	return run.rows, run.pid
 }
 

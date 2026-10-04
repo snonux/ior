@@ -41,8 +41,10 @@ func UnexercisedSkipSummary(output string) []string {
 
 // SkipSummary returns the lines `mage integrationTest` prints after the run
 // about every test that skipped for a reason the host decides: the fold
-// tests (FoldSkipSummary), then the tests whose case was not exercised
+// tests (FoldSkipSummary), then the row tests that could not be judged
+// (RowSkipSummary), then the tests whose case was not exercised
 // (UnexercisedSkipSummary). Nothing when none skipped.
 func SkipSummary(output string) []string {
-	return append(FoldSkipSummary(output), UnexercisedSkipSummary(output)...)
+	lines := append(FoldSkipSummary(output), RowSkipSummary(output)...)
+	return append(lines, UnexercisedSkipSummary(output)...)
 }

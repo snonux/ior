@@ -139,10 +139,22 @@ its environment through `sudo -E`) makes it FAIL instead - use it where the
 folds must be shown. Since the binary runs without `-test.v`, which prints no
 skip, a skipping fold test also prints one `ior-integration: fold test
 skipped: ...` line to stdout, and `mage integrationTest` ends with a count and
-list of them (`gatecmd.SkipSummary`, which is `FoldSkipSummary` plus the list
+list of them (`gatecmd.SkipSummary`, which is `FoldSkipSummary` plus the lists
 below; nothing when none skipped). One skip is a busy moment; most of them
 mean a host whose real-time tasks preempt BPF programs all the time, where the
 folds went untested.
+
+**Single-row presence tests that cannot be judged** (task a33):
+`AssertRowsPresent` / `AssertEventsPresent` (`integrationtests/expectations.go`)
+retry a remembered scenario run when the rows they ask for are missing and the
+run's kernel-side loss (ring drops or skipped probe runs) can explain the
+shortfall (`integrationtests/rowpresence.go`, up to three attempts). A wrong
+row (the call was recorded but does not match) or a shortfall larger than the
+reported loss still fails hard, as does a missing row with zero loss. When
+every run is unexplained the same way, the test SKIPS and prints
+`ior-integration: row test skipped: ...` (`GiveUpOnRows`);
+`IOR_REQUIRE_ROWS=1` makes it FAIL instead. `gatecmd.SkipSummary` lists those
+under `RowSkipSummary`, between the fold and unexercised sections.
 
 **Tests whose case was not exercised** use the same channel: a test that can
 judge a run but cannot make it take the path it is there for (the lagging stop
@@ -154,6 +166,7 @@ there would claim a check that never ran.
 
 ```bash
 IOR_REQUIRE_FOLDS=1 mage integrationTest
+IOR_REQUIRE_ROWS=1 mage integrationTest
 ```
 
 **Opt-in stress signals**: `IOR_STRESS_TEST=1` turns on the two timing/throughput

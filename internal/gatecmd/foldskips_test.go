@@ -40,7 +40,8 @@ func TestFoldSkipSummaryListsTheMarkedLines(t *testing.T) {
 }
 
 // A test whose case was not exercised is listed under its own heading, after
-// the fold tests, and SkipSummary is both lists.
+// the fold tests (and after any row-presence skips; see
+// TestRowSkipSummaryListsTheMarkedLines).
 func TestSkipSummaryListsUnexercisedTestsBehindTheFoldTests(t *testing.T) {
 	output := UnexercisedSkipMarker + "TestStop: no lagging stop in 5 runs\n" +
 		"    stop_test.go:1: " + UnexercisedSkipMarker + "TestX: quoted\n" +
@@ -58,5 +59,37 @@ func TestSkipSummaryListsUnexercisedTestsBehindTheFoldTests(t *testing.T) {
 	}
 	if got := SkipSummary("ok\nPASS\n"); len(got) != 0 {
 		t.Fatalf("SkipSummary without a skip = %q, want nothing", got)
+	}
+}
+
+// TestRowSkipSummaryListsTheMarkedLines: a row test's skip is listed with
+// the way to make it fail, between the fold tests and the unexercised ones,
+// and only IOR_REQUIRE_ROWS=1 asks for the failure.
+func TestRowSkipSummaryListsTheMarkedLines(t *testing.T) {
+	output := UnexercisedSkipMarker + "TestStop: no lagging stop\n" +
+		RowSkipMarker + "TestCloseRangeEmpty: 3 runs\n" +
+		"    close_test.go:1: " + RowSkipMarker + "TestX: quoted\n" +
+		FoldSkipMarker + "TestA: scenario a: lost\nok\n"
+	if got, want := SkippedRowTests(output), []string{"TestCloseRangeEmpty: 3 runs"}; !slices.Equal(got, want) {
+		t.Fatalf("SkippedRowTests = %q, want %q", got, want)
+	}
+	summary := SkipSummary(output)
+	if len(summary) != 6 || !strings.HasPrefix(summary[2], "1 row test(s) SKIPPED") ||
+		!strings.Contains(summary[2], RequireRowsEnv+"=1") || summary[3] != "  TestCloseRangeEmpty: 3 runs" {
+		t.Fatalf("SkipSummary = %q", summary)
+	}
+	if got := RowSkipSummary("ok\nPASS\n"); got != nil {
+		t.Fatalf("RowSkipSummary without a skip = %q, want nothing", got)
+	}
+	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+		getenv := func(name string) string {
+			if name != RequireRowsEnv {
+				t.Fatalf("getenv(%q), want %q", name, RequireRowsEnv)
+			}
+			return value
+		}
+		if got := RowsRequired(getenv); got != want {
+			t.Errorf("RowsRequired with %s=%q = %v, want %v", RequireRowsEnv, value, got, want)
+		}
 	}
 }
