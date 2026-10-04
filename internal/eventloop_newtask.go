@@ -197,11 +197,11 @@ func (e *eventLoop) retireRecycledTid(tid uint32) {
 	e.ringState().dropThread(tid)
 }
 
-// retireRecycledPid drops the handle names scoped to the pid of a new
-// PROCESS (handleTracker.dropScoped). A new process's tgid is its own fresh
-// tid, so names under it can only be a previous owner's whose group-dead
-// exit record was lost; with that record they went in dropProcessState. A
-// new thread joins a live process, whose names are its own to keep. The fd
+// retireRecycledPid drops the scoped handle names and brk baseline of a new
+// PROCESS. A new process's tgid is its own fresh tid, so state under it can
+// only be a previous owner's whose group-dead exit record was lost; with
+// that record it went in dropProcessState. A new thread joins a live
+// process, whose names and shared break are its own to keep. The fd
 // table's leftovers of the same kind are cleared by inheritFdTable. The
 // child gets none of its creator's scoped names: it is another process, and
 // falls back as one (a fork does inherit the working directory, so handing
@@ -216,6 +216,7 @@ func (e *eventLoop) retireRecycledPid(ev *types.TaskNewtaskEvent) {
 		return
 	}
 	e.handleState().dropScoped(ev.Pid)
+	e.brkState.forget(ev.Pid)
 }
 
 // inheritFdTable models what the kernel does with the descriptor table of a new

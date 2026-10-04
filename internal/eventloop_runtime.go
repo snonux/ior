@@ -467,6 +467,7 @@ func (e *eventLoop) processRawEvent(raw []byte, ch chan<- *event.Pair) {
 		return
 	}
 	e.applyPendingCommRefresh()
+	e.applyRingProbeChanges()
 	e.numTracepoints++
 	evType := types.EventType(raw[0])
 	handler, ok := e.rawHandlers[evType]

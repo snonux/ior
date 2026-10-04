@@ -88,7 +88,10 @@ import (
 //   - the io_uring_register probes are detached while the trace runs (the
 //     TUI's probe toggle), or were never selected: registrations are not
 //     seen. Never selected means an empty mirror and the old label; detached
-//     midway leaves the tables as they were. Not handled;
+//     midway clears every table on the loop goroutine once the manager
+//     reports the completed detach (ringProbeWatch).
+//     Records queued before the gap or captured during attachment cannot
+//     rebuild them; only registrations newer than the completed attach can;
 //   - -tid traces one thread: another thread's table is not seen, and none
 //     of its rows are either.
 //
@@ -221,7 +224,7 @@ func (t *ringTracker) dropAll() {
 func (e *eventLoop) handleRingFdsEvent(ev *types.RingFdsEvent) {
 	defer ev.Recycle()
 	rings := e.ringState()
-	if !ringFdsRecordUsable(ev) || e.recordMayPredateDrop(ev.Time) {
+	if !ringFdsRecordUsable(ev) || e.recordMayPredateDrop(ev.Time) || e.ringRecordAcrossProbeChange(ev.Time) {
 		rings.dropThread(ev.Tid)
 		return
 	}
@@ -346,6 +349,7 @@ func (t *fdTracker) cachesExactly(fd int32, pid uint32, f file.File) bool {
 // the one call whose exit record has the releasing record's time; any other
 // use of the index finds the slot empty and clears it.
 func (e *eventLoop) resolveRegisteredRing(tid, pid uint32, index int32, exitTime uint64) file.File {
+	e.applyRingProbeChanges()
 	if e.rings == nil || index < 0 || index >= types.IOR_RING_FDS_MAX {
 		return file.NewRegisteredRing(index)
 	}

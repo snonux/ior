@@ -573,7 +573,9 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     them as `SyscallAggregate.UntimedCount` and keeps them out of min/max,
     the latency means and the latency sparkline. The kernel stores `count`
     last, and the consumer tolerates torn per-CPU reads (histogram ahead of
-    count counts as timed; a slot's first timed sample read before its
+    count is deferred until the actual count arrives, never synthesized from
+    the histogram, so the final settled drain retains the count needed to
+    carry late latency/errors; a slot's first timed sample read before its
     min/max landed is deferred to the next drain instead of seeding a 0
     minimum; a baseline only advances with a new count). This relies on the
     copy reading `count` first, so `count` must stay the first field of
@@ -709,7 +711,7 @@ thread and write its TID to `$IOR_WORKLOAD_TID_FILE`, which the test's
     drain (clearing its handle and source), so a SetFilter that races the stop
     swaps the filter without draining the possibly closed map.
 - **Additional metric dimensions**:
-  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`. What feeds it (task hq2, `internal/eventloop_addrspace.go`): successful `mmap`/`munmap`/`mremap` (larger of old/new size) and `brk`, each rounded up to the host page size because the kernel maps whole pages (`mmap(len=1)` maps 4096 bytes). `brk` is the movement of the per-process break since the previous `brk` (`brkTracker`, evicted on exec and group-dead exit; the first sighting and `brk(0)` only baseline). `msync`/`mprotect`/`madvise`/`mlock*` leave the extent unchanged and report 0. Huge-page mappings stay at base-page granularity. Accepted approximation: `brkTracker` keys by tgid, not by address space, so a `CLONE_VM`/vfork child (own tgid, shared mm) baselines its first `brk` to 0 and the parent's stale baseline later attributes the shared heap's movement to itself; exec clears the baseline, which covers the common vfork-then-exec case.
+  - Address-space extent accumulator: `TotalAddressSpaceBytes` and `AddressSpaceBytesPerSec` in `statsengine.Snapshot`. What feeds it (task hq2, `internal/eventloop_addrspace.go`): successful `mmap`/`munmap`/`mremap` (larger of old/new size) and `brk`, each rounded up to the host page size because the kernel maps whole pages (`mmap(len=1)` maps 4096 bytes). `brk` is the movement of the per-process break since the previous `brk` (`brkTracker`, evicted on exec, group-dead exit, and `task_newtask` proving a new process lifetime; thread births and malformed same-creator process records preserve it; the first sighting and `brk(0)` only baseline). `msync`/`mprotect`/`madvise`/`mlock*` leave the extent unchanged and report 0. Huge-page mappings stay at base-page granularity. Accepted approximation: `brkTracker` keys by tgid, not by address space, so a `CLONE_VM`/vfork child (own tgid, shared mm) baselines its first `brk` to 0 and the parent's stale baseline later attributes the shared heap's movement to itself; exec clears the baseline, which covers the common vfork-then-exec case.
   - Per-event stream/export field `requested_sleep_ns` (from sleep tracepoints): `-1` when unknown (null/unreadable or kernel-invalid timespec, absolute `TIMER_ABSTIME` sleeps); valid requests whose nanoseconds are unrepresentable in `__s64` saturate to `S64_MAX` (`generateExtraSleep`). The kernel similarly clamps to `KTIME_MAX`, but from `tv_sec >= KTIME_SEC_MAX` regardless of `tv_nsec`, so values within ~1s of the boundary may differ.
 - **The trace-started signal is a promise, not a progress report**: in TUI mode
   `setupTraceInfra` closing the `started` channel is what makes

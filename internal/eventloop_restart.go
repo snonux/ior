@@ -2410,6 +2410,7 @@ func (e *eventLoop) watchProbeChanges(listen func(hook func(probemanager.Change)
 	listen(e.probesChanged)
 	e.restarts.probes.seedRestartSyscall(isActive(restartSyscallProbe))
 	e.noteProbeChange(false)
+	e.ringProbes.note(e.restarts.probes.changedAt.Load())
 }
 
 // restartSyscallProbe is the name restart_syscall's probe pair has in the
@@ -2444,6 +2445,7 @@ var restartSyscallProbe = types.SYS_ENTER_RESTART_SYSCALL.Name()
 // second report of an attach that succeeded changes nothing: "may be
 // attached" stands. Reports about other syscalls leave the state alone.
 func (e *eventLoop) probesChanged(change probemanager.Change) {
+	e.noteRingProbeChange(change)
 	watch := &e.restarts.probes
 	ofRestartSyscall := change.Syscall == restartSyscallProbe
 	if change.Phase == probemanager.ChangeBegins {
@@ -2530,6 +2532,7 @@ func (e *eventLoop) noteProbeChange(restartSyscallOff bool) {
 // goroutine that changed the probe (restartProbeWatch.clearWarning). One left
 // after the loop has stopped is not shown: the run is over.
 func (e *eventLoop) probeChangeNoticed(pairs chan *event.Pair) {
+	e.applyRingProbeChanges()
 	e.notifyWarningOrLog(e.restarts.probes.takeClearWarning())
 	e.releaseRestartsBehindProbeChange(pairs)
 }

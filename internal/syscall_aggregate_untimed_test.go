@@ -145,17 +145,17 @@ func newTestAggregateConsumer(traceID uint32) (*syscallAggregateConsumer, *fakeS
 	}, fakeMap
 }
 
-// A slot read while the kernel had bumped the histogram but not yet count
-// (count is stored last) holds a completed timed invocation.
-func TestDecodeRawSyscallAggregateSlotRaisesCountToHistogramTotal(t *testing.T) {
+// A newer histogram must never spend a count whose other fields may not yet
+// have been copied. Preserve the actual count for drainRow to defer it.
+func TestDecodeRawSyscallAggregateSlotPreservesActualCount(t *testing.T) {
 	got, err := decodeRawSyscallAggregateSlot(encodeRawAggregates(t, rawSyscallAggregate{
 		Count: 2, TotalDuration: 3_000, MinDuration: 500, MaxDuration: 1_500, Histogram: [8]uint64{3},
 	}))
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
-	if got.Count != 3 || got.untimedCount() != 0 {
-		t.Fatalf("count/untimed = %d/%d, want 3/0", got.Count, got.untimedCount())
+	if got.Count != 2 || got.untimedCount() != 0 {
+		t.Fatalf("count/untimed = %d/%d, want 2/0", got.Count, got.untimedCount())
 	}
 }
 
@@ -198,7 +198,7 @@ func TestSyscallAggregateConsumerKeepsLatencyOfTornRead(t *testing.T) {
 }
 
 // Torn read with the histogram ahead of count: the invocation counts as
-// timed right away and the consistent read that follows adds nothing.
+// timed when the actual count arrives, without inventing an untimed call.
 func TestSyscallAggregateConsumerHistogramAheadIsTimed(t *testing.T) {
 	const traceID = uint32(types.SYS_ENTER_FUTEX)
 	consumer, fakeMap := newTestAggregateConsumer(traceID)
@@ -208,14 +208,14 @@ func TestSyscallAggregateConsumerHistogramAheadIsTimed(t *testing.T) {
 	rows := drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
 		Count: 1, TotalDuration: 3_000, MinDuration: 1_000, MaxDuration: 2_000, Histogram: [8]uint64{0, 2},
 	})
-	if len(rows) != 1 || rows[0].Count != 1 || rows[0].UntimedCount != 0 || rows[0].TotalLatencyNs != 2_000 {
-		t.Fatalf("rows = %+v, want one timed invocation of 2000ns", rows)
+	if len(rows) != 0 {
+		t.Fatalf("rows before count caught up = %+v, want none", rows)
 	}
 	rows = drainOne(t, consumer, fakeMap, traceID, rawSyscallAggregate{
 		Count: 2, TotalDuration: 3_000, MinDuration: 1_000, MaxDuration: 2_000, Histogram: [8]uint64{0, 2},
 	})
-	if len(rows) != 0 {
-		t.Fatalf("rows after the count caught up = %+v, want none", rows)
+	if len(rows) != 1 || rows[0].Count != 1 || rows[0].UntimedCount != 0 || rows[0].TotalLatencyNs != 2_000 {
+		t.Fatalf("rows = %+v, want one timed invocation of 2000ns", rows)
 	}
 }
 

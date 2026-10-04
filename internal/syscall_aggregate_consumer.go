@@ -131,11 +131,15 @@ func (c *syscallAggregateConsumer) Drain() ([]statsengine.SyscallAggregate, erro
 // before count (ior_update_syscall_aggregate), so a read that caught a slot
 // mid-update may already show latency or errors of an invocation whose count
 // is not visible yet. Advancing the baseline past them would drop them for
-// good; keeping it re-diffs them once their count lands.
+// good; keeping it re-diffs them once their count lands. A histogram ahead of
+// the actual count is likewise deferred. Never synthesize a count from it:
+// the copy may have read total/errors before that invocation updated them,
+// and spending its count now would leave no row to carry those fields when
+// the final settled read arrives.
 func (c *syscallAggregateConsumer) drainRow(traceID types.TraceId, raw rawSyscallAggregate) (statsengine.SyscallAggregate, bool) {
 	prev := c.last[traceID]
 	delta := raw.diff(prev)
-	if delta.Count == 0 {
+	if delta.Count == 0 || raw.timedCount() > raw.Count {
 		return statsengine.SyscallAggregate{}, false
 	}
 	c.last[traceID] = raw
@@ -198,9 +202,9 @@ func decodeRawSyscallAggregateSlot(raw []byte) (rawSyscallAggregate, error) {
 //     0 that no later row can raise. So its timed part (histogram, total,
 //     min, max) is left out of this read; count cannot include it yet
 //     either, and the next drain picks the whole invocation up.
-//   - Otherwise a histogram total above count is a completed timed
-//     invocation whose count store is pending; count is raised to it so the
-//     invocation never looks untimed.
+//   - Otherwise count stays exactly as read, even below the histogram total.
+//     drainRow defers that inconsistent value until count catches up, keeping
+//     a pending invocation to carry any latency/errors not visible yet.
 //
 // A completed invocation never records 0ns: ior_on_syscall_exit clamps its
 // aggregate duration to at least 1ns, so min and max of a settled timed slot
@@ -214,7 +218,6 @@ func (r rawSyscallAggregate) normalizeTornSlot() rawSyscallAggregate {
 		r.Histogram = [8]uint64{}
 		return r
 	}
-	r.Count = max(r.Count, timed)
 	return r
 }
 
