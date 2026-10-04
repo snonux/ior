@@ -20,14 +20,26 @@ var errNoLibbpfLink = errors.New("libbpfgo returned neither a link nor an error"
 // one fail without a kernel (ior_bpflink_test.go).
 var destroyBPFLink = (*bpf.BPFLink).Destroy
 
-// attachBPFTracepoint and attachBPFRawTracepoint are libbpfgo's two attach
-// calls, the only ones ior makes (attachLibbpfTracepoint,
-// attachLibbpfRawTracepoint). They are variables for the same reason as
-// destroyBPFLink: tests watch the calls without a kernel.
+// attachBPFTracepoint, attachBPFRawTracepoint and attachBPFGeneric are
+// libbpfgo's attach calls ior makes (attachLibbpfTracepoint,
+// attachLibbpfRawTracepoint, attachLibbpfGeneric). They are variables for
+// the same reason as destroyBPFLink: tests watch the calls without a kernel.
+// AttachGeneric is the fentry/fexit path of the raw-syscall prototype
+// (IOR_RAW_SYSCALLS=fentry, task g23). libbpfgo's AttachGeneric takes only
+// the program, so attachBPFGeneric keeps a listing-name argument that the
+// seam's wrapped-attach pin requires (same form as the other two: last arg
+// is the name libbpfLinkOf lists under) and ignores it for the kernel call.
 var (
 	attachBPFTracepoint    = (*bpf.BPFProg).AttachTracepoint
 	attachBPFRawTracepoint = (*bpf.BPFProg).AttachRawTracepoint
+	attachBPFGeneric       = attachBPFGenericIgnoringName
 )
+
+// attachBPFGenericIgnoringName is the default of attachBPFGeneric: call
+// libbpfgo's AttachGeneric and ignore the listing name (see above).
+func attachBPFGenericIgnoringName(prog *bpf.BPFProg, _ string) (*bpf.BPFLink, error) {
+	return prog.AttachGeneric()
+}
 
 // libbpfAttachMu serialises every attach ior makes through libbpfgo (task
 // 223).
@@ -78,6 +90,17 @@ func attachLibbpfRawTracepoint(prog *bpf.BPFProg, name string) (probemanager.Lin
 	libbpfAttachMu.Lock()
 	defer libbpfAttachMu.Unlock()
 	return libbpfLinkOf(prog, name)(attachBPFRawTracepoint(prog, name))
+}
+
+// attachLibbpfGeneric attaches prog from its SEC() name (fentry/fexit),
+// one attach at a time, and lists it under name. For the fentry prototype
+// name is the classic tracepoint (`sys_enter_read`, `sys_exit_write`, …)
+// so the restart-fold skip counter asks the same names as under classic
+// handlers (libbpfAttachedProgramFDsOn / restartFoldTracepoints).
+func attachLibbpfGeneric(prog *bpf.BPFProg, name string) (probemanager.Link, error) {
+	libbpfAttachMu.Lock()
+	defer libbpfAttachMu.Unlock()
+	return libbpfLinkOf(prog, name)(attachBPFGeneric(prog, name))
 }
 
 // attachedProgram names one loaded program for the list of attached ones:

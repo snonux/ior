@@ -46,4 +46,9 @@
 // Auto-generated tracepoints.
 #include "generated_tracepoints.c"
 
+// Raw tracepoint syscall dispatch prototype (task 703): read and write only,
+// loaded only when IOR_RAW_SYSCALLS asks for it. Included last because it
+// uses the generated trace ID constants.
+#include "rawsyscall.c"
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

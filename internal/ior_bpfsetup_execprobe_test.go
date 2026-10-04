@@ -520,6 +520,54 @@ func TestAttachRestartFoldProbesAttachTheirTracepoints(t *testing.T) {
 	}
 }
 
+// TestAttachRestartSigreturnProbeFollowsTheDispatcherModes: fentry has no
+// raw dispatcher, so the classic handle_restart_sigreturn probe must stay
+// attached (task g23); a raw-dispatcher mode replaces it and must skip the
+// classic attach. UsesRawDispatchers alone is not enough — the call site
+// used to gate on mode != off, which would skip fentry too.
+func TestAttachRestartSigreturnProbeFollowsTheDispatcherModes(t *testing.T) {
+	orig := rawSyscallModeFromEnv
+	t.Cleanup(func() { rawSyscallModeFromEnv = orig })
+
+	t.Run("fentry keeps the classic probe", func(t *testing.T) {
+		rawSyscallModeFromEnv = func() (rawSyscallMode, error) {
+			return rawSyscallMode{dispatch: rawDispatchFentry}, nil
+		}
+		link := &fakeProbeLink{}
+		prog := &fakeProbeProgram{link: link}
+		attacher := &fakeProbeAttacher{prog: prog}
+		var announced []string
+		release := attachRestartSigreturnProbe(attacher, bpfSetupLog{
+			status: failOnLog(t), warn: failOnLog(t), teardown: failOnLog(t),
+			attached: func(name string) { announced = append(announced, name) },
+		})
+		if len(announced) != 1 || announced[0] != restartSigreturnProbeName {
+			t.Fatalf("announcements = %q, want [%q]", announced, restartSigreturnProbeName)
+		}
+		release()
+		if link.destroyCount() != 1 {
+			t.Fatalf("destroyed %d times, want 1", link.destroyCount())
+		}
+	})
+	for _, dispatch := range []string{rawDispatchTailCall, rawDispatchSwitch} {
+		t.Run(dispatch+" skips the classic probe", func(t *testing.T) {
+			rawSyscallModeFromEnv = func() (rawSyscallMode, error) {
+				return rawSyscallMode{dispatch: dispatch}, nil
+			}
+			attacher := &fakeProbeAttacher{prog: &fakeProbeProgram{link: &fakeProbeLink{}}}
+			var announced []string
+			release := attachRestartSigreturnProbe(attacher, bpfSetupLog{
+				attached: func(name string) { announced = append(announced, name) },
+				warn:     failOnLog(t),
+			})
+			release()
+			if len(announced) != 0 || attacher.requested != "" {
+				t.Fatalf("%s still attached: announced %q requested %q", dispatch, announced, attacher.requested)
+			}
+		})
+	}
+}
+
 // TestAttachRestartFoldProbeFailuresAreNonFatal: a missing program (an older
 // IOR_BPF_OBJECT) or a failing attach (a kernel without the tracepoint)
 // leaves kernel-restarted calls unfolded, is reported on the warn sink,

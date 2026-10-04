@@ -791,9 +791,13 @@ func configureEventLoopOutput(el *eventLoop, mgr *probemanager.Manager, configur
 	// the sink's flusher, and the buffered rows would then only leave in 64 KiB
 	// chunks and never at shutdown. Modes whose configure installed their own
 	// callback already dropped the flusher through SetPrintCallback.
+	//
+	// The syscalls of the raw syscall prototype (IOR_RAW_SYSCALLS, task 703)
+	// are not in the manager at all, so they pass on its say-so instead.
 	el.WrapPrintCallback(func(next func(*event.Pair)) func(*event.Pair) {
 		return func(ep *event.Pair) {
-			if !mgr.IsActive(ep.EnterEv.GetTraceId().Name()) {
+			name := ep.EnterEv.GetTraceId().Name()
+			if !mgr.IsActive(name) && !rawSyscallTracedByPrototype(name) {
 				ep.Recycle()
 				return
 			}

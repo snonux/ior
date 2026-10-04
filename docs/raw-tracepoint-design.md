@@ -1,15 +1,14 @@
 # Raw Tracepoint Syscall Dispatch: Design and Prototype
 
-Status: **design and measurements only (task 703).** The read/write-only
-prototype measured here (`IOR_RAW_SYSCALLS=tailcall|switch[-probe]`, files
-`internal/c/rawsyscall.c` and `internal/rawsyscall_proto.go`) is NOT part of
-this tree: it lives on the local branch `task/703` (commit 243489a), kept for
-the follow-up work, because the recommendation below is not to replace the
-classic handlers now. Wherever this page says "the prototype", it means that
-branch. This page is the design for the real thing, the prototype's
-measurements and the recommended plan (in short: a real but moderate gain, two new costs, staged
-go as an opt-in backend behind three cheap gates). Check the kernel details
-marked *unverified* before implementing.
+Status: **prototype + gate 3 answered for direction (tasks 703, g23).**
+`IOR_RAW_SYSCALLS` switches on a read/write-only prototype; without it ior
+behaves exactly as before. This page holds the design, the prototype's
+measurements (classic vs raw vs fentry) and the recommended plan. Gate 3
+**prefers fentry over raw for the build-out** on trampoline kernels, with
+classic as default/fallback; full-set attach cost and el9 remain open
+(see "Gate 3"). Gates 1 (el8/el9) and 2 (skip loss under contention) are
+still open. Check the kernel details marked *unverified* before
+implementing.
 
 ## Where the cost goes today
 
@@ -54,9 +53,24 @@ hooks in `internal/ior_bpfsetup.go` (`loadBPFObject`, `attachSessionProbes`,
   slots 0 and 1 hold raw-tracepoint versions of the read/write handlers.
 - `IOR_RAW_SYSCALLS=switch`: one program per side; an `ARRAY` indexed by
   syscall number says "traced", and a `switch` runs the inlined handler body.
+- `IOR_RAW_SYSCALLS=fentry` (task g23): four trampoline programs
+  (`?fentry`/`?fexit` on `__x64_sys_{read,write}`), attached through
+  libbpf's `AttachGeneric` seam and listed under the classic
+  `sys_enter_*`/`sys_exit_*` names so the restart-fold skip counter finds
+  them. Arguments arrive as BTF-typed `struct pt_regs *` (the syscall
+  wrappers take that); the shared helpers read them the same way as the
+  raw handlers (`regs->di` / `BPF_CORE_READ(regs, di)`, not
+  `PT_REGS_PARM*_SYSCALL` — see the comment on `ior_raw_arg0` in
+  `rawsyscall.c`). No raw dispatcher. The classic
+  `handle_restart_sigreturn` hand probe stays attached, so a classic
+  `syscalls:sys_enter_*` still arms `perf_syscall_enter` host-wide: an
+  untraced syscall pays about the same as under classic ior (~153 insn),
+  not the bpftrace-floor zero of a pure fentry attach. Converting that
+  hand probe is a build-out residual.
 - A `-probe` suffix (`tailcall-probe`, `switch-probe`) reads the registers
   with `bpf_probe_read_kernel` (what el8 would run) instead of the direct,
   `bpf_rdonly_cast`-typed loads used where the kernel has the kfunc (6.2+).
+  `fentry` has no `-probe` variant (rejected at parse time).
 - The handler bodies are those of the generated
   `handle_sys_{enter,exit}_{read,write}`: same `filter()`, same
   `ior_on_syscall_enter`/`ior_on_syscall_exit` hooks (sampling, enter
@@ -64,19 +78,23 @@ hooks in `internal/ior_bpfsetup.go` (`loadBPFObject`, `attachSessionProbes`,
   same file identity. A dd traced both ways gives the same rows.
 - The programs are in `?` sections (libbpf autoload off). Without the variable
   no new program is loaded; only three small maps are created.
-- With the prototype on, read and write leave the probe manager (not
+- With a **raw** mode on, read and write leave the probe manager (not
   registered, not in the probes modal; the active-probe row filter lets them
   through), the dispatchers attach as hand probes, and the classic
   `handle_restart_sigreturn` hand probe is replaced by the dispatcher (any
   classic `syscalls:*` tracepoint keeps `perf_syscall_enter` running for every
-  syscall, which would hide the gain).
-- 32-bit syscalls are skipped explicitly (see "Compat syscalls"); with the
-  check removed, three `int 0x80` calls of compat `restart_syscall` (nr 0)
-  showed up as three bogus `read` rows.
+  syscall, which would hide the gain). With **fentry**, the same leave of
+  the probe manager applies for read/write, but restart_sigreturn stays the
+  classic hand probe.
+- 32-bit syscalls are skipped explicitly in the raw path (see "Compat
+  syscalls"); with the check removed, three `int 0x80` calls of compat
+  `restart_syscall` (nr 0) showed up as three bogus `read` rows. fentry never
+  sees a compat entry: it is attached to the 64-bit wrappers only.
 
 Prototype limitations: x86_64 only, read/write only, no runtime toggling, the
-dispatchers attach after the probe manager's walk (so the restart fold's
-handler-depth count starts late), and the TUI does not show the two syscalls.
+raw dispatchers attach after the probe manager's walk (so the restart fold's
+handler-depth count starts late), full-set fentry attach time (~730
+trampolines) is unmeasured, and the TUI does not show the two syscalls.
 
 ## Measurements
 
@@ -103,11 +121,11 @@ sudo -n perf stat -e instructions:k,cycles:k -o <file> -- \
 # run: the 1 GiB ring holds all 12M records) and the skipped probe runs.
 ```
 
-`<mode>` is empty ("classic", ior as it is today), `tailcall`, `switch` or
-`tailcall-probe`. `<scope>` is `-pid 1` (ior's BPF `filter()` rejects every
-dd syscall: what every process outside the trace filter pays) or
-`-comm nomatch` (no BPF-side filter, every record is emitted and dropped in
-userspace: what a traced syscall pays).
+`<mode>` is empty ("classic", ior as it is today), `tailcall`, `switch`,
+`tailcall-probe` or `fentry`. `<scope>` is `-pid 1` (ior's BPF `filter()`
+rejects every dd syscall: what every process outside the trace filter pays)
+or `-comm nomatch` (no BPF-side filter, every record is emitted and dropped
+in userspace: what a traced syscall pays).
 Per-syscall figures are (configuration - untraced) / 6,000,000, one "syscall"
 being an enter and an exit; `min` uses the minima of both, `med` the medians.
 
@@ -213,13 +231,111 @@ Summary, per read/write syscall on 7.2:
 | not traced, ior running | 153 insn, 84 cycles, ~26 ns | ~345 insn, ~26-35 ns | +125 % insn |
 | skipped runs under RT preemption | ~11k | ~65k | x6 |
 
+### Gate 3: fentry/fexit prototype (task g23)
+
+Measured 2026-10-04 on the same host and kernel (7.2.5-200.fc44.x86_64),
+same method as above (6 interleaved rounds; load average moderate; ring
+buffer 1 GiB, drops 0 in every run). Modes: classic (env unset),
+`IOR_RAW_SYSCALLS=fentry`, `IOR_RAW_SYSCALLS=tailcall`.
+
+**Traced, rejected by the filter** (`-pid 1`):
+
+| config | insn:k, 1e9: med (min-max) | cycles:k, 1e9: med (min-max) | wall s: med (min-max) | insn/syscall med | cycles/syscall min | ns/syscall min |
+|---|---|---|---|---|---|---|
+| untraced | 4.367 (4.366-4.367) | 2.130 (2.082-2.198) | 0.702 (0.674-0.723) | - | - | - |
+| classic | 8.606 (8.605-8.606) | 3.811 (3.771-4.231) | 1.140 (1.083-1.205) | 707 | 281 | 68 |
+| fentry | 7.038 (7.038-7.039) | 3.110 (3.074-3.253) | 0.928 (0.925-0.970) | 445 | 165 | 42 |
+| tailcall | 7.129 (7.128-7.129) | 3.239 (3.207-3.452) | 0.957 (0.952-1.027) | 460 | 187 | 46 |
+
+**Traced and emitted** (`-comm nomatch`):
+
+| config | insn:k, 1e9: med (min-max) | cycles:k, 1e9: med (min-max) | wall s: med (min-max) | insn/syscall med | cycles/syscall min |
+|---|---|---|---|---|---|
+| classic | 12.428 (12.427-12.429) | 6.320 (6.218-6.627) | 2.054 (1.751-2.169) | 1344 | 689 |
+| fentry | 10.993 (10.993-10.994) | 5.686 (5.497-5.898) | 1.889 (1.795-1.955) | 1104 | 569 |
+| tailcall | 11.084 (11.083-11.085) | 6.033 (5.850-6.303) | 1.992 (1.940-2.065) | 1120 | 628 |
+
+(`instructions:k` agreed within 0.1 % across rounds; wall time for the
+emitting classic set was the noisiest, so ns/syscall is omitted there.)
+
+**Skipped probe runs** (shutdown total; median of 6 rounds):
+
+| config | emit scope | reject scope |
+|---|---|---|
+| classic | 81.5 | 3.5 |
+| fentry | 76 | 1 |
+| tailcall | 198.5 | 2 |
+
+fentry matches classic; the raw dispatcher is about 2.4× worse under the
+emitting scope even without a deliberate `SCHED_FIFO` contender (703's
+contention case was 6×).
+
+**Attach time** (wall ms from process start to the "Probing for" line;
+read+write only, 3 rounds): classic median 997 ms, fentry 1018 ms,
+tailcall 1016 ms. For two programs the attach itself is lost in the
+object load. **Full-set attach of ~730 fentry/fexit trampolines is not
+measured** (the prototype only builds the four read/write programs); that
+remains a build-phase residual. Availability on el9 is still gate 1
+(*unverified* on this host).
+
+**Same rows.** `dd if=/dev/zero of=/dev/null bs=3 count=5` traced with
+`-trace-syscalls read,write -comm dd` under `IOR_RAW_SYSCALLS=fentry`
+produces the same 16 rows as classic (name, return value, file identity).
+
+**Argument access.** The BTF signature of `__x64_sys_*` is
+`long (*)(struct pt_regs *)`, so `BPF_PROG` gives a typed `regs` and the
+prototype reuses `ior_raw_enter_fd` / `ior_raw_exit_ret`, which read
+registers through `ior_raw_arg0` (`regs->di` / `BPF_CORE_READ`). No
+separate probe-read fentry variant.
+
+**Restart-fold hooks.** fentry does not replace `handle_restart_sigreturn`:
+`usesRawDispatchers()` is false, so the classic hand probe stays. The
+raw modes still replace it with the enter dispatcher.
+
+Summary vs classic on 7.2 (median instructions):
+
+| case | fentry | raw, tail call |
+|---|---|---|
+| traced, filter rejects | 445 insn (−37 %) | 460 insn (−35 %) |
+| traced, record emitted | 1104 insn (−18 %) | 1120 insn (−17 %) |
+| not traced, ior running | ~classic (~153 insn; classic `restart_sigreturn` TP still arms `perf_syscall_enter`) | ~345 insn (+125 %) |
+| skipped runs (emit scope, quiet) | ~classic | ~2.4× classic |
+
+#### Gate 3 verdict: prefer fentry for the build-out; do not lead with raw
+
+**Prefer fentry** for the next build step on trampoline kernels: on 7.2
+the read/write prototype is at least as cheap as the raw dispatcher on
+traced syscalls, keeps per-syscall skip counters (links listed under
+classic `sys_enter_*`/`sys_exit_*` names) and never sees compat
+syscalls. Untraced cost today matches classic (the classic
+`restart_sigreturn` TP remains); unlike raw it does not add a
+dispatcher on every syscall. Classic handlers stay the default and the
+only backend for el8 (no trampolines) and the fallback everywhere.
+
+**Do not lead with the raw dispatcher.** Its untraced tax (+125 %) and
+skip amplification are the deal-breakers the bpftrace floor already
+pointed at; fentry matches the traced gain without that dispatcher tax.
+Raw may still matter on a kernel that has raw tracepoints but not
+trampolines — that is gate 1's call, not a reason to build the full
+generator path for it first.
+
+**What this gate did not close** (still required before making fentry
+the default or claiming the full cost): attach/load time for the full
+~730 trampoline set (only two syscalls were prototyped; the two-program
+attach was lost in the object load); el9 trampoline availability
+(gate 1, *unverified* here); a contended skip re-check (gate 2);
+converting `handle_restart_sigreturn` off a classic `syscalls:*`
+tracepoint so untraced cost can fall to the bpftrace-floor zero. The
+verdict is a direction for the build-out, not a ship decision.
+
 ## Design
 
 ### Dispatch by syscall number
 
 Three shapes were considered.
 
-1. **Tail-call program array (recommended).** Each side has one tiny
+1. **Tail-call program array (preferred among the raw shapes).** Each side
+   has one tiny
    dispatcher (enter: 7 instructions xlated; exit: 22, of which the
    `orig_ax` read) that tail-calls `progs[nr]`. Every syscall keeps its own
    handler program, generated from the same bodies as today, verified on its
@@ -349,10 +465,13 @@ All of it lives in the handler bodies and hooks (`filter()`,
 `ior_on_syscall_enter*`, `ior_on_syscall_exit*`, `syscall_sampling_rate_map`
 indexed by trace ID, `ior_restart_on_enter`/`_on_exit`) and is unchanged. The
 restart fold's `handle_restart_sigreturn` hand probe has to move into the
-enter dispatcher (done in the prototype), and the dispatcher has to run it
-before the slot lookup, because it counts handler returns whether or not
-`rt_sigreturn` is traced. It must also precede the syscall slots at startup
-(attach the dispatchers before filling any slot).
+enter dispatcher for the **raw** modes (done in the prototype for
+`tailcall`/`switch`); the dispatcher has to run it before the slot
+lookup, because it counts handler returns whether or not `rt_sigreturn`
+is traced. It must also precede the syscall slots at startup (attach the
+dispatchers before filling any slot). **fentry** keeps the classic hand
+probe instead (no dispatcher to host it); converting that probe is a
+build-out residual so untraced cost can fall below classic.
 
 ### File identity (task 603)
 
@@ -486,55 +605,52 @@ generator, the probe manager's attach contract and the restart-fold safety
 rules (o03/x13/023/723) for a gain of 7-30 %; (5) a slot delete does not
 wait for running handlers as a link's `Destroy` does.
 
-An alternative measured on the way: `fentry`/`fexit` on the syscall
-functions is cheaper than the raw pair (304 instructions, ~28 ns), costs an
-untraced syscall nothing, keeps one program per syscall (so skips stay
-per-syscall and the probe manager keeps links), and never sees a compat
-syscall. It needs BPF trampolines (5.5 on x86_64, 6.0 on arm64; both versions
-and the RHEL 9 backports *unverified*) and 730 trampoline attachments, and
-does nothing for el8. It deserves the same prototype before either is built out.
+Gate 3 answered that alternative: the ior fentry prototype is slightly
+cheaper than the raw pair on traced syscalls (−18 % / −37 % insn emit /
+reject vs classic), keeps per-syscall skips, and never sees a compat
+syscall. Untraced cost is not the bpftrace-floor zero: ior still
+attaches classic `handle_restart_sigreturn`, which arms
+`perf_syscall_enter` host-wide (~classic's ~153 insn); the raw
+dispatcher's extra ~345 insn tax is what fentry avoids today. Reaching
+true zero untraced cost needs that hand probe converted too. It needs
+BPF trampolines (5.5 on x86_64, 6.0 on arm64; both versions and the
+RHEL 9 backports still *unverified*) and ~730 trampoline attachments
+(attach cost for the full set unmeasured; two programs were
+indistinguishable from classic). It does nothing for el8. **Prefer
+fentry over raw for the build-out; see "Gate 3 verdict".**
 
-Follow-up tasks, in order; 1-3 are cheap gates, stop if they fail:
+Follow-up tasks, in order; 1–2 remain cheap gates for any raw residual;
+gate 3 answered a build-out direction (residuals still open):
 
-1. **Gate: el9 and el8.** Load the prototype in the el9 (5.14) and el8
-   (4.18) VMs: verifier acceptance of the dispatchers and of raw handlers as
-   tail-call targets, a probe-read compat check without the BTF task, whether
-   raw tracepoint programs count `recursion_misses` there, and the same dd
-   measurement classic vs prototype. No-go for a kernel where the emitted
-   gain is under ~10 %.
-2. **Gate: skip loss.** Quantify the record loss of the dispatcher against
-   the classic handlers under realistic contention (the integration suite's
-   fold tests with `IOR_REQUIRE_FOLDS=1`, a multi-threaded workload, the
-   `SCHED_FIFO` case) on 7.2 and on a kernel with non-preemptible
-   tracepoints; decide between accepting it, per-family dispatchers
-   (measure their cost: each attached dispatcher pair adds ~340
-   instructions to every syscall) or dropping the design for preemptible
-   kernels.
-3. **Gate: fentry/fexit prototype** for read/write behind the same switch
-   (`IOR_RAW_SYSCALLS=fentry`): rows, cost, attach time for 730 programs,
-   availability on el9. Pick raw, fentry, or raw for old kernels plus
-   fentry for new ones.
-4. Build: pass `-D__TARGET_ARCH_x86`/`arm64` so `bpf_tracing.h`'s
-   `PT_REGS_PARMn_CORE_SYSCALL` work; generate the per-`GOARCH` syscall
-   name -> number table from `golang.org/x/sys/unix`.
-5. Generator: emit a raw variant of every handler (arguments through one
-   register accessor, bodies otherwise unchanged) in `?` sections next to
-   the classic ones; keep `mage generate` idempotent; check object size and
-   load time.
-6. Probe manager: a slot-write backend behind the existing
-   `Attach`/`Detach`/`IsActive` and change-hook contract (exit slot first,
-   enter slot first on detach, undo on a failed second write), with the
-   structural seam tests extended for the map writes.
-7. Restart fold and evidence: `rt_sigreturn` counting in the enter
-   dispatcher ahead of every slot, dispatchers attached before the first
-   slot is filled, `kernelCountsSkippedRuns` per program type, the fold
-   sweep reading the two dispatchers.
-8. Compat exclusion for el8 (probe read) and arm64 (`TIF_32BIT`); arm64
-   register table (`orig_x0`, `syscallno`); an integration test with an
-   `int 0x80` workload.
-9. A real flag in place of `IOR_RAW_SYSCALLS`, the whole integration suite
-   run under both backends, then the measurement again and the decision
-   about the default; the classic handlers stay as the fallback.
+1. **Gate: el9 and el8.** Load the fentry prototype (and, if still
+   interesting, the raw one) in the el9 (5.14) and el8 (4.18) VMs:
+   trampoline availability on el9, verifier acceptance, and the same dd
+   measurement. No-go for a kernel where the emitted gain is under ~10 %.
+   el8 keeps classic.
+2. **Gate: skip loss (raw only, if raw survives gate 1).** Quantify the
+   record loss of the dispatcher against the classic handlers under
+   realistic contention. fentry's quiet-host skips already match classic;
+   a contended re-check is still worth one run before declaring it equal.
+3. ~~**Gate: fentry/fexit prototype**~~ **Answered for direction (task
+   g23).** Prefer fentry over raw for the build-out on trampoline
+   kernels; classic stays default/fallback. Open residuals of this gate:
+   full-set (~730) attach/load time, el9 availability.
+4. **Build (fentry-first):** generate `?fentry`/`?fexit` handlers for
+   every traced syscall (BTF-typed `struct pt_regs *` args, bodies
+   otherwise unchanged); keep `mage generate` idempotent; measure object
+   size, load time and attach time for the full set; wire the probe
+   manager (or a sibling attacher) so runtime toggles destroy trampoline
+   links the same way they destroy classic ones; move
+   `handle_restart_sigreturn` off a classic `syscalls:*` tracepoint
+   (fentry on `rt_sigreturn` or an equivalent) so untraced cost can drop
+   to the bpftrace-floor zero.
+5. Raw path only if gate 1 finds a kernel that wants it: `-D__TARGET_ARCH_*`,
+   syscall-number table, generator for raw variants, slot-write probe
+   manager, restart-fold dispatcher rules, compat exclusion — the previous
+   steps 4–8, demoted.
+6. A real flag in place of `IOR_RAW_SYSCALLS`, the whole integration suite
+   under classic and fentry, then the measurement again and the decision
+   about the default; classic stays the fallback.
 
-Until gates 1-3 are answered the prototype stays what it is: off by default,
-read and write only.
+Until gates 1–2 are answered the prototype stays what it is: off by default,
+read and write only, with `fentry` as the third switch value.

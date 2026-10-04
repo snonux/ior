@@ -411,18 +411,32 @@ func TestLibbpfLinkOfNoProgramListsNothing(t *testing.T) {
 func TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks(t *testing.T) {
 	root := repoRoot(t)
 	methods := 0
+	sawGeneric := false
 	for _, decl := range funcDecls(parseRepoFile(t, filepath.Join(root, "internal", "ior_bpfsetup.go"))) {
 		if receiverTypeName(decl) != "libbpfTracepointProgram" {
 			continue
 		}
 		methods++
-		if call := onlyReturnedCall(decl); call == nil || !callsIdentWithPrefix(call, "attachLibbpf") || !passesProgField(call) {
+		call := onlyReturnedCall(decl)
+		if call == nil || !callsIdentWithPrefix(call, "attachLibbpf") || !passesProgField(call) {
 			t.Errorf("libbpfTracepointProgram.%s is not `return attachLibbpf...(p.prog, ...)`", decl.Name.Name)
+			continue
+		}
+		// AttachGeneric must forward its listAs argument, not p.prog.Name():
+		// the fentry prototype lists under classic sys_enter_/sys_exit_ names
+		// for restart-fold skip accounting (task g23). Ignoring listAs
+		// re-breaks that while every fake AttachGeneric test stays green.
+		if decl.Name.Name == "AttachGeneric" {
+			sawGeneric = true
+			if len(call.Args) != 2 || !isIdentifier(call.Args[1], "listAs") {
+				t.Errorf("AttachGeneric must be `return attachLibbpfGeneric(p.prog, listAs)`, got args %#v", call.Args)
+			}
 		}
 	}
-	// AttachTracepoint and AttachRawTracepoint: fewer means the scan lost them.
-	if methods < 2 {
-		t.Fatalf("found %d methods of libbpfTracepointProgram, want at least 2", methods)
+	// AttachTracepoint, AttachRawTracepoint, AttachGeneric.
+	if methods < 3 || !sawGeneric {
+		t.Fatalf("found %d methods of libbpfTracepointProgram (AttachGeneric seen %v), want at least 3 incl. AttachGeneric",
+			methods, sawGeneric)
 	}
 	attaches := 0
 	for _, decl := range funcDecls(parseRepoFile(t, filepath.Join(root, "internal", "ior_bpflink.go"))) {
@@ -434,8 +448,9 @@ func TestLibbpfTracepointProgramHandsOutOnlyWrappedLinks(t *testing.T) {
 			t.Errorf("%s does not end in its only return, `return libbpfLinkOf(prog, name)(attachBPF...(prog, ..., name))`", decl.Name.Name)
 		}
 	}
-	if attaches < 2 {
-		t.Fatalf("found %d attachLibbpf... functions in ior_bpflink.go, want at least 2", attaches)
+	// Tracepoint, RawTracepoint, Generic (fentry/fexit, task g23).
+	if attaches < 3 {
+		t.Fatalf("found %d attachLibbpf... functions in ior_bpflink.go, want at least 3", attaches)
 	}
 }
 
@@ -595,6 +610,12 @@ var wrappedAttachSources = map[string]struct {
 	"the classic form": {`func a(prog *P, c, n string) (L, error) {
 	return libbpfLinkOf(prog, n)(attachBPFTracepoint(prog, c, n))
 }`, true},
+	"the generic form": {`func a(prog *P, n string) (L, error) {
+	return libbpfLinkOf(prog, n)(attachBPFGeneric(prog, n))
+}`, true},
+	"a generic link listed under another name": {`func a(prog *P, n string) (L, error) {
+	return libbpfLinkOf(prog, n)(attachBPFGeneric(prog))
+}`, false},
 	"a link listed under another tracepoint": {`func a(prog *P, c, n string) (L, error) {
 	return libbpfLinkOf(prog, c)(attachBPFTracepoint(prog, c, n))
 }`, false},
@@ -646,19 +667,23 @@ func TestReturnsOnlyAWrappedAttachTellsTheFormsApart(t *testing.T) {
 //   - GetProgram is libbpfgo's Module.GetProgram, which hands out the
 //     *bpf.BPFProg, in libbpfTracepointModule.GetProgram alone. The scan goes
 //     by name, so the two calls of probemanager.Attacher's GetProgram are
-//     listed too.
+//     listed too, and so are the raw syscall prototype's (task 703),
+//     which resolve its programs through the same wrapping Attacher.
 //
 //   - BPFProg and BPFLink are the types. ior_bpflink.go wraps and destroys
 //     the links and makes the attach calls; beyond it only the field of
 //     libbpfTracepointProgram names the program type.
 //
-//   - prog is that field: only the two methods read it, to pass it on.
+//   - prog is that field: only the two attach methods read it, to pass it
+//     on, and the raw syscall prototype's SetAutoload and FileDescriptor
+//     (task 703), which attach nothing.
 //
 //   - AttachTracepoint and AttachRawTracepoint are libbpfgo's two attach
 //     calls ior makes, in ior_bpflink.go. The scan goes by name here too, so
 //     the calls of probemanager.Program's methods of the same names are
 //     listed: the syscall probes' in the manager and the hand-written
-//     probes' in ior_bpfsetup.go. libbpfTracepointProgram's own two methods
+//     probes' in ior_bpfsetup.go and the raw syscall prototype's
+//     dispatchers (task 703). libbpfTracepointProgram's own two methods
 //     are not: they declare the names and select neither.
 //
 //   - NextProgram is the iterator's way to every program of the module, and
@@ -680,6 +705,7 @@ var libbpfSeamNames = map[string]map[string][]string{
 	"GetProgram": {
 		"internal/ior_bpfsetup.go":         {"libbpfTracepointModule.GetProgram", "attachHandProbe"},
 		"internal/probemanager/manager.go": {"attachOne"},
+		"internal/rawsyscall_proto.go":     {"loadRawSyscallPrograms", "fillRawSyscallSlots"},
 	},
 	"BPFProg": {
 		"internal/ior_bpflink.go":  {"*"},
@@ -692,6 +718,10 @@ var libbpfSeamNames = map[string]map[string][]string{
 	"prog": {
 		"internal/ior_bpfsetup.go": {
 			"libbpfTracepointProgram.AttachTracepoint", "libbpfTracepointProgram.AttachRawTracepoint",
+			"libbpfTracepointProgram.AttachGeneric",
+		},
+		"internal/rawsyscall_proto.go": {
+			"libbpfTracepointProgram.SetAutoload", "libbpfTracepointProgram.FileDescriptor",
 		},
 	},
 	"AttachTracepoint": {
@@ -700,8 +730,14 @@ var libbpfSeamNames = map[string]map[string][]string{
 		"internal/probemanager/manager.go": {"attachOne"},
 	},
 	"AttachRawTracepoint": {
-		"internal/ior_bpflink.go":  {"*"},
-		"internal/ior_bpfsetup.go": {"attachTaskRenameProbe"},
+		"internal/ior_bpflink.go":      {"*"},
+		"internal/ior_bpfsetup.go":     {"attachTaskRenameProbe"},
+		"internal/rawsyscall_proto.go": {"attachRawSyscallPrototype"},
+	},
+	"AttachGeneric": {
+		"internal/ior_bpflink.go":      {"*"},
+		"internal/ior_bpfsetup.go":     {"libbpfTracepointProgram.AttachGeneric"},
+		"internal/rawsyscall_proto.go": {"attachFentrySyscallPrototype", "attachFentrySide"},
 	},
 }
 

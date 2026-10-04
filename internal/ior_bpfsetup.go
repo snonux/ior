@@ -39,6 +39,14 @@ func (p libbpfTracepointProgram) AttachRawTracepoint(name string) (probemanager.
 	return attachLibbpfRawTracepoint(p.prog, name)
 }
 
+// AttachGeneric attaches p from its SEC() name (fentry/fexit of the
+// IOR_RAW_SYSCALLS=fentry prototype, task g23). listAs is the classic
+// tracepoint name the link is listed under for skip accounting
+// (`sys_enter_read`, …); see attachLibbpfGeneric.
+func (p libbpfTracepointProgram) AttachGeneric(listAs string) (probemanager.Link, error) {
+	return attachLibbpfGeneric(p.prog, listAs)
+}
+
 // libbpfTracepointModule wraps a libbpf BPF module as a probemanager.Module.
 type libbpfTracepointModule struct {
 	module *bpf.Module
@@ -191,13 +199,41 @@ var loadSessionBPFModule = loadConfiguredBPFModule
 // headless exactly when probes is nil (see probeManagerPublisher), which is
 // what decides whether zero attached syscall probes is an error or a warning
 // (attachRequiredTraceProbes).
+//
+// With the raw/fentry syscall prototype on (IOR_RAW_SYSCALLS, tasks 703/g23)
+// its syscalls are taken out of the probe manager's selection and traced by
+// the chosen backend (raw dispatchers, or per-syscall fentry/fexit links)
+// instead; a backend that traces a syscall counts as an attached probe for
+// that guard. Off, attachRawSyscallSession is attachRequiredTraceProbes.
 func attachSessionProbes(ctx context.Context, attacher probemanager.Attacher, cfg flags.Config, probes probeManagerPublisher, log bpfSetupLog) (*probemanager.Manager, func(), error) {
 	headless := probes == nil
-	mgr, releaseSchedProbes, err := attachRequiredTraceProbes(ctx, attacher, cfg.TracepointSelector.ShouldAttach, tracepoints.List, headless, log)
+	mgr, releaseSchedProbes, err := attachRawSyscallSession(ctx, attacher, cfg.TracepointSelector.ShouldAttach, headless, log)
 	if err != nil {
 		return nil, nil, err
 	}
 	return mgr, publishProbeManager(probes, mgr, releaseSchedProbes), nil
+}
+
+// attachRawSyscallSession is attachRequiredTraceProbes over tracepoints.List
+// with the raw syscall prototype wired in when it is on (see
+// attachSessionProbes).
+func attachRawSyscallSession(ctx context.Context, attacher probemanager.Attacher, shouldAttach func(string) bool, headless bool, log bpfSetupLog) (*probemanager.Manager, func(), error) {
+	mode, _ := rawSyscallModeFromEnv()
+	if mode == rawSyscallOff {
+		return attachRequiredTraceProbes(ctx, attacher, shouldAttach, tracepoints.List, headless, log)
+	}
+	log = log.withDefaults()
+	managed, selected := rawSyscallSelection(mode, shouldAttach)
+	mgr, releaseSchedProbes, err := attachTraceProbes(ctx, attacher, managed, tracepoints.List, log)
+	if err != nil {
+		return nil, nil, err
+	}
+	releaseRaw, traced := attachRawSyscallPrototype(attacher, mode, selected, log)
+	release := releaseConcurrently(releaseSchedProbes, releaseRaw)
+	if traced {
+		return mgr, release, nil
+	}
+	return requireAttachedProbes(mgr, release, headless, log)
 }
 
 // loadConfiguredBPFModule opens the embedded BPF object, sizes its maps, sets
@@ -248,6 +284,11 @@ func loadBPFObject(cfg flags.Config, wantIdent bool, warn func(args ...any)) (*b
 	identCaptured, err := setFileIdentGlobal(wantIdent, bpfModule.InitGlobalVariable)
 	if err != nil {
 		return bpfModule, false, "set globals", err
+	}
+	// The raw syscall prototype (task 703) loads its programs only when
+	// IOR_RAW_SYSCALLS asks for them; otherwise this does nothing.
+	if err := enableRawSyscallPrograms(libbpfTracepointModule{module: bpfModule}, warn); err != nil {
+		return bpfModule, identCaptured, "enable raw syscall prototype", err
 	}
 	if err := bpfModule.BPFLoadObject(); err != nil {
 		return bpfModule, identCaptured, loadObjectStage, err
@@ -615,7 +656,16 @@ const restartSigreturnProbeName = "restart rt_sigreturn"
 // return, so a call restarted after an SA_RESTART handler is not folded;
 // calls restarted without any handler - a stopped sleep resumed by
 // restart_syscall among them - still are.
+//
+// With a raw-dispatcher prototype on (IOR_RAW_SYSCALLS=tailcall|switch, task
+// 703) its sys_enter dispatcher does this program's work and it is not
+// attached: a classic syscall tracepoint would keep the per-syscall argument
+// capture running that the prototype exists to avoid (rawsyscall.c). fentry
+// (task g23) has no dispatcher, so the classic probe stays.
 func attachRestartSigreturnProbe(attacher probemanager.Attacher, log bpfSetupLog) func() {
+	if mode, _ := rawSyscallModeFromEnv(); mode.usesRawDispatchers() {
+		return func() {}
+	}
 	return attachHandProbe(attacher, restartSigreturnProgName, restartSigreturnProbeName, log,
 		func(prog probemanager.Program) (probemanager.Link, error) {
 			return prog.AttachTracepoint("syscalls", "sys_enter_rt_sigreturn")
