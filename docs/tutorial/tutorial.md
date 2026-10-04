@@ -24,6 +24,9 @@ tape under [`tapes/`](./tapes). To rebuild them all, run `sudo -v && mage demo` 
    - [Regex search](#regex-search)
    - [CSV export](#csv-export)
 5. [Choosing what to trace](#choosing-what-to-trace)
+   - [Syscall families on the command line](#syscall-families-on-the-command-line)
+   - [Sampling](#sampling)
+   - [Other filters](#other-filters)
 6. [Recording for offline analysis](#recording-for-offline-analysis)
    - [TUI Parquet recording](#tui-parquet-recording)
    - [Headless modes](#headless-modes)
@@ -141,6 +144,10 @@ bytes, latency and gap.
 
 ![Stream tab live-tailing rows](./assets/07-stream-live.gif)
 
+Setup and runtime warnings (no probe attached, dropped events, libbpf warnings) show up as
+rows in the stream too. While there are any, the other tabs show `warnings: N (7:Stream)`
+in the status line. Pause, select a warning row and press `Enter` to read all of it.
+
 ## Mastering the Stream tab
 
 Stream has **Live** and **Pause** modes; `space` switches between them. Pause lets you
@@ -214,6 +221,39 @@ a family; cycling onto one with no attached probe shows
 `<Family> not traced: press O, tab, space to attach` in the status line (capital `O`
 opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the frame order).
 
+### Syscall families on the command line
+
+Every syscall belongs to one of 12 families (FS, Network, Memory, Signals, Sched, IPC,
+Time, Process, Security, Polling, AIO, Misc) and has a kind that describes its arguments
+(`open`, `fd`, `socket`, `sleep`, ...). Without selection flags only FS is attached. Pick
+the startup set with families, kinds or single syscalls, and subtract with the `-no-`
+variants:
+
+```shell
+sudo ./ior -trace-families FS,Network
+sudo ./ior -trace-kinds fd,open -no-trace-syscalls read
+sudo ./ior -trace-syscalls openat,recvmsg,nanosleep
+```
+
+`./ior -help` lists all valid families and kinds, and
+[Syscall tracing](../syscall-tracing-plan.md) shows which syscall is in which.
+
+### Sampling
+
+Busy syscalls can be sampled per family or per syscall: `1` keeps every call, `N` keeps
+one in N, and `0` only counts them in the kernel (aggregate-only). `futex*` and
+`clock_gettime` are aggregate-only by default.
+
+```shell
+sudo ./ior -trace-families FS,Time -syscall-sampling-families Time=100
+sudo ./ior -syscall-sampling-syscalls read=10,write=10
+```
+
+Raw outputs (`-plain`, `-flamegraph`, `-parquet`) note the sampling on stderr and in the
+written files; see [Output files](../output.md#sampling).
+
+### Other filters
+
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
 filtering (`-comm`, `-path`). Tracepoint subsetting on the command line uses `-tps <regex>`
 or `-tpsExclude <regex>`. Both take a comma-separated list of regexes; whitespace around
@@ -255,6 +295,13 @@ tooling, derive collapsed stacks from it:
 `ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`. `-parquet` streams every row,
 so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe
 into anything (human-facing status lines go to stderr, so the pipe stays clean).
+
+A headless run with `-pid <n>` or `-tid <n>` stops by itself when that process or thread
+exits, like `strace -p`, and prints the usual end-of-run statistics.
+
+When `-plain` or `ior collapsed` writes to a terminal, escape sequences hidden in traced
+comm names and paths are shown as `\x1b` and the like. Piped output stays raw; use
+`-escape=always` when you pipe into `less -R` or `grep`.
 
 #### Plain CSV schema
 
@@ -303,6 +350,7 @@ window opens; `mage demo` is safe to run in the background while you keep workin
 | `p` | re-open PID picker |
 | `t` | open TID picker |
 | `o` / `O` | open probe selection dialog (`O` on the Flame tab, where `o` cycles the frame order; `tab` there: Syscalls / Families view; `space`/`enter` toggles a whole family) |
+| `[` / `]` | scope the view to the previous / next syscall family |
 | `r` | refresh dashboard snapshot |
 | `q` / `ctrl+c` | quit |
 
