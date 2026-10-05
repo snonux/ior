@@ -1,16 +1,16 @@
 # 03-syscalls-tab: sortable syscalls table, j/k to scroll, s/S to sort/reverse-sort.
 # Key 3 switches to Syscalls.
-Output demo/assets/03-syscalls-tab.gif
+Output docs/tutorial/assets/03-syscalls-tab.gif
 Set Shell "bash"
 Set Padding 20
 
 Hide
-Type "cd $(mktemp -d -t ior-demo-XXXX) && clear"
+Type 'cd "$IOR_DEMO_DIR" && clear'
 Enter
 Sleep 300ms
 Show
 
-Type "sudo -n /home/paul/git/ior/ior"
+Type "sudo -n ./ior"
 Enter
 Sleep 5s
 Enter
@@ -31,6 +31,6 @@ Type "s"
 Sleep 1500ms
 Type "S"
 Sleep 2s
-Screenshot demo/assets/screenshot-syscalls.png
+Screenshot docs/tutorial/assets/screenshot-syscalls.png
 Type "q"
 Sleep 1s

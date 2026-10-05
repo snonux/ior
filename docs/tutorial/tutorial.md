@@ -250,6 +250,8 @@ Newly attached syscalls use the sampling rates set at startup. If a trace restar
 a probe change, ior keeps the requested selection; probes that cannot attach are retried
 and skipped with a log line until your next probe change.
 
+![Attach and detach Network, then follow the untraced-family hint](./assets/16-probes-families.gif)
+
 ### Syscall families on the command line
 
 Every syscall belongs to one of 12 families (FS, Network, Memory, Signals, Sched, IPC,
@@ -303,6 +305,8 @@ recipe_pid=$!
 Each command stops after three seconds. The CSV excerpts are rows from real runs;
 PIDs, timings, addresses and descriptor names will vary. Status and warnings go to
 stderr.
+
+![CLI selectors for Time, memory mappings, and individual file syscalls](./assets/15-cli-families.gif)
 
 #### Network calls from one process
 
@@ -565,6 +569,8 @@ ior collapsed:   read: 9058 calls (1-in-10: 935 traced, 8123 counted only)
 The collapsed weights describe the emitted sample. See [Output files](../output.md#sampling)
 for the recording formats.
 
+![Sampling rates, syscall counts, and the Latency + Gaps view](./assets/17-sampling.gif)
+
 ### Other filters
 
 Restricting to a single PID is also exposed as a CLI flag (`-pid <n>`), as is comm/path
@@ -797,6 +803,8 @@ ior: -tid 2263035: not a thread of -pid 1 (the pid and tid filters are ANDed, so
 
 `Esc` closes the warning; `p` lets you choose another process, and `q` quits.
 
+![Warning badge, Stream warning row, and its full message](./assets/18-stream-warnings.gif)
+
 To see what event loss looks like, use a tiny ring buffer and a burst of one-byte reads
 and writes. This runs the tracer in the background, gives it two seconds to attach,
 and keeps CSV off the terminal while saving warnings and statistics:
@@ -840,7 +848,7 @@ The whole asset pipeline is reproducible:
 ```shell
 mage installDemoTools          # one-time: VHS via go install + ttyd via dnf
 sudo -v                        # warm the sudo timestamp once
-mage demo                      # regen all 14 GIFs + screenshots (~10 min)
+mage demo                      # regen all 18 GIFs + screenshots
 ```
 
 Or rebuild a single tape after editing it:

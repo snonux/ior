@@ -1,16 +1,16 @@
 # 09-stream-regex-search: regex search forward (/), n to advance, ? for backward.
 # Key 7 switches to Stream.
-Output demo/assets/09-stream-regex-search.gif
+Output docs/tutorial/assets/09-stream-regex-search.gif
 Set Shell "bash"
 Set Padding 20
 
 Hide
-Type "cd $(mktemp -d -t ior-demo-XXXX) && clear"
+Type 'cd "$IOR_DEMO_DIR" && clear'
 Enter
 Sleep 300ms
 Show
 
-Type "sudo -n /home/paul/git/ior/ior"
+Type "sudo -n ./ior"
 Enter
 Sleep 5s
 Enter
@@ -29,7 +29,7 @@ Type "n"
 Sleep 800ms
 Type "n"
 Sleep 800ms
-Screenshot demo/assets/screenshot-stream-search.png
+Screenshot docs/tutorial/assets/screenshot-stream-search.png
 Type "?"
 Sleep 600ms
 Type "stat"

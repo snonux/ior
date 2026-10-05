@@ -6,15 +6,15 @@
 # Designed to be killed via `kill $!` from the tape wrapper. All children are
 # placed in this script's process group so a single signal cleans them up.
 
-set -u
+set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IOWORKLOAD="${ROOT}/../ioworkload"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+IOWORKLOAD="${ROOT}/ioworkload"
 SCRATCH="$(mktemp -d -t ior-demo-workload-XXXXXX)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 cleanup() {
-    trap - TERM INT
+    trap '' TERM INT
     # Kill the entire process group so all background loops stop.
     kill -- -$$ 2>/dev/null || true
     exit 0
@@ -24,9 +24,9 @@ trap cleanup TERM INT
 # A) walk /usr and read first byte of each file: tons of openat/read/close + varied paths.
 (
     while true; do
-        find /usr/share /usr/lib -maxdepth 4 -type f 2>/dev/null \
-            | shuf -n 800 \
-            | xargs -r -I{} sh -c 'head -c 1 "{}" >/dev/null 2>&1' || true
+        find /usr/share /usr/lib -maxdepth 4 -type f -print0 2>/dev/null \
+            | shuf -z -n 800 \
+            | xargs -0 -r -n 1 head -c 1 -- >/dev/null 2>&1 || true
         sleep 1
     done
 ) &
@@ -64,11 +64,14 @@ if [ -x "$IOWORKLOAD" ]; then
             rename-basic
             link-basic
             dir-basic
+            family-mixed
         )
         while true; do
             for s in "${scenarios[@]}"; do
-                "$IOWORKLOAD" --scenario="$s" >/dev/null 2>&1 || true
+                IOR_WORKLOAD_STARTUP_DELAY_MS=0 \
+                    "$IOWORKLOAD" --scenario="$s" >/dev/null 2>&1 || true
             done
+            sleep 0.1
         done
     ) &
 fi

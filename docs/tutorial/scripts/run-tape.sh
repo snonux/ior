@@ -3,8 +3,8 @@
 # workload. Tapes themselves don't need to know about the workload — they just
 # launch ior and drive the TUI.
 #
-# vhs is invoked with cwd set to the repo root, so all paths inside tapes
-# (Output, Screenshot, the ./ior binary) are repo-relative.
+# vhs is invoked from the repo root so Output/Screenshot paths are repo-relative.
+# The recorded shell uses IOR_DEMO_DIR, with ./ior linked to the built binary.
 #
 # Usage: run-tape.sh <path-to-tape>
 
@@ -16,8 +16,8 @@ if [ $# -ne 1 ]; then
 fi
 
 TAPE="$(realpath "$1")"
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORKLOAD="${ROOT}/demo/scripts/workload.sh"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+WORKLOAD="${ROOT}/docs/tutorial/scripts/workload.sh"
 
 if [ ! -f "$TAPE" ]; then
     echo "tape not found: $TAPE" >&2
@@ -29,24 +29,36 @@ command -v vhs >/dev/null || { echo "vhs not on PATH (run: mage installDemoTools
 command -v ttyd >/dev/null || { echo "ttyd not on PATH (run: mage installDemoTools)" >&2; exit 3; }
 sudo -n true 2>/dev/null || { echo "sudo timestamp expired (run: sudo -v)" >&2; exit 4; }
 
-# Start workload in its own session/process group so we can kill the whole tree.
-setsid "$WORKLOAD" </dev/null >/dev/null 2>&1 &
-WL_PID=$!
+# Each tape gets an isolated working directory with a portable ./ior command.
+IOR_DEMO_DIR="$(mktemp -d -t ior-demo-XXXXXX)"
+export IOR_DEMO_DIR
+WL_PID=""
 
 cleanup() {
-    if kill -0 "$WL_PID" 2>/dev/null; then
+    if [ -n "$WL_PID" ]; then
         # The workload runs `setsid` so its PID == its PGID.
         kill -TERM -- "-$WL_PID" 2>/dev/null || true
         sleep 0.5
         kill -KILL -- "-$WL_PID" 2>/dev/null || true
+        wait "$WL_PID" 2>/dev/null || true
     fi
-    # Best-effort: stop any straggling ior processes from this tape.
-    sudo -n pkill -TERM -f '/ior$' 2>/dev/null || true
+    rm -rf -- "$IOR_DEMO_DIR"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ln -s "$ROOT/ior" "$IOR_DEMO_DIR/ior"
+# Start workload in its own session/process group so we can kill the whole tree.
+setsid "$WORKLOAD" </dev/null >/dev/null 2>&1 &
+WL_PID=$!
 
 # Give the workload a moment to spool up before recording.
 sleep 2
+if ! kill -0 "$WL_PID" 2>/dev/null; then
+    echo "demo workload exited before recording" >&2
+    exit 5
+fi
 
 cd "$ROOT"
 vhs "$TAPE"

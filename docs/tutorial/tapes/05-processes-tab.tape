@@ -1,16 +1,16 @@
 # 05-processes-tab: processes tab, scroll, and reverse-sort.
 # Key 5 switches to Processes.
-Output demo/assets/05-processes-tab.gif
+Output docs/tutorial/assets/05-processes-tab.gif
 Set Shell "bash"
 Set Padding 20
 
 Hide
-Type "cd $(mktemp -d -t ior-demo-XXXX) && clear"
+Type 'cd "$IOR_DEMO_DIR" && clear'
 Enter
 Sleep 300ms
 Show
 
-Type "sudo -n /home/paul/git/ior/ior"
+Type "sudo -n ./ior"
 Enter
 Sleep 5s
 Enter
@@ -25,6 +25,6 @@ Type "j"
 Sleep 800ms
 Type "S"
 Sleep 2s
-Screenshot demo/assets/screenshot-processes.png
+Screenshot docs/tutorial/assets/screenshot-processes.png
 Type "q"
 Sleep 1s

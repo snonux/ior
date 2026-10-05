@@ -1,16 +1,16 @@
-# 10-stream-csv-export: 'e' to export current filtered stream snapshot, then ls the CSV produced.
+# 10-stream-csv-export: 'e', Enter to export the filtered stream snapshot, then ls the CSV.
 # Key 7 switches to Stream.
-Output demo/assets/10-stream-csv-export.gif
+Output docs/tutorial/assets/10-stream-csv-export.gif
 Set Shell "bash"
 Set Padding 20
 
 Hide
-Type "cd $(mktemp -d -t ior-demo-XXXX) && clear"
+Type 'cd "$IOR_DEMO_DIR" && clear'
 Enter
 Sleep 300ms
 Show
 
-Type "sudo -n /home/paul/git/ior/ior"
+Type "sudo -n ./ior"
 Enter
 Sleep 5s
 Enter
@@ -19,10 +19,14 @@ Type "7"
 Sleep 4s
 Type "e"
 Sleep 2s
-Screenshot demo/assets/screenshot-stream-export.png
-Sleep 1s
+Screenshot docs/tutorial/assets/screenshot-stream-export.png
+Enter
+Wait+Screen@30s /Exported:/
+Sleep 2s
+Escape
 Type "q"
 Sleep 1s
+Wait+Line@30s /^> *$/
 Type "ls -lh ior-stream-*.csv"
 Enter
 Sleep 2s

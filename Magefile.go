@@ -1374,7 +1374,7 @@ const (
 	demoSudoKeepers = "docs/tutorial/scripts/sudo-keepalive.sh"
 )
 
-// Demo regenerates every demo asset (full ~14-tape run, ~10 minutes).
+// Demo regenerates every demo asset from docs/tutorial/tapes/.
 // Pre-flight: vhs + ttyd on PATH, sudo timestamp live (`sudo -v`).
 // Safe to run in the background — VHS records headlessly with no real window.
 func Demo() error {

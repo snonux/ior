@@ -1,16 +1,16 @@
 # 08-stream-pause-filter: pause stream, navigate cells, push two filters onto the stack, undo with Esc.
 # Key 7 switches to Stream.
-Output demo/assets/08-stream-pause-filter.gif
+Output docs/tutorial/assets/08-stream-pause-filter.gif
 Set Shell "bash"
 Set Padding 20
 
 Hide
-Type "cd $(mktemp -d -t ior-demo-XXXX) && clear"
+Type 'cd "$IOR_DEMO_DIR" && clear'
 Enter
 Sleep 300ms
 Show
 
-Type "sudo -n /home/paul/git/ior/ior"
+Type "sudo -n ./ior"
 Enter
 Sleep 5s
 Enter
@@ -37,7 +37,7 @@ Right
 Sleep 400ms
 Enter
 Sleep 2s
-Screenshot demo/assets/screenshot-stream-filtered.png
+Screenshot docs/tutorial/assets/screenshot-stream-filtered.png
 Escape
 Sleep 1s
 Escape
