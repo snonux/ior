@@ -24,6 +24,7 @@ tape under [`tapes/`](./tapes). To rebuild them all, run `sudo -v && mage demo` 
    - [Regex search](#regex-search)
    - [CSV export](#csv-export)
 5. [Choosing what to trace](#choosing-what-to-trace)
+   - [Changing probes while tracing](#changing-probes-while-tracing)
    - [Syscall families on the command line](#syscall-families-on-the-command-line)
    - [Sampling](#sampling)
    - [Other filters](#other-filters)
@@ -207,19 +208,46 @@ Three modal pickers reshape what the rest of the TUI sees:
 
 The **Families** view lists all 12 syscall families with attached/total probe counts
 (`[x]` all attached, `[~]` some, `[ ]` none). `space` or `enter` detaches a family that has
-any attached probe and attaches it otherwise, with a live `attaching <family>... n/total`
-progress line while the batch runs; failures are reported (first error) without aborting
-the rest. By default only the FS family is traced, so this is the way to start tracing
-e.g. Network without restarting ior with `-trace-families`. Your runtime selection
-persists across trace restarts (PID/TID reselect, filter changes), replacing the startup
-`-trace-*` flags for the rest of the session. Newly attached syscalls get the same
-sampling rates as at startup. The carried set is what you asked for: if a change finishes
-after the trace restarted, its unattachable probes are retried and skipped with a log line
-until your next probe change. Detaching everything makes later sessions attach nothing;
-only restarting `ior` brings back the startup selection. The `[` / `]` keys only re-scope the view to
-a family; cycling onto one with no attached probe shows
-`<Family> not traced: press O, tab, space to attach` in the status line (capital `O`
-opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the frame order).
+any attached probe and attaches it otherwise. Failed attachments are reported without
+aborting the rest; the counts depend on the tracepoints available on your kernel.
+
+### Changing probes while tracing
+
+Start with the default FS set:
+
+```shell
+sudo ./ior
+```
+
+1. Press `Enter` on **All PIDs** in the launch picker. Wait for the dashboard to appear,
+   then press `O` to open **Probes**. Capital `O` works on every tab; lowercase `o` also
+   opens it on the other tabs. On Flame, lowercase `o` changes the frame order.
+2. Press `tab` for **Families**. Move to **Network** with `j` / `k` or the arrow keys,
+   then press `space`. Watch the `attaching Network...` progress line and wait for the
+   result. On this host it finished with `Network: attached 22 of 22 probes`.
+3. Keep Network selected and press `space` again. Wait for the detach to finish; its
+   row returns to `[ ]` with zero attached probes. FS stays attached.
+4. Press `tab` to return to **Syscalls**. Press `/`, type `openat`, then press `Enter`
+   to leave the search prompt. Both `openat` and `openat2` match: search is a case-insensitive
+   substring filter. Select `openat` and press `space` to detach just that syscall;
+   press it again to attach it. `a` attaches **all registered syscalls**, and `n` detaches
+   them all, even with a search active. Try `a`, wait for it to finish, then `n` and wait
+   again. To restore FS, press `tab`, select **FS** and press `space`.
+5. Press `Esc` to close the dialog. Press `]` to scope the dashboard to **Network**;
+   `[` goes back to the unscoped view. With Network detached, the status line shows
+   `Network not traced: press O, tab, space to attach`. These keys change what the
+   dashboard shows; they do not attach probes.
+6. Follow that hint: press `O`, `tab`, `space`. The Families cursor is already on
+   Network. Wait for attachment to finish, then press `Esc` to return to the scoped
+   dashboard. Press `[` to show all attached families again, or `q` to quit.
+
+Your probe selection survives PID/TID reselects (`p` / `t`) and filter changes (`f`),
+including ones that restart the trace. Only quitting and restarting `ior` restores the
+`-trace-*` startup set (FS when no selection flags were given). Detaching everything
+therefore leaves later trace sessions with no probes until you attach some again.
+Newly attached syscalls use the sampling rates set at startup. If a trace restarts during
+a probe change, ior keeps the requested selection; probes that cannot attach are retried
+and skipped with a log line until your next probe change.
 
 ### Syscall families on the command line
 
