@@ -602,19 +602,168 @@ back-to-back, capped with `-duration` so each terminates on its own.
 
 ![Three headless flows in one tape](./assets/14-headless-modes.gif)
 
-`-flamegraph` writes one aggregated `.ior.zst` artifact at shutdown, ideal for `ior`'s
-native flamegraph and integration workflows. To render a recording with external FlameGraph
-tooling, derive collapsed stacks from it:
-`ior collapsed <file>.ior.zst | flamegraph.pl > flame.svg`. `-parquet` streams every row,
-so the file grows continuously. `-plain` is the lightest weight: CSV to stdout you can pipe
-into anything (human-facing status lines go to stderr, so the pipe stays clean).
+`-plain` writes CSV to stdout; status lines and statistics go to stderr. `-parquet`
+streams per-event rows to disk. `-flamegraph` writes an aggregated `.ior.zst` recording
+at shutdown; convert it to an SVG with external FlameGraph tools.
 
-A headless run with `-pid <n>` or `-tid <n>` stops by itself when that process or thread
-exits, like `strace -p`, and prints the usual end-of-run statistics.
+The examples below run from the repository root in Bash. Define a short workload that
+writes five bytes every 100 ms for about eight seconds:
 
-When `-plain` or `ior collapsed` writes to a terminal, escape sequences hidden in traced
-comm names and paths are shown as `\x1b` and the like. Piped output stays raw; use
-`-escape=always` when you pipe into `less -R` or `grep`.
+```shell
+headless_workload() {
+  bash -c 'for ((i=0; i<80; i++)); do
+    printf hello > "$1"
+    sleep 0.1
+  done' ior-headless "${1:-/dev/null}" &
+  workload_pid=$!
+}
+```
+
+#### Stop when a process exits
+
+Start the workload, then select the newest Bash process with `pgrep`:
+
+```shell
+headless_workload
+sudo ./ior -plain -pid "$(pgrep -n bash)" -duration 15
+wait "$workload_pid"
+```
+
+On a busy host, use `-pid "$workload_pid"` to select this exact instance instead.
+The loop's `printf` is a Bash builtin, so its writes belong to that process. Its
+`sleep` children are separate processes: `-pid` does not follow forks.
+
+The trace stops when the Bash process exits, before the 15-second cap. This run printed
+on stderr:
+
+```text
+Traced process 2328116 exited, stopping the trace
+```
+
+The PID will differ on your host. Statistics follow, and ior exits successfully.
+
+#### Stop when a worker thread exits
+
+This Python process starts one worker, then keeps the main thread alive for 12 seconds:
+
+```shell
+python3 - <<'PY' &
+import threading
+import time
+
+def worker():
+    for _ in range(80):
+        with open("/dev/null", "wb") as output:
+            output.write(b"hello")
+        time.sleep(0.1)
+
+thread = threading.Thread(target=worker)
+thread.start()
+time.sleep(12)
+thread.join()
+PY
+thread_pid=$!
+
+# Wait for the worker to appear, then select its TID rather than the main thread.
+for _ in {1..40}; do
+  worker_tid=$(ls "/proc/$thread_pid/task" |
+    awk -v pid="$thread_pid" '$0 != pid {print; exit}')
+  [ -n "$worker_tid" ] && break
+  sleep 0.05
+done
+test -n "$worker_tid"
+ls "/proc/$thread_pid/task"
+sudo ./ior -plain -tid "$worker_tid" -duration 15
+kill -0 "$thread_pid"             # The process is still alive after ior stops.
+wait "$thread_pid"
+```
+
+This run listed main-thread TID `2332120` and worker TID `2332125`, then printed:
+
+```text
+Traced thread 2332125 exited, stopping the trace
+```
+
+The trace follows that thread's lifetime, even while its process keeps running. `-pid`
+and `-tid` can also be combined when you want to name both.
+
+#### Record, then choose the flamegraph weight
+
+Start a fresh workload and save a recording named `run`:
+
+```shell
+headless_workload
+sudo ./ior -flamegraph -name run -pid "$workload_pid" -duration 15
+wait "$workload_pid"
+```
+
+This run stopped when the process exited and reported:
+
+```text
+Wrote earth-run-2026-10-05_11:29:39.ior.zst
+```
+
+The hostname and timestamp vary. Set `record` to the path printed by your run. With
+[`flamegraph.pl`](https://github.com/brendangregg/FlameGraph) on your `PATH`:
+
+```shell
+record=earth-run-2026-10-05_11:29:39.ior.zst
+./ior collapsed "$record" | flamegraph.pl > flame.svg
+./ior collapsed -fields comm,path -count bytes "$record" |
+  flamegraph.pl --countname bytes > bytes.svg
+```
+
+The first SVG counts events and uses the default `comm,tracepoint,path` frames. The
+second groups by command and path, with width proportional to bytes transferred.
+`--countname bytes` labels that weight in the SVG. The same recording can be collapsed
+again with `-count duration` or `-count durationToPrev` for syscall time or the gap
+between traced calls; both weights are nanoseconds.
+
+#### Escaping on a terminal and through a pager
+
+Make a file whose name contains a real ESC followed by the red-colour sequence:
+
+```shell
+escape_dir=$(mktemp -d /tmp/ior-escape.XXXXXX)
+escape_file="$escape_dir/"$'a\x1b[31mred'
+touch "$escape_file"
+```
+
+Run this loop directly in a terminal:
+
+```shell
+for mode in auto always never; do
+  headless_workload "$escape_file"
+  sudo ./ior -plain -pid "$workload_pid" -trace-syscalls openat \
+    -duration 1 -escape="$mode"
+  wait "$workload_pid"
+done
+```
+
+Now send the same rows through `less -R` (press `q` after each trace has finished):
+
+```shell
+for mode in auto always never; do
+  headless_workload "$escape_file"
+  sudo ./ior -plain -pid "$workload_pid" -trace-syscalls openat \
+    -duration 1 -escape="$mode" | less -R
+  wait "$workload_pid"
+done
+rm -- "$escape_file"
+rmdir -- "$escape_dir"
+```
+
+The filename behaved as follows in these runs:
+
+| Mode | Direct terminal | Pipe to `less -R` |
+|------|-----------------|------------------|
+| `auto` (default) | Literal `a\x1b[31mred` | Raw ESC; `red` appears red |
+| `always` | Literal `a\x1b[31mred` | Literal `a\x1b[31mred` |
+| `never` | Raw ESC; `red` appears red | Raw ESC; `red` appears red |
+
+`auto` checks ior's stdout, so a pipe gets raw bytes even when the pager displays on a
+terminal. Use `always` for a readable escaped pipeline. `ior collapsed` accepts the
+same `-escape` modes; see [Terminal escaping](../output.md#terminal-escaping).
 
 #### Plain CSV schema
 
