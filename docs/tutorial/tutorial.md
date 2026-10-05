@@ -240,17 +240,109 @@ sudo ./ior -trace-syscalls openat,recvmsg,nanosleep
 
 ### Sampling
 
-Busy syscalls can be sampled per family or per syscall: `1` keeps every call, `N` keeps
-one in N, and `0` only counts them in the kernel (aggregate-only). `futex*` and
-`clock_gettime` are aggregate-only by default.
+Busy syscalls can be sampled per family or per syscall: `1` emits every call, `N` emits
+about one in N, and `0` only counts calls in the kernel (aggregate-only). A sampling flag
+sets rates for the probes you attach; it does not attach a family itself. This dashboard
+run samples Time at 1-in-100, only counts Misc, and samples `read` at 1-in-10:
 
 ```shell
-sudo ./ior -trace-families FS,Time -syscall-sampling-families Time=100
-sudo ./ior -syscall-sampling-syscalls read=10,write=10
+sudo ./ior -trace-families FS,Time,Misc \
+  -syscall-sampling-families Time=100,Misc=0 \
+  -syscall-sampling-syscalls read=10
 ```
 
-Raw outputs (`-plain`, `-flamegraph`, `-parquet`) note the sampling on stderr and in the
-written files; see [Output files](../output.md#sampling).
+Select **All PIDs** in the picker. Per-syscall settings override family settings, which
+in turn override the built-in defaults. In the TUI, the futex variants (`futex`,
+`futex_wait`, `futex_wake`, `futex_requeue`, `futex_waitv`) and `clock_gettime` are
+aggregate-only by default. They belong to IPC and Time, so the default FS-only trace
+never sees them. To get individual `futex` rows in Stream, attach IPC and override its rate:
+
+```shell
+sudo ./ior -trace-families IPC -syscall-sampling-syscalls futex=1
+```
+
+The other futex variants keep their defaults. A family setting such as `IPC=1` overrides
+the defaults for the whole family.
+
+Press `6` in the first run to see the effect on **Latency + Gaps**. The latency histogram
+and syscall counts include the calls counted only in the kernel. The gap histogram has
+samples only between consecutive *emitted* calls on a thread: with `read=10`, a gap can
+span several reads, including their execution time. Aggregate-only calls also lie inside
+those gaps. A larger gap therefore need not mean the thread spent more time idle. The
+Overview tab calls the same mean `Traced gap`.
+
+Raw modes (`-plain`, `-flamegraph`, headless `-parquet`) promote the built-in rate-0
+defaults and any **family** rate of `0` to `1`. In this raw version, Misc emits every call;
+Time still runs at 1-in-100:
+
+```shell
+sudo ./ior -plain -trace-families Time,Misc \
+  -syscall-sampling-families Time=100,Misc=0 -duration 2 > sampled.csv
+```
+
+An explicit per-syscall `0` is preserved even in raw modes: it gives that syscall no
+output rows, but its kernel counts appear in the end totals. CSV keeps its fixed schema;
+the sampling notice and totals go to stderr.
+
+For a sampled Parquet capture:
+
+```shell
+sudo ./ior -parquet sampled.parquet -trace-syscalls read \
+  -syscall-sampling-syscalls read=10 -duration 2
+```
+
+One run printed this startup notice and these end-of-run lines on stderr (your counts
+will differ):
+
+```text
+Sampling active (read=10): output rows are a sample of these syscalls; exact totals are reported at the end
+sampled syscalls (read 1-in-10): rows are a sample; the counts below are exact kernel totals
+  read: 9874 calls (1-in-10: 957 traced, 8917 counted only)
+syscalls including kernel-counted only: 9874
+```
+
+Read the two footer keys in DuckDB:
+
+```sql
+SELECT decode(key) AS key, decode(value) AS value
+FROM parquet_kv_metadata('sampled.parquet')
+WHERE decode(key) IN ('ior.sampling', 'ior.sampling.totals')
+ORDER BY key;
+```
+
+That file had 957 rows and these footer values:
+
+```text
+ior.sampling = read=10
+ior.sampling.totals = [{"syscall":"read","rate":10,"traced":957,"counted_only":8917,"total":9874}]
+```
+
+Use `total` for the population; row counts, bytes, paths and per-row latency analysis stay
+sampled. TUI `R` recordings carry the same keys when a sampled probe is attached, including
+aggregate-only defaults. Lost events make totals lower bounds (`"lower_bound":true`);
+filters the kernel counters cannot apply can make them `unavailable`. See
+[Sampled recordings](../parquet-querying.md#sampled-recordings) for those details.
+
+The native recording carries sampling in its header and uses **format version 2**
+(unsampled recordings use version 1). Capture one, then pass the filename printed by
+`Wrote` to `ior collapsed`; this glob works when there is just one matching recording:
+
+```shell
+sudo ./ior -flamegraph -name sampled -trace-syscalls read \
+  -syscall-sampling-syscalls read=10 -duration 2
+./ior collapsed ./*-sampled-*.ior.zst > sampled.collapsed
+```
+
+`ior collapsed` reports the sampling on stderr. For example, a separate native capture
+printed:
+
+```text
+ior collapsed: sampled syscalls (read 1-in-10): rows are a sample; the counts below are exact kernel totals
+ior collapsed:   read: 9058 calls (1-in-10: 935 traced, 8123 counted only)
+```
+
+The collapsed weights describe the emitted sample. See [Output files](../output.md#sampling)
+for the recording formats.
 
 ### Other filters
 
