@@ -17,6 +17,7 @@ import (
 	"ior/internal/types"
 
 	"github.com/DataDog/zstd" // Go stdlib does not include zstd; third-party dep required
+	zstddecode "github.com/klauspost/compress/zstd"
 )
 
 type pathType = string
@@ -237,12 +238,14 @@ func (iod *iorData) loadFromFile(filename string) (retErr error) {
 		}
 	}()
 
-	decoder := zstd.NewReader(file)
-	defer func() {
-		if err := decoder.Close(); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("close zstd reader for %s: %w", filename, err))
-		}
-	}()
+	// DataDog's streaming reader can return EOF for an unfinished frame after
+	// its payload was flushed. Use a reader that requires a complete frame;
+	// concurrency 1 keeps loading synchronous without decoder worker goroutines.
+	decoder, err := zstddecode.NewReader(file, zstddecode.WithDecoderConcurrency(1))
+	if err != nil {
+		return fmt.Errorf("open zstd reader for %s: %w", filename, err)
+	}
+	defer decoder.Close()
 
 	// decodeRecords translates the stored tracepoint names to this build's IDs
 	// and rejects headerless (pre-format-version) recordings, whose numeric IDs

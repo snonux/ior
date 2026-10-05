@@ -153,6 +153,15 @@ func decodeRecords(r io.Reader) (map[recordKey]Counter, sampling.Summary, error)
 	if err := dec.Decode(&stored); err != nil {
 		return nil, sampling.Summary{}, fmt.Errorf("decode records: %w", err)
 	}
+	// gob uses this reader directly because it implements io.ByteReader. Check
+	// it, rather than r, so buffered trailing bytes cannot escape validation.
+	// Reading through EOF also lets the decompressor validate the frame's end.
+	if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, sampling.Summary{}, errors.New("unexpected data after recording records")
+		}
+		return nil, sampling.Summary{}, fmt.Errorf("read recording end: %w", err)
+	}
 	records, err := translateRecords(stored, header.Tracepoints)
 	if err != nil {
 		return nil, sampling.Summary{}, err
