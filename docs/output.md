@@ -57,8 +57,9 @@ With an explicit sampling rate, a raw-mode run (`-plain`, `-flamegraph`, `-parqu
 sample of the sampled syscalls. It says so on stderr at startup, reports their exact totals
 (rows written plus the invocations the kernel only counted) in the end-of-run statistics, and
 marks the files: Parquet footer keys `ior.sampling` and `ior.sampling.totals` (see
-`docs/parquet-querying.md`), and the `.ior.zst` header (format version 2, which `ior collapsed`
-reports on stderr; unsampled recordings keep version 1). Totals are reported as unavailable
+`docs/parquet-querying.md`), and the `.ior.zst` header (format version 2; unsampled recordings
+keep version 1).
+`ior collapsed` reports the sampling details on stderr. Totals are reported as unavailable
 under a filter the kernel counters cannot apply (`-comm`, `-path`, ...). If the kernel's ring
 buffer dropped events (`ring buffer drops: N` in the statistics), records still buffered at
 stop could not be decoded (`records discarded at stop: N`) or the stop left records in the
