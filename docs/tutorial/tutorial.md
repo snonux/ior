@@ -225,18 +225,210 @@ opens the probes modal on every tab; on the Flame tab lowercase `o` cycles the f
 
 Every syscall belongs to one of 12 families (FS, Network, Memory, Signals, Sched, IPC,
 Time, Process, Security, Polling, AIO, Misc) and has a kind that describes its arguments
-(`open`, `fd`, `socket`, `sleep`, ...). Without selection flags only FS is attached. Pick
-the startup set with families, kinds or single syscalls, and subtract with the `-no-`
-variants:
-
-```shell
-sudo ./ior -trace-families FS,Network
-sudo ./ior -trace-kinds fd,open -no-trace-syscalls read
-sudo ./ior -trace-syscalls openat,recvmsg,nanosleep
-```
+(`open`, `fd`, `socket`, `sleep`, ...). With no selection flags, only FS is attached.
+The positive `-trace-families`, `-trace-kinds` and `-trace-syscalls` selections are added
+together; any matching `-no-trace-*` exclusion wins. For example, `-trace-families Time
+-trace-syscalls openat` selects Time **and** openat.
 
 `./ior -help` lists all valid families and kinds, and
-[Syscall tracing](../syscall-tracing-plan.md) shows which syscall is in which.
+[Syscall tracing](../syscalls.md) shows which syscall is in which. A tracepoint missing
+on the host is skipped with a warning; selecting its family does not make that syscall
+available on an older kernel.
+
+The recipes below use one local Python 3 workload: Unix sockets, `/dev/null`, anonymous
+memory, POSIX timers and a 100 ms sleep. Start it in the same shell where you will run
+ior, then use `$recipe_pid` as the process to trace (replace it with your application's
+PID for a real investigation):
+
+```shell
+python3 - <<'PYTHON' &
+import ctypes
+import mmap
+import os
+import socket
+import time
+
+libc = ctypes.CDLL(None, use_errno=True)
+timer = ctypes.c_void_p()
+while True:
+    left, right = socket.socketpair()
+    left.send(b"hello")
+    right.recv(5)
+    left.getsockname()
+    left.close()
+    right.close()
+    fd = os.open("/dev/null", os.O_WRONLY)
+    os.write(fd, b"hello")
+    os.close(fd)
+    with mmap.mmap(-1, 4096) as page:
+        page[0] = 1
+    if libc.timer_create(1, None, ctypes.byref(timer)) != 0:
+        raise OSError(ctypes.get_errno(), "timer_create")
+    if libc.timer_delete(timer) != 0:
+        raise OSError(ctypes.get_errno(), "timer_delete")
+    time.sleep(0.1)
+PYTHON
+recipe_pid=$!
+```
+
+Each command stops after three seconds. The CSV excerpts are rows from real runs;
+PIDs, timings, addresses and descriptor names will vary. Status and warnings go to
+stderr.
+
+#### Network calls from one process
+
+Use this when a client or server's socket activity is getting lost among file calls:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-families Network -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00025946,python3,2267829.2267829,socketpair,0,"socket:1:1:0%(4,O_RDWR|O_CLOEXEC)"
+00006176,00003496,python3,2267829.2267829,sendto,5,"socket:1:1:0%(4,O_RDWR|O_CLOEXEC)"
+00003237,00002001,python3,2267829.2267829,recvfrom,5,"socket:1:1:0%(5,O_RDWR|O_CLOEXEC)"
+```
+
+`close` belongs to FS, so a Network-only trace does not include it; add
+`-trace-syscalls close` if you need socket closes too.
+
+#### Sleeps and timers
+
+Use the Time family to see sleeps alongside POSIX timer creation and deletion:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-families Time -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00002604,python3,2267829.2267829,timer_create,0,N:file
+00005102,00001539,python3,2267829.2267829,timer_delete,0,N:file
+00003200,100058941,python3,2267829.2267829,clock_nanosleep,0,N:file
+```
+
+For a thread that spends its time sleeping, select just the `sleep` kind:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-kinds sleep -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,100053122,python3,2267829.2267829,clock_nanosleep,0,N:file
+```
+
+`timerfd_create` and the other timerfd calls belong to IPC; add that family if your
+application uses file-descriptor timers.
+
+#### Memory mapping
+
+Use the Memory family when investigating mapping, protection or allocation syscalls:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-families Memory -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00020318,python3,2267829.2267829,mmap,139691959808000,anon
+00011642,00006288,python3,2267829.2267829,munmap,0,N:file
+```
+
+For the mapping and address-range argument kinds, choose `mmap,mem` instead:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-kinds mmap,mem -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00015790,python3,2267829.2267829,mmap,139691959808000,anon
+00010338,00007150,python3,2267829.2267829,munmap,0,N:file
+```
+
+These are syscall traces: writing a byte to an already mapped page is not another row.
+
+#### Combine families and remove noisy calls
+
+Keep file, socket and timer activity while dropping file reads/writes and every syscall
+of the `sleep` kind:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-families FS,Network,Time \
+  -no-trace-syscalls read,write -no-trace-kinds sleep -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00004285,00010884,python3,2269761.2269761,openat,4,"/dev/null%(4,O_WRONLY|O_CLOEXEC)"
+100091377,00029219,python3,2269761.2269761,socketpair,0,"socket:1:1:0%(4,O_RDWR|O_CLOEXEC)"
+00088894,00006270,python3,2269761.2269761,timer_create,0,N:file
+```
+
+Network `sendto`/`recvfrom` remain selected: excluding `read,write` names those two
+syscalls, rather than every operation that moves data.
+
+#### Individual syscalls
+
+Use an explicit syscall list to follow file opens and closes without read/write rows:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-syscalls openat,close -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00005027,00015792,python3,2267829.2267829,openat,4,"/dev/null%(4,O_WRONLY|O_CLOEXEC)"
+00005410,00001010,python3,2267829.2267829,close,0,"/dev/null%(4,O_WRONLY|O_CLOEXEC)"
+```
+
+This selects exactly `openat` and `close`; it does not add the default FS family.
+
+#### Narrow a family selection with tracepoint regexes
+
+Use `-tps` to narrow the selected families and `-tpsExclude` to remove matches from
+that result:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -trace-families FS,Network \
+  -tps 'sys_(enter|exit)_(openat|close|socketpair)$' -tpsExclude 'close$' \
+  -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00027074,python3,2267829.2267829,socketpair,0,"socket:1:1:0%(4,O_RDWR|O_CLOEXEC)"
+00058486,00008414,python3,2267829.2267829,openat,4,"/dev/null%(4,O_WRONLY|O_CLOEXEC)"
+```
+
+Here the family set and `-tps` must **both** match, then `-tpsExclude` removes close.
+The regexes match tracepoint names such as `sys_enter_openat`, not bare syscall names;
+use `openat` or `sys_(enter|exit)_openat$`, rather than `^openat$`. Match both enter and
+exit so ior can pair a completed call into a row.
+
+With `-tps` alone and no `-trace-*` or `-no-trace-*` selectors, the regex replaces the
+FS default. Use this to select socketpair directly even though it is outside FS:
+
+```shell
+sudo ./ior -pid "$recipe_pid" -tps 'sys_(enter|exit)_socketpair$' -plain -duration 3
+```
+
+```csv
+durationToPrevNs,durationNs,comm,pid.tid,name,ret,file
+00000000,00028008,python3,2267829.2267829,socketpair,0,"socket:1:1:0%(4,O_RDWR|O_CLOEXEC)"
+```
+
+Adding even a negative dimension selector restores dimension gating: with no positive
+`-trace-*` selector, that starts from FS. `-tpsExclude` alone also subtracts from FS.
+
+When finished with the recipes, stop the background workload:
+
+```shell
+kill "$recipe_pid"
+wait "$recipe_pid" 2>/dev/null
+```
 
 ### Sampling
 
