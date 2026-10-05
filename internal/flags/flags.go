@@ -224,6 +224,11 @@ func parseFromFlagSet(fs *flag.FlagSet, args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
+	// flag.Parse stops at the first operand; accepting it would also silently
+	// ignore any filters that follow. The tracing command has no operands.
+	if fs.NArg() != 0 {
+		return Config{}, fmt.Errorf("unexpected positional argument %q: tracing accepts flags only (use -h for help)", fs.Arg(0))
+	}
 	if err := resolvePostParseFields(&cfg, tpsAttach, tpsExclude, fields, dims); err != nil {
 		return Config{}, err
 	}
