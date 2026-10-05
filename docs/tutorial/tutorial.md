@@ -30,7 +30,8 @@ tape under [`tapes/`](./tapes). To rebuild them all, run `sudo -v && mage demo` 
 6. [Recording for offline analysis](#recording-for-offline-analysis)
    - [TUI Parquet recording](#tui-parquet-recording)
    - [Headless modes](#headless-modes)
-7. [Regenerating the demo](#regenerating-the-demo)
+7. [When something looks wrong](#when-something-looks-wrong)
+8. [Regenerating the demo](#regenerating-the-demo)
 
 ## Installing ior
 
@@ -313,6 +314,63 @@ CSV-quoted, so parse the rows with any CSV reader rather than a naive comma spli
 full per-event schema (with `seq`, `time_ns`, `bytes`, `error`, `family`,
 `requested_sleep_ns`, `nfds`, `timeout_ns`, `address_space_bytes`, `old_file`, `epoll_*`) use the TUI stream CSV export (`e` in
 the dashboard, writes `ior-stream-<timestamp>.csv`) or headless Parquet instead.
+
+## When something looks wrong
+
+For the full limitation list and explanations, see [Troubleshooting](../troubleshooting.md).
+
+To see a setup warning, deliberately choose a thread that cannot belong to the selected
+process. In a shell on the host, `$$` is your shell's PID/TID, not a thread of PID 1:
+
+```shell
+sudo ./ior -pid 1 -tid $$ -duration 15
+```
+
+The Flame tab's status line shows `warnings: 1 (7:Stream)`. Press `7`, `space` to pause,
+`g` to select the oldest row, then `Enter` to read the whole warning. This run showed
+the following (your shell's TID will differ):
+
+```text
+ior: -tid 2263035: not a thread of -pid 1 (the pid and tid filters are ANDed, so nothing could ever match): the trace will stay empty
+```
+
+`Esc` closes the warning; `p` lets you choose another process, and `q` quits.
+
+To see what event loss looks like, use a tiny ring buffer and a burst of one-byte reads
+and writes. This runs the tracer in the background, gives it two seconds to attach,
+and keeps CSV off the terminal while saving warnings and statistics:
+
+```shell
+sudo -v
+sudo ./ior -plain -trace-syscalls read,write -comm dd -mapSize 4096 -duration 5 > /dev/null 2> drops.log &
+tracer=$!
+sleep 2
+dd if=/dev/zero of=/dev/null bs=1 count=1000000 status=none
+wait "$tracer"
+cat drops.log
+```
+
+An excerpt from the end-of-run statistics on this host:
+
+```text
+Statistics:
+    ring buffer drops: 2882319 (576473.22/s, 71.66% of events)
+    probe runs skipped by the kernel: 0
+```
+
+Drop counts are host-wide, even with `-comm dd`, and vary with workload and host load.
+Nonzero drops mean the trace is incomplete. For normal captures, omit `-mapSize` to use
+the default 16 MiB, or raise it to absorb longer consumer stalls.
+
+For libbpf's full load diagnostics, capture stderr from a headless run:
+
+```shell
+sudo IOR_LIBBPF_DEBUG=1 ./ior -plain -duration 5 2> libbpf.log > /dev/null
+```
+
+The log includes lines such as `libbpf: loading object 'ior.bpf.o' from buffer`.
+Use the same trace options as the failing run and read `libbpf.log` for the load or
+verifier error. The TUI ignores this variable because it owns the terminal screen.
 
 ## Regenerating the demo
 
