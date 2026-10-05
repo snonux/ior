@@ -128,3 +128,54 @@ of a pipe, so `ior -plain | grep`, `| tee` or `| less -R` (and `ior collapsed ..
 still show raw bytes. Use `-escape=always` for such pipelines, or `-escape=never` to keep
 raw bytes on a terminal. Both `-plain` and `ior collapsed` accept the flag, and any other
 value is an error.
+
+## Bytes vs Non-Bytes Classification
+
+Positive return values count as throughput bytes only for these syscalls:
+
+- ReadClassified: `fgetxattr`, `flistxattr`, `getcwd`, `getdents`, `getdents64`, `getrandom`, `getxattr`, `getxattrat`, `lgetxattr`, `listxattr`, `listxattrat`, `llistxattr`, `mq_timedreceive`, `msgrcv`, `pread64`, `preadv`, `preadv2`, `process_vm_readv`, `read`, `readlink`, `readlinkat`, `readv`, `recvfrom`, `recvmsg`, `sched_getaffinity`
+- TransferClassified: `copy_file_range`, `sendfile64`, `splice`, `tee`, `vmsplice`
+- WriteClassified: `process_vm_writev`, `pwrite64`, `pwritev`, `pwritev2`, `sendmsg`, `sendto`, `write`, `writev`
+
+Transfers contribute to both the read and the write totals. All other traced syscalls are
+non-bytes: their return values do not count as throughput. Address-space extent from memory
+syscalls is a separate metric.
+
+A `getxattr*` or `listxattr*` call with a zero output-buffer size asks for the required
+capacity. Its positive return is kept in the row, but its throughput byte count is zero.
+`syslog` is also non-bytes because the meaning of its return depends on the action.
+
+`recvfrom` and `recvmsg` capture their `flags` and buffer capacity in an `fd_size_event`, because
+two flags change what the return value is worth. `MSG_PEEK` copies without consuming, so a peeking
+call counts zero bytes; the later plain receive of the same data is the one that counts. Netlink
+clients (`ip addr`, libnl, systemd) peek every datagram with `recvmsg(fd, {iov_len=0},
+MSG_PEEK|MSG_TRUNC)` and then read it again, which used to count each reply twice. `MSG_TRUNC`
+makes the return the datagram's real length even when it did not fit, so the count is capped at the
+buffer capacity: `recvfrom`'s `size`, or for `recvmsg` the sum of up to eight iovec lengths.
+When that capacity is unknown (an older BPF object, or a `recvmsg` with more than eight iovecs or an
+unreadable `msghdr`) the raw return is kept. `recvmmsg` is unclassified and unaffected.
+
+For a transfer with two descriptors, the file row names one endpoint: the destination fd
+(`out_fd` for `sendfile64`, `fd_out` for `copy_file_range` and `splice`, `fdout` for `tee`).
+`vmsplice` uses its single pipe fd. The bytes still count toward both totals, even though
+the row names only one endpoint.
+
+## Pointer-Backed Argument Capture
+
+`openat2` reports the `flags` word from offset zero of the userspace `struct open_how`
+pointer in `args[2]`. The enter handler first sets flags to the `-1` unknown sentinel. Only
+when the pointer is non-NULL and a guarded `bpf_probe_read_user` of the first `u64`
+succeeds does it store that word, truncated to the 32-bit `flags` field of the event. A
+NULL or unreadable pointer therefore stays
+distinguishable from `O_RDONLY` (zero).
+
+Every path-capturing handler except exec retries a path read at syscall exit when the
+enter-side nofault `bpf_probe_read_user_str` failed (open, pathname, fd-pathname, name and
+two-fd-names kinds, memfd_create, fsopen); the `OPEN_NAME_FIXUP_EVENT` control record repairs
+the pending enter event, with a slot field telling the two names of rename/link and of
+move_mount (from/to pathname) apart. exec does not retry (a successful exec replaces the
+address space).
+
+Polling records preserve `nfds` (or `maxevents` for epoll waits), timeout and the epoll
+instance descriptor where applicable. `timeout_ns = -1` means an infinite wait; `-2` means
+unreadable, invalid or unrepresentable. Non-negative values are captured nanoseconds.

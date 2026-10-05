@@ -14,10 +14,10 @@ import (
 
 var docListItemRE = regexp.MustCompile("`([^`]+)`")
 
-func TestSyscallTracingPlanFamiliesStayInSyncWithGeneratedMap(t *testing.T) {
-	doc, err := readSyscallTracingPlan()
+func TestSyscallReferenceFamiliesStayInSyncWithGeneratedMap(t *testing.T) {
+	doc, err := readSyscallReference()
 	if err != nil {
-		t.Fatalf("read syscall tracing plan: %v", err)
+		t.Fatalf("read syscall reference: %v", err)
 	}
 
 	documented, err := parseDocListSection(doc, "## Traced Syscalls by Family")
@@ -29,10 +29,10 @@ func TestSyscallTracingPlanFamiliesStayInSyncWithGeneratedMap(t *testing.T) {
 	assertGroupedEqual(t, "family", documented, generated)
 }
 
-func TestSyscallTracingPlanKindsStayInSyncWithGeneratedMap(t *testing.T) {
-	doc, err := readSyscallTracingPlan()
+func TestSyscallReferenceKindsStayInSyncWithGeneratedMap(t *testing.T) {
+	doc, err := readSyscallReference()
 	if err != nil {
-		t.Fatalf("read syscall tracing plan: %v", err)
+		t.Fatalf("read syscall reference: %v", err)
 	}
 
 	documented, err := parseDocListSection(doc, "## Traced Syscalls by TracepointKind")
@@ -44,13 +44,13 @@ func TestSyscallTracingPlanKindsStayInSyncWithGeneratedMap(t *testing.T) {
 	assertGroupedEqual(t, "kind", documented, generated)
 }
 
-func readSyscallTracingPlan() (string, error) {
+func readSyscallReference() (string, error) {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", fmt.Errorf("runtime.Caller failed")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
-	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "syscall-tracing-plan.md"))
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "syscalls.md"))
 	if err != nil {
 		return "", err
 	}

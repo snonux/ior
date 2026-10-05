@@ -320,7 +320,12 @@ func tuiChdirTemp(t *testing.T) string {
 
 func tuiNewSession(t *testing.T, m *tui.Model) *tuiSession {
 	t.Helper()
-	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(tuiTermWidth, tuiTermHeight))
+	// Match Bubble Tea's capabilities to the VT emulator. An unset/dumb TERM
+	// makes its renderer use insert/replace mode (CSI 4 h/l), which this
+	// emulator does not implement, corrupting diffs that grow a line.
+	tm := teatest.NewTestModel(t, m,
+		teatest.WithInitialTermSize(tuiTermWidth, tuiTermHeight),
+		teatest.WithProgramOptions(tea.WithEnvironment([]string{"TERM=xterm-256color"})))
 	t.Cleanup(func() { _ = tm.Quit() })
 
 	em := vt.NewEmulator(tuiTermWidth, tuiTermHeight)
@@ -1540,6 +1545,8 @@ func TestTUIIntegration_Syscalls_TableRenders(t *testing.T) {
 // descending direction. The selected column starts at 0 (Syscall), so the
 // label is the stable observable; exact row order is data-dependent.
 func TestTUIIntegration_Syscalls_SortToggles(t *testing.T) {
+	// A CI shell may have no terminal capabilities; the virtual terminal must.
+	t.Setenv("TERM", "dumb")
 	s := tuiNewFlamesModel(t)
 	s.waitFor("view:root")
 

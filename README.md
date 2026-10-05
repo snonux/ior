@@ -77,5 +77,5 @@ Headless runs with `-pid` or `-tid` stop when the traced process or thread exits
 - [Output files and recordings](./docs/output.md): file naming, sampling, CSV schemas, memory limits, escaping
 - [Querying Parquet](./docs/parquet-querying.md)
 - [Troubleshooting and known limitations](./docs/troubleshooting.md): warnings, libbpf logs, io_uring, seccomp and other blind spots
-- [Syscall tracing](./docs/syscall-tracing-plan.md): families, kinds, sampling, byte counting
+- [Syscall tracing](./docs/syscalls.md): families, kinds, sampling, byte counting
 - [Building on Rocky Linux 9](./docs/build-rocky-linux-9.md)

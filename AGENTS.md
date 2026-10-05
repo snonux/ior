@@ -50,11 +50,12 @@ because `w` is an `io.Writer`. That asymmetry is the default exclusion list,
 not an oversight, and unannotated stderr writes are common throughout the
 tree.
 
-**What actually runs the gates.** There is no CI in this repo, and `mage world`
-cannot complete on a host older than the generation kernel (its `generate` step
-is diff-gated; see "Generation host / kernel"). In practice the gates run when
-somebody types `mage lint` / `mage world` on a suitable host, so treat them as
-a pre-commit habit rather than something enforced for you.
+**What actually runs the gates.** `.github/workflows/test.yml` runs
+`mage fmtCheck`, `mage testRace` and the root/eBPF `mage integrationTest` on
+Ubuntu 24.04 for pushes and manual dispatches. `mage lint` / `mage world` still
+run manually on a suitable host: `mage world` cannot complete on a host older
+than the generation kernel (its `generate` step is diff-gated; see "Generation
+host / kernel"). Keep those checks as a pre-commit habit; CI does not run them.
 
 **Where the gates are defined.** `Magefile.go` is behind `//go:build mage`, so
 nothing can import it, and for several rounds every assertion about what `mage

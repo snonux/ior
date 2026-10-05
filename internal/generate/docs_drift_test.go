@@ -14,10 +14,10 @@ import (
 
 var bytesListItemRE = regexp.MustCompile("`([^`]+)`")
 
-func TestSyscallTracingPlanBytesClassificationStaysInSync(t *testing.T) {
-	doc, err := readSyscallTracingPlan()
+func TestOutputBytesClassificationStaysInSync(t *testing.T) {
+	doc, err := readOutputDocumentation()
 	if err != nil {
-		t.Fatalf("read syscall tracing plan: %v", err)
+		t.Fatalf("read output documentation: %v", err)
 	}
 
 	documented, err := parseDocListSection(doc, "## Bytes vs Non-Bytes Classification")
@@ -63,8 +63,8 @@ func assertBytesClassificationMatchesGenerator(t *testing.T, documented map[stri
 	}
 }
 
-func readSyscallTracingPlan() (string, error) {
-	return readRepoFile("docs", "syscall-tracing-plan.md")
+func readOutputDocumentation() (string, error) {
+	return readRepoFile("docs", "output.md")
 }
 
 func readRepoFile(parts ...string) (string, error) {

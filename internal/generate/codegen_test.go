@@ -3197,17 +3197,17 @@ func TestGenerateOpenat2FlagsCaptureIsDocumented(t *testing.T) {
 		t.Error("committed sys_enter_openat2 handler differs from the generator")
 	}
 
-	doc, err := readSyscallTracingPlan()
+	doc, err := readOutputDocumentation()
 	if err != nil {
-		t.Fatalf("read syscall tracing plan: %v", err)
+		t.Fatalf("read output documentation: %v", err)
 	}
 	for _, text := range []string{"struct open_how", "bpf_probe_read_user", "`-1`"} {
 		if !strings.Contains(doc, text) {
-			t.Errorf("docs/syscall-tracing-plan.md must document openat2 flags capture with %q", text)
+			t.Errorf("docs/output.md must document openat2 flags capture with %q", text)
 		}
 	}
 	if strings.Contains(doc, "`openat2` does not report `flags`") {
-		t.Error("docs/syscall-tracing-plan.md still describes openat2 flags as uncaptured")
+		t.Error("docs/output.md still describes openat2 flags as uncaptured")
 	}
 }
 

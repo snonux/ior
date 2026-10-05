@@ -99,8 +99,13 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
 
     if (pid == IOR_PID_FILTER)
         return 0;
-    ior_on_exec_tid_change((__u32)ctx->old_pid, tid, in_scope);
-    scope = ior_exec_record_scope(in_scope, pid, (__u32)ctx->old_pid);
+    // Keep the CO-RE load as a scalar across the map helpers below. Older
+    // LLVM versions otherwise reuse a relocated ctx + offset pointer for
+    // later loads, which tracepoint verifiers reject as a modified ctx.
+    __u32 old_tid = (__u32)ctx->old_pid;
+    barrier_var(old_tid);
+    ior_on_exec_tid_change(old_tid, tid, in_scope);
+    scope = ior_exec_record_scope(in_scope, pid, old_tid);
     if (scope == IOR_EXEC_OUT_OF_SCOPE)
         return 0;
 
@@ -120,7 +125,7 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     // the field needs no memset first; see "String fields in ring-buffer
     // records" in filter.c.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
-    ev->old_tid = (__u32)ctx->old_pid;
+    ev->old_tid = old_tid;
     ev->exit_untraced = scope == IOR_EXEC_CALLER_TRACED ? 1 : 0;
 
     bpf_ringbuf_submit(ev, 0);
