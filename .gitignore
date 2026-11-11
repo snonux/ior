@@ -31,3 +31,10 @@ perf/.static-*
 # Generated test output
 *.test
 *.log
+
+# Workspace dumps that once entered history (flamegraph.test, earth-*
+# recordings / collapsed stacks). Covered partly by *.test / *.ior.zst /
+# *.collapsed above; keep the explicit root globs so a renamed dump cannot
+# sneak back in under a path the suite also rejects.
+/flamegraph.test
+/earth-*
