@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -202,13 +203,48 @@ func runSyntheticLiveFlames(ctx context.Context, liveTrie *flamegraph.LiveTrie, 
 // them separately makes each consumer's dependency explicit and prevents
 // callers from accidentally calling Ingest from snapshot-only paths or vice
 // versa.
+// flushingSnapshotSource is the stats engine as published to the dashboard.
+// Its Reset first ingests the kernel aggregate counts accrued since the last
+// drain (eventLoop.flushAggregatesThen), so they land in the baseline being
+// discarded. A bare engine Reset left up to one drain period of pre-reset
+// counts in the kernel map; the next drain put them into the fresh baseline,
+// inflating the rates of aggregate-only and sampled syscalls right after
+// every reset (auto-reset, the r key, a probe toggle) - the defect SwapFilter
+// already fixed for filter swaps. Before the event loop exists (loop unset)
+// and once its drainer retired, Reset is the engine's own.
+type flushingSnapshotSource struct {
+	runtime.ResettableSnapshotSource
+	loop atomic.Pointer[eventLoop]
+}
+
+// Reset flushes the kernel aggregates into the outgoing baseline, then resets.
+func (s *flushingSnapshotSource) Reset() {
+	if el := s.loop.Load(); el != nil {
+		el.flushAggregatesThen(s.ResettableSnapshotSource.Reset)
+		return
+	}
+	s.ResettableSnapshotSource.Reset()
+}
+
+// flushingSource returns the dashboard's view of snapSource, creating it on
+// first use for a runtime assembled without one.
+func (rt *tuiRuntime) flushingSource() *flushingSnapshotSource {
+	if rt.dashboardSource == nil {
+		rt.dashboardSource = &flushingSnapshotSource{ResettableSnapshotSource: rt.snapSource}
+	}
+	return rt.dashboardSource
+}
+
 type tuiRuntime struct {
 	accumulator statsengine.Accumulator
 	snapSource  runtime.ResettableSnapshotSource
-	streamBuf   runtime.EventSink
-	streamSrc   runtime.StreamSource
-	streamSeq   runtime.Sequencer
-	liveTrie    *flamegraph.LiveTrie
+	// dashboardSource is snapSource as the dashboard sees it: its Reset
+	// flushes the kernel aggregates first (flushingSnapshotSource).
+	dashboardSource *flushingSnapshotSource
+	streamBuf       runtime.EventSink
+	streamSrc       runtime.StreamSource
+	streamSeq       runtime.Sequencer
+	liveTrie        *flamegraph.LiveTrie
 	// recorder stays behind the narrow runtime.RowRecorder seam: the core
 	// only records rows and claims failures to report, so parquet's wider
 	// surface (start/stop/status, the TUI's concern) cannot ripple into this
@@ -256,12 +292,13 @@ func buildTUIRuntime(cfg flags.Config, bindings runtime.TraceRuntimeBindings) (*
 	rt := &tuiRuntime{
 		// Wire the same engine instance into both roles: accumulator for
 		// event ingestion, snapSource for dashboard snapshot queries.
-		accumulator: components.engine,
-		snapSource:  components.engine,
-		streamBuf:   components.streamBuf,
-		streamSrc:   components.streamBuf,
-		streamSeq:   components.streamSeq,
-		liveTrie:    components.liveTrie,
+		accumulator:     components.engine,
+		snapSource:      components.engine,
+		dashboardSource: &flushingSnapshotSource{ResettableSnapshotSource: components.engine},
+		streamBuf:       components.streamBuf,
+		streamSrc:       components.streamBuf,
+		streamSeq:       components.streamSeq,
+		liveTrie:        components.liveTrie,
 	}
 
 	if bindings != nil {
@@ -317,7 +354,7 @@ func wireRuntimeBindings(rt *tuiRuntime, bindings runtime.TraceRuntimeBindings) 
 	}
 	// Expose the snapshot-read side to the dashboard; the accumulator (write
 	// side) is used only by the event-loop callback below.
-	bindings.SetDashboardSnapshotSource(rt.snapSource)
+	bindings.SetDashboardSnapshotSource(rt.flushingSource())
 	bindings.SetEventStreamSource(rt.streamSrc)
 	bindings.SetLiveTrie(rt.liveTrie)
 	return nil
@@ -417,6 +454,7 @@ func makeTUIEventLoopConfigurer(cfg flags.Config, rt *tuiRuntime, publisher runt
 		if sink, ok := rt.snapSource.(aggregateSink); ok {
 			el.SetAggregateSink(sink)
 		}
+		rt.flushingSource().loop.Store(el)
 		wireRecordingSampling(cfg, el, rt, publisher)
 		if publisher != nil {
 			unregisterLiveFilterSetter = publisher.SetLiveFilterSetter(el.SetFilter)

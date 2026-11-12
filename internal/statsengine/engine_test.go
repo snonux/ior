@@ -124,29 +124,73 @@ func TestEngineTracksAddressSpaceBytesSeparately(t *testing.T) {
 }
 
 func TestEngineTrendDetection(t *testing.T) {
-	if got := detectTrend(make([]float64, trendWindowSlots*2)); got.Direction != TrendStable {
+	if got := detectTrend(0, 0); got.Direction != TrendStable {
 		t.Fatalf("expected stable for flat data, got %+v", got)
 	}
-
-	series := make([]float64, trendWindowSlots*2)
-	for i := 0; i < trendWindowSlots; i++ {
-		series[i] = 10
-	}
-	for i := trendWindowSlots; i < trendWindowSlots*2; i++ {
-		series[i] = 30
-	}
-	if got := detectTrend(series); got.Direction != TrendRising {
+	if got := detectTrend(10, 30); got.Direction != TrendRising {
 		t.Fatalf("expected rising trend, got %+v", got)
 	}
-
-	for i := 0; i < trendWindowSlots; i++ {
-		series[i] = 40
-	}
-	for i := trendWindowSlots; i < trendWindowSlots*2; i++ {
-		series[i] = 10
-	}
-	if got := detectTrend(series); got.Direction != TrendFalling {
+	if got := detectTrend(40, 10); got.Direction != TrendFalling {
 		t.Fatalf("expected falling trend, got %+v", got)
+	}
+}
+
+// trendSeriesStart is a slot-aligned start time for the trend tests.
+var trendSeriesStart = time.Unix(1_700_000_000, 0)
+
+// TestThroughputTrendFollowsBytesNotCallSize pins the throughput series as
+// bytes per slot: a constant byte rate stays stable when zero-byte calls join
+// it (a per-call mean fell by 99%), and a doubled byte rate at the same call
+// size rises (a per-call mean stayed flat).
+func TestThroughputTrendFollowsBytesNotCallSize(t *testing.T) {
+	slot := timeSeriesSlotWidthDefault
+	series := newRingSumSeries()
+	for i := 0; i < 2*trendWindowSlots; i++ {
+		at := trendSeriesStart.Add(time.Duration(i) * slot)
+		series.Add(1<<20, at)
+		if i >= trendWindowSlots {
+			for range 99 {
+				series.Add(0, at)
+			}
+		}
+	}
+	now := trendSeriesStart.Add(time.Duration(2*trendWindowSlots) * slot)
+	if got := seriesTrend(series, now); got.Direction != TrendStable {
+		t.Fatalf("constant byte rate with extra zero-byte calls: %+v, want stable", got)
+	}
+
+	series = newRingSumSeries()
+	for i := 0; i < 2*trendWindowSlots; i++ {
+		at := trendSeriesStart.Add(time.Duration(i) * slot)
+		series.Add(4096, at)
+		if i >= trendWindowSlots {
+			series.Add(4096, at)
+		}
+	}
+	if got := seriesTrend(series, now); got.Direction != TrendRising {
+		t.Fatalf("doubled byte rate: %+v, want rising", got)
+	}
+}
+
+// TestMeanTrendIgnoresEmptySlots pins that a mean series (latency, gap) pools
+// its windows: a constant latency stays stable when the recent window has
+// calls in only half of its slots, and an idle recent window is no trend.
+func TestMeanTrendIgnoresEmptySlots(t *testing.T) {
+	slot := timeSeriesSlotWidthDefault
+	series := newRingTimeSeries()
+	for i := 0; i < 2*trendWindowSlots; i++ {
+		if i >= trendWindowSlots && i%2 == 1 {
+			continue
+		}
+		series.Add(1e6, trendSeriesStart.Add(time.Duration(i)*slot))
+	}
+	now := trendSeriesStart.Add(time.Duration(2*trendWindowSlots-1) * slot)
+	if got := seriesTrend(series, now); got.Direction != TrendStable || got.DeltaPercent != 0 {
+		t.Fatalf("constant latency, sparse recent window: %+v, want stable", got)
+	}
+	idle := now.Add(time.Duration(trendWindowSlots) * slot)
+	if got := seriesTrend(series, idle); got.Direction != TrendStable {
+		t.Fatalf("idle recent window: %+v, want stable", got)
 	}
 }
 

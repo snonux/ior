@@ -82,4 +82,8 @@ WORKDIR /git/ior
 # IOR_FORCE_GENERATE=1 skips the strict diff against the committed syscall-coverage
 # audit, which was generated on a different kernel build than the container host.
 # The container runs as root so bpftool and /sys/kernel/tracing are used directly.
-CMD ["sh", "-c", "IOR_FORCE_GENERATE=1 mage generate && mage all && mv -v ior ior.el8"]
+# `mage all` writes ./ior into the bind-mounted repo root, so an existing ior
+# (the el9 or a native build) is moved aside first and put back on exit;
+# otherwise this build overwrote and then renamed away the binary it is meant
+# to sit alongside.
+CMD ["sh", "-c", "[ ! -e ior ] || mv ior .ior.keep; trap '[ ! -e .ior.keep ] || mv .ior.keep ior' EXIT; IOR_FORCE_GENERATE=1 mage generate && mage all && mv -v ior ior.el8"]

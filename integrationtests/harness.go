@@ -2,7 +2,6 @@ package integrationtests
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -67,7 +66,8 @@ type TestHarness struct {
 }
 
 // OutputCapture is a goroutine-safe line sink: ior's stdout and stderr are
-// scanned by two goroutines at once.
+// scanned by two goroutines at once, and the workload's stderr is still being
+// copied by os/exec when a timed-out run reads it for the error message.
 type OutputCapture struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -224,8 +224,8 @@ func (h *TestHarness) workloadStartupFile(scenario string) string {
 
 // startWorkload launches the workload for scenario and waits (bounded by
 // workloadStartupTimeout) for it to print its PID as the first stdout line.
-// The returned buffer captures the workload's stderr for error reporting.
-func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, int, *bytes.Buffer, error) {
+// The returned capture holds the workload's stderr for error reporting.
+func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, int, *OutputCapture, error) {
 	cmd, stderr := h.workloadCommand(scenario, startupFile)
 
 	stdout, err := cmd.StdoutPipe()
@@ -254,14 +254,16 @@ func (h *TestHarness) startWorkload(scenario, startupFile string) (*exec.Cmd, in
 }
 
 // workloadCommand builds the (unstarted) workload command. Its stderr is teed
-// to the test's stderr and to the returned buffer. The environment is only
+// to the test's stderr and to the returned capture, which is locked because
+// waitBoth returns after killing a timed-out workload without waiting for its
+// Wait (and with it os/exec's stderr copy goroutine) to finish. The environment is only
 // overridden when extra env or a startup file is requested. A stale startup
 // file is removed first: the harness writes the file to release the workload
 // (releaseWorkloadWhenIorReady) and the workload polls for it, so a leftover
 // one would let the workload start before ior has attached.
-func (h *TestHarness) workloadCommand(scenario, startupFile string) (*exec.Cmd, *bytes.Buffer) {
+func (h *TestHarness) workloadCommand(scenario, startupFile string) (*exec.Cmd, *OutputCapture) {
 	cmd := exec.Command(h.WorkloadBinary, "--scenario="+scenario)
-	stderr := &bytes.Buffer{}
+	stderr := &OutputCapture{}
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
 	if len(h.WorkloadEnv) > 0 || startupFile != "" {
 		cmd.Env = append(os.Environ(), h.WorkloadEnv...)

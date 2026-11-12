@@ -155,11 +155,16 @@ func TestRingbufDropMonitorFinalTickOnStop(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(results) != 1 {
-		t.Fatalf("results = %+v, want exactly the final tick", results)
+	// The startup read reports what was lost before the monitor started
+	// (during the probe attach) and marks it so; the final tick follows.
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want the startup read and the final tick", results)
 	}
-	if results[0].total != 12 || results[0].delta != 12 {
-		t.Fatalf("final tick = %+v, want total/delta 12", results[0])
+	if !results[0].startup || results[0].total != 12 || results[0].delta != 12 {
+		t.Fatalf("startup read = %+v, want startup with total/delta 12", results[0])
+	}
+	if results[1].startup || results[1].total != 12 || results[1].delta != 0 {
+		t.Fatalf("final tick = %+v, want total 12 and no new drops", results[1])
 	}
 }
 
@@ -228,7 +233,8 @@ func TestEventLoopDropMonitorForwardsReadFailure(t *testing.T) {
 	cancel()
 	stop()
 
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "drop counter read failed") {
+	// Both reads fail: the startup read and the final one.
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "drop counter read failed") {
 		t.Fatalf("warnings = %q, want the read failure surfaced", warnings)
 	}
 }
@@ -585,5 +591,31 @@ func TestStatsGatesTheDropTotalOnTheFailureFlagNotOnTheTotal(t *testing.T) {
 	}
 	if !strings.Contains(line, "4242") {
 		t.Errorf("stats line = %q, want the counted total", strings.TrimSpace(line))
+	}
+}
+
+// TestRingbufDropWarningNamesAttachPhaseLoss pins that drops found by the
+// monitor's startup read are reported as lost during the probe attach, not as
+// the running trace falling behind, and that later drops keep the usual text.
+func TestRingbufDropWarningNamesAttachPhaseLoss(t *testing.T) {
+	el := &eventLoop{
+		cfg:     eventLoopConfig{aggregateDrainEvery: time.Hour},
+		dropSrc: &ringbufDropSourceStub{totals: []uint64{7, 9}},
+		done:    make(chan struct{}),
+	}
+	var warnings []string
+	el.warningCb = func(message string) { warnings = append(warnings, message) }
+
+	stop := el.startRingbufDropMonitor(context.Background())
+	stop()
+
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %q, want one for the attach phase and one for the run", warnings)
+	}
+	if !strings.Contains(warnings[0], "while the probes were attaching: 7 events") {
+		t.Fatalf("startup warning = %q", warnings[0])
+	}
+	if !strings.Contains(warnings[1], "Ring buffer full: 2 events dropped kernel-side (9 total this run)") {
+		t.Fatalf("run warning = %q", warnings[1])
 	}
 }

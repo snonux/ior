@@ -131,7 +131,8 @@ func (m *Model) startFamilyBatch(req probes.FamilyBatchRequestMsg) tea.Cmd {
 	}
 	if m.bulkRunning() {
 		// The manager is half done, so the batch's intent could not be derived.
-		m.probeModal = m.probeModal.SetError(bulkBusyNotice)
+		// The modal already shows the batch as running; take that back.
+		m.probeModal = m.probeModal.CancelBatch().SetError(bulkBusyNotice)
 		return nil
 	}
 	manager := m.runtime.currentProbeManager()

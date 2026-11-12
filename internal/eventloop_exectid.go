@@ -417,11 +417,14 @@ func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok
 // completeUntracedExec finishes a traced thread's successful execve whose
 // exit ior will never see, using the sched_process_exec record as its exit.
 //
-// BPF sets ExitUntraced only under -tid <non-leader> when that very thread
-// exec'd (ior_exec_record_scope in internal/c/exec.c): the execve entered
-// under the traced tid, but after de_thread() it returns under the leader's
-// tid, which the kernel-side tid filter rejects, so no sys_exit record
-// arrives. Without this the enter stayed parked until LRU trimming and the
+// BPF sets ExitUntraced in two cases. Under -tid <non-leader> when that very
+// thread exec'd (ior_exec_record_scope in internal/c/exec.c): the execve
+// entered under the traced tid, but after de_thread() it returns under the
+// leader's tid, which the kernel-side tid filter rejects, so no sys_exit
+// record arrives. And for an exec that loaded a 32-bit program
+// (ior_exec_into_compat there): the task stays in scope and keeps its tid,
+// but it leaves the execve as a 32-bit syscall, which the classic syscall
+// tracepoints never report. Without this the enter stayed parked until LRU trimming and the
 // thread's last traced syscall was never shown; at a sampling rate N the
 // emitted invocation was not counted anywhere either, since BPF leaves an
 // emitted enter to userspace (ior_on_exec_tid_change).
@@ -437,8 +440,8 @@ func (e *eventLoop) lostExecCaller(exit *types.RetEvent) (tid uint32, proven, ok
 //
 // Only a parked execve/execveat enter is completed. If there is none (execve
 // not traced, the enter filtered or trimmed), there is nothing to report.
-// Tracing of the thread ends here: its post-exec syscalls run under the
-// filtered leader tid.
+// Tracing of the thread ends here in both cases: its post-exec syscalls run
+// under the filtered leader tid, or are 32-bit ones no tracepoint reports.
 func (e *eventLoop) completeUntracedExec(ev *types.ProcessExecEvent, ch chan<- *event.Pair) {
 	pair, ok := e.pairs.pending(ev.Tid)
 	if !ok {

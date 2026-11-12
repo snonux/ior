@@ -255,7 +255,7 @@ func (f *Filter) matchesNumerics(candidate Candidate) bool {
 	if f.TID != nil && !matchNumeric(f.TID, int64(candidate.TIDValue())) {
 		return false
 	}
-	if f.FD != nil && !matchNumeric(f.FD, int64(candidate.FDValue())) {
+	if f.FD != nil && !matchFD(f.FD, candidate.FDValue()) {
 		return false
 	}
 	if f.GapNs != nil && !matchNumeric(f.GapNs, int64(candidate.GapValue())) {
@@ -412,6 +412,19 @@ func matchString(sf *StringFilter, value string) bool {
 	default:
 		return strings.Contains(value, pattern)
 	}
+}
+
+// matchFD applies the descriptor filter. A candidate without a descriptor
+// carries the negative sentinel (streamrow.UnknownFD, -1), which is "no
+// value" and not a number to order: fd<3 and fd!=5 used to select every
+// fd-less row (nanosleep, futex, path-only calls), which usually outnumber the
+// rows asked for. Such a row now matches only the filter that names the
+// sentinel exactly (fd==-1), so the rows without a descriptor stay selectable.
+func matchFD(nf *NumericFilter, fd int32) bool {
+	if fd < 0 {
+		return nf.Op == OpEq && nf.Value == int64(fd)
+	}
+	return matchNumeric(nf, int64(fd))
 }
 
 func matchNumeric(nf *NumericFilter, value int64) bool {

@@ -111,6 +111,14 @@ func (m Model) switchView() Model {
 	return m.clampCursor()
 }
 
+// CancelBatch drops the optimistic "batch running" state of a family batch
+// the TUI refused to start (toggleSelectedFamily sets it before the request
+// is sent). It leaves the error and info lines alone.
+func (m Model) CancelBatch() Model {
+	m.batch = familyBatch{}
+	return m
+}
+
 // toggleSelectedFamily requests detaching the selected family when any of
 // its probes is attached and attaching it otherwise. A key press while a
 // batch is shown as running is ignored here; the TUI, which owns the run,
@@ -121,6 +129,14 @@ func (m Model) toggleSelectedFamily() (Model, tea.Cmd) {
 	families := m.familyStates()
 	if m.batch.active || m.famCursor < 0 || m.famCursor >= len(families) {
 		return m, nil
+	}
+	// An all-on/all-off walk owns the manager: the TUI refuses the batch, so
+	// do not show it as running. The optimistic batch state set below was
+	// never cleared after that refusal, leaving a phantom "attaching ... 0/N"
+	// that blocked every later toggle until the modal was reopened.
+	if m.bulkRunning {
+		m.lastErr = BulkBusyNotice
+		return m.clampCursor(), nil
 	}
 	state := families[m.famCursor]
 	if state.Total == 0 {

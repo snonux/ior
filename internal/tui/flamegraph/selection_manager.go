@@ -222,13 +222,35 @@ func (s *SelectionManager) restoreByPath(frames []tuiFrame, path string) {
 			return
 		}
 	}
+	if idx := closestRelative(frames, path); idx >= 0 {
+		s.selectedIdx = idx
+		s.wish(path)
+	}
+}
+
+// closestRelative returns the frame that stands in for a vanished path: its
+// nearest surviving ancestor (the longest frame path that is a boundary
+// prefix of path), or, when no ancestor is left, the first descendant; -1
+// without either. Taking the first relative in slice order always picked the
+// root, since frames are depth-first and the root is an ancestor of
+// everything - a pruned leaf threw the selection to the bottom of the graph
+// instead of onto its parent.
+func closestRelative(frames []tuiFrame, path string) int {
+	ancestor, descendant := -1, -1
 	for idx, frame := range frames {
-		if hasPathBoundaryPrefix(path, frame.Path) || hasPathBoundaryPrefix(frame.Path, path) {
-			s.selectedIdx = idx
-			s.wish(path)
-			return
+		switch {
+		case hasPathBoundaryPrefix(path, frame.Path):
+			if ancestor < 0 || len(frame.Path) > len(frames[ancestor].Path) {
+				ancestor = idx
+			}
+		case descendant < 0 && hasPathBoundaryPrefix(frame.Path, path):
+			descendant = idx
 		}
 	}
+	if ancestor >= 0 {
+		return ancestor
+	}
+	return descendant
 }
 
 // resolveWanted picks the path restoreByPath should look for: the pending

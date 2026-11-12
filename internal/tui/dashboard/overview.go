@@ -22,7 +22,8 @@ import (
 func renderOverview(snap *statsengine.Snapshot, width, height int) string {
 	theme := common.Current()
 	if snap == nil {
-		return theme.PanelStyle.Render("Overview: waiting for stats...")
+		// Cut to the width like every other placeholder (task cz2).
+		return common.RenderMessagePanel("Overview: waiting for stats...", width)
 	}
 	if width <= 0 {
 		width = 80

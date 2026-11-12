@@ -22,11 +22,20 @@ import (
 // the hint line may exceed the width: the hint keeps whole segments only
 // (fitHintSegments).
 func renderSelectableTable(spec tableSpec, rows [][]string, width, height, selectedRow, selectedCol int, rowHint string, extraHints ...string) string {
-	if len(rows) == 0 {
+	rowAt := func(idx int) []string { return rows[idx] }
+	return renderSelectableTableLazy(spec, len(rows), rowAt, width, height, selectedRow, selectedCol, rowHint, extraHints...)
+}
+
+// renderSelectableTableLazy is renderSelectableTable over rowCount rows whose
+// cells are produced on demand by rowAt. Only the visible window is asked for,
+// so a table with an unbounded row set (Processes: thousands of rows on a busy
+// host) formats about a screenful of cells per frame instead of every row.
+func renderSelectableTableLazy(spec tableSpec, rowCount int, rowAt func(idx int) []string, width, height, selectedRow, selectedCol int, rowHint string, extraHints ...string) string {
+	if rowCount == 0 {
 		return ""
 	}
 
-	selectedRow = clampOffset(selectedRow, len(rows))
+	selectedRow = clampOffset(selectedRow, rowCount)
 	selectedCol = common.ClampTableCol(selectedCol, len(spec.columns))
 	fit, ok := fitTableColumns(spec, width, selectedCol)
 	if !ok {
@@ -34,7 +43,7 @@ func renderSelectableTable(spec tableSpec, rows [][]string, width, height, selec
 	}
 	columns := fit.columns(spec)
 	shownCol := fit.visibleIndex(selectedCol)
-	start, end := common.VisibleTableWindow(selectedRow, len(rows), tableRowBudget(height))
+	start, end := common.VisibleTableWindow(selectedRow, rowCount, tableRowBudget(height))
 
 	lines := make([]string, 0, end-start+2)
 	lines = append(lines, common.RenderTableHeader(columns))
@@ -43,10 +52,10 @@ func renderSelectableTable(spec tableSpec, rows [][]string, width, height, selec
 		if idx == selectedRow {
 			col = shownCol
 		}
-		lines = append(lines, common.RenderTableRow(columns, fit.cells(spec, rows[idx]), idx == selectedRow, col, lipgloss.Style{}))
+		lines = append(lines, common.RenderTableRow(columns, fit.cells(spec, rowAt(idx)), idx == selectedRow, col, lipgloss.Style{}))
 	}
 
-	hints := []string{fmt.Sprintf("Row %d/%d Col %d/%d", selectedRow+1, len(rows), selectedCol+1, len(spec.columns))}
+	hints := []string{fmt.Sprintf("Row %d/%d Col %d/%d", selectedRow+1, rowCount, selectedCol+1, len(spec.columns))}
 	if rowHint != "" {
 		hints = append(hints, rowHint)
 	}

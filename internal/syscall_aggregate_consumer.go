@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"unsafe"
 
@@ -99,6 +100,31 @@ func (c *syscallAggregateConsumer) Drain() ([]statsengine.SyscallAggregate, erro
 		return nil, nil
 	}
 
+	// The baselines the rows advance (c.last, c.untimed) are restored when
+	// the drain fails part-way: the rows built so far are discarded with the
+	// error, and with their baselines left advanced the next drain reported
+	// a delta of 0 for them - the counts were lost for good, while callers
+	// rely on "the map is cumulative, a later drain catches up".
+	undo := c.beginDrain()
+	rows, err := c.drainRows()
+	if err != nil {
+		undo()
+		return nil, err
+	}
+	return rows, nil
+}
+
+// beginDrain snapshots the per-trace-ID baselines and returns the function
+// that puts them back. The maps hold one small entry per attached syscall
+// and a drain runs about once a second, so the copies are cheap.
+func (c *syscallAggregateConsumer) beginDrain() (undo func()) {
+	last, untimed := maps.Clone(c.last), maps.Clone(c.untimed)
+	return func() { c.last, c.untimed = last, untimed }
+}
+
+// drainRows reads every key of the aggregate map into delta rows, advancing
+// the baselines as it goes (Drain undoes them on error).
+func (c *syscallAggregateConsumer) drainRows() ([]statsengine.SyscallAggregate, error) {
 	iter := c.aggregateMap.Iterator()
 	rows := make([]statsengine.SyscallAggregate, 0, 64)
 	for iter.Next() {

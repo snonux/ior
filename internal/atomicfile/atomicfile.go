@@ -79,7 +79,7 @@ const (
 // must not run in parallel.
 var (
 	openTempFile  = os.OpenFile
-	closeTempFile = (*os.File).Close
+	closeTempFile = SyncAndClose
 	chmodTempFile = os.Chmod
 )
 
@@ -364,6 +364,16 @@ func writeThenPublish(final string, write func(io.Writer) error, publishTmp func
 		return "", errors.Join(err, os.Remove(tmp))
 	}
 	return published, nil
+}
+
+// SyncAndClose flushes f to stable storage and closes it. A temp file must be
+// synced before it is renamed over its destination: the rename is atomic for
+// readers, but without the fsync a crash or power loss shortly after it can
+// leave the new name pointing at an empty or truncated file - with the file it
+// replaced already gone. The file is closed even when the sync fails.
+func SyncAndClose(f *os.File) error {
+	syncErr := f.Sync()
+	return errors.Join(syncErr, f.Close())
 }
 
 // closeAndRemove discards a half-written temp file, reporting problems other

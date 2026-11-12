@@ -307,12 +307,19 @@ func (e *eventLoop) Filter() globalfilter.Filter {
 // into the baseline the TUI resets right after a live swap.
 func (e *eventLoop) SetFilter(filter globalfilter.Filter) {
 	cloned := filter.Clone()
-	store := func() { e.filterPtr.Store(&cloned) }
+	e.flushAggregatesThen(func() { e.filterPtr.Store(&cloned) })
+}
+
+// flushAggregatesThen runs apply at a stats boundary: while the aggregate
+// drain loop runs, the kernel aggregate counts accrued so far are ingested
+// first (aggregateDrainer.SwapFilter), so they are booked before the boundary
+// and not after it. Without a running drainer it only runs apply.
+func (e *eventLoop) flushAggregatesThen(apply func()) {
 	if d := e.aggregateDrainer.Load(); d != nil {
-		d.SwapFilter(store)
+		d.SwapFilter(apply)
 		return
 	}
-	store()
+	apply()
 }
 
 // SetAggregateSink wires the syscall-aggregate ingestion sink (the stats
@@ -362,6 +369,7 @@ func newEventLoop(cfg eventLoopConfig) (*eventLoop, error) {
 	// "Sampling" in eventloop_restart.go); the rates are fixed for the run,
 	// so the tracker is told once, here.
 	el.restarts.restartSyscallSampled = restartSyscallSampled(cfg.aggregateIngestTraceIDs)
+	el.restarts.sampledEnters = cfg.aggregateIngestTraceIDs
 	// One slot: a runtime probe change wakes the loop once, however many
 	// probes changed before it looks (restartProbeWatch, task o03).
 	el.restarts.probes.wake = make(chan struct{}, 1)

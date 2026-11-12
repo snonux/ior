@@ -120,13 +120,15 @@ type Model struct {
 	// table the state above selects in, so clamping the treemap selection
 	// (a PID outside the top tiles) never moves the table selection. See
 	// tabletab.go for what the component is for.
-	syscallsTab            tableTabState[syscallSortKey]
-	syscallsTreemapOffset  int
-	syscallsTreemapWanted  stickyKey
-	filesTab               tableTabState[fileSortKey]
-	filesDirGrouped        bool
-	filesDirTab            tableTabState[fileDirSortKey]
-	processesTab           tableTabState[processSortKey]
+	syscallsTab           tableTabState[syscallSortKey]
+	syscallsTreemapOffset int
+	syscallsTreemapWanted stickyKey
+	filesTab              tableTabState[fileSortKey]
+	filesDirGrouped       bool
+	filesDirTab           tableTabState[fileDirSortKey]
+	processesTab          tableTabState[processSortKey]
+	// processSort memoises the sorted Processes table rows per snapshot.
+	processSort            processSortCache
 	processesTreemapOffset int
 	processesTreemapWanted stickyKey
 	streamModel            eventstream.Model
@@ -740,7 +742,7 @@ func (m *Model) selectedProcessSnapshot() (statsengine.ProcessSnapshot, bool) {
 }
 
 func (m *Model) sortedProcessTableRows() []statsengine.ProcessSnapshot {
-	return sortedProcessTableRows(m.snapshotOrZero().Processes(), m.processesTab.sort)
+	return m.processSort.rows(m.snapshotOrZero().Processes(), m.processesTab.sort)
 }
 
 // processByKey returns the row whose selection key (processKey) is key; an

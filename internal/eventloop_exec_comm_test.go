@@ -367,14 +367,14 @@ func TestProcessExecEventLeavesPairingStateUntouched(t *testing.T) {
 		"/etc/ld.so.preload", types.SYS_ENTER_ACCESS)
 	el.processRawEvent(enterRaw, out)
 	verifyEnterEventPending(t, el, execCommTid)
-	pendingBefore := el.pairs.enters[execCommTid]
+	pendingBefore := el.pairs.enters[execCommTid].pair
 	syscallsBefore := el.numSyscalls
 	afterFilterBefore := el.numSyscallsAfterFilter
 
 	el.processRawEvent(makeProcessExecEvent(t, defaulTime+1, execCommPid, execCommTid, "cat"), out)
 
 	verifyEnterEventPending(t, el, execCommTid)
-	if el.pairs.enters[execCommTid] != pendingBefore {
+	if el.pairs.enters[execCommTid].pair != pendingBefore {
 		t.Fatal("control record replaced the pending enter event for the tid")
 	}
 	if el.numSyscalls != syscallsBefore {

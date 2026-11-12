@@ -225,8 +225,18 @@ import (
 //     re-execution fold has this residual; the guard keeps it out of this
 //     fold.
 //
-// The interrupted syscall's own rate needs no guard under either rule: its
-// restart_syscall is a row of its own whenever the call was sampled out.
+// The interrupted syscall's own rate needs no guard for the restart_syscall
+// fold: its restart_syscall is a row of its own whenever the call was sampled
+// out. The re-execution fold does need one, for the first reason above. The
+// continuation of a -512/-513/-514 exit is the interrupted syscall itself, so
+// at rate N the re-execution is sampled out N-1 times in N (at rate 0 the
+// row does not exist). Nothing releases the held row then until the thread's
+// next record, and the re-executed call - a blocking read, a wait - is
+// exactly what keeps the thread silent, its own exit sampled out with its
+// enter. So a row whose syscall is not at rate 1 is not held
+// (restartTracker.reexecutionSampled, holdable): it is emitted by its own
+// exit with its restart code, and a sampled-in re-execution is a row of its
+// own (TestSampledSyscallReexecutionRowIsNotHeld).
 //
 // Runtime probe changes (task o03). BPF takes a task's first traced enter
 // after an interrupted exit for the continuation, and that holds only while
@@ -704,6 +714,12 @@ type restartTracker struct {
 	// held, most of them would only be late, and on a coarse clock the RESUME
 	// record's time rule would not keep a later call out).
 	restartSyscallSampled bool
+	// sampledEnters is the run's set of enter trace IDs whose effective
+	// sampling rate is not 1 (eventLoopConfig.aggregateIngestTraceIDs, shared
+	// and read-only). A -512/-513/-514 row of such a syscall is not held
+	// (reexecutionSampled): its continuation is the same syscall, sampled
+	// per invocation, so most re-executions never reach the stream.
+	sampledEnters map[types.TraceId]struct{}
 	// restartSyscallUntraced is set by trace setup (traceSetIsFinal) in a run
 	// that cannot change its probes, when restart_syscall has none attached:
 	// no restart_syscall exit will ever arrive, so a -516 row has nothing to
@@ -1368,7 +1384,8 @@ func restartSyscallSampled(notAtRateOne map[types.TraceId]struct{}) bool {
 // holdable reports whether ep is an interrupted row worth parking: a -516
 // exit of the kind the restart_syscall fold can patch, when BPF announces
 // restart_syscall continuations (restartBlock), or - when it proves
-// re-executions - any exit carrying -512/-513/-514. A run that samples
+// re-executions - any exit carrying -512/-513/-514 of a syscall the run does
+// not sample (reexecutionSampled). A run that samples
 // restart_syscall parks no -516 row either ("Sampling" in the file comment),
 // nor does one that will never record a restart_syscall, or cannot while its
 // probes are switched off (restartBlockHeld).
@@ -1392,7 +1409,20 @@ func (r *restartTracker) holdable(ep *event.Pair) bool {
 		_, isRet := ep.ExitEv.(*types.RetEvent)
 		return isRet && r.restartBlockHeld()
 	}
-	return r.reexec && event.IsReexecutedRestartRet(ret)
+	return r.reexec && event.IsReexecutedRestartRet(ret) && !r.reexecutionSampled(ep)
+}
+
+// reexecutionSampled reports whether the re-execution of ep's syscall is
+// subject to sampling, i.e. whether the syscall's effective rate is not 1
+// ("Sampling" in the file comment). Such a row is not parked: the enter that
+// would fold into it is sampled out most of the time, and the row would only
+// be late.
+func (r *restartTracker) reexecutionSampled(ep *event.Pair) bool {
+	if len(r.sampledEnters) == 0 || ep.EnterEv == nil {
+		return false
+	}
+	_, sampled := r.sampledEnters[ep.EnterEv.GetTraceId()]
+	return sampled
 }
 
 // restartBlockHeld reports whether this run parks a -516 row now: BPF

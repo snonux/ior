@@ -17,13 +17,25 @@ type timeSeriesSlot struct {
 	weight float64
 }
 
-// ringTimeSeries stores fixed-width time buckets in a circular buffer; each
-// bucket reports the (weighted) mean of the samples that fell into it.
+// ringTimeSeries stores fixed-width time buckets in a circular buffer. By
+// default each bucket reports the (weighted) mean of the samples that fell
+// into it (latency, gap). With sumMode it reports their sum instead: the
+// throughput series is bytes per slot, and a mean there would be "bytes per
+// syscall", which falls when zero-byte calls are added to a constant byte
+// rate and stays flat when the byte rate doubles at the same call size.
 type ringTimeSeries struct {
 	slots    []timeSeriesSlot
 	slotSize time.Duration
 	lastKey  int64
 	hasData  bool
+	sumMode  bool
+}
+
+// newRingSumSeries returns a series whose slots report sums (see sumMode).
+func newRingSumSeries() *ringTimeSeries {
+	r := newRingTimeSeries()
+	r.sumMode = true
+	return r
 }
 
 func newRingTimeSeries() *ringTimeSeries {
@@ -127,10 +139,62 @@ func (r *ringTimeSeries) ValuesAt(now time.Time) []float64 {
 		if slot.key != key || slot.weight == 0 {
 			continue
 		}
-		result[i] = slot.sum / slot.weight
+		result[i] = r.slotValue(slot.sum, slot.weight)
 	}
 
 	return result
+}
+
+// slotValue is what sum and weight amount to in this series' mode: the sum
+// itself, or the weighted mean (0 without samples).
+func (r *ringTimeSeries) slotValue(sum, weight float64) float64 {
+	if r.sumMode {
+		return sum
+	}
+	if weight == 0 {
+		return 0
+	}
+	return sum / weight
+}
+
+// TrendWindows returns the series' value over the two adjacent windows of
+// window slots each that end at now: prev, then recent. Unlike averaging the
+// per-slot values of ValuesAt, the windows are pooled (sum of sums over sum
+// of weights), so a slot without samples is "no measurement" and not a 0 that
+// would make a mean series follow the call density instead of the value. ok
+// is false when a mean series has no sample in one of the windows, i.e.
+// there is nothing to compare. A sum series skips the newest slot, which is
+// still filling and would read as a drop.
+func (r *ringTimeSeries) TrendWindows(now time.Time, window int) (prev, recent float64, ok bool) {
+	if r == nil || !r.hasData || window <= 0 || len(r.slots) < window*2+1 {
+		return 0, 0, false
+	}
+	end := r.lastKey
+	if !now.IsZero() {
+		end = max(end, r.slotKey(now))
+	}
+	if r.sumMode {
+		end--
+	}
+	prevSum, prevWeight := r.windowTotals(end-int64(2*window)+1, window)
+	recentSum, recentWeight := r.windowTotals(end-int64(window)+1, window)
+	if !r.sumMode && (prevWeight == 0 || recentWeight == 0) {
+		return 0, 0, false
+	}
+	return r.slotValue(prevSum, prevWeight), r.slotValue(recentSum, recentWeight), true
+}
+
+// windowTotals pools the sums and weights of the count slots from key start.
+func (r *ringTimeSeries) windowTotals(start int64, count int) (sum, weight float64) {
+	for key := start; key < start+int64(count); key++ {
+		slot := r.slots[r.slotIndex(key)]
+		if slot.key != key {
+			continue
+		}
+		sum += slot.sum
+		weight += slot.weight
+	}
+	return sum, weight
 }
 
 // addWeighted adds sum and weight to the slot with key, advancing the window

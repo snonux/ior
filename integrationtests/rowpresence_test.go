@@ -215,6 +215,13 @@ func TestRunSourcesKnowOnlyTheRowsTheyWereGiven(t *testing.T) {
 	if got := sources.judged(verdict, nil, lacking); got.rows != nil {
 		t.Fatalf("no rows: judged %+v", got)
 	}
+	// A run that recorded nothing is remembered too, once it has an identity.
+	empty := judgedRun[int]{rows: identifiableRows[int](nil), logged: statsBlock(noRingDrops, "1"), pid: 7}
+	none := func([]int) shortfall { return shortfall{unmet: 1, missing: 1} }
+	defer sources.remember(empty, rerun)()
+	if got := sources.judged(verdict, empty.rows, none); got.pid != 2 {
+		t.Fatalf("empty remembered run: judged run %d, want the rerun", got.pid)
+	}
 	forget()
 	if got := sources.judged(verdict, first.rows, lacking); got.pid != 0 {
 		t.Fatalf("forgotten rows: judged run %d, want the rows as they are", got.pid)

@@ -32,13 +32,22 @@ func renderProcessesWithSort(snap *statsengine.Snapshot, width, height, offset, 
 		return fitTableLine("Processes: waiting for stats...", width)
 	}
 
-	rows := processRows(sortedProcessTableRows(snap.Processes(), sortState))
-	if len(rows) == 0 {
+	return renderSortedProcesses(sortedProcessTableRows(snap.Processes(), sortState), width, height, offset, selectedCol, pidFilter, sortState)
+}
+
+// renderSortedProcesses renders the Processes table from rows already in
+// sortState's order, so the dashboard can hand in its memoised order
+// (processSortCache) instead of sorting once more per frame.
+func renderSortedProcesses(processes []statsengine.ProcessSnapshot, width, height, offset, selectedCol, pidFilter int, sortState tableSortState[processSortKey]) string {
+	// The process set is unbounded, so the cells are formatted lazily: only
+	// the rows in the visible window (renderSelectableTableLazy).
+	if len(processes) == 0 {
 		return fitTableLine("Processes: no data", width)
 	}
+	rowAt := func(idx int) []string { return processRow(processes[idx]) }
 
 	noteRows := processFilterNoteRows(pidFilter, height)
-	out := renderSelectableTable(processTableSpec(), rows, width, height-noteRows, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
+	out := renderSelectableTableLazy(processTableSpec(), len(processes), rowAt, width, height-noteRows, offset, selectedCol, "enter:filter", "s/S:sort", processSortHint(sortState), "v:mode", "b:metric")
 	if noteRows > 0 {
 		// Use a Builder to avoid an extra allocation for the PID-filter note suffix.
 		var b strings.Builder
@@ -110,6 +119,34 @@ func processTableSpec() tableSpec {
 		// 0 PID, 1 Comm, 2 Syscalls, 3 Rate/s, 4 Total Bytes, 5 Avg Latency.
 		dropOrder: []int{3, 4, 5, 2},
 	}
+}
+
+// processSortCache memoises the sorted Processes rows of one snapshot. The
+// order is asked for on every frame (render) and several times per key press
+// and stats tick (selection capture, re-anchoring, the selected row), and
+// each ask used to clone and sort the whole, unbounded process set. A
+// snapshot's rows are immutable and every snapshot has a backing array of
+// its own, so the rows' identity plus the sort state is the cache key.
+type processSortCache struct {
+	// src is kept (not just its address) so the array cannot be collected
+	// and its address reused by a later snapshot while this entry lives.
+	src    []statsengine.ProcessSnapshot
+	sort   tableSortState[processSortKey]
+	sorted []statsengine.ProcessSnapshot
+}
+
+// rows returns rows in sortState's order, sorting only when rows or
+// sortState differ from the previous call.
+func (c *processSortCache) rows(rows []statsengine.ProcessSnapshot, sortState tableSortState[processSortKey]) []statsengine.ProcessSnapshot {
+	if len(rows) == 0 || !sortState.active {
+		return sortedProcessTableRows(rows, sortState) // nothing to sort
+	}
+	if len(c.src) == len(rows) && &c.src[0] == &rows[0] && c.sort == sortState {
+		return c.sorted
+	}
+	c.src, c.sort = rows, sortState
+	c.sorted = sortedProcessTableRows(rows, sortState)
+	return c.sorted
 }
 
 func sortedProcessTableRows(rows []statsengine.ProcessSnapshot, sortState tableSortState[processSortKey]) []statsengine.ProcessSnapshot {
@@ -211,16 +248,21 @@ func findProcessOffset(rows []statsengine.ProcessSnapshot, key string) (int, boo
 func processRows(processes []statsengine.ProcessSnapshot) [][]string {
 	rows := make([][]string, 0, len(processes))
 	for _, p := range processes {
-		rows = append(rows, []string{
-			p.ID(), // "PID#lifetime" for a recycled PID's later rows
-			common.Sanitize(p.Comm),
-			strconv.FormatUint(p.Syscalls, 10),
-			fmt.Sprintf("%.1f", p.RatePerSec),
-			formatBytes(float64(p.Bytes)),
-			latencyCell(p.NoLatency, p.AvgLatencyNs),
-		})
+		rows = append(rows, processRow(p))
 	}
 	return rows
+}
+
+// processRow formats one Processes table row.
+func processRow(p statsengine.ProcessSnapshot) []string {
+	return []string{
+		p.ID(), // "PID#lifetime" for a recycled PID's later rows
+		common.Sanitize(p.Comm),
+		strconv.FormatUint(p.Syscalls, 10),
+		fmt.Sprintf("%.1f", p.RatePerSec),
+		formatBytes(float64(p.Bytes)),
+		latencyCell(p.NoLatency, p.AvgLatencyNs),
+	}
 }
 
 // truncateText sanitises value (it renders traced comm names, see

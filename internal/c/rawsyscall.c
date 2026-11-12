@@ -62,9 +62,9 @@
 #define IOR_RAW_NR_WRITE 1
 #define IOR_RAW_NR_RT_SIGRETURN 15
 
-// IOR_TS_COMPAT is x86's thread_info.status bit of a task inside a 32-bit
-// syscall (arch/x86/include/asm/thread_info.h, what in_ia32_syscall tests).
-#define IOR_TS_COMPAT 0x0002
+// IOR_TS_COMPAT, x86's thread_info.status bit of a task inside a 32-bit
+// syscall, is defined in exec.c (included before this file), which asks the
+// same question of a task that just exec'd.
 
 // ior_raw_enter_progs and ior_raw_exit_progs are the tail-call tables of the
 // first variant, indexed by syscall number; userspace stores the handler

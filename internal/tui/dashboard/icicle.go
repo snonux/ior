@@ -225,6 +225,13 @@ func layoutIcicle(nodes []*icicleNode, x, width, depth, maxDepth, rootSlot int, 
 	if len(nodes) == 0 || width <= 0 || depth >= maxDepth {
 		return
 	}
+	// Every tile needs at least one cell. With more nodes than cells the
+	// per-tile width clamp went negative for the leading (largest) nodes and
+	// skipped them, so only the smallest tail was drawn. nodes is sorted
+	// largest first (sortedIcicleChildren), so keep the ones that fit.
+	if len(nodes) > width {
+		nodes = nodes[:width]
+	}
 	total := icicleNodeTotal(nodes, metric)
 	if total == 0 {
 		return

@@ -94,7 +94,7 @@ func flamegraphScenarioRun(t *testing.T, scenario string, extraIorArgs []string)
 
 	AssertNoUnexpectedPID(t, result, pid)
 	AssertNoUnexpectedComm(t, result, "ioworkload")
-	return judgedRun[flamegraph.IterRecord]{rows: result.Records, logged: h.IorOutput.String(), pid: pid}
+	return judgedRun[flamegraph.IterRecord]{rows: identifiableRows(result.Records), logged: h.IorOutput.String(), pid: pid}
 }
 
 func runParquetScenarioRows(t *testing.T, scenario string, duration int, extraIorArgs, workloadEnv []string) ([]iorparquet.Record, int) {
@@ -115,7 +115,7 @@ func runParquetScenarioRowsAllowingComms(t *testing.T, scenario string, duration
 	enableParallelIfRequested(t)
 	again := func() judgedRun[iorparquet.Record] {
 		run := parquetScenarioRun(t, scenario, duration, extraIorArgs, workloadEnv, comms...)
-		return judgedRun[iorparquet.Record]{rows: run.rows, logged: run.logged, pid: run.pid}
+		return judgedRun[iorparquet.Record]{rows: identifiableRows(run.rows), logged: run.logged, pid: run.pid}
 	}
 	run := again()
 	t.Cleanup(parquetRunSources.remember(run, again))

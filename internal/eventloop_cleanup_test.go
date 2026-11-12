@@ -29,12 +29,12 @@ func TestTracepointEnteredPrunesOldestPendingPairs(t *testing.T) {
 	if _, ok := el.pairs.enters[defaultTid+2]; !ok {
 		t.Fatalf("expected newest pending enter event to be retained")
 	}
-	if got := len(el.pairs.enterAges); got != 2 {
-		t.Fatalf("pending enter metadata size = %d, want 2", got)
+	if got := len(el.pairs.enters); got != 2 {
+		t.Fatalf("pending enter table size = %d, want 2", got)
 	}
 
-	for _, pair := range el.pairs.enters {
-		pair.Recycle()
+	for _, parked := range el.pairs.enters {
+		parked.pair.Recycle()
 	}
 }
 
@@ -55,9 +55,6 @@ func TestConsumeEnterEventClearsPendingPairMetadata(t *testing.T) {
 
 	if _, ok := el.pairs.enters[defaultTid]; ok {
 		t.Fatalf("expected pending enter pair to be removed")
-	}
-	if _, ok := el.pairs.enterAges[defaultTid]; ok {
-		t.Fatalf("expected pending enter metadata to be removed")
 	}
 }
 

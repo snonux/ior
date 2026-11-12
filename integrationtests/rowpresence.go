@@ -178,14 +178,39 @@ var (
 	eventRunSources   runSources[flamegraph.IterRecord]
 )
 
+// rowsIdentity returns the address that identifies the run rows came from:
+// that of the first element of their backing array, which exists for an
+// empty slice too as long as it has capacity. A slice without capacity (nil)
+// has no identity.
+func rowsIdentity[R any](rows []R) *R {
+	if cap(rows) == 0 {
+		return nil
+	}
+	return &rows[:1][0]
+}
+
+// identifiableRows returns rows, or for a run that recorded nothing an empty
+// slice with a backing array of its own. A run that lost its every row to
+// the kernel is the one a presence assertion most needs to ask about, and
+// without an identity it could not be remembered, so it failed hard instead
+// of being run again.
+func identifiableRows[R any](rows []R) []R {
+	if cap(rows) > 0 {
+		return rows
+	}
+	return make([]R, 0, 1)
+}
+
 // remember records where run's rows came from and how to run the scenario
-// again, and returns the function that forgets it (for t.Cleanup). A run
-// without rows has no identity and is not remembered.
+// again, and returns the function that forgets it (for t.Cleanup). Rows
+// without a backing array have no identity and are not remembered; the
+// scenario helpers pass theirs through identifiableRows so that an empty run
+// has one.
 func (s *runSources[R]) remember(run judgedRun[R], rerun func() judgedRun[R]) (forget func()) {
-	if len(run.rows) == 0 {
+	key := rowsIdentity(run.rows)
+	if key == nil {
 		return func() {}
 	}
-	key := &run.rows[0]
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.byRows == nil {
@@ -201,12 +226,13 @@ func (s *runSources[R]) remember(run judgedRun[R], rerun func() judgedRun[R]) (f
 
 // of returns the remembered run rows came from.
 func (s *runSources[R]) of(rows []R) (rememberedRun[R], bool) {
-	if len(rows) == 0 {
+	key := rowsIdentity(rows)
+	if key == nil {
 		return rememberedRun[R]{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	source, ok := s.byRows[&rows[0]]
+	source, ok := s.byRows[key]
 	return source, ok
 }
 

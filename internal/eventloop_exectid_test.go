@@ -211,7 +211,7 @@ func TestPairTrackerMoveExecCallerWithoutState(t *testing.T) {
 	p := newPairTracker()
 	p.setPrevTime(nleExecPid, 77)
 	p.moveExecCaller(nleExecCaller, nleExecPid)
-	if len(p.enters) != 0 || len(p.prevTimes) != 0 || len(p.prevTimeAges) != 0 {
+	if len(p.enters) != 0 || len(p.prevTimes) != 0 {
 		t.Fatalf("tracker not empty after move: enters=%v prevTimes=%v", p.enters, p.prevTimes)
 	}
 }
@@ -561,5 +561,44 @@ func TestExecExitTraceID(t *testing.T) {
 				t.Fatalf("execExitTraceID(%v) = %v, %v; want %v, %v", tc.enter, got, ok, tc.want, tc.wantOK)
 			}
 		})
+	}
+}
+
+// TestExecIntoCompatProgramCompletesFromExecRecord pins the other use of the
+// flagged exec record: a leader that execs a 32-bit program keeps its tid and
+// stays in scope, but its sys_exit_execve never fires (the classic syscall
+// tracepoints ignore 32-bit syscalls), so BPF flags the record ExitUntraced
+// with old_tid == tid. The parked execve must become a successful row ending
+// at the record instead of staying parked until the LRU trims it.
+func TestExecIntoCompatProgramCompletesFromExecRecord(t *testing.T) {
+	el := newNonLeaderExecLoop(t)
+	out := make(chan *event.Pair, 1)
+	el.processRawEvent(makeNonLeaderExecEnter(t, 1500, nleExecPid), out)
+
+	ev := types.ProcessExecEvent{
+		EventType: types.PROCESS_EXEC_EVENT, Time: 1800, Pid: nleExecPid, Tid: nleExecPid,
+		OldTid: nleExecPid, ExitUntraced: 1,
+	}
+	copy(ev.Comm[:], "prog32")
+	el.processRawEvent(mustRaw(t, &ev), out)
+
+	var ep *event.Pair
+	select {
+	case ep = <-out:
+	default:
+		t.Fatal("flagged same-tid exec record did not complete the parked execve")
+	}
+	defer ep.Recycle()
+	if got := ep.ExitEv.GetTraceId(); got != types.SYS_EXIT_EXECVE {
+		t.Errorf("exit trace id = %v, want sys_exit_execve", got)
+	}
+	if ret, ok := restartRetOf(ep); !ok || ret != 0 {
+		t.Errorf("ret = %d (ok %t), want 0", ret, ok)
+	}
+	if ep.Duration != 300 {
+		t.Errorf("duration = %d, want 300 (enter to the exec record)", ep.Duration)
+	}
+	if _, parked := el.pairs.pending(nleExecPid); parked {
+		t.Error("the execve enter is still parked")
 	}
 }
