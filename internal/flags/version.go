@@ -7,7 +7,7 @@ import (
 )
 
 // Version is the current application version.
-const Version = "v1.2.0"
+const Version = "v1.3.1"
 
 const asciiBannerTemplate = ` ██╗    ██╗  ██████╗     ██████╗  ██╗  ██████╗  ████████╗
  ██║   ██╔╝ ██╔═══██╗    ██╔══██╗ ██║ ██╔═══██╗ ╚══██╔══╝
