@@ -41,6 +41,39 @@ type traceLifecycle struct {
 	// until then. It outlives sessions, which is what carries a runtime
 	// probe change across a restart.
 	attachSyscalls []string
+	// scope is the kernel-side PID/TID scope the running session was started
+	// with (see kernelScope); the zero value while no session runs.
+	scope kernelScope
+}
+
+// kernelScope is the PID/TID equality a trace session loads into the BPF
+// programs as load-time globals (applyTraceScopeFromGlobalFilter in package
+// internal): 0 means the dimension is unscoped. It cannot change while the
+// session runs, unlike the userspace filter.
+type kernelScope struct {
+	pid, tid int64
+}
+
+// kernelScopeOf derives the kernel scope a session started with filter gets.
+func kernelScopeOf(filter globalfilter.Filter) kernelScope {
+	var scope kernelScope
+	scope.pid, _ = filter.PID.EqValue()
+	scope.tid, _ = filter.TID.EqValue()
+	return scope
+}
+
+// covers reports whether a session with scope s delivers every event next
+// asks for, i.e. whether a filter change to next can be applied in place. An
+// unscoped dimension covers anything (the userspace filter narrows it); a
+// scoped one only covers the same ID.
+func (s kernelScope) covers(next kernelScope) bool {
+	return (s.pid == 0 || s.pid == next.pid) && (s.tid == 0 || s.tid == next.tid)
+}
+
+// scopeCovers reports whether the running session's kernel scope delivers the
+// events filter selects (kernelScope.covers).
+func (t *traceLifecycle) scopeCovers(filter globalfilter.Filter) bool {
+	return t.scope.covers(kernelScopeOf(filter))
 }
 
 // tracingShutdownProgressMsg carries one progress update from the active
@@ -96,6 +129,7 @@ func (t *traceLifecycle) beginCmd(bindings *runtimeBindings, filter globalfilter
 	t.traceCtx, t.traceStop = ctx, cancel
 	t.shutdownReporter = runtime.NewTraceShutdownReporter()
 	t.session++
+	t.scope = kernelScopeOf(filter)
 	var sessionBindings runtime.TraceRuntimeBindings
 	if bindings != nil {
 		view := bindings.beginSession()
@@ -167,6 +201,7 @@ func (t *traceLifecycle) stop() {
 	if t.traceStop != nil {
 		t.traceStop()
 		t.traceCtx, t.traceStop = nil, nil
+		t.scope = kernelScope{}
 	}
 	// Retire the session's bindings view synchronously, here on the Update
 	// goroutine: once stop returns, none of the stopped session's rows can

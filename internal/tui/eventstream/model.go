@@ -661,9 +661,10 @@ func (m *Model) handleViewportUpdate(msg tea.KeyPressMsg) bool {
 		m.viewport = vp
 	}
 	m.scrollOffset = clamp(m.viewport.YOffset(), 0, m.maxScrollOffset())
-	if m.scrollOffset < m.maxScrollOffset() {
-		m.autoScroll = false
-	}
+	// Scrolling away from the tail stops the follow; scrolling back down to
+	// the last row re-arms it (it used to stay off until G or pause/resume,
+	// leaving a live view that looked followed but fell behind).
+	m.autoScroll = m.scrollOffset >= m.maxScrollOffset()
 	return true
 }
 
@@ -1327,6 +1328,15 @@ func (m *Model) jumpSearch(direction SearchDirection) bool {
 		m.statusMessage = "Search: no rows"
 		return true
 	}
+	// A search jump selects a row, and the selection exists (and is drawn)
+	// only while paused. n/N on a resumed stream used to move the view and
+	// stop the tail-follow while the header still said LIVE and no row was
+	// highlighted; it now pauses first, like opening the search does.
+	if !m.paused {
+		m.paused = true
+		m.ensureSelection()
+		m.ensureSelectedCol()
+	}
 	start := m.selectedIdx
 	if start < 0 || start >= len(m.filtered) {
 		if direction == SearchForward {
@@ -1365,8 +1375,11 @@ func (m *Model) findMatch(start int, direction SearchDirection) int {
 }
 
 // streamEventMatchesRegex reports whether the paused search's pattern matches
-// a row: any of its text cells, any of its numbers in decimal, or the word
-// "error" on a failed call. A warning row is matched by the one line it shows
+// a row: any of its text cells, any of the numbers it shows in decimal, or the
+// word "error" on a failed call. The sequence number and the timestamp are
+// not columns and are not searched: a 19-digit timestamp contains any given
+// two-digit string in about one row out of seven, so a search for a PID, fd
+// or errno stopped on rows showing no match. A warning row is matched by the one line it shows
 // (warningLine) and by nothing else: its other values are placeholders that
 // are not drawn (comm "ior", pid 0, ret -1, 0 bytes, the error flag), and
 // /^0$ or /^ior$ used to stop on a row showing neither.
@@ -1380,9 +1393,7 @@ func streamEventMatchesRegex(ev StreamEvent, re *regexp.Regexp) bool {
 	if re.MatchString(ev.Syscall) || re.MatchString(ev.Comm) || re.MatchString(ev.FileName) {
 		return true
 	}
-	if re.MatchString(strconv.FormatUint(ev.Seq, 10)) ||
-		re.MatchString(strconv.FormatUint(ev.TimeNs, 10)) ||
-		re.MatchString(strconv.FormatUint(uint64(ev.PID), 10)) ||
+	if re.MatchString(strconv.FormatUint(uint64(ev.PID), 10)) ||
 		re.MatchString(strconv.FormatUint(uint64(ev.TID), 10)) ||
 		re.MatchString(strconv.FormatInt(int64(ev.FD), 10)) ||
 		re.MatchString(strconv.FormatInt(ev.RetVal, 10)) ||

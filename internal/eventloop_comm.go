@@ -581,6 +581,18 @@ func (r *commResolver) setCachedFromEnterPayload(tid uint32, comm string, rechec
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	prev, had := r.comms[tid]
+	if had && !recheck && !prev.stale && prev.comm == comm {
+		// The payload repeats the cached name - nearly every open of a
+		// thread that is already known. The general path below would end
+		// in the same state through three map reads and three map writes;
+		// do it in one write each. The epoch bump must stay: it retires a
+		// procfs lookup still in flight (storeLookupResult). Nothing was
+		// added, so there is nothing to prune.
+		prev.epoch++
+		r.comms[tid] = prev
+		r.touchCommLocked(tid)
+		return
+	}
 	r.setKernelCommLocked(tid, comm)
 	if recheck || (had && prev.comm != comm) {
 		r.markStaleLocked(tid)
@@ -676,6 +688,12 @@ func (r *commResolver) queueLookup(tid uint32) {
 	if tid == 0 {
 		return
 	}
+	// The cache hit - every enter of a known thread - needs no workers, so it
+	// is answered under one lock before startLookupWorkers, which costs
+	// another lock round-trip and a Once check per call.
+	if r.touchCachedComm(tid) {
+		return
+	}
 	r.startLookupWorkers()
 
 	r.mu.Lock()
@@ -684,11 +702,27 @@ func (r *commResolver) queueLookup(tid uint32) {
 		return
 	}
 	if _, ok := r.comms[tid]; ok {
-		// Already resolved; refresh the LRU age so the active TID stays cached.
+		// Resolved since the check above.
 		r.touchCommLocked(tid)
 		return
 	}
 	r.enqueueLookupLocked(tid)
+}
+
+// touchCachedComm refreshes the LRU age of tid's cached comm, so the active
+// TID stays cached, and reports whether there was one. A closed resolver
+// reports true: there is nothing left to queue.
+func (r *commResolver) touchCachedComm(tid uint32) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return true
+	}
+	if _, ok := r.comms[tid]; !ok {
+		return false
+	}
+	r.touchCommLocked(tid)
+	return true
 }
 
 // enqueueLookupLocked marks tid pending and hands it to a lookup worker,

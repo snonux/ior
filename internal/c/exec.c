@@ -56,7 +56,51 @@
  * a map lookup in filter() on every event of every task the tid filter
  * rejects; the renumbered thread is therefore not traced any further (see
  * the -tid notes in AGENTS.md).
+ *
+ * An exec into a 32-bit program loses its exit the same way, for another
+ * reason (ior_exec_into_compat below): the record is flagged exit_untraced
+ * there too, and the in-flight enter state is settled here
+ * (ior_on_exec_exit_unseen in filter.c).
  */
+
+// IOR_TS_COMPAT is x86's thread_info.status bit of a task inside a 32-bit
+// syscall (arch/x86/include/asm/thread_info.h, what in_ia32_syscall tests).
+#define IOR_TS_COMPAT 0x0002
+
+// ior_exec_into_compat reports whether the current task, which just exec'd,
+// will leave its execve as a 32-bit (compat) syscall.
+//
+// execve enters as whatever the calling program is, so a 64-bit caller's
+// sys_enter_execve fires. Loading an i386 ELF then switches the task over
+// (set_personality_ia32: orig_ax becomes the 32-bit execve number and
+// thread_info.status gets TS_COMPAT) before sched_process_exec fires, which
+// exec_binprm does after load_binary. From there the task is "in a 32-bit
+// syscall", and x86's classic syscall tracepoints ignore those
+// (ARCH_TRACE_IGNORE_COMPAT_SYSCALLS): sys_exit_execve never fires. The
+// execve row was lost - its enter stayed parked in userspace until the LRU
+// trimmed it - and its syscall_enter_state_map entry lingered until the tid
+// was handed out again, with a sampled-out invocation counted nowhere.
+//
+// The read is a probe read through bpf_get_current_task(), not the BTF-typed
+// task rawsyscall.c uses, so it also loads on kernels before 5.11 (el8). A
+// kernel without thread_info.status (not x86) has no such switch: the
+// field-exists relocation resolves to 0 and the verifier prunes the read.
+//
+// The mirror case, a 32-bit caller exec'ing a 64-bit program, leaves an exit
+// without an enter; that is the stateless exit of filter.c and needs nothing
+// here.
+//
+// Verification status: this compiles to valid CO-RE relocations and follows
+// the read pattern of ior_exit_group_dead, but it has not been run against an
+// i386 exec (the integration tests need root and a 32-bit binary).
+static __always_inline int ior_exec_into_compat(void) {
+    struct task_struct *task;
+
+    if (!bpf_core_field_exists(struct thread_info, status))
+        return 0;
+    task = (struct task_struct *)bpf_get_current_task();
+    return (BPF_CORE_READ(task, thread_info.status) & IOR_TS_COMPAT) != 0;
+}
 
 // Emission scope of a sched_process_exec record.
 enum ior_exec_scope {
@@ -96,6 +140,7 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     struct process_exec_event *ev;
     int in_scope = !filter(&pid, &tid);
     enum ior_exec_scope scope;
+    int exit_unseen;
 
     if (pid == IOR_PID_FILTER)
         return 0;
@@ -108,6 +153,13 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     scope = ior_exec_record_scope(in_scope, pid, old_tid);
     if (scope == IOR_EXEC_OUT_OF_SCOPE)
         return 0;
+    // An in-scope exec into a 32-bit program: its sys_exit never fires
+    // (ior_exec_into_compat), so the enter state is settled now and the
+    // record below tells userspace to complete the execve from it. After
+    // the tid move above, the state is under the post-exec tid.
+    exit_unseen = scope == IOR_EXEC_IN_SCOPE && ior_exec_into_compat();
+    if (exit_unseen)
+        ior_on_exec_exit_unseen(tid);
 
     ev = bpf_ringbuf_reserve(&event_map, sizeof(struct process_exec_event), 0);
     if (!ev) {
@@ -126,7 +178,7 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     // records" in filter.c.
     bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
     ev->old_tid = old_tid;
-    ev->exit_untraced = scope == IOR_EXEC_CALLER_TRACED ? 1 : 0;
+    ev->exit_untraced = (scope == IOR_EXEC_CALLER_TRACED || exit_unseen) ? 1 : 0;
 
     bpf_ringbuf_submit(ev, 0);
     return 0;

@@ -110,6 +110,9 @@ type snapshotInputs struct {
 	latencySeries    []float64
 	gapSeries        []float64
 	throughputSeries []float64
+	latencyTrend     Trend
+	gapTrend         Trend
+	throughputTrend  Trend
 
 	syscalls  syscallCapture
 	files     []fileSnapshotInput
@@ -144,7 +147,7 @@ func newEngineWithClock(topN int, now func() time.Time) *Engine {
 		gapHist:          newHistogram(),
 		latencySeries:    newRingTimeSeries(),
 		gapSeries:        newRingTimeSeries(),
-		throughputSeries: newRingTimeSeries(),
+		throughputSeries: newRingSumSeries(),
 	}
 }
 
@@ -184,7 +187,7 @@ func (e *Engine) Reset() {
 	e.gapHist = newHistogram()
 	e.latencySeries = newRingTimeSeries()
 	e.gapSeries = newRingTimeSeries()
-	e.throughputSeries = newRingTimeSeries()
+	e.throughputSeries = newRingSumSeries()
 }
 
 // Ingest updates all aggregates for one event pair.
@@ -320,6 +323,9 @@ func (e *Engine) captureSnapshotInputs() snapshotInputs {
 		latencySeries:          e.latencySeries.ValuesAt(now),
 		gapSeries:              e.gapSeries.ValuesAt(now),
 		throughputSeries:       e.throughputSeries.ValuesAt(now),
+		latencyTrend:           seriesTrend(e.latencySeries, now),
+		gapTrend:               seriesTrend(e.gapSeries, now),
+		throughputTrend:        seriesTrend(e.throughputSeries, now),
 		syscalls:               e.syscalls.captureInputs(),
 		files:                  e.files.snapshotInputs(),
 		dirs:                   e.dirs.snapshotInputs(),
@@ -400,9 +406,9 @@ func populateSnapshotFields(snap *Snapshot, in snapshotInputs, elapsed time.Dura
 	snap.WriteBytesPerSec = safeRate(in.totalWriteBytes, rateDiv)
 	snap.LatencyMeanNs = safeMean(in.totalLatency, timedCount(in.totalSyscalls, in.totalUntimed))
 	snap.GapMeanNs = tracedGapMean(in)
-	snap.LatencyTrend = detectTrend(in.latencySeries)
-	snap.GapTrend = detectTrend(in.gapSeries)
-	snap.ThroughputTrend = detectTrend(in.throughputSeries)
+	snap.LatencyTrend = in.latencyTrend
+	snap.GapTrend = in.gapTrend
+	snap.ThroughputTrend = in.throughputTrend
 }
 
 // storeSyscallPercentiles briefly re-takes the lock to cache the percentiles
@@ -480,13 +486,21 @@ func nonNegativeDuration(d time.Duration) time.Duration {
 	return d
 }
 
-func detectTrend(series []float64) Trend {
-	if len(series) < trendWindowSlots*2 {
+// seriesTrend compares the two most recent trendWindowSlots-wide windows of
+// series (ringTimeSeries.TrendWindows). Without a comparison - too little
+// history, or a mean series with no sample in a window - the trend is stable:
+// an idle stretch is not "latency fell to zero".
+func seriesTrend(series *ringTimeSeries, now time.Time) Trend {
+	prev, recent, ok := series.TrendWindows(now, trendWindowSlots)
+	if !ok {
 		return Trend{Direction: TrendStable}
 	}
+	return detectTrend(prev, recent)
+}
 
-	prev := average(series[len(series)-trendWindowSlots*2 : len(series)-trendWindowSlots])
-	recent := average(series[len(series)-trendWindowSlots:])
+// detectTrend classifies the change from prev to recent: stable within 5%,
+// otherwise rising or falling by DeltaPercent.
+func detectTrend(prev, recent float64) Trend {
 	delta := recent - prev
 
 	if prev == 0 {
@@ -504,15 +518,4 @@ func detectTrend(series []float64) Trend {
 		return Trend{Direction: TrendRising, DeltaPercent: deltaPercent}
 	}
 	return Trend{Direction: TrendFalling, DeltaPercent: deltaPercent}
-}
-
-func average(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	sum := 0.0
-	for _, v := range values {
-		sum += v
-	}
-	return sum / float64(len(values))
 }

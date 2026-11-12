@@ -222,13 +222,16 @@ func FmtCheck() error {
 // When checkOnly is true, any file that needs reformatting is reported as an
 // error without writing to disk. When false, files are rewritten in place.
 func fmtGoFiles(checkOnly bool) error {
-	var unformatted []string
+	var unformatted, broken []string
 	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		// Skip vendor and hidden directories (e.g. .git).
-		if d.IsDir() && (d.Name() == "vendor" || strings.HasPrefix(d.Name(), ".")) {
+		// Skip vendor and hidden directories (e.g. .git) - but not the walk
+		// root itself: its name is ".", so the hidden-directory test matched
+		// it and SkipDir ended the whole walk before any file was visited,
+		// making both Fmt and FmtCheck silent no-ops.
+		if d.IsDir() && path != "." && (d.Name() == "vendor" || strings.HasPrefix(d.Name(), ".")) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
@@ -240,8 +243,12 @@ func fmtGoFiles(checkOnly bool) error {
 		}
 		formatted, err := format.Source(src)
 		if err != nil {
-			// Syntax errors are reported but don't abort the walk.
+			// A file gofmt cannot parse is neither formatted nor checkable.
+			// Keep walking so every such file is listed, but fail the
+			// target afterwards: returning nil here used to let FmtCheck
+			// pass (and Fmt claim success) over an unparseable file.
 			fmt.Printf("gofmt: syntax error in %s: %v\n", path, err)
+			broken = append(broken, path)
 			return nil
 		}
 		if string(src) == string(formatted) {
@@ -255,6 +262,10 @@ func fmtGoFiles(checkOnly bool) error {
 	})
 	if err != nil {
 		return err
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("gofmt: %d file(s) have syntax errors:\n  %s",
+			len(broken), strings.Join(broken, "\n  "))
 	}
 	if len(unformatted) > 0 {
 		return fmt.Errorf("gofmt: %d file(s) need formatting:\n  %s\nRun `mage fmt` to fix.",
@@ -422,8 +433,10 @@ func BenchCompare() error {
 	}
 
 	outputFile := filepath.Join(benchProfilesDir, fmt.Sprintf("bench-%s.txt", benchTimestamp()))
-	cmd := fmt.Sprintf("go test ./... -v -bench=. -run=xxx -benchmem -count=6 | tee %q", outputFile)
-	if err := sh.RunWithV(goEnv(), "sh", "-c", cmd); err != nil {
+	// pipefail: without it the pipeline's status is tee's, and a failed build
+	// or panicking benchmark reported success with a truncated output file.
+	cmd := fmt.Sprintf("set -o pipefail; go test ./... -v -bench=. -run=xxx -benchmem -count=6 | tee %q", outputFile)
+	if err := sh.RunWithV(goEnv(), "bash", "-c", cmd); err != nil {
 		return err
 	}
 
@@ -637,7 +650,8 @@ func World() error {
 
 // IntegrationTest builds everything, runs the root link tests of ./internal
 // (runRootLinkTests) and then the integration tests in parallel.
-// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: NumCPU, minimum 1).
+// Set INTEGRATION_PARALLEL to tune `go test -parallel` (default: min(NumCPU, 2), see
+// resolveIntegrationParallelism; minimum 1).
 func IntegrationTest() error {
 	return runIntegrationTests(true)
 }
@@ -1283,9 +1297,17 @@ func parquetSchemaCheck(dir, file, dataFile string) error {
 		return err
 	}
 	fmt.Println(schemaOut)
+	// Compare whole column names (the first tab-separated field of each
+	// DESCRIBE line): a substring test let a missing "fd" hide behind "nfds"
+	// and a missing "file" behind "old_file".
+	present := make(map[string]bool)
+	for _, line := range strings.Split(schemaOut, "\n") {
+		name, _, _ := strings.Cut(line, "\t")
+		present[strings.TrimSpace(name)] = true
+	}
 	var missing []string
 	for _, col := range expectedParquetColumns {
-		if !strings.Contains(schemaOut, col) {
+		if !present[col] {
 			missing = append(missing, col)
 		}
 	}
@@ -1334,7 +1356,8 @@ func parquetSanityCheck(dir, file, dataFile string) error {
 	if err1 != nil || err2 != nil || err3 != nil {
 		return fmt.Errorf("sanity check FAIL: could not parse numeric values from: %s", sanityOut)
 	}
-	if maxSeq <= minSeq {
+	// A single-row file has min == max, which is valid.
+	if maxSeq < minSeq {
 		return fmt.Errorf("sanity check FAIL: seq not monotonically increasing (min=%d, max=%d)", minSeq, maxSeq)
 	}
 	if minTimeNs == 0 {

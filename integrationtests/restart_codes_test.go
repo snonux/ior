@@ -236,11 +236,14 @@ func TestSignalStoppedReadsEachFoldIntoOneRow(t *testing.T) {
 // four reads: descriptor of one, byte count and end time of a later one).
 //
 // The check is by value, not by timing. Whatever the sampler picks, a row on
-// descriptor i can only be read i: it returns i+1 bytes (the call, folded or
-// its re-execution alone) or -512 (the interrupted half alone), each at most
-// once. Which rows exist at all is the sampler's choice, so only their
-// presence in general is required. No fold is required either, so a run in
-// which the kernel lost or skipped records is judged like any other.
+// descriptor i can only be read i: it returns i+1 bytes (the call's final
+// invocation), at most once, or -512 (an interrupted invocation). A sampled
+// syscall's interrupted rows are not held for a fold
+// (restartTracker.reexecutionSampled), so a read stopped more than once
+// shows one -512 row per interruption that was sampled in, each unfolded.
+// Which rows exist at all is the sampler's choice, so only their presence in
+// general is required, and a run in which the kernel lost or skipped records
+// is judged like any other.
 func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
 	total := 0
 	for i, rows := range reexecManyRows(t, runParquetScenarioRows, "-syscall-sampling-syscalls", "read=2") {
@@ -260,16 +263,15 @@ func TestSignalStoppedReadsUnderSamplingNeverSpanTwoCalls(t *testing.T) {
 			if row.IsError {
 				t.Errorf("read %d: row flagged is_error=true: %+v", i, row)
 			}
-			// Task 203: a row left with -512 took no continuation; a row
-			// with the result is the folded call (1) or its re-execution
-			// alone (0).
-			if row.Restarts > 1 || (row.Ret == -512 && row.Restarts != 0) {
-				t.Errorf("read %d: ret=%d restarts=%d, want 0 for an unfolded row and at most 1: %+v",
+			// Nothing is folded at this rate: every row is one
+			// invocation, so none counts a restart.
+			if row.Restarts != 0 {
+				t.Errorf("read %d: ret=%d restarts=%d, want 0: a sampled read is never folded: %+v",
 					i, row.Ret, row.Restarts, row)
 			}
 		}
-		if finals > 1 || interrupted > 1 {
-			t.Errorf("read %d (fd %d): %d rows returning %d and %d returning -512, want at most one each: %+v",
+		if finals > 1 {
+			t.Errorf("read %d (fd %d): %d rows returning %d and %d returning -512, want at most one final row: %+v",
 				i, reexecManyFdBase+int32(i), finals, want, interrupted, rows)
 		}
 	}

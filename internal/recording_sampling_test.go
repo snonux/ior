@@ -173,11 +173,11 @@ func TestTUIRecordingDropsAreReadAtItsEdges(t *testing.T) {
 	cfg := mustParseArgs(t, "-syscall-sampling-syscalls", "openat=5")
 	for _, tc := range []struct {
 		name   string
-		totals []uint64 // the drop counter at the start flush, then at the stop flush
+		totals []uint64 // the drop counter at the monitor's startup read, the start flush and the stop flush
 		want   string
 	}{
-		{"drops before the start", []uint64{5, 5}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1}]`},
-		{"drops before the stop", []uint64{5, 8}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1,"lower_bound":true}]`},
+		{"drops before the start", []uint64{0, 5, 5}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1}]`},
+		{"drops before the stop", []uint64{0, 5, 8}, `[{"syscall":"openat","rate":5,"traced":1,"counted_only":0,"total":1,"lower_bound":true}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTUIRecordingHarness(t, cfg, &aggregateSourceStub{}, &ringbufDropSourceStub{totals: tc.totals})
@@ -335,7 +335,7 @@ func TestAggregateDrainerFlushStopsOnceRetired(t *testing.T) {
 // (the drop map may be closed by then), not even through a pointer loaded
 // before the stop unpublished it.
 func TestRingbufDropMonitorFlushStopsOnceRetired(t *testing.T) {
-	source := &ringbufDropSourceStub{totals: []uint64{2}}
+	source := &ringbufDropSourceStub{totals: []uint64{0, 2}} // the startup read finds none
 	counter := &samplingCounterStub{}
 	el := &eventLoop{cfg: eventLoopConfig{aggregateDrainEvery: time.Hour}, dropSrc: source}
 	el.SetRecordingSamplingCounter(counter)
@@ -352,7 +352,7 @@ func TestRingbufDropMonitorFlushStopsOnceRetired(t *testing.T) {
 	monitor.Flush()
 	source.mu.Lock()
 	defer source.mu.Unlock()
-	if source.callCnt != 2 {
-		t.Fatalf("drop counter read %d times, want 2 (the flush and the final read)", source.callCnt)
+	if source.callCnt != 3 {
+		t.Fatalf("drop counter read %d times, want 3 (the startup read, the flush and the final read)", source.callCnt)
 	}
 }

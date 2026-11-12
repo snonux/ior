@@ -225,11 +225,16 @@ func (c *bubbleChart) mergeTargetNodes(targets []bubbleNode, existing map[string
 	next := make([]bubbleNode, 0, len(targets))
 	for _, target := range targets {
 		node := bubbleNode{
-			ID:           target.ID,
-			Label:        target.Label,
-			Detail:       target.Detail,
-			Count:        target.Count,
-			Bytes:        target.Bytes,
+			ID:     target.ID,
+			Label:  target.Label,
+			Detail: target.Detail,
+			Count:  target.Count,
+			Bytes:  target.Bytes,
+			// Duration must be carried too: the status line prints it for the
+			// duration metric and SetViewport rebuilds the layout input from
+			// the nodes, so a dropped Duration showed "duration=0ns" and
+			// collapsed every bubble to the minimum radius after a resize.
+			Duration:     target.Duration,
 			Value:        target.Value,
 			targetRadius: target.targetRadius,
 			anchorX:      target.targetX,

@@ -539,7 +539,8 @@ func tabRenderProcesses(m *Model, snap *statsengine.Snapshot, _ *eventstream.Mod
 	if snap == nil {
 		return renderWaitingForStats(TabProcesses, width)
 	}
-	return renderProcessesWithSort(snap, width, height, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort)
+	rows := m.processSort.rows(snap.Processes(), m.processesTab.sort)
+	return renderSortedProcesses(rows, width, height, m.processesTab.offset, m.processesTab.col, m.pidFilter, m.processesTab.sort)
 }
 
 // captureSyscallsSelection is the Syscalls tab's CaptureSelection hook.
@@ -593,7 +594,11 @@ func handleFilesKey(m *Model, msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !key.Matches(msg, m.keys.DirGroup) {
 		return false, nil
 	}
-	m.toggleFilesDirGrouping()
+	// Leaving grouped mode from a treemap/icicle/bubbles view resets the tab to
+	// the table, whose row order differs from the chart's item order; without
+	// re-anchoring, the carried-over offset selected a different directory
+	// when grouping was switched back on.
+	m.filesDirSelection().keep(m.toggleFilesDirGrouping)
 	return true, nil
 }
 

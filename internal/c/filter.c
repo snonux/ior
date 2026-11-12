@@ -611,6 +611,38 @@ static __always_inline void ior_on_exec_tid_change(__u32 old_tid, __u32 new_tid,
         ior_on_enter_state_lost(moved.enter_trace_id, ior_sampling_rate(moved.enter_trace_id));
 }
 
+// ior_on_exec_exit_unseen settles the in-flight enter state of an execve
+// whose sys_exit will never fire although the task stays in scope: the exec
+// loaded a 32-bit program, and the classic syscall tracepoints ignore the
+// 32-bit syscall the task is now in (ior_exec_into_compat in exec.c, which
+// calls this from sched_process_exec with the post-exec tid).
+//
+// It is the out-of-scope branch of ior_on_exec_tid_change for a task that did
+// not change scope: the entry is deleted, since no exit handler will - it
+// used to linger until the tid was reused, crowding the bounded map - and an
+// invocation whose enter was not emitted is counted here, untimed, because
+// the exit handler that would have counted it never runs. An emitted enter
+// is userspace's: the exec record is flagged exit_untraced and completes it
+// (eventLoop.completeUntracedExec), so it is counted exactly once, unless
+// that record's ring-buffer reserve fails (the same residual as there).
+//
+// Whatever entry the tid holds at this point is the exec's own: the task is
+// inside execve, and a traced enter of it wrote the entry. Without one
+// (execve not traced, or filtered) there is nothing to settle. The two
+// fields are copied out before the delete frees the element.
+static __always_inline void ior_on_exec_exit_unseen(__u32 tid) {
+    struct syscall_enter_state *state = bpf_map_lookup_elem(&syscall_enter_state_map, &tid);
+    __u32 enter_trace_id, emitted;
+
+    if (!state)
+        return;
+    enter_trace_id = state->enter_trace_id;
+    emitted = state->emit_event;
+    bpf_map_delete_elem(&syscall_enter_state_map, &tid);
+    if (!emitted)
+        ior_count_untimed_syscall(enter_trace_id);
+}
+
 // Recovering a path whose sys_enter read faulted.
 //
 // bpf_probe_read_user_str() is a *nofault* read: it runs with page faults

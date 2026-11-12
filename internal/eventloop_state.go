@@ -1294,12 +1294,15 @@ func (t *handleTracker) limit() int {
 // pairTracker holds the state for matching sys_enter events to their sys_exit
 // counterparts and computing inter-syscall durations per TID.
 type pairTracker struct {
-	enters       map[uint32]*event.Pair // pending enter events, keyed by TID
-	enterAges    map[uint32]uint64      // insertion order per TID, for LRU eviction
-	prevTimes    map[uint32]uint64      // previous pair's exit time per TID, for DurationToPrev
-	prevTimeAges map[uint32]uint64      // insertion order per TID, for prevTimes LRU eviction
-	maxSize      int                    // max pending enter events before pruning; 0 = default
-	age          uint64                 // monotonic counter for LRU ordering
+	// enters holds the pending enter events and prevTimes the previous
+	// pair's exit time (for DurationToPrev), both keyed by TID. Each value
+	// carries its own LRU age: the ages used to live in two parallel maps,
+	// which cost every syscall pair four more map operations (a write per
+	// set and setPrevTime, a delete per consume) on the loop's hot path.
+	enters    map[uint32]pendingEnter
+	prevTimes map[uint32]prevExit
+	maxSize   int    // max pending enter events before pruning; 0 = default
+	age       uint64 // monotonic counter for LRU ordering
 	// execCallers indexes the exec enters parked by non-leader threads:
 	// pid -> the callers' tids. Several threads of one process can sit in
 	// execve at once (all but one are killed by de_thread), so a pid keeps
@@ -1321,12 +1324,23 @@ type pairTracker struct {
 	lastEnters map[uint32]lastEnter
 }
 
+// pendingEnter is one parked enter with its LRU age (insertion order).
+type pendingEnter struct {
+	pair *event.Pair
+	age  uint64
+}
+
+// prevExit is the exit time of a TID's most recent completed pair with its
+// LRU age.
+type prevExit struct {
+	time uint64
+	age  uint64
+}
+
 func newPairTracker() pairTracker {
 	return pairTracker{
-		enters:       make(map[uint32]*event.Pair),
-		enterAges:    make(map[uint32]uint64),
-		prevTimes:    make(map[uint32]uint64),
-		prevTimeAges: make(map[uint32]uint64),
+		enters:    make(map[uint32]pendingEnter),
+		prevTimes: make(map[uint32]prevExit),
 	}
 }
 
@@ -1349,22 +1363,19 @@ func (p *pairTracker) set(enterEv event.Event) (at uint64, superseded bool) {
 // control record processed in between changed the fd table.
 func (p *pairTracker) setWithFile(enterEv event.Event, target file.File) (at uint64, superseded bool) {
 	if p.enters == nil {
-		p.enters = make(map[uint32]*event.Pair)
-		p.enterAges = make(map[uint32]uint64)
-		p.prevTimes = make(map[uint32]uint64)
-		p.prevTimeAges = make(map[uint32]uint64)
+		p.enters = make(map[uint32]pendingEnter)
+		p.prevTimes = make(map[uint32]prevExit)
 	}
 	tid := enterEv.GetTid()
 	pair := event.NewPair(enterEv)
 	pair.File = target
 	at, superseded = p.noteEnter(enterEv, 0)
-	if prev, ok := p.enters[tid]; ok && prev != nil {
+	if prev := p.enters[tid].pair; prev != nil {
 		at, superseded = prev.EnterEv.GetTime(), true
 		prev.Recycle()
 	}
 	p.age++
-	p.enters[tid] = pair
-	p.enterAges[tid] = p.age
+	p.enters[tid] = pendingEnter{pair: pair, age: p.age}
 	p.indexExecCaller(enterEv)
 	p.prune()
 	return at, superseded
@@ -1425,8 +1436,8 @@ func (p *pairTracker) forgetExecCaller(pid, tid uint32) {
 // isParkedExecCaller reports whether tid still holds a parked exec enter of
 // process pid.
 func (p *pairTracker) isParkedExecCaller(pid, tid uint32) bool {
-	pair, ok := p.enters[tid]
-	if !ok || pair == nil {
+	pair := p.enters[tid].pair
+	if pair == nil {
 		return false
 	}
 	_, isExec := pair.EnterEv.(*types.ExecEvent)
@@ -1455,12 +1466,12 @@ func (p *pairTracker) parkedExecCaller(pid uint32) (tid uint32, ok bool) {
 // execCallers hint if it had one.
 // Reading a nil map returns the zero value in Go, so this is safe before any set call.
 func (p *pairTracker) consume(tid uint32) (*event.Pair, bool) {
-	pair, ok := p.enters[tid]
+	parked, ok := p.enters[tid]
 	if !ok {
 		return nil, false
 	}
 	delete(p.enters, tid)
-	delete(p.enterAges, tid)
+	pair := parked.pair
 	if pair != nil && pair.EnterEv != nil {
 		p.forgetExecCaller(pair.EnterEv.GetPid(), tid)
 	}
@@ -1487,7 +1498,6 @@ func (p *pairTracker) evictTid(tid uint32) {
 		pair.Recycle()
 	}
 	delete(p.prevTimes, tid)
-	delete(p.prevTimeAges, tid)
 	// The next owner of the number is a thread not seen yet: an exit of its
 	// without an enter is no loss (unpairedExit).
 	delete(p.lastEnters, tid)
@@ -1516,8 +1526,7 @@ func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) (at uint64, supersed
 	if pair, ok := p.consume(oldTid); ok && pair != nil {
 		if _, isExec := pair.EnterEv.(*types.ExecEvent); isExec {
 			p.age++
-			p.enters[newTid] = pair
-			p.enterAges[newTid] = p.age
+			p.enters[newTid] = pendingEnter{pair: pair, age: p.age}
 		} else {
 			at, superseded = pair.EnterEv.GetTime(), true
 			pair.Recycle()
@@ -1529,8 +1538,7 @@ func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) (at uint64, supersed
 	}
 	if prev, ok := p.prevTimes[oldTid]; ok {
 		delete(p.prevTimes, oldTid)
-		delete(p.prevTimeAges, oldTid)
-		p.setPrevTime(newTid, prev)
+		p.setPrevTime(newTid, prev.time)
 	}
 	return at, superseded
 }
@@ -1541,8 +1549,8 @@ func (p *pairTracker) moveExecCaller(oldTid, newTid uint32) (at uint64, supersed
 // age: peeking is not use, and letting a fixup refresh the entry would let a
 // stream of them keep genuinely stale enters alive.
 func (p *pairTracker) pending(tid uint32) (*event.Pair, bool) {
-	pair, ok := p.enters[tid]
-	if !ok || pair == nil {
+	pair := p.enters[tid].pair
+	if pair == nil {
 		return nil, false
 	}
 	return pair, true
@@ -1550,7 +1558,7 @@ func (p *pairTracker) pending(tid uint32) (*event.Pair, bool) {
 
 // prevTime returns the exit time of the previous pair for tid, used to compute DurationToPrev.
 func (p *pairTracker) prevTime(tid uint32) uint64 {
-	return p.prevTimes[tid]
+	return p.prevTimes[tid].time
 }
 
 // setPrevTime records the exit time of the most recent completed pair for tid
@@ -1558,12 +1566,10 @@ func (p *pairTracker) prevTime(tid uint32) uint64 {
 // thread-churning traces where TIDs are never reused.
 func (p *pairTracker) setPrevTime(tid uint32, t uint64) {
 	if p.prevTimes == nil {
-		p.prevTimes = make(map[uint32]uint64)
-		p.prevTimeAges = make(map[uint32]uint64)
+		p.prevTimes = make(map[uint32]prevExit)
 	}
 	p.age++
-	p.prevTimes[tid] = t
-	p.prevTimeAges[tid] = p.age
+	p.prevTimes[tid] = prevExit{time: t, age: p.age}
 	p.prunePrevTimes()
 }
 
@@ -1574,7 +1580,9 @@ func (p *pairTracker) prunePrevTimes() {
 	if len(p.prevTimes) <= limit {
 		return
 	}
-	trimLRU(p.prevTimes, p.prevTimeAges, trimTarget(limit))
+	for _, tid := range lruVictimsBy(p.prevTimes, func(e prevExit) uint64 { return e.age }, trimTarget(limit)) {
+		delete(p.prevTimes, tid)
+	}
 }
 
 // prune trims the oldest pending enters once the table is over its limit.
@@ -1589,10 +1597,9 @@ func (p *pairTracker) prune() {
 	if len(p.enters) <= limit {
 		return
 	}
-	for _, tid := range lruVictims(p.enters, p.enterAges, trimTarget(limit)) {
-		p.forgetTrimmed(tid, p.enters[tid])
+	for _, tid := range lruVictimsBy(p.enters, func(e pendingEnter) uint64 { return e.age }, trimTarget(limit)) {
+		p.forgetTrimmed(tid, p.enters[tid].pair)
 		delete(p.enters, tid)
-		delete(p.enterAges, tid)
 	}
 }
 
@@ -1621,6 +1628,18 @@ func trimLRU[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize i
 // through their own removal helper, which recycles the value or maintains an
 // index.
 func lruVictims[K comparable, V any](state map[K]V, ages map[K]uint64, targetSize int) []K {
+	return lruVictimsOf(state, func(k K, _ V) uint64 { return ages[k] }, targetSize)
+}
+
+// lruVictimsBy is lruVictims for a table whose values carry their own age
+// (the pair tracker's), so no parallel ages map has to be kept in step.
+func lruVictimsBy[K comparable, V any](state map[K]V, age func(V) uint64, targetSize int) []K {
+	return lruVictimsOf(state, func(_ K, v V) uint64 { return age(v) }, targetSize)
+}
+
+// lruVictimsOf is the shared body: the keys of the len(state)-targetSize
+// entries with the smallest age, oldest first.
+func lruVictimsOf[K comparable, V any](state map[K]V, age func(K, V) uint64, targetSize int) []K {
 	excess := len(state) - targetSize
 	if excess <= 0 {
 		return nil
@@ -1630,8 +1649,8 @@ func lruVictims[K comparable, V any](state map[K]V, ages map[K]uint64, targetSiz
 		age uint64
 	}
 	oldest := make([]entry, 0, len(state))
-	for k := range state {
-		oldest = append(oldest, entry{key: k, age: ages[k]})
+	for k, v := range state {
+		oldest = append(oldest, entry{key: k, age: age(k, v)})
 	}
 	slices.SortFunc(oldest, func(a, b entry) int { return cmp.Compare(a.age, b.age) })
 	victims := make([]K, excess)

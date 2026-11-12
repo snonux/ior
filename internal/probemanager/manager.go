@@ -341,7 +341,12 @@ func (m *Manager) AttachAll(shouldAttach func(string) bool, tpNames []string, on
 	groups := GroupTracepoints(tpNames)
 	for syscall, pair := range groups {
 		m.Register(syscall, pair)
-		if !shouldAttach(pair.Enter) && !shouldAttach(pair.Exit) {
+		// Ask only about the names the pair has. An enter-only pair
+		// (exit_group, rt_sigreturn, exit) has an empty Exit, and a -tps
+		// regex that matches the empty string (".*") said yes to it, so
+		// the pair was attached although -tpsExclude named its enter.
+		wanted := (pair.Enter != "" && shouldAttach(pair.Enter)) || (pair.Exit != "" && shouldAttach(pair.Exit))
+		if !wanted {
 			continue
 		}
 		if err := m.Attach(syscall); err != nil {

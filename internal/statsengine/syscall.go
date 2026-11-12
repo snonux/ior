@@ -49,9 +49,12 @@ type syscallStats struct {
 
 	sampleVersion         uint64
 	lastPercentileVersion uint64
-	cachedP50             uint64
-	cachedP95             uint64
-	cachedP99             uint64
+	// lastCaptureVersion is sampleVersion at the previous snapshot capture;
+	// an unchanged value means the reservoir went idle (needsPercentileRecompute).
+	lastCaptureVersion uint64
+	cachedP50          uint64
+	cachedP95          uint64
+	cachedP99          uint64
 }
 
 // percentileJob carries a private copy of one syscall's latency reservoir from
@@ -327,12 +330,20 @@ func (s *syscallStats) addSample(duration uint64, cap int, rng *rand.Rand) {
 // recomputed from the samples. An empty reservoir (e.g. a syscall only seen
 // through AddAggregate) never needs a job: its cached zero percentiles are
 // already correct. Otherwise the first computation always happens, later ones
-// are batched by percentilesStale.
+// are batched by percentilesStale while samples keep arriving. Once the
+// reservoir is idle - no new sample since the previous capture - the pending
+// samples are flushed whatever their number: the batching only exists to
+// spare a busy syscall a recompute per snapshot, and without the flush a
+// syscall that went quiet below the batch step kept percentiles that
+// contradicted its live min/max/mean until the next Reset.
+// It must be called exactly once per capture: it records the capture.
 func (s *syscallStats) needsPercentileRecompute() bool {
+	idle := s.lastCaptureVersion == s.sampleVersion
+	s.lastCaptureVersion = s.sampleVersion
 	if s.lastPercentileVersion == s.sampleVersion || len(s.samples) == 0 {
 		return false
 	}
-	return s.lastPercentileVersion == 0 || s.percentilesStale()
+	return s.lastPercentileVersion == 0 || idle || s.percentilesStale()
 }
 
 // takeScratch removes the stats' scratch buffer and returns it emptied, with

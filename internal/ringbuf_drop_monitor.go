@@ -30,6 +30,14 @@ type ringbufDropResult struct {
 	skipped        uint64
 	skippedDelta   uint64
 	skippedWarning string
+
+	// startup marks the reading Start takes before the first poll: whatever
+	// it finds was lost while the probes were being attached, before the
+	// loop consumed its first record. It counts like any other loss (the
+	// records that did fit are still in the ring and are consumed with the
+	// holes in them), but the warning says when it happened instead of
+	// blaming a consumer that was not running yet.
+	startup bool
 }
 
 // lost reports whether the observation gives a reason to think records are
@@ -136,12 +144,24 @@ func growth(last, now uint64) uint64 {
 // stop function runs; stop performs one final read so drops occurring in the
 // last partial interval are still reported, and retires the monitor in that
 // same locked cycle (see pollCycle).
+//
+// Before the first poll it reads the counter once and hands that reading
+// over marked as startup. The BPF programs fill the ring from the moment the
+// first probe is attached, and nothing consumes it until the loop starts, so
+// on a busy host the ring overflows during the attach. That loss used to
+// surface one period into the run as "Ring buffer full: N events dropped",
+// indistinguishable from the running loop falling behind.
 func (m *ringbufDropMonitor) Start(ctx context.Context, every time.Duration, handle func(ringbufDropResult)) func() {
 	if m == nil || m.source == nil {
 		return func() {}
 	}
 	m.mu.Lock()
 	m.handle = handle
+	if handle != nil {
+		first := m.Tick()
+		first.startup = true
+		handle(first)
+	}
 	m.mu.Unlock()
 	stopLoop := startPollLoop(ctx, every, m.pollCycle)
 	return func() {
@@ -183,7 +203,8 @@ func (m *ringbufDropMonitor) flushLocked() {
 // burst and run totals so a single stream/TUI warning row is self-contained:
 // a full ring buffer for the records it refused, the kernel for the program
 // runs it skipped (which a larger -mapSize does nothing about), and both
-// when a poll saw both.
+// when a poll saw both. Drops found by the startup reading are worded as what
+// they are: lost during the probe attach, before the trace consumed anything.
 //
 // The two parts claim different things. A ring-buffer drop is a record ior
 // wanted and lost. A skipped run is counted before ior's filter and for
@@ -193,7 +214,13 @@ func (m *ringbufDropMonitor) flushLocked() {
 // can be other tasks' runs.
 func formatRingbufDropWarning(result ringbufDropResult) string {
 	var parts []string
-	if result.delta > 0 {
+	if result.delta > 0 && result.startup {
+		parts = append(parts, fmt.Sprintf(
+			"Ring buffer filled while the probes were attaching: %d events dropped kernel-side "+
+				"before the trace started (%d total this run) - the first rows may be incomplete",
+			result.delta, result.total,
+		))
+	} else if result.delta > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"Ring buffer full: %d events dropped kernel-side (%d total this run) - consider a larger -mapSize",
 			result.delta, result.total,

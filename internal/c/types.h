@@ -788,9 +788,11 @@ struct perf_open_event {
 // entry the same way (ior_on_exec_tid_change in filter.c).
 //
 // exit_untraced (0 or 1; a __u32 because the Go type generator maps only
-// 32/64-bit integers) is set when only the pre-exec caller was in scope:
-// -tid traced a non-leader thread, whose post-exec (leader) tid the filter
-// rejects, so the execve's sys_exit record will never arrive. Userspace then
+// 32/64-bit integers) is set when the execve's sys_exit record will never
+// arrive: only the pre-exec caller was in scope (-tid traced a non-leader
+// thread, whose post-exec (leader) tid the filter rejects), or the exec
+// loaded a 32-bit program, whose syscalls the classic tracepoints ignore
+// (ior_exec_into_compat in exec.c). Userspace then
 // completes the parked execve enter from this record
 // (eventLoop.completeUntracedExec). The word occupies what used to be an
 // explicit tail pad, so the layout stays 48 bytes with no implicit padding

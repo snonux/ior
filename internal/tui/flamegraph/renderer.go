@@ -17,6 +17,9 @@ import (
 
 const pathSeparator = "\x1f"
 const pathSeparatorByte = '\x1f'
+
+// pathSeparatorStandIn replaces pathSeparator inside a frame name (frameName).
+const pathSeparatorStandIn = "\x1e"
 const minFlameWidth = 60
 const maxBarVisualHeight = 3
 
@@ -260,6 +263,15 @@ func snapshotHeightTotal(node *snapshotNode) uint64 {
 
 func frameName(name string, depth int) string {
 	if name != "" {
+		// A traced name may contain the path separator byte (a file called
+		// "a\x1fb" is legal). Left in, it split the frame's Path into two
+		// parts, so the frame lost its parent, its subtree highlight and
+		// could not be zoomed (findNodeByPath). The neighbouring control
+		// byte stands in for it; findChildByName compares through frameName
+		// too, so the path still resolves to the node.
+		if strings.IndexByte(name, pathSeparatorByte) >= 0 {
+			return strings.ReplaceAll(name, pathSeparator, pathSeparatorStandIn)
+		}
 		return name
 	}
 	if depth == 0 {
@@ -688,7 +700,9 @@ func renderSelectedView(ctx RenderContext, filterIsActive bool) string {
 	toolbar := buildToolbar(frames, ctx.Width, params)
 	var status string
 	if filterIsActive {
-		status = buildFilteredStatus(frames, selected, selectedIdx, ctx.MatchSet, ctx.MetricLabel, ctx.SearchQuery, ctx.GlobalTotal, params.visibleFrames)
+		// The share of frames the filter keeps visible: params.visibleFrames
+		// counts every frame, which made this figure a constant 100%.
+		status = buildFilteredStatus(frames, selected, selectedIdx, ctx.MatchSet, ctx.MetricLabel, ctx.SearchQuery, ctx.GlobalTotal, countVisibleFrames(frames, ctx.FilterSet))
 	} else {
 		status = buildNormalStatus(selected, ctx.MetricLabel, ctx.GlobalTotal)
 	}

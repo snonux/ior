@@ -344,6 +344,13 @@ func matchRawOpenEvent(filter globalfilter.Filter, ev event.Event) bool {
 	if openEv == nil {
 		return filter.MatchOpenEventComm(openEv)
 	}
+	// Without a comm or file filter every branch below answers true, but
+	// only after converting the payload's comm and file name to strings
+	// (2-3 allocations, ~200ns per open enter). An unfiltered run - the
+	// common case - skips that.
+	if filter.Comm == nil && filter.File == nil {
+		return true
+	}
 	filename := types.StringValue(openEv.Filename[:])
 	if openEv.FilenameStatus == types.PATH_READ_FAILED {
 		// A failed non-NULL read may still be repaired by the exit fixup, so its
@@ -373,6 +380,12 @@ func matchRawNameEvent(filter globalfilter.Filter, ev event.Event) bool {
 	if !ok || nameEv == nil {
 		return false
 	}
+	// The file dimension is the only one this gate applies; without it the
+	// answer is true and the name strings need not be built (see
+	// matchRawOpenEvent).
+	if filter.File == nil {
+		return true
+	}
 	if nameEv.OldnameStatus == types.PATH_READ_FAILED || nameEv.NewnameStatus == types.PATH_READ_FAILED {
 		return true
 	}
@@ -396,6 +409,10 @@ func matchRawPathEvent(filter globalfilter.Filter, ev event.Event) bool {
 	pathEv, ok := ev.(*types.PathEvent)
 	if !ok || pathEv == nil {
 		return false
+	}
+	// Only the file dimension applies here; see matchRawNameEvent.
+	if filter.File == nil {
+		return true
 	}
 	if pathEv.PathnameStatus == types.PATH_READ_FAILED {
 		return true

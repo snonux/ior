@@ -461,3 +461,34 @@ func TestEqValueReturnsInt64PreservesLargeValues(t *testing.T) {
 		t.Fatalf("EqValue() on zero value: got (%d, %v), want (0, false)", v, ok)
 	}
 }
+
+// TestFDFilterTreatsMissingDescriptorAsNoValue pins that the -1 "no
+// descriptor" sentinel is not ordered or compared as a number: only fd==-1
+// selects rows without a descriptor.
+func TestFDFilterTreatsMissingDescriptorAsNoValue(t *testing.T) {
+	noFD := testCandidate()
+	noFD.fd = -1
+	withFD := testCandidate()
+	withFD.fd = 2
+
+	cases := []struct {
+		name       string
+		filter     NumericFilter
+		wantNoFD   bool
+		wantWithFD bool
+	}{
+		{"less than", NumericFilter{Op: OpLt, Value: 3}, false, true},
+		{"not equal", NumericFilter{Op: OpNeq, Value: 5}, false, true},
+		{"equal sentinel", NumericFilter{Op: OpEq, Value: -1}, true, false},
+		{"not sentinel", NumericFilter{Op: OpNeq, Value: -1}, false, true},
+	}
+	for _, tc := range cases {
+		f := Filter{FD: &tc.filter}
+		if got := f.Matches(noFD); got != tc.wantNoFD {
+			t.Errorf("%s: fd-less row matched = %v, want %v", tc.name, got, tc.wantNoFD)
+		}
+		if got := f.Matches(withFD); got != tc.wantWithFD {
+			t.Errorf("%s: fd 2 row matched = %v, want %v", tc.name, got, tc.wantWithFD)
+		}
+	}
+}

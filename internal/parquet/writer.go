@@ -195,7 +195,9 @@ func (w *Writer) Close() error {
 		removeErr := os.Remove(tempPath)
 		return errors.Join(fmt.Errorf("close parquet writer: %w", err), closeErr, removeErr)
 	}
-	if err := file.Close(); err != nil {
+	// Sync before the rename: publishing an unsynced temp file over an
+	// existing recording could lose both across a crash (atomicfile.SyncAndClose).
+	if err := atomicfile.SyncAndClose(file); err != nil {
 		removeErr := os.Remove(tempPath)
 		return errors.Join(fmt.Errorf("close parquet file: %w", err), removeErr)
 	}

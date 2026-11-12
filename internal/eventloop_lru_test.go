@@ -22,7 +22,7 @@ func TestPairTrackerPrevTimesEvictsOldestEntries(t *testing.T) {
 	// Seed a pending enter first: its age must survive prevTimes pruning.
 	enterEv, _ := makeEnterOpenEvent(t, defaulTime, defaultPid, defaultTid)
 	tracker.set(&enterEv)
-	seededAge := tracker.enterAges[defaultTid]
+	seededAge := tracker.enters[defaultTid].age
 
 	tracker.setPrevTime(defaultTid, 100)
 	tracker.setPrevTime(defaultTid+1, 200)
@@ -40,17 +40,17 @@ func TestPairTrackerPrevTimesEvictsOldestEntries(t *testing.T) {
 	if got := tracker.prevTime(defaultTid + 2); got != 300 {
 		t.Fatalf("expected newest prevTimes entry to be retained, got %d", got)
 	}
-	if got := len(tracker.prevTimeAges); got != 2 {
-		t.Fatalf("prevTimes LRU metadata size = %d, want 2", got)
+	if got := len(tracker.prevTimes); got != 2 {
+		t.Fatalf("prevTimes size = %d, want 2", got)
 	}
 	if got := len(tracker.enters); got != 1 {
 		t.Fatalf("prevTimes pruning must not touch the pending enters map, got %d entries", got)
 	}
-	if got := tracker.enterAges[defaultTid]; got != seededAge {
+	if got := tracker.enters[defaultTid].age; got != seededAge {
 		t.Fatalf("pending enter age = %d, want unchanged %d", got, seededAge)
 	}
-	for _, pair := range tracker.enters {
-		pair.Recycle()
+	for _, parked := range tracker.enters {
+		parked.pair.Recycle()
 	}
 }
 

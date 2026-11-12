@@ -187,3 +187,27 @@ func TestSyscallAccumulatorPercentilesRecomputeForSmallReservoir(t *testing.T) {
 		t.Fatalf("expected p50 to reflect new samples, got %d", stats.cachedP50)
 	}
 }
+
+// TestSyscallAccumulatorPercentilesFlushWhenIdle pins that a syscall which
+// goes quiet with fewer pending samples than the batch step still gets its
+// percentiles brought up to date by the next idle snapshot, instead of
+// showing stale p95/p99 next to a live max until Reset.
+func TestSyscallAccumulatorPercentilesFlushWhenIdle(t *testing.T) {
+	acc := newSyscallAccumulatorWithConfig(10_000, rand.New(rand.NewPCG(11, 0)))
+	traceID := types.SYS_ENTER_WRITE
+
+	for range 100 {
+		acc.Add(newPair(traceID, 1_000, 0, 0))
+	}
+	_ = acc.Snapshot(1 * time.Second)
+	for range 12 {
+		acc.Add(newPair(traceID, 1_000_000_000, 0, 0))
+	}
+	// The first snapshot after the burst may still batch; the syscall is idle
+	// from then on, so the following one must flush.
+	_ = acc.Snapshot(1 * time.Second)
+	snap := acc.Snapshot(1 * time.Second)
+	if len(snap) != 1 || snap[0].LatencyP99Ns != 1_000_000_000 {
+		t.Fatalf("idle syscall kept stale percentiles: %+v", snap)
+	}
+}

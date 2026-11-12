@@ -561,17 +561,21 @@ func (m *Model) View() tea.View {
 	return tea.NewView(m.renderViewContent())
 }
 
-// renderViewContent assembles the flamegraph string. Pure function over Model
-// state — pulled out so View() can decide whether to memoize the result.
-func (m *Model) renderViewContent() string {
+// renderHeight is the height handed to the flame renderer: the model height
+// less the selection status line and, when shown, the help line, at least 3
+// (frameIndexAt mirrors it for hit testing).
+func (m *Model) renderHeight() int {
 	extraLines := 1 // selection status line
 	if m.showHelp {
 		extraLines++
 	}
-	renderHeight := m.height - extraLines
-	if renderHeight < 3 {
-		renderHeight = 3
-	}
+	return max(m.height-extraLines, 3)
+}
+
+// renderViewContent assembles the flamegraph string. Pure function over Model
+// state — pulled out so View() can decide whether to memoize the result.
+func (m *Model) renderViewContent() string {
+	renderHeight := m.renderHeight()
 
 	frames := m.anim.currentFrames()
 	content := RenderTerminalView(RenderContext{
@@ -771,7 +775,10 @@ func buildSnapshotMsg(liveTrie coreflamegraph.Snapshotter, generation uint64, wi
 		}
 	}
 	targetFrames := buildTerminalLayoutWithPath(layoutRoot, width, height, rootPath)
-	if zoomPath != "" {
+	// Lineage only for a zoom root that resolved: when the zoom path is
+	// missing from this snapshot the layout above is the whole tree, and
+	// stacking the lineage on it drew a second, phantom root row.
+	if zoomRoot != nil {
 		targetFrames = applyZoomLineage(targetFrames, tree, zoomPath, width)
 	}
 	return flameSnapshotReadyMsg{
@@ -882,7 +889,9 @@ func (m *Model) rebuildFrames(animate bool) {
 
 	root, rootPath := m.zoom.layoutRoot(m.snapshot)
 	targetFrames := buildTerminalLayoutWithPath(root, m.width, m.height, rootPath)
-	if m.zoom.path() != "" {
+	// Lineage only while the zoom root resolved (rootPath is "" when the
+	// layout fell back to the whole snapshot, see buildSnapshotMsg).
+	if rootPath != "" {
 		targetFrames = m.withZoomLineage(targetFrames)
 	}
 	ancestry := buildFrameAncestry(targetFrames)
@@ -903,7 +912,11 @@ func (m *Model) applyTargetFrames(targetFrames []tuiFrame, ancestry frameAncestr
 	m.search.recomputeFilterState(frames, ancestry)
 	navigable := m.search.navigable()
 	m.sel.ensureNavigable(frames, m.search.matches(), navigable)
-	m.sel.ensureVisible(frames, m.height, navigable)
+	// The renderer's height, not the model's: the selection status line (and
+	// the help line) are not flame rows, and with the full height the offset
+	// here was one row short of the renderer's on a short viewport, leaving
+	// the selection on a row that is not drawn.
+	m.sel.ensureVisible(frames, m.renderHeight(), navigable)
 	m.sel.refreshSubtree(frames, ancestry)
 }
 

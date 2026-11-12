@@ -1103,7 +1103,14 @@ func (m *Model) handleGlobalKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, b
 		}
 	}
 	if m.helpOverlayVisible {
-		return m.handleHelpOverlayKeyPress(msg)
+		// The overlay consumes every key but ctrl+c: the terminal is raw, so
+		// ctrl+c is only a key here, and swallowing it left no way to
+		// interrupt ior while the help was open. It closes the overlay and
+		// falls through to the quit path below.
+		if msg.String() != "ctrl+c" {
+			return m.handleHelpOverlayKeyPress(msg)
+		}
+		m.helpOverlayVisible = false
 	}
 	if m.isTypingIntoTextInput(msg) {
 		// A focused text input owns every printable key: q and H are letters
@@ -1566,7 +1573,17 @@ func (m *Model) cancelPickerToDashboard() (tea.Model, tea.Cmd) {
 		m.setError(err, errorScreenRecoverable)
 		return m, nil
 	}
-	m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
+	// Entering the picker changed no filter, so normally there is nothing to
+	// put back - and rebinding would do harm: it replaces the PID/TID
+	// constraints by equality ones, which deleted a non-equality filter
+	// (PID != 1234, shown here as "no PID") from the active filter and its
+	// undo history. Rebind only when the bookmark really differs.
+	if returnState.pidFilter != m.filters.pidFromFilter() || returnState.tidFilter != m.filters.tidFromFilter() {
+		m.setProcessFilters(returnState.pidFilter, returnState.tidFilter)
+	} else {
+		m.dashboard.SetFilterNotice("")
+		m.syncDashboardFilterState()
+	}
 	m.router.showDashboard()
 	return m, m.restartTrace()
 }
@@ -1729,14 +1746,21 @@ func (m *Model) applyFilterLiveOrRestart(filter globalfilter.Filter) (tea.Model,
 	// eventloop via the registered setter. The BPF probes stay attached, so
 	// the user no longer sees the multi-second 'Attaching tracepoints'
 	// overlay on filter changes.
-	if m.runtime.applyLiveFilter(filter) {
+	//
+	// The swap only replaces the userspace filter. The PID/TID equality is
+	// also the session's kernel scope, fixed when its BPF programs were
+	// loaded, so a filter that clears or changes it cannot be applied in
+	// place: the session would keep delivering only the old PID's events
+	// while the title and status bar name the new one (an empty dashboard,
+	// or a "system-wide" trace of one process). Such a change restarts.
+	if m.tracer.scopeCovers(filter) && m.runtime.applyLiveFilter(filter) {
 		m.clearError()
 		return m, m.resetAggregatesAfterLiveSwap()
 	}
 
-	// Fallback: no trace currently running (e.g. first invocation), so
-	// restart the pipeline so the new filter takes effect on the next
-	// trace start. The old session is stopped - which also retires its
+	// Fallback: no trace currently running (e.g. first invocation), or the
+	// running one is scoped to another PID/TID, so restart the pipeline so
+	// the new filter takes effect on the next trace start. The old session is stopped - which also retires its
 	// bindings view, so none of its rows is recorded from here on - before
 	// the epoch advances and its aggregates are cleared; beginTraceCmd's
 	// stop is then a no-op.
@@ -1910,7 +1934,6 @@ func (m *Model) viewPickerScreen(width, height int, title string) tea.View {
 // (overlayExportModal), keeping the tab bar and the status line in view
 // where the terminal has the rows (task ns2).
 func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
-	base := m.dashboard.View().Content
 	if m.filterModal.Visible() {
 		return altScreenView(placeToViewport(width, height, m.filterModal.View(width, height)), title)
 	}
@@ -1920,6 +1943,10 @@ func (m *Model) viewDashboardScreen(width, height int, title string) tea.View {
 	if m.probeModal.Visible() {
 		return altScreenView(placeToViewport(width, height, m.probeModal.View(width, height)), title)
 	}
+	// Rendered only here: the three modals above replace the frame, so
+	// rendering the dashboard before them built (and threw away) a full
+	// Stream or Flame frame on every key typed into a modal and every tick.
+	base := m.dashboard.View().Content
 	if m.exporter.Visible() {
 		return altScreenView(overlayExportModal(m.exporter, base, width, height), title)
 	}

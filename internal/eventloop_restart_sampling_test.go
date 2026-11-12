@@ -306,3 +306,39 @@ func TestSampledRestartSyscallHoldsOnlyReexecutedRows(t *testing.T) {
 		}
 	}
 }
+
+// TestSampledSyscallReexecutionRowIsNotHeld pins the re-execution fold's own
+// sampling guard (restartTracker.reexecutionSampled). The continuation of a
+// -512 exit is the interrupted syscall itself, so in a run that samples that
+// syscall most re-executions never reach the stream and a held row would only
+// be late: it is emitted by its own exit. The negative control is the same
+// stream in a run that samples nothing, where the row is held for its fold.
+func TestSampledSyscallReexecutionRowIsNotHeld(t *testing.T) {
+	for _, tc := range []struct {
+		cfg  samplingConfig
+		held bool
+	}{
+		{samplingConfig{name: "clock_nanosleep=4", plain: true, syscalls: map[string]uint32{"clock_nanosleep": 4}}, false},
+		{samplingConfig{name: "Time=4", plain: true, families: map[types.SyscallFamily]uint32{types.FamilyTime: 4}}, false},
+		{samplingConfig{name: "nothing sampled", plain: true}, true},
+		{samplingConfig{name: "another syscall sampled", plain: true, syscalls: map[string]uint32{"openat": 4}}, true},
+	} {
+		t.Run(tc.cfg.name, func(t *testing.T) {
+			f := samplingFixtures(tc.cfg.flags())["re-execution proof on"](t)
+			f.clockAt(restartBase + 50)
+			f.feedNone(f.sleepEnter(restartBase, restartTid), "clock_nanosleep enter")
+			f.clockAt(restartBase + 550)
+			rows := f.feed(f.sleepExit(restartBase+500, restartTid, -512))
+			if tc.held {
+				if len(rows) != 0 || len(f.el.restarts.held) != 1 {
+					t.Fatalf("rows = %+v with %d held, want the -512 row held for its fold", rows, len(f.el.restarts.held))
+				}
+				return
+			}
+			if len(rows) != 1 || rows[0].ret != -512 || rows[0].duration != 500 {
+				t.Fatalf("rows = %+v, want the -512 sleep emitted by its own exit", rows)
+			}
+			f.requireNothingHeld()
+		})
+	}
+}
